@@ -1,0 +1,16 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@mewhhaha/baba@4.0.0": "4.0.0"
+  },
+  "jsr": {
+    "@mewhhaha/baba@4.0.0": {
+      "integrity": "f1a172755fec45e21b14a44c88fca0067b3f01fabf2dedd07cb7e398e5a18814"
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@mewhhaha/baba@4.0.0"
+    ]
+  }
+}

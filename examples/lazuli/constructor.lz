@@ -1,0 +1,9 @@
+data Pair = Pair(first, second);
+
+fn completePair partial = partial(32);
+
+fn main =
+  let withTen = Pair(10) in
+  case completePair(withTen) of
+    | Pair(first, second) -> first * 100 + second
+  end;
