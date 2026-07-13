@@ -1,0 +1,4 @@
+fn main =
+  let unused = 1 / 0 in
+  let shared = 20 + 1 in
+  shared + shared;

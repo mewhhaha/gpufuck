@@ -1,0 +1,76 @@
+token IDENT = /[A-Za-z_][A-Za-z0-9_]*/ ;
+token INTEGER = /[0-9]+/ ;
+skip WS = /[ \t\r\n]+/ ;
+skip COMMENT = /--[^\n\r]*/ ;
+
+module = declaration+ ;
+
+declaration = data_declaration | definition ;
+
+data_declaration = "data" name:IDENT "=" constructors:constructor_declaration ("|" constructors:constructor_declaration)* ";" ;
+constructor_declaration = name:IDENT fields:constructor_fields? ;
+constructor_fields = "(" values:identifier_list ")" ;
+identifier_list = head:IDENT tail:identifier_tail* ;
+identifier_tail = "," value:IDENT ;
+
+definition = "fn" name:IDENT params:IDENT* "=" body:expr ";" ;
+
+expr =
+  let_rec_expr
+  | let_expr
+  | if_expr
+  | fun_expr
+  | case_expr
+  | equality
+;
+
+let_rec_expr = "let" "rec" name:IDENT parameter:IDENT "=" value:expr "in" body:expr ;
+let_expr = "let" name:IDENT "=" value:expr "in" body:expr ;
+if_expr = "if" condition:expr "then" consequent:expr "else" alternate:expr ;
+fun_expr = "fun" param:IDENT "->" body:expr ;
+case_expr = "case" scrutinee:expr "of" arms:case_arm+ "end" ;
+case_arm = "|" pattern:case_pattern "->" body:expr ;
+case_pattern = name:IDENT binders:pattern_binders? ;
+pattern_binders = "(" values:identifier_list ")" ;
+
+equality = left:comparison rest:equality_tail* ;
+equality_tail = op:equality_op right:comparison ;
+equality_op = eq | ne ;
+eq = "==" ;
+ne = "!=" ;
+
+comparison = left:additive rest:comparison_tail* ;
+comparison_tail = op:comparison_op right:additive ;
+comparison_op = lt | le | gt | ge ;
+lt = "<" ;
+le = "<=" ;
+gt = ">" ;
+ge = ">=" ;
+
+additive = left:multiplicative rest:additive_tail* ;
+additive_tail = op:additive_op right:multiplicative ;
+additive_op = plus | minus ;
+plus = "+" ;
+minus = "-" ;
+
+multiplicative = left:unary rest:multiplicative_tail* ;
+multiplicative_tail = op:multiplicative_op right:unary ;
+multiplicative_op = star | slash ;
+star = "*" ;
+slash = "/" ;
+
+unary = negate | call ;
+negate = "-" body:unary ;
+
+call = callee:primary args:call_arguments* ;
+call_arguments = "(" values:argument_values ")" ;
+argument_values = head:expr tail:argument_tail* ;
+argument_tail = "," value:expr ;
+
+primary = integer | boolean | variable | group ;
+integer = value:INTEGER ;
+boolean = truth | falsity ;
+truth = "true" ;
+falsity = "false" ;
+variable = name:IDENT ;
+group = "(" body:expr ")" ;

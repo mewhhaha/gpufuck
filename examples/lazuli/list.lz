@@ -1,0 +1,9 @@
+data List = Nil | Cons(head, tail);
+
+fn sum values =
+  case values of
+    | Nil -> 0
+    | Cons(head, tail) -> head + sum(tail)
+  end;
+
+fn main = sum(Cons(20, Cons(22, Nil)));
