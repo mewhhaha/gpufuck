@@ -104,20 +104,25 @@ thunks rather than copying or forcing them.
 
 The implementation keeps the boundary explicit:
 
-1. The checked-in Baba/Wasm parser reads source on the host and produces a bounded, flat surface
-   tree with interned symbols and UTF-8 byte spans.
-2. One serial WGSL compiler invocation validates the uploaded tables, resolves lexical names to de
-   Bruijn depths, resolves globals and constructors, validates patterns, and emits the core IR.
-3. Core nodes, definitions, and constructor metadata remain in GPU buffers.
-4. A serial WGSL abstract machine evaluates the module with explicit heap and continuation-stack
-   indices. Guest recursion never uses recursive WGSL calls.
+1. The checked-in Baba/Wasm parser reads each source on the host and produces a bounded, flat
+   surface tree with interned symbols and UTF-8 byte spans.
+2. One WGSL compiler dispatch validates the uploaded tables, resolves lexical names to de Bruijn
+   depths, resolves globals and constructors, validates patterns, and emits the core IR. Each
+   program in a `compileBatch` call gets its own invocation and its own base-offset region of the
+   shared buffers, so the device schedules the whole batch concurrently instead of one dispatch per
+   program; within one program, the compiler is still a single serial invocation.
+3. Core nodes, definitions, and constructor metadata remain in GPU buffers, split into one
+   self-contained module per program after the batch dispatch completes.
+4. A serial WGSL abstract machine evaluates one module at a time, with explicit heap and
+   continuation-stack indices. Guest recursion never uses recursive WGSL calls.
 5. Evaluation yields at bounded transition quanta and resumes from GPU-resident state. Only the
    compact status/result record is read back between dispatches.
 
-Parsing is therefore host-side; semantic compilation and evaluation are GPU-side. The serial
-implementation is a correctness baseline, not a claim that one program has lower latency on a GPU
-than on a CPU. The natural parallel extension is to evaluate many independent programs in separate
-regions.
+Parsing is therefore host-side; semantic compilation and evaluation are GPU-side. The per-program
+compiler work is a correctness baseline, not a claim that one program has lower latency on a GPU
+than on a CPU — the batch dispatch is where the GPU's parallelism actually pays off. Evaluation has
+not been batched the same way yet: `evaluate` still runs one module at a time, which is the natural
+next extension.
 
 ## Memory and ownership
 
@@ -166,6 +171,22 @@ Compilation diagnostics use UTF-8 byte spans (`L1001`–`L2009`). Runtime faults
 modules, fuel, heap and stack limits, blackholes, dynamic type errors, division by zero, and
 non-exhaustive cases (`L3001`–`L3008`).
 
+Independent programs compile as one parallel GPU dispatch through `compileBatch`, which returns one
+result per source in the same order:
+
+```ts
+const [first, second] = await compiler.compileBatch([
+  "fn main = 6 * 7;",
+  "fn main = 1 + absent;",
+]);
+console.log(first.ok, second.ok); // true, false — each program keeps its own diagnostics
+```
+
+`compiler.compile(source)` is `compileBatch([source])` unwrapped, so single- and multi-program
+compilation share the same GPU path. A batch that does not fit the device's buffers, or that asks
+for more programs than `maxComputeWorkgroupsPerDimension` allows, reports a capacity diagnostic (or
+throws, for the dispatch-count case) rather than partially compiling.
+
 ## Development
 
 ```sh
@@ -197,7 +218,10 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
 - Structured constructor results report their outer constructor without forcing or serializing
   fields.
 - A run has bounded fuel, heap, and continuation stack. It has no in-run collector or free list.
-- GPU compilation is still one serial invocation; evaluation is resumable but not yet batched.
+- `compileBatch` dispatches at most `maxComputeWorkgroupsPerDimension` programs per call, and the
+  batch's combined nodes, definitions, types, and constructors must still fit the device's buffers;
+  callers past either limit should split into smaller batches. Evaluation is resumable but not yet
+  batched the same way — `evaluate` still runs one module at a time.
 
 ## Brainfuck IR
 

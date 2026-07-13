@@ -260,6 +260,97 @@ Deno.test("requires a top-level main definition", async () => {
   });
 });
 
+Deno.test("returns no results for an empty batch", async () => {
+  await withLazuliRuntime(async ({ compiler }) => {
+    deepStrictEqual(await compiler.compileBatch([]), []);
+  });
+});
+
+Deno.test("compiles independent programs together in one batch dispatch", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const sources = [
+      "fn main = 6 * 7;",
+      "fn main = 1 + 1;",
+      "fn double x = x + x; fn main = double(21);",
+    ];
+    const results = await runtime.compiler.compileBatch(sources);
+    equal(results.length, sources.length);
+
+    const values: number[] = [];
+    for (const result of results) {
+      ok(result?.ok, `expected batch program to compile: ${JSON.stringify(result)}`);
+      if (!result.ok) continue;
+      try {
+        const evaluation = await runtime.evaluator.evaluate(result.module);
+        ok(evaluation.ok);
+        equal(evaluation.ok && evaluation.value.kind, "integer");
+        if (evaluation.ok && evaluation.value.kind === "integer") {
+          values.push(evaluation.value.value);
+        }
+      } finally {
+        result.module.destroy();
+      }
+    }
+    deepStrictEqual(values, [42, 2, 42]);
+  });
+});
+
+Deno.test("reports each program's own diagnostic in a mixed batch", async () => {
+  await withLazuliRuntime(async ({ compiler }) => {
+    const results = await compiler.compileBatch([
+      "fn main = 6 * 7;",
+      "fn main = absent;",
+      "fn answer = 1;",
+    ]);
+    equal(results.length, 3);
+    const [validResult, unknownNameResult, missingMainResult] = results;
+
+    ok(validResult?.ok);
+    if (validResult?.ok) validResult.module.destroy();
+
+    if (unknownNameResult === undefined || unknownNameResult.ok) {
+      throw new Error("expected an unknown-name diagnostic");
+    }
+    equal(unknownNameResult.diagnostics[0].code, "L2001");
+
+    if (missingMainResult === undefined || missingMainResult.ok) {
+      throw new Error("expected a missing-main diagnostic");
+    }
+    equal(missingMainResult.diagnostics[0].code, "L2003");
+  });
+});
+
+Deno.test("keeps a batch module usable after a sibling batch module is destroyed", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const results = await runtime.compiler.compileBatch([
+      "fn main = 11 * 11;",
+      "fn main = 6 * 7;",
+    ]);
+    equal(results.length, 2);
+    const [first, second] = results;
+    if (first === undefined || !first.ok || second === undefined || !second.ok) {
+      throw new Error("expected both batch programs to compile");
+    }
+
+    first.module.destroy();
+
+    const evaluation = await runtime.evaluator.evaluate(second.module);
+    ok(evaluation.ok);
+    deepStrictEqual(evaluation.ok && evaluation.value, { kind: "integer", value: 42 });
+    second.module.destroy();
+  });
+});
+
+Deno.test("rejects a batch larger than the device's per-dispatch workgroup limit", async () => {
+  await withLazuliRuntime(async ({ compiler, device }) => {
+    const oversizedBatch = device.limits.maxComputeWorkgroupsPerDimension + 1;
+    await rejects(
+      () => compiler.compileBatch(Array.from({ length: oversizedBatch }, () => "fn main = 1;")),
+      /dispatches at most/,
+    );
+  });
+});
+
 Deno.test("reports demanded cyclic globals as blackholes", async () => {
   await withLazuliRuntime(async (runtime) => {
     const result = await evaluateSource(runtime, "fn main = main;");

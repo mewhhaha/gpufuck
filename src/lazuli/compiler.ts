@@ -23,20 +23,24 @@ import {
 } from "./abi.ts";
 import { parseLazuliSource } from "./frontend.ts";
 
-const COMPILATION_STATE_BYTE_LENGTH = 40;
+const COMPILATION_STATE_WORD_LENGTH = 14;
 const MAXIMUM_SEMANTIC_COMPILER_ITERATIONS = 1_000_000;
 
 const StateWord = {
-  NodeCount: 0,
-  DefinitionCount: 1,
-  TypeCount: 2,
-  ConstructorCount: 3,
-  EntrySymbol: 4,
-  Status: 5,
-  ErrorCode: 6,
-  ErrorSource: 7,
-  ErrorDetail: 8,
-  EntryDefinition: 9,
+  NodeBase: 0,
+  NodeCount: 1,
+  DefinitionBase: 2,
+  DefinitionCount: 3,
+  TypeBase: 4,
+  TypeCount: 5,
+  ConstructorBase: 6,
+  ConstructorCount: 7,
+  EntrySymbol: 8,
+  Status: 9,
+  ErrorCode: 10,
+  ErrorSource: 11,
+  ErrorDetail: 12,
+  EntryDefinition: 13,
 } as const;
 
 const Status = {
@@ -93,6 +97,19 @@ export type LazuliCompileResult =
     readonly ok: false;
     readonly diagnostics: readonly [LazuliDiagnostic, ...LazuliDiagnostic[]];
   };
+
+type LazuliValidatedSource =
+  | { readonly ok: true; readonly surface: EncodedLazuliSurface; readonly sourceByteLength: number }
+  | {
+    readonly ok: false;
+    readonly diagnostics: readonly [LazuliDiagnostic, ...LazuliDiagnostic[]];
+  };
+
+interface LazuliCompileLane {
+  readonly sourceIndex: number;
+  readonly surface: EncodedLazuliSurface;
+  readonly sourceByteLength: number;
+}
 
 class CompiledGpuLazuliModule implements GpuLazuliModule {
   readonly nodeBuffer: GPUBuffer;
@@ -221,6 +238,7 @@ export class GpuLazuliCompiler {
   readonly #maximumDefinitionCount: number;
   readonly #maximumTypeCount: number;
   readonly #maximumConstructorCount: number;
+  readonly #maximumBatchSize: number;
   #compilationTail: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -231,6 +249,7 @@ export class GpuLazuliCompiler {
     maximumDefinitionCount: number,
     maximumTypeCount: number,
     maximumConstructorCount: number,
+    maximumBatchSize: number,
   ) {
     this.#device = device;
     this.#pipeline = pipeline;
@@ -239,6 +258,7 @@ export class GpuLazuliCompiler {
     this.#maximumDefinitionCount = maximumDefinitionCount;
     this.#maximumTypeCount = maximumTypeCount;
     this.#maximumConstructorCount = maximumConstructorCount;
+    this.#maximumBatchSize = maximumBatchSize;
   }
 
   static async create(device: GPUDevice): Promise<GpuLazuliCompiler> {
@@ -261,15 +281,17 @@ export class GpuLazuliCompiler {
       Math.floor(device.limits.maxStorageBufferBindingSize / LAZULI_CONSTRUCTOR_BYTE_LENGTH),
       Math.floor(device.limits.maxBufferSize / LAZULI_CONSTRUCTOR_BYTE_LENGTH),
     );
+    const maximumBatchSize = device.limits.maxComputeWorkgroupsPerDimension;
 
     if (
       maximumNodeCount === 0 || maximumDefinitionCount === 0 || maximumTypeCount === 0 ||
-      maximumConstructorCount === 0
+      maximumConstructorCount === 0 || maximumBatchSize === 0
     ) {
       throw new Error(
         "WebGPU device limits cannot store Lazuli ABI records: " +
           `maxStorageBufferBindingSize=${device.limits.maxStorageBufferBindingSize}, ` +
-          `maxBufferSize=${device.limits.maxBufferSize}`,
+          `maxBufferSize=${device.limits.maxBufferSize}, ` +
+          `maxComputeWorkgroupsPerDimension=${device.limits.maxComputeWorkgroupsPerDimension}`,
       );
     }
 
@@ -303,6 +325,7 @@ export class GpuLazuliCompiler {
         maximumDefinitionCount,
         maximumTypeCount,
         maximumConstructorCount,
+        maximumBatchSize,
       );
     } catch (cause) {
       throw new Error("WebGPU could not create the Lazuli semantic compiler pipeline", { cause });
@@ -310,6 +333,112 @@ export class GpuLazuliCompiler {
   }
 
   async compile(source: string): Promise<LazuliCompileResult> {
+    const [result] = await this.compileBatch([source]);
+    if (result === undefined) {
+      throw new Error("GPU Lazuli batch compiler produced no result for a single-source batch");
+    }
+    return result;
+  }
+
+  /**
+   * Compiles independent programs as one GPU dispatch: each program gets its own base-offset
+   * region of shared buffers and one compute invocation, so the device schedules every program
+   * in the batch concurrently instead of one dispatch per program.
+   */
+  async compileBatch(sources: readonly string[]): Promise<readonly LazuliCompileResult[]> {
+    if (sources.length === 0) return [];
+    if (sources.length > this.#maximumBatchSize) {
+      throw new Error(
+        `batch has ${sources.length} programs; this device dispatches at most ${this.#maximumBatchSize} per call (maxComputeWorkgroupsPerDimension)`,
+      );
+    }
+
+    const results = new Array<LazuliCompileResult | undefined>(sources.length);
+    const lanes: LazuliCompileLane[] = [];
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+      const source = sources[sourceIndex];
+      if (source === undefined) {
+        throw new Error(`batch source ${sourceIndex} is missing`);
+      }
+      const validated = this.#validateSource(source);
+      if (!validated.ok) {
+        results[sourceIndex] = validated;
+        continue;
+      }
+      lanes.push({
+        sourceIndex,
+        surface: validated.surface,
+        sourceByteLength: validated.sourceByteLength,
+      });
+    }
+
+    if (lanes.length === 0) {
+      return finalizeResults(results);
+    }
+
+    let totalNodeCount = 0;
+    let totalDefinitionCount = 0;
+    let totalTypeCount = 0;
+    let totalConstructorCount = 0;
+    for (const lane of lanes) {
+      totalNodeCount += lane.surface.nodeCount;
+      totalDefinitionCount += lane.surface.definitionCount;
+      totalTypeCount += lane.surface.typeCount;
+      totalConstructorCount += lane.surface.constructorCount;
+    }
+
+    if (
+      totalNodeCount > this.#maximumNodeCount ||
+      totalDefinitionCount > this.#maximumDefinitionCount ||
+      totalTypeCount > this.#maximumTypeCount ||
+      totalConstructorCount > this.#maximumConstructorCount
+    ) {
+      const diagnostic = batchCapacityDiagnostic({
+        programCount: lanes.length,
+        totalNodeCount,
+        maximumNodeCount: this.#maximumNodeCount,
+        totalDefinitionCount,
+        maximumDefinitionCount: this.#maximumDefinitionCount,
+        totalTypeCount,
+        maximumTypeCount: this.#maximumTypeCount,
+        totalConstructorCount,
+        maximumConstructorCount: this.#maximumConstructorCount,
+      });
+      for (const lane of lanes) {
+        results[lane.sourceIndex] = { ok: false, diagnostics: [diagnostic] };
+      }
+      return finalizeResults(results);
+    }
+
+    const laneResults = await this.#runExclusively(() => this.#compileLanes(lanes));
+    for (let laneIndex = 0; laneIndex < lanes.length; laneIndex++) {
+      const lane = lanes[laneIndex];
+      const laneResult = laneResults[laneIndex];
+      if (lane === undefined || laneResult === undefined) {
+        throw new Error(`GPU Lazuli batch compiler omitted lane ${laneIndex}`);
+      }
+      results[lane.sourceIndex] = laneResult;
+    }
+
+    return finalizeResults(results);
+  }
+
+  async #runExclusively<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const previousCompilation = this.#compilationTail;
+    let release: (() => void) | undefined;
+    this.#compilationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previousCompilation;
+    try {
+      return await operation();
+    } finally {
+      release?.();
+    }
+  }
+
+  #validateSource(source: string): LazuliValidatedSource {
     const sourceByteLength = new TextEncoder().encode(source).byteLength;
     if (sourceByteLength > this.#maximumSourceByteLength) {
       return {
@@ -383,105 +512,165 @@ export class GpuLazuliCompiler {
       };
     }
 
-    return await this.#runExclusively(() => this.#compileSurface(surface, sourceByteLength));
+    return { ok: true, surface, sourceByteLength };
   }
 
-  async #runExclusively<Result>(operation: () => Promise<Result>): Promise<Result> {
-    const previousCompilation = this.#compilationTail;
-    let release: (() => void) | undefined;
-    this.#compilationTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+  async #compileLanes(
+    lanes: readonly LazuliCompileLane[],
+  ): Promise<readonly LazuliCompileResult[]> {
+    const laneCount = lanes.length;
 
-    await previousCompilation;
-    try {
-      return await operation();
-    } finally {
-      release?.();
+    let totalNodeCount = 0;
+    let totalDefinitionCount = 0;
+    let totalTypeCount = 0;
+    let totalConstructorCount = 0;
+    for (const lane of lanes) {
+      totalNodeCount += lane.surface.nodeCount;
+      totalDefinitionCount += lane.surface.definitionCount;
+      totalTypeCount += lane.surface.typeCount;
+      totalConstructorCount += lane.surface.constructorCount;
     }
-  }
 
-  async #compileSurface(
-    surface: EncodedLazuliSurface,
-    sourceByteLength: number,
-  ): Promise<LazuliCompileResult> {
-    const surfaceNodeBytes = encodeWords(surface.nodeWords);
-    const definitionBytes = encodeWords(surface.definitionWords);
-    const typeBytes = encodeWords(surface.typeWords);
-    const constructorBytes = encodeWords(surface.constructorWords);
-    const initialState = new ArrayBuffer(COMPILATION_STATE_BYTE_LENGTH);
-    const initialStateView = new DataView(initialState);
-    initialStateView.setUint32(StateWord.NodeCount * 4, surface.nodeCount, true);
-    initialStateView.setUint32(StateWord.DefinitionCount * 4, surface.definitionCount, true);
-    initialStateView.setUint32(StateWord.TypeCount * 4, surface.typeCount, true);
-    initialStateView.setUint32(StateWord.ConstructorCount * 4, surface.constructorCount, true);
-    initialStateView.setUint32(StateWord.EntrySymbol * 4, surface.mainSymbol, true);
-    initialStateView.setUint32(StateWord.Status * 4, 0, true);
-    initialStateView.setUint32(StateWord.ErrorCode * 4, ErrorCode.None, true);
-    initialStateView.setUint32(StateWord.ErrorSource * 4, LAZULI_NO_INDEX, true);
-    initialStateView.setUint32(StateWord.ErrorDetail * 4, LAZULI_NO_INDEX, true);
-    initialStateView.setUint32(StateWord.EntryDefinition * 4, LAZULI_NO_INDEX, true);
+    const surfaceNodeWords = new Uint32Array(totalNodeCount * LAZULI_NODE_WORD_LENGTH);
+    const definitionWords = new Uint32Array(totalDefinitionCount * LAZULI_DEFINITION_WORD_LENGTH);
+    const typeWords = new Uint32Array(totalTypeCount * LAZULI_TYPE_WORD_LENGTH);
+    const constructorWords = new Uint32Array(
+      totalConstructorCount * LAZULI_CONSTRUCTOR_WORD_LENGTH,
+    );
+    const stateWords = new Uint32Array(laneCount * COMPILATION_STATE_WORD_LENGTH);
+    const laneNodeBases = new Array<number>(laneCount);
+    const laneDefinitionBases = new Array<number>(laneCount);
+    const laneConstructorBases = new Array<number>(laneCount);
+
+    let nodeBase = 0;
+    let definitionBase = 0;
+    let typeBase = 0;
+    let constructorBase = 0;
+    for (let laneIndex = 0; laneIndex < laneCount; laneIndex++) {
+      const lane = lanes[laneIndex];
+      if (lane === undefined) throw new Error(`batch lane ${laneIndex} is missing`);
+
+      surfaceNodeWords.set(lane.surface.nodeWords, nodeBase * LAZULI_NODE_WORD_LENGTH);
+      definitionWords.set(
+        lane.surface.definitionWords,
+        definitionBase * LAZULI_DEFINITION_WORD_LENGTH,
+      );
+      typeWords.set(lane.surface.typeWords, typeBase * LAZULI_TYPE_WORD_LENGTH);
+      constructorWords.set(
+        lane.surface.constructorWords,
+        constructorBase * LAZULI_CONSTRUCTOR_WORD_LENGTH,
+      );
+
+      const stateOffset = laneIndex * COMPILATION_STATE_WORD_LENGTH;
+      stateWords[stateOffset + StateWord.NodeBase] = nodeBase;
+      stateWords[stateOffset + StateWord.NodeCount] = lane.surface.nodeCount;
+      stateWords[stateOffset + StateWord.DefinitionBase] = definitionBase;
+      stateWords[stateOffset + StateWord.DefinitionCount] = lane.surface.definitionCount;
+      stateWords[stateOffset + StateWord.TypeBase] = typeBase;
+      stateWords[stateOffset + StateWord.TypeCount] = lane.surface.typeCount;
+      stateWords[stateOffset + StateWord.ConstructorBase] = constructorBase;
+      stateWords[stateOffset + StateWord.ConstructorCount] = lane.surface.constructorCount;
+      stateWords[stateOffset + StateWord.EntrySymbol] = lane.surface.mainSymbol;
+      stateWords[stateOffset + StateWord.Status] = 0;
+      stateWords[stateOffset + StateWord.ErrorCode] = ErrorCode.None;
+      stateWords[stateOffset + StateWord.ErrorSource] = LAZULI_NO_INDEX;
+      stateWords[stateOffset + StateWord.ErrorDetail] = LAZULI_NO_INDEX;
+      stateWords[stateOffset + StateWord.EntryDefinition] = LAZULI_NO_INDEX;
+
+      laneNodeBases[laneIndex] = nodeBase;
+      laneDefinitionBases[laneIndex] = definitionBase;
+      laneConstructorBases[laneIndex] = constructorBase;
+
+      nodeBase += lane.surface.nodeCount;
+      definitionBase += lane.surface.definitionCount;
+      typeBase += lane.surface.typeCount;
+      constructorBase += lane.surface.constructorCount;
+    }
 
     let surfaceNodeBuffer: GPUBuffer | undefined;
-    let coreNodeBuffer: GPUBuffer | undefined;
     let definitionBuffer: GPUBuffer | undefined;
     let typeBuffer: GPUBuffer | undefined;
     let constructorBuffer: GPUBuffer | undefined;
+    let coreNodeBuffer: GPUBuffer | undefined;
     let stateBuffer: GPUBuffer | undefined;
     let stateReadbackBuffer: GPUBuffer | undefined;
     let stateReadbackMapped = false;
-    let nodeBufferTransferred = false;
-    let definitionBufferTransferred = false;
-    let constructorBufferTransferred = false;
+    const laneNodeBuffers: GPUBuffer[] = [];
+    const laneDefinitionBuffers: GPUBuffer[] = [];
+    const laneConstructorBuffers: GPUBuffer[] = [];
+    const laneTransferred = new Array<boolean>(laneCount).fill(false);
 
     try {
       this.#device.pushErrorScope("validation");
       let validation: Promise<GPUError | null>;
       try {
         surfaceNodeBuffer = this.#device.createBuffer({
-          label: "Lazuli surface nodes",
-          size: storageBufferSize(surface.nodeCount, LAZULI_NODE_BYTE_LENGTH),
+          label: "Lazuli batch surface nodes",
+          size: storageBufferSize(totalNodeCount, LAZULI_NODE_BYTE_LENGTH),
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
         });
         definitionBuffer = this.#device.createBuffer({
-          label: "Lazuli definitions",
-          size: storageBufferSize(surface.definitionCount, LAZULI_DEFINITION_BYTE_LENGTH),
+          label: "Lazuli batch definitions",
+          size: storageBufferSize(totalDefinitionCount, LAZULI_DEFINITION_BYTE_LENGTH),
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         typeBuffer = this.#device.createBuffer({
-          label: "Lazuli algebraic types",
-          size: storageBufferSize(surface.typeCount, LAZULI_TYPE_BYTE_LENGTH),
+          label: "Lazuli batch algebraic types",
+          size: storageBufferSize(totalTypeCount, LAZULI_TYPE_BYTE_LENGTH),
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
         });
         constructorBuffer = this.#device.createBuffer({
-          label: "Lazuli constructors",
-          size: storageBufferSize(surface.constructorCount, LAZULI_CONSTRUCTOR_BYTE_LENGTH),
+          label: "Lazuli batch constructors",
+          size: storageBufferSize(totalConstructorCount, LAZULI_CONSTRUCTOR_BYTE_LENGTH),
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         coreNodeBuffer = this.#device.createBuffer({
-          label: "Lazuli core nodes",
-          size: storageBufferSize(surface.nodeCount, LAZULI_NODE_BYTE_LENGTH),
+          label: "Lazuli batch core nodes",
+          size: storageBufferSize(totalNodeCount, LAZULI_NODE_BYTE_LENGTH),
           usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         stateBuffer = this.#device.createBuffer({
-          label: "Lazuli compilation state",
-          size: COMPILATION_STATE_BYTE_LENGTH,
+          label: "Lazuli batch compilation state",
+          size: stateWords.byteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         stateReadbackBuffer = this.#device.createBuffer({
-          label: "Lazuli compilation state readback",
-          size: COMPILATION_STATE_BYTE_LENGTH,
+          label: "Lazuli batch compilation state readback",
+          size: stateWords.byteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
-        this.#device.queue.writeBuffer(surfaceNodeBuffer, 0, surfaceNodeBytes);
-        this.#device.queue.writeBuffer(definitionBuffer, 0, definitionBytes);
-        this.#device.queue.writeBuffer(typeBuffer, 0, typeBytes);
-        this.#device.queue.writeBuffer(constructorBuffer, 0, constructorBytes);
-        this.#device.queue.writeBuffer(stateBuffer, 0, initialState);
+        for (let laneIndex = 0; laneIndex < laneCount; laneIndex++) {
+          const lane = lanes[laneIndex];
+          if (lane === undefined) throw new Error(`batch lane ${laneIndex} is missing`);
+          laneNodeBuffers.push(this.#device.createBuffer({
+            label: `Lazuli core nodes (batch lane ${laneIndex})`,
+            size: storageBufferSize(lane.surface.nodeCount, LAZULI_NODE_BYTE_LENGTH),
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+          }));
+          laneDefinitionBuffers.push(this.#device.createBuffer({
+            label: `Lazuli definitions (batch lane ${laneIndex})`,
+            size: storageBufferSize(lane.surface.definitionCount, LAZULI_DEFINITION_BYTE_LENGTH),
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+          }));
+          laneConstructorBuffers.push(this.#device.createBuffer({
+            label: `Lazuli constructors (batch lane ${laneIndex})`,
+            size: storageBufferSize(
+              lane.surface.constructorCount,
+              LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+            ),
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+          }));
+        }
+
+        this.#device.queue.writeBuffer(surfaceNodeBuffer, 0, encodeWords(surfaceNodeWords));
+        this.#device.queue.writeBuffer(definitionBuffer, 0, encodeWords(definitionWords));
+        this.#device.queue.writeBuffer(typeBuffer, 0, encodeWords(typeWords));
+        this.#device.queue.writeBuffer(constructorBuffer, 0, encodeWords(constructorWords));
+        this.#device.queue.writeBuffer(stateBuffer, 0, encodeWords(stateWords));
 
         const bindGroup = this.#device.createBindGroup({
-          label: "Lazuli semantic compiler bindings",
+          label: "Lazuli batch semantic compiler bindings",
           layout: this.#pipeline.getBindGroupLayout(0),
           entries: [
             { binding: 0, resource: { buffer: surfaceNodeBuffer } },
@@ -493,21 +682,73 @@ export class GpuLazuliCompiler {
           ],
         });
         const commandEncoder = this.#device.createCommandEncoder({
-          label: "Lazuli semantic compilation commands",
+          label: "Lazuli batch semantic compilation commands",
         });
         const computePass = commandEncoder.beginComputePass({
-          label: "Compile Lazuli surface nodes",
+          label: "Compile Lazuli batch surface nodes",
         });
         computePass.setPipeline(this.#pipeline);
         computePass.setBindGroup(0, bindGroup);
-        computePass.dispatchWorkgroups(1);
+        computePass.dispatchWorkgroups(laneCount);
         computePass.end();
+
+        for (let laneIndex = 0; laneIndex < laneCount; laneIndex++) {
+          const lane = lanes[laneIndex];
+          const laneOwnNodeBase = laneNodeBases[laneIndex];
+          const laneOwnDefinitionBase = laneDefinitionBases[laneIndex];
+          const laneOwnConstructorBase = laneConstructorBases[laneIndex];
+          const laneNodeBuffer = laneNodeBuffers[laneIndex];
+          const laneDefinitionBuffer = laneDefinitionBuffers[laneIndex];
+          const laneConstructorBuffer = laneConstructorBuffers[laneIndex];
+          if (
+            lane === undefined || laneOwnNodeBase === undefined ||
+            laneOwnDefinitionBase === undefined || laneOwnConstructorBase === undefined ||
+            laneNodeBuffer === undefined || laneDefinitionBuffer === undefined ||
+            laneConstructorBuffer === undefined
+          ) {
+            throw new Error(`batch lane ${laneIndex} is missing GPU state`);
+          }
+
+          const nodeByteLength = lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH;
+          if (nodeByteLength > 0) {
+            commandEncoder.copyBufferToBuffer(
+              coreNodeBuffer,
+              laneOwnNodeBase * LAZULI_NODE_BYTE_LENGTH,
+              laneNodeBuffer,
+              0,
+              nodeByteLength,
+            );
+          }
+          const definitionByteLength = lane.surface.definitionCount *
+            LAZULI_DEFINITION_BYTE_LENGTH;
+          if (definitionByteLength > 0) {
+            commandEncoder.copyBufferToBuffer(
+              definitionBuffer,
+              laneOwnDefinitionBase * LAZULI_DEFINITION_BYTE_LENGTH,
+              laneDefinitionBuffer,
+              0,
+              definitionByteLength,
+            );
+          }
+          const constructorByteLength = lane.surface.constructorCount *
+            LAZULI_CONSTRUCTOR_BYTE_LENGTH;
+          if (constructorByteLength > 0) {
+            commandEncoder.copyBufferToBuffer(
+              constructorBuffer,
+              laneOwnConstructorBase * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+              laneConstructorBuffer,
+              0,
+              constructorByteLength,
+            );
+          }
+        }
+
         commandEncoder.copyBufferToBuffer(
           stateBuffer,
           0,
           stateReadbackBuffer,
           0,
-          COMPILATION_STATE_BYTE_LENGTH,
+          stateWords.byteLength,
         );
         this.#device.queue.submit([commandEncoder.finish()]);
         validation = this.#device.popErrorScope();
@@ -515,7 +756,7 @@ export class GpuLazuliCompiler {
         const validationError = await this.#device.popErrorScope();
         if (validationError !== null) {
           throw new Error(
-            `WebGPU rejected Lazuli compilation for ${surface.nodeCount} nodes, ${surface.definitionCount} definitions, ${surface.typeCount} types, and ${surface.constructorCount} constructors: ${validationError.message}`,
+            `WebGPU rejected Lazuli batch compilation for ${laneCount} programs, ${totalNodeCount} nodes, ${totalDefinitionCount} definitions, ${totalTypeCount} types, and ${totalConstructorCount} constructors: ${validationError.message}`,
             { cause },
           );
         }
@@ -525,7 +766,7 @@ export class GpuLazuliCompiler {
       const validationError = await validation;
       if (validationError !== null) {
         throw new Error(
-          `WebGPU rejected Lazuli compilation for ${surface.nodeCount} nodes, ${surface.definitionCount} definitions, ${surface.typeCount} types, and ${surface.constructorCount} constructors: ${validationError.message}`,
+          `WebGPU rejected Lazuli batch compilation for ${laneCount} programs, ${totalNodeCount} nodes, ${totalDefinitionCount} definitions, ${totalTypeCount} types, and ${totalConstructorCount} constructors: ${validationError.message}`,
         );
       }
 
@@ -533,82 +774,106 @@ export class GpuLazuliCompiler {
         await stateReadbackBuffer.mapAsync(GPUMapMode.READ);
       } catch (cause) {
         throw new Error(
-          `could not read GPU Lazuli compilation status for ${surface.nodeCount} nodes`,
+          `could not read GPU Lazuli batch compilation status for ${laneCount} programs`,
           { cause },
         );
       }
       stateReadbackMapped = true;
-      const completedState = new DataView(stateReadbackBuffer.getMappedRange().slice(0));
-      const state = readCompletedState(completedState);
+      const completedView = new DataView(stateReadbackBuffer.getMappedRange().slice(0));
 
-      if (state.status === Status.Ok) {
+      const laneResults: LazuliCompileResult[] = [];
+      for (let laneIndex = 0; laneIndex < laneCount; laneIndex++) {
+        const lane = lanes[laneIndex];
+        const laneNodeBuffer = laneNodeBuffers[laneIndex];
+        const laneDefinitionBuffer = laneDefinitionBuffers[laneIndex];
+        const laneConstructorBuffer = laneConstructorBuffers[laneIndex];
         if (
-          state.nodeCount !== surface.nodeCount ||
-          state.definitionCount !== surface.definitionCount ||
-          state.typeCount !== surface.typeCount ||
-          state.constructorCount !== surface.constructorCount ||
-          state.errorCode !== ErrorCode.None ||
-          state.errorSource !== LAZULI_NO_INDEX ||
-          state.errorDetail !== LAZULI_NO_INDEX ||
-          state.entryDefinition >= surface.definitionCount
+          lane === undefined || laneNodeBuffer === undefined ||
+          laneDefinitionBuffer === undefined || laneConstructorBuffer === undefined
         ) {
+          throw new Error(`batch lane ${laneIndex} is missing GPU state`);
+        }
+        const state = readCompletedState(completedView, laneIndex * COMPILATION_STATE_WORD_LENGTH);
+
+        if (state.status === Status.Ok) {
+          if (
+            state.nodeCount !== lane.surface.nodeCount ||
+            state.definitionCount !== lane.surface.definitionCount ||
+            state.typeCount !== lane.surface.typeCount ||
+            state.constructorCount !== lane.surface.constructorCount ||
+            state.errorCode !== ErrorCode.None ||
+            state.errorSource !== LAZULI_NO_INDEX ||
+            state.errorDetail !== LAZULI_NO_INDEX ||
+            state.entryDefinition >= lane.surface.definitionCount
+          ) {
+            throw new Error(
+              `GPU Lazuli batch compiler returned inconsistent success state at lane ${laneIndex}: ${
+                formatState(state)
+              }`,
+            );
+          }
+          const module = new CompiledGpuLazuliModule(
+            this.#device,
+            laneNodeBuffer,
+            laneDefinitionBuffer,
+            laneConstructorBuffer,
+            lane.surface.nodeCount,
+            lane.surface.definitionCount,
+            lane.surface.typeCount,
+            constructorNames(lane.surface),
+            constructorArities(lane.surface),
+            state.entryDefinition,
+          );
+          laneTransferred[laneIndex] = true;
+          laneResults.push({ ok: true, module });
+          continue;
+        }
+
+        if (state.status === Status.Diagnostic) {
+          const diagnostic = diagnosticFromState(state, lane.surface, lane.sourceByteLength);
+          if (diagnostic === undefined) {
+            throw new Error(
+              `GPU Lazuli batch compiler returned inconsistent diagnostic state at lane ${laneIndex}: ${
+                formatState(state)
+              }`,
+            );
+          }
+          laneResults.push({ ok: false, diagnostics: [diagnostic] });
+          continue;
+        }
+
+        if (state.status === Status.InvalidSurface) {
           throw new Error(
-            `GPU Lazuli compiler returned inconsistent success state: ${formatState(state)}`,
+            `GPU Lazuli batch compiler rejected an impossible encoded surface at lane ${laneIndex}: ${
+              formatInvalidSurfaceState(state)
+            }`,
           );
         }
-        const module = new CompiledGpuLazuliModule(
-          this.#device,
-          coreNodeBuffer,
-          definitionBuffer,
-          constructorBuffer,
-          surface.nodeCount,
-          surface.definitionCount,
-          surface.typeCount,
-          constructorNames(surface),
-          constructorArities(surface),
-          state.entryDefinition,
-        );
-        nodeBufferTransferred = true;
-        definitionBufferTransferred = true;
-        constructorBufferTransferred = true;
-        return { ok: true, module };
-      }
 
-      if (state.status === Status.Diagnostic) {
-        const diagnostic = diagnosticFromState(state, surface, sourceByteLength);
-        if (diagnostic === undefined) {
-          throw new Error(
-            `GPU Lazuli compiler returned inconsistent diagnostic state: ${formatState(state)}`,
-          );
-        }
-        return { ok: false, diagnostics: [diagnostic] };
-      }
-
-      if (state.status === Status.InvalidSurface) {
         throw new Error(
-          `GPU Lazuli compiler rejected an impossible encoded surface: ${
-            formatInvalidSurfaceState(state)
+          `GPU Lazuli batch compiler returned unknown status at lane ${laneIndex}: ${
+            formatState(state)
           }`,
         );
       }
 
-      throw new Error(`GPU Lazuli compiler returned unknown status: ${formatState(state)}`);
+      return laneResults;
     } finally {
       if (stateReadbackMapped) {
         stateReadbackBuffer?.unmap();
       }
       surfaceNodeBuffer?.destroy();
       typeBuffer?.destroy();
+      definitionBuffer?.destroy();
+      constructorBuffer?.destroy();
+      coreNodeBuffer?.destroy();
       stateBuffer?.destroy();
       stateReadbackBuffer?.destroy();
-      if (!nodeBufferTransferred) {
-        coreNodeBuffer?.destroy();
-      }
-      if (!definitionBufferTransferred) {
-        definitionBuffer?.destroy();
-      }
-      if (!constructorBufferTransferred) {
-        constructorBuffer?.destroy();
+      for (let laneIndex = 0; laneIndex < laneNodeBuffers.length; laneIndex++) {
+        if (laneTransferred[laneIndex]) continue;
+        laneNodeBuffers[laneIndex]?.destroy();
+        laneDefinitionBuffers[laneIndex]?.destroy();
+        laneConstructorBuffers[laneIndex]?.destroy();
       }
     }
   }
@@ -627,18 +892,19 @@ type CompletedState = Readonly<{
   entryDefinition: number;
 }>;
 
-function readCompletedState(state: DataView): CompletedState {
+function readCompletedState(state: DataView, wordOffset: number): CompletedState {
+  const byteOffset = wordOffset * 4;
   return {
-    nodeCount: state.getUint32(StateWord.NodeCount * 4, true),
-    definitionCount: state.getUint32(StateWord.DefinitionCount * 4, true),
-    typeCount: state.getUint32(StateWord.TypeCount * 4, true),
-    constructorCount: state.getUint32(StateWord.ConstructorCount * 4, true),
-    entrySymbol: state.getUint32(StateWord.EntrySymbol * 4, true),
-    status: state.getUint32(StateWord.Status * 4, true),
-    errorCode: state.getUint32(StateWord.ErrorCode * 4, true),
-    errorSource: state.getUint32(StateWord.ErrorSource * 4, true),
-    errorDetail: state.getUint32(StateWord.ErrorDetail * 4, true),
-    entryDefinition: state.getUint32(StateWord.EntryDefinition * 4, true),
+    nodeCount: state.getUint32(byteOffset + StateWord.NodeCount * 4, true),
+    definitionCount: state.getUint32(byteOffset + StateWord.DefinitionCount * 4, true),
+    typeCount: state.getUint32(byteOffset + StateWord.TypeCount * 4, true),
+    constructorCount: state.getUint32(byteOffset + StateWord.ConstructorCount * 4, true),
+    entrySymbol: state.getUint32(byteOffset + StateWord.EntrySymbol * 4, true),
+    status: state.getUint32(byteOffset + StateWord.Status * 4, true),
+    errorCode: state.getUint32(byteOffset + StateWord.ErrorCode * 4, true),
+    errorSource: state.getUint32(byteOffset + StateWord.ErrorSource * 4, true),
+    errorDetail: state.getUint32(byteOffset + StateWord.ErrorDetail * 4, true),
+    entryDefinition: state.getUint32(byteOffset + StateWord.EntryDefinition * 4, true),
   };
 }
 
@@ -994,6 +1260,30 @@ function semanticWorkLimitDiagnostic(
   };
 }
 
+function batchCapacityDiagnostic(capacity: {
+  readonly programCount: number;
+  readonly totalNodeCount: number;
+  readonly maximumNodeCount: number;
+  readonly totalDefinitionCount: number;
+  readonly maximumDefinitionCount: number;
+  readonly totalTypeCount: number;
+  readonly maximumTypeCount: number;
+  readonly totalConstructorCount: number;
+  readonly maximumConstructorCount: number;
+}): LazuliDiagnostic {
+  return {
+    stage: "compile",
+    code: "L1003",
+    message: `batch of ${capacity.programCount} programs needs ${capacity.totalNodeCount} ` +
+      `nodes, ${capacity.totalDefinitionCount} definitions, ${capacity.totalTypeCount} types, ` +
+      `and ${capacity.totalConstructorCount} constructors combined; this device accepts at ` +
+      `most ${capacity.maximumNodeCount} nodes, ${capacity.maximumDefinitionCount} ` +
+      `definitions, ${capacity.maximumTypeCount} types, and ` +
+      `${capacity.maximumConstructorCount} constructors per dispatch`,
+    span: { startByte: 0, endByte: 0 },
+  };
+}
+
 function validateEncodedSurfaceShape(surface: EncodedLazuliSurface): void {
   if (!Number.isSafeInteger(surface.nodeCount) || surface.nodeCount < 0) {
     throw new Error(`frontend returned invalid Lazuli node count ${surface.nodeCount}`);
@@ -1136,4 +1426,15 @@ function formatInvalidSurfaceState(state: CompletedState): string {
     }
   })();
   return `${reason}; ${formatState(state)}`;
+}
+
+function finalizeResults(
+  results: readonly (LazuliCompileResult | undefined)[],
+): readonly LazuliCompileResult[] {
+  return results.map((result, index) => {
+    if (result === undefined) {
+      throw new Error(`GPU Lazuli batch compiler produced no result for program ${index}`);
+    }
+    return result;
+  });
 }
