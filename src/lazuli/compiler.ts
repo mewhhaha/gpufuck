@@ -33,11 +33,14 @@ import {
   runGpuLazuliCompilationInference,
 } from "./gpu_type_inference.ts";
 import { LAZULI_TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
+import { GpuDispatchScheduler, MAXIMUM_GPU_DISPATCH_BATCH_SIZE } from "./gpu_dispatch_scheduler.ts";
 
 const DEFAULT_MAXIMUM_COMPILATION_STEPS = 1_000_000;
 const HARD_MAXIMUM_COMPILATION_STEPS = 10_000_000;
 const DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 4_096;
 const HARD_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 65_536;
+const COMPILATION_TRANSIENT_BYTES_PER_INPUT = 6_144;
+const COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH = 16_384;
 
 const ErrorCode = {
   None: 0,
@@ -95,6 +98,18 @@ export type LazuliCompileResult =
     readonly ok: false;
     readonly diagnostics: readonly [LazuliDiagnostic, ...LazuliDiagnostic[]];
   };
+
+interface PendingLazuliCompilation {
+  readonly compile: () => Promise<LazuliCompileResult>;
+  readonly admissionWeight: number;
+  readonly signal?: AbortSignal;
+  readonly cancelWhileQueued: () => void;
+  readonly resolve: (result: LazuliCompileResult) => void;
+  readonly reject: (reason: unknown) => void;
+  previous: PendingLazuliCompilation | undefined;
+  next: PendingLazuliCompilation | undefined;
+  queued: boolean;
+}
 
 class CompiledGpuLazuliModule implements GpuLazuliModule {
   readonly nodeBuffer: GPUBuffer;
@@ -229,7 +244,13 @@ export class GpuLazuliCompiler {
   readonly #maximumDefinitionCount: number;
   readonly #maximumTypeCount: number;
   readonly #maximumConstructorCount: number;
-  #compilationTail: Promise<void> = Promise.resolve();
+  readonly #maximumConcurrentCompilationWeight: number;
+  readonly #minimumCompilationAdmissionWeight: number;
+  readonly #dispatchScheduler: GpuDispatchScheduler;
+  #firstPendingCompilation: PendingLazuliCompilation | undefined;
+  #lastPendingCompilation: PendingLazuliCompilation | undefined;
+  #activeCompilationCount = 0;
+  #activeCompilationWeight = 0;
 
   private constructor(
     device: GPUDevice,
@@ -240,6 +261,7 @@ export class GpuLazuliCompiler {
     maximumDefinitionCount: number,
     maximumTypeCount: number,
     maximumConstructorCount: number,
+    maximumConcurrentCompilationWeight: number,
   ) {
     this.#device = device;
     this.#pipeline = pipeline;
@@ -249,6 +271,12 @@ export class GpuLazuliCompiler {
     this.#maximumDefinitionCount = maximumDefinitionCount;
     this.#maximumTypeCount = maximumTypeCount;
     this.#maximumConstructorCount = maximumConstructorCount;
+    this.#maximumConcurrentCompilationWeight = maximumConcurrentCompilationWeight;
+    this.#minimumCompilationAdmissionWeight = Math.max(
+      1,
+      Math.floor(maximumConcurrentCompilationWeight / MAXIMUM_GPU_DISPATCH_BATCH_SIZE),
+    );
+    this.#dispatchScheduler = new GpuDispatchScheduler(device);
   }
 
   static async create(device: GPUDevice): Promise<GpuLazuliCompiler> {
@@ -270,6 +298,10 @@ export class GpuLazuliCompiler {
     const maximumConstructorCount = Math.min(
       Math.floor(device.limits.maxStorageBufferBindingSize / LAZULI_CONSTRUCTOR_BYTE_LENGTH),
       Math.floor(device.limits.maxBufferSize / LAZULI_CONSTRUCTOR_BYTE_LENGTH),
+    );
+    const maximumConcurrentCompilationWeight = Math.min(
+      device.limits.maxBufferSize,
+      device.limits.maxStorageBufferBindingSize,
     );
 
     if (
@@ -337,6 +369,7 @@ export class GpuLazuliCompiler {
         maximumDefinitionCount,
         maximumTypeCount,
         maximumConstructorCount,
+        maximumConcurrentCompilationWeight,
       );
     } catch (cause) {
       throw new Error("WebGPU could not create the Lazuli semantic compiler pipeline", { cause });
@@ -392,37 +425,145 @@ export class GpuLazuliCompiler {
       };
     }
 
-    return await this.#runExclusively(async () => {
-      options.signal?.throwIfAborted();
-      const result = await this.#compileSurface(
-        surface,
-        sourceByteLength,
-        limits,
-        options.signal,
-      );
-      try {
+    // One source byte upper-bounds one schema or type-parameter record. Six KiB covers its
+    // semantic storage, inference metadata/workspace/output/readback, and one workspace growth.
+    const estimatedTransientByteLength = COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH +
+      COMPILATION_TRANSIENT_BYTES_PER_INPUT *
+        (sourceByteLength + surface.nodeCount + surface.definitionCount + surface.typeCount +
+          surface.constructorCount);
+    const admissionWeight = Math.max(
+      this.#minimumCompilationAdmissionWeight,
+      estimatedTransientByteLength,
+    );
+
+    return await this.#compileWhenAdmitted(
+      async () => {
         options.signal?.throwIfAborted();
-      } catch (error) {
-        if (result.ok) result.module.destroy();
-        throw error;
+        const result = await this.#compileSurface(
+          surface,
+          sourceByteLength,
+          limits,
+          options.signal,
+        );
+        try {
+          options.signal?.throwIfAborted();
+        } catch (error) {
+          if (result.ok) result.module.destroy();
+          throw error;
+        }
+        return result;
+      },
+      admissionWeight,
+      options.signal,
+    );
+  }
+
+  #compileWhenAdmitted(
+    compile: () => Promise<LazuliCompileResult>,
+    admissionWeight: number,
+    signal: AbortSignal | undefined,
+  ): Promise<LazuliCompileResult> {
+    return new Promise<LazuliCompileResult>((resolve, reject) => {
+      const cancelWhileQueued = () => {
+        if (!pendingCompilation.queued) return;
+        this.#removeQueuedCompilation(pendingCompilation);
+        reject(signal?.reason);
+        this.#startQueuedCompilations();
+      };
+      const pendingCompilation: PendingLazuliCompilation = {
+        compile,
+        admissionWeight,
+        ...(signal === undefined ? {} : { signal }),
+        cancelWhileQueued,
+        resolve,
+        reject,
+        previous: undefined,
+        next: undefined,
+        queued: false,
+      };
+
+      if (
+        this.#firstPendingCompilation === undefined &&
+        this.#canStartCompilation(admissionWeight)
+      ) {
+        this.#startCompilation(pendingCompilation);
+        return;
       }
-      return result;
+      this.#enqueueCompilation(pendingCompilation);
+      signal?.addEventListener("abort", cancelWhileQueued, { once: true });
     });
   }
 
-  async #runExclusively<Result>(operation: () => Promise<Result>): Promise<Result> {
-    const previousCompilation = this.#compilationTail;
-    let release: (() => void) | undefined;
-    this.#compilationTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    await previousCompilation;
-    try {
-      return await operation();
-    } finally {
-      release?.();
+  #enqueueCompilation(pendingCompilation: PendingLazuliCompilation): void {
+    pendingCompilation.previous = this.#lastPendingCompilation;
+    pendingCompilation.queued = true;
+    if (this.#lastPendingCompilation === undefined) {
+      this.#firstPendingCompilation = pendingCompilation;
+    } else {
+      this.#lastPendingCompilation.next = pendingCompilation;
     }
+    this.#lastPendingCompilation = pendingCompilation;
+  }
+
+  #removeQueuedCompilation(pendingCompilation: PendingLazuliCompilation): void {
+    const { previous, next } = pendingCompilation;
+    if (previous === undefined) {
+      this.#firstPendingCompilation = next;
+    } else {
+      previous.next = next;
+    }
+    if (next === undefined) {
+      this.#lastPendingCompilation = previous;
+    } else {
+      next.previous = previous;
+    }
+    pendingCompilation.previous = undefined;
+    pendingCompilation.next = undefined;
+    pendingCompilation.queued = false;
+  }
+
+  #startCompilation(pendingCompilation: PendingLazuliCompilation): void {
+    pendingCompilation.signal?.removeEventListener(
+      "abort",
+      pendingCompilation.cancelWhileQueued,
+    );
+    if (pendingCompilation.signal?.aborted) {
+      pendingCompilation.reject(pendingCompilation.signal.reason);
+      return;
+    }
+    this.#activeCompilationCount++;
+    this.#activeCompilationWeight += pendingCompilation.admissionWeight;
+    void this.#settleCompilation(pendingCompilation);
+  }
+
+  async #settleCompilation(pendingCompilation: PendingLazuliCompilation): Promise<void> {
+    try {
+      pendingCompilation.resolve(await pendingCompilation.compile());
+    } catch (error) {
+      pendingCompilation.reject(error);
+    } finally {
+      this.#activeCompilationCount--;
+      this.#activeCompilationWeight -= pendingCompilation.admissionWeight;
+      this.#startQueuedCompilations();
+    }
+  }
+
+  #startQueuedCompilations(): void {
+    while (
+      this.#firstPendingCompilation !== undefined &&
+      this.#canStartCompilation(this.#firstPendingCompilation.admissionWeight)
+    ) {
+      const pendingCompilation = this.#firstPendingCompilation;
+      this.#removeQueuedCompilation(pendingCompilation);
+      this.#startCompilation(pendingCompilation);
+    }
+  }
+
+  #canStartCompilation(admissionWeight: number): boolean {
+    if (this.#activeCompilationCount >= MAXIMUM_GPU_DISPATCH_BATCH_SIZE) return false;
+    if (this.#activeCompilationCount === 0) return true;
+    return this.#activeCompilationWeight + admissionWeight <=
+      this.#maximumConcurrentCompilationWeight;
   }
 
   async #compileSurface(
@@ -465,34 +606,50 @@ export class GpuLazuliCompiler {
     let nodeBufferTransferred = false;
     let definitionBufferTransferred = false;
     let constructorBufferTransferred = false;
+    const surfaceNodeByteLength = storageBufferSize(
+      surface.nodeCount,
+      LAZULI_NODE_BYTE_LENGTH,
+    );
+    const definitionByteLength = storageBufferSize(
+      surface.definitionCount,
+      LAZULI_DEFINITION_BYTE_LENGTH,
+    );
+    const typeByteLength = storageBufferSize(surface.typeCount, LAZULI_TYPE_BYTE_LENGTH);
+    const constructorByteLength = storageBufferSize(
+      surface.constructorCount,
+      LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+    );
+    const allocationEvidence =
+      `surface nodes=${surfaceNodeByteLength} bytes, core nodes=${surfaceNodeByteLength} bytes, definitions=${definitionByteLength} bytes, algebraic types=${typeByteLength} bytes, constructors=${constructorByteLength} bytes, state=${LAZULI_COMPILATION_STATE_BYTE_LENGTH} bytes`;
 
     try {
       this.#device.pushErrorScope("validation");
-      let validation: Promise<GPUError | null>;
+      this.#device.pushErrorScope("out-of-memory");
+      let setupFailure: { readonly cause: unknown } | undefined;
       try {
         surfaceNodeBuffer = this.#device.createBuffer({
           label: "Lazuli surface nodes",
-          size: storageBufferSize(surface.nodeCount, LAZULI_NODE_BYTE_LENGTH),
+          size: surfaceNodeByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
         });
         definitionBuffer = this.#device.createBuffer({
           label: "Lazuli definitions",
-          size: storageBufferSize(surface.definitionCount, LAZULI_DEFINITION_BYTE_LENGTH),
+          size: definitionByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         typeBuffer = this.#device.createBuffer({
           label: "Lazuli algebraic types",
-          size: storageBufferSize(surface.typeCount, LAZULI_TYPE_BYTE_LENGTH),
+          size: typeByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
         });
         constructorBuffer = this.#device.createBuffer({
           label: "Lazuli constructors",
-          size: storageBufferSize(surface.constructorCount, LAZULI_CONSTRUCTOR_BYTE_LENGTH),
+          size: constructorByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         coreNodeBuffer = this.#device.createBuffer({
           label: "Lazuli core nodes",
-          size: storageBufferSize(surface.nodeCount, LAZULI_NODE_BYTE_LENGTH),
+          size: surfaceNodeByteLength,
           usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         stateBuffer = this.#device.createBuffer({
@@ -519,26 +676,43 @@ export class GpuLazuliCompiler {
             { binding: 5, resource: { buffer: stateBuffer } },
           ],
         });
-        validation = this.#device.popErrorScope();
       } catch (cause) {
-        const validationError = await this.#device.popErrorScope();
-        if (validationError !== null) {
-          throw new Error(
-            `WebGPU rejected Lazuli compilation for ${surface.nodeCount} nodes, ${surface.definitionCount} definitions, ${surface.typeCount} types, and ${surface.constructorCount} constructors: ${validationError.message}`,
-            { cause },
-          );
-        }
-        throw cause;
+        setupFailure = { cause };
       }
 
-      const validationError = await validation;
+      const outOfMemory = this.#device.popErrorScope();
+      const validation = this.#device.popErrorScope();
+      const [outOfMemoryError, validationError] = await Promise.all([
+        outOfMemory,
+        validation,
+      ]);
       if (validationError !== null) {
         throw new Error(
-          `WebGPU rejected Lazuli compilation for ${surface.nodeCount} nodes, ${surface.definitionCount} definitions, ${surface.typeCount} types, and ${surface.constructorCount} constructors: ${validationError.message}`,
+          `WebGPU rejected Lazuli compilation for ${surface.nodeCount} nodes, ${surface.definitionCount} definitions, ${surface.typeCount} types, and ${surface.constructorCount} constructors (${allocationEvidence}): ${validationError.message}`,
+          setupFailure === undefined ? undefined : { cause: setupFailure.cause },
         );
       }
-      if (bindGroup === undefined) {
-        throw new Error("WebGPU did not create Lazuli semantic compiler bindings");
+      if (outOfMemoryError !== null) {
+        return {
+          ok: false,
+          diagnostics: [{
+            stage: "compile",
+            code: "L1003",
+            message:
+              `program exhausted GPU memory before semantic compilation; required ${allocationEvidence}: ${outOfMemoryError.message}`,
+            span: { startByte: 0, endByte: sourceByteLength },
+          }],
+        };
+      }
+      if (setupFailure !== undefined) throw setupFailure.cause;
+      if (
+        surfaceNodeBuffer === undefined || coreNodeBuffer === undefined ||
+        definitionBuffer === undefined || typeBuffer === undefined ||
+        constructorBuffer === undefined || stateBuffer === undefined || bindGroup === undefined
+      ) {
+        throw new Error(
+          `WebGPU did not create Lazuli semantic compiler buffers and bindings (${allocationEvidence})`,
+        );
       }
 
       const combined = await runGpuLazuliCompilationInference({
@@ -557,7 +731,7 @@ export class GpuLazuliCompiler {
         pipeline: this.#pipeline,
         bindGroup,
         stateBuffer,
-      });
+      }, this.#dispatchScheduler);
       const state = combined.semanticState;
 
       if (state.status === Status.Ok) {
