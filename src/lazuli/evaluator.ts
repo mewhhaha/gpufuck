@@ -6,7 +6,7 @@ import {
   LAZULI_NODE_BYTE_LENGTH,
 } from "./abi.ts";
 import type { LazuliType, LazuliTypeDeclaration, LazuliTypeSchema } from "./abi.ts";
-import type { GpuLazuliModule } from "./compiler.ts";
+import type { GpuLazuliModule } from "./compiler_module.ts";
 import { LAZULI_EVALUATOR_SHADER } from "./evaluator_shader.ts";
 
 const HEAP_SLOT_BYTE_LENGTH = 32;
