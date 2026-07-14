@@ -15,6 +15,7 @@ import {
   LazuliCompilationStateWord,
   LazuliCompilationStatus,
 } from "./compiler_shader.ts";
+import { type GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
 import {
   LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
   LAZULI_INFERENCE_FRAME_WORD_LENGTH,
@@ -183,13 +184,15 @@ export async function runGpuLazuliTypeInference(
 export async function runGpuLazuliCompilationInference(
   options: GpuLazuliTypeInferenceOptions,
   semanticPass: GpuLazuliSemanticCompilationPass,
+  dispatchScheduler?: GpuDispatchScheduler,
 ): Promise<GpuLazuliCompilationInferenceRun> {
-  return await runGpuLazuliTypeInferenceMachine(options, semanticPass);
+  return await runGpuLazuliTypeInferenceMachine(options, semanticPass, dispatchScheduler);
 }
 
 async function runGpuLazuliTypeInferenceMachine(
   options: GpuLazuliTypeInferenceOptions,
   semanticPass?: GpuLazuliSemanticCompilationPass,
+  dispatchScheduler?: GpuDispatchScheduler,
 ): Promise<GpuLazuliCompilationInferenceRun> {
   const initialSteps = semanticPass === undefined ? options.initialSteps ?? 0 : 0;
   validateFuel(options.maximumSteps, options.maximumStepsPerDispatch, initialSteps);
@@ -324,6 +327,7 @@ async function runGpuLazuliTypeInferenceMachine(
         options.surface,
         semanticPass,
         options.signal,
+        dispatchScheduler,
       );
       options.signal?.throwIfAborted();
 
@@ -1040,8 +1044,12 @@ async function createInferenceBuffers(
     outOfMemory = options.device.popErrorScope();
     validation = options.device.popErrorScope();
   } catch (cause) {
-    const outOfMemoryError = await options.device.popErrorScope();
-    const validationError = await options.device.popErrorScope();
+    const outOfMemoryScope = options.device.popErrorScope();
+    const validationScope = options.device.popErrorScope();
+    const [outOfMemoryError, validationError] = await Promise.all([
+      outOfMemoryScope,
+      validationScope,
+    ]);
     metadataBuffer?.destroy();
     workspaceBuffer?.destroy();
     outputBuffer?.destroy();
@@ -1169,8 +1177,12 @@ async function createInferenceReadbackBuffer(
     outOfMemory = device.popErrorScope();
     validation = device.popErrorScope();
   } catch (cause) {
-    const outOfMemoryError = await device.popErrorScope();
-    const validationError = await device.popErrorScope();
+    const outOfMemoryScope = device.popErrorScope();
+    const validationScope = device.popErrorScope();
+    const [outOfMemoryError, validationError] = await Promise.all([
+      outOfMemoryScope,
+      validationScope,
+    ]);
     buffer?.destroy();
     if (validationError !== null) {
       throw new Error(
@@ -1258,8 +1270,12 @@ async function createInferenceOutputBuffer(
     outOfMemory = device.popErrorScope();
     validation = device.popErrorScope();
   } catch (cause) {
-    const outOfMemoryError = await device.popErrorScope();
-    const validationError = await device.popErrorScope();
+    const outOfMemoryScope = device.popErrorScope();
+    const validationScope = device.popErrorScope();
+    const [outOfMemoryError, validationError] = await Promise.all([
+      outOfMemoryScope,
+      validationScope,
+    ]);
     buffer?.destroy();
     if (outOfMemoryError !== null) {
       return { ok: false, byteLength: size, reason: outOfMemoryError.message };
@@ -1311,8 +1327,12 @@ async function createExpandedWorkspace(
     outOfMemory = device.popErrorScope();
     validation = device.popErrorScope();
   } catch (cause) {
-    const outOfMemoryError = await device.popErrorScope();
-    const validationError = await device.popErrorScope();
+    const outOfMemoryScope = device.popErrorScope();
+    const validationScope = device.popErrorScope();
+    const [outOfMemoryError, validationError] = await Promise.all([
+      outOfMemoryScope,
+      validationScope,
+    ]);
     expandedBuffer?.destroy();
     if (outOfMemoryError !== null) {
       return { ok: false, byteLength, reason: outOfMemoryError.message };
@@ -1732,7 +1752,28 @@ async function dispatchForReadback(
   surface: EncodedLazuliSurface,
   semanticPass: GpuLazuliSemanticCompilationPass | undefined,
   signal: AbortSignal | undefined,
+  dispatchScheduler: GpuDispatchScheduler | undefined,
 ): Promise<void> {
+  if (dispatchScheduler !== undefined) {
+    await dispatchScheduler.schedule({
+      encode: (commands) =>
+        encodeInferenceDispatch(
+          commands,
+          pipeline,
+          bindGroup,
+          outputBuffer,
+          outputCapacity,
+          stateBuffer,
+          readbackBuffer,
+          readbackIncludesOutput,
+          semanticPass,
+        ),
+      validationContext: `WebGPU rejected Lazuli type inference for ${surface.nodeCount} nodes`,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    return;
+  }
+
   device.pushErrorScope("validation");
   let validation: Promise<GPUError | null>;
   try {
@@ -1741,43 +1782,17 @@ async function dispatchForReadback(
         ? "Lazuli type inference commands"
         : "Lazuli semantic compilation and type inference commands",
     });
-    if (semanticPass !== undefined) {
-      const semanticCompute = commands.beginComputePass({
-        label: "Compile Lazuli surface nodes",
-      });
-      semanticCompute.setPipeline(semanticPass.pipeline);
-      semanticCompute.setBindGroup(0, semanticPass.bindGroup);
-      semanticCompute.dispatchWorkgroups(1);
-      semanticCompute.end();
-      commands.copyBufferToBuffer(
-        semanticPass.stateBuffer,
-        0,
-        stateBuffer,
-        SEMANTIC_SNAPSHOT_BYTE_OFFSET,
-        LAZULI_COMPILATION_STATE_BYTE_LENGTH,
-      );
-    }
-    const pass = commands.beginComputePass({ label: "Infer Lazuli types" });
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(1);
-    pass.end();
-    commands.copyBufferToBuffer(
+    encodeInferenceDispatch(
+      commands,
+      pipeline,
+      bindGroup,
+      outputBuffer,
+      outputCapacity,
       stateBuffer,
-      0,
       readbackBuffer,
-      0,
-      INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
+      readbackIncludesOutput,
+      semanticPass,
     );
-    if (readbackIncludesOutput) {
-      commands.copyBufferToBuffer(
-        outputBuffer,
-        0,
-        readbackBuffer,
-        INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
-        inferenceOutputBufferByteLength(outputCapacity),
-      );
-    }
     signal?.throwIfAborted();
     device.queue.submit([commands.finish()]);
     validation = device.popErrorScope();
@@ -1795,6 +1810,56 @@ async function dispatchForReadback(
   if (validationError !== null) {
     throw new Error(
       `WebGPU rejected Lazuli type inference for ${surface.nodeCount} nodes: ${validationError.message}`,
+    );
+  }
+}
+
+function encodeInferenceDispatch(
+  commands: GPUCommandEncoder,
+  pipeline: GPUComputePipeline,
+  bindGroup: GPUBindGroup,
+  outputBuffer: GPUBuffer,
+  outputCapacity: number,
+  stateBuffer: GPUBuffer,
+  readbackBuffer: GPUBuffer,
+  readbackIncludesOutput: boolean,
+  semanticPass: GpuLazuliSemanticCompilationPass | undefined,
+): void {
+  if (semanticPass !== undefined) {
+    const semanticCompute = commands.beginComputePass({
+      label: "Compile Lazuli surface nodes",
+    });
+    semanticCompute.setPipeline(semanticPass.pipeline);
+    semanticCompute.setBindGroup(0, semanticPass.bindGroup);
+    semanticCompute.dispatchWorkgroups(1);
+    semanticCompute.end();
+    commands.copyBufferToBuffer(
+      semanticPass.stateBuffer,
+      0,
+      stateBuffer,
+      SEMANTIC_SNAPSHOT_BYTE_OFFSET,
+      LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+    );
+  }
+  const pass = commands.beginComputePass({ label: "Infer Lazuli types" });
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(1);
+  pass.end();
+  commands.copyBufferToBuffer(
+    stateBuffer,
+    0,
+    readbackBuffer,
+    0,
+    INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
+  );
+  if (readbackIncludesOutput) {
+    commands.copyBufferToBuffer(
+      outputBuffer,
+      0,
+      readbackBuffer,
+      INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
+      inferenceOutputBufferByteLength(outputCapacity),
     );
   }
 }
