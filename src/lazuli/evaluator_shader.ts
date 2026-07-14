@@ -36,6 +36,13 @@ struct Constructor {
   end_byte: u32,
 }
 
+struct ValueNode {
+  tag: u32,
+  payload: u32,
+  first_child: u32,
+  child_count: u32,
+}
+
 struct HeapSlot {
   kind: u32,
   state: u32,
@@ -95,6 +102,21 @@ struct EvaluationState {
   case_source_offset: u32,
   maximum_steps_per_dispatch: u32,
   initialization_definition: u32,
+  node_base: u32,
+  definition_base: u32,
+  constructor_base: u32,
+  heap_base: u32,
+  stack_base: u32,
+  global_base: u32,
+  input_base: u32,
+  input_count: u32,
+  pending_input: u32,
+  result_form: u32,
+  result_base: u32,
+  result_capacity: u32,
+  result_top: u32,
+  reify_field: u32,
+  reify_remaining: u32,
 }
 
 @group(0) @binding(0)
@@ -113,10 +135,15 @@ var<storage, read_write> continuation_stack: array<ContinuationFrame>;
 var<storage, read_write> global_thunks: array<u32>;
 
 @group(0) @binding(5)
-var<storage, read_write> evaluation: EvaluationState;
+var<storage, read_write> evaluation_states: array<EvaluationState>;
 
 @group(0) @binding(6)
 var<storage, read> constructors: array<Constructor>;
+
+@group(0) @binding(7)
+var<storage, read_write> value_nodes: array<ValueNode>;
+
+var<private> evaluation: EvaluationState;
 
 const NO_INDEX: u32 = ${LAZULI_NO_INDEX}u;
 const NODE_WORD_LENGTH: u32 = ${LAZULI_NODE_WORD_LENGTH}u;
@@ -137,6 +164,8 @@ const FAULT_BLACKHOLE: u32 = 5u;
 const FAULT_TYPE_ERROR: u32 = 6u;
 const FAULT_DIVIDE_BY_ZERO: u32 = 7u;
 const FAULT_NON_EXHAUSTIVE_CASE: u32 = 8u;
+const FAULT_RESULT_TOO_LARGE: u32 = 9u;
+const FAULT_CYCLIC_RESULT: u32 = 10u;
 
 const MODE_EVAL: u32 = 1u;
 const MODE_ENTER_THUNK: u32 = 2u;
@@ -144,6 +173,9 @@ const MODE_RETURN: u32 = 3u;
 const MODE_CASE_ARM: u32 = 4u;
 const MODE_CASE_BIND: u32 = 5u;
 const MODE_INITIALIZE_GLOBAL: u32 = 6u;
+const MODE_REIFY_VALUE: u32 = 7u;
+const MODE_REIFY_PREPARE_FIELDS: u32 = 8u;
+const MODE_REIFY_CONTINUE: u32 = 9u;
 
 const VALUE_INTEGER: u32 = 1u;
 const VALUE_BOOLEAN: u32 = 2u;
@@ -161,6 +193,7 @@ const HEAP_CONSTRUCTOR: u32 = 6u;
 const THUNK_UNEVALUATED: u32 = 0u;
 const THUNK_EVALUATING: u32 = 1u;
 const THUNK_EVALUATED: u32 = 2u;
+const THUNK_INPUT: u32 = 3u;
 
 const FRAME_UPDATE: u32 = 1u;
 const FRAME_APPLY: u32 = 2u;
@@ -169,6 +202,9 @@ const FRAME_UNARY: u32 = 4u;
 const FRAME_BINARY_LEFT: u32 = 5u;
 const FRAME_BINARY_RIGHT: u32 = 6u;
 const FRAME_CASE: u32 = 7u;
+const FRAME_REIFY_FIELD: u32 = 8u;
+const FRAME_REIFY_VALUE: u32 = 9u;
+const FRAME_REIFY_END: u32 = 10u;
 
 const EXPECT_INTEGER: u32 = 1u;
 const EXPECT_BOOLEAN: u32 = 2u;
@@ -203,6 +239,52 @@ const BINARY_SUBTRACT: u32 = ${LazuliBinaryOperator.Subtract}u;
 const BINARY_MULTIPLY: u32 = ${LazuliBinaryOperator.Multiply}u;
 const BINARY_DIVIDE: u32 = ${LazuliBinaryOperator.Divide}u;
 
+fn region_contains(base: u32, index: u32, storage_length: u32) -> bool {
+  if base > storage_length {
+    return false;
+  }
+  return index < storage_length - base;
+}
+
+fn region_fits(base: u32, length: u32, storage_length: u32) -> bool {
+  if base > storage_length {
+    return false;
+  }
+  return length <= storage_length - base;
+}
+
+fn node_storage_index(index: u32) -> u32 {
+  return evaluation.node_base + index;
+}
+
+fn definition_storage_index(index: u32) -> u32 {
+  return evaluation.definition_base + index;
+}
+
+fn constructor_storage_index(index: u32) -> u32 {
+  return evaluation.constructor_base + index;
+}
+
+fn heap_storage_index(index: u32) -> u32 {
+  return evaluation.heap_base + index;
+}
+
+fn stack_storage_index(index: u32) -> u32 {
+  return evaluation.stack_base + index;
+}
+
+fn global_storage_index(index: u32) -> u32 {
+  return evaluation.global_base + index;
+}
+
+fn input_storage_index(index: u32) -> u32 {
+  return evaluation.input_base + index;
+}
+
+fn result_storage_index(index: u32) -> u32 {
+  return evaluation.result_base + index;
+}
+
 fn fail(code: u32, source_offset: u32, detail: u32) {
   evaluation.status = STATUS_FAULT;
   evaluation.fault_code = code;
@@ -215,7 +297,8 @@ fn fail_bad_module(detail: u32) {
 }
 
 fn valid_node(index: u32) -> bool {
-  return index != NO_INDEX && index < evaluation.node_count && index < arrayLength(&nodes);
+  return index != NO_INDEX && index < evaluation.node_count &&
+    region_contains(evaluation.node_base, index, arrayLength(&nodes));
 }
 
 fn valid_core_child(parent_index: u32, child_index: u32) -> bool {
@@ -232,15 +315,16 @@ fn children_are_absent(node: CoreNode) -> bool {
 
 fn valid_heap(index: u32) -> bool {
   return index != NO_INDEX && index < evaluation.heap_top &&
-    index < evaluation.heap_capacity && index < arrayLength(&heap);
+    index < evaluation.heap_capacity &&
+    region_contains(evaluation.heap_base, index, arrayLength(&heap));
 }
 
 fn valid_constructor(index: u32) -> bool {
   if index == NO_INDEX || index >= evaluation.constructor_count ||
-      index >= arrayLength(&constructors) {
+      !region_contains(evaluation.constructor_base, index, arrayLength(&constructors)) {
     return false;
   }
-  let constructor = constructors[index];
+  let constructor = constructors[constructor_storage_index(index)];
   return constructor.type_index < evaluation.type_count &&
     constructor.arity <= MAXIMUM_CONSTRUCTOR_ARITY;
 }
@@ -257,18 +341,18 @@ fn valid_heap_value(value_tag: u32, value_payload: u32) -> bool {
       if !valid_heap(value_payload) {
         return false;
       }
-      let closure = heap[value_payload];
+      let closure = heap[heap_storage_index(value_payload)];
       return closure.kind == HEAP_CLOSURE && valid_node(closure.field0);
     }
     case VALUE_CONSTRUCTOR_PARTIAL: {
       if !valid_heap(value_payload) {
         return false;
       }
-      let partial = heap[value_payload];
+      let partial = heap[heap_storage_index(value_payload)];
       if partial.kind != HEAP_CONSTRUCTOR_PARTIAL || !valid_constructor(partial.field0) {
         return false;
       }
-      let constructor = constructors[partial.field0];
+      let constructor = constructors[constructor_storage_index(partial.field0)];
       if constructor.arity == 0u || partial.field2 >= constructor.arity {
         return false;
       }
@@ -278,17 +362,17 @@ fn valid_heap_value(value_tag: u32, value_payload: u32) -> bool {
       if !valid_heap(partial.field1) {
         return false;
       }
-      return heap[partial.field1].kind == HEAP_CONSTRUCTOR_FIELD;
+      return heap[heap_storage_index(partial.field1)].kind == HEAP_CONSTRUCTOR_FIELD;
     }
     case VALUE_CONSTRUCTOR: {
       if !valid_heap(value_payload) {
         return false;
       }
-      let value = heap[value_payload];
+      let value = heap[heap_storage_index(value_payload)];
       if value.kind != HEAP_CONSTRUCTOR || !valid_constructor(value.field0) {
         return false;
       }
-      let constructor = constructors[value.field0];
+      let constructor = constructors[constructor_storage_index(value.field0)];
       if value.field2 != constructor.arity {
         return false;
       }
@@ -298,7 +382,7 @@ fn valid_heap_value(value_tag: u32, value_payload: u32) -> bool {
       if !valid_heap(value.field1) {
         return false;
       }
-      return heap[value.field1].kind == HEAP_CONSTRUCTOR_FIELD;
+      return heap[heap_storage_index(value.field1)].kind == HEAP_CONSTRUCTOR_FIELD;
     }
     default: {
       return false;
@@ -307,7 +391,8 @@ fn valid_heap_value(value_tag: u32, value_payload: u32) -> bool {
 }
 
 fn allocate_heap_slot(kind: u32, source_offset: u32) -> u32 {
-  if evaluation.heap_top >= evaluation.heap_capacity || evaluation.heap_top >= arrayLength(&heap) {
+  if evaluation.heap_top >= evaluation.heap_capacity ||
+      !region_contains(evaluation.heap_base, evaluation.heap_top, arrayLength(&heap)) {
     fail(FAULT_OUT_OF_HEAP, source_offset, evaluation.heap_capacity);
     return NO_INDEX;
   }
@@ -315,18 +400,22 @@ fn allocate_heap_slot(kind: u32, source_offset: u32) -> u32 {
   let index = evaluation.heap_top;
   evaluation.heap_top += 1u;
   evaluation.allocations += 1u;
-  heap[index] = HeapSlot(kind, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
+  heap[heap_storage_index(index)] = HeapSlot(kind, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
   return index;
 }
 
 fn push_frame(frame: ContinuationFrame) -> bool {
   if evaluation.stack_top >= evaluation.stack_capacity ||
-      evaluation.stack_top >= arrayLength(&continuation_stack) {
+      !region_contains(
+        evaluation.stack_base,
+        evaluation.stack_top,
+        arrayLength(&continuation_stack),
+      ) {
     fail(FAULT_STACK_OVERFLOW, frame.source_offset, evaluation.stack_capacity);
     return false;
   }
 
-  continuation_stack[evaluation.stack_top] = frame;
+  continuation_stack[stack_storage_index(evaluation.stack_top)] = frame;
   evaluation.stack_top += 1u;
   evaluation.peak_stack = max(evaluation.peak_stack, evaluation.stack_top);
   return true;
@@ -339,12 +428,13 @@ fn pop_frame() -> ContinuationFrame {
   }
 
   let index = evaluation.stack_top - 1u;
-  if index >= evaluation.stack_capacity || index >= arrayLength(&continuation_stack) {
+  if index >= evaluation.stack_capacity ||
+      !region_contains(evaluation.stack_base, index, arrayLength(&continuation_stack)) {
     fail_bad_module(index);
     return ContinuationFrame(0u, 0u, 0u, 0u, 0u, 0u, NO_INDEX, 0u);
   }
   evaluation.stack_top = index;
-  return continuation_stack[index];
+  return continuation_stack[stack_storage_index(index)];
 }
 
 fn valid_binary_operator(operator_code: u32) -> bool {
@@ -369,7 +459,7 @@ fn evaluate_node() {
     return;
   }
 
-  let node = nodes[evaluation.expression];
+  let node = nodes[node_storage_index(evaluation.expression)];
   evaluation.current_source_offset = node.source_offset;
 
   switch node.tag {
@@ -398,16 +488,16 @@ fn evaluate_node() {
       if thunk_index == NO_INDEX {
         return;
       }
-      heap[thunk_index].state = THUNK_UNEVALUATED;
-      heap[thunk_index].field0 = node.child0;
-      heap[thunk_index].field1 = evaluation.environment;
+      heap[heap_storage_index(thunk_index)].state = THUNK_UNEVALUATED;
+      heap[heap_storage_index(thunk_index)].field0 = node.child0;
+      heap[heap_storage_index(thunk_index)].field1 = evaluation.environment;
 
       let environment_index = allocate_heap_slot(HEAP_ENVIRONMENT, node.source_offset);
       if environment_index == NO_INDEX {
         return;
       }
-      heap[environment_index].field0 = evaluation.environment;
-      heap[environment_index].field1 = thunk_index;
+      heap[heap_storage_index(environment_index)].field0 = evaluation.environment;
+      heap[heap_storage_index(environment_index)].field1 = thunk_index;
       evaluate_expression(node.child1, environment_index);
     }
     case TAG_LET_REC: {
@@ -416,7 +506,7 @@ fn evaluate_node() {
         fail_bad_module(evaluation.expression);
         return;
       }
-      if nodes[node.child0].tag != TAG_LAMBDA {
+      if nodes[node_storage_index(node.child0)].tag != TAG_LAMBDA {
         fail_bad_module(evaluation.expression);
         return;
       }
@@ -430,11 +520,11 @@ fn evaluate_node() {
         return;
       }
 
-      heap[environment_index].field0 = evaluation.environment;
-      heap[environment_index].field1 = thunk_index;
-      heap[thunk_index].state = THUNK_UNEVALUATED;
-      heap[thunk_index].field0 = node.child0;
-      heap[thunk_index].field1 = environment_index;
+      heap[heap_storage_index(environment_index)].field0 = evaluation.environment;
+      heap[heap_storage_index(environment_index)].field1 = thunk_index;
+      heap[heap_storage_index(thunk_index)].state = THUNK_UNEVALUATED;
+      heap[heap_storage_index(thunk_index)].field0 = node.child0;
+      heap[heap_storage_index(thunk_index)].field1 = environment_index;
       evaluate_expression(node.child1, environment_index);
     }
     case TAG_IF: {
@@ -469,8 +559,8 @@ fn evaluate_node() {
       if closure_index == NO_INDEX {
         return;
       }
-      heap[closure_index].field0 = node.child0;
-      heap[closure_index].field1 = evaluation.environment;
+      heap[heap_storage_index(closure_index)].field0 = node.child0;
+      heap[heap_storage_index(closure_index)].field1 = evaluation.environment;
       return_value(VALUE_CLOSURE, closure_index);
     }
     case TAG_APPLY: {
@@ -573,7 +663,7 @@ fn evaluate_node() {
         fail_bad_module(evaluation.local_environment);
         return;
       }
-      let environment_slot = heap[evaluation.local_environment];
+      let environment_slot = heap[heap_storage_index(evaluation.local_environment)];
       if environment_slot.kind != HEAP_ENVIRONMENT {
         fail_bad_module(evaluation.local_environment);
         return;
@@ -592,12 +682,13 @@ fn evaluate_node() {
       evaluation.local_depth -= 1u;
     }
     case TAG_GLOBAL: {
-      if node.payload >= evaluation.definition_count || node.payload >= arrayLength(&global_thunks) ||
+      if node.payload >= evaluation.definition_count ||
+          !region_contains(evaluation.global_base, node.payload, arrayLength(&global_thunks)) ||
           !children_are_absent(node) {
         fail_bad_module(node.payload);
         return;
       }
-      let thunk_index = global_thunks[node.payload];
+      let thunk_index = global_thunks[global_storage_index(node.payload)];
       if !valid_heap(thunk_index) {
         fail_bad_module(thunk_index);
         return;
@@ -610,15 +701,15 @@ fn evaluate_node() {
         fail_bad_module(node.payload);
         return;
       }
-      let constructor = constructors[node.payload];
+      let constructor = constructors[constructor_storage_index(node.payload)];
       if constructor.arity == 0u {
         let value_index = allocate_heap_slot(HEAP_CONSTRUCTOR, node.source_offset);
         if value_index == NO_INDEX {
           return;
         }
-        heap[value_index].field0 = node.payload;
-        heap[value_index].field1 = NO_INDEX;
-        heap[value_index].field2 = 0u;
+        heap[heap_storage_index(value_index)].field0 = node.payload;
+        heap[heap_storage_index(value_index)].field1 = NO_INDEX;
+        heap[heap_storage_index(value_index)].field2 = 0u;
         return_value(VALUE_CONSTRUCTOR, value_index);
         return;
       }
@@ -627,9 +718,9 @@ fn evaluate_node() {
       if partial_index == NO_INDEX {
         return;
       }
-      heap[partial_index].field0 = node.payload;
-      heap[partial_index].field1 = NO_INDEX;
-      heap[partial_index].field2 = 0u;
+      heap[heap_storage_index(partial_index)].field0 = node.payload;
+      heap[heap_storage_index(partial_index)].field1 = NO_INDEX;
+      heap[heap_storage_index(partial_index)].field2 = 0u;
       return_value(VALUE_CONSTRUCTOR_PARTIAL, partial_index);
     }
     default: {
@@ -645,7 +736,7 @@ fn enter_thunk() {
     return;
   }
 
-  let thunk = heap[thunk_index];
+  let thunk = heap[heap_storage_index(thunk_index)];
   if thunk.kind != HEAP_THUNK {
     fail_bad_module(thunk_index);
     return;
@@ -670,7 +761,7 @@ fn enter_thunk() {
       if !push_frame(frame) {
         return;
       }
-      heap[thunk_index].state = THUNK_EVALUATING;
+      heap[heap_storage_index(thunk_index)].state = THUNK_EVALUATING;
       evaluation.thunk_evaluations += 1u;
       evaluate_expression(thunk.field0, thunk.field1);
     }
@@ -684,21 +775,318 @@ fn enter_thunk() {
       }
       return_value(thunk.field2, thunk.field3);
     }
+    case THUNK_INPUT: {
+      let input_index = thunk.field0;
+      if !region_contains(evaluation.input_base, input_index, arrayLength(&value_nodes)) ||
+          input_index >= evaluation.input_count {
+        fail_bad_module(input_index);
+        return;
+      }
+      let input = value_nodes[input_storage_index(input_index)];
+      if input.tag == VALUE_INTEGER {
+        if input.first_child != NO_INDEX || input.child_count != 0u {
+          fail_bad_module(input_index);
+          return;
+        }
+        heap[heap_storage_index(thunk_index)].state = THUNK_EVALUATED;
+        heap[heap_storage_index(thunk_index)].field2 = VALUE_INTEGER;
+        heap[heap_storage_index(thunk_index)].field3 = input.payload;
+        return_value(VALUE_INTEGER, input.payload);
+        return;
+      }
+      if input.tag == VALUE_BOOLEAN {
+        if input.payload > 1u || input.first_child != NO_INDEX || input.child_count != 0u {
+          fail_bad_module(input_index);
+          return;
+        }
+        heap[heap_storage_index(thunk_index)].state = THUNK_EVALUATED;
+        heap[heap_storage_index(thunk_index)].field2 = VALUE_BOOLEAN;
+        heap[heap_storage_index(thunk_index)].field3 = input.payload;
+        return_value(VALUE_BOOLEAN, input.payload);
+        return;
+      }
+      if input.tag != VALUE_CONSTRUCTOR || !valid_constructor(input.payload) {
+        fail_bad_module(input_index);
+        return;
+      }
+      let constructor = constructors[constructor_storage_index(input.payload)];
+      let fields_are_valid = select(
+        region_fits(input.first_child, input.child_count, evaluation.input_count),
+        input.first_child == NO_INDEX,
+        input.child_count == 0u,
+      );
+      if input.child_count != constructor.arity || !fields_are_valid {
+        fail_bad_module(input_index);
+        return;
+      }
+
+      var field_list = NO_INDEX;
+      var field_offset = 0u;
+      loop {
+        if field_offset >= input.child_count {
+          break;
+        }
+        let field_thunk = allocate_heap_slot(HEAP_THUNK, NO_INDEX);
+        if field_thunk == NO_INDEX {
+          return;
+        }
+        heap[heap_storage_index(field_thunk)].state = THUNK_INPUT;
+        heap[heap_storage_index(field_thunk)].field0 = input.first_child + field_offset;
+
+        let field = allocate_heap_slot(HEAP_CONSTRUCTOR_FIELD, NO_INDEX);
+        if field == NO_INDEX {
+          return;
+        }
+        heap[heap_storage_index(field)].field0 = field_list;
+        heap[heap_storage_index(field)].field1 = field_thunk;
+        field_list = field;
+        field_offset += 1u;
+      }
+
+      let value_index = allocate_heap_slot(HEAP_CONSTRUCTOR, NO_INDEX);
+      if value_index == NO_INDEX {
+        return;
+      }
+      heap[heap_storage_index(value_index)].field0 = input.payload;
+      heap[heap_storage_index(value_index)].field1 = field_list;
+      heap[heap_storage_index(value_index)].field2 = input.child_count;
+      heap[heap_storage_index(thunk_index)].state = THUNK_EVALUATED;
+      heap[heap_storage_index(thunk_index)].field2 = VALUE_CONSTRUCTOR;
+      heap[heap_storage_index(thunk_index)].field3 = value_index;
+      return_value(VALUE_CONSTRUCTOR, value_index);
+    }
     default: {
       fail_bad_module(thunk.state);
     }
   }
 }
 
+fn apply_to_thunk(argument_thunk: u32, source_offset: u32) {
+  if evaluation.value_tag != VALUE_CLOSURE &&
+      evaluation.value_tag != VALUE_CONSTRUCTOR_PARTIAL {
+    fail(FAULT_TYPE_ERROR, source_offset, EXPECT_CALLABLE);
+    return;
+  }
+  if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) ||
+      !valid_heap(argument_thunk) {
+    fail_bad_module(evaluation.value_payload);
+    return;
+  }
+
+  if evaluation.value_tag == VALUE_CONSTRUCTOR_PARTIAL {
+    let partial = heap[heap_storage_index(evaluation.value_payload)];
+    let constructor = constructors[constructor_storage_index(partial.field0)];
+    let field_index = allocate_heap_slot(HEAP_CONSTRUCTOR_FIELD, source_offset);
+    if field_index == NO_INDEX {
+      return;
+    }
+    heap[heap_storage_index(field_index)].field0 = partial.field1;
+    heap[heap_storage_index(field_index)].field1 = argument_thunk;
+
+    let applied_count = partial.field2 + 1u;
+    if applied_count == constructor.arity {
+      let value_index = allocate_heap_slot(HEAP_CONSTRUCTOR, source_offset);
+      if value_index == NO_INDEX {
+        return;
+      }
+      heap[heap_storage_index(value_index)].field0 = partial.field0;
+      heap[heap_storage_index(value_index)].field1 = field_index;
+      heap[heap_storage_index(value_index)].field2 = applied_count;
+      return_value(VALUE_CONSTRUCTOR, value_index);
+      return;
+    }
+
+    let next_partial = allocate_heap_slot(HEAP_CONSTRUCTOR_PARTIAL, source_offset);
+    if next_partial == NO_INDEX {
+      return;
+    }
+    heap[heap_storage_index(next_partial)].field0 = partial.field0;
+    heap[heap_storage_index(next_partial)].field1 = field_index;
+    heap[heap_storage_index(next_partial)].field2 = applied_count;
+    return_value(VALUE_CONSTRUCTOR_PARTIAL, next_partial);
+    return;
+  }
+
+  let closure = heap[heap_storage_index(evaluation.value_payload)];
+  let call_environment = allocate_heap_slot(HEAP_ENVIRONMENT, source_offset);
+  if call_environment == NO_INDEX {
+    return;
+  }
+  heap[heap_storage_index(call_environment)].field0 = closure.field1;
+  heap[heap_storage_index(call_environment)].field1 = argument_thunk;
+  evaluate_expression(closure.field0, call_environment);
+}
+
+fn append_result_node(tag: u32, payload: u32, field_count: u32) -> bool {
+  if evaluation.result_top >= evaluation.result_capacity ||
+      !region_contains(evaluation.result_base, evaluation.result_top, arrayLength(&value_nodes)) {
+    fail(FAULT_RESULT_TOO_LARGE, evaluation.current_source_offset, evaluation.result_capacity);
+    return false;
+  }
+  value_nodes[result_storage_index(evaluation.result_top)] =
+    ValueNode(tag, payload, field_count, 0u);
+  evaluation.result_top += 1u;
+  return true;
+}
+
+fn reify_value() {
+  if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
+    fail_bad_module(evaluation.value_payload);
+    return;
+  }
+  if evaluation.value_tag != VALUE_CONSTRUCTOR {
+    if !append_result_node(evaluation.value_tag, evaluation.value_payload, 0u) {
+      return;
+    }
+    evaluation.mode = MODE_REIFY_CONTINUE;
+    return;
+  }
+
+  let value_index = evaluation.value_payload;
+  let value = heap[heap_storage_index(value_index)];
+  if value.reserved0 != 0u {
+    fail(FAULT_CYCLIC_RESULT, evaluation.current_source_offset, value_index);
+    return;
+  }
+  if !append_result_node(VALUE_CONSTRUCTOR, value.field0, value.field2) {
+    return;
+  }
+  if value.field2 == 0u {
+    evaluation.mode = MODE_REIFY_CONTINUE;
+    return;
+  }
+
+  heap[heap_storage_index(value_index)].reserved0 = 1u;
+  let end_frame = ContinuationFrame(
+    FRAME_REIFY_END,
+    value_index,
+    0u,
+    0u,
+    0u,
+    0u,
+    evaluation.current_source_offset,
+    0u,
+  );
+  if !push_frame(end_frame) {
+    return;
+  }
+  evaluation.reify_field = value.field1;
+  evaluation.reify_remaining = value.field2;
+  evaluation.mode = MODE_REIFY_PREPARE_FIELDS;
+}
+
+fn prepare_reified_fields() {
+  if evaluation.reify_remaining == 0u {
+    if evaluation.reify_field != NO_INDEX {
+      fail_bad_module(evaluation.reify_field);
+      return;
+    }
+    evaluation.mode = MODE_REIFY_CONTINUE;
+    return;
+  }
+  if !valid_heap(evaluation.reify_field) {
+    fail_bad_module(evaluation.reify_field);
+    return;
+  }
+  let field = heap[heap_storage_index(evaluation.reify_field)];
+  if field.kind != HEAP_CONSTRUCTOR_FIELD || !valid_heap(field.field1) {
+    fail_bad_module(evaluation.reify_field);
+    return;
+  }
+  let field_frame = ContinuationFrame(
+    FRAME_REIFY_FIELD,
+    field.field1,
+    0u,
+    0u,
+    0u,
+    0u,
+    evaluation.current_source_offset,
+    0u,
+  );
+  if !push_frame(field_frame) {
+    return;
+  }
+  evaluation.reify_field = field.field0;
+  evaluation.reify_remaining -= 1u;
+}
+
+fn continue_reification() {
+  if evaluation.stack_top == 0u {
+    evaluation.status = STATUS_COMPLETE;
+    return;
+  }
+  let frame = pop_frame();
+  if evaluation.status == STATUS_FAULT {
+    return;
+  }
+  switch frame.kind {
+    case FRAME_REIFY_FIELD: {
+      if !valid_heap(frame.field0) {
+        fail_bad_module(frame.field0);
+        return;
+      }
+      let value_frame = ContinuationFrame(
+        FRAME_REIFY_VALUE,
+        0u,
+        0u,
+        0u,
+        0u,
+        0u,
+        frame.source_offset,
+        0u,
+      );
+      if !push_frame(value_frame) {
+        return;
+      }
+      evaluation.expression = frame.field0;
+      evaluation.mode = MODE_ENTER_THUNK;
+    }
+    case FRAME_REIFY_END: {
+      if !valid_heap(frame.field0) ||
+          heap[heap_storage_index(frame.field0)].kind != HEAP_CONSTRUCTOR ||
+          heap[heap_storage_index(frame.field0)].reserved0 != 1u {
+        fail_bad_module(frame.field0);
+        return;
+      }
+      heap[heap_storage_index(frame.field0)].reserved0 = 0u;
+      evaluation.mode = MODE_REIFY_CONTINUE;
+    }
+    default: {
+      fail_bad_module(frame.kind);
+    }
+  }
+}
+
 fn return_from_expression() {
   if evaluation.stack_top == 0u {
+    if evaluation.pending_input != NO_INDEX {
+      if evaluation.value_tag != VALUE_CLOSURE &&
+          evaluation.value_tag != VALUE_CONSTRUCTOR_PARTIAL {
+        fail(FAULT_TYPE_ERROR, NO_INDEX, EXPECT_CALLABLE);
+        return;
+      }
+      let input_index = evaluation.pending_input;
+      evaluation.pending_input = NO_INDEX;
+      let argument_thunk = allocate_heap_slot(HEAP_THUNK, NO_INDEX);
+      if argument_thunk == NO_INDEX {
+        return;
+      }
+      heap[heap_storage_index(argument_thunk)].state = THUNK_INPUT;
+      heap[heap_storage_index(argument_thunk)].field0 = input_index;
+      apply_to_thunk(argument_thunk, NO_INDEX);
+      return;
+    }
     if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
       fail_bad_module(evaluation.value_payload);
       return;
     }
+    if evaluation.result_form == 1u {
+      evaluation.mode = MODE_REIFY_VALUE;
+      return;
+    }
     if evaluation.value_tag == VALUE_CONSTRUCTOR {
       let value_index = evaluation.value_payload;
-      let value = heap[value_index];
+      let value = heap[heap_storage_index(value_index)];
       evaluation.value_payload = value.field0;
     }
     evaluation.status = STATUS_COMPLETE;
@@ -711,12 +1099,19 @@ fn return_from_expression() {
   }
 
   switch frame.kind {
+    case FRAME_REIFY_VALUE: {
+      if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
+        fail_bad_module(evaluation.value_payload);
+        return;
+      }
+      evaluation.mode = MODE_REIFY_VALUE;
+    }
     case FRAME_UPDATE: {
       if !valid_heap(frame.field0) {
         fail_bad_module(frame.field0);
         return;
       }
-      let thunk = heap[frame.field0];
+      let thunk = heap[heap_storage_index(frame.field0)];
       if thunk.kind != HEAP_THUNK || thunk.state != THUNK_EVALUATING {
         fail_bad_module(frame.field0);
         return;
@@ -725,18 +1120,14 @@ fn return_from_expression() {
         fail_bad_module(evaluation.value_payload);
         return;
       }
-      heap[frame.field0].state = THUNK_EVALUATED;
-      heap[frame.field0].field2 = evaluation.value_tag;
-      heap[frame.field0].field3 = evaluation.value_payload;
+      heap[heap_storage_index(frame.field0)].state = THUNK_EVALUATED;
+      heap[heap_storage_index(frame.field0)].field2 = evaluation.value_tag;
+      heap[heap_storage_index(frame.field0)].field3 = evaluation.value_payload;
     }
     case FRAME_APPLY: {
       if evaluation.value_tag != VALUE_CLOSURE &&
           evaluation.value_tag != VALUE_CONSTRUCTOR_PARTIAL {
         fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_CALLABLE);
-        return;
-      }
-      if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
-        fail_bad_module(evaluation.value_payload);
         return;
       }
       if !valid_node(frame.field0) {
@@ -748,52 +1139,10 @@ fn return_from_expression() {
       if argument_thunk == NO_INDEX {
         return;
       }
-      heap[argument_thunk].state = THUNK_UNEVALUATED;
-      heap[argument_thunk].field0 = frame.field0;
-      heap[argument_thunk].field1 = frame.field1;
-
-      if evaluation.value_tag == VALUE_CONSTRUCTOR_PARTIAL {
-        let partial = heap[evaluation.value_payload];
-        let constructor = constructors[partial.field0];
-        let field_index = allocate_heap_slot(HEAP_CONSTRUCTOR_FIELD, frame.source_offset);
-        if field_index == NO_INDEX {
-          return;
-        }
-        heap[field_index].field0 = partial.field1;
-        heap[field_index].field1 = argument_thunk;
-
-        let applied_count = partial.field2 + 1u;
-        if applied_count == constructor.arity {
-          let value_index = allocate_heap_slot(HEAP_CONSTRUCTOR, frame.source_offset);
-          if value_index == NO_INDEX {
-            return;
-          }
-          heap[value_index].field0 = partial.field0;
-          heap[value_index].field1 = field_index;
-          heap[value_index].field2 = applied_count;
-          return_value(VALUE_CONSTRUCTOR, value_index);
-          return;
-        }
-
-        let next_partial = allocate_heap_slot(HEAP_CONSTRUCTOR_PARTIAL, frame.source_offset);
-        if next_partial == NO_INDEX {
-          return;
-        }
-        heap[next_partial].field0 = partial.field0;
-        heap[next_partial].field1 = field_index;
-        heap[next_partial].field2 = applied_count;
-        return_value(VALUE_CONSTRUCTOR_PARTIAL, next_partial);
-        return;
-      }
-
-      let closure = heap[evaluation.value_payload];
-      let call_environment = allocate_heap_slot(HEAP_ENVIRONMENT, frame.source_offset);
-      if call_environment == NO_INDEX {
-        return;
-      }
-      heap[call_environment].field0 = closure.field1;
-      heap[call_environment].field1 = argument_thunk;
-      evaluate_expression(closure.field0, call_environment);
+      heap[heap_storage_index(argument_thunk)].state = THUNK_UNEVALUATED;
+      heap[heap_storage_index(argument_thunk)].field0 = frame.field0;
+      heap[heap_storage_index(argument_thunk)].field1 = frame.field1;
+      apply_to_thunk(argument_thunk, frame.source_offset);
     }
     case FRAME_CASE: {
       if evaluation.value_tag != VALUE_CONSTRUCTOR {
@@ -805,7 +1154,7 @@ fn return_from_expression() {
         fail_bad_module(evaluation.value_payload);
         return;
       }
-      let value = heap[evaluation.value_payload];
+      let value = heap[heap_storage_index(evaluation.value_payload)];
       evaluation.case_arm = frame.field0;
       evaluation.case_pattern = NO_INDEX;
       evaluation.case_field = value.field1;
@@ -939,7 +1288,7 @@ fn match_case_arm() {
     return;
   }
 
-  let arm = nodes[evaluation.case_arm];
+  let arm = nodes[node_storage_index(evaluation.case_arm)];
   if arm.tag != TAG_CASE_ARM || !valid_constructor(arm.payload) ||
       !valid_core_child(evaluation.case_arm, arm.child0) ||
       !valid_optional_core_child(evaluation.case_arm, arm.child1) || arm.child2 != NO_INDEX {
@@ -951,7 +1300,7 @@ fn match_case_arm() {
     return;
   }
 
-  let constructor = constructors[arm.payload];
+  let constructor = constructors[constructor_storage_index(arm.payload)];
   if constructor.arity != evaluation.case_remaining {
     fail_bad_module(arm.payload);
     return;
@@ -973,7 +1322,7 @@ fn bind_case_field() {
       fail_bad_module(evaluation.case_field);
       return;
     }
-    let body = nodes[evaluation.case_pattern];
+    let body = nodes[node_storage_index(evaluation.case_pattern)];
     if body.tag == TAG_PATTERN_BIND || body.tag == TAG_CASE_ARM {
       fail_bad_module(evaluation.case_pattern);
       return;
@@ -982,7 +1331,7 @@ fn bind_case_field() {
     return;
   }
 
-  let binding = nodes[evaluation.case_pattern];
+  let binding = nodes[node_storage_index(evaluation.case_pattern)];
   if binding.tag != TAG_PATTERN_BIND ||
       !valid_core_child(evaluation.case_pattern, binding.child0) ||
       binding.child1 != NO_INDEX || binding.child2 != NO_INDEX {
@@ -993,12 +1342,12 @@ fn bind_case_field() {
     fail_bad_module(evaluation.case_field);
     return;
   }
-  let field = heap[evaluation.case_field];
+  let field = heap[heap_storage_index(evaluation.case_field)];
   if field.kind != HEAP_CONSTRUCTOR_FIELD || !valid_heap(field.field1) {
     fail_bad_module(evaluation.case_field);
     return;
   }
-  let thunk = heap[field.field1];
+  let thunk = heap[heap_storage_index(field.field1)];
   if thunk.kind != HEAP_THUNK {
     fail_bad_module(field.field1);
     return;
@@ -1008,8 +1357,8 @@ fn bind_case_field() {
   if environment_index == NO_INDEX {
     return;
   }
-  heap[environment_index].field0 = evaluation.case_environment;
-  heap[environment_index].field1 = field.field1;
+  heap[heap_storage_index(environment_index)].field0 = evaluation.case_environment;
+  heap[heap_storage_index(environment_index)].field1 = field.field1;
   evaluation.case_environment = environment_index;
   evaluation.case_pattern = binding.child0;
   evaluation.case_field = field.field0;
@@ -1048,17 +1397,39 @@ fn initialize_evaluation() {
   evaluation.case_constructor = NO_INDEX;
   evaluation.case_source_offset = NO_INDEX;
   evaluation.initialization_definition = 0u;
+  evaluation.result_top = 0u;
+  evaluation.reify_field = NO_INDEX;
+  evaluation.reify_remaining = 0u;
 
   if evaluation.node_count == 0u || evaluation.definition_count == 0u ||
       evaluation.entry_definition >= evaluation.definition_count ||
       evaluation.maximum_steps_per_dispatch == 0u ||
-      evaluation.node_count > arrayLength(&nodes) ||
-      evaluation.definition_count > arrayLength(&definitions) ||
-      evaluation.definition_count > arrayLength(&global_thunks) ||
-      evaluation.constructor_count > arrayLength(&constructors) ||
+      !region_fits(evaluation.node_base, evaluation.node_count, arrayLength(&nodes)) ||
+      !region_fits(
+        evaluation.definition_base,
+        evaluation.definition_count,
+        arrayLength(&definitions),
+      ) ||
+      !region_fits(
+        evaluation.global_base,
+        evaluation.definition_count,
+        arrayLength(&global_thunks),
+      ) ||
+      !region_fits(
+        evaluation.constructor_base,
+        evaluation.constructor_count,
+        arrayLength(&constructors),
+      ) ||
       (evaluation.constructor_count > 0u && evaluation.type_count == 0u) ||
-      evaluation.heap_capacity > arrayLength(&heap) ||
-      evaluation.stack_capacity > arrayLength(&continuation_stack) {
+      !region_fits(evaluation.heap_base, evaluation.heap_capacity, arrayLength(&heap)) ||
+      !region_fits(
+        evaluation.stack_base,
+        evaluation.stack_capacity,
+        arrayLength(&continuation_stack),
+      ) || !region_fits(evaluation.input_base, evaluation.input_count, arrayLength(&value_nodes)) ||
+      evaluation.result_form > 1u || evaluation.result_capacity == 0u ||
+      !region_fits(evaluation.result_base, evaluation.result_capacity, arrayLength(&value_nodes)) ||
+      (evaluation.pending_input != NO_INDEX && evaluation.pending_input >= evaluation.input_count) {
     fail_bad_module(evaluation.entry_definition);
     return;
   }
@@ -1067,13 +1438,17 @@ fn initialize_evaluation() {
 fn initialize_global() {
   let definition_index = evaluation.initialization_definition;
   if definition_index >= evaluation.definition_count ||
-      definition_index >= arrayLength(&definitions) ||
-      definition_index >= arrayLength(&global_thunks) {
+      !region_contains(
+        evaluation.definition_base,
+        definition_index,
+        arrayLength(&definitions),
+      ) ||
+      !region_contains(evaluation.global_base, definition_index, arrayLength(&global_thunks)) {
     fail_bad_module(definition_index);
     return;
   }
 
-  let definition = definitions[definition_index];
+  let definition = definitions[definition_storage_index(definition_index)];
   evaluation.current_source_offset = definition.start_byte;
   if !valid_node(definition.root_node) {
     fail(FAULT_BAD_MODULE, definition.start_byte, definition.root_node);
@@ -1084,20 +1459,19 @@ fn initialize_global() {
   if thunk_index == NO_INDEX {
     return;
   }
-  heap[thunk_index].state = THUNK_UNEVALUATED;
-  heap[thunk_index].field0 = definition.root_node;
-  heap[thunk_index].field1 = NO_INDEX;
-  global_thunks[definition_index] = thunk_index;
+  heap[heap_storage_index(thunk_index)].state = THUNK_UNEVALUATED;
+  heap[heap_storage_index(thunk_index)].field0 = definition.root_node;
+  heap[heap_storage_index(thunk_index)].field1 = NO_INDEX;
+  global_thunks[global_storage_index(definition_index)] = thunk_index;
 
   evaluation.initialization_definition += 1u;
   if evaluation.initialization_definition == evaluation.definition_count {
-    evaluation.expression = global_thunks[evaluation.entry_definition];
+    evaluation.expression = global_thunks[global_storage_index(evaluation.entry_definition)];
     evaluation.mode = MODE_ENTER_THUNK;
   }
 }
 
-@compute @workgroup_size(1)
-fn evaluate_lazuli() {
+fn evaluate_lane() {
   initialize_evaluation();
   if evaluation.status != STATUS_PENDING {
     return;
@@ -1136,10 +1510,31 @@ fn evaluate_lazuli() {
       case MODE_INITIALIZE_GLOBAL: {
         initialize_global();
       }
+      case MODE_REIFY_VALUE: {
+        reify_value();
+      }
+      case MODE_REIFY_PREPARE_FIELDS: {
+        prepare_reified_fields();
+      }
+      case MODE_REIFY_CONTINUE: {
+        continue_reification();
+      }
       default: {
         fail_bad_module(evaluation.mode);
       }
     }
   }
+}
+
+@compute @workgroup_size(1)
+fn evaluate_lazuli(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
+  let lane_index = global_invocation_id.x;
+  if lane_index >= arrayLength(&evaluation_states) {
+    return;
+  }
+
+  evaluation = evaluation_states[lane_index];
+  evaluate_lane();
+  evaluation_states[lane_index] = evaluation;
 }
 `;

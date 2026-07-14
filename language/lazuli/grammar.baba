@@ -1,25 +1,43 @@
 token IDENT = /[A-Za-z_][A-Za-z0-9_]*/ ;
 token INTEGER = /[0-9]+/ ;
+token STRING = /"[^"\r\n]*"/ ;
 skip WS = /[ \t\r\n]+/ ;
 skip COMMENT = /--[^\n\r]*/ ;
 
 module = declaration+ ;
 
-declaration = data_declaration | definition ;
+declaration = data_declaration | definition | let_declaration | const_declaration ;
 
-data_declaration = "data" name:IDENT "=" constructors:constructor_declaration ("|" constructors:constructor_declaration)* ";" ;
+data_declaration = "data" name:IDENT parameters:IDENT* "=" constructors:constructor_declaration ("|" constructors:constructor_declaration)* ";" ;
 constructor_declaration = name:IDENT fields:constructor_fields? ;
-constructor_fields = "(" values:identifier_list ")" ;
+constructor_fields = "(" values:constructor_field_list ")" ;
+constructor_field_list = head:constructor_field tail:constructor_field_tail* ;
+constructor_field_tail = "," value:constructor_field ;
+constructor_field = name:IDENT ":" type:source_type ;
 identifier_list = head:IDENT tail:identifier_tail* ;
 identifier_tail = "," value:IDENT ;
 
-definition = "fn" name:IDENT params:IDENT* "=" body:expr ";" ;
+definition = "fn" name:IDENT params:IDENT? "=" body:expr ";" ;
+let_declaration = "let" name:IDENT annotation:let_annotation? "=" body:expr ";" ;
+let_annotation = ":" type:source_type ;
+const_declaration = "const" name:IDENT parameters:const_parameters? "=" body:expr ";" ;
+const_parameters = "[" values:identifier_list "]" ;
+
+source_type = left:type_application tail:type_function_tail? ;
+type_function_tail = "->" result:source_type ;
+type_application = callee:type_atom arguments:type_atom* ;
+type_atom = type_named | type_unit | type_tuple | type_group ;
+type_named = name:IDENT ;
+type_unit = "(" ")" ;
+type_tuple = "(" first:source_type "," second:source_type ")" ;
+type_group = "(" body:source_type ")" ;
 
 expr =
   let_rec_expr
   | let_expr
   | if_expr
   | fun_expr
+  | arrow_expr
   | case_expr
   | equality
 ;
@@ -28,9 +46,13 @@ let_rec_expr = "let" "rec" name:IDENT parameter:IDENT "=" value:expr "in" body:e
 let_expr = "let" name:IDENT "=" value:expr "in" body:expr ;
 if_expr = "if" condition:expr "then" consequent:expr "else" alternate:expr ;
 fun_expr = "fun" param:IDENT "->" body:expr ;
+arrow_expr = param:IDENT "=>" body:expr ;
 case_expr = "case" scrutinee:expr "of" arms:case_arm+ "end" ;
 case_arm = "|" pattern:case_pattern "->" body:expr ;
-case_pattern = name:IDENT binders:pattern_binders? ;
+case_pattern = constructor_pattern | tuple_pattern | unit_pattern ;
+constructor_pattern = name:IDENT binders:pattern_binders? ;
+tuple_pattern = "(" first:IDENT "," second:IDENT ")" ;
+unit_pattern = "(" ")" ;
 pattern_binders = "(" values:identifier_list ")" ;
 
 equality = left:comparison rest:equality_tail* ;
@@ -62,15 +84,27 @@ slash = "/" ;
 unary = negate | call ;
 negate = "-" body:unary ;
 
-call = callee:primary args:call_arguments* ;
-call_arguments = "(" values:argument_values ")" ;
-argument_values = head:expr tail:argument_tail* ;
-argument_tail = "," value:expr ;
+call = callee:primary args:call_argument* ;
+call_argument = value:primary ;
 
-primary = integer | boolean | variable | group ;
+primary = integer | string | boolean | list | named | unit | tuple | group ;
+named = name:IDENT suffix:named_suffix? ;
+named_suffix = const_instantiation | record ;
+const_instantiation = "[" arguments:type_argument_list "]" ;
+type_argument_list = head:source_type tail:type_argument_tail* ;
+type_argument_tail = "," value:source_type ;
+string = value:STRING ;
+list = "[" values:list_values? "]" ;
+list_values = head:expr tail:list_tail* ;
+list_tail = "," value:expr ;
+record = "{" fields:record_fields? "}" ;
+record_fields = head:record_field tail:record_tail* ;
+record_tail = "," value:record_field ;
+record_field = name:IDENT ":" value:expr ;
 integer = value:INTEGER ;
 boolean = truth | falsity ;
 truth = "true" ;
 falsity = "false" ;
-variable = name:IDENT ;
+unit = "(" ")" ;
+tuple = "(" first:expr "," second:expr ")" ;
 group = "(" body:expr ")" ;

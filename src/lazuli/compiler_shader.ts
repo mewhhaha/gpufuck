@@ -1,3 +1,42 @@
+export const LAZULI_COMPILATION_STATE_WORD_LENGTH = 24;
+export const LAZULI_COMPILATION_STATE_BYTE_LENGTH = LAZULI_COMPILATION_STATE_WORD_LENGTH *
+  Uint32Array.BYTES_PER_ELEMENT;
+
+export const LazuliCompilationStateWord = {
+  NodeCount: 0,
+  DefinitionCount: 1,
+  TypeCount: 2,
+  ConstructorCount: 3,
+  EntrySymbol: 4,
+  Status: 5,
+  ErrorCode: 6,
+  ErrorSource: 7,
+  ErrorDetail: 8,
+  EntryDefinition: 9,
+  TotalSteps: 10,
+  MaximumSteps: 11,
+  MaximumStepsPerDispatch: 12,
+  Phase: 13,
+  PrimaryCursor: 14,
+  SecondaryCursor: 15,
+  TertiaryCursor: 16,
+  ResolutionNode: 17,
+  ResolutionParent: 18,
+  ResolutionChild: 19,
+  ResolutionDepth: 20,
+  ResolutionSymbol: 21,
+  CoreTag: 22,
+  CorePayload: 23,
+} as const;
+
+export const LazuliCompilationStatus = {
+  Pending: 0,
+  Ok: 1,
+  Diagnostic: 2,
+  InvalidSurface: 3,
+  StepLimit: 4,
+} as const;
+
 export const LAZULI_COMPILER_SHADER = /* wgsl */ `
 struct SurfaceNode {
   tag: u32,
@@ -40,7 +79,7 @@ struct CoreNode {
   child1: u32,
   child2: u32,
   source_byte_offset: u32,
-  reserved0: u32,
+  source_end_byte: u32,
   reserved1: u32,
 }
 
@@ -55,6 +94,20 @@ struct CompilationState {
   error_source: u32,
   error_detail: u32,
   entry_definition: u32,
+  total_steps: u32,
+  maximum_steps: u32,
+  maximum_steps_per_dispatch: u32,
+  phase: u32,
+  primary_cursor: u32,
+  secondary_cursor: u32,
+  tertiary_cursor: u32,
+  resolution_node: u32,
+  resolution_parent: u32,
+  resolution_child: u32,
+  resolution_depth: u32,
+  resolution_symbol: u32,
+  core_tag: u32,
+  core_payload: u32,
 }
 
 @group(0) @binding(0)
@@ -82,6 +135,7 @@ const STATUS_PENDING: u32 = 0u;
 const STATUS_OK: u32 = 1u;
 const STATUS_DIAGNOSTIC: u32 = 2u;
 const STATUS_INVALID_SURFACE: u32 = 3u;
+const STATUS_STEP_LIMIT: u32 = 4u;
 
 const ERROR_NONE: u32 = 0u;
 const ERROR_UNKNOWN_NAME: u32 = 1u;
@@ -116,6 +170,27 @@ const SURFACE_LET_REC: u32 = 16u;
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
 const CORE_CONSTRUCTOR: u32 = 15u;
+
+const PHASE_UNINITIALIZED: u32 = 0u;
+const PHASE_VALIDATE_COUNTS: u32 = 1u;
+const PHASE_VALIDATE_NODE: u32 = 2u;
+const PHASE_VALIDATE_DEFINITION: u32 = 3u;
+const PHASE_VALIDATE_TYPE: u32 = 4u;
+const PHASE_VALIDATE_TYPE_TOTAL: u32 = 5u;
+const PHASE_VALIDATE_CONSTRUCTOR: u32 = 6u;
+const PHASE_FIND_DUPLICATE_DEFINITION: u32 = 7u;
+const PHASE_FIND_DUPLICATE_TYPE: u32 = 8u;
+const PHASE_FIND_DUPLICATE_CONSTRUCTOR: u32 = 9u;
+const PHASE_FIND_DEFINITION_CONSTRUCTOR_COLLISION: u32 = 10u;
+const PHASE_FIND_ENTRY_DEFINITION: u32 = 11u;
+const PHASE_LOWER_NODE: u32 = 12u;
+const PHASE_RESOLVE_LOCAL_NAME: u32 = 13u;
+const PHASE_RESOLVE_GLOBAL_NAME: u32 = 14u;
+const PHASE_RESOLVE_CONSTRUCTOR_NAME: u32 = 15u;
+const PHASE_RESOLVE_CASE_CONSTRUCTOR: u32 = 16u;
+const PHASE_COUNT_PATTERN_BINDERS: u32 = 17u;
+const PHASE_FIND_CASE_PARENT: u32 = 18u;
+const PHASE_FIND_EARLIER_CASE_ARM: u32 = 19u;
 
 fn report_diagnostic(code: u32, source: u32, detail: u32) {
   state.status = STATUS_DIAGNOSTIC;
@@ -239,390 +314,504 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
   }
 }
 
-fn surface_is_valid() -> bool {
+fn initialize_compilation() {
+  if state.phase != PHASE_UNINITIALIZED {
+    return;
+  }
+
+  state.error_code = ERROR_NONE;
+  state.error_source = NO_INDEX;
+  state.error_detail = NO_INDEX;
+  state.entry_definition = NO_INDEX;
+  state.total_steps = 0u;
+  state.primary_cursor = 0u;
+  state.secondary_cursor = 0u;
+  state.tertiary_cursor = 0u;
+  state.resolution_node = NO_INDEX;
+  state.resolution_parent = NO_INDEX;
+  state.resolution_child = NO_INDEX;
+  state.resolution_depth = 0u;
+  state.resolution_symbol = NO_INDEX;
+  state.core_tag = 0u;
+  state.core_payload = 0u;
+
+  if state.maximum_steps == 0u || state.maximum_steps_per_dispatch == 0u {
+    report_invalid_surface(ERROR_INVALID_COUNTS, 0u);
+    return;
+  }
+
+  state.phase = PHASE_VALIDATE_COUNTS;
+}
+
+fn validate_counts() {
   if state.node_count > arrayLength(&surface_nodes) ||
     state.node_count > arrayLength(&core_nodes) ||
     state.definition_count > arrayLength(&definitions) ||
     state.type_count > arrayLength(&algebraic_types) ||
     state.constructor_count > arrayLength(&constructors) {
     report_invalid_surface(ERROR_INVALID_COUNTS, 0u);
-    return false;
+    return;
   }
 
-  var node_index = 0u;
-  loop {
-    if node_index >= state.node_count {
-      break;
-    }
-    if !node_shape_is_valid(node_index, surface_nodes[node_index]) {
-      report_invalid_surface(ERROR_INVALID_NODE, node_index);
-      return false;
-    }
-    node_index += 1u;
+  state.primary_cursor = 0u;
+  state.phase = PHASE_VALIDATE_NODE;
+}
+
+fn validate_node() {
+  if state.primary_cursor >= state.node_count {
+    state.primary_cursor = 0u;
+    state.phase = PHASE_VALIDATE_DEFINITION;
+    return;
   }
 
-  var definition_index = 0u;
-  var previous_definition_start = 0u;
-  loop {
-    if definition_index >= state.definition_count {
-      break;
-    }
-    let definition = definitions[definition_index];
-    if definition.root_node >= state.node_count {
-      report_invalid_surface(ERROR_INVALID_DEFINITION, definition_index);
-      return false;
-    }
-    if definition.start_byte > definition.end_byte ||
-      (definition_index > 0u && definition.start_byte < previous_definition_start) {
-      report_invalid_surface(ERROR_INVALID_DEFINITION, definition_index);
-      return false;
-    }
-    if surface_nodes[definition.root_node].parent != NO_INDEX {
-      report_invalid_surface(ERROR_INVALID_DEFINITION, definition_index);
-      return false;
-    }
-    previous_definition_start = definition.start_byte;
-    definition_index += 1u;
+  if !node_shape_is_valid(state.primary_cursor, surface_nodes[state.primary_cursor]) {
+    report_invalid_surface(ERROR_INVALID_NODE, state.primary_cursor);
+    return;
+  }
+  state.primary_cursor += 1u;
+}
+
+fn validate_definition() {
+  if state.primary_cursor >= state.definition_count {
+    state.primary_cursor = 0u;
+    state.tertiary_cursor = 0u;
+    state.phase = PHASE_VALIDATE_TYPE;
+    return;
   }
 
-  var type_index = 0u;
-  var previous_type_start = 0u;
-  var expected_first_constructor = 0u;
-  loop {
-    if type_index >= state.type_count {
-      break;
-    }
-    let algebraic_type = algebraic_types[type_index];
-    if algebraic_type.start_byte > algebraic_type.end_byte ||
-      (type_index > 0u && algebraic_type.start_byte < previous_type_start) ||
-      algebraic_type.first_constructor != expected_first_constructor ||
-      algebraic_type.first_constructor > state.constructor_count ||
-      algebraic_type.constructor_count >
-        state.constructor_count - algebraic_type.first_constructor {
-      report_invalid_surface(ERROR_INVALID_TYPE, type_index);
-      return false;
-    }
-    previous_type_start = algebraic_type.start_byte;
-    expected_first_constructor =
-      algebraic_type.first_constructor + algebraic_type.constructor_count;
-    type_index += 1u;
+  let definition = definitions[state.primary_cursor];
+  if definition.root_node >= state.node_count {
+    report_invalid_surface(ERROR_INVALID_DEFINITION, state.primary_cursor);
+    return;
   }
-  if expected_first_constructor != state.constructor_count {
+  if definition.start_byte > definition.end_byte ||
+    (state.primary_cursor > 0u &&
+      definition.start_byte < definitions[state.primary_cursor - 1u].start_byte) ||
+    surface_nodes[definition.root_node].parent != NO_INDEX {
+    report_invalid_surface(ERROR_INVALID_DEFINITION, state.primary_cursor);
+    return;
+  }
+  state.primary_cursor += 1u;
+}
+
+fn validate_type() {
+  if state.primary_cursor >= state.type_count {
+    state.phase = PHASE_VALIDATE_TYPE_TOTAL;
+    return;
+  }
+
+  let algebraic_type = algebraic_types[state.primary_cursor];
+  if algebraic_type.start_byte > algebraic_type.end_byte ||
+    (state.primary_cursor > 0u &&
+      algebraic_type.start_byte < algebraic_types[state.primary_cursor - 1u].start_byte) ||
+    algebraic_type.first_constructor != state.tertiary_cursor ||
+    algebraic_type.first_constructor > state.constructor_count ||
+    algebraic_type.constructor_count > state.constructor_count - algebraic_type.first_constructor {
+    report_invalid_surface(ERROR_INVALID_TYPE, state.primary_cursor);
+    return;
+  }
+  state.tertiary_cursor = algebraic_type.first_constructor + algebraic_type.constructor_count;
+  state.primary_cursor += 1u;
+}
+
+fn validate_type_total() {
+  if state.tertiary_cursor != state.constructor_count {
     report_invalid_surface(ERROR_INVALID_TYPE, state.type_count);
-    return false;
+    return;
   }
-
-  var constructor_index = 0u;
-  var previous_constructor_start = 0u;
-  loop {
-    if constructor_index >= state.constructor_count {
-      break;
-    }
-    let constructor = constructors[constructor_index];
-    if constructor.type_index >= state.type_count {
-      report_invalid_surface(ERROR_INVALID_CONSTRUCTOR, constructor_index);
-      return false;
-    }
-    let algebraic_type = algebraic_types[constructor.type_index];
-    if constructor.start_byte > constructor.end_byte ||
-      (constructor_index > 0u && constructor.start_byte < previous_constructor_start) ||
-      constructor.arity > MAXIMUM_CONSTRUCTOR_ARITY ||
-      constructor_index < algebraic_type.first_constructor ||
-      constructor_index - algebraic_type.first_constructor >= algebraic_type.constructor_count {
-      report_invalid_surface(ERROR_INVALID_CONSTRUCTOR, constructor_index);
-      return false;
-    }
-    previous_constructor_start = constructor.start_byte;
-    constructor_index += 1u;
-  }
-
-  return true;
+  state.primary_cursor = 0u;
+  state.phase = PHASE_VALIDATE_CONSTRUCTOR;
 }
 
-fn find_global_definition(symbol: u32) -> u32 {
-  var definition_index = 0u;
-  loop {
-    if definition_index >= state.definition_count {
-      break;
-    }
-    if definitions[definition_index].symbol == symbol {
-      return definition_index;
-    }
-    definition_index += 1u;
+fn validate_constructor() {
+  if state.primary_cursor >= state.constructor_count {
+    state.primary_cursor = 0u;
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_FIND_DUPLICATE_DEFINITION;
+    return;
   }
-  return NO_INDEX;
+
+  let constructor = constructors[state.primary_cursor];
+  if constructor.type_index >= state.type_count {
+    report_invalid_surface(ERROR_INVALID_CONSTRUCTOR, state.primary_cursor);
+    return;
+  }
+  let algebraic_type = algebraic_types[constructor.type_index];
+  if constructor.start_byte > constructor.end_byte ||
+    (state.primary_cursor > 0u &&
+      constructor.start_byte < constructors[state.primary_cursor - 1u].start_byte) ||
+    constructor.arity > MAXIMUM_CONSTRUCTOR_ARITY ||
+    state.primary_cursor < algebraic_type.first_constructor ||
+    state.primary_cursor - algebraic_type.first_constructor >= algebraic_type.constructor_count {
+    report_invalid_surface(ERROR_INVALID_CONSTRUCTOR, state.primary_cursor);
+    return;
+  }
+  state.primary_cursor += 1u;
 }
 
-fn find_constructor(symbol: u32) -> u32 {
-  var constructor_index = 0u;
-  loop {
-    if constructor_index >= state.constructor_count {
-      break;
-    }
-    if constructors[constructor_index].symbol == symbol {
-      return constructor_index;
-    }
-    constructor_index += 1u;
+fn find_duplicate_definition() {
+  if state.primary_cursor >= state.definition_count {
+    state.primary_cursor = 0u;
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_FIND_DUPLICATE_TYPE;
+    return;
   }
-  return NO_INDEX;
+  if state.secondary_cursor >= state.primary_cursor {
+    state.primary_cursor += 1u;
+    state.secondary_cursor = 0u;
+    return;
+  }
+
+  let definition = definitions[state.primary_cursor];
+  if definitions[state.secondary_cursor].symbol == definition.symbol {
+    report_diagnostic(ERROR_DUPLICATE_DEFINITION, definition.start_byte, definition.symbol);
+    return;
+  }
+  state.secondary_cursor += 1u;
 }
 
-fn resolve_name(node_index: u32, symbol: u32) -> u32 {
-  var child_index = node_index;
-  var parent_index = surface_nodes[node_index].parent;
-  var local_depth = 0u;
-
-  loop {
-    if parent_index == NO_INDEX {
-      break;
-    }
-
-    let parent = surface_nodes[parent_index];
-    let introduces_let_binding = parent.tag == SURFACE_LET && parent.child1 == child_index;
-    let introduces_let_rec_binding = parent.tag == SURFACE_LET_REC &&
-      (parent.child0 == child_index || parent.child1 == child_index);
-    let introduces_lambda_binding = parent.tag == SURFACE_LAMBDA && parent.child0 == child_index;
-    let introduces_pattern_binding =
-      parent.tag == SURFACE_PATTERN_BIND && parent.child0 == child_index;
-    if introduces_let_binding || introduces_let_rec_binding || introduces_lambda_binding ||
-      introduces_pattern_binding {
-      if parent.payload == symbol {
-        return local_depth;
-      }
-      local_depth += 1u;
-    }
-
-    child_index = parent_index;
-    parent_index = parent.parent;
+fn find_duplicate_type() {
+  if state.primary_cursor >= state.type_count {
+    state.primary_cursor = 0u;
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_FIND_DUPLICATE_CONSTRUCTOR;
+    return;
+  }
+  if state.secondary_cursor >= state.primary_cursor {
+    state.primary_cursor += 1u;
+    state.secondary_cursor = 0u;
+    return;
   }
 
-  return NO_INDEX;
+  let algebraic_type = algebraic_types[state.primary_cursor];
+  if algebraic_types[state.secondary_cursor].symbol == algebraic_type.symbol {
+    report_diagnostic(ERROR_DUPLICATE_TYPE, algebraic_type.start_byte, algebraic_type.symbol);
+    return;
+  }
+  state.secondary_cursor += 1u;
 }
 
-fn pattern_binder_count(arm_index: u32) -> u32 {
-  var count = 0u;
-  var node_index = surface_nodes[arm_index].child0;
-  loop {
-    if node_index >= state.node_count || surface_nodes[node_index].tag != SURFACE_PATTERN_BIND {
-      break;
-    }
-    count += 1u;
-    node_index = surface_nodes[node_index].child0;
+fn find_duplicate_constructor() {
+  if state.primary_cursor >= state.constructor_count {
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_FIND_ENTRY_DEFINITION;
+    return;
   }
-  return count;
+  if state.secondary_cursor >= state.primary_cursor {
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_FIND_DEFINITION_CONSTRUCTOR_COLLISION;
+    return;
+  }
+
+  let constructor = constructors[state.primary_cursor];
+  if constructors[state.secondary_cursor].symbol == constructor.symbol {
+    report_diagnostic(ERROR_DUPLICATE_CONSTRUCTOR, constructor.start_byte, constructor.symbol);
+    return;
+  }
+  state.secondary_cursor += 1u;
 }
 
-fn case_has_earlier_arm(arm_index: u32, constructor_symbol: u32) -> bool {
-  var first_arm = arm_index;
-  var parent_index = surface_nodes[arm_index].parent;
-  loop {
-    if parent_index >= state.node_count {
-      return false;
-    }
-    let parent = surface_nodes[parent_index];
-    if parent.tag == SURFACE_CASE {
-      first_arm = parent.child1;
-      break;
-    }
-    parent_index = parent.parent;
+fn find_definition_constructor_collision() {
+  if state.secondary_cursor >= state.definition_count {
+    state.primary_cursor += 1u;
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_FIND_DUPLICATE_CONSTRUCTOR;
+    return;
   }
 
-  var earlier_arm = first_arm;
-  loop {
-    if earlier_arm == arm_index {
-      return false;
+  let constructor = constructors[state.primary_cursor];
+  let definition = definitions[state.secondary_cursor];
+  if definition.symbol == constructor.symbol {
+    var conflict_start = constructor.start_byte;
+    if definition.start_byte > conflict_start {
+      conflict_start = definition.start_byte;
     }
-    if earlier_arm >= state.node_count {
-      return false;
-    }
-    let arm = surface_nodes[earlier_arm];
-    if arm.payload == constructor_symbol {
-      return true;
-    }
-    earlier_arm = arm.child1;
+    report_diagnostic(
+      ERROR_DEFINITION_CONSTRUCTOR_COLLISION,
+      conflict_start,
+      constructor.symbol,
+    );
+    return;
   }
-  return false;
+  state.secondary_cursor += 1u;
+}
+
+fn find_entry_definition() {
+  if state.secondary_cursor >= state.definition_count {
+    report_diagnostic(ERROR_MISSING_MAIN, NO_INDEX, state.entry_symbol);
+    return;
+  }
+  if definitions[state.secondary_cursor].symbol == state.entry_symbol {
+    state.entry_definition = state.secondary_cursor;
+    state.primary_cursor = 0u;
+    state.phase = PHASE_LOWER_NODE;
+    return;
+  }
+  state.secondary_cursor += 1u;
+}
+
+fn write_lowered_node() {
+  let surface_node = surface_nodes[state.primary_cursor];
+  core_nodes[state.primary_cursor] = CoreNode(
+    state.core_tag,
+    state.core_payload,
+    surface_node.child0,
+    surface_node.child1,
+    surface_node.child2,
+    surface_node.start_byte,
+    surface_node.end_byte,
+    0u,
+  );
+  state.primary_cursor += 1u;
+  if state.primary_cursor == state.node_count {
+    state.status = STATUS_OK;
+    return;
+  }
+  state.phase = PHASE_LOWER_NODE;
+}
+
+fn lower_node() {
+  if state.primary_cursor >= state.node_count {
+    state.status = STATUS_OK;
+    return;
+  }
+
+  let surface_node = surface_nodes[state.primary_cursor];
+  state.core_tag = surface_node.tag;
+  state.core_payload = surface_node.payload;
+  if surface_node.tag == SURFACE_NAME {
+    state.resolution_node = state.primary_cursor;
+    state.resolution_parent = surface_node.parent;
+    state.resolution_child = state.primary_cursor;
+    state.resolution_depth = 0u;
+    state.resolution_symbol = surface_node.payload;
+    state.phase = PHASE_RESOLVE_LOCAL_NAME;
+    return;
+  }
+  if surface_node.tag == SURFACE_CASE_ARM {
+    state.resolution_node = state.primary_cursor;
+    state.resolution_symbol = surface_node.payload;
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_RESOLVE_CASE_CONSTRUCTOR;
+    return;
+  }
+  write_lowered_node();
+}
+
+fn resolve_local_name() {
+  if state.resolution_parent == NO_INDEX {
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_RESOLVE_GLOBAL_NAME;
+    return;
+  }
+
+  let parent = surface_nodes[state.resolution_parent];
+  let introduces_let_binding = parent.tag == SURFACE_LET &&
+    parent.child1 == state.resolution_child;
+  let introduces_let_rec_binding = parent.tag == SURFACE_LET_REC &&
+    (parent.child0 == state.resolution_child || parent.child1 == state.resolution_child);
+  let introduces_lambda_binding = parent.tag == SURFACE_LAMBDA &&
+    parent.child0 == state.resolution_child;
+  let introduces_pattern_binding = parent.tag == SURFACE_PATTERN_BIND &&
+    parent.child0 == state.resolution_child;
+  if introduces_let_binding || introduces_let_rec_binding || introduces_lambda_binding ||
+    introduces_pattern_binding {
+    if parent.payload == state.resolution_symbol {
+      state.core_tag = CORE_LOCAL;
+      state.core_payload = state.resolution_depth;
+      write_lowered_node();
+      return;
+    }
+    state.resolution_depth += 1u;
+  }
+  state.resolution_child = state.resolution_parent;
+  state.resolution_parent = parent.parent;
+}
+
+fn resolve_global_name() {
+  if state.secondary_cursor >= state.definition_count {
+    state.secondary_cursor = 0u;
+    state.phase = PHASE_RESOLVE_CONSTRUCTOR_NAME;
+    return;
+  }
+  if definitions[state.secondary_cursor].symbol == state.resolution_symbol {
+    state.core_tag = CORE_GLOBAL;
+    state.core_payload = state.secondary_cursor;
+    write_lowered_node();
+    return;
+  }
+  state.secondary_cursor += 1u;
+}
+
+fn resolve_constructor_name() {
+  if state.secondary_cursor >= state.constructor_count {
+    let surface_node = surface_nodes[state.resolution_node];
+    report_diagnostic(ERROR_UNKNOWN_NAME, surface_node.start_byte, state.resolution_symbol);
+    return;
+  }
+  if constructors[state.secondary_cursor].symbol == state.resolution_symbol {
+    state.core_tag = CORE_CONSTRUCTOR;
+    state.core_payload = state.secondary_cursor;
+    write_lowered_node();
+    return;
+  }
+  state.secondary_cursor += 1u;
+}
+
+fn resolve_case_constructor() {
+  if state.secondary_cursor >= state.constructor_count {
+    let surface_node = surface_nodes[state.resolution_node];
+    report_diagnostic(ERROR_UNKNOWN_CASE_CONSTRUCTOR, surface_node.start_byte, state.resolution_symbol);
+    return;
+  }
+  if constructors[state.secondary_cursor].symbol == state.resolution_symbol {
+    state.core_payload = state.secondary_cursor;
+    state.resolution_child = surface_nodes[state.resolution_node].child0;
+    state.resolution_depth = 0u;
+    state.phase = PHASE_COUNT_PATTERN_BINDERS;
+    return;
+  }
+  state.secondary_cursor += 1u;
+}
+
+fn count_pattern_binders() {
+  if state.resolution_child < state.node_count &&
+    surface_nodes[state.resolution_child].tag == SURFACE_PATTERN_BIND {
+    state.resolution_depth += 1u;
+    state.resolution_child = surface_nodes[state.resolution_child].child0;
+    return;
+  }
+  if state.resolution_depth != constructors[state.core_payload].arity {
+    let surface_node = surface_nodes[state.resolution_node];
+    report_diagnostic(ERROR_PATTERN_ARITY_MISMATCH, surface_node.start_byte, state.resolution_node);
+    return;
+  }
+  state.resolution_parent = surface_nodes[state.resolution_node].parent;
+  state.phase = PHASE_FIND_CASE_PARENT;
+}
+
+fn find_case_parent() {
+  if state.resolution_parent >= state.node_count {
+    write_lowered_node();
+    return;
+  }
+  let parent = surface_nodes[state.resolution_parent];
+  if parent.tag == SURFACE_CASE {
+    state.secondary_cursor = parent.child1;
+    state.phase = PHASE_FIND_EARLIER_CASE_ARM;
+    return;
+  }
+  state.resolution_parent = parent.parent;
+}
+
+fn find_earlier_case_arm() {
+  if state.secondary_cursor == state.resolution_node ||
+    state.secondary_cursor >= state.node_count {
+    write_lowered_node();
+    return;
+  }
+  let arm = surface_nodes[state.secondary_cursor];
+  if arm.payload == state.resolution_symbol {
+    let surface_node = surface_nodes[state.resolution_node];
+    report_diagnostic(
+      ERROR_DUPLICATE_CASE_ARM,
+      surface_node.start_byte,
+      state.resolution_symbol,
+    );
+    return;
+  }
+  state.secondary_cursor = arm.child1;
+}
+
+fn advance_compilation() {
+  switch state.phase {
+    case PHASE_VALIDATE_COUNTS: {
+      validate_counts();
+    }
+    case PHASE_VALIDATE_NODE: {
+      validate_node();
+    }
+    case PHASE_VALIDATE_DEFINITION: {
+      validate_definition();
+    }
+    case PHASE_VALIDATE_TYPE: {
+      validate_type();
+    }
+    case PHASE_VALIDATE_TYPE_TOTAL: {
+      validate_type_total();
+    }
+    case PHASE_VALIDATE_CONSTRUCTOR: {
+      validate_constructor();
+    }
+    case PHASE_FIND_DUPLICATE_DEFINITION: {
+      find_duplicate_definition();
+    }
+    case PHASE_FIND_DUPLICATE_TYPE: {
+      find_duplicate_type();
+    }
+    case PHASE_FIND_DUPLICATE_CONSTRUCTOR: {
+      find_duplicate_constructor();
+    }
+    case PHASE_FIND_DEFINITION_CONSTRUCTOR_COLLISION: {
+      find_definition_constructor_collision();
+    }
+    case PHASE_FIND_ENTRY_DEFINITION: {
+      find_entry_definition();
+    }
+    case PHASE_LOWER_NODE: {
+      lower_node();
+    }
+    case PHASE_RESOLVE_LOCAL_NAME: {
+      resolve_local_name();
+    }
+    case PHASE_RESOLVE_GLOBAL_NAME: {
+      resolve_global_name();
+    }
+    case PHASE_RESOLVE_CONSTRUCTOR_NAME: {
+      resolve_constructor_name();
+    }
+    case PHASE_RESOLVE_CASE_CONSTRUCTOR: {
+      resolve_case_constructor();
+    }
+    case PHASE_COUNT_PATTERN_BINDERS: {
+      count_pattern_binders();
+    }
+    case PHASE_FIND_CASE_PARENT: {
+      find_case_parent();
+    }
+    case PHASE_FIND_EARLIER_CASE_ARM: {
+      find_earlier_case_arm();
+    }
+    default: {
+      report_invalid_surface(ERROR_INVALID_COUNTS, state.phase);
+    }
+  }
 }
 
 @compute @workgroup_size(1)
 fn compile_lazuli() {
-  state.status = STATUS_PENDING;
-  state.error_code = ERROR_NONE;
-  state.error_source = NO_INDEX;
-  state.error_detail = NO_INDEX;
-  state.entry_definition = NO_INDEX;
-
-  if !surface_is_valid() {
+  if state.status != STATUS_PENDING {
+    return;
+  }
+  initialize_compilation();
+  if state.status != STATUS_PENDING {
     return;
   }
 
-  var definition_index = 0u;
+  let dispatch_start_steps = state.total_steps;
   loop {
-    if definition_index >= state.definition_count {
-      break;
+    if state.status != STATUS_PENDING {
+      return;
     }
-    let symbol = definitions[definition_index].symbol;
-    var earlier_definition_index = 0u;
-    loop {
-      if earlier_definition_index >= definition_index {
-        break;
-      }
-      if definitions[earlier_definition_index].symbol == symbol {
-        report_diagnostic(
-          ERROR_DUPLICATE_DEFINITION,
-          definitions[definition_index].start_byte,
-          symbol,
-        );
-        return;
-      }
-      earlier_definition_index += 1u;
+    if state.total_steps >= state.maximum_steps {
+      state.status = STATUS_STEP_LIMIT;
+      return;
     }
-    definition_index += 1u;
+    if state.total_steps - dispatch_start_steps >= state.maximum_steps_per_dispatch {
+      return;
+    }
+    state.total_steps += 1u;
+    advance_compilation();
   }
-
-  var type_index = 0u;
-  loop {
-    if type_index >= state.type_count {
-      break;
-    }
-    let symbol = algebraic_types[type_index].symbol;
-    var earlier_type_index = 0u;
-    loop {
-      if earlier_type_index >= type_index {
-        break;
-      }
-      if algebraic_types[earlier_type_index].symbol == symbol {
-        report_diagnostic(ERROR_DUPLICATE_TYPE, algebraic_types[type_index].start_byte, symbol);
-        return;
-      }
-      earlier_type_index += 1u;
-    }
-    type_index += 1u;
-  }
-
-  var constructor_index = 0u;
-  loop {
-    if constructor_index >= state.constructor_count {
-      break;
-    }
-    let constructor = constructors[constructor_index];
-    var earlier_constructor_index = 0u;
-    loop {
-      if earlier_constructor_index >= constructor_index {
-        break;
-      }
-      if constructors[earlier_constructor_index].symbol == constructor.symbol {
-        report_diagnostic(
-          ERROR_DUPLICATE_CONSTRUCTOR,
-          constructor.start_byte,
-          constructor.symbol,
-        );
-        return;
-      }
-      earlier_constructor_index += 1u;
-    }
-
-    definition_index = 0u;
-    loop {
-      if definition_index >= state.definition_count {
-        break;
-      }
-      let definition = definitions[definition_index];
-      if definition.symbol == constructor.symbol {
-        var conflict_start = constructor.start_byte;
-        if definition.start_byte > conflict_start {
-          conflict_start = definition.start_byte;
-        }
-        report_diagnostic(
-          ERROR_DEFINITION_CONSTRUCTOR_COLLISION,
-          conflict_start,
-          constructor.symbol,
-        );
-        return;
-      }
-      definition_index += 1u;
-    }
-    constructor_index += 1u;
-  }
-
-  let entry_definition = find_global_definition(state.entry_symbol);
-  if entry_definition == NO_INDEX {
-    report_diagnostic(ERROR_MISSING_MAIN, NO_INDEX, state.entry_symbol);
-    return;
-  }
-  state.entry_definition = entry_definition;
-
-  var node_index = 0u;
-  loop {
-    if node_index >= state.node_count {
-      break;
-    }
-
-    let surface_node = surface_nodes[node_index];
-    var core_tag = surface_node.tag;
-    var core_payload = surface_node.payload;
-    if surface_node.tag == SURFACE_NAME {
-      let local_depth = resolve_name(node_index, surface_node.payload);
-      if local_depth != NO_INDEX {
-        core_tag = CORE_LOCAL;
-        core_payload = local_depth;
-      } else {
-        let global_definition = find_global_definition(surface_node.payload);
-        if global_definition != NO_INDEX {
-          core_tag = CORE_GLOBAL;
-          core_payload = global_definition;
-        } else {
-          let named_constructor = find_constructor(surface_node.payload);
-          if named_constructor == NO_INDEX {
-            report_diagnostic(
-              ERROR_UNKNOWN_NAME,
-              surface_node.start_byte,
-              surface_node.payload,
-            );
-            return;
-          }
-          core_tag = CORE_CONSTRUCTOR;
-          core_payload = named_constructor;
-        }
-      }
-    } else if surface_node.tag == SURFACE_CASE_ARM {
-      let arm_constructor = find_constructor(surface_node.payload);
-      if arm_constructor == NO_INDEX {
-        report_diagnostic(
-          ERROR_UNKNOWN_CASE_CONSTRUCTOR,
-          surface_node.start_byte,
-          surface_node.payload,
-        );
-        return;
-      }
-      if pattern_binder_count(node_index) != constructors[arm_constructor].arity {
-        report_diagnostic(ERROR_PATTERN_ARITY_MISMATCH, surface_node.start_byte, node_index);
-        return;
-      }
-      if case_has_earlier_arm(node_index, surface_node.payload) {
-        report_diagnostic(
-          ERROR_DUPLICATE_CASE_ARM,
-          surface_node.start_byte,
-          surface_node.payload,
-        );
-        return;
-      }
-      core_payload = arm_constructor;
-    }
-
-    core_nodes[node_index] = CoreNode(
-      core_tag,
-      core_payload,
-      surface_node.child0,
-      surface_node.child1,
-      surface_node.child2,
-      surface_node.start_byte,
-      0u,
-      0u,
-    );
-    node_index += 1u;
-  }
-
-  state.status = STATUS_OK;
 }
 `;

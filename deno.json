@@ -11,20 +11,22 @@
     "noFallthroughCasesInSwitch": true
   },
   "fmt": {
-    "exclude": ["language/lazuli/generated"],
+    "exclude": ["language/lazuli/generated", ".claude"],
     "lineWidth": 100,
     "indentWidth": 2,
     "semiColons": true,
     "singleQuote": false
   },
   "tasks": {
+    "bench:lazuli": "deno bench --allow-read=language/lazuli/generated benchmarks/lazuli_compiler_bench.ts",
     "compile": "deno run --allow-read cli.ts",
     "compile:lazuli": "deno run --allow-read lazuli_cli.ts compile",
-    "generate:lazuli": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@4.0.0/cli language/lazuli/grammar.baba --out language/lazuli/generated --name lazuli --root module --target wasm",
-    "check": "deno check mod.ts cli.ts lazuli_cli.ts tests/*.ts",
+    "generate:lazuli": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@4.0.0/cli language/lazuli/grammar.baba --metadata language/lazuli/baba.json --out language/lazuli/generated --name lazuli --root module --target wasm",
+    "check": "deno check mod.ts cli.ts lazuli_cli.ts benchmarks/*.ts tests/*.ts",
     "fmt": "deno fmt --check",
     "lint": "deno lint",
     "run:lazuli": "deno run --allow-read lazuli_cli.ts run",
-    "test": "deno test --allow-read"
+    "run:lazuli-batch": "deno run --allow-read lazuli_cli.ts run-batch",
+    "test": "DENO_JOBS=2 deno test --parallel --allow-read tests/*.ts"
   }
 }

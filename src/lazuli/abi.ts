@@ -1,4 +1,4 @@
-export const LAZULI_ABI_VERSION = 3;
+export const LAZULI_ABI_VERSION = 4;
 export const LAZULI_NO_INDEX = 0xffffffff;
 export const LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
 export const LAZULI_MAXIMUM_SURFACE_NODES = 65_536;
@@ -126,7 +126,78 @@ export type LazuliDiagnosticCode =
   | "L2006"
   | "L2007"
   | "L2008"
-  | "L2009";
+  | "L2009"
+  | "L2010"
+  | "L2101"
+  | "L2102"
+  | "L2103"
+  | "L2104";
+
+export type LazuliType =
+  | { readonly kind: "integer" }
+  | { readonly kind: "boolean" }
+  | { readonly kind: "unit" }
+  | { readonly kind: "tuple"; readonly values: readonly [LazuliType, LazuliType] }
+  | {
+    readonly kind: "named";
+    readonly name: string;
+    readonly arguments: readonly LazuliType[];
+  }
+  | { readonly kind: "function"; readonly parameter: LazuliType; readonly result: LazuliType };
+
+export type LazuliTypeSchema =
+  | { readonly kind: "integer" }
+  | { readonly kind: "boolean" }
+  | { readonly kind: "unit" }
+  | { readonly kind: "parameter"; readonly name: string }
+  | {
+    readonly kind: "tuple";
+    readonly values: readonly [LazuliTypeSchema, LazuliTypeSchema];
+  }
+  | {
+    readonly kind: "named";
+    readonly name: string;
+    readonly arguments: readonly LazuliTypeSchema[];
+  }
+  | {
+    readonly kind: "function";
+    readonly parameter: LazuliTypeSchema;
+    readonly result: LazuliTypeSchema;
+  };
+
+export interface LazuliConstructorFieldDeclaration {
+  readonly name: string;
+  readonly type: LazuliTypeSchema;
+}
+
+export interface LazuliConstructorDeclaration {
+  readonly name: string;
+  readonly fields: readonly LazuliConstructorFieldDeclaration[];
+}
+
+export interface LazuliTypeDeclaration {
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly constructors: readonly LazuliConstructorDeclaration[];
+}
+
+export type LazuliSourceType = LazuliTypeSchema & LazuliSpan;
+
+export interface EncodedLazuliDefinitionType {
+  readonly annotation: LazuliSourceType | null;
+}
+
+export interface EncodedLazuliTypeDeclaration {
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly constructors: readonly {
+    readonly name: string;
+    readonly fields: readonly {
+      readonly name: string;
+      readonly type: LazuliSourceType;
+    }[];
+  }[];
+}
 
 export interface LazuliDiagnostic {
   readonly stage: "parse" | "compile";
@@ -146,6 +217,8 @@ export interface EncodedLazuliSurface {
   readonly constructorCount: number;
   readonly mainSymbol: number;
   readonly symbolNames: readonly string[];
+  readonly definitionTypes: readonly EncodedLazuliDefinitionType[];
+  readonly typeDeclarations: readonly EncodedLazuliTypeDeclaration[];
 }
 
 export type LazuliFrontendResult =

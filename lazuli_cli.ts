@@ -1,19 +1,33 @@
 import {
   GpuLazuliCompiler,
   GpuLazuliEvaluator,
+  type GpuLazuliModule,
   LAZULI_ABI_VERSION,
   requestWebGpuDevice,
 } from "./mod.ts";
 
-type LazuliCommand = "compile" | "run";
+type LazuliCommand = "compile" | "run" | "run-batch";
+type CliOutput = Pick<Console, "error" | "log">;
 
-async function main(arguments_: readonly string[]): Promise<number> {
+export async function main(
+  arguments_: readonly string[],
+  output: CliOutput = console,
+): Promise<number> {
   const command = arguments_[0];
-  const sourcePath = arguments_[1];
-  if (!isLazuliCommand(command) || sourcePath === undefined || arguments_.length !== 2) {
-    console.error("usage: lazuli_cli.ts <compile|run> <source.lz>");
+  const sourcePaths = arguments_.slice(1);
+  if (
+    !isLazuliCommand(command) || sourcePaths.length === 0 ||
+    (command !== "run-batch" && sourcePaths.length !== 1)
+  ) {
+    output.error("usage: lazuli_cli.ts <compile|run> <source.lz>");
+    output.error("       lazuli_cli.ts run-batch <first.lz> <second.lz> [...]");
     return 2;
   }
+
+  if (command === "run-batch") return await runBatch(sourcePaths, output);
+
+  const sourcePath = sourcePaths[0];
+  if (sourcePath === undefined) throw new Error("missing Lazuli source path");
 
   let source: string;
   try {
@@ -31,7 +45,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     const compilation = await compiler.compile(source);
     if (!compilation.ok) {
       for (const diagnostic of compilation.diagnostics) {
-        console.error(
+        output.error(
           `error[${diagnostic.code}] bytes ${diagnostic.span.startByte}..${diagnostic.span.endByte}: ${diagnostic.message}`,
         );
       }
@@ -41,7 +55,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
     try {
       if (command === "compile") {
         const nodes = await compilation.module.readCoreNodes();
-        console.log(JSON.stringify(
+        output.log(JSON.stringify(
           {
             abiVersion: LAZULI_ABI_VERSION,
             nodeCount: compilation.module.nodeCount,
@@ -67,13 +81,13 @@ async function main(arguments_: readonly string[]): Promise<number> {
         const location = evaluation.fault.sourceByteOffset === null
           ? "unknown source"
           : `byte ${evaluation.fault.sourceByteOffset}`;
-        console.error(
+        output.error(
           `runtime[${evaluation.fault.code}] ${location}: ${evaluation.fault.message}`,
         );
         return 1;
       }
 
-      console.log(JSON.stringify(
+      output.log(JSON.stringify(
         {
           value: evaluation.value,
           stats: evaluation.stats,
@@ -90,8 +104,79 @@ async function main(arguments_: readonly string[]): Promise<number> {
   }
 }
 
+async function runBatch(
+  sourcePaths: readonly string[],
+  output: CliOutput,
+): Promise<number> {
+  const sources: string[] = [];
+  for (const sourcePath of sourcePaths) {
+    try {
+      sources.push(await Deno.readTextFile(sourcePath));
+    } catch (cause) {
+      const reason = cause instanceof Error ? `: ${cause.message}` : "";
+      throw new Error(`could not read Lazuli source ${JSON.stringify(sourcePath)}${reason}`, {
+        cause,
+      });
+    }
+  }
+
+  const device = await requestWebGpuDevice();
+  const modules: GpuLazuliModule[] = [];
+  try {
+    const compiler = await GpuLazuliCompiler.create(device);
+    let hasCompilationFailure = false;
+    for (let index = 0; index < sources.length; index += 1) {
+      const source = sources[index];
+      const sourcePath = sourcePaths[index];
+      if (source === undefined || sourcePath === undefined) {
+        throw new Error(`batch source ${index} is missing`);
+      }
+
+      const compilation = await compiler.compile(source);
+      if (compilation.ok) {
+        modules.push(compilation.module);
+        continue;
+      }
+
+      hasCompilationFailure = true;
+      for (const diagnostic of compilation.diagnostics) {
+        const displayPath = JSON.stringify(sourcePath);
+        output.error(
+          `${displayPath}: error[${diagnostic.code}] bytes ${diagnostic.span.startByte}..${diagnostic.span.endByte}: ${diagnostic.message}`,
+        );
+      }
+    }
+
+    if (hasCompilationFailure) return 1;
+
+    const evaluator = await GpuLazuliEvaluator.create(device);
+    const evaluations = await evaluator.evaluateBatch(modules);
+    if (evaluations.length !== sourcePaths.length) {
+      throw new Error(
+        `Lazuli batch evaluator returned ${evaluations.length} results for ${sourcePaths.length} sources`,
+      );
+    }
+
+    output.log(JSON.stringify(
+      evaluations.map((evaluation, index) => {
+        const sourcePath = sourcePaths[index];
+        if (sourcePath === undefined) {
+          throw new Error(`Lazuli batch source ${index} is missing`);
+        }
+        return { path: sourcePath, ...evaluation };
+      }),
+      null,
+      2,
+    ));
+    return evaluations.some((evaluation) => !evaluation.ok) ? 1 : 0;
+  } finally {
+    for (const module of modules) module.destroy();
+    device.destroy();
+  }
+}
+
 function isLazuliCommand(value: string | undefined): value is LazuliCommand {
-  return value === "compile" || value === "run";
+  return value === "compile" || value === "run" || value === "run-batch";
 }
 
 if (import.meta.main) {

@@ -90,7 +90,8 @@ export interface ParseDiagnostic {
 
 export type MainTokenKind =
   | "IDENT"
-  | "INTEGER";
+  | "INTEGER"
+  | "STRING";
 
 export type TriviaTokenKind =
   | "WS"
@@ -118,15 +119,20 @@ export type LiteralKind =
   | "("
   | ")"
   | ","
+  | ":"
   | "fn"
   | "let"
+  | "const"
+  | "["
+  | "]"
+  | "->"
   | "rec"
   | "in"
   | "if"
   | "then"
   | "else"
   | "fun"
-  | "->"
+  | "=>"
   | "case"
   | "of"
   | "end"
@@ -140,6 +146,8 @@ export type LiteralKind =
   | "-"
   | "*"
   | "/"
+  | "{"
+  | "}"
   | "true"
   | "false";
 
@@ -205,17 +213,36 @@ export type RuleName =
   | "data_declaration"
   | "constructor_declaration"
   | "constructor_fields"
+  | "constructor_field_list"
+  | "constructor_field_tail"
+  | "constructor_field"
   | "identifier_list"
   | "identifier_tail"
   | "definition"
+  | "let_declaration"
+  | "let_annotation"
+  | "const_declaration"
+  | "const_parameters"
+  | "source_type"
+  | "type_function_tail"
+  | "type_application"
+  | "type_atom"
+  | "type_named"
+  | "type_unit"
+  | "type_tuple"
+  | "type_group"
   | "expr"
   | "let_rec_expr"
   | "let_expr"
   | "if_expr"
   | "fun_expr"
+  | "arrow_expr"
   | "case_expr"
   | "case_arm"
   | "case_pattern"
+  | "constructor_pattern"
+  | "tuple_pattern"
+  | "unit_pattern"
   | "pattern_binders"
   | "equality"
   | "equality_tail"
@@ -242,15 +269,27 @@ export type RuleName =
   | "unary"
   | "negate"
   | "call"
-  | "call_arguments"
-  | "argument_values"
-  | "argument_tail"
+  | "call_argument"
   | "primary"
+  | "named"
+  | "named_suffix"
+  | "const_instantiation"
+  | "type_argument_list"
+  | "type_argument_tail"
+  | "string"
+  | "list"
+  | "list_values"
+  | "list_tail"
+  | "record"
+  | "record_fields"
+  | "record_tail"
+  | "record_field"
   | "integer"
   | "boolean"
   | "truth"
   | "falsity"
-  | "variable"
+  | "unit"
+  | "tuple"
   | "group";
 
 export interface TokenCursor<
@@ -293,6 +332,7 @@ export interface DeclarationCursor extends RuleCursorBase<"declaration"> {
 export interface DataDeclarationCursor extends RuleCursorBase<"data_declaration"> {
   field(name: "constructors"): ReadonlyArray<ConstructorDeclarationCursor>;
   field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "parameters"): ReadonlyArray<TokenCursor<"named", "IDENT">>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: "constructors"): ReadonlyArray<ConstructorDeclarationCursor>;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -306,7 +346,27 @@ export interface ConstructorDeclarationCursor extends RuleCursorBase<"constructo
 }
 
 export interface ConstructorFieldsCursor extends RuleCursorBase<"constructor_fields"> {
-  field(name: "values"): IdentifierListCursor;
+  field(name: "values"): ConstructorFieldListCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstructorFieldListCursor extends RuleCursorBase<"constructor_field_list"> {
+  field(name: "head"): ConstructorFieldCursor;
+  field(name: "tail"): ReadonlyArray<ConstructorFieldTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstructorFieldTailCursor extends RuleCursorBase<"constructor_field_tail"> {
+  field(name: "value"): ConstructorFieldCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstructorFieldCursor extends RuleCursorBase<"constructor_field"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "type"): SourceTypeCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -327,7 +387,80 @@ export interface IdentifierTailCursor extends RuleCursorBase<"identifier_tail"> 
 export interface DefinitionCursor extends RuleCursorBase<"definition"> {
   field(name: "body"): ExprCursor;
   field(name: "name"): TokenCursor<"named", "IDENT">;
-  field(name: "params"): ReadonlyArray<TokenCursor<"named", "IDENT">>;
+  field(name: "params"): TokenCursor<"named", "IDENT"> | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface LetDeclarationCursor extends RuleCursorBase<"let_declaration"> {
+  field(name: "annotation"): LetAnnotationCursor | null;
+  field(name: "body"): ExprCursor;
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface LetAnnotationCursor extends RuleCursorBase<"let_annotation"> {
+  field(name: "type"): SourceTypeCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstDeclarationCursor extends RuleCursorBase<"const_declaration"> {
+  field(name: "body"): ExprCursor;
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "parameters"): ConstParametersCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstParametersCursor extends RuleCursorBase<"const_parameters"> {
+  field(name: "values"): IdentifierListCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface SourceTypeCursor extends RuleCursorBase<"source_type"> {
+  field(name: "left"): TypeApplicationCursor;
+  field(name: "tail"): TypeFunctionTailCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TypeFunctionTailCursor extends RuleCursorBase<"type_function_tail"> {
+  field(name: "result"): SourceTypeCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TypeApplicationCursor extends RuleCursorBase<"type_application"> {
+  field(name: "arguments"): ReadonlyArray<TypeAtomCursor>;
+  field(name: "callee"): TypeAtomCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TypeAtomCursor extends RuleCursorBase<"type_atom"> {
+}
+
+export interface TypeNamedCursor extends RuleCursorBase<"type_named"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TypeUnitCursor extends RuleCursorBase<"type_unit"> {
+}
+
+export interface TypeTupleCursor extends RuleCursorBase<"type_tuple"> {
+  field(name: "first"): SourceTypeCursor;
+  field(name: "second"): SourceTypeCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TypeGroupCursor extends RuleCursorBase<"type_group"> {
+  field(name: "body"): SourceTypeCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -367,6 +500,13 @@ export interface FunExprCursor extends RuleCursorBase<"fun_expr"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface ArrowExprCursor extends RuleCursorBase<"arrow_expr"> {
+  field(name: "body"): ExprCursor;
+  field(name: "param"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface CaseExprCursor extends RuleCursorBase<"case_expr"> {
   field(name: "arms"): ReadonlyArray<CaseArmCursor>;
   field(name: "scrutinee"): ExprCursor;
@@ -382,10 +522,23 @@ export interface CaseArmCursor extends RuleCursorBase<"case_arm"> {
 }
 
 export interface CasePatternCursor extends RuleCursorBase<"case_pattern"> {
+}
+
+export interface ConstructorPatternCursor extends RuleCursorBase<"constructor_pattern"> {
   field(name: "binders"): PatternBindersCursor | null;
   field(name: "name"): TokenCursor<"named", "IDENT">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TuplePatternCursor extends RuleCursorBase<"tuple_pattern"> {
+  field(name: "first"): TokenCursor<"named", "IDENT">;
+  field(name: "second"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface UnitPatternCursor extends RuleCursorBase<"unit_pattern"> {
 }
 
 export interface PatternBindersCursor extends RuleCursorBase<"pattern_binders"> {
@@ -502,32 +655,99 @@ export interface NegateCursor extends RuleCursorBase<"negate"> {
 }
 
 export interface CallCursor extends RuleCursorBase<"call"> {
-  field(name: "args"): ReadonlyArray<CallArgumentsCursor>;
+  field(name: "args"): ReadonlyArray<CallArgumentCursor>;
   field(name: "callee"): PrimaryCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface CallArgumentsCursor extends RuleCursorBase<"call_arguments"> {
-  field(name: "values"): ArgumentValuesCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface ArgumentValuesCursor extends RuleCursorBase<"argument_values"> {
-  field(name: "head"): ExprCursor;
-  field(name: "tail"): ReadonlyArray<ArgumentTailCursor>;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface ArgumentTailCursor extends RuleCursorBase<"argument_tail"> {
-  field(name: "value"): ExprCursor;
+export interface CallArgumentCursor extends RuleCursorBase<"call_argument"> {
+  field(name: "value"): PrimaryCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface PrimaryCursor extends RuleCursorBase<"primary"> {
+}
+
+export interface NamedCursor extends RuleCursorBase<"named"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "suffix"): NamedSuffixCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface NamedSuffixCursor extends RuleCursorBase<"named_suffix"> {
+}
+
+export interface ConstInstantiationCursor extends RuleCursorBase<"const_instantiation"> {
+  field(name: "arguments"): TypeArgumentListCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TypeArgumentListCursor extends RuleCursorBase<"type_argument_list"> {
+  field(name: "head"): SourceTypeCursor;
+  field(name: "tail"): ReadonlyArray<TypeArgumentTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TypeArgumentTailCursor extends RuleCursorBase<"type_argument_tail"> {
+  field(name: "value"): SourceTypeCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface StringCursor extends RuleCursorBase<"string"> {
+  field(name: "value"): TokenCursor<"named", "STRING">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ListCursor extends RuleCursorBase<"list"> {
+  field(name: "values"): ListValuesCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ListValuesCursor extends RuleCursorBase<"list_values"> {
+  field(name: "head"): ExprCursor;
+  field(name: "tail"): ReadonlyArray<ListTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ListTailCursor extends RuleCursorBase<"list_tail"> {
+  field(name: "value"): ExprCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface RecordCursor extends RuleCursorBase<"record"> {
+  field(name: "fields"): RecordFieldsCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface RecordFieldsCursor extends RuleCursorBase<"record_fields"> {
+  field(name: "head"): RecordFieldCursor;
+  field(name: "tail"): ReadonlyArray<RecordTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface RecordTailCursor extends RuleCursorBase<"record_tail"> {
+  field(name: "value"): RecordFieldCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface RecordFieldCursor extends RuleCursorBase<"record_field"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "value"): ExprCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface IntegerCursor extends RuleCursorBase<"integer"> {
@@ -545,8 +765,12 @@ export interface TruthCursor extends RuleCursorBase<"truth"> {
 export interface FalsityCursor extends RuleCursorBase<"falsity"> {
 }
 
-export interface VariableCursor extends RuleCursorBase<"variable"> {
-  field(name: "name"): TokenCursor<"named", "IDENT">;
+export interface UnitCursor extends RuleCursorBase<"unit"> {
+}
+
+export interface TupleCursor extends RuleCursorBase<"tuple"> {
+  field(name: "first"): ExprCursor;
+  field(name: "second"): ExprCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -563,17 +787,36 @@ export type AnyRuleCursor =
   | DataDeclarationCursor
   | ConstructorDeclarationCursor
   | ConstructorFieldsCursor
+  | ConstructorFieldListCursor
+  | ConstructorFieldTailCursor
+  | ConstructorFieldCursor
   | IdentifierListCursor
   | IdentifierTailCursor
   | DefinitionCursor
+  | LetDeclarationCursor
+  | LetAnnotationCursor
+  | ConstDeclarationCursor
+  | ConstParametersCursor
+  | SourceTypeCursor
+  | TypeFunctionTailCursor
+  | TypeApplicationCursor
+  | TypeAtomCursor
+  | TypeNamedCursor
+  | TypeUnitCursor
+  | TypeTupleCursor
+  | TypeGroupCursor
   | ExprCursor
   | LetRecExprCursor
   | LetExprCursor
   | IfExprCursor
   | FunExprCursor
+  | ArrowExprCursor
   | CaseExprCursor
   | CaseArmCursor
   | CasePatternCursor
+  | ConstructorPatternCursor
+  | TuplePatternCursor
+  | UnitPatternCursor
   | PatternBindersCursor
   | EqualityCursor
   | EqualityTailCursor
@@ -600,15 +843,27 @@ export type AnyRuleCursor =
   | UnaryCursor
   | NegateCursor
   | CallCursor
-  | CallArgumentsCursor
-  | ArgumentValuesCursor
-  | ArgumentTailCursor
+  | CallArgumentCursor
   | PrimaryCursor
+  | NamedCursor
+  | NamedSuffixCursor
+  | ConstInstantiationCursor
+  | TypeArgumentListCursor
+  | TypeArgumentTailCursor
+  | StringCursor
+  | ListCursor
+  | ListValuesCursor
+  | ListTailCursor
+  | RecordCursor
+  | RecordFieldsCursor
+  | RecordTailCursor
+  | RecordFieldCursor
   | IntegerCursor
   | BooleanCursor
   | TruthCursor
   | FalsityCursor
-  | VariableCursor
+  | UnitCursor
+  | TupleCursor
   | GroupCursor;
 
 export type RuleCursor<N extends RuleName = RuleName> = Extract<

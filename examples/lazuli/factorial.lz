@@ -2,6 +2,6 @@ fn factorial n =
   if n == 0 then
     1
   else
-    n * factorial(n - 1);
+    n * factorial (n - 1);
 
-fn main = factorial(6);
+fn main = factorial 6;
