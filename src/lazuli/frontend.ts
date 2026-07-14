@@ -13,9 +13,11 @@ import {
   LazuliDefinitionWord,
   type LazuliDiagnostic,
   type LazuliFrontendResult,
+  type LazuliSourceType,
   type LazuliSpan,
   LazuliSurfaceTag,
   LazuliSurfaceWord,
+  type LazuliTypeSchema,
   LazuliTypeWord,
   LazuliUnaryOperator,
 } from "./abi.ts";
@@ -23,6 +25,7 @@ import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
 
 type ParseResult = ReturnType<ReturnType<typeof createParser>["parse"]>;
 type AnyRuleCursor = Extract<ParseResult, { readonly ok: true }>["cursor"];
+type LazuliParser = ReturnType<typeof createParser>;
 
 interface Utf16Span {
   readonly start: number;
@@ -37,23 +40,65 @@ interface Identifier {
 interface Definition {
   readonly name: Identifier;
   readonly parameters: readonly Identifier[];
+  readonly annotation: SourceType | null;
   readonly body: Expression;
   readonly span: Utf16Span;
 }
 
 interface DataDeclaration {
   readonly name: Identifier;
+  readonly parameters: readonly Identifier[];
   readonly constructors: readonly ConstructorDeclaration[];
+  readonly span: Utf16Span;
+}
+
+interface ConstDefinition {
+  readonly kind: "const";
+  readonly name: Identifier;
+  readonly parameters: readonly Identifier[];
+  readonly body: Expression;
   readonly span: Utf16Span;
 }
 
 interface ConstructorDeclaration {
   readonly name: Identifier;
-  readonly fields: readonly Identifier[];
+  readonly fields: readonly ConstructorField[];
   readonly span: Utf16Span;
 }
 
-type Declaration = DataDeclaration | Definition;
+interface ConstructorField {
+  readonly name: Identifier;
+  readonly type: SourceType;
+}
+
+type SourceType =
+  | { readonly kind: "integer"; readonly span: Utf16Span }
+  | { readonly kind: "boolean"; readonly span: Utf16Span }
+  | { readonly kind: "unit"; readonly span: Utf16Span }
+  | {
+    readonly kind: "parameter";
+    readonly name: string;
+    readonly span: Utf16Span;
+  }
+  | {
+    readonly kind: "tuple";
+    readonly values: readonly [SourceType, SourceType];
+    readonly span: Utf16Span;
+  }
+  | {
+    readonly kind: "named";
+    readonly name: string;
+    readonly arguments: readonly SourceType[];
+    readonly span: Utf16Span;
+  }
+  | {
+    readonly kind: "function";
+    readonly parameter: SourceType;
+    readonly result: SourceType;
+    readonly span: Utf16Span;
+  };
+
+type Declaration = DataDeclaration | Definition | ConstDefinition;
 
 interface CaseArm {
   readonly constructor: Identifier;
@@ -66,6 +111,18 @@ type Expression =
   | { readonly kind: "integer"; readonly text: string; readonly span: Utf16Span }
   | { readonly kind: "boolean"; readonly value: boolean; readonly span: Utf16Span }
   | { readonly kind: "name"; readonly identifier: Identifier; readonly span: Utf16Span }
+  | {
+    readonly kind: "const-instantiation";
+    readonly name: Identifier;
+    readonly arguments: readonly SourceType[];
+    readonly span: Utf16Span;
+  }
+  | {
+    readonly kind: "record";
+    readonly constructor: Identifier;
+    readonly fields: readonly { readonly name: Identifier; readonly value: Expression }[];
+    readonly span: Utf16Span;
+  }
   | {
     readonly kind: "let";
     readonly name: Identifier;
@@ -131,6 +188,7 @@ const maximumI32 = 2_147_483_647n;
 const minimumI32Magnitude = 2_147_483_648n;
 const reservedIdentifierSpellings = new Set([
   "case",
+  "const",
   "data",
   "else",
   "end",
@@ -145,6 +203,32 @@ const reservedIdentifierSpellings = new Set([
   "then",
   "true",
 ]);
+const reservedBuiltinDeclarationNames = new Set([
+  "List",
+  "Nil",
+  "Cons",
+  "Bytes",
+  "BytesNil",
+  "BytesCons",
+  "Text",
+  "Utf8",
+]);
+// Baba snapshots each cursor tape, so sequential parses do not retain Wasm-backed cursors.
+let lazuliParser: LazuliParser | undefined;
+
+function getLazuliParser(): LazuliParser {
+  if (lazuliParser !== undefined) return lazuliParser;
+
+  lazuliParser = createParser({
+    bytes: Deno.readFileSync(
+      new URL("../../language/lazuli/generated/wasm/parser.wasm", import.meta.url),
+    ),
+    plan: Deno.readFileSync(
+      new URL("../../language/lazuli/generated/wasm/parser.plan", import.meta.url),
+    ),
+  });
+  return lazuliParser;
+}
 
 /** Parses Lazuli source into the stable surface-node ABI without resolving names. */
 export function parseLazuliSource(source: string): LazuliFrontendResult {
@@ -160,14 +244,7 @@ export function parseLazuliSource(source: string): LazuliFrontendResult {
 
   const symbols = new SymbolInterner();
   symbols.intern("main");
-  const parser = createParser({
-    bytes: Deno.readFileSync(
-      new URL("../../language/lazuli/generated/wasm/parser.wasm", import.meta.url),
-    ),
-    plan: Deno.readFileSync(
-      new URL("../../language/lazuli/generated/wasm/parser.plan", import.meta.url),
-    ),
-  });
+  const parser = getLazuliParser();
 
   try {
     const parsed = parser.parse(source, { preserveTrivia: false });
@@ -206,10 +283,64 @@ export function parseLazuliSource(source: string): LazuliFrontendResult {
           span: byteOffsets.span(error.span),
         });
       }
+      if (error instanceof ReservedBuiltinDeclaration) {
+        return failure({
+          stage: "parse",
+          code: "L1001",
+          message: error.message,
+          span: byteOffsets.span(error.span),
+        });
+      }
+      if (error instanceof ApplicationSpacingError) {
+        return failure({
+          stage: "parse",
+          code: "L1001",
+          message: error.message,
+          span: byteOffsets.span(error.span),
+        });
+      }
+      if (error instanceof TypeApplicationError) {
+        return failure({
+          stage: "parse",
+          code: "L1001",
+          message: error.message,
+          span: byteOffsets.span(error.span),
+        });
+      }
+      if (error instanceof TypeApplicationSpacingError) {
+        return failure({
+          stage: "parse",
+          code: "L1001",
+          message: error.message,
+          span: byteOffsets.span(error.span),
+        });
+      }
       throw error;
     }
-    const definitions = declarations.filter(isDefinition);
-    const dataDeclarations = declarations.filter(isDataDeclaration);
+    let definitions: readonly Definition[] = declarations.filter(isDefinition);
+    const dataDeclarations = [
+      ...declarations.filter(isDataDeclaration),
+      ...builtinDataDeclarations(source.length, symbols),
+    ];
+    const constDefinitions = declarations.filter(isConstDefinition);
+    try {
+      definitions = specializeConstDefinitions(
+        definitions,
+        constDefinitions,
+        dataDeclarations,
+        symbols,
+      );
+    } catch (error) {
+      if (error instanceof ConstSpecializationError) {
+        return failure({
+          stage: "parse",
+          code: "L1001",
+          message: error.message,
+          span: byteOffsets.span(error.span),
+        });
+      }
+      throw error;
+    }
     const summary = summarizeDefinitions(definitions, byteOffsets);
     if (summary.integerDiagnostics.length > 0) {
       return { ok: false, diagnostics: asNonemptyDiagnostics(summary.integerDiagnostics) };
@@ -245,8 +376,6 @@ export function parseLazuliSource(source: string): LazuliFrontendResult {
       ));
     }
     throw error;
-  } finally {
-    parser.dispose();
   }
 }
 
@@ -270,6 +399,105 @@ class ReservedIdentifier extends Error {
   constructor(readonly span: Utf16Span, readonly spelling: string) {
     super(`Reserved word ${JSON.stringify(spelling)} cannot be used as an identifier.`);
   }
+}
+
+class ReservedBuiltinDeclaration extends Error {
+  constructor(readonly span: Utf16Span, name: string) {
+    super(`Built-in name ${JSON.stringify(name)} cannot be declared in source.`);
+  }
+}
+
+class ApplicationSpacingError extends Error {
+  constructor(readonly span: Utf16Span) {
+    super("Function application requires whitespace before its argument.");
+  }
+}
+
+class TypeApplicationError extends Error {
+  constructor(readonly span: Utf16Span) {
+    super("Only named types can be applied to type arguments.");
+  }
+}
+
+class TypeApplicationSpacingError extends Error {
+  constructor(readonly span: Utf16Span) {
+    super("Type application requires whitespace before its argument.");
+  }
+}
+
+function builtinDataDeclarations(
+  sourceEnd: number,
+  symbols: SymbolInterner,
+): readonly DataDeclaration[] {
+  const span = { start: sourceEnd, end: sourceEnd };
+  const parameter = (name: string): Identifier => ({ spelling: name, span });
+  const named = (name: string, arguments_: readonly SourceType[] = []): SourceType => ({
+    kind: "named",
+    name,
+    arguments: arguments_,
+    span,
+  });
+  const field = (name: string, type: SourceType): ConstructorField => ({
+    name: parameter(name),
+    type,
+  });
+  const declaration = (
+    typeName: string,
+    parameters: readonly string[],
+    constructors: readonly {
+      readonly name: string;
+      readonly fields: readonly ConstructorField[];
+    }[],
+  ): DataDeclaration => {
+    symbols.intern(typeName);
+    for (const constructor of constructors) symbols.intern(constructor.name);
+    return {
+      name: { spelling: typeName, span },
+      parameters: parameters.map(parameter),
+      constructors: constructors.map((constructor) => ({
+        name: { spelling: constructor.name, span },
+        fields: constructor.fields,
+        span,
+      })),
+      span,
+    };
+  };
+  const value = parameter("value");
+  const first = parameter("first");
+  const second = parameter("second");
+  return [
+    declaration("List", [value.spelling], [
+      { name: "Nil", fields: [] },
+      {
+        name: "Cons",
+        fields: [
+          field("value", { kind: "parameter", name: value.spelling, span }),
+          field("tail", named("List", [{ kind: "parameter", name: value.spelling, span }])),
+        ],
+      },
+    ]),
+    declaration("Bytes", [], [
+      { name: "BytesNil", fields: [] },
+      {
+        name: "BytesCons",
+        fields: [
+          field("byte", { kind: "integer", span }),
+          field("tail", named("Bytes")),
+        ],
+      },
+    ]),
+    declaration("Text", [], [
+      { name: "Utf8", fields: [field("bytes", named("Bytes"))] },
+    ]),
+    declaration("$UnitType", [], [{ name: "$Unit", fields: [] }]),
+    declaration("$TupleType", [first.spelling, second.spelling], [{
+      name: "$Tuple",
+      fields: [
+        field("first", { kind: "parameter", name: first.spelling, span }),
+        field("second", { kind: "parameter", name: second.spelling, span }),
+      ],
+    }]),
+  ];
 }
 
 function ensureParseDepth(depth: number, span: Utf16Span): void {
@@ -313,6 +541,10 @@ function parseDeclaration(node: AnyRuleCursor, symbols: SymbolInterner): Declara
       return parseDataDeclaration(declaration, symbols);
     case "definition":
       return parseDefinition(declaration, symbols);
+    case "let_declaration":
+      return parseLetDeclaration(declaration, symbols);
+    case "const_declaration":
+      return parseConstDefinition(declaration, symbols);
     default:
       throw new Error(`Unsupported Lazuli declaration syntax node ${declaration.name}.`);
   }
@@ -320,11 +552,13 @@ function parseDeclaration(node: AnyRuleCursor, symbols: SymbolInterner): Declara
 
 function parseDataDeclaration(node: AnyRuleCursor, symbols: SymbolInterner): DataDeclaration {
   const name = identifier(requiredToken(node, "name"));
+  rejectReservedBuiltinDeclaration(name);
   symbols.intern(name.spelling);
+  const parameters = tokenFieldArray(node, "parameters").map(identifier);
   const constructors = ruleFieldArray(node, "constructors").map((constructor) =>
     parseConstructorDeclaration(constructor, symbols)
   );
-  return { name, constructors, span: node.span };
+  return { name, parameters, constructors, span: node.span };
 }
 
 function parseConstructorDeclaration(
@@ -335,13 +569,16 @@ function parseConstructorDeclaration(
     throw new Error(`Expected constructor declaration syntax node, got ${node.name}.`);
   }
   const name = identifier(requiredToken(node, "name"));
+  rejectReservedBuiltinDeclaration(name);
   symbols.intern(name.spelling);
   const fields = optionalRuleField(node, "fields");
-  const fieldNames = fields ? parseIdentifierList(requiredRuleField(fields, "values")) : [];
-  if (fieldNames.length > LAZULI_MAXIMUM_CONSTRUCTOR_ARITY) {
-    throw new ConstructorArityLimit(node.span, name.spelling, fieldNames.length);
+  const constructorFields = fields
+    ? parseConstructorFieldList(requiredRuleField(fields, "values"))
+    : [];
+  if (constructorFields.length > LAZULI_MAXIMUM_CONSTRUCTOR_ARITY) {
+    throw new ConstructorArityLimit(node.span, name.spelling, constructorFields.length);
   }
-  return { name, fields: fieldNames, span: node.span };
+  return { name, fields: constructorFields, span: node.span };
 }
 
 function parseDefinition(node: AnyRuleCursor, symbols: SymbolInterner): Definition {
@@ -349,6 +586,7 @@ function parseDefinition(node: AnyRuleCursor, symbols: SymbolInterner): Definiti
     throw new Error(`Expected definition syntax node, got ${node.name}.`);
   }
   const name = identifier(requiredToken(node, "name"));
+  rejectReservedBuiltinDeclaration(name);
   symbols.intern(name.spelling);
   const parameters = tokenFieldArray(node, "params").map(identifier);
   for (const parameter of parameters) symbols.intern(parameter.spelling);
@@ -357,9 +595,134 @@ function parseDefinition(node: AnyRuleCursor, symbols: SymbolInterner): Definiti
   return {
     name,
     parameters,
+    annotation: null,
     body: parseExpression(requiredRuleField(node, "body"), symbols, bodyDepth),
     span: node.span,
   };
+}
+
+function parseLetDeclaration(node: AnyRuleCursor, symbols: SymbolInterner): Definition {
+  if (node.name !== "let_declaration") {
+    throw new Error(`Expected let declaration syntax node, got ${node.name}.`);
+  }
+  const name = identifier(requiredToken(node, "name"));
+  rejectReservedBuiltinDeclaration(name);
+  symbols.intern(name.spelling);
+  const annotation = optionalRuleField(node, "annotation");
+  return {
+    name,
+    parameters: [],
+    annotation: annotation === null ? null : parseSourceType(requiredRuleField(annotation, "type")),
+    body: parseExpression(requiredRuleField(node, "body"), symbols, 1),
+    span: node.span,
+  };
+}
+
+function parseConstDefinition(node: AnyRuleCursor, symbols: SymbolInterner): ConstDefinition {
+  if (node.name !== "const_declaration") {
+    throw new Error(`Expected const declaration syntax node, got ${node.name}.`);
+  }
+  const name = identifier(requiredToken(node, "name"));
+  rejectReservedBuiltinDeclaration(name);
+  const parametersNode = optionalRuleField(node, "parameters");
+  const parameters = parametersNode === null
+    ? []
+    : parseIdentifierList(requiredRuleField(parametersNode, "values"));
+  return {
+    kind: "const",
+    name,
+    parameters,
+    body: parseExpression(requiredRuleField(node, "body"), symbols, 1),
+    span: node.span,
+  };
+}
+
+function parseConstructorFieldList(node: AnyRuleCursor): readonly ConstructorField[] {
+  if (node.name !== "constructor_field_list") {
+    throw new Error(`Expected constructor field list syntax node, got ${node.name}.`);
+  }
+  return [
+    requiredRuleField(node, "head"),
+    ...ruleFieldArray(node, "tail").map((tail) => requiredRuleField(tail, "value")),
+  ].map(parseConstructorField);
+}
+
+function parseConstructorField(node: AnyRuleCursor): ConstructorField {
+  if (node.name !== "constructor_field") {
+    throw new Error(`Expected constructor field syntax node, got ${node.name}.`);
+  }
+  return {
+    name: identifier(requiredToken(node, "name")),
+    type: parseSourceType(requiredRuleField(node, "type")),
+  };
+}
+
+function parseSourceType(node: AnyRuleCursor): SourceType {
+  if (node.name !== "source_type") {
+    throw new Error(`Expected source type syntax node, got ${node.name}.`);
+  }
+  const left = parseTypeApplication(requiredRuleField(node, "left"));
+  const tail = optionalRuleField(node, "tail");
+  if (tail === null) return withTypeSpan(left, node.span);
+  return {
+    kind: "function",
+    parameter: left,
+    result: parseSourceType(requiredRuleField(tail, "result")),
+    span: node.span,
+  };
+}
+
+function parseTypeApplication(node: AnyRuleCursor): SourceType {
+  if (node.name !== "type_application") {
+    throw new Error(`Expected type application syntax node, got ${node.name}.`);
+  }
+  const calleeNode = requiredRuleField(node, "callee");
+  const callee = parseTypeAtom(calleeNode);
+  const argumentNodes = ruleFieldArray(node, "arguments");
+  let previousTokenEnd = lastTokenEnd(calleeNode);
+  const arguments_ = argumentNodes.map((argument) => {
+    if (argument.span.start <= previousTokenEnd) {
+      throw new TypeApplicationSpacingError(argument.span);
+    }
+    previousTokenEnd = lastTokenEnd(argument);
+    return parseTypeAtom(argument);
+  });
+  if (arguments_.length === 0) return withTypeSpan(callee, node.span);
+  if (callee.kind !== "named") {
+    throw new TypeApplicationError(node.span);
+  }
+  return { ...callee, arguments: arguments_, span: node.span };
+}
+
+function parseTypeAtom(node: AnyRuleCursor): SourceType {
+  const atom = node.name === "type_atom" ? childRule(node) : node;
+  switch (atom.name) {
+    case "type_named": {
+      const name = identifier(requiredToken(atom, "name"));
+      if (name.spelling === "Int") return { kind: "integer", span: atom.span };
+      if (name.spelling === "Bool") return { kind: "boolean", span: atom.span };
+      return { kind: "named", name: name.spelling, arguments: [], span: atom.span };
+    }
+    case "type_unit":
+      return { kind: "unit", span: atom.span };
+    case "type_tuple":
+      return {
+        kind: "tuple",
+        values: [
+          parseSourceType(requiredRuleField(atom, "first")),
+          parseSourceType(requiredRuleField(atom, "second")),
+        ],
+        span: atom.span,
+      };
+    case "type_group":
+      return withTypeSpan(parseSourceType(requiredRuleField(atom, "body")), atom.span);
+    default:
+      throw new Error(`Unsupported Lazuli type syntax node ${atom.name}.`);
+  }
+}
+
+function withTypeSpan(type: SourceType, span: Utf16Span): SourceType {
+  return { ...type, span };
 }
 
 function parseExpression(
@@ -417,6 +780,16 @@ function parseExpression(
         span: node.span,
       };
     }
+    case "arrow_expr": {
+      const parameter = identifier(requiredToken(node, "param"));
+      symbols.intern(parameter.spelling);
+      return {
+        kind: "lambda",
+        parameter,
+        body: parseExpression(requiredRuleField(node, "body"), symbols, depth + 1),
+        span: node.span,
+      };
+    }
     case "case_expr":
       return {
         kind: "case",
@@ -454,15 +827,83 @@ function parseExpression(
         text: requiredToken(node, "value").text,
         span: node.span,
       };
+    case "string": {
+      const token = requiredToken(node, "value");
+      const bytes = new TextEncoder().encode(token.text.slice(1, -1));
+      let byteList = constructorExpression("BytesNil", [], node.span, symbols);
+      for (let byteIndex = bytes.length - 1; byteIndex >= 0; byteIndex--) {
+        const byte = bytes[byteIndex];
+        if (byte === undefined) throw new Error(`UTF-8 text omitted byte ${byteIndex}.`);
+        byteList = constructorExpression(
+          "BytesCons",
+          [{ kind: "integer", text: byte.toString(), span: node.span }, byteList],
+          node.span,
+          symbols,
+        );
+      }
+      return constructorExpression("Utf8", [byteList], node.span, symbols);
+    }
+    case "list": {
+      const valuesNode = optionalRuleField(node, "values");
+      const values = valuesNode === null ? [] : [
+        requiredRuleField(valuesNode, "head"),
+        ...ruleFieldArray(valuesNode, "tail").map((tail) => requiredRuleField(tail, "value")),
+      ].map((value) => parseExpression(value, symbols, depth + 1));
+      let list = constructorExpression("Nil", [], node.span, symbols);
+      for (let valueIndex = values.length - 1; valueIndex >= 0; valueIndex--) {
+        const value = values[valueIndex];
+        if (value === undefined) throw new Error(`List literal omitted value ${valueIndex}.`);
+        list = constructorExpression("Cons", [value, list], node.span, symbols);
+      }
+      return list;
+    }
+    case "named": {
+      const constructor = identifier(requiredToken(node, "name"));
+      symbols.intern(constructor.spelling);
+      const suffixNode = optionalRuleField(node, "suffix");
+      if (suffixNode === null) {
+        return { kind: "name", identifier: constructor, span: node.span };
+      }
+      const suffix = childRule(suffixNode);
+      if (suffix.name === "const_instantiation") {
+        const arguments_ = parseTypeArgumentList(requiredRuleField(suffix, "arguments"));
+        return {
+          kind: "const-instantiation",
+          name: constructor,
+          arguments: arguments_,
+          span: node.span,
+        };
+      }
+      if (suffix.name !== "record") {
+        throw new Error(`Unsupported Lazuli named suffix ${suffix.name}.`);
+      }
+      const fieldsNode = optionalRuleField(suffix, "fields");
+      const fieldNodes = fieldsNode === null ? [] : [
+        requiredRuleField(fieldsNode, "head"),
+        ...ruleFieldArray(fieldsNode, "tail").map((tail) => requiredRuleField(tail, "value")),
+      ];
+      const fields = fieldNodes.map((field) => ({
+        name: identifier(requiredToken(field, "name")),
+        value: parseExpression(requiredRuleField(field, "value"), symbols, depth + 1),
+      }));
+      return { kind: "record", constructor, fields, span: node.span };
+    }
     case "truth":
       return { kind: "boolean", value: true, span: node.span };
     case "falsity":
       return { kind: "boolean", value: false, span: node.span };
-    case "variable": {
-      const name = identifier(requiredToken(node, "name"));
-      symbols.intern(name.spelling);
-      return { kind: "name", identifier: name, span: node.span };
-    }
+    case "unit":
+      return constructorExpression("$Unit", [], node.span, symbols);
+    case "tuple":
+      return constructorExpression(
+        "$Tuple",
+        [
+          parseExpression(requiredRuleField(node, "first"), symbols, depth + 1),
+          parseExpression(requiredRuleField(node, "second"), symbols, depth + 1),
+        ],
+        node.span,
+        symbols,
+      );
     case "group":
       return parseExpression(requiredRuleField(node, "body"), symbols, depth);
     default:
@@ -470,15 +911,45 @@ function parseExpression(
   }
 }
 
+function constructorExpression(
+  name: string,
+  arguments_: readonly Expression[],
+  span: Utf16Span,
+  symbols: SymbolInterner,
+): Expression {
+  const identifier: Identifier = { spelling: name, span };
+  symbols.intern(name);
+  let expression: Expression = { kind: "name", identifier, span };
+  for (const argument of arguments_) {
+    expression = { kind: "apply", callee: expression, argument, span };
+  }
+  return expression;
+}
+
 function parseCaseArm(node: AnyRuleCursor, symbols: SymbolInterner, depth: number): CaseArm {
   if (node.name !== "case_arm") {
     throw new Error(`Expected case arm syntax node, got ${node.name}.`);
   }
-  const pattern = requiredRuleField(node, "pattern");
-  const constructor = identifier(requiredToken(pattern, "name"));
+  const pattern = childRule(requiredRuleField(node, "pattern"));
+  let constructor: Identifier;
+  let binders: readonly Identifier[];
+  if (pattern.name === "tuple_pattern") {
+    constructor = { spelling: "$Tuple", span: pattern.span };
+    binders = [
+      identifier(requiredToken(pattern, "first")),
+      identifier(requiredToken(pattern, "second")),
+    ];
+  } else if (pattern.name === "unit_pattern") {
+    constructor = { spelling: "$Unit", span: pattern.span };
+    binders = [];
+  } else if (pattern.name === "constructor_pattern") {
+    constructor = identifier(requiredToken(pattern, "name"));
+    const bindersNode = optionalRuleField(pattern, "binders");
+    binders = bindersNode ? parseIdentifierList(requiredRuleField(bindersNode, "values")) : [];
+  } else {
+    throw new Error(`Unsupported Lazuli case pattern ${pattern.name}.`);
+  }
   symbols.intern(constructor.spelling);
-  const bindersNode = optionalRuleField(pattern, "binders");
-  const binders = bindersNode ? parseIdentifierList(requiredRuleField(bindersNode, "values")) : [];
   for (const binder of binders) symbols.intern(binder.spelling);
   return {
     constructor,
@@ -498,41 +969,38 @@ function parseIdentifierList(node: AnyRuleCursor): readonly Identifier[] {
   ];
 }
 
+function parseTypeArgumentList(node: AnyRuleCursor): readonly SourceType[] {
+  if (node.name !== "type_argument_list") {
+    throw new Error(`Expected type argument list syntax node, got ${node.name}.`);
+  }
+  return [
+    parseSourceType(requiredRuleField(node, "head")),
+    ...ruleFieldArray(node, "tail").map((tail) =>
+      parseSourceType(requiredRuleField(tail, "value"))
+    ),
+  ];
+}
+
 function parseCall(node: AnyRuleCursor, symbols: SymbolInterner, depth: number): Expression {
   const callArguments = ruleFieldArray(node, "args");
-  const argumentNodes: Array<{
-    readonly node: AnyRuleCursor;
-    readonly argumentsNode: AnyRuleCursor;
-    readonly isFinal: boolean;
-  }> = [];
-  for (const argumentsNode of callArguments) {
-    const values = requiredRuleField(argumentsNode, "values");
-    const valuesInCall = [
-      requiredRuleField(values, "head"),
-      ...ruleFieldArray(values, "tail").map((tail) => requiredRuleField(tail, "value")),
-    ];
-    for (let index = 0; index < valuesInCall.length; index++) {
-      const argument = valuesInCall[index];
-      if (!argument) throw new Error("Call arguments unexpectedly omitted an argument.");
-      argumentNodes.push({
-        node: argument,
-        argumentsNode,
-        isFinal: index === valuesInCall.length - 1,
-      });
-    }
-  }
+  const calleeNode = requiredRuleField(node, "callee");
   let callee = parseExpression(
-    requiredRuleField(node, "callee"),
+    calleeNode,
     symbols,
-    depth + argumentNodes.length,
+    depth + callArguments.length,
   );
-  for (let index = 0; index < argumentNodes.length; index++) {
-    const argumentEntry = argumentNodes[index];
+  let previousTokenEnd = lastTokenEnd(calleeNode);
+  for (let index = 0; index < callArguments.length; index++) {
+    const argumentEntry = callArguments[index];
     if (!argumentEntry) throw new Error("Call arguments unexpectedly omitted an argument.");
+    const argumentNode = requiredRuleField(argumentEntry, "value");
+    if (argumentNode.span.start <= previousTokenEnd) {
+      throw new ApplicationSpacingError(argumentNode.span);
+    }
     const argument = parseExpression(
-      argumentEntry.node,
+      argumentNode,
       symbols,
-      depth + argumentNodes.length - index,
+      depth + callArguments.length - index,
     );
     callee = {
       kind: "apply",
@@ -540,11 +1008,29 @@ function parseCall(node: AnyRuleCursor, symbols: SymbolInterner, depth: number):
       argument,
       span: {
         start: callee.span.start,
-        end: argumentEntry.isFinal ? argumentEntry.argumentsNode.span.end : argument.span.end,
+        end: argumentNode.span.end,
       },
     };
+    previousTokenEnd = lastTokenEnd(argumentNode);
   }
   return callee;
+}
+
+function lastTokenEnd(node: AnyRuleCursor): number {
+  let end = node.span.start;
+  const pending: AnyRuleCursor[] = [node];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) throw new Error("Syntax traversal unexpectedly ended.");
+    for (const child of current.children()) {
+      if (isRuleCursor(child)) {
+        pending.push(child);
+      } else if (isTokenCursor(child)) {
+        end = Math.max(end, child.span.end);
+      }
+    }
+  }
+  return end;
 }
 
 function foldBinary(
@@ -623,6 +1109,359 @@ function multiplicativeOperator(ruleName: string): number {
   }
 }
 
+class ConstSpecializationError extends Error {
+  constructor(readonly span: Utf16Span, message: string) {
+    super(message);
+  }
+}
+
+function specializeConstDefinitions(
+  definitions: readonly Definition[],
+  constDefinitions: readonly ConstDefinition[],
+  dataDeclarations: readonly DataDeclaration[],
+  symbols: SymbolInterner,
+): readonly Definition[] {
+  const templates = new Map<string, ConstDefinition>();
+  for (const definition of constDefinitions) {
+    if (templates.has(definition.name.spelling)) {
+      throw new ConstSpecializationError(
+        definition.name.span,
+        `Duplicate const declaration ${JSON.stringify(definition.name.spelling)}.`,
+      );
+    }
+    templates.set(definition.name.spelling, definition);
+  }
+  const types = new Map(
+    dataDeclarations.map((declaration) => [declaration.name.spelling, declaration]),
+  );
+  const constructors = new Map<string, ConstructorDeclaration>();
+  for (const declaration of dataDeclarations) {
+    for (const constructor of declaration.constructors) {
+      if (!constructors.has(constructor.name.spelling)) {
+        constructors.set(constructor.name.spelling, constructor);
+      }
+    }
+  }
+  const runtimeNames = new Set(definitions.map((definition) => definition.name.spelling));
+  const specializations = new Map<string, Identifier>();
+  const generated: Definition[] = [];
+
+  const instantiate = (
+    name: Identifier,
+    arguments_: readonly SourceType[],
+    descriptors: ReadonlyMap<string, SourceType>,
+    span: Utf16Span,
+  ): Expression => {
+    const template = templates.get(name.spelling);
+    if (template === undefined) {
+      throw new ConstSpecializationError(
+        span,
+        `Unknown const declaration ${JSON.stringify(name.spelling)}.`,
+      );
+    }
+    if (arguments_.length !== template.parameters.length) {
+      throw new ConstSpecializationError(
+        span,
+        `Const ${
+          JSON.stringify(name.spelling)
+        } expects ${template.parameters.length} type arguments; received ${arguments_.length}.`,
+      );
+    }
+    const resolvedTypes = arguments_.map((argument) =>
+      resolveConstDescriptor(argument, descriptors, types)
+    );
+    const key = `${name.spelling}[${resolvedTypes.map(typeStructuralKey).join(",")}]`;
+    let generatedName = specializations.get(key);
+    if (generatedName === undefined) {
+      generatedName = { spelling: `$const$${specializations.size}`, span: template.name.span };
+      symbols.intern(generatedName.spelling);
+      specializations.set(key, generatedName);
+      const generatedIndex = generated.length;
+      generated.push({
+        name: generatedName,
+        parameters: [],
+        annotation: null,
+        body: { kind: "boolean", value: false, span: template.span },
+        span: template.span,
+      });
+      const templateDescriptors = new Map<string, SourceType>();
+      for (let index = 0; index < template.parameters.length; index++) {
+        const parameter = template.parameters[index];
+        const type = resolvedTypes[index];
+        if (parameter === undefined || type === undefined) {
+          throw new Error(`Const specialization ${key} omitted type argument ${index}.`);
+        }
+        templateDescriptors.set(parameter.spelling, type);
+      }
+      generated[generatedIndex] = {
+        name: generatedName,
+        parameters: [],
+        annotation: null,
+        body: expand(template.body, templateDescriptors, new Set()),
+        span: template.span,
+      };
+    }
+    return { kind: "name", identifier: generatedName, span };
+  };
+
+  const expand = (
+    expression: Expression,
+    descriptors: ReadonlyMap<string, SourceType>,
+    boundNames: ReadonlySet<string>,
+  ): Expression => {
+    const withBoundName = (name: string): ReadonlySet<string> => {
+      const next = new Set(boundNames);
+      next.add(name);
+      return next;
+    };
+    switch (expression.kind) {
+      case "integer":
+      case "boolean":
+        return expression;
+      case "name": {
+        const template = templates.get(expression.identifier.spelling);
+        if (
+          template !== undefined && template.parameters.length === 0 &&
+          !boundNames.has(expression.identifier.spelling) &&
+          !runtimeNames.has(expression.identifier.spelling)
+        ) {
+          return instantiate(expression.identifier, [], descriptors, expression.span);
+        }
+        return expression;
+      }
+      case "const-instantiation":
+        return instantiate(expression.name, expression.arguments, descriptors, expression.span);
+      case "record": {
+        const constructor = constructors.get(expression.constructor.spelling);
+        if (constructor === undefined) {
+          throw new ConstSpecializationError(
+            expression.constructor.span,
+            `Unknown record constructor ${JSON.stringify(expression.constructor.spelling)}.`,
+          );
+        }
+        const suppliedFields = new Map<string, Expression>();
+        for (const field of expression.fields) {
+          if (suppliedFields.has(field.name.spelling)) {
+            throw new ConstSpecializationError(
+              field.name.span,
+              `Record ${JSON.stringify(expression.constructor.spelling)} repeats field ${
+                JSON.stringify(field.name.spelling)
+              }.`,
+            );
+          }
+          suppliedFields.set(field.name.spelling, field.value);
+        }
+        const orderedValues = constructor.fields.map((field) => {
+          const value = suppliedFields.get(field.name.spelling);
+          if (value === undefined) {
+            throw new ConstSpecializationError(
+              expression.span,
+              `Record ${JSON.stringify(expression.constructor.spelling)} is missing field ${
+                JSON.stringify(field.name.spelling)
+              }.`,
+            );
+          }
+          suppliedFields.delete(field.name.spelling);
+          return expand(value, descriptors, boundNames);
+        });
+        const unknownField = suppliedFields.keys().next().value;
+        if (typeof unknownField === "string") {
+          throw new ConstSpecializationError(
+            expression.span,
+            `Record ${JSON.stringify(expression.constructor.spelling)} has unknown field ${
+              JSON.stringify(unknownField)
+            }.`,
+          );
+        }
+        return constructorExpression(
+          expression.constructor.spelling,
+          orderedValues,
+          expression.span,
+          symbols,
+        );
+      }
+      case "let":
+        return {
+          ...expression,
+          value: expand(expression.value, descriptors, boundNames),
+          body: expand(
+            expression.body,
+            descriptors,
+            withBoundName(expression.name.spelling),
+          ),
+        };
+      case "let-rec": {
+        const recursiveNames = new Set(boundNames);
+        recursiveNames.add(expression.name.spelling);
+        recursiveNames.add(expression.parameter.spelling);
+        return {
+          ...expression,
+          value: expand(expression.value, descriptors, recursiveNames),
+          body: expand(
+            expression.body,
+            descriptors,
+            withBoundName(expression.name.spelling),
+          ),
+        };
+      }
+      case "if":
+        return {
+          ...expression,
+          condition: expand(expression.condition, descriptors, boundNames),
+          consequent: expand(expression.consequent, descriptors, boundNames),
+          alternate: expand(expression.alternate, descriptors, boundNames),
+        };
+      case "lambda":
+        return {
+          ...expression,
+          body: expand(
+            expression.body,
+            descriptors,
+            withBoundName(expression.parameter.spelling),
+          ),
+        };
+      case "apply":
+        return {
+          ...expression,
+          callee: expand(expression.callee, descriptors, boundNames),
+          argument: expand(expression.argument, descriptors, boundNames),
+        };
+      case "unary":
+        return { ...expression, body: expand(expression.body, descriptors, boundNames) };
+      case "binary":
+        return {
+          ...expression,
+          left: expand(expression.left, descriptors, boundNames),
+          right: expand(expression.right, descriptors, boundNames),
+        };
+      case "case":
+        return {
+          ...expression,
+          scrutinee: expand(expression.scrutinee, descriptors, boundNames),
+          arms: expression.arms.map((arm) => {
+            const armNames = new Set(boundNames);
+            for (const binder of arm.binders) armNames.add(binder.spelling);
+            return { ...arm, body: expand(arm.body, descriptors, armNames) };
+          }),
+        };
+    }
+  };
+
+  const expandedDefinitions = definitions.map((definition) => {
+    const boundNames = new Set(definition.parameters.map((parameter) => parameter.spelling));
+    return { ...definition, body: expand(definition.body, new Map(), boundNames) };
+  });
+  return [...expandedDefinitions, ...generated].sort((left, right) =>
+    left.span.start - right.span.start || left.span.end - right.span.end
+  );
+}
+
+function resolveConstDescriptor(
+  descriptor: SourceType,
+  forwardingDescriptors: ReadonlyMap<string, SourceType>,
+  declaredTypes: ReadonlyMap<string, DataDeclaration>,
+): SourceType {
+  switch (descriptor.kind) {
+    case "integer":
+    case "boolean":
+    case "unit":
+      return descriptor;
+    case "parameter":
+      throw new ConstSpecializationError(
+        descriptor.span,
+        `Const type descriptor ${JSON.stringify(descriptor.name)} is not closed.`,
+      );
+    case "tuple":
+      return {
+        ...descriptor,
+        values: [
+          resolveClosedConstDescriptor(descriptor.values[0], forwardingDescriptors, declaredTypes),
+          resolveClosedConstDescriptor(descriptor.values[1], forwardingDescriptors, declaredTypes),
+        ],
+      };
+    case "function":
+      return {
+        ...descriptor,
+        parameter: resolveClosedConstDescriptor(
+          descriptor.parameter,
+          forwardingDescriptors,
+          declaredTypes,
+        ),
+        result: resolveClosedConstDescriptor(
+          descriptor.result,
+          forwardingDescriptors,
+          declaredTypes,
+        ),
+      };
+    case "named": {
+      if (descriptor.arguments.length === 0) {
+        const forwarded = forwardingDescriptors.get(descriptor.name);
+        if (forwarded !== undefined) return forwarded;
+      }
+      const declaration = declaredTypes.get(descriptor.name);
+      if (declaration === undefined) {
+        throw new ConstSpecializationError(
+          descriptor.span,
+          `Unknown const type descriptor ${JSON.stringify(descriptor.name)}.`,
+        );
+      }
+      if (descriptor.arguments.length !== declaration.parameters.length) {
+        throw new ConstSpecializationError(
+          descriptor.span,
+          `Type descriptor ${
+            JSON.stringify(descriptor.name)
+          } expects ${declaration.parameters.length} type arguments; received ${descriptor.arguments.length}.`,
+        );
+      }
+      return {
+        ...descriptor,
+        arguments: descriptor.arguments.map((argument) =>
+          resolveClosedConstDescriptor(argument, forwardingDescriptors, declaredTypes)
+        ),
+      };
+    }
+  }
+}
+
+function resolveClosedConstDescriptor(
+  descriptor: SourceType,
+  forwardingDescriptors: ReadonlyMap<string, SourceType>,
+  declaredTypes: ReadonlyMap<string, DataDeclaration>,
+): SourceType {
+  if (
+    descriptor.kind === "named" && descriptor.arguments.length === 0 &&
+    forwardingDescriptors.has(descriptor.name)
+  ) {
+    throw new ConstSpecializationError(
+      descriptor.span,
+      `Const type descriptor ${JSON.stringify(descriptor.name)} must be closed; ` +
+        "only a descriptor parameter may be forwarded directly.",
+    );
+  }
+  return resolveConstDescriptor(descriptor, new Map(), declaredTypes);
+}
+
+function typeStructuralKey(type: SourceType): string {
+  switch (type.kind) {
+    case "integer":
+      return "integer";
+    case "boolean":
+      return "boolean";
+    case "unit":
+      return "unit";
+    case "parameter":
+      return `parameter(${JSON.stringify(type.name)})`;
+    case "tuple":
+      return `tuple(${typeStructuralKey(type.values[0])},${typeStructuralKey(type.values[1])})`;
+    case "named":
+      return `named(${JSON.stringify(type.name)}:[${
+        type.arguments.map(typeStructuralKey).join(",")
+      }])`;
+    case "function":
+      return `function(${typeStructuralKey(type.parameter)},${typeStructuralKey(type.result)})`;
+  }
+}
+
 function summarizeDefinitions(
   definitions: readonly Definition[],
   byteOffsets: Utf8ByteOffsets,
@@ -660,6 +1499,10 @@ function summarizeDefinitions(
       case "boolean":
       case "name":
         break;
+      case "const-instantiation":
+        throw new Error("Const instantiation reached surface summarization.");
+      case "record":
+        throw new Error("Record expression reached surface summarization.");
       case "let":
         pending.push({ expression: expression.body, depth: depth + 1 });
         pending.push({ expression: expression.value, depth: depth + 1 });
@@ -771,7 +1614,76 @@ function encodeSurface(
     constructorCount: constructorWords.length / LAZULI_CONSTRUCTOR_WORD_LENGTH,
     mainSymbol: symbols.id("main"),
     symbolNames: symbols.names,
+    definitionTypes: definitions.map((definition) => ({
+      annotation: definition.annotation === null
+        ? null
+        : encodeSourceType(definition.annotation, byteOffsets),
+    })),
+    typeDeclarations: dataDeclarations.map((declaration) => {
+      const parameterNames = new Set(declaration.parameters.map((parameter) => parameter.spelling));
+      return {
+        name: declaration.name.spelling,
+        parameters: declaration.parameters.map((parameter) => parameter.spelling),
+        constructors: declaration.constructors.map((constructor) => ({
+          name: constructor.name.spelling,
+          fields: constructor.fields.map((field) => ({
+            name: field.name.spelling,
+            type: encodeSourceType(field.type, byteOffsets, parameterNames),
+          })),
+        })),
+      };
+    }),
   };
+}
+
+function encodeSourceType(
+  type: SourceType,
+  byteOffsets: Utf8ByteOffsets,
+  parameters: ReadonlySet<string> = new Set(),
+): LazuliSourceType {
+  return {
+    ...encodeTypeSchema(type, parameters),
+    ...byteOffsets.span(type.span),
+  } as LazuliSourceType;
+}
+
+function encodeTypeSchema(
+  type: SourceType,
+  parameters: ReadonlySet<string>,
+): LazuliTypeSchema {
+  switch (type.kind) {
+    case "integer":
+      return { kind: "integer" };
+    case "boolean":
+      return { kind: "boolean" };
+    case "unit":
+      return { kind: "unit" };
+    case "parameter":
+      return { kind: "parameter", name: type.name };
+    case "tuple":
+      return {
+        kind: "tuple",
+        values: [
+          encodeTypeSchema(type.values[0], parameters),
+          encodeTypeSchema(type.values[1], parameters),
+        ],
+      };
+    case "named":
+      if (type.arguments.length === 0 && parameters.has(type.name)) {
+        return { kind: "parameter", name: type.name };
+      }
+      return {
+        kind: "named",
+        name: type.name,
+        arguments: type.arguments.map((argument) => encodeTypeSchema(argument, parameters)),
+      };
+    case "function":
+      return {
+        kind: "function",
+        parameter: encodeTypeSchema(type.parameter, parameters),
+        result: encodeTypeSchema(type.result, parameters),
+      };
+  }
 }
 
 class SurfaceEncoder {
@@ -806,6 +1718,10 @@ class SurfaceEncoder {
         );
       case "name":
         return this.emitName(expression.identifier, parent);
+      case "const-instantiation":
+        throw new Error("Const instantiation reached surface encoding.");
+      case "record":
+        throw new Error("Record expression reached surface encoding.");
       case "let": {
         const node = this.reserveNode(
           LazuliSurfaceTag.Let,
@@ -1064,6 +1980,12 @@ function identifier(token: { readonly text: string; readonly span: Utf16Span }):
   return { spelling: token.text, span: token.span };
 }
 
+function rejectReservedBuiltinDeclaration(identifier: Identifier): void {
+  if (reservedBuiltinDeclarationNames.has(identifier.spelling)) {
+    throw new ReservedBuiltinDeclaration(identifier.span, identifier.spelling);
+  }
+}
+
 function isCallStackOverflow(error: unknown): error is RangeError {
   return error instanceof RangeError && /maximum call stack size exceeded/i.test(error.message);
 }
@@ -1087,11 +2009,15 @@ function isRuleCursor(value: unknown): value is AnyRuleCursor {
 }
 
 function isDefinition(declaration: Declaration): declaration is Definition {
-  return "parameters" in declaration;
+  return "body" in declaration && !("kind" in declaration);
 }
 
 function isDataDeclaration(declaration: Declaration): declaration is DataDeclaration {
   return "constructors" in declaration;
+}
+
+function isConstDefinition(declaration: Declaration): declaration is ConstDefinition {
+  return "kind" in declaration && declaration.kind === "const";
 }
 
 function isTokenCursor(

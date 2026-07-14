@@ -21,19 +21,29 @@ export {
   type LazuliFrontendResult,
   type LazuliSpan,
   LazuliSurfaceTag,
+  type LazuliType,
+  type LazuliTypeDeclaration,
+  type LazuliTypeSchema,
   LazuliUnaryOperator,
 } from "./src/lazuli/abi.ts";
 export {
   GpuLazuliCompiler,
   type GpuLazuliModule,
+  type LazuliCompilationOptions,
   type LazuliCompileResult,
   type LazuliCoreNode,
 } from "./src/lazuli/compiler.ts";
 export {
   GpuLazuliEvaluator,
+  type LazuliBatchEvaluationOptions,
+  type LazuliDeepBatchEvaluationOptions,
+  type LazuliDeepEvaluationOptions,
+  type LazuliDeepEvaluationResult,
+  type LazuliDeepValue,
   type LazuliEvaluationOptions,
   type LazuliEvaluationResult,
   type LazuliEvaluationStats,
+  type LazuliInputValue,
   type LazuliRuntimeFault,
   type LazuliValue,
 } from "./src/lazuli/evaluator.ts";

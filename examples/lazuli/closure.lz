@@ -1,3 +1,3 @@
 fn makeAdder x = fun y -> x + y;
 
-fn main = makeAdder(40)(2);
+fn main = makeAdder 40 2;

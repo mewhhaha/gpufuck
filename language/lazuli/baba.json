@@ -1,0 +1,10 @@
+{
+  "parser": {
+    "resolutions": [
+      {
+        "conflict": "c_4264c68d79c37056",
+        "prefer": "shift"
+      }
+    ]
+  }
+}

@@ -1,11 +1,15 @@
-import { LAZULI_COMPILER_SHADER } from "./compiler_shader.ts";
+import {
+  LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+  LAZULI_COMPILER_SHADER,
+  LazuliCompilationStateWord as StateWord,
+  LazuliCompilationStatus as Status,
+} from "./compiler_shader.ts";
 import {
   type EncodedLazuliSurface,
   LAZULI_CONSTRUCTOR_BYTE_LENGTH,
   LAZULI_CONSTRUCTOR_WORD_LENGTH,
   LAZULI_DEFINITION_BYTE_LENGTH,
   LAZULI_DEFINITION_WORD_LENGTH,
-  LAZULI_MAXIMUM_PARSE_DEPTH,
   LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH,
   LAZULI_MAXIMUM_SURFACE_NODES,
   LAZULI_NO_INDEX,
@@ -19,31 +23,21 @@ import {
   type LazuliDiagnostic,
   LazuliSurfaceTag,
   LazuliSurfaceWord,
+  type LazuliType,
+  type LazuliTypeDeclaration,
   LazuliTypeWord,
 } from "./abi.ts";
 import { parseLazuliSource } from "./frontend.ts";
+import {
+  type GpuLazuliSemanticStateSnapshot,
+  runGpuLazuliCompilationInference,
+} from "./gpu_type_inference.ts";
+import { LAZULI_TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
 
-const COMPILATION_STATE_BYTE_LENGTH = 40;
-const MAXIMUM_SEMANTIC_COMPILER_ITERATIONS = 1_000_000;
-
-const StateWord = {
-  NodeCount: 0,
-  DefinitionCount: 1,
-  TypeCount: 2,
-  ConstructorCount: 3,
-  EntrySymbol: 4,
-  Status: 5,
-  ErrorCode: 6,
-  ErrorSource: 7,
-  ErrorDetail: 8,
-  EntryDefinition: 9,
-} as const;
-
-const Status = {
-  Ok: 1,
-  Diagnostic: 2,
-  InvalidSurface: 3,
-} as const;
+const DEFAULT_MAXIMUM_COMPILATION_STEPS = 1_000_000;
+const HARD_MAXIMUM_COMPILATION_STEPS = 10_000_000;
+const DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 4_096;
+const HARD_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 65_536;
 
 const ErrorCode = {
   None: 0,
@@ -83,8 +77,16 @@ export interface GpuLazuliModule {
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly entryDefinition: number;
+  readonly mainType: LazuliType;
+  readonly typeDeclarations: readonly LazuliTypeDeclaration[];
   readCoreNodes(): Promise<readonly LazuliCoreNode[]>;
   destroy(): void;
+}
+
+export interface LazuliCompilationOptions {
+  readonly maximumSteps?: number;
+  readonly maximumStepsPerDispatch?: number;
+  readonly signal?: AbortSignal;
 }
 
 export type LazuliCompileResult =
@@ -105,6 +107,8 @@ class CompiledGpuLazuliModule implements GpuLazuliModule {
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly entryDefinition: number;
+  readonly mainType: LazuliType;
+  readonly typeDeclarations: readonly LazuliTypeDeclaration[];
 
   readonly #device: GPUDevice;
   #destroyed = false;
@@ -120,6 +124,8 @@ class CompiledGpuLazuliModule implements GpuLazuliModule {
     constructorNames: readonly string[],
     constructorArities: readonly number[],
     entryDefinition: number,
+    mainType: LazuliType,
+    typeDeclarations: readonly LazuliTypeDeclaration[],
   ) {
     this.#device = device;
     this.nodeBuffer = nodeBuffer;
@@ -132,6 +138,8 @@ class CompiledGpuLazuliModule implements GpuLazuliModule {
     this.constructorNames = Object.freeze([...constructorNames]);
     this.constructorArities = Object.freeze([...constructorArities]);
     this.entryDefinition = entryDefinition;
+    this.mainType = deepFreeze(mainType);
+    this.typeDeclarations = deepFreeze([...typeDeclarations]);
   }
 
   async readCoreNodes(): Promise<readonly LazuliCoreNode[]> {
@@ -178,7 +186,6 @@ class CompiledGpuLazuliModule implements GpuLazuliModule {
           `WebGPU rejected Lazuli core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
         );
       }
-
       await readbackBuffer.mapAsync(GPUMapMode.READ);
       mapped = true;
       const words = new DataView(readbackBuffer.getMappedRange().slice(0));
@@ -216,6 +223,7 @@ class CompiledGpuLazuliModule implements GpuLazuliModule {
 export class GpuLazuliCompiler {
   readonly #device: GPUDevice;
   readonly #pipeline: GPUComputePipeline;
+  readonly #inferencePipeline: GPUComputePipeline;
   readonly #maximumSourceByteLength: number;
   readonly #maximumNodeCount: number;
   readonly #maximumDefinitionCount: number;
@@ -226,6 +234,7 @@ export class GpuLazuliCompiler {
   private constructor(
     device: GPUDevice,
     pipeline: GPUComputePipeline,
+    inferencePipeline: GPUComputePipeline,
     maximumSourceByteLength: number,
     maximumNodeCount: number,
     maximumDefinitionCount: number,
@@ -234,6 +243,7 @@ export class GpuLazuliCompiler {
   ) {
     this.#device = device;
     this.#pipeline = pipeline;
+    this.#inferencePipeline = inferencePipeline;
     this.#maximumSourceByteLength = maximumSourceByteLength;
     this.#maximumNodeCount = maximumNodeCount;
     this.#maximumDefinitionCount = maximumDefinitionCount;
@@ -286,6 +296,21 @@ export class GpuLazuliCompiler {
       throw new Error(`WebGPU rejected the Lazuli compiler shader:\n${formattedErrors}`);
     }
 
+    const inferenceShaderModule = device.createShaderModule({
+      label: "Lazuli type inference",
+      code: LAZULI_TYPE_INFERENCE_SHADER,
+    });
+    const inferenceCompilation = await inferenceShaderModule.getCompilationInfo();
+    const inferenceErrors = inferenceCompilation.messages.filter((message) =>
+      message.type === "error"
+    );
+    if (inferenceErrors.length > 0) {
+      const formattedErrors = inferenceErrors.map((message) =>
+        `${message.lineNum}:${message.linePos}: ${message.message}`
+      ).join("\n");
+      throw new Error(`WebGPU rejected the Lazuli type inference shader:\n${formattedErrors}`);
+    }
+
     try {
       const pipeline = await device.createComputePipelineAsync({
         label: "Lazuli semantic compiler pipeline",
@@ -295,9 +320,18 @@ export class GpuLazuliCompiler {
           entryPoint: "compile_lazuli",
         },
       });
+      const inferencePipeline = await device.createComputePipelineAsync({
+        label: "Lazuli type inference pipeline",
+        layout: "auto",
+        compute: {
+          module: inferenceShaderModule,
+          entryPoint: "infer_lazuli_types",
+        },
+      });
       return new GpuLazuliCompiler(
         device,
         pipeline,
+        inferencePipeline,
         maximumSourceByteLength,
         maximumNodeCount,
         maximumDefinitionCount,
@@ -309,7 +343,12 @@ export class GpuLazuliCompiler {
     }
   }
 
-  async compile(source: string): Promise<LazuliCompileResult> {
+  async compile(
+    source: string,
+    options: LazuliCompilationOptions = {},
+  ): Promise<LazuliCompileResult> {
+    const limits = compilationLimits(options);
+    options.signal?.throwIfAborted();
     const sourceByteLength = new TextEncoder().encode(source).byteLength;
     if (sourceByteLength > this.#maximumSourceByteLength) {
       return {
@@ -353,37 +392,22 @@ export class GpuLazuliCompiler {
       };
     }
 
-    let nameNodeCount = 0;
-    let caseArmNodeCount = 0;
-    for (let nodeIndex = 0; nodeIndex < surface.nodeCount; nodeIndex++) {
-      const tag = surface.nodeWords[nodeIndex * LAZULI_NODE_WORD_LENGTH + LazuliSurfaceWord.Tag];
-      if (tag === LazuliSurfaceTag.Name) nameNodeCount++;
-      if (tag === LazuliSurfaceTag.CaseArm) caseArmNodeCount++;
-    }
-    const triangularDefinitionIterations = surface.definitionCount *
-      (surface.definitionCount - 1) / 2;
-    const triangularTypeIterations = surface.typeCount * (surface.typeCount - 1) / 2;
-    const triangularConstructorIterations = surface.constructorCount *
-      (surface.constructorCount - 1) / 2;
-    const semanticIterationEstimate = triangularDefinitionIterations +
-      triangularTypeIterations + triangularConstructorIterations +
-      surface.constructorCount * surface.definitionCount + surface.definitionCount +
-      surface.nodeCount +
-      nameNodeCount *
-        (LAZULI_MAXIMUM_PARSE_DEPTH + surface.definitionCount + surface.constructorCount) +
-      caseArmNodeCount * (surface.constructorCount + LAZULI_MAXIMUM_PARSE_DEPTH) +
-      caseArmNodeCount * caseArmNodeCount;
-    if (semanticIterationEstimate > MAXIMUM_SEMANTIC_COMPILER_ITERATIONS) {
-      return {
-        ok: false,
-        diagnostics: [semanticWorkLimitDiagnostic(
-          semanticIterationEstimate,
-          sourceByteLength,
-        )],
-      };
-    }
-
-    return await this.#runExclusively(() => this.#compileSurface(surface, sourceByteLength));
+    return await this.#runExclusively(async () => {
+      options.signal?.throwIfAborted();
+      const result = await this.#compileSurface(
+        surface,
+        sourceByteLength,
+        limits,
+        options.signal,
+      );
+      try {
+        options.signal?.throwIfAborted();
+      } catch (error) {
+        if (result.ok) result.module.destroy();
+        throw error;
+      }
+      return result;
+    });
   }
 
   async #runExclusively<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -404,12 +428,14 @@ export class GpuLazuliCompiler {
   async #compileSurface(
     surface: EncodedLazuliSurface,
     sourceByteLength: number,
+    limits: ReturnType<typeof compilationLimits>,
+    signal: AbortSignal | undefined,
   ): Promise<LazuliCompileResult> {
     const surfaceNodeBytes = encodeWords(surface.nodeWords);
     const definitionBytes = encodeWords(surface.definitionWords);
     const typeBytes = encodeWords(surface.typeWords);
     const constructorBytes = encodeWords(surface.constructorWords);
-    const initialState = new ArrayBuffer(COMPILATION_STATE_BYTE_LENGTH);
+    const initialState = new ArrayBuffer(LAZULI_COMPILATION_STATE_BYTE_LENGTH);
     const initialStateView = new DataView(initialState);
     initialStateView.setUint32(StateWord.NodeCount * 4, surface.nodeCount, true);
     initialStateView.setUint32(StateWord.DefinitionCount * 4, surface.definitionCount, true);
@@ -421,6 +447,13 @@ export class GpuLazuliCompiler {
     initialStateView.setUint32(StateWord.ErrorSource * 4, LAZULI_NO_INDEX, true);
     initialStateView.setUint32(StateWord.ErrorDetail * 4, LAZULI_NO_INDEX, true);
     initialStateView.setUint32(StateWord.EntryDefinition * 4, LAZULI_NO_INDEX, true);
+    initialStateView.setUint32(StateWord.TotalSteps * 4, 0, true);
+    initialStateView.setUint32(StateWord.MaximumSteps * 4, limits.maximumSteps, true);
+    initialStateView.setUint32(
+      StateWord.MaximumStepsPerDispatch * 4,
+      limits.maximumStepsPerDispatch,
+      true,
+    );
 
     let surfaceNodeBuffer: GPUBuffer | undefined;
     let coreNodeBuffer: GPUBuffer | undefined;
@@ -428,8 +461,7 @@ export class GpuLazuliCompiler {
     let typeBuffer: GPUBuffer | undefined;
     let constructorBuffer: GPUBuffer | undefined;
     let stateBuffer: GPUBuffer | undefined;
-    let stateReadbackBuffer: GPUBuffer | undefined;
-    let stateReadbackMapped = false;
+    let bindGroup: GPUBindGroup | undefined;
     let nodeBufferTransferred = false;
     let definitionBufferTransferred = false;
     let constructorBufferTransferred = false;
@@ -465,13 +497,8 @@ export class GpuLazuliCompiler {
         });
         stateBuffer = this.#device.createBuffer({
           label: "Lazuli compilation state",
-          size: COMPILATION_STATE_BYTE_LENGTH,
+          size: LAZULI_COMPILATION_STATE_BYTE_LENGTH,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
-        });
-        stateReadbackBuffer = this.#device.createBuffer({
-          label: "Lazuli compilation state readback",
-          size: COMPILATION_STATE_BYTE_LENGTH,
-          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
         this.#device.queue.writeBuffer(surfaceNodeBuffer, 0, surfaceNodeBytes);
@@ -480,7 +507,7 @@ export class GpuLazuliCompiler {
         this.#device.queue.writeBuffer(constructorBuffer, 0, constructorBytes);
         this.#device.queue.writeBuffer(stateBuffer, 0, initialState);
 
-        const bindGroup = this.#device.createBindGroup({
+        bindGroup = this.#device.createBindGroup({
           label: "Lazuli semantic compiler bindings",
           layout: this.#pipeline.getBindGroupLayout(0),
           entries: [
@@ -492,24 +519,6 @@ export class GpuLazuliCompiler {
             { binding: 5, resource: { buffer: stateBuffer } },
           ],
         });
-        const commandEncoder = this.#device.createCommandEncoder({
-          label: "Lazuli semantic compilation commands",
-        });
-        const computePass = commandEncoder.beginComputePass({
-          label: "Compile Lazuli surface nodes",
-        });
-        computePass.setPipeline(this.#pipeline);
-        computePass.setBindGroup(0, bindGroup);
-        computePass.dispatchWorkgroups(1);
-        computePass.end();
-        commandEncoder.copyBufferToBuffer(
-          stateBuffer,
-          0,
-          stateReadbackBuffer,
-          0,
-          COMPILATION_STATE_BYTE_LENGTH,
-        );
-        this.#device.queue.submit([commandEncoder.finish()]);
         validation = this.#device.popErrorScope();
       } catch (cause) {
         const validationError = await this.#device.popErrorScope();
@@ -528,18 +537,28 @@ export class GpuLazuliCompiler {
           `WebGPU rejected Lazuli compilation for ${surface.nodeCount} nodes, ${surface.definitionCount} definitions, ${surface.typeCount} types, and ${surface.constructorCount} constructors: ${validationError.message}`,
         );
       }
-
-      try {
-        await stateReadbackBuffer.mapAsync(GPUMapMode.READ);
-      } catch (cause) {
-        throw new Error(
-          `could not read GPU Lazuli compilation status for ${surface.nodeCount} nodes`,
-          { cause },
-        );
+      if (bindGroup === undefined) {
+        throw new Error("WebGPU did not create Lazuli semantic compiler bindings");
       }
-      stateReadbackMapped = true;
-      const completedState = new DataView(stateReadbackBuffer.getMappedRange().slice(0));
-      const state = readCompletedState(completedState);
+
+      const combined = await runGpuLazuliCompilationInference({
+        device: this.#device,
+        pipeline: this.#inferencePipeline,
+        surface,
+        coreNodeBuffer,
+        definitionBuffer,
+        typeBuffer,
+        constructorBuffer,
+        maximumSteps: limits.maximumSteps,
+        maximumStepsPerDispatch: limits.maximumStepsPerDispatch,
+        sourceByteLength,
+        ...(signal === undefined ? {} : { signal }),
+      }, {
+        pipeline: this.#pipeline,
+        bindGroup,
+        stateBuffer,
+      });
+      const state = combined.semanticState;
 
       if (state.status === Status.Ok) {
         if (
@@ -556,6 +575,17 @@ export class GpuLazuliCompiler {
             `GPU Lazuli compiler returned inconsistent success state: ${formatState(state)}`,
           );
         }
+        const inference = combined.inference;
+        if (inference === undefined) {
+          throw new Error(
+            `GPU Lazuli type inference omitted a result after semantic success: ${
+              formatState(state)
+            }`,
+          );
+        }
+        if (!inference.ok) {
+          return { ok: false, diagnostics: [inference.diagnostic] };
+        }
         const module = new CompiledGpuLazuliModule(
           this.#device,
           coreNodeBuffer,
@@ -567,6 +597,8 @@ export class GpuLazuliCompiler {
           constructorNames(surface),
           constructorArities(surface),
           state.entryDefinition,
+          inference.mainType,
+          inference.typeDeclarations,
         );
         nodeBufferTransferred = true;
         definitionBufferTransferred = true;
@@ -592,15 +624,22 @@ export class GpuLazuliCompiler {
         );
       }
 
+      if (state.status === Status.StepLimit) {
+        return {
+          ok: false,
+          diagnostics: [semanticWorkLimitDiagnostic(
+            state.totalSteps,
+            sourceByteLength,
+            limits.maximumSteps,
+          )],
+        };
+      }
+
       throw new Error(`GPU Lazuli compiler returned unknown status: ${formatState(state)}`);
     } finally {
-      if (stateReadbackMapped) {
-        stateReadbackBuffer?.unmap();
-      }
       surfaceNodeBuffer?.destroy();
       typeBuffer?.destroy();
       stateBuffer?.destroy();
-      stateReadbackBuffer?.destroy();
       if (!nodeBufferTransferred) {
         coreNodeBuffer?.destroy();
       }
@@ -614,33 +653,7 @@ export class GpuLazuliCompiler {
   }
 }
 
-type CompletedState = Readonly<{
-  nodeCount: number;
-  definitionCount: number;
-  typeCount: number;
-  constructorCount: number;
-  entrySymbol: number;
-  status: number;
-  errorCode: number;
-  errorSource: number;
-  errorDetail: number;
-  entryDefinition: number;
-}>;
-
-function readCompletedState(state: DataView): CompletedState {
-  return {
-    nodeCount: state.getUint32(StateWord.NodeCount * 4, true),
-    definitionCount: state.getUint32(StateWord.DefinitionCount * 4, true),
-    typeCount: state.getUint32(StateWord.TypeCount * 4, true),
-    constructorCount: state.getUint32(StateWord.ConstructorCount * 4, true),
-    entrySymbol: state.getUint32(StateWord.EntrySymbol * 4, true),
-    status: state.getUint32(StateWord.Status * 4, true),
-    errorCode: state.getUint32(StateWord.ErrorCode * 4, true),
-    errorSource: state.getUint32(StateWord.ErrorSource * 4, true),
-    errorDetail: state.getUint32(StateWord.ErrorDetail * 4, true),
-    entryDefinition: state.getUint32(StateWord.EntryDefinition * 4, true),
-  };
-}
+type CompletedState = GpuLazuliSemanticStateSnapshot;
 
 function diagnosticFromState(
   state: CompletedState,
@@ -982,16 +995,58 @@ function constructorLimitDiagnostic(
 }
 
 function semanticWorkLimitDiagnostic(
-  semanticIterationEstimate: number,
+  completedTransitions: number,
   sourceByteLength: number,
+  maximumSteps: number,
 ): LazuliDiagnostic {
   return {
     stage: "compile",
     code: "L1003",
     message:
-      `program's serial semantic work estimate is ${semanticIterationEstimate} iterations; the compiler limit is ${MAXIMUM_SEMANTIC_COMPILER_ITERATIONS}`,
+      `program exhausted the compiler limit after ${completedTransitions} serial semantic transitions; the limit is ${maximumSteps}`,
     span: { startByte: 0, endByte: sourceByteLength },
   };
+}
+
+function compilationLimits(options: LazuliCompilationOptions): {
+  readonly maximumSteps: number;
+  readonly maximumStepsPerDispatch: number;
+} {
+  return {
+    maximumSteps: boundedCompilationOption(
+      "maximumSteps",
+      options.maximumSteps,
+      DEFAULT_MAXIMUM_COMPILATION_STEPS,
+      HARD_MAXIMUM_COMPILATION_STEPS,
+    ),
+    maximumStepsPerDispatch: boundedCompilationOption(
+      "maximumStepsPerDispatch",
+      options.maximumStepsPerDispatch,
+      DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH,
+      HARD_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH,
+    ),
+  };
+}
+
+function boundedCompilationOption(
+  name: string,
+  value: number | undefined,
+  defaultValue: number,
+  maximum: number,
+): number {
+  const resolved = value ?? defaultValue;
+  if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > maximum) {
+    throw new RangeError(
+      `${name} must be an integer from 1 through ${maximum}; received ${resolved}`,
+    );
+  }
+  return resolved;
+}
+
+function deepFreeze<Value>(value: Value): Value {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
 }
 
 function validateEncodedSurfaceShape(surface: EncodedLazuliSurface): void {
