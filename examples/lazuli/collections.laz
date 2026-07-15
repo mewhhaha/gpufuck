@@ -1,6 +1,6 @@
 -- List literals lower to the built-in lazy List constructors.
 
-let sum : List Int -> Int = values =>
+let sum = values =>
   case values of
     | Nil -> 0
     | Cons(head, tail) -> head + sum tail

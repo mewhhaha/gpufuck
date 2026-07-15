@@ -45,6 +45,37 @@ export {
   type GpuFunctionalModule,
 } from "./src/functional/compiler.ts";
 export {
+  compileFunctionalModuleToWasm,
+  type FunctionalWasmExecution,
+  type FunctionalWasmRunOptions,
+  FunctionalWasmRuntimeError,
+  type FunctionalWasmStats,
+  type FunctionalWasmValue,
+  runFunctionalWasmModule,
+} from "./src/functional/wasm_codegen.ts";
+export {
+  FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+  FUNCTIONAL_INIT_TYPE_NAME,
+  type FunctionalHostCapabilityDeclaration,
+  type FunctionalHostFieldDeclaration,
+  type FunctionalHostOperationDeclaration,
+  type FunctionalHostScalarType,
+  type FunctionalHostValueDeclaration,
+  type FunctionalSurfaceModuleOptions,
+  type FunctionalWasmHostOperation,
+  type FunctionalWasmHostValue,
+  type FunctionalWasmInit,
+  type FunctionalWasmInitBinding,
+} from "./src/functional/host_contract.ts";
+export {
+  buildFunctionalSurfaceModule,
+  type FunctionalSurfaceCaseArm,
+  type FunctionalSurfaceDefinition,
+  type FunctionalSurfaceExpression,
+  type FunctionalSurfaceTypeDeclaration,
+  surface,
+} from "./src/functional/surface_builder.ts";
+export {
   type FunctionalBatchEvaluationOptions,
   type FunctionalDeepBatchEvaluationOptions,
   type FunctionalDeepEvaluationOptions,
@@ -71,6 +102,15 @@ export {
   type TypeCoreCapabilityWitness,
 } from "./src/functional/capability_contract.ts";
 export { TypeCoreCapabilityResolver } from "./src/functional/capability_resolver.ts";
+export type {
+  FunctionalEffectExpression,
+  FunctionalEffectHandler,
+  FunctionalEffectOperation,
+  FunctionalEffectProgram,
+  FunctionalEffectType,
+  LoweredFunctionalEffectProgram,
+} from "./src/functional/effect_contract.ts";
+export { lowerFunctionalEffectProgram } from "./src/functional/effect_lowering.ts";
 export {
   type TypeCoreExecutionOptions,
   type TypeCoreExecutionResult,
@@ -88,4 +128,15 @@ export {
   type TypeCoreValue,
 } from "./src/functional/type_core_contract.ts";
 export { GpuTypeCoreExecutor } from "./src/functional/type_core.ts";
+export type {
+  FunctionalTypeConstructorDeclaration,
+  FunctionalTypeExpression,
+  FunctionalTypeFunctionDeclaration,
+  FunctionalTypeFunctionParameter,
+  FunctionalTypeKind,
+  FunctionalTypeNormalization,
+  FunctionalTypeNormalizationOptions,
+  FunctionalTypeProgram,
+} from "./src/functional/type_program_contract.ts";
+export { FunctionalTypeNormalizer } from "./src/functional/type_program.ts";
 export { requestWebGpuDevice } from "./src/webgpu.ts";

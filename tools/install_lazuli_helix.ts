@@ -48,7 +48,7 @@ async function installLanguageConfig(): Promise<void> {
     'name = "lazuli"',
     'scope = "source.lazuli"',
     'injection-regex = "lazuli"',
-    'file-types = ["lz"]',
+    'file-types = ["laz"]',
     'roots = ["deno.json", ".git"]',
     'comment-tokens = "--"',
     'grammar = "lazuli"',

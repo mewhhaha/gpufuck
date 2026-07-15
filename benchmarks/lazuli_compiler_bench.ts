@@ -40,11 +40,11 @@ const benchmarks: readonly CompilationBenchmark[] = [
   {
     name: "const-specialized rich values",
     source: `      data Line = Line(price: Int, quantity: Int);
-      const identity[T] = value => value;
+      const identity a = value => value;
       let line_total = line => case line of
         | Line(price, quantity) -> price * quantity
       end;
-      let main = line_total (identity[Line] Line { quantity: 2, price: 21 });`,
+      let main = line_total (identity @Line Line { quantity: 2, price: 21 });`,
   },
   {
     name: "64 global definitions",

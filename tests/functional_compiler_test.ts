@@ -1,18 +1,23 @@
-import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
+import { deepStrictEqual, equal, match, ok, rejects, throws } from "node:assert/strict";
 
 import {
+  buildFunctionalSurfaceModule,
   type EncodedFunctionalModule,
   FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
   FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH,
   FUNCTIONAL_MODULE_ABI_VERSION,
   FUNCTIONAL_NO_INDEX,
+  FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+  FunctionalBinaryOperator,
   FunctionalCoreTag,
   FunctionalEvaluationProfile,
   FunctionalExpressionTag,
   FunctionalTypecheckingProfile,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
+  lowerFunctionalEffectProgram,
   requestWebGpuDevice,
+  surface,
 } from "../functional.ts";
 import { GpuLazuliCompiler, lazuliSurfaceToFunctionalModule, parseLazuliSource } from "../mod.ts";
 
@@ -50,6 +55,7 @@ function integerModule(value: number, entryName = "entry"): EncodedFunctionalMod
     evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
     typecheckingProfile: FunctionalTypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
+    hostCapabilities: [],
     nodeWords: Uint32Array.of(
       FunctionalExpressionTag.Integer,
       0,
@@ -116,6 +122,159 @@ Deno.test("compiles independent functional modules concurrently", async () => {
   } finally {
     for (const module of modules) module.destroy();
   }
+});
+
+Deno.test("runs handled algebraic effects as explicit GPU continuations", async () => {
+  const handled = lowerFunctionalEffectProgram({
+    operations: [{
+      effect: "Reader",
+      name: "ask",
+      parameter: { kind: "unit" },
+      result: { kind: "integer" },
+    }],
+    handlers: [{
+      effect: "Reader",
+      operation: "ask",
+      implementation: surface.lambda(
+        "$request",
+        surface.lambda("$resume", surface.apply(surface.name("$resume"), surface.integer(40))),
+      ),
+    }],
+    expression: {
+      kind: "bind",
+      name: "answer",
+      computation: {
+        kind: "perform",
+        effect: "Reader",
+        operation: "ask",
+        argument: surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+      },
+      body: {
+        kind: "pure",
+        value: surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("answer"),
+          surface.integer(2),
+        ),
+        valueType: { kind: "integer" },
+      },
+    },
+  });
+  const module = buildFunctionalSurfaceModule(
+    [
+      ...handled.definitions,
+      {
+        name: "gpuMain",
+        parameters: [],
+        annotation: handled.resultType.value,
+        body: handled.expression,
+      },
+    ],
+    [],
+    "gpuMain",
+    0,
+  );
+  const { compiler, evaluator } = functionalRuntime();
+
+  const compilation = await compiler.compileModule(module);
+
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const evaluation = await evaluator.evaluate(compilation.module);
+    ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
+    if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects performed effects without an explicit handler", () => {
+  throws(
+    () =>
+      lowerFunctionalEffectProgram({
+        operations: [{
+          effect: "Reader",
+          name: "ask",
+          parameter: { kind: "unit" },
+          result: { kind: "integer" },
+        }],
+        handlers: [],
+        expression: {
+          kind: "perform",
+          effect: "Reader",
+          operation: "ask",
+          argument: surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+        },
+      }),
+    /performs "Reader\.ask" without a handler/,
+  );
+});
+
+Deno.test("rejects duplicate host capability fields at the surface boundary", () => {
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: surface.integer(42) }],
+        [],
+        "main",
+        0,
+        {
+          hostCapabilities: [{
+            name: "Console",
+            fields: [
+              { kind: "value", name: "enabled", type: { kind: "boolean" } },
+              { kind: "value", name: "enabled", type: { kind: "boolean" } },
+            ],
+          }],
+        },
+      ),
+    /capability "Console" repeats field "enabled"/,
+  );
+});
+
+Deno.test("GPU inference rejects an effect handler that resumes with the wrong type", async () => {
+  const handled = lowerFunctionalEffectProgram({
+    operations: [{
+      effect: "Reader",
+      name: "ask",
+      parameter: { kind: "unit" },
+      result: { kind: "integer" },
+    }],
+    handlers: [{
+      effect: "Reader",
+      operation: "ask",
+      implementation: surface.lambda(
+        "$request",
+        surface.lambda("$resume", surface.apply(surface.name("$resume"), surface.boolean(true))),
+      ),
+    }],
+    expression: {
+      kind: "perform",
+      effect: "Reader",
+      operation: "ask",
+      argument: surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+    },
+  });
+  const module = buildFunctionalSurfaceModule(
+    [
+      ...handled.definitions,
+      {
+        name: "gpuMain",
+        parameters: [],
+        annotation: handled.resultType.value,
+        body: handled.expression,
+      },
+    ],
+    [],
+    "gpuMain",
+    0,
+  );
+
+  const compilation = await functionalRuntime().compiler.compileModule(module);
+
+  equal(compilation.ok, false);
+  if (!compilation.ok) equal(compilation.diagnostics[0].stage, "compile");
 });
 
 Deno.test("rejects unsupported functional module envelopes before GPU work", async () => {

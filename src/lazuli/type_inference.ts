@@ -143,8 +143,6 @@ class InferenceContext {
   #nextTypeVariable = 0;
   #rigidScope = 0;
   #untouchableTypeVariableCutoff: number | null = null;
-  #indexedEliminationAllowed = true;
-  #indexedEliminationRestriction = "";
 
   constructor(surface: EncodedLazuliSurface) {
     this.#surface = surface;
@@ -609,37 +607,11 @@ class InferenceContext {
       );
     }
 
-    const recursiveComponent = component.length > 1 || component.some((definitionIndex) => {
-      const rootNode = this.definitionWord(definitionIndex, LazuliDefinitionWord.RootNode);
-      return this.definitionDependencies(rootNode).has(definitionIndex);
-    });
     for (const definitionIndex of component) {
       const rootNode = this.definitionWord(definitionIndex, LazuliDefinitionWord.RootNode);
       const placeholder = this.requiredMapValue(placeholders, definitionIndex);
-      const hasAnnotation = this.#surface.definitionTypes[definitionIndex]?.annotation != null;
-      const previousIndexedEliminationAllowed = this.#indexedEliminationAllowed;
-      const previousIndexedEliminationRestriction = this.#indexedEliminationRestriction;
-      this.#indexedEliminationAllowed = !recursiveComponent || hasAnnotation;
-      this.#indexedEliminationRestriction = `recursive definition ${
-        JSON.stringify(
-          this.symbolName(this.definitionWord(definitionIndex, LazuliDefinitionWord.Symbol)),
-        )
-      } requires an explicit type annotation for indexed elimination`;
-      try {
-        const inferred = this.inferNode(
-          rootNode,
-          componentEnvironment,
-          hasAnnotation ? placeholder : null,
-        );
-        this.unify(
-          placeholder,
-          inferred,
-          this.nodeSpan(rootNode),
-        );
-      } finally {
-        this.#indexedEliminationAllowed = previousIndexedEliminationAllowed;
-        this.#indexedEliminationRestriction = previousIndexedEliminationRestriction;
-      }
+      const inferred = this.inferNode(rootNode, componentEnvironment, placeholder);
+      this.unify(placeholder, inferred, this.nodeSpan(rootNode));
     }
 
     for (const definitionIndex of component) {
@@ -693,22 +665,11 @@ class InferenceContext {
         const recursiveType = this.inferenceVariable();
         const recursiveEnvironment = new Map(environment);
         recursiveEnvironment.set(payload, { parameters: [], type: recursiveType });
-        const previousIndexedEliminationAllowed = this.#indexedEliminationAllowed;
-        const previousIndexedEliminationRestriction = this.#indexedEliminationRestriction;
-        this.#indexedEliminationAllowed = false;
-        this.#indexedEliminationRestriction = `local recursive definition ${
-          JSON.stringify(this.symbolName(payload))
-        } requires a complete type signature for indexed elimination`;
-        let value: InferenceType;
-        try {
-          value = this.inferNode(
-            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
-            recursiveEnvironment,
-          );
-        } finally {
-          this.#indexedEliminationAllowed = previousIndexedEliminationAllowed;
-          this.#indexedEliminationRestriction = previousIndexedEliminationRestriction;
-        }
+        const value = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          recursiveEnvironment,
+          recursiveType,
+        );
         this.unify(recursiveType, value, span);
         const bodyEnvironment = new Map(environment);
         bodyEnvironment.set(payload, this.generalize(recursiveType, environment));
@@ -725,21 +686,29 @@ class InferenceContext {
           BOOLEAN,
         );
         this.unify(BOOLEAN, condition, span);
-        const consequent = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
-          environment,
-          expected,
-        );
-        const alternate = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2),
-          environment,
-          expected,
-        );
-        this.unify(consequent, alternate, span);
-        return consequent;
+        const consequentNode = this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1);
+        const alternateNode = this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2);
+        const inferAlternateFirst =
+          this.nodeWord(consequentNode, LazuliSurfaceWord.Tag) === LazuliSurfaceTag.Case &&
+          this.nodeWord(alternateNode, LazuliSurfaceWord.Tag) !== LazuliSurfaceTag.Case;
+        const firstNode = inferAlternateFirst ? alternateNode : consequentNode;
+        const secondNode = inferAlternateFirst ? consequentNode : alternateNode;
+        const first = this.inferNode(firstNode, environment, expected);
+        if (expected !== null) this.unify(expected, first, this.nodeSpan(firstNode));
+        const result = expected ?? first;
+        const second = this.inferNode(secondNode, environment, result);
+        this.unify(result, second, this.nodeSpan(secondNode));
+        return result;
       }
       case LazuliSurfaceTag.Lambda: {
-        const expectedFunction = expected === null ? null : this.prune(expected);
+        let expectedFunction = expected === null ? null : this.prune(expected);
+        if (expectedFunction?.kind === "variable") {
+          const parameter = this.inferenceVariable();
+          const result = this.inferenceVariable();
+          const functionType: FunctionType = { kind: "function", parameter, result };
+          this.unify(expectedFunction, functionType, span);
+          expectedFunction = functionType;
+        }
         const parameter = expectedFunction?.kind === "function"
           ? expectedFunction.parameter
           : this.inferenceVariable();
@@ -761,7 +730,7 @@ class InferenceContext {
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
           environment,
         );
-        const result = this.inferenceVariable();
+        const result = expected ?? this.inferenceVariable();
         this.unify(callee, { kind: "function", parameter: argument, result }, span);
         return result;
       }
@@ -934,27 +903,28 @@ class InferenceContext {
     shape: TypeDeclarationShape,
   ): InferenceType {
     const span = this.nodeSpan(nodeIndex);
-    if (!this.#indexedEliminationAllowed) {
-      throw this.failure("L2104", this.#indexedEliminationRestriction, span);
+    let inferredResult = expected;
+    let deferredExpected: InferenceType | null = null;
+    if (inferredResult !== null && this.firstInferenceVariable(inferredResult) !== null) {
+      deferredExpected = inferredResult;
+      inferredResult = null;
     }
-    if (expected === null) {
-      throw this.invalidTypeMetadata(
-        `indexed case for ${
-          JSON.stringify(shape.name)
-        } requires a propagated expected type; received no expected type`,
-        span,
-      );
-    }
-    const unresolvedExpected = this.firstInferenceVariable(expected);
-    if (unresolvedExpected !== null) {
-      throw this.invalidTypeMetadata(
-        `indexed case for ${
-          JSON.stringify(shape.name)
-        } requires a fully zonked expected type; received ${
-          this.formatType(expected)
-        } with unsolved inference variable ${this.formatType(unresolvedExpected)}`,
-        span,
-      );
+    let scrutineeType = this.prune(scrutinee);
+    if (scrutineeType.kind === "variable") {
+      const declaration = this.#surface.typeDeclarations[shape.typeIndex];
+      if (declaration === undefined) {
+        throw new Error(`Lazuli indexed case refers to missing type ${shape.typeIndex}.`);
+      }
+      const shapedScrutinee: NamedType = {
+        kind: "named",
+        name: shape.name,
+        arguments: declaration.parameters.map((name) => this.rigidVariable(name)),
+      };
+      this.unify(scrutineeType, shapedScrutinee, span);
+      scrutineeType = shapedScrutinee;
+    } else {
+      this.rigidifyInferenceVariables(scrutineeType, shape);
+      scrutineeType = this.prune(scrutineeType);
     }
     const unresolvedScrutinee = this.firstInferenceVariable(scrutinee);
     if (unresolvedScrutinee !== null) {
@@ -967,7 +937,6 @@ class InferenceContext {
         span,
       );
     }
-    const scrutineeType = this.prune(scrutinee);
     if (scrutineeType.kind !== "named" || scrutineeType.name !== shape.name) {
       throw this.invalidTypeMetadata(
         `indexed case requires scrutinee ${JSON.stringify(shape.name)}; received ${
@@ -1028,13 +997,35 @@ class InferenceContext {
           }
           armEnvironment.set(binder.symbol, { parameters: [], type: field });
         }
-        const body = this.inferNode(arm.body, armEnvironment, expected);
-        this.unify(expected, body, this.nodeSpan(armIndex));
+        const body = this.inferNode(
+          arm.body,
+          armEnvironment,
+          inferredResult ?? deferredExpected,
+        );
+        if (inferredResult === null) {
+          const matchesDeferred = deferredExpected !== null &&
+            this.prune(body) === this.prune(deferredExpected);
+          if (!matchesDeferred && !this.isStableConcrete(body)) {
+            throw this.invalidTypeMetadata(
+              `indexed case for ${
+                JSON.stringify(shape.name)
+              } requires a propagated expected type; received no expected type`,
+              span,
+            );
+          }
+          inferredResult = matchesDeferred ? deferredExpected : body;
+        } else {
+          this.unify(inferredResult, body, this.nodeSpan(armIndex));
+        }
         matchedConstructors.add(constructorSymbol);
       } finally {
         this.rollbackRefinements(checkpoint);
         this.#rigidScope = previousRigidScope;
         this.#untouchableTypeVariableCutoff = previousCutoff;
+      }
+      if (deferredExpected !== null && inferredResult !== null) {
+        this.unify(deferredExpected, inferredResult, this.nodeSpan(armIndex));
+        deferredExpected = null;
       }
       armIndex = this.nodeWord(armIndex, LazuliSurfaceWord.Child1);
     }
@@ -1072,7 +1063,52 @@ class InferenceContext {
         span,
       );
     }
-    return expected;
+    if (inferredResult === null) {
+      throw new Error(`Lazuli indexed case ${nodeIndex} did not infer a result type.`);
+    }
+    return inferredResult;
+  }
+
+  private rigidifyInferenceVariables(type: InferenceType, shape: TypeDeclarationShape): void {
+    const declaration = this.#surface.typeDeclarations[shape.typeIndex];
+    const fallbackName = declaration?.parameters[0] ?? "inferred";
+    const pending = [type];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current === undefined) break;
+      const pruned = this.prune(current);
+      if (pruned.kind === "variable") {
+        this.unify(pruned, this.rigidVariable(fallbackName), { startByte: 0, endByte: 0 });
+        continue;
+      }
+      if (pruned.kind === "tuple") {
+        pending.push(pruned.values[1], pruned.values[0]);
+      } else if (pruned.kind === "named") {
+        for (let index = pruned.arguments.length - 1; index >= 0; index--) {
+          const argument = pruned.arguments[index];
+          if (argument !== undefined) pending.push(argument);
+        }
+      } else if (pruned.kind === "function") {
+        pending.push(pruned.result, pruned.parameter);
+      }
+    }
+  }
+
+  private isStableConcrete(type: InferenceType): boolean {
+    if (type.kind === "variable") {
+      return type.instance !== null && this.isStableConcrete(type.instance);
+    }
+    if (type.kind === "rigid") return false;
+    if (type.kind === "tuple") {
+      return this.isStableConcrete(type.values[0]) && this.isStableConcrete(type.values[1]);
+    }
+    if (type.kind === "named") {
+      return type.arguments.every((argument) => this.isStableConcrete(argument));
+    }
+    if (type.kind === "function") {
+      return this.isStableConcrete(type.parameter) && this.isStableConcrete(type.result);
+    }
+    return true;
   }
 
   private globalEnvironment(): Map<number, TypeScheme> {

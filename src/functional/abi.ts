@@ -29,6 +29,7 @@ import {
   LazuliTypeWord,
   LazuliUnaryOperator,
 } from "../lazuli/abi.ts";
+import type { FunctionalHostCapabilityDeclaration } from "./host_contract.ts";
 
 export const FUNCTIONAL_MODULE_ABI_VERSION = LAZULI_ABI_VERSION;
 export const FUNCTIONAL_NO_INDEX = LAZULI_NO_INDEX;
@@ -127,6 +128,7 @@ export interface EncodedFunctionalModule {
   readonly evaluationProfile: FunctionalEvaluationProfile;
   readonly typecheckingProfile: FunctionalTypecheckingProfile;
   readonly primitiveCapabilities: readonly FunctionalPrimitiveCapability[];
+  readonly hostCapabilities?: readonly FunctionalHostCapabilityDeclaration[];
   readonly nodeWords: Uint32Array;
   readonly definitionWords: Uint32Array;
   readonly typeWords: Uint32Array;

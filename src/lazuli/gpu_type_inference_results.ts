@@ -261,15 +261,7 @@ export function diagnosticFromState(
       return {
         stage: "compile",
         code: "L2104",
-        message: state.errorContext === 1
-          ? `recursive definition ${
-            JSON.stringify(symbolName(surface, state.errorDetail))
-          } requires an explicit type annotation for indexed elimination`
-          : state.errorContext === 2
-          ? `local recursive definition ${
-            JSON.stringify(symbolName(surface, state.errorDetail))
-          } requires a complete type signature for indexed elimination`
-          : state.errorOperand0 === LAZULI_NO_INDEX
+        message: state.errorOperand0 === LAZULI_NO_INDEX
           ? "main has no inferred type"
           : `main must have a concrete type; inferred ${
             formatWorkspaceType(

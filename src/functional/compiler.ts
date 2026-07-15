@@ -1,4 +1,5 @@
 import type { EncodedLazuliSurface, LazuliDiagnostic } from "../lazuli/abi.ts";
+import type { GpuLazuliModule } from "../lazuli/compiler_module.ts";
 import {
   constructorLimitDiagnostic,
   definitionLimitDiagnostic,
@@ -23,12 +24,14 @@ import {
   FUNCTIONAL_NODE_WORD_LENGTH,
   FUNCTIONAL_TYPE_BYTE_LENGTH,
   FUNCTIONAL_TYPE_WORD_LENGTH,
+  FunctionalDefinitionWord,
   type FunctionalDiagnostic,
   type FunctionalDiagnosticCode,
   FunctionalEvaluationProfile,
   FunctionalTypecheckingProfile,
 } from "./abi.ts";
 import { CompilationAdmissionQueue } from "./compilation_admission.ts";
+import { normalizeFunctionalHostCapabilities } from "./host_contract.ts";
 import type {
   FunctionalCompilationOptions,
   FunctionalCompileResult,
@@ -184,12 +187,33 @@ export class GpuFunctionalCompiler {
             ],
           };
         }
-        return { ok: true, module: result.module as unknown as GpuFunctionalModule };
+        return { ok: true, module: functionalModule(result.module, module) };
       },
       estimatedTransientByteLength,
       options.signal,
     );
   }
+}
+
+function functionalModule(
+  module: GpuLazuliModule,
+  encodedModule: EncodedFunctionalModule,
+): GpuFunctionalModule {
+  const definitionRoots = Array.from(
+    { length: encodedModule.definitionCount },
+    (_, definitionIndex) =>
+      encodedModule.definitionWords[
+        definitionIndex * FUNCTIONAL_DEFINITION_WORD_LENGTH + FunctionalDefinitionWord.RootNode
+      ]!,
+  );
+  return {
+    ...module,
+    definitionRoots: Object.freeze(definitionRoots),
+    hostCapabilities: normalizeFunctionalHostCapabilities(encodedModule.hostCapabilities),
+    entryType: module.mainType,
+    readCoreNodes: async () => await module.readCoreNodes(),
+    destroy: () => module.destroy(),
+  };
 }
 
 export function validateFunctionalCompilationOptions(
@@ -260,6 +284,7 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
     );
   }
   validatePrimitiveCapabilities(module.primitiveCapabilities);
+  normalizeFunctionalHostCapabilities(module.hostCapabilities);
   validateRecordTable("node", module.nodeWords, module.nodeCount, FUNCTIONAL_NODE_WORD_LENGTH);
   validateRecordTable(
     "definition",

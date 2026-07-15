@@ -6,6 +6,7 @@
 ";" @punctuation.delimiter
 "=" @operator
 "=>" @operator
+"@" @operator
 "[" @punctuation.bracket
 "]" @punctuation.bracket
 "{" @punctuation.bracket
@@ -31,7 +32,13 @@
 (constructor_field_tail) @variable.other.member
 (constructor_field) @variable.other.member
 (const_declaration) @constant.builtin
-(const_parameters) @constant.builtin
+(const_parameter) @constant.builtin
+(const_parameter_bind) @constant.builtin
+(const_parameter_tuple) @constant.builtin
+(const_parameter_record) @constant.builtin
+(const_parameter_field_list) @constant.builtin
+(const_parameter_field_tail) @constant.builtin
+(const_parameter_field) @constant.builtin
 (source_type) @type
 (type_function_tail) @type
 (type_application) @type
@@ -41,8 +48,13 @@
 (type_tuple) @type
 (type_group) @type
 (const_instantiation) @constant.builtin
-(type_argument_list) @type
-(type_argument_tail) @type
+(const_descriptor) @constant.builtin
+(const_descriptor_hole) @constant.builtin
+(const_descriptor_tuple) @constant.builtin
+(const_descriptor_record) @constant.builtin
+(const_descriptor_field_list) @constant.builtin
+(const_descriptor_field_tail) @constant.builtin
+(const_descriptor_field) @constant.builtin
 (string) @string
 (record) @type
 (record_fields) @type
@@ -54,6 +66,9 @@
 (STRING) @string
 (COMMENT) @comment
 (arrow_expr param: (IDENT) @variable)
+(const_descriptor_field name: (IDENT) @variable.other.member)
+(const_parameter_bind name: (IDENT) @variable)
+(const_parameter_field name: (IDENT) @variable.other.member)
 (constructor_field name: (IDENT) @variable.other.member)
 (fun_expr param: (IDENT) @variable)
 (let_declaration name: (IDENT) @variable)

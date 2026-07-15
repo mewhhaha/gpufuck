@@ -36,9 +36,9 @@ function captureOutput(): {
 Deno.test("runs Lazuli batch results in source-path order", async () => {
   const captured = captureOutput();
   const sourcePaths = [
-    "examples/lazuli/list.lz",
-    "examples/lazuli/answer.lz",
-    "examples/lazuli/proofs.lz",
+    "examples/lazuli/list.laz",
+    "examples/lazuli/answer.laz",
+    "examples/lazuli/proofs.laz",
   ];
 
   const exitCode = await main(["run-batch", ...sourcePaths], captured.output);
@@ -73,8 +73,8 @@ Deno.test("runs Lazuli batch results in source-path order", async () => {
 Deno.test("returns a nonzero exit code for a faulted Lazuli batch lane", async () => {
   const captured = captureOutput();
   const sourcePaths = [
-    "examples/lazuli/answer.lz",
-    "tests/fixtures/lazuli/divide-by-zero.lz",
+    "examples/lazuli/answer.laz",
+    "tests/fixtures/lazuli/divide-by-zero.laz",
   ];
 
   const exitCode = await main(["run-batch", ...sourcePaths], captured.output);

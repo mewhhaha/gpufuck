@@ -2,8 +2,19 @@
   "parser": {
     "resolutions": [
       {
-        "conflict": "c_ea3f027c5076463a",
-        "prefer": "shift"
+        "conflict": "c_63b0f916cc419390",
+        "prefer": "reduce",
+        "reduce": "const_descriptor = type_named"
+      },
+      {
+        "conflict": "c_49e290512793893f",
+        "prefer": "reduce",
+        "reduce": "const_descriptor = type_unit"
+      },
+      {
+        "conflict": "c_d5d182871ac62338",
+        "prefer": "reduce",
+        "reduce": "const_descriptor = type_group"
       }
     ]
   }
