@@ -11,6 +11,7 @@ import {
   parseLazuliSource,
   requestWebGpuDevice,
 } from "../mod.ts";
+import { LAZULI_TYPE_WORD_LENGTH, LazuliTypeWord } from "../src/lazuli/abi.ts";
 
 interface LazuliRuntime {
   readonly device: GPUDevice;
@@ -195,6 +196,105 @@ Deno.test("retains frozen inferred main and algebraic type metadata", async () =
       arguments: [{ kind: "integer" }],
     });
     module.destroy();
+  });
+});
+
+Deno.test("retains explicit indexed constructor results in compiled metadata", async () => {
+  await withLazuliRuntime(async ({ compiler }) => {
+    const compilation = await compiler.compile(
+      "data Equal a b = Refl : Equal a a; let main : Equal Int Int = Refl;",
+    );
+
+    ok(compilation.ok);
+    if (!compilation.ok) return;
+    try {
+      const declaration = compilation.module.typeDeclarations.find((type) => type.name === "Equal");
+      ok(declaration);
+      const result = declaration.constructors[0]?.result;
+      ok(result);
+      ok(Object.isFrozen(result));
+      deepStrictEqual(result, {
+        kind: "named",
+        name: "Equal",
+        arguments: [
+          { kind: "parameter", name: "a" },
+          { kind: "parameter", name: "a" },
+        ],
+      });
+    } finally {
+      compilation.module.destroy();
+    }
+  });
+});
+
+Deno.test("encodes empty algebraic types without constructors", () => {
+  const parsing = parseLazuliSource("data False = ;");
+
+  ok(parsing.ok);
+  if (!parsing.ok) return;
+  const typeIndex = parsing.surface.typeDeclarations.findIndex((type) => type.name === "False");
+  ok(typeIndex >= 0);
+  deepStrictEqual(parsing.surface.typeDeclarations[typeIndex]?.constructors, []);
+  equal(
+    parsing.surface.typeWords[
+      typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.ConstructorCount
+    ],
+    0,
+  );
+});
+
+Deno.test("encodes explicit constructor results without changing regular constructor shapes", () => {
+  const source = "data Box a = Box(value: a); data Equal a b = Refl : Equal a a; let main = Refl;";
+  const parsing = parseLazuliSource(source);
+
+  ok(parsing.ok);
+  if (!parsing.ok) return;
+  const box = parsing.surface.typeDeclarations.find((type) => type.name === "Box");
+  const equalType = parsing.surface.typeDeclarations.find((type) => type.name === "Equal");
+  ok(box && equalType);
+  const boxConstructor = box.constructors[0];
+  ok(boxConstructor);
+  equal("result" in boxConstructor, false);
+  const result = equalType.constructors[0]?.result;
+  ok(result);
+  const resultStart = source.indexOf("Equal a a");
+  deepStrictEqual(result, {
+    kind: "named",
+    name: "Equal",
+    arguments: [
+      { kind: "parameter", name: "a" },
+      { kind: "parameter", name: "a" },
+    ],
+    startByte: resultStart,
+    endByte: resultStart + "Equal a a".length,
+  });
+});
+
+Deno.test("compiles annotated elimination from an empty type with no case arms", async () => {
+  await withLazuliRuntime(async ({ compiler }) => {
+    const compilation = await compiler.compile(
+      "data False = ; let main : False -> Int = impossible => case impossible of end;",
+      { maximumStepsPerDispatch: 1 },
+    );
+
+    ok(compilation.ok);
+    if (!compilation.ok) return;
+    try {
+      deepStrictEqual(compilation.module.mainType, {
+        kind: "function",
+        parameter: { kind: "named", name: "False", arguments: [] },
+        result: { kind: "integer" },
+      });
+      const declaration = compilation.module.typeDeclarations.find((type) => type.name === "False");
+      ok(declaration);
+      deepStrictEqual(declaration.constructors, []);
+      const nodes = await compilation.module.readCoreNodes();
+      const emptyCase = nodes.find((node) => node.tag === LazuliCoreTag.Case);
+      ok(emptyCase);
+      equal(emptyCase.child1, LAZULI_NO_INDEX);
+    } finally {
+      compilation.module.destroy();
+    }
   });
 });
 
@@ -719,6 +819,83 @@ Deno.test("rejects malformed core child edges as invalid modules", async () => {
       if (result.ok) continue;
       equal(result.fault.kind, "bad-module", description);
       equal(result.fault.code, "L3001", description);
+    }
+  });
+});
+
+Deno.test("faults safely if a constructor reaches a zero-arm core case", async () => {
+  await withLazuliRuntime(async ({ device, evaluator }) => {
+    const uploadStorageBuffer = (label: string, words: Uint32Array<ArrayBuffer>): GPUBuffer => {
+      const buffer = device.createBuffer({
+        label,
+        size: words.byteLength,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
+      });
+      device.queue.writeBuffer(buffer, 0, words);
+      return buffer;
+    };
+    const nodeBuffer = uploadStorageBuffer(
+      "Hostile zero-arm Lazuli core nodes",
+      new Uint32Array([
+        LazuliCoreTag.Case,
+        0,
+        1,
+        LAZULI_NO_INDEX,
+        LAZULI_NO_INDEX,
+        0,
+        0,
+        0,
+        LazuliCoreTag.Constructor,
+        0,
+        LAZULI_NO_INDEX,
+        LAZULI_NO_INDEX,
+        LAZULI_NO_INDEX,
+        0,
+        0,
+        0,
+      ]),
+    );
+    const definitionBuffer = uploadStorageBuffer(
+      "Hostile zero-arm Lazuli definitions",
+      new Uint32Array([0, 0, 0, 0]),
+    );
+    const constructorBuffer = uploadStorageBuffer(
+      "Hostile zero-arm Lazuli constructors",
+      new Uint32Array([0, 0, 0, 0, 0]),
+    );
+    let destroyed = false;
+    const module: GpuLazuliModule = {
+      nodeBuffer,
+      definitionBuffer,
+      constructorBuffer,
+      nodeCount: 2,
+      definitionCount: 1,
+      constructorCount: 1,
+      typeCount: 1,
+      constructorNames: ["Fabricated"],
+      constructorArities: [0],
+      entryDefinition: 0,
+      mainType: { kind: "integer" },
+      typeDeclarations: [],
+      readCoreNodes: () => Promise.resolve([]),
+      destroy() {
+        if (destroyed) return;
+        destroyed = true;
+        nodeBuffer.destroy();
+        definitionBuffer.destroy();
+        constructorBuffer.destroy();
+      },
+    };
+
+    try {
+      const result = await evaluator.evaluate(module, { maximumSteps: 32, stackFrames: 8 });
+      equal(result.ok, false);
+      if (result.ok) return;
+      equal(result.fault.kind, "non-exhaustive-case");
+      equal(result.fault.code, "L3008");
+      match(result.fault.message, /Fabricated/);
+    } finally {
+      module.destroy();
     }
   });
 });
@@ -1618,6 +1795,49 @@ Deno.test("reports invalid host constructors before GPU evaluation", async () =>
       equal(result.fault.kind, "bad-input");
       equal(result.fault.code, "L3009");
       deepStrictEqual(result.stats, {
+        steps: 0,
+        allocations: 0,
+        peakStack: 0,
+        thunkEvaluations: 0,
+      });
+    } finally {
+      module.destroy();
+    }
+  });
+});
+
+Deno.test("matches indexed constructor results before decoding host fields", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const module = await compileModule(
+      runtime.compiler,
+      `data Choice a b =
+         First(value: a) : Choice b a
+         | OnlyBool(value: Bool) : Choice Bool Bool;
+       let main : Choice Bool Int -> Int = choice => 42;`,
+    );
+    try {
+      const accepted = await runtime.evaluator.evaluate(module, {
+        input: {
+          kind: "constructor",
+          name: "First",
+          fields: [{ kind: "integer", value: 7 }],
+        },
+      });
+      ok(accepted.ok);
+      deepStrictEqual(accepted.value, { kind: "integer", value: 42 });
+
+      const rejected = await runtime.evaluator.evaluate(module, {
+        input: {
+          kind: "constructor",
+          name: "OnlyBool",
+          fields: [{ kind: "boolean", value: true }],
+        },
+      });
+      equal(rejected.ok, false);
+      if (rejected.ok) return;
+      equal(rejected.fault.kind, "bad-input");
+      equal(rejected.fault.code, "L3009");
+      deepStrictEqual(rejected.stats, {
         steps: 0,
         allocations: 0,
         peakStack: 0,

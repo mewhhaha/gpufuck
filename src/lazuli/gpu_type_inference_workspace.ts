@@ -12,6 +12,7 @@ import {
   LAZULI_INFERENCE_FRAME_WORD_LENGTH,
   LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
   LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
+  LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
   LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
   LazuliInferenceDiagnosticCode,
   LazuliInferenceSchedulerWord,
@@ -80,6 +81,11 @@ export function workspaceLayout(
     checkedSum("frame input count", surface.nodeCount, surface.definitionCount, 1),
     2,
   );
+  const defaultRefinementCapacity = checkedProduct(
+    "refinement arena capacity",
+    inferenceInputs,
+    4,
+  );
   const schemaScratchCapacity = checkedSum(
     "schema scratch capacity",
     checkedProduct("schema parameter mapping", Math.max(schemaNodeCount, typeParameterCount), 2),
@@ -113,6 +119,7 @@ export function workspaceLayout(
       type: defaultTypeCapacity,
       environment: defaultEnvironmentCapacity,
       frame: defaultFrameCapacity,
+      refinement: defaultRefinementCapacity,
       scratch: defaultScratchCapacity,
       output: defaultTypeCapacity,
     },
@@ -148,6 +155,11 @@ function optionsWorkspaceCapacities(
       defaults.environment,
     ),
     frame: capacity("initial frame capacity", overrides?.frame, defaults.frame),
+    refinement: capacity(
+      "initial refinement capacity",
+      overrides?.refinement,
+      defaults.refinement,
+    ),
     scratch,
     output: capacity("initial output capacity", overrides?.output, defaults.output),
   };
@@ -172,13 +184,22 @@ function createWorkspaceLayout(
       LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
     ),
   );
-  const scratchBase = checkedSum(
-    "frame arena base",
+  const refinementBase = checkedSum(
+    "refinement arena base",
     frameBase,
     checkedProduct(
       "frame arena words",
       capacities.frame,
       LAZULI_INFERENCE_FRAME_WORD_LENGTH,
+    ),
+  );
+  const scratchBase = checkedSum(
+    "scratch arena base",
+    refinementBase,
+    checkedProduct(
+      "refinement arena words",
+      capacities.refinement,
+      LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
     ),
   );
   const workspaceWordLength = checkedSum(
@@ -203,6 +224,8 @@ function createWorkspaceLayout(
     environmentCapacity: capacities.environment,
     frameBase,
     frameCapacity: capacities.frame,
+    refinementBase,
+    refinementCapacity: capacities.refinement,
     scratchBase,
     scratchCapacity: capacities.scratch,
     workspaceWordLength,
@@ -235,6 +258,8 @@ export function createInitialState(
   set(LazuliInferenceStateWord.EnvironmentCapacity, layout.environmentCapacity);
   set(LazuliInferenceStateWord.FrameBase, layout.frameBase);
   set(LazuliInferenceStateWord.FrameCapacity, layout.frameCapacity);
+  set(LazuliInferenceStateWord.RefinementBase, layout.refinementBase);
+  set(LazuliInferenceStateWord.RefinementCapacity, layout.refinementCapacity);
   set(LazuliInferenceStateWord.ScratchBase, layout.scratchBase);
   set(LazuliInferenceStateWord.ScratchCapacity, layout.scratchCapacity);
   set(LazuliInferenceStateWord.OutputCapacity, layout.outputCapacity);
@@ -252,7 +277,10 @@ export function createInitialState(
     LazuliInferenceStateWord.ConstructorFieldOffsetsBase,
     metadata.constructorFieldOffsetsBase,
   );
-  set(LazuliInferenceStateWord.DeclaredResultKindBase, metadata.declaredResultKindBase);
+  set(LazuliInferenceStateWord.ConstructorResultBase, metadata.constructorResultBase);
+  set(LazuliInferenceStateWord.UntouchableTypeCutoff, LAZULI_NO_INDEX);
+  set(LazuliInferenceStateWord.IndexedEliminationAllowed, 1);
+  set(LazuliInferenceStateWord.IndexedEliminationRestrictionSymbol, LAZULI_NO_INDEX);
   const initialSteps = syntheticSemanticSuccess ? options.initialSteps ?? 0 : 0;
   set(LazuliInferenceSchedulerWord.PreviousSemanticSteps, initialSteps);
   const setSemantic = (word: number, value: number) =>
@@ -704,6 +732,15 @@ export async function createExpandedWorkspace(
     copyWorkspaceRegion(
       commands,
       workspaceBuffer,
+      layout.refinementBase,
+      expandedBuffer,
+      expandedLayout.refinementBase,
+      state.refinementTop,
+      LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
+    );
+    copyWorkspaceRegion(
+      commands,
+      workspaceBuffer,
       layout.scratchBase,
       expandedBuffer,
       expandedLayout.scratchBase,
@@ -828,6 +865,7 @@ export function isWorkspaceArenaExhaustion(errorCode: number): boolean {
   return errorCode === LazuliInferenceDiagnosticCode.TypeArenaExhausted ||
     errorCode === LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted ||
     errorCode === LazuliInferenceDiagnosticCode.FrameArenaExhausted ||
+    errorCode === LazuliInferenceDiagnosticCode.RefinementArenaExhausted ||
     errorCode === LazuliInferenceDiagnosticCode.ScratchArenaExhausted;
 }
 
@@ -839,6 +877,8 @@ export function workspaceArenaCapacity(layout: WorkspaceLayout, errorCode: numbe
       return layout.environmentCapacity;
     case LazuliInferenceDiagnosticCode.FrameArenaExhausted:
       return layout.frameCapacity;
+    case LazuliInferenceDiagnosticCode.RefinementArenaExhausted:
+      return layout.refinementCapacity;
     case LazuliInferenceDiagnosticCode.ScratchArenaExhausted:
       return layout.scratchCapacity;
     default:
@@ -867,6 +907,9 @@ export function growWorkspaceLayout(
     frame: errorCode === LazuliInferenceDiagnosticCode.FrameArenaExhausted
       ? doubledCapacity
       : layout.frameCapacity,
+    refinement: errorCode === LazuliInferenceDiagnosticCode.RefinementArenaExhausted
+      ? doubledCapacity
+      : layout.refinementCapacity,
     scratch: errorCode === LazuliInferenceDiagnosticCode.ScratchArenaExhausted
       ? doubledCapacity
       : layout.scratchCapacity,
@@ -887,6 +930,8 @@ export function resumeWorkspaceAfterGrowth(
       [LazuliInferenceStateWord.EnvironmentCapacity, layout.environmentCapacity],
       [LazuliInferenceStateWord.FrameBase, layout.frameBase],
       [LazuliInferenceStateWord.FrameCapacity, layout.frameCapacity],
+      [LazuliInferenceStateWord.RefinementBase, layout.refinementBase],
+      [LazuliInferenceStateWord.RefinementCapacity, layout.refinementCapacity],
       [LazuliInferenceStateWord.ScratchBase, layout.scratchBase],
       [LazuliInferenceStateWord.ScratchCapacity, layout.scratchCapacity],
       [LazuliInferenceStateWord.Status, LazuliInferenceStatus.Pending],
@@ -940,6 +985,8 @@ export function inferenceArenaName(errorCode: number): string {
       return "environment";
     case LazuliInferenceDiagnosticCode.FrameArenaExhausted:
       return "frame";
+    case LazuliInferenceDiagnosticCode.RefinementArenaExhausted:
+      return "refinement";
     case LazuliInferenceDiagnosticCode.ScratchArenaExhausted:
       return "scratch";
     case LazuliInferenceDiagnosticCode.OutputArenaExhausted:

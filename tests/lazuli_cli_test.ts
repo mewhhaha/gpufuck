@@ -38,6 +38,7 @@ Deno.test("runs Lazuli batch results in source-path order", async () => {
   const sourcePaths = [
     "examples/lazuli/list.lz",
     "examples/lazuli/answer.lz",
+    "examples/lazuli/proofs.lz",
   ];
 
   const exitCode = await main(["run-batch", ...sourcePaths], captured.output);
@@ -56,6 +57,11 @@ Deno.test("runs Lazuli batch results in source-path order", async () => {
       },
       {
         path: sourcePaths[1],
+        successful: true,
+        value: { kind: "integer", value: 42 },
+      },
+      {
+        path: sourcePaths[2],
         successful: true,
         value: { kind: "integer", value: 42 },
       },

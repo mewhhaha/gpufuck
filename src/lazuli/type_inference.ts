@@ -43,6 +43,9 @@ interface RigidVariable {
   readonly kind: "rigid";
   readonly id: number;
   readonly name: string;
+  readonly origin: "ambient" | "pattern";
+  readonly scope: number;
+  refinement: InferenceType | null;
 }
 
 interface IntegerType {
@@ -104,9 +107,16 @@ interface InstantiatedConstructor {
 }
 
 interface TypeDeclarationShape {
+  readonly typeIndex: number;
   readonly name: string;
   readonly arity: number;
   readonly constructors: readonly number[];
+  readonly indexed: boolean;
+}
+
+interface RigidRefinement {
+  readonly source: RigidVariable;
+  readonly previous: InferenceType | null;
 }
 
 type TypeEnvironment = ReadonlyMap<number, TypeScheme>;
@@ -129,7 +139,12 @@ class InferenceContext {
   readonly #definitionSchemes = new Map<number, TypeScheme>();
   readonly #constructorFieldTypes: LazuliTypeSchema[][] = [];
   readonly #publicTypeDeclarations: LazuliTypeDeclaration[] = [];
+  readonly #refinementTrail: RigidRefinement[] = [];
   #nextTypeVariable = 0;
+  #rigidScope = 0;
+  #untouchableTypeVariableCutoff: number | null = null;
+  #indexedEliminationAllowed = true;
+  #indexedEliminationRestriction = "";
 
   constructor(surface: EncodedLazuliSurface) {
     this.#surface = surface;
@@ -234,9 +249,11 @@ class InferenceContext {
         (_, offset) => firstConstructor + offset,
       );
       this.#typeByName.set(declaration.name, {
+        typeIndex,
         name: declaration.name,
         arity: declaration.parameters.length,
         constructors,
+        indexed: declaration.constructors.some((constructor) => constructor.result !== undefined),
       });
     }
   }
@@ -296,7 +313,80 @@ class InferenceContext {
         const fields = constructor.fields.map((field) =>
           this.typeFromSchema(field.type, parameterScope, "declared", constructorSpan)
         );
-        const result = this.declaredTypeResult(declaration.name, parameters, constructor.name);
+        let result: InferenceType;
+        if (constructor.result === undefined) {
+          result = this.declaredTypeResult(declaration.name, parameters, constructor.name);
+        } else {
+          const resultSpan = this.sourceSpan(constructor.result, constructorSpan);
+          const convertedResult = this.typeFromSchema(
+            constructor.result,
+            parameterScope,
+            "declared",
+            constructorSpan,
+          );
+          if (
+            constructor.result.kind !== "named" || constructor.result.name !== declaration.name
+          ) {
+            const received = constructor.result.kind === "named"
+              ? `${
+                JSON.stringify(constructor.result.name)
+              } with ${constructor.result.arguments.length} arguments`
+              : `a ${constructor.result.kind} result`;
+            throw this.invalidTypeMetadata(
+              `constructor ${JSON.stringify(constructor.name)} result must have head ${
+                JSON.stringify(declaration.name)
+              } with ${declaration.parameters.length} arguments; received ${received}`,
+              resultSpan,
+            );
+          }
+
+          const directResultParameters = new Set(
+            constructor.result.arguments.flatMap((argument) =>
+              argument.kind === "parameter" ? [argument.name] : []
+            ),
+          );
+          const fieldParameters = new Map<string, LazuliTypeSchema>();
+          const pendingFieldTypes: LazuliTypeSchema[] = constructor.fields
+            .map((field) => field.type)
+            .reverse();
+          while (pendingFieldTypes.length > 0) {
+            const fieldType = pendingFieldTypes.pop();
+            if (fieldType === undefined) break;
+            switch (fieldType.kind) {
+              case "parameter":
+                if (!fieldParameters.has(fieldType.name)) {
+                  fieldParameters.set(fieldType.name, fieldType);
+                }
+                break;
+              case "tuple":
+                pendingFieldTypes.push(fieldType.values[1], fieldType.values[0]);
+                break;
+              case "named":
+                for (let index = fieldType.arguments.length - 1; index >= 0; index--) {
+                  const argument = fieldType.arguments[index];
+                  if (argument !== undefined) pendingFieldTypes.push(argument);
+                }
+                break;
+              case "function":
+                pendingFieldTypes.push(fieldType.result, fieldType.parameter);
+                break;
+              case "integer":
+              case "boolean":
+              case "unit":
+                break;
+            }
+          }
+          for (const [parameterName, parameterSchema] of fieldParameters) {
+            if (directResultParameters.has(parameterName)) continue;
+            throw this.invalidTypeMetadata(
+              `constructor ${JSON.stringify(constructor.name)} field parameter ${
+                JSON.stringify(parameterName)
+              } is not a bare direct argument of its result`,
+              this.sourceSpan(parameterSchema, constructorSpan),
+            );
+          }
+          result = convertedResult;
+        }
         const typing: ConstructorTyping = {
           symbol,
           name: constructor.name,
@@ -316,6 +406,9 @@ class InferenceContext {
               Object.freeze({ name: field.name, type: this.copySchema(field.type) })
             ),
           ),
+          ...(constructor.result === undefined ? {} : {
+            result: this.copySchema(constructor.result),
+          }),
         }));
       }
       if (!declaration.name.startsWith("$")) {
@@ -467,7 +560,7 @@ class InferenceContext {
           return;
         case LazuliSurfaceTag.Case: {
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
-          let armIndex = this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1);
+          let armIndex = this.nodeWord(nodeIndex, LazuliSurfaceWord.Child1);
           while (armIndex !== LAZULI_NO_INDEX) {
             const arm = this.caseArmBody(armIndex);
             let armScope = boundSymbols;
@@ -516,14 +609,37 @@ class InferenceContext {
       );
     }
 
+    const recursiveComponent = component.length > 1 || component.some((definitionIndex) => {
+      const rootNode = this.definitionWord(definitionIndex, LazuliDefinitionWord.RootNode);
+      return this.definitionDependencies(rootNode).has(definitionIndex);
+    });
     for (const definitionIndex of component) {
       const rootNode = this.definitionWord(definitionIndex, LazuliDefinitionWord.RootNode);
-      const inferred = this.inferNode(rootNode, componentEnvironment);
-      this.unify(
-        this.requiredMapValue(placeholders, definitionIndex),
-        inferred,
-        this.nodeSpan(rootNode),
-      );
+      const placeholder = this.requiredMapValue(placeholders, definitionIndex);
+      const hasAnnotation = this.#surface.definitionTypes[definitionIndex]?.annotation != null;
+      const previousIndexedEliminationAllowed = this.#indexedEliminationAllowed;
+      const previousIndexedEliminationRestriction = this.#indexedEliminationRestriction;
+      this.#indexedEliminationAllowed = !recursiveComponent || hasAnnotation;
+      this.#indexedEliminationRestriction = `recursive definition ${
+        JSON.stringify(
+          this.symbolName(this.definitionWord(definitionIndex, LazuliDefinitionWord.Symbol)),
+        )
+      } requires an explicit type annotation for indexed elimination`;
+      try {
+        const inferred = this.inferNode(
+          rootNode,
+          componentEnvironment,
+          hasAnnotation ? placeholder : null,
+        );
+        this.unify(
+          placeholder,
+          inferred,
+          this.nodeSpan(rootNode),
+        );
+      } finally {
+        this.#indexedEliminationAllowed = previousIndexedEliminationAllowed;
+        this.#indexedEliminationRestriction = previousIndexedEliminationRestriction;
+      }
     }
 
     for (const definitionIndex of component) {
@@ -536,7 +652,11 @@ class InferenceContext {
     }
   }
 
-  private inferNode(nodeIndex: number, environment: TypeEnvironment): InferenceType {
+  private inferNode(
+    nodeIndex: number,
+    environment: TypeEnvironment,
+    expected: InferenceType | null = null,
+  ): InferenceType {
     const tag = this.nodeWord(nodeIndex, LazuliSurfaceWord.Tag);
     const payload = this.nodeWord(nodeIndex, LazuliSurfaceWord.Payload);
     const span = this.nodeSpan(nodeIndex);
@@ -566,48 +686,69 @@ class InferenceContext {
         return this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
           bodyEnvironment,
+          expected,
         );
       }
       case LazuliSurfaceTag.LetRec: {
         const recursiveType = this.inferenceVariable();
         const recursiveEnvironment = new Map(environment);
         recursiveEnvironment.set(payload, { parameters: [], type: recursiveType });
-        const value = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
-          recursiveEnvironment,
-        );
+        const previousIndexedEliminationAllowed = this.#indexedEliminationAllowed;
+        const previousIndexedEliminationRestriction = this.#indexedEliminationRestriction;
+        this.#indexedEliminationAllowed = false;
+        this.#indexedEliminationRestriction = `local recursive definition ${
+          JSON.stringify(this.symbolName(payload))
+        } requires a complete type signature for indexed elimination`;
+        let value: InferenceType;
+        try {
+          value = this.inferNode(
+            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+            recursiveEnvironment,
+          );
+        } finally {
+          this.#indexedEliminationAllowed = previousIndexedEliminationAllowed;
+          this.#indexedEliminationRestriction = previousIndexedEliminationRestriction;
+        }
         this.unify(recursiveType, value, span);
         const bodyEnvironment = new Map(environment);
         bodyEnvironment.set(payload, this.generalize(recursiveType, environment));
         return this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
           bodyEnvironment,
+          expected,
         );
       }
       case LazuliSurfaceTag.If: {
         const condition = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
           environment,
+          BOOLEAN,
         );
         this.unify(BOOLEAN, condition, span);
         const consequent = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
           environment,
+          expected,
         );
         const alternate = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2),
           environment,
+          expected,
         );
         this.unify(consequent, alternate, span);
         return consequent;
       }
       case LazuliSurfaceTag.Lambda: {
-        const parameter = this.inferenceVariable();
+        const expectedFunction = expected === null ? null : this.prune(expected);
+        const parameter = expectedFunction?.kind === "function"
+          ? expectedFunction.parameter
+          : this.inferenceVariable();
         const bodyEnvironment = new Map(environment);
         bodyEnvironment.set(payload, { parameters: [], type: parameter });
         const body = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
           bodyEnvironment,
+          expectedFunction?.kind === "function" ? expectedFunction.result : null,
         );
         return { kind: "function", parameter, result: body };
       }
@@ -628,6 +769,7 @@ class InferenceContext {
         const body = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
           environment,
+          INTEGER,
         );
         this.unify(INTEGER, body, span);
         return INTEGER;
@@ -636,32 +778,73 @@ class InferenceContext {
         const left = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
           environment,
+          INTEGER,
         );
         const right = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
           environment,
+          INTEGER,
         );
         this.unify(INTEGER, left, span);
         this.unify(INTEGER, right, span);
         return payload <= LazuliBinaryOperator.GreaterEqual ? BOOLEAN : INTEGER;
       }
       case LazuliSurfaceTag.Case:
-        return this.inferCase(nodeIndex, environment);
+        return this.inferCase(nodeIndex, environment, expected);
       default:
         throw new Error(`Unsupported Lazuli expression tag ${tag} at node ${nodeIndex}.`);
     }
   }
 
-  private inferCase(nodeIndex: number, environment: TypeEnvironment): InferenceType {
+  private inferCase(
+    nodeIndex: number,
+    environment: TypeEnvironment,
+    expected: InferenceType | null,
+  ): InferenceType {
     const span = this.nodeSpan(nodeIndex);
     const scrutinee = this.inferNode(
       this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
       environment,
     );
+    const indexedShape = this.indexedCaseShape(nodeIndex, scrutinee);
+    if (indexedShape !== null) {
+      return this.inferIndexedCase(nodeIndex, environment, scrutinee, expected, indexedShape);
+    }
+    return this.inferOrdinaryCase(nodeIndex, environment, scrutinee, span);
+  }
+
+  private inferOrdinaryCase(
+    nodeIndex: number,
+    environment: TypeEnvironment,
+    scrutinee: InferenceType,
+    span: LazuliDiagnostic["span"],
+  ): InferenceType {
     const result = this.inferenceVariable();
     const matchedConstructors = new Set<number>();
     let matchedTypeIndex: number | null = null;
-    let armIndex = this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1);
+    let armIndex = this.nodeWord(nodeIndex, LazuliSurfaceWord.Child1);
+    if (armIndex === LAZULI_NO_INDEX) {
+      const scrutineeType = this.prune(scrutinee);
+      const shape = scrutineeType.kind === "named"
+        ? this.#typeByName.get(scrutineeType.name)
+        : undefined;
+      if (shape !== undefined && shape.constructors.length === 0) return result;
+      const firstConstructor = shape?.constructors[0];
+      if (firstConstructor !== undefined) {
+        const symbol = this.constructorWord(firstConstructor, LazuliConstructorWord.Symbol);
+        throw this.failure(
+          "L2010",
+          `non-exhaustive case; missing constructor ${JSON.stringify(this.symbolName(symbol))}`,
+          span,
+        );
+      }
+      throw this.invalidTypeMetadata(
+        `empty case requires a zero-constructor named type; received ${
+          this.formatType(scrutineeType)
+        }`,
+        span,
+      );
+    }
     while (armIndex !== LAZULI_NO_INDEX) {
       const constructorSymbol = this.nodeWord(armIndex, LazuliSurfaceWord.Payload);
       const constructor = this.#constructorBySymbol.get(constructorSymbol);
@@ -719,6 +902,179 @@ class InferenceContext {
     return result;
   }
 
+  private indexedCaseShape(
+    nodeIndex: number,
+    scrutinee: InferenceType,
+  ): TypeDeclarationShape | null {
+    const scrutineeType = this.prune(scrutinee);
+    if (scrutineeType.kind === "named") {
+      const shape = this.#typeByName.get(scrutineeType.name);
+      if (shape?.indexed === true) return shape;
+    }
+    let armIndex = this.nodeWord(nodeIndex, LazuliSurfaceWord.Child1);
+    while (armIndex !== LAZULI_NO_INDEX) {
+      const constructor = this.#constructorBySymbol.get(
+        this.nodeWord(armIndex, LazuliSurfaceWord.Payload),
+      );
+      const declaration = constructor === undefined
+        ? undefined
+        : this.#surface.typeDeclarations[constructor.typeIndex];
+      const shape = declaration === undefined ? undefined : this.#typeByName.get(declaration.name);
+      if (shape?.indexed === true) return shape;
+      armIndex = this.nodeWord(armIndex, LazuliSurfaceWord.Child1);
+    }
+    return null;
+  }
+
+  private inferIndexedCase(
+    nodeIndex: number,
+    environment: TypeEnvironment,
+    scrutinee: InferenceType,
+    expected: InferenceType | null,
+    shape: TypeDeclarationShape,
+  ): InferenceType {
+    const span = this.nodeSpan(nodeIndex);
+    if (!this.#indexedEliminationAllowed) {
+      throw this.failure("L2104", this.#indexedEliminationRestriction, span);
+    }
+    if (expected === null) {
+      throw this.invalidTypeMetadata(
+        `indexed case for ${
+          JSON.stringify(shape.name)
+        } requires a propagated expected type; received no expected type`,
+        span,
+      );
+    }
+    const unresolvedExpected = this.firstInferenceVariable(expected);
+    if (unresolvedExpected !== null) {
+      throw this.invalidTypeMetadata(
+        `indexed case for ${
+          JSON.stringify(shape.name)
+        } requires a fully zonked expected type; received ${
+          this.formatType(expected)
+        } with unsolved inference variable ${this.formatType(unresolvedExpected)}`,
+        span,
+      );
+    }
+    const unresolvedScrutinee = this.firstInferenceVariable(scrutinee);
+    if (unresolvedScrutinee !== null) {
+      throw this.invalidTypeMetadata(
+        `indexed case for ${
+          JSON.stringify(shape.name)
+        } requires a fully zonked scrutinee; received ${
+          this.formatType(scrutinee)
+        } with unsolved inference variable ${this.formatType(unresolvedScrutinee)}`,
+        span,
+      );
+    }
+    const scrutineeType = this.prune(scrutinee);
+    if (scrutineeType.kind !== "named" || scrutineeType.name !== shape.name) {
+      throw this.invalidTypeMetadata(
+        `indexed case requires scrutinee ${JSON.stringify(shape.name)}; received ${
+          this.formatType(scrutineeType)
+        }`,
+        span,
+      );
+    }
+
+    const matchedConstructors = new Set<number>();
+    let armIndex = this.nodeWord(nodeIndex, LazuliSurfaceWord.Child1);
+    while (armIndex !== LAZULI_NO_INDEX) {
+      const constructorSymbol = this.nodeWord(armIndex, LazuliSurfaceWord.Payload);
+      const constructor = this.#constructorBySymbol.get(constructorSymbol);
+      if (constructor === undefined) {
+        throw this.invalidTypeMetadata(
+          `cannot infer unknown case constructor ${this.symbolName(constructorSymbol)}`,
+          this.nodeSpan(armIndex),
+        );
+      }
+      const checkpoint = this.#refinementTrail.length;
+      const previousRigidScope = this.#rigidScope;
+      const previousCutoff = this.#untouchableTypeVariableCutoff;
+      this.#rigidScope += 1;
+      const cutoff = this.#nextTypeVariable;
+      this.#untouchableTypeVariableCutoff = cutoff;
+      try {
+        const instantiated = this.instantiatePatternConstructor(constructor);
+        const constructorResult = this.formatType(instantiated.result);
+        const scrutineeDescription = this.formatType(scrutineeType);
+        if (
+          constructor.typeIndex !== shape.typeIndex ||
+          !this.matchPatternType(instantiated.result, scrutineeType)
+        ) {
+          throw this.failure(
+            "L2102",
+            `constructor ${
+              JSON.stringify(constructor.name)
+            } is inaccessible: result ${constructorResult} is incompatible with scrutinee ${scrutineeDescription}`,
+            this.nodeSpan(armIndex),
+          );
+        }
+        const arm = this.caseArmBody(armIndex);
+        if (arm.binders.length !== instantiated.fields.length) {
+          throw this.invalidTypeMetadata(
+            `constructor ${
+              JSON.stringify(constructor.name)
+            } has ${instantiated.fields.length} fields but the arm binds ${arm.binders.length}`,
+            this.nodeSpan(armIndex),
+          );
+        }
+        const armEnvironment = new Map(environment);
+        for (let binderIndex = 0; binderIndex < arm.binders.length; binderIndex++) {
+          const binder = arm.binders[binderIndex];
+          const field = instantiated.fields[binderIndex];
+          if (binder === undefined || field === undefined) {
+            throw new Error(`Lazuli case arm ${armIndex} omitted binder ${binderIndex}.`);
+          }
+          armEnvironment.set(binder.symbol, { parameters: [], type: field });
+        }
+        const body = this.inferNode(arm.body, armEnvironment, expected);
+        this.unify(expected, body, this.nodeSpan(armIndex));
+        matchedConstructors.add(constructorSymbol);
+      } finally {
+        this.rollbackRefinements(checkpoint);
+        this.#rigidScope = previousRigidScope;
+        this.#untouchableTypeVariableCutoff = previousCutoff;
+      }
+      armIndex = this.nodeWord(armIndex, LazuliSurfaceWord.Child1);
+    }
+
+    for (const constructorIndex of shape.constructors) {
+      const constructorSymbol = this.constructorWord(
+        constructorIndex,
+        LazuliConstructorWord.Symbol,
+      );
+      const constructor = this.#constructorBySymbol.get(constructorSymbol);
+      if (constructor === undefined) {
+        throw new Error(
+          `Lazuli indexed type ${shape.name} omitted constructor ${constructorIndex}.`,
+        );
+      }
+      const checkpoint = this.#refinementTrail.length;
+      const previousRigidScope = this.#rigidScope;
+      this.#rigidScope += 1;
+      let compatible = false;
+      try {
+        compatible = this.matchPatternType(
+          this.instantiatePatternConstructor(constructor).result,
+          scrutineeType,
+        );
+      } finally {
+        this.rollbackRefinements(checkpoint);
+        this.#rigidScope = previousRigidScope;
+      }
+      if (!compatible || matchedConstructors.has(constructorSymbol)) continue;
+      throw this.failure(
+        "L2010",
+        `non-exhaustive case; missing constructor ${
+          JSON.stringify(this.symbolName(constructorSymbol))
+        }`,
+        span,
+      );
+    }
+    return expected;
+  }
+
   private globalEnvironment(): Map<number, TypeScheme> {
     const environment = new Map(this.#definitionSchemes);
     for (const constructor of this.#constructorBySymbol.values()) {
@@ -754,6 +1110,20 @@ class InferenceContext {
     };
   }
 
+  private instantiatePatternConstructor(constructor: ConstructorTyping): InstantiatedConstructor {
+    const replacements = new Map<TypeParameter, RigidVariable>();
+    for (const parameter of constructor.parameters) {
+      const name = parameter.kind === "rigid"
+        ? parameter.name
+        : this.typeVariableName(parameter.id);
+      replacements.set(parameter, this.rigidVariable(name, "pattern", this.#rigidScope));
+    }
+    return {
+      fields: constructor.fields.map((field) => this.replaceParameters(field, replacements)),
+      result: this.replaceParameters(constructor.result, replacements),
+    };
+  }
+
   private instantiateScheme(scheme: TypeScheme): InferenceType {
     const replacements = new Map<TypeParameter, InferenceVariable>();
     for (const parameter of scheme.parameters) {
@@ -764,7 +1134,7 @@ class InferenceContext {
 
   private replaceParameters(
     type: InferenceType,
-    replacements: ReadonlyMap<TypeParameter, InferenceVariable>,
+    replacements: ReadonlyMap<TypeParameter, TypeParameter>,
   ): InferenceType {
     const pruned = this.prune(type);
     if (pruned.kind === "variable" || pruned.kind === "rigid") {
@@ -804,7 +1174,10 @@ class InferenceContext {
     const parameters = this.freeTypeParameters(type);
     const environmentParameters = this.freeEnvironmentParameters(environment);
     return {
-      parameters: [...parameters].filter((parameter) => !environmentParameters.has(parameter)),
+      parameters: [...parameters].filter((parameter) =>
+        !environmentParameters.has(parameter) &&
+        (parameter.kind !== "rigid" || parameter.origin !== "pattern")
+      ),
       type,
     };
   }
@@ -847,6 +1220,112 @@ class InferenceContext {
         break;
     }
     return result;
+  }
+
+  private firstInferenceVariable(type: InferenceType): InferenceVariable | null {
+    const pruned = this.prune(type);
+    switch (pruned.kind) {
+      case "variable":
+        return pruned;
+      case "tuple":
+        return this.firstInferenceVariable(pruned.values[0]) ??
+          this.firstInferenceVariable(pruned.values[1]);
+      case "named":
+        for (const argument of pruned.arguments) {
+          const unresolved = this.firstInferenceVariable(argument);
+          if (unresolved !== null) return unresolved;
+        }
+        return null;
+      case "function":
+        return this.firstInferenceVariable(pruned.parameter) ??
+          this.firstInferenceVariable(pruned.result);
+      case "rigid":
+      case "integer":
+      case "boolean":
+      case "unit":
+        return null;
+    }
+  }
+
+  private matchPatternType(pattern: InferenceType, scrutinee: InferenceType): boolean {
+    const left = this.prune(pattern);
+    const right = this.prune(scrutinee);
+    if (left === right) return true;
+    if (left.kind === "variable" || right.kind === "variable") return false;
+    if (left.kind === "rigid" && right.kind === "rigid") {
+      const source = left.scope > right.scope || (left.scope === right.scope && left.id > right.id)
+        ? left
+        : right;
+      return this.refineRigid(source, source === left ? right : left);
+    }
+    if (left.kind === "rigid") return this.refineRigid(left, right);
+    if (right.kind === "rigid") return this.refineRigid(right, left);
+    if (left.kind !== right.kind) return false;
+    switch (left.kind) {
+      case "integer":
+      case "boolean":
+      case "unit":
+        return true;
+      case "tuple":
+        return right.kind === "tuple" &&
+          this.matchPatternType(left.values[0], right.values[0]) &&
+          this.matchPatternType(left.values[1], right.values[1]);
+      case "named": {
+        if (
+          right.kind !== "named" || left.name !== right.name ||
+          left.arguments.length !== right.arguments.length
+        ) return false;
+        for (let index = 0; index < left.arguments.length; index++) {
+          const leftArgument = left.arguments[index];
+          const rightArgument = right.arguments[index];
+          if (
+            leftArgument === undefined || rightArgument === undefined ||
+            !this.matchPatternType(leftArgument, rightArgument)
+          ) return false;
+        }
+        return true;
+      }
+      case "function":
+        return right.kind === "function" &&
+          this.matchPatternType(left.parameter, right.parameter) &&
+          this.matchPatternType(left.result, right.result);
+    }
+  }
+
+  private refineRigid(source: RigidVariable, target: InferenceType): boolean {
+    if (this.rigidOccurs(source, target)) return false;
+    this.#refinementTrail.push({ source, previous: source.refinement });
+    source.refinement = target;
+    return true;
+  }
+
+  private rigidOccurs(source: RigidVariable, type: InferenceType): boolean {
+    const pruned = this.prune(type);
+    if (pruned === source) return true;
+    switch (pruned.kind) {
+      case "tuple":
+        return this.rigidOccurs(source, pruned.values[0]) ||
+          this.rigidOccurs(source, pruned.values[1]);
+      case "named":
+        return pruned.arguments.some((argument) => this.rigidOccurs(source, argument));
+      case "function":
+        return this.rigidOccurs(source, pruned.parameter) ||
+          this.rigidOccurs(source, pruned.result);
+      case "variable":
+      case "rigid":
+      case "integer":
+      case "boolean":
+      case "unit":
+        return false;
+    }
+  }
+
+  private rollbackRefinements(checkpoint: number): void {
+    while (this.#refinementTrail.length > checkpoint) {
+      const refinement = this.#refinementTrail.pop();
+      if (refinement === undefined) throw new Error("Lazuli refinement trail underflowed.");
+      refinement.source.refinement = refinement.previous;
+    }
   }
 
   private unify(
@@ -911,6 +1390,17 @@ class InferenceContext {
     type: InferenceType,
     span: LazuliDiagnostic["span"],
   ): void {
+    if (
+      this.#untouchableTypeVariableCutoff !== null &&
+      variable.id < this.#untouchableTypeVariableCutoff
+    ) {
+      throw this.invalidTypeMetadata(
+        `indexed case arm cannot solve pre-existing inference variable ${
+          this.formatType(variable)
+        } with ${this.formatType(type)}`,
+        span,
+      );
+    }
     if (this.occurs(variable, type)) {
       throw this.failure(
         "L2103",
@@ -943,9 +1433,9 @@ class InferenceContext {
   }
 
   private prune(type: InferenceType): InferenceType {
-    if (type.kind !== "variable" || type.instance === null) return type;
-    type.instance = this.prune(type.instance);
-    return type.instance;
+    if (type.kind === "variable" && type.instance !== null) return this.prune(type.instance);
+    if (type.kind === "rigid" && type.refinement !== null) return this.prune(type.refinement);
+    return type;
   }
 
   private typeFromSchema(
@@ -986,6 +1476,13 @@ class InferenceContext {
       case "named": {
         const declaration = this.#typeByName.get(schema.name);
         if (declaration === undefined) {
+          if (parameterPolicy === "implicit" && schema.arguments.length === 0) {
+            const existing = parameters.get(schema.name);
+            if (existing !== undefined) return existing;
+            const parameter = this.rigidVariable(schema.name);
+            parameters.set(schema.name, parameter);
+            return parameter;
+          }
           throw this.invalidTypeMetadata(`unknown type ${JSON.stringify(schema.name)}`, span);
         }
         if (schema.arguments.length !== declaration.arity) {
@@ -1165,8 +1662,19 @@ class InferenceContext {
     return { kind: "variable", id: this.#nextTypeVariable++, instance: null };
   }
 
-  private rigidVariable(name: string): RigidVariable {
-    return { kind: "rigid", id: this.#nextTypeVariable++, name };
+  private rigidVariable(
+    name: string,
+    origin: RigidVariable["origin"] = "ambient",
+    scope = 0,
+  ): RigidVariable {
+    return {
+      kind: "rigid",
+      id: this.#nextTypeVariable++,
+      name,
+      origin,
+      scope,
+      refinement: null,
+    };
   }
 
   private typeVariableName(index: number): string {

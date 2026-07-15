@@ -20,7 +20,7 @@ import {
   semanticWorkLimitDiagnostic,
 } from "./compilation_diagnostics.ts";
 import { CompiledGpuLazuliModule, type LazuliCompileResult } from "./compiler_module.ts";
-import { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
+import { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
 import { runGpuLazuliCompilationInference } from "./gpu_type_inference_runner.ts";
 import { LAZULI_TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
 

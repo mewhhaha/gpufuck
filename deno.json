@@ -1,6 +1,7 @@
 {
   "unstable": ["webgpu"],
   "imports": {
+    "@mewhhaha/baba": "jsr:@mewhhaha/baba@4.0.0",
     "@mewhhaha/baba/runtime/generated-wasm": "jsr:@mewhhaha/baba@4.0.0/runtime/generated-wasm"
   },
   "compilerOptions": {
@@ -22,7 +23,7 @@
     "compile": "deno run --allow-read cli.ts",
     "compile:lazuli": "deno run --allow-read lazuli_cli.ts compile",
     "generate:lazuli": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@4.0.0/cli language/lazuli/grammar.baba --metadata language/lazuli/baba.json --out language/lazuli/generated --name lazuli --root module --target wasm",
-    "check": "deno check mod.ts cli.ts lazuli_cli.ts benchmarks/*.ts tests/*.ts",
+    "check": "deno check mod.ts functional.ts cli.ts lazuli_cli.ts benchmarks/*.ts tests/*.ts tools/*.ts",
     "fmt": "deno fmt --check",
     "lint": "deno lint",
     "run:lazuli": "deno run --allow-read lazuli_cli.ts run",

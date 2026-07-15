@@ -23,12 +23,15 @@ export interface GpuLazuliTypeInferenceOptions extends GpuLazuliTypeInferenceBuf
   readonly initialWorkspaceCapacities?: GpuLazuliTypeInferenceWorkspaceCapacities;
   /** Internal runner observation point invoked after each completed dispatch. */
   readonly observeDispatch?: (observation: GpuLazuliTypeInferenceDispatchObservation) => void;
+  /** Internal test hook invoked on the prepared schema buffer before upload. */
+  readonly mutateMetadataForTest?: (words: Uint32Array) => void;
 }
 
 export interface GpuLazuliTypeInferenceWorkspaceCapacities {
   readonly type?: number;
   readonly environment?: number;
   readonly frame?: number;
+  readonly refinement?: number;
   readonly scratch?: number;
   readonly output?: number;
 }
@@ -41,6 +44,7 @@ export interface GpuLazuliTypeInferenceDispatchObservation {
   readonly typeCapacity: number;
   readonly environmentCapacity: number;
   readonly frameCapacity: number;
+  readonly refinementCapacity: number;
   readonly scratchCapacity: number;
   readonly outputCapacity: number;
 }
@@ -74,6 +78,7 @@ export interface InferenceStateSnapshot {
   readonly typeTop: number;
   readonly environmentTop: number;
   readonly frameTop: number;
+  readonly refinementTop: number;
   readonly outputRoot: number;
   readonly outputCount: number;
 }
@@ -85,6 +90,8 @@ export interface WorkspaceLayout {
   readonly environmentCapacity: number;
   readonly frameBase: number;
   readonly frameCapacity: number;
+  readonly refinementBase: number;
+  readonly refinementCapacity: number;
   readonly scratchBase: number;
   readonly scratchCapacity: number;
   readonly workspaceWordLength: number;
@@ -95,6 +102,7 @@ export interface WorkspaceCapacities {
   readonly type: number;
   readonly environment: number;
   readonly frame: number;
+  readonly refinement: number;
   readonly scratch: number;
   readonly output: number;
 }

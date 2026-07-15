@@ -143,21 +143,333 @@ Deno.test("GPU type inference matches the host oracle for the 64-program success
   });
 });
 
+Deno.test("indexed constructor results match the host across dispatch quanta", async () => {
+  const fixtures = [
+    {
+      source: "data Equal a b = Refl : Equal a a; let main : Equal Int Int = Refl;",
+      ok: true,
+    },
+    {
+      source:
+        "data Witness a b = Witness : Witness a (b, b); let main : Witness Int (Bool, Bool) = Witness;",
+      ok: true,
+    },
+    {
+      source: "data Select a b = Keep(value: a) : Select a a; let main : Select Int Int = Keep 1;",
+      ok: true,
+    },
+    {
+      source: "data Equal a b = Refl : Equal a a; let main : Equal Int Bool = Refl;",
+      ok: false,
+      code: "L2102",
+      message: "type mismatch: expected Bool, received Int",
+    },
+    {
+      source: "data Equal a b = Refl : Bool; let main = 0;",
+      ok: false,
+      code: "L2101",
+      message:
+        'constructor "Refl" result must have head "Equal" with 2 arguments; received a boolean result',
+    },
+    {
+      source: "data Equal a b = Refl : Equal a; let main = 0;",
+      ok: false,
+      code: "L2101",
+      message: 'type "Equal" expects 2 arguments; received 1',
+    },
+    {
+      source: "-- żółć\ndata Indexed a b = Mk(value: b) : Indexed a (b, b); let main = 0;",
+      ok: false,
+      code: "L2101",
+      message: 'constructor "Mk" field parameter "b" is not a bare direct argument of its result',
+      span: { startByte: 41, endByte: 42 },
+    },
+  ] as const;
+
+  for (const fixture of fixtures) {
+    const expected = inferWithHostOracle(fixture.source);
+    equal(expected.ok, fixture.ok);
+    if (!expected.ok && !fixture.ok) {
+      equal(expected.diagnostic.code, fixture.code);
+      equal(expected.diagnostic.message, fixture.message);
+      if ("span" in fixture) deepStrictEqual(expected.diagnostic.span, fixture.span);
+    }
+  }
+
+  await withCompiler(async (compiler) => {
+    for (let fixtureIndex = 0; fixtureIndex < fixtures.length; fixtureIndex++) {
+      const fixture = fixtures[fixtureIndex];
+      if (fixture === undefined) throw new Error(`missing indexed constructor ${fixtureIndex}`);
+      const dispatchQuanta = fixtureIndex === 0 ? [1, 7, 4_096] : [4_096];
+      for (const maximumStepsPerDispatch of dispatchQuanta) {
+        const snapshot = await compilerInferenceSnapshot(compiler, fixture.source, {
+          maximumStepsPerDispatch,
+        });
+        equal(snapshot.ok, fixture.ok);
+      }
+    }
+  });
+});
+
+Deno.test("indexed elimination scopes refinements and filters coverage on host and GPU", async () => {
+  const successes = [
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let cast : Equal a b -> a -> b = proof => value => case proof of | Refl -> value end; let main = cast Refl 42;",
+      mainType: { kind: "integer" },
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let trans : Equal a b -> Equal b c -> Equal a c = left => right => case left of | Refl -> case right of | Refl -> Refl end end; let main : Equal Int Int = trans Refl Refl;",
+      mainType: {
+        kind: "named",
+        name: "Equal",
+        arguments: [{ kind: "integer" }, { kind: "integer" }],
+      },
+    },
+    {
+      source:
+        "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let untag : Tag a -> a = tag => case tag of | TagInt -> 1 | TagBool -> true end; let main = (untag TagInt, untag TagBool);",
+      mainType: {
+        kind: "tuple",
+        values: [{ kind: "integer" }, { kind: "boolean" }],
+      },
+    },
+    {
+      source:
+        "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let onlyInt : Tag Int -> Int = tag => case tag of | TagInt -> 1 end; let main = onlyInt TagInt;",
+      mainType: { kind: "integer" },
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let absurd : Equal Int Bool -> Int = proof => case proof of end; let main = 0;",
+      mainType: { kind: "integer" },
+    },
+    {
+      source:
+        "data Swap a b = Swapped(first: a, second: b) : Swap b a; let restore : Swap a b -> (b, a) = value => case value of | Swapped(first, second) -> (first, second) end; let main = restore (Swapped true 1);",
+      mainType: {
+        kind: "tuple",
+        values: [{ kind: "boolean" }, { kind: "integer" }],
+      },
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let add : Equal a Int -> a -> Int = proof => value => (case proof of | Refl -> value end) + 1; let main = add Refl 41;",
+      mainType: { kind: "integer" },
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let choose : Equal a Bool -> a -> Bool = proof => value => if case proof of | Refl -> value end then true else false; let main = choose Refl true;",
+      mainType: { kind: "boolean" },
+    },
+    {
+      source:
+        "data Flag a = Any | IsInt : Flag Int; let onlyAny : Flag Bool -> Int = flag => case flag of | Any -> 1 end; let main = onlyAny Any;",
+      mainType: { kind: "integer" },
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let loop : Equal a b -> a -> b = proof => value => if true then case proof of | Refl -> value end else loop proof value; let main = loop Refl 42;",
+      mainType: { kind: "integer" },
+    },
+  ] as const;
+
+  for (const fixture of successes) {
+    const result = inferWithHostOracle(fixture.source);
+    ok(result.ok, result.ok ? undefined : result.diagnostic.message);
+    if (result.ok) deepStrictEqual(result.mainType, fixture.mainType);
+  }
+
+  await withCompiler(async (compiler) => {
+    for (let fixtureIndex = 0; fixtureIndex < successes.length; fixtureIndex++) {
+      const fixture = successes[fixtureIndex];
+      if (fixture === undefined) throw new Error(`missing indexed success ${fixtureIndex}`);
+      const dispatchQuanta = fixtureIndex === 0 ? [1, 7, 4_096] : [4_096];
+      for (const maximumStepsPerDispatch of dispatchQuanta) {
+        const snapshot = await compilerInferenceSnapshot(compiler, fixture.source, {
+          maximumStepsPerDispatch,
+        });
+        equal(snapshot.ok, true);
+      }
+    }
+  });
+});
+
+Deno.test("indexed elimination rejects unsound or inaccessible arms on host and GPU", async () => {
+  const failures = [
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let bad = case Refl of | Refl -> 1 end; let main = 0;",
+      code: "L2101",
+      message: 'indexed case for "Equal" requires a propagated expected type',
+    },
+    {
+      source:
+        "-- żółć\ndata Tag a = TagInt : Tag Int | TagBool : Tag Bool; let bad : Tag Int -> Int = tag => case tag of | TagInt -> 1 | TagBool -> 0 end; let main = 0;",
+      code: "L2102",
+      message:
+        'constructor "TagBool" is inaccessible: result Tag[Bool] is incompatible with scrutinee Tag[Int]',
+      span: { startByte: 124, endByte: 139 },
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let bad : Equal Int Bool -> Int = proof => case proof of | Refl -> 0 end; let main = 0;",
+      code: "L2102",
+      message:
+        'constructor "Refl" is inaccessible: result Equal[a, a] is incompatible with scrutinee Equal[Int, Bool]',
+    },
+    {
+      source:
+        "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let bad : Tag a -> a = tag => case tag of | TagInt -> true | TagBool -> true end; let main = 0;",
+      code: "L2102",
+      message: "type mismatch: expected Int, received Bool",
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let bad : Int = case (value => value) of | Refl -> 0 end; let main = 0;",
+      code: "L2101",
+      message: 'indexed case for "Equal" requires a fully zonked scrutinee',
+    },
+    {
+      source:
+        "data Choice a = First : Choice Int | Second : Choice Int; let bad : Choice Int -> Int = value => case value of | First -> 1 end; let main = 0;",
+      code: "L2010",
+      message: 'non-exhaustive case; missing constructor "Second"',
+    },
+    {
+      source:
+        "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; fn left tag = right tag; let right : Tag a -> a = tag => case tag of | TagInt -> left tag | TagBool -> left tag end; let main = 0;",
+      code: "L2101",
+      message: "indexed case arm cannot solve pre-existing inference variable",
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; fn loop proof = if true then case proof of | Refl -> loop proof end else 0; let main = 0;",
+      code: "L2104",
+      message: 'recursive definition "loop" requires an explicit type annotation',
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let main = let rec loop proof = case proof of | Refl -> loop proof end in 0;",
+      code: "L2104",
+      message: 'local recursive definition "loop" requires a complete type signature',
+    },
+  ] as const;
+
+  for (const fixture of failures) {
+    const result = inferWithHostOracle(fixture.source);
+    equal(result.ok, false);
+    if (result.ok) continue;
+    equal(result.diagnostic.code, fixture.code);
+    ok(
+      result.diagnostic.message.startsWith(fixture.message),
+      `${result.diagnostic.message} did not start with ${fixture.message}`,
+    );
+    if ("span" in fixture) deepStrictEqual(result.diagnostic.span, fixture.span);
+  }
+
+  await withCompiler(async (compiler) => {
+    for (let fixtureIndex = 0; fixtureIndex < failures.length; fixtureIndex++) {
+      const fixture = failures[fixtureIndex];
+      if (fixture === undefined) throw new Error(`missing indexed failure ${fixtureIndex}`);
+      const dispatchQuanta = fixtureIndex === 1 ? [1, 7, 4_096] : [4_096];
+      for (const maximumStepsPerDispatch of dispatchQuanta) {
+        const snapshot = await compilerInferenceSnapshot(compiler, fixture.source, {
+          maximumStepsPerDispatch,
+        });
+        equal(snapshot.ok, false);
+      }
+    }
+  });
+});
+
+Deno.test("zero-arm elimination from an empty named type matches the host oracle", async () => {
+  const source =
+    "data False a = ; let main : False Int -> (Int, Bool) = impossible => case impossible of end;";
+  const expected = inferWithHostOracle(source);
+  ok(expected.ok);
+  if (!expected.ok) return;
+  deepStrictEqual(expected.mainType, {
+    kind: "function",
+    parameter: {
+      kind: "named",
+      name: "False",
+      arguments: [{ kind: "integer" }],
+    },
+    result: {
+      kind: "tuple",
+      values: [{ kind: "integer" }, { kind: "boolean" }],
+    },
+  });
+
+  await withCompiler(async (compiler) => {
+    for (const maximumStepsPerDispatch of [1, 7, 4_096]) {
+      const snapshot = await compilerInferenceSnapshot(compiler, source, {
+        maximumStepsPerDispatch,
+      });
+      ok(snapshot.ok);
+    }
+  });
+});
+
+Deno.test("zero-arm cases reject inhabited and unknown scrutinee types with host-GPU parity", async () => {
+  const cases = [
+    {
+      source: "data Maybe = Nothing | Just; let main = case Nothing of end;",
+      code: "L2010",
+      message: 'non-exhaustive case; missing constructor "Nothing"',
+    },
+    {
+      source: "let main : Int -> Int = value => case value of end;",
+      code: "L2101",
+      message: "empty case requires a zero-constructor named type; received Int",
+    },
+    {
+      source: "let main = value => case value of end;",
+      code: "L2101",
+      message: "empty case requires a zero-constructor named type; received 'a",
+    },
+  ] as const;
+
+  await withCompiler(async (compiler) => {
+    for (const fixture of cases) {
+      const expected = inferWithHostOracle(fixture.source);
+      equal(expected.ok, false);
+      if (expected.ok) continue;
+      equal(expected.diagnostic.code, fixture.code);
+      equal(expected.diagnostic.message, fixture.message);
+      for (const maximumStepsPerDispatch of [1, 7, 4_096]) {
+        const snapshot = await compilerInferenceSnapshot(compiler, fixture.source, {
+          maximumStepsPerDispatch,
+        });
+        equal(snapshot.ok, false);
+      }
+    }
+  });
+});
+
 Deno.test("representative inference corpus is dispatch-quantum invariant", async () => {
   equal(representativeCorpus.length, 16);
 
   await withCompiler(async (compiler) => {
-    for (const program of representativeCorpus) {
-      const oneStep = await compilerInferenceSnapshot(compiler, program.source, {
-        maximumStepsPerDispatch: 1,
-      });
-      const sevenSteps = await compilerInferenceSnapshot(compiler, program.source, {
-        maximumStepsPerDispatch: 7,
-      });
-      const largeDispatch = await compilerInferenceSnapshot(compiler, program.source, {
-        maximumStepsPerDispatch: 4_096,
-      });
-
+    const snapshotsByQuantum: InferenceSnapshot[][] = [];
+    for (const maximumStepsPerDispatch of [1, 7, 4_096]) {
+      snapshotsByQuantum.push(
+        await Promise.all(
+          representativeCorpus.map((program) =>
+            compilerInferenceSnapshot(compiler, program.source, { maximumStepsPerDispatch })
+          ),
+        ),
+      );
+    }
+    for (let programIndex = 0; programIndex < representativeCorpus.length; programIndex++) {
+      const program = representativeCorpus[programIndex];
+      if (program === undefined) throw new Error(`missing representative program ${programIndex}`);
+      const oneStep = snapshotsByQuantum[0]?.[programIndex];
+      const sevenSteps = snapshotsByQuantum[1]?.[programIndex];
+      const largeDispatch = snapshotsByQuantum[2]?.[programIndex];
+      ok(oneStep !== undefined && sevenSteps !== undefined && largeDispatch !== undefined);
       deepStrictEqual(oneStep, sevenSteps, `${program.name} at one and seven transitions`);
       deepStrictEqual(sevenSteps, largeDispatch, `${program.name} at seven and 4096 transitions`);
     }
@@ -241,6 +553,19 @@ Deno.test("semantic diagnostics take precedence over speculative type inference"
       equal(compilation.ok, false);
       equal(compilation.diagnostics[0].code, "L2001");
       equal(compilation.diagnostics[0].message, 'unknown name "absent"');
+    }
+
+    const repeatedIndexedArm = await compiler.compile(
+      "data Equal a b = Refl : Equal a a; let bad : Equal Int Int -> Int = proof => case proof of | Refl -> 0 | Refl -> true end; let main = 0;",
+      { maximumStepsPerDispatch: 4_096 },
+    );
+    equal(repeatedIndexedArm.ok, false);
+    if (!repeatedIndexedArm.ok) {
+      equal(repeatedIndexedArm.diagnostics[0].code, "L2009");
+      equal(
+        repeatedIndexedArm.diagnostics[0].message,
+        'duplicate case arm for constructor "Refl"',
+      );
     }
   });
 });

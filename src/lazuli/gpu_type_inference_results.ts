@@ -1,10 +1,14 @@
 import {
   type EncodedLazuliSurface,
+  LAZULI_CONSTRUCTOR_WORD_LENGTH,
   LAZULI_NO_INDEX,
+  LAZULI_TYPE_WORD_LENGTH,
+  LazuliConstructorWord,
   type LazuliDiagnostic,
   type LazuliType,
   type LazuliTypeDeclaration,
   type LazuliTypeSchema,
+  LazuliTypeWord,
 } from "./abi.ts";
 import { type GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 import {
@@ -17,9 +21,12 @@ import { inferenceArenaName } from "./gpu_type_inference_workspace.ts";
 import { LazuliCompilationStatus } from "./compiler_shader.ts";
 import {
   LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
+  LAZULI_INFERENCE_SCHEMA_WORD_LENGTH,
   LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
   LazuliInferenceDiagnosticCode,
   LazuliInferenceMetadataFailure,
+  LazuliInferenceSchemaTag,
+  LazuliInferenceSchemaWord,
   type LazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 import { type LazuliTypeInferenceSuccess } from "./type_inference.ts";
@@ -66,11 +73,12 @@ export function assertConsistentState(
     !Number.isSafeInteger(inferenceProgress) || inferenceProgress < 0 ||
     (semanticState.status !== LazuliCompilationStatus.Ok && inferenceProgress !== 0) ||
     state.typeTop > layout.typeCapacity || state.environmentTop > layout.environmentCapacity ||
-    state.frameTop > layout.frameCapacity || state.outputCount > outputCapacity ||
+    state.frameTop > layout.frameCapacity ||
+    state.refinementTop > layout.refinementCapacity || state.outputCount > outputCapacity ||
     (state.outputCount !== 0 && state.outputRoot >= state.outputCount)
   ) {
     throw new Error(
-      `GPU Lazuli compilation returned inconsistent dispatch progress: semanticSteps=${semanticState.totalSteps}, previousSemanticSteps=${previousSemanticSteps}, inferenceTransitions=${state.transitions}, previousInferenceTransitions=${previousTransitions}, maximumTransitions=${dispatchTransitions}, typeTop=${state.typeTop}, environmentTop=${state.environmentTop}, frameTop=${state.frameTop}, outputRoot=${state.outputRoot}, outputCount=${state.outputCount}`,
+      `GPU Lazuli compilation returned inconsistent dispatch progress: semanticSteps=${semanticState.totalSteps}, previousSemanticSteps=${previousSemanticSteps}, inferenceTransitions=${state.transitions}, previousInferenceTransitions=${previousTransitions}, maximumTransitions=${dispatchTransitions}, typeTop=${state.typeTop}, environmentTop=${state.environmentTop}, frameTop=${state.frameTop}, refinementTop=${state.refinementTop}, outputRoot=${state.outputRoot}, outputCount=${state.outputCount}`,
     );
   }
 }
@@ -185,10 +193,39 @@ export function diagnosticFromState(
       return {
         stage: "compile",
         code: "L2101",
-        message: metadataFailureMessage(state, metadata.identifierNames),
+        message: metadataFailureMessage(
+          state,
+          metadata,
+          workspace,
+          surface,
+        ),
         span,
       };
     case LazuliInferenceDiagnosticCode.TypeMismatch:
+      if (state.errorContext === 1) {
+        return {
+          stage: "compile",
+          code: "L2102",
+          message: `constructor ${
+            JSON.stringify(constructorName(surface, state.errorDetail))
+          } is inaccessible: result ${
+            formatWorkspaceType(
+              state.errorOperand0,
+              workspace,
+              surface,
+              metadata.identifierNames,
+            )
+          } is incompatible with scrutinee ${
+            formatWorkspaceType(
+              state.errorOperand1,
+              workspace,
+              surface,
+              metadata.identifierNames,
+            )
+          }`,
+          span,
+        };
+      }
       return {
         stage: "compile",
         code: "L2102",
@@ -224,7 +261,15 @@ export function diagnosticFromState(
       return {
         stage: "compile",
         code: "L2104",
-        message: state.errorOperand0 === LAZULI_NO_INDEX
+        message: state.errorContext === 1
+          ? `recursive definition ${
+            JSON.stringify(symbolName(surface, state.errorDetail))
+          } requires an explicit type annotation for indexed elimination`
+          : state.errorContext === 2
+          ? `local recursive definition ${
+            JSON.stringify(symbolName(surface, state.errorDetail))
+          } requires a complete type signature for indexed elimination`
+          : state.errorOperand0 === LAZULI_NO_INDEX
           ? "main has no inferred type"
           : `main must have a concrete type; inferred ${
             formatWorkspaceType(
@@ -245,8 +290,11 @@ export function diagnosticFromState(
 
 function metadataFailureMessage(
   state: InferenceStateSnapshot,
-  identifierNames: readonly string[],
+  metadata: LazuliInferenceShaderMetadata,
+  workspace: DataView | undefined,
+  surface: EncodedLazuliSurface,
 ): string {
+  const identifierNames = metadata.identifierNames;
   const name = (identifier: number): string => identifierName(identifierNames, identifier);
   switch (state.errorContext) {
     case LazuliInferenceMetadataFailure.UnknownName:
@@ -275,8 +323,6 @@ function metadataFailureMessage(
       return `type ${JSON.stringify(name(state.errorDetail))} repeats parameter ${
         JSON.stringify(name(state.errorOperand0))
       }`;
-    case LazuliInferenceMetadataFailure.BuiltInTupleParameterCount:
-      return "the built-in tuple type must declare exactly two parameters";
     case LazuliInferenceMetadataFailure.InvalidConstructor:
       return `invalid constructor ${state.errorDetail}: type ${state.errorOperand0}, detail ${state.errorOperand1}`;
     case LazuliInferenceMetadataFailure.ConstructorFieldCountMismatch:
@@ -293,11 +339,138 @@ function metadataFailureMessage(
       return `cannot convert invalid schema ${state.errorDetail}`;
     case LazuliInferenceMetadataFailure.DuplicateTypeName:
       return `duplicate type name ${JSON.stringify(name(state.errorDetail))}`;
+    case LazuliInferenceMetadataFailure.InvalidEmptyCaseScrutinee:
+      return `empty case requires a zero-constructor named type; received ${
+        formatWorkspaceType(state.errorOperand0, workspace, surface, identifierNames)
+      }`;
+    case LazuliInferenceMetadataFailure.InvalidConstructorResult:
+      return invalidConstructorResultMessage(state, metadata, surface);
+    case LazuliInferenceMetadataFailure.HiddenConstructorFieldParameter:
+      return `constructor ${
+        JSON.stringify(constructorName(surface, state.errorDetail))
+      } field parameter ${
+        JSON.stringify(name(state.errorOperand0))
+      } is not a bare direct argument of its result`;
+    case LazuliInferenceMetadataFailure.IndexedExpectedTypeMissing:
+      return `indexed case for ${
+        JSON.stringify(name(state.errorDetail))
+      } requires a propagated expected type; received no expected type`;
+    case LazuliInferenceMetadataFailure.IndexedExpectedTypeUnresolved:
+      return `indexed case for ${
+        JSON.stringify(name(state.errorDetail))
+      } requires a fully zonked expected type; received ${
+        formatWorkspaceType(state.errorOperand0, workspace, surface, identifierNames)
+      } with unsolved inference variable ${
+        formatWorkspaceType(state.errorOperand1, workspace, surface, identifierNames)
+      }`;
+    case LazuliInferenceMetadataFailure.IndexedScrutineeUnresolved:
+      return `indexed case for ${
+        JSON.stringify(name(state.errorDetail))
+      } requires a fully zonked scrutinee; received ${
+        formatWorkspaceType(state.errorOperand0, workspace, surface, identifierNames)
+      } with unsolved inference variable ${
+        formatWorkspaceType(state.errorOperand1, workspace, surface, identifierNames)
+      }`;
+    case LazuliInferenceMetadataFailure.IndexedScrutineeTypeMismatch:
+      return `indexed case requires scrutinee ${
+        JSON.stringify(name(state.errorDetail))
+      }; received ${formatWorkspaceType(state.errorOperand0, workspace, surface, identifierNames)}`;
+    case LazuliInferenceMetadataFailure.UntouchableIndexedVariable:
+      return `indexed case arm cannot solve pre-existing inference variable ${
+        formatWorkspaceType(state.errorOperand0, workspace, surface, identifierNames)
+      } with ${formatWorkspaceType(state.errorOperand1, workspace, surface, identifierNames)}`;
     default:
       throw new Error(
         `GPU Lazuli type inference returned unknown L2101 context ${state.errorContext}`,
       );
   }
+}
+
+function invalidConstructorResultMessage(
+  state: InferenceStateSnapshot,
+  metadata: LazuliInferenceShaderMetadata,
+  surface: EncodedLazuliSurface,
+): string {
+  const constructor = constructorName(surface, state.errorDetail);
+  if (state.errorOperand0 >= metadata.schemaNodeCount) {
+    return `constructor ${
+      JSON.stringify(constructor)
+    } references invalid result schema ${state.errorOperand0}`;
+  }
+  const constructorBase = state.errorDetail * LAZULI_CONSTRUCTOR_WORD_LENGTH;
+  const typeIndex = surface.constructorWords[constructorBase + LazuliConstructorWord.Type];
+  if (typeIndex === undefined || typeIndex >= surface.typeCount) {
+    throw new Error(
+      `GPU Lazuli result diagnostic references missing constructor type ${typeIndex}`,
+    );
+  }
+  const typeSymbol = surface.typeWords[typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.Symbol];
+  if (typeSymbol === undefined) {
+    throw new Error(`GPU Lazuli result diagnostic references missing type ${typeIndex}`);
+  }
+  const firstParameter = metadata.words[metadata.typeParameterOffsetsBase + typeIndex];
+  const parameterEnd = metadata.words[metadata.typeParameterOffsetsBase + typeIndex + 1];
+  if (firstParameter === undefined || parameterEnd === undefined || parameterEnd < firstParameter) {
+    throw new Error(`GPU Lazuli result diagnostic references invalid type ${typeIndex} metadata`);
+  }
+  return `constructor ${JSON.stringify(constructor)} result must have head ${
+    JSON.stringify(symbolName(surface, typeSymbol))
+  } with ${parameterEnd - firstParameter} arguments; received ${
+    describeResultSchema(state.errorOperand0, metadata)
+  }`;
+}
+
+function describeResultSchema(
+  root: number,
+  metadata: LazuliInferenceShaderMetadata,
+): string {
+  const word = (schema: number, offset: number): number => {
+    const value = metadata.words[
+      metadata.schemaBase + schema * LAZULI_INFERENCE_SCHEMA_WORD_LENGTH + offset
+    ];
+    if (value === undefined) {
+      throw new Error(`GPU Lazuli result diagnostic references incomplete schema ${schema}`);
+    }
+    return value;
+  };
+  const tag = word(root, LazuliInferenceSchemaWord.Tag);
+  if (tag === LazuliInferenceSchemaTag.Named) {
+    let argumentCount = 0;
+    let argument = word(root, LazuliInferenceSchemaWord.FirstChild);
+    while (argument !== LAZULI_NO_INDEX) {
+      argumentCount++;
+      argument = word(argument, LazuliInferenceSchemaWord.NextSibling);
+    }
+    return `${
+      JSON.stringify(
+        identifierName(metadata.identifierNames, word(root, LazuliInferenceSchemaWord.Symbol)),
+      )
+    } with ${argumentCount} arguments`;
+  }
+  const kind = tag === LazuliInferenceSchemaTag.Integer
+    ? "integer"
+    : tag === LazuliInferenceSchemaTag.Boolean
+    ? "boolean"
+    : tag === LazuliInferenceSchemaTag.Unit
+    ? "unit"
+    : tag === LazuliInferenceSchemaTag.Parameter
+    ? "parameter"
+    : tag === LazuliInferenceSchemaTag.Tuple
+    ? "tuple"
+    : tag === LazuliInferenceSchemaTag.Function
+    ? "function"
+    : `unknown-${tag}`;
+  return `a ${kind} result`;
+}
+
+function constructorName(surface: EncodedLazuliSurface, constructorIndex: number): string {
+  const symbol = surface.constructorWords[
+    constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH + LazuliConstructorWord.Symbol
+  ];
+  if (symbol === undefined) {
+    throw new Error(`GPU Lazuli inference returned unknown constructor ${constructorIndex}`);
+  }
+  return symbolName(surface, symbol);
 }
 
 export function decodeMainType(
@@ -353,7 +526,13 @@ export function publicTypeMetadata(surface: EncodedLazuliSurface): Pick<
         ),
       );
       constructorFieldTypes.push(Object.freeze(fields.map((field) => field.type)));
-      return Object.freeze({ name: constructor.name, fields });
+      return Object.freeze({
+        name: constructor.name,
+        fields,
+        ...(constructor.result === undefined ? {} : {
+          result: copySchema(constructor.result),
+        }),
+      });
     });
     if (!declaration.name.startsWith("$")) {
       typeDeclarations.push(Object.freeze({
@@ -393,16 +572,20 @@ function formatWorkspaceType(
   const prune = (typeIndex: number): number => {
     const seen = new Set<number>();
     let current = typeIndex;
-    while (typeWord(current, 0) === 1) {
-      const replacement = typeWord(current, 1);
+    while (true) {
+      const kind = typeWord(current, 0);
+      const replacement = kind === 1
+        ? typeWord(current, 1)
+        : kind === 3
+        ? typeWord(current, 3)
+        : LAZULI_NO_INDEX;
       if (replacement === LAZULI_NO_INDEX) return current;
       if (seen.has(current)) {
-        throw new Error(`GPU Lazuli diagnostic contains cyclic variable link at type ${current}`);
+        throw new Error(`GPU Lazuli diagnostic contains cyclic type link at type ${current}`);
       }
       seen.add(current);
       current = replacement;
     }
-    return current;
   };
   const names = new Map<number, string>();
   const variableName = (typeIndex: number): string => {

@@ -1,4 +1,4 @@
-export const LAZULI_ABI_VERSION = 4;
+export const LAZULI_ABI_VERSION = 5;
 export const LAZULI_NO_INDEX = 0xffffffff;
 export const LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
 export const LAZULI_MAXIMUM_SURFACE_NODES = 65_536;
@@ -173,6 +173,7 @@ export interface LazuliConstructorFieldDeclaration {
 export interface LazuliConstructorDeclaration {
   readonly name: string;
   readonly fields: readonly LazuliConstructorFieldDeclaration[];
+  readonly result?: LazuliTypeSchema;
 }
 
 export interface LazuliTypeDeclaration {
@@ -196,6 +197,7 @@ export interface EncodedLazuliTypeDeclaration {
       readonly name: string;
       readonly type: LazuliSourceType;
     }[];
+    readonly result?: LazuliSourceType;
   }[];
 }
 

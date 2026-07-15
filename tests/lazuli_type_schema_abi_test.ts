@@ -4,6 +4,7 @@ import {
   LAZULI_ABI_VERSION,
   LAZULI_MAXIMUM_PARSE_DEPTH,
   LAZULI_NO_INDEX,
+  LAZULI_TYPE_WORD_LENGTH,
   type LazuliType,
   LazuliTypeWord,
 } from "../src/lazuli/abi.ts";
@@ -15,7 +16,6 @@ import {
   LAZULI_TYPE_SCHEMA_ABI_VERSION,
   LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
   LAZULI_TYPE_SCHEMA_WORD_LENGTH,
-  LazuliDeclaredResultKind,
   LazuliTypeSchemaMetadataWord,
   LazuliTypeSchemaTag,
   LazuliTypeSchemaWord,
@@ -37,7 +37,7 @@ function schemaWords(
   return Uint32Array.from(records.flatMap((record) => record));
 }
 
-Deno.test("canonical schema metadata packs every ABI-v4 table into one buffer", () => {
+Deno.test("canonical schema metadata packs every ABI-v5 table into one buffer", () => {
   const surface = parsedCanonicalSurface();
   const flattened = flattenLazuliTypeSchemas(surface);
 
@@ -84,9 +84,9 @@ Deno.test("canonical schema metadata packs every ABI-v4 table into one buffer", 
       flattened.constructorFieldRoots,
     ],
     [
-      LazuliTypeSchemaMetadataWord.DeclaredResultKindsOffset,
-      LazuliTypeSchemaMetadataWord.DeclaredResultKindsLength,
-      flattened.declaredResultKinds,
+      LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset,
+      LazuliTypeSchemaMetadataWord.ConstructorResultRootsLength,
+      flattened.constructorResultRoots,
     ],
   ] as const;
   for (const [offsetWord, lengthWord, table] of tables) {
@@ -99,21 +99,73 @@ Deno.test("canonical schema metadata packs every ABI-v4 table into one buffer", 
     deepStrictEqual(flattened.metadataWords.subarray(offset, offset + length), table);
   }
 
-  const resultKinds = new Map(
-    surface.typeDeclarations.map((declaration, typeIndex) => [
-      declaration.name,
-      flattened.declaredResultKinds[typeIndex],
-    ]),
+  const constructorResults = new Map(
+    surface.typeDeclarations.flatMap((declaration, typeIndex) => {
+      const firstConstructor = surface.typeWords[
+        typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.FirstConstructor
+      ];
+      ok(firstConstructor !== undefined);
+      return declaration.constructors.map((constructor, constructorOffset) => {
+        const root = flattened.constructorResultRoots[firstConstructor + constructorOffset];
+        ok(root !== undefined);
+        return [
+          constructor.name,
+          decodeLazuliTypeSchema(flattened.schemaWords, root, flattened.identifierNames),
+        ] as const;
+      });
+    }),
   );
-  equal(resultKinds.get("Box"), LazuliDeclaredResultKind.Named);
-  equal(resultKinds.get("$UnitType"), LazuliDeclaredResultKind.Unit);
-  equal(resultKinds.get("$TupleType"), LazuliDeclaredResultKind.Tuple);
+  deepStrictEqual(constructorResults.get("Box"), {
+    kind: "named",
+    name: "Box",
+    arguments: [{ kind: "parameter", name: "a" }],
+  });
+  deepStrictEqual(constructorResults.get("$Unit"), { kind: "unit" });
+  deepStrictEqual(constructorResults.get("$Tuple"), {
+    kind: "tuple",
+    values: [
+      { kind: "parameter", name: "first" },
+      { kind: "parameter", name: "second" },
+    ],
+  });
+
+  const boxResultRoot = flattened.constructorResultRoots[0];
+  ok(boxResultRoot !== undefined);
+  const boxResultRecord = boxResultRoot * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+  equal(flattened.schemaWords[boxResultRecord + LazuliTypeSchemaWord.StartByte], LAZULI_NO_INDEX);
+  equal(flattened.schemaWords[boxResultRecord + LazuliTypeSchemaWord.EndByte], LAZULI_NO_INDEX);
+});
+
+Deno.test("explicit constructor results retain their indexed schema and source span", () => {
+  const source = "data Equal a b = Refl : Equal a a; let main : Equal Int Int = Refl;";
+  const parsing = parseLazuliSource(source);
+  ok(parsing.ok);
+  if (!parsing.ok) return;
+  const flattened = flattenLazuliTypeSchemas(parsing.surface);
+  const result = parsing.surface.typeDeclarations[0]?.constructors[0]?.result;
+  const root = flattened.constructorResultRoots[0];
+  ok(result !== undefined && root !== undefined);
+
+  deepStrictEqual(
+    decodeLazuliTypeSchema(flattened.schemaWords, root, flattened.identifierNames),
+    {
+      kind: "named",
+      name: "Equal",
+      arguments: [
+        { kind: "parameter", name: "a" },
+        { kind: "parameter", name: "a" },
+      ],
+    },
+  );
+  const record = root * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+  equal(flattened.schemaWords[record + LazuliTypeSchemaWord.StartByte], result.startByte);
+  equal(flattened.schemaWords[record + LazuliTypeSchemaWord.EndByte], result.endByte);
 });
 
 Deno.test("flattened records preserve source spans and decode parameterized schemas", () => {
   const surface = parsedCanonicalSurface();
   const flattened = flattenLazuliTypeSchemas(surface);
-  const boxTypeOffset = 0 * 5;
+  const boxTypeOffset = 0 * LAZULI_TYPE_WORD_LENGTH;
   const boxConstructor = surface.typeWords[boxTypeOffset + LazuliTypeWord.FirstConstructor];
   ok(boxConstructor !== undefined);
   const firstField = flattened.constructorFieldOffsets[boxConstructor];

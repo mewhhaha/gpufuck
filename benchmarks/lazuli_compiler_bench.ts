@@ -1,4 +1,9 @@
-import { GpuLazuliCompiler, requestWebGpuDevice } from "../mod.ts";
+import {
+  GpuLazuliCompiler,
+  GpuTypeCoreExecutor,
+  requestWebGpuDevice,
+  type TypeCoreProgram,
+} from "../mod.ts";
 
 interface CompilationBenchmark {
   readonly name: string;
@@ -62,6 +67,17 @@ const benchmarks: readonly CompilationBenchmark[] = [
       let main = sum (Branch (Leaf 20) (Leaf 22));`,
   },
   {
+    name: "indexed equality proof",
+    source: `data Equal a b = Refl : Equal a a;
+      let cast : Equal a b -> a -> b = proof => value => case proof of
+        | Refl -> value
+      end;
+      let transitive : Equal a b -> Equal b c -> Equal a c = first => second => case first of
+        | Refl -> case second of | Refl -> Refl end
+      end;
+      let main = cast (transitive Refl Refl) 42;`,
+  },
+  {
     name: "wide exhaustive algebraic type",
     source: `data Wide = A | B | C | D | E | F | G | H;
       let main = value => case value of
@@ -80,6 +96,7 @@ const benchmarks: readonly CompilationBenchmark[] = [
 
 const device = await requestWebGpuDevice();
 const compiler = await GpuLazuliCompiler.create(device);
+const typeCore = await GpuTypeCoreExecutor.create(device);
 globalThis.addEventListener("unload", () => device.destroy(), { once: true });
 
 for (const benchmark of benchmarks) {
@@ -101,3 +118,24 @@ for (const benchmark of benchmarks) {
     },
   });
 }
+
+const typeCoreProgram: TypeCoreProgram = {
+  typeConstructors: [{ name: "Vector", parameterKinds: ["type", "integer"] }],
+  functions: [],
+  entry: {
+    kind: "type",
+    type: {
+      kind: "named",
+      name: "Vector",
+      arguments: [
+        { kind: "type", type: { kind: "integer" } },
+        { kind: "integer", value: 42 },
+      ],
+    },
+  },
+};
+
+Deno.bench("execute Type Core: kinded Vector", async () => {
+  const result = await typeCore.execute(typeCoreProgram);
+  if (!result.ok) throw new Error(`Type Core benchmark failed during ${result.stage}`);
+});

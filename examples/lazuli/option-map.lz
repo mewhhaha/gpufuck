@@ -1,0 +1,15 @@
+-- Generic algebraic data and higher-order functions remain ordinary Lazuli values.
+
+data Option a = None | Some(value: a);
+
+let map : (a -> b) -> Option a -> Option b = transform => option =>
+  case option of
+    | None -> None
+    | Some(value) -> Some (transform value)
+  end;
+
+fn main =
+  case map (value => value + 1) (Some 41) of
+    | None -> 0
+    | Some(value) -> value
+  end;

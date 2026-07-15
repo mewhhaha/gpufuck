@@ -8,8 +8,11 @@ module = declaration+ ;
 
 declaration = data_declaration | definition | let_declaration | const_declaration ;
 
-data_declaration = "data" name:IDENT parameters:IDENT* "=" constructors:constructor_declaration ("|" constructors:constructor_declaration)* ";" ;
-constructor_declaration = name:IDENT fields:constructor_fields? ;
+data_declaration = "data" name:IDENT parameters:IDENT* "=" constructors:data_constructors? ";" ;
+data_constructors = head:constructor_declaration tail:data_constructor_tail* ;
+data_constructor_tail = "|" value:constructor_declaration ;
+constructor_declaration = name:IDENT fields:constructor_fields? result:constructor_result? ;
+constructor_result = ":" type:source_type ;
 constructor_fields = "(" values:constructor_field_list ")" ;
 constructor_field_list = head:constructor_field tail:constructor_field_tail* ;
 constructor_field_tail = "," value:constructor_field ;
@@ -47,7 +50,7 @@ let_expr = "let" name:IDENT "=" value:expr "in" body:expr ;
 if_expr = "if" condition:expr "then" consequent:expr "else" alternate:expr ;
 fun_expr = "fun" param:IDENT "->" body:expr ;
 arrow_expr = param:IDENT "=>" body:expr ;
-case_expr = "case" scrutinee:expr "of" arms:case_arm+ "end" ;
+case_expr = "case" scrutinee:expr "of" arms:case_arm* "end" ;
 case_arm = "|" pattern:case_pattern "->" body:expr ;
 case_pattern = constructor_pattern | tuple_pattern | unit_pattern ;
 constructor_pattern = name:IDENT binders:pattern_binders? ;

@@ -4,7 +4,7 @@ import {
   LazuliCompilationStateWord,
   LazuliCompilationStatus,
 } from "./compiler_shader.ts";
-import { type GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
+import { type GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
 import {
   type GpuLazuliSemanticCompilationPass,
   type GpuLazuliSemanticStateSnapshot,
@@ -439,6 +439,7 @@ export function readInferenceState(view: DataView): InferenceStateSnapshot {
     typeTop: word(LazuliInferenceStateWord.TypeTop),
     environmentTop: word(LazuliInferenceStateWord.EnvironmentTop),
     frameTop: word(LazuliInferenceStateWord.FrameTop),
+    refinementTop: word(LazuliInferenceStateWord.RefinementTop),
     outputRoot: word(LazuliInferenceStateWord.OutputRoot),
     outputCount: word(LazuliInferenceStateWord.OutputCount),
   };

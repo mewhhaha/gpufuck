@@ -1,0 +1,33 @@
+data False = ;
+
+data Equal a b = Refl : Equal a a;
+
+data Fact a =
+  IntegerFact(value: Int) : Fact Int
+  | BooleanFact(value: Bool) : Fact Bool;
+
+let absurd : False -> a = impossible =>
+  case impossible of end;
+
+let cast : Equal a b -> a -> b = proof => value =>
+  case proof of
+    | Refl -> value
+  end;
+
+let transitive : Equal a b -> Equal b c -> Equal a c = first => second =>
+  case first of
+    | Refl -> case second of
+      | Refl -> Refl
+    end
+  end;
+
+let reveal : Fact a -> a = fact =>
+  case fact of
+    | IntegerFact(value) -> value
+    | BooleanFact(value) -> value
+  end;
+
+fn main =
+  if reveal (BooleanFact true)
+  then cast (transitive Refl Refl) 42
+  else 0;
