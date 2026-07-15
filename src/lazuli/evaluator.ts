@@ -477,6 +477,70 @@ function instantiateTypeSchema(
   }
 }
 
+function sameLazuliType(left: LazuliType, right: LazuliType): boolean {
+  if (left.kind !== right.kind) return false;
+  switch (left.kind) {
+    case "integer":
+    case "boolean":
+    case "unit":
+      return true;
+    case "tuple":
+      return right.kind === "tuple" &&
+        sameLazuliType(left.values[0], right.values[0]) &&
+        sameLazuliType(left.values[1], right.values[1]);
+    case "named":
+      if (
+        right.kind !== "named" || left.name !== right.name ||
+        left.arguments.length !== right.arguments.length
+      ) return false;
+      return left.arguments.every((argument, index) => {
+        const rightArgument = right.arguments[index];
+        return rightArgument !== undefined && sameLazuliType(argument, rightArgument);
+      });
+    case "function":
+      return right.kind === "function" &&
+        sameLazuliType(left.parameter, right.parameter) &&
+        sameLazuliType(left.result, right.result);
+  }
+}
+
+function matchConstructorResultSchema(
+  schema: LazuliTypeSchema,
+  type: LazuliType,
+  parameters: Map<string, LazuliType>,
+): boolean {
+  switch (schema.kind) {
+    case "integer":
+    case "boolean":
+    case "unit":
+      return schema.kind === type.kind;
+    case "parameter": {
+      const existing = parameters.get(schema.name);
+      if (existing !== undefined) return sameLazuliType(existing, type);
+      parameters.set(schema.name, type);
+      return true;
+    }
+    case "tuple":
+      return type.kind === "tuple" &&
+        matchConstructorResultSchema(schema.values[0], type.values[0], parameters) &&
+        matchConstructorResultSchema(schema.values[1], type.values[1], parameters);
+    case "named":
+      if (
+        type.kind !== "named" || schema.name !== type.name ||
+        schema.arguments.length !== type.arguments.length
+      ) return false;
+      return schema.arguments.every((argument, index) => {
+        const typeArgument = type.arguments[index];
+        return typeArgument !== undefined &&
+          matchConstructorResultSchema(argument, typeArgument, parameters);
+      });
+    case "function":
+      return type.kind === "function" &&
+        matchConstructorResultSchema(schema.parameter, type.parameter, parameters) &&
+        matchConstructorResultSchema(schema.result, type.result, parameters);
+  }
+}
+
 function expectedConstructorFieldTypes(
   module: GpuLazuliModule,
   expectedType: LazuliType,
@@ -502,10 +566,14 @@ function expectedConstructorFieldTypes(
   if (constructor === undefined) return undefined;
 
   const parameters = new Map<string, LazuliType>();
-  for (const [index, parameter] of declaration.parameters.entries()) {
-    const argument = expectedType.arguments[index];
-    if (argument === undefined) return undefined;
-    parameters.set(parameter, argument);
+  if (constructor.result === undefined) {
+    for (const [index, parameter] of declaration.parameters.entries()) {
+      const argument = expectedType.arguments[index];
+      if (argument === undefined) return undefined;
+      parameters.set(parameter, argument);
+    }
+  } else if (!matchConstructorResultSchema(constructor.result, expectedType, parameters)) {
+    return undefined;
   }
   const fieldTypes = constructor.fields.map((field) =>
     instantiateTypeSchema(field.type, parameters)
@@ -526,6 +594,7 @@ function validateInputValue(
   module: GpuLazuliModule,
   input: LazuliInputValue,
   expectedType: LazuliType,
+  enableCollectionSyntax: boolean,
 ): LazuliEvaluationResult | undefined {
   const entries: InputEncodingEntry[] = [{
     value: input,
@@ -596,14 +665,14 @@ function validateInputValue(
       return typeMismatch(path, expectedType, value);
     }
 
-    if (expectedType.name === "Text" && taggedValue.kind === "text") {
+    if (enableCollectionSyntax && expectedType.name === "Text" && taggedValue.kind === "text") {
       const textValue = (value as { readonly value?: unknown }).value;
       if (typeof textValue !== "string") {
         return badInputFault(`${inputPath(path)}.value must be text; received ${textValue}`, path);
       }
       continue;
     }
-    if (expectedType.name === "List" && taggedValue.kind === "list") {
+    if (enableCollectionSyntax && expectedType.name === "List" && taggedValue.kind === "list") {
       const values = (value as { readonly values?: unknown }).values;
       const elementType = expectedType.arguments[0];
       if (!Array.isArray(values)) {
@@ -694,6 +763,7 @@ function encodeInputValue(
   module: GpuLazuliModule,
   input: LazuliInputValue,
   expectedType: LazuliType,
+  enableCollectionSyntax: boolean,
 ): EncodedInput | LazuliEvaluationResult {
   const entries: InputEncodingEntry[] = [{
     value: input,
@@ -719,7 +789,7 @@ function encodeInputValue(
 
     const ancestorValue = value;
     let taggedValue = value as { readonly kind?: unknown };
-    if (taggedValue.kind === "text") {
+    if (enableCollectionSyntax && taggedValue.kind === "text") {
       const textValue = (value as { readonly value?: unknown }).value;
       if (typeof textValue !== "string") {
         return badInputFault(`${path}.value must be text; received ${textValue}`, entry.path);
@@ -729,7 +799,7 @@ function encodeInputValue(
       value = expandedText;
       taggedValue = expandedText;
     }
-    if (taggedValue.kind === "list") {
+    if (enableCollectionSyntax && taggedValue.kind === "list") {
       const listValues = (value as { readonly values?: unknown }).values;
       if (!Array.isArray(listValues)) {
         return badInputFault(`${path}.values must be an array`, entry.path);
@@ -1227,6 +1297,7 @@ function decodeDeepValue(
   nodeCount: number,
   module: GpuLazuliModule,
   expectedType: LazuliType,
+  enableCollectionSyntax: boolean,
 ): LazuliDeepValue {
   const view = new DataView(bytes);
   let root: LazuliDeepValue | undefined;
@@ -1300,10 +1371,15 @@ function decodeDeepValue(
       `deep result is incomplete: nodes=${nodeCount}, openConstructors=${parents.length}`,
     );
   }
-  return decodeTypedDeepValue(root, expectedType);
+  return decodeTypedDeepValue(root, expectedType, enableCollectionSyntax);
 }
 
-function decodeTypedDeepValue(root: LazuliDeepValue, expectedType: LazuliType): LazuliDeepValue {
+function decodeTypedDeepValue(
+  root: LazuliDeepValue,
+  expectedType: LazuliType,
+  enableCollectionSyntax: boolean,
+): LazuliDeepValue {
+  if (!enableCollectionSyntax) return root;
   if (expectedType.kind !== "named") return root;
   if (expectedType.name === "Text") return decodeTextValue(root);
   if (expectedType.name === "List") return decodeListValue(root);
@@ -1398,6 +1474,7 @@ export class GpuLazuliEvaluator {
   readonly #maximumHeapSlots: number;
   readonly #maximumStackFrames: number;
   readonly #maximumResultNodes: number;
+  readonly #enableCollectionSyntax: boolean;
 
   private constructor(
     device: GPUDevice,
@@ -1405,15 +1482,28 @@ export class GpuLazuliEvaluator {
     maximumHeapSlots: number,
     maximumStackFrames: number,
     maximumResultNodes: number,
+    enableCollectionSyntax: boolean,
   ) {
     this.#device = device;
     this.#pipeline = pipeline;
     this.#maximumHeapSlots = maximumHeapSlots;
     this.#maximumStackFrames = maximumStackFrames;
     this.#maximumResultNodes = maximumResultNodes;
+    this.#enableCollectionSyntax = enableCollectionSyntax;
   }
 
   static async create(device: GPUDevice): Promise<GpuLazuliEvaluator> {
+    return await GpuLazuliEvaluator.createBackend(device, true);
+  }
+
+  static async createFunctionalBackend(device: GPUDevice): Promise<GpuLazuliEvaluator> {
+    return await GpuLazuliEvaluator.createBackend(device, false);
+  }
+
+  private static async createBackend(
+    device: GPUDevice,
+    enableCollectionSyntax: boolean,
+  ): Promise<GpuLazuliEvaluator> {
     const maximumStorageBytes = Math.min(
       device.limits.maxStorageBufferBindingSize,
       device.limits.maxBufferSize,
@@ -1464,6 +1554,7 @@ export class GpuLazuliEvaluator {
         maximumHeapSlots,
         maximumStackFrames,
         maximumResultNodes,
+        enableCollectionSyntax,
       );
     } catch (cause) {
       throw new Error("WebGPU could not create the Lazuli evaluator pipeline", { cause });
@@ -1616,7 +1707,12 @@ export class GpuLazuliEvaluator {
     const inputType = options.input === undefined ? undefined : inputParameterType(module);
     if (inputType !== undefined && "ok" in inputType) return inputType;
     if (options.input !== undefined && inputType !== undefined) {
-      const inputFault = validateInputValue(module, options.input, inputType);
+      const inputFault = validateInputValue(
+        module,
+        options.input,
+        inputType,
+        this.#enableCollectionSyntax,
+      );
       if (inputFault !== undefined) return inputFault;
     }
     const outputType = evaluationOutputType(module, options.input !== undefined);
@@ -1625,7 +1721,12 @@ export class GpuLazuliEvaluator {
       if (inputType === undefined || "ok" in inputType) {
         throw new Error("Lazuli evaluator omitted the main input type");
       }
-      const encodedInput = encodeInputValue(module, options.input, inputType);
+      const encodedInput = encodeInputValue(
+        module,
+        options.input,
+        inputType,
+        this.#enableCollectionSyntax,
+      );
       if ("ok" in encodedInput) return encodedInput;
       inputEncoding = encodedInput;
     }
@@ -1874,7 +1975,13 @@ export class GpuLazuliEvaluator {
             resultReadbackBuffer.unmap();
             return {
               ok: true,
-              value: decodeDeepValue(resultBytes, snapshot.resultTop, module, outputType),
+              value: decodeDeepValue(
+                resultBytes,
+                snapshot.resultTop,
+                module,
+                outputType,
+                this.#enableCollectionSyntax,
+              ),
               stats: snapshot.stats,
             };
           }
@@ -1961,7 +2068,12 @@ export class GpuLazuliEvaluator {
         continue;
       }
       if (inputValue !== undefined && inputType !== undefined) {
-        const inputFault = validateInputValue(module, inputValue, inputType);
+        const inputFault = validateInputValue(
+          module,
+          inputValue,
+          inputType,
+          this.#enableCollectionSyntax,
+        );
         if (inputFault !== undefined) {
           results[resultIndex] = inputFault;
           continue;
@@ -1973,7 +2085,12 @@ export class GpuLazuliEvaluator {
         if (inputType === undefined || "ok" in inputType) {
           throw new Error("Lazuli batch evaluator omitted a main input type");
         }
-        const encodedInput = encodeInputValue(module, inputValue, inputType);
+        const encodedInput = encodeInputValue(
+          module,
+          inputValue,
+          inputType,
+          this.#enableCollectionSyntax,
+        );
         if ("ok" in encodedInput) {
           results[resultIndex] = encodedInput;
           continue;
@@ -2509,6 +2626,7 @@ export class GpuLazuliEvaluator {
                   snapshot.resultTop,
                   lane.module,
                   lane.outputType,
+                  this.#enableCollectionSyntax,
                 ),
                 stats: snapshot.stats,
               };

@@ -1,23 +1,22 @@
-import type { LazuliCompileResult } from "./compiler_module.ts";
 import { MAXIMUM_GPU_DISPATCH_BATCH_SIZE } from "./gpu_dispatch_scheduler.ts";
 
-interface PendingLazuliCompilation {
-  readonly compile: () => Promise<LazuliCompileResult>;
+interface PendingCompilation<Result> {
+  readonly compile: () => Promise<Result>;
   readonly admissionWeight: number;
   readonly signal?: AbortSignal;
   readonly cancelWhileQueued: () => void;
-  readonly resolve: (result: LazuliCompileResult) => void;
+  readonly resolve: (result: Result) => void;
   readonly reject: (reason: unknown) => void;
-  previous: PendingLazuliCompilation | undefined;
-  next: PendingLazuliCompilation | undefined;
+  previous: PendingCompilation<Result> | undefined;
+  next: PendingCompilation<Result> | undefined;
   queued: boolean;
 }
 
-export class LazuliCompilationAdmissionQueue {
+export class CompilationAdmissionQueue<Result> {
   readonly #maximumConcurrentWeight: number;
   readonly #minimumAdmissionWeight: number;
-  #firstPendingCompilation: PendingLazuliCompilation | undefined;
-  #lastPendingCompilation: PendingLazuliCompilation | undefined;
+  #firstPendingCompilation: PendingCompilation<Result> | undefined;
+  #lastPendingCompilation: PendingCompilation<Result> | undefined;
   #activeCompilationCount = 0;
   #activeCompilationWeight = 0;
 
@@ -30,22 +29,19 @@ export class LazuliCompilationAdmissionQueue {
   }
 
   admit(
-    compile: () => Promise<LazuliCompileResult>,
+    compile: () => Promise<Result>,
     estimatedTransientByteLength: number,
     signal: AbortSignal | undefined,
-  ): Promise<LazuliCompileResult> {
-    const admissionWeight = Math.max(
-      this.#minimumAdmissionWeight,
-      estimatedTransientByteLength,
-    );
-    return new Promise<LazuliCompileResult>((resolve, reject) => {
+  ): Promise<Result> {
+    const admissionWeight = Math.max(this.#minimumAdmissionWeight, estimatedTransientByteLength);
+    return new Promise<Result>((resolve, reject) => {
       const cancelWhileQueued = () => {
         if (!pendingCompilation.queued) return;
         this.#removeQueuedCompilation(pendingCompilation);
         reject(signal?.reason);
         this.#startQueuedCompilations();
       };
-      const pendingCompilation: PendingLazuliCompilation = {
+      const pendingCompilation: PendingCompilation<Result> = {
         compile,
         admissionWeight,
         ...(signal === undefined ? {} : { signal }),
@@ -69,7 +65,7 @@ export class LazuliCompilationAdmissionQueue {
     });
   }
 
-  #enqueueCompilation(pendingCompilation: PendingLazuliCompilation): void {
+  #enqueueCompilation(pendingCompilation: PendingCompilation<Result>): void {
     pendingCompilation.previous = this.#lastPendingCompilation;
     pendingCompilation.queued = true;
     if (this.#lastPendingCompilation === undefined) {
@@ -80,7 +76,7 @@ export class LazuliCompilationAdmissionQueue {
     this.#lastPendingCompilation = pendingCompilation;
   }
 
-  #removeQueuedCompilation(pendingCompilation: PendingLazuliCompilation): void {
+  #removeQueuedCompilation(pendingCompilation: PendingCompilation<Result>): void {
     const { previous, next } = pendingCompilation;
     if (previous === undefined) {
       this.#firstPendingCompilation = next;
@@ -97,7 +93,7 @@ export class LazuliCompilationAdmissionQueue {
     pendingCompilation.queued = false;
   }
 
-  #startCompilation(pendingCompilation: PendingLazuliCompilation): void {
+  #startCompilation(pendingCompilation: PendingCompilation<Result>): void {
     pendingCompilation.signal?.removeEventListener(
       "abort",
       pendingCompilation.cancelWhileQueued,
@@ -111,7 +107,7 @@ export class LazuliCompilationAdmissionQueue {
     void this.#settleCompilation(pendingCompilation);
   }
 
-  async #settleCompilation(pendingCompilation: PendingLazuliCompilation): Promise<void> {
+  async #settleCompilation(pendingCompilation: PendingCompilation<Result>): Promise<void> {
     try {
       pendingCompilation.resolve(await pendingCompilation.compile());
     } catch (error) {

@@ -1,3 +1,4 @@
 node_modules
 .agents
 .claude
+/language/lazuli/generated/tree-sitter/

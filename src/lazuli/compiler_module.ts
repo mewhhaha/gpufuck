@@ -60,6 +60,7 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly entryDefinition: number;
+  readonly entryType: LazuliType;
   readonly mainType: LazuliType;
   readonly typeDeclarations: readonly LazuliTypeDeclaration[];
 
@@ -87,7 +88,8 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
     this.constructorNames = Object.freeze(constructorNames(surface));
     this.constructorArities = Object.freeze(constructorArities(surface));
     this.entryDefinition = entryDefinition;
-    this.mainType = deepFreeze(mainType);
+    this.entryType = deepFreeze(mainType);
+    this.mainType = this.entryType;
     this.typeDeclarations = deepFreeze([...typeDeclarations]);
   }
 

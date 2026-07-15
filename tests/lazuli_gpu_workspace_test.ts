@@ -2,6 +2,7 @@ import { deepStrictEqual, equal, ok, rejects } from "node:assert/strict";
 
 import {
   GpuLazuliCompiler,
+  LAZULI_NO_INDEX,
   type LazuliType,
   parseLazuliSource,
   requestWebGpuDevice,
@@ -17,6 +18,7 @@ import {
   LAZULI_INFERENCE_FRAME_WORD_LENGTH,
   LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
   LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
+  LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
   LAZULI_INFERENCE_STATE_WORD_LENGTH,
   LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
   LAZULI_TYPE_INFERENCE_SHADER,
@@ -24,12 +26,18 @@ import {
   LazuliInferenceSchedulerWord,
   LazuliInferenceStatus,
 } from "../src/lazuli/type_inference_shader.ts";
+import {
+  LAZULI_TYPE_SCHEMA_WORD_LENGTH,
+  LazuliTypeSchemaMetadataWord,
+  LazuliTypeSchemaWord,
+} from "../src/lazuli/type_schema_abi.ts";
 
 interface InferenceControls {
   readonly capacities?: GpuLazuliTypeInferenceWorkspaceCapacities;
   readonly maximumStepsPerDispatch?: number;
   readonly signal?: AbortSignal;
   readonly onDispatch?: (observation: GpuLazuliTypeInferenceDispatchObservation) => void;
+  readonly mutateMetadataForTest?: (words: Uint32Array) => void;
 }
 
 async function runInferenceWithCapacities(
@@ -75,6 +83,9 @@ async function runInferenceWithCapacities(
       ...(controls.capacities === undefined
         ? {}
         : { initialWorkspaceCapacities: controls.capacities }),
+      ...(controls.mutateMetadataForTest === undefined
+        ? {}
+        : { mutateMetadataForTest: controls.mutateMetadataForTest }),
       observeDispatch: (observation) => {
         observations.push(observation);
         controls.onDispatch?.(observation);
@@ -122,11 +133,100 @@ function typeNodeCount(type: LazuliType): number {
   return count;
 }
 
-Deno.test("GPU inference keeps its ABI-v4 state prefix ahead of the scheduler envelope", () => {
-  equal(LAZULI_INFERENCE_STATE_WORD_LENGTH, 64);
-  equal(LazuliInferenceSchedulerWord.PreviousSemanticSteps, 64);
-  equal(LazuliInferenceSchedulerWord.SemanticState, 65);
-  equal(LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH, 89);
+Deno.test("GPU inference keeps its ABI-v5 state prefix ahead of the scheduler envelope", () => {
+  equal(LAZULI_INFERENCE_STATE_WORD_LENGTH, 72);
+  equal(LazuliInferenceSchedulerWord.PreviousSemanticSteps, 72);
+  equal(LazuliInferenceSchedulerWord.SemanticState, 73);
+  equal(LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH, 97);
+});
+
+Deno.test("GPU inference rejects a constructor result root outside the schema table", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const shader = device.createShaderModule({
+      label: "Lazuli malformed result metadata test shader",
+      code: LAZULI_TYPE_INFERENCE_SHADER,
+    });
+    const pipeline = await device.createComputePipelineAsync({
+      label: "Lazuli malformed result metadata test pipeline",
+      layout: "auto",
+      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+    });
+    const compiler = await GpuLazuliCompiler.create(device);
+    const source = "data Box a = Box(value: a); let main = 0;";
+    const { result } = await runInferenceWithCapacities(
+      device,
+      compiler,
+      pipeline,
+      source,
+      {
+        maximumStepsPerDispatch: 1,
+        mutateMetadataForTest: (words) => {
+          const resultBase = words[
+            LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset
+          ];
+          ok(resultBase !== undefined);
+          words[resultBase] = LAZULI_NO_INDEX;
+        },
+      },
+    );
+
+    equal(result.ok, false);
+    if (result.ok) return;
+    equal(result.diagnostic.code, "L2101");
+    equal(
+      result.diagnostic.message,
+      'constructor "Box" references invalid result schema 4294967295',
+    );
+    deepStrictEqual(result.diagnostic.span, { startByte: 13, endByte: 26 });
+  } finally {
+    device.destroy();
+  }
+});
+
+Deno.test("GPU inference validates the shape of sentinel-marked constructor results", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const shader = device.createShaderModule({
+      label: "Lazuli malformed synthetic result shader",
+      code: LAZULI_TYPE_INFERENCE_SHADER,
+    });
+    const pipeline = await device.createComputePipelineAsync({
+      label: "Lazuli malformed synthetic result pipeline",
+      layout: "auto",
+      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+    });
+    const compiler = await GpuLazuliCompiler.create(device);
+    const source = "data Box a = Box(value: a); let main = 0;";
+    const { result } = await runInferenceWithCapacities(
+      device,
+      compiler,
+      pipeline,
+      source,
+      {
+        mutateMetadataForTest: (words) => {
+          const schemaBase = words[LazuliTypeSchemaMetadataWord.SchemaWordsOffset];
+          const resultBase = words[
+            LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset
+          ];
+          ok(schemaBase !== undefined && resultBase !== undefined);
+          const root = words[resultBase];
+          ok(root !== undefined && root !== LAZULI_NO_INDEX);
+          words[
+            schemaBase + root * LAZULI_TYPE_SCHEMA_WORD_LENGTH + LazuliTypeSchemaWord.Tag
+          ] = 99;
+        },
+      },
+    );
+
+    equal(result.ok, false);
+    if (result.ok) return;
+    equal(result.diagnostic.code, "L2101");
+    ok(result.diagnostic.message.includes("invalid shape: tag 99"));
+    deepStrictEqual(result.diagnostic.span, { startByte: 13, endByte: 26 });
+  } finally {
+    device.destroy();
+  }
 });
 
 Deno.test("GPU inference bounds deep types and repeated constructor schemes", async () => {
@@ -327,6 +427,15 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
           observation.frameCapacity,
       },
       {
+        name: "refinement",
+        source:
+          "data Equal a b = Refl : Equal a a; let cast : Equal a b -> a -> b = proof => value => case proof of | Refl -> value end; let main = cast Refl 42;",
+        capacities: { refinement: 1 },
+        errorCode: LazuliInferenceDiagnosticCode.RefinementArenaExhausted,
+        capacity: (observation: GpuLazuliTypeInferenceDispatchObservation) =>
+          observation.refinementCapacity,
+      },
+      {
         name: "scratch",
         source: scratchSource,
         capacities: { scratch: shaderMinimumScratchCapacity(scratchSource) },
@@ -344,7 +453,7 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
       },
     ] as const;
 
-    for (const fixture of fixtures) {
+    await Promise.all(fixtures.map(async (fixture) => {
       const { result, observations } = await runInferenceWithCapacities(
         device,
         compiler,
@@ -353,6 +462,19 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
         { capacities: fixture.capacities, maximumStepsPerDispatch: 1 },
       );
       assertSuccessfulInference(fixture.source, result);
+      const normalCapacity = await runInferenceWithCapacities(
+        device,
+        compiler,
+        pipeline,
+        fixture.source,
+        { maximumStepsPerDispatch: 4_096 },
+      );
+      assertSuccessfulInference(fixture.source, normalCapacity.result);
+      equal(
+        result.transitions,
+        normalCapacity.result.transitions,
+        `${fixture.name} growth changed the final semantic transition count`,
+      );
       const exhaustedIndex = observations.findIndex((observation) =>
         observation.status === LazuliInferenceStatus.Exhausted &&
         observation.errorCode === fixture.errorCode
@@ -392,13 +514,19 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
           : exhausted.frameCapacity,
       );
       equal(
+        resumed.refinementCapacity,
+        fixture.name === "refinement"
+          ? Math.max(1, exhausted.refinementCapacity * 2)
+          : exhausted.refinementCapacity,
+      );
+      equal(
         resumed.scratchCapacity,
         fixture.name === "scratch"
           ? Math.max(1, exhausted.scratchCapacity * 2)
           : exhausted.scratchCapacity,
       );
       if (fixture.name !== "output") equal(resumed.outputCapacity, exhausted.outputCapacity);
-    }
+    }));
 
     const outputFuel = await runInferenceWithCapacities(
       device,
@@ -443,6 +571,14 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
           frame: Math.floor(maximumStorageWords / LAZULI_INFERENCE_FRAME_WORD_LENGTH) + 1,
         },
       },
+      {
+        name: "refinement",
+        capacities: {
+          refinement: Math.floor(
+            maximumStorageWords / LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
+          ) + 1,
+        },
+      },
       { name: "scratch", capacities: { scratch: maximumStorageWords + 1 } },
       {
         name: "output",
@@ -472,7 +608,7 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
 Deno.test("GPU inference transition counts are invariant across dispatch quanta", async () => {
   const sources = [
     "let main = 42;",
-    "let main = true;",
+    "data Equal a b = Refl : Equal a a; let cast : Equal a b -> a -> b = proof => value => case proof of | Refl -> value end; let main = cast Refl 42;",
     "let identity = value => value; let main = (identity 1, identity true);",
     "fn factorial value = if value == 0 then 1 else value * factorial (value - 1); fn main = factorial 5;",
     "data Box a = Box(value: a); let main : Box Int = Box 1;",
@@ -503,16 +639,24 @@ Deno.test("GPU inference transition counts are invariant across dispatch quanta"
     });
     const compiler = await GpuLazuliCompiler.create(device);
 
-    for (const source of sources) {
-      const runs = [];
-      for (const maximumStepsPerDispatch of [1, 7, 4_096]) {
-        runs.push(
-          await runInferenceWithCapacities(device, compiler, pipeline, source, {
-            maximumStepsPerDispatch,
-          }),
-        );
-      }
-      const [one, seven, large] = runs;
+    const runsByQuantum: Awaited<ReturnType<typeof runInferenceWithCapacities>>[][] = [];
+    for (const maximumStepsPerDispatch of [1, 7, 4_096]) {
+      runsByQuantum.push(
+        await Promise.all(
+          sources.map((source) =>
+            runInferenceWithCapacities(device, compiler, pipeline, source, {
+              maximumStepsPerDispatch,
+            })
+          ),
+        ),
+      );
+    }
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+      const source = sources[sourceIndex];
+      if (source === undefined) throw new Error(`missing invariance source ${sourceIndex}`);
+      const one = runsByQuantum[0]?.[sourceIndex];
+      const seven = runsByQuantum[1]?.[sourceIndex];
+      const large = runsByQuantum[2]?.[sourceIndex];
       ok(one !== undefined && seven !== undefined && large !== undefined);
       deepStrictEqual(one.result, seven.result, source);
       deepStrictEqual(seven.result, large.result, source);

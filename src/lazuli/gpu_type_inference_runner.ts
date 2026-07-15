@@ -1,6 +1,6 @@
 import { LAZULI_NO_INDEX } from "./abi.ts";
 import { LazuliCompilationStatus } from "./compiler_shader.ts";
-import { type GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
+import { type GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
 import { type GpuLazuliSemanticCompilationPass } from "./gpu_semantic_contract.ts";
 import {
   type GpuLazuliCompilationInferenceRun,
@@ -56,6 +56,7 @@ import {
 import {
   LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
   LazuliInferenceDiagnosticCode,
+  LazuliInferenceMetadataFailure,
   LazuliInferenceStateWord,
   LazuliInferenceStatus,
   prepareLazuliInferenceShaderMetadata,
@@ -103,6 +104,7 @@ async function runGpuLazuliTypeInferenceMachine(
     options.surface,
     flattenLazuliTypeSchemas(options.surface),
   );
+  options.mutateMetadataForTest?.(metadata.words);
   let layout: WorkspaceLayout;
   try {
     assertStorageSize(
@@ -266,6 +268,7 @@ async function runGpuLazuliTypeInferenceMachine(
         typeCapacity: layout.typeCapacity,
         environmentCapacity: layout.environmentCapacity,
         frameCapacity: layout.frameCapacity,
+        refinementCapacity: layout.refinementCapacity,
         scratchCapacity: layout.scratchCapacity,
         outputCapacity,
       });
@@ -330,6 +333,11 @@ async function runGpuLazuliTypeInferenceMachine(
       if (state.status === LazuliInferenceStatus.Diagnostic) {
         const workspace = state.errorCode === LazuliInferenceDiagnosticCode.TypeMismatch ||
             state.errorCode === LazuliInferenceDiagnosticCode.InfiniteType ||
+            (state.errorCode === LazuliInferenceDiagnosticCode.InvalidTypeMetadata &&
+              (state.errorContext ===
+                  LazuliInferenceMetadataFailure.InvalidEmptyCaseScrutinee ||
+                state.errorContext >=
+                  LazuliInferenceMetadataFailure.IndexedExpectedTypeUnresolved)) ||
             (state.errorCode === LazuliInferenceDiagnosticCode.NonConcreteMain &&
               state.errorOperand0 !== LAZULI_NO_INDEX)
           ? await readDiagnosticWorkspace(

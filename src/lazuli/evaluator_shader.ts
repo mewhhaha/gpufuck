@@ -630,7 +630,8 @@ fn evaluate_node() {
     }
     case TAG_CASE: {
       if !valid_core_child(evaluation.expression, node.child0) ||
-          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX {
+          !valid_optional_core_child(evaluation.expression, node.child1) ||
+          node.child2 != NO_INDEX {
         fail_bad_module(evaluation.expression);
         return;
       }
@@ -1150,7 +1151,7 @@ fn return_from_expression() {
         return;
       }
       if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) ||
-          !valid_node(frame.field0) {
+          (frame.field0 != NO_INDEX && !valid_node(frame.field0)) {
         fail_bad_module(evaluation.value_payload);
         return;
       }

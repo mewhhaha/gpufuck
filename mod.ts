@@ -6,6 +6,7 @@ export {
   MAXIMUM_SOURCE_BYTE_LENGTH,
 } from "./src/gpu_compiler.ts";
 export { type BrainfuckInstruction, BrainfuckOpcode, brainfuckOpcodeName } from "./src/ir.ts";
+export * from "./functional.ts";
 export {
   type EncodedLazuliSurface,
   LAZULI_ABI_VERSION,
@@ -48,4 +49,5 @@ export {
   type LazuliValue,
 } from "./src/lazuli/evaluator.ts";
 export { parseLazuliSource } from "./src/lazuli/frontend.ts";
+export { lazuliSurfaceToFunctionalModule } from "./src/lazuli/functional_adapter.ts";
 export { requestWebGpuDevice } from "./src/webgpu.ts";

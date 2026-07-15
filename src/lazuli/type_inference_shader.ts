@@ -1,5 +1,6 @@
 import {
   type EncodedLazuliSurface,
+  LAZULI_ABI_VERSION,
   LAZULI_CONSTRUCTOR_WORD_LENGTH,
   LAZULI_DEFINITION_WORD_LENGTH,
   LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
@@ -17,7 +18,6 @@ import {
   type FlattenedLazuliTypeSchemas,
   LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
   LAZULI_TYPE_SCHEMA_WORD_LENGTH,
-  LazuliDeclaredResultKind,
   LazuliTypeSchemaMetadataWord,
   LazuliTypeSchemaWord,
 } from "./type_schema_abi.ts";
@@ -41,22 +41,19 @@ export const LazuliInferenceSchemaTag = {
  * these fixed-width tables. Child, parameter, and field offsets are relative
  * to their respective scalar tables.
  */
-export const LAZULI_INFERENCE_TYPE_METADATA_WORD_LENGTH = 5;
+export const LAZULI_INFERENCE_TYPE_METADATA_WORD_LENGTH = 4;
 export const LazuliInferenceTypeMetadataWord = {
   FirstParameter: 0,
   ParameterCount: 1,
   FirstConstructor: 2,
   ConstructorCount: 3,
-  ResultKind: 4,
 } as const;
 
-/** @deprecated Use `LazuliDeclaredResultKind` from `type_schema_abi.ts`. */
-export const LazuliInferenceDeclaredResultKind = LazuliDeclaredResultKind;
-
-export const LAZULI_INFERENCE_CONSTRUCTOR_METADATA_WORD_LENGTH = 2;
+export const LAZULI_INFERENCE_CONSTRUCTOR_METADATA_WORD_LENGTH = 3;
 export const LazuliInferenceConstructorMetadataWord = {
   FirstField: 0,
   FieldCount: 1,
+  ResultRoot: 2,
 } as const;
 
 /** Internal type records occupy the caller-provided type region in binding 5. */
@@ -91,6 +88,7 @@ export const LazuliInferenceEnvironmentWord = {
 } as const;
 
 export const LAZULI_INFERENCE_FRAME_WORD_LENGTH = 12;
+export const LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH = 2;
 export const LazuliInferenceFrameWord = {
   Node: 0,
   Stage: 1,
@@ -149,6 +147,7 @@ export const LazuliInferenceDiagnosticCode = {
   FrameArenaExhausted: 2204,
   ScratchArenaExhausted: 2205,
   OutputArenaExhausted: 2206,
+  RefinementArenaExhausted: 2207,
 } as const;
 
 /**
@@ -167,17 +166,24 @@ export const LazuliInferenceMetadataFailure = {
   InvalidDefinitionAnnotation: 8,
   InvalidTypeDeclaration: 9,
   RepeatedTypeParameter: 10,
-  BuiltInTupleParameterCount: 11,
   InvalidConstructor: 12,
   ConstructorFieldCountMismatch: 13,
   InvalidConstructorField: 14,
   InvalidSchemaShape: 15,
   InvalidSchemaConversion: 16,
   DuplicateTypeName: 17,
+  InvalidEmptyCaseScrutinee: 18,
+  InvalidConstructorResult: 19,
+  HiddenConstructorFieldParameter: 20,
+  IndexedExpectedTypeMissing: 21,
+  IndexedExpectedTypeUnresolved: 22,
+  IndexedScrutineeUnresolved: 23,
+  IndexedScrutineeTypeMismatch: 24,
+  UntouchableIndexedVariable: 25,
 } as const;
 
 /**
- * Binding 7 is a single state record. Words through `DeclaredResultKindBase` are
+ * Binding 7 is a single state record. Words through `ConstructorResultBase` are
  * immutable dispatch inputs; the shader initializes and owns the rest.
  *
  * Diagnostic payloads are durable workspace references/scalars:
@@ -186,18 +192,21 @@ export const LazuliInferenceMetadataFailure = {
  * - L2101: `ErrorContext` is `LazuliInferenceMetadataFailure`; `ErrorDetail`
  *   identifies the primary symbol/index, while `ErrorOperand0/1` carry any
  *   expected/received evidence required by that category. Name/type failures
- *   put the offending symbol in `ErrorDetail`; case-field, type-argument,
- *   constructor-field, and built-in tuple count failures put expected and
- *   received counts in operands 0 and 1. A repeated parameter uses the type
+ *   put the offending symbol in `ErrorDetail`; case-field, type-argument, and
+ *   constructor-field failures put expected and received counts in operands 0
+ *   and 1. A repeated parameter uses the type
  *   symbol as detail and the parameter symbol as operand 0. Structural
  *   metadata failures use the offending table index as detail and preserve
- *   the invalid indices/counts in the operands.
+ *   the invalid indices/counts in the operands. An invalid empty-case
+ *   scrutinee uses its inferred type root as operand 0. Constructor-result
+ *   failures use the constructor index as detail and the result root as
+ *   operand 0; hidden field parameters additionally put their symbol there.
  * - L2102: `ErrorOperand0/1` are the expected/received internal type roots.
  * - L2103: `ErrorOperand0/1` are the variable/candidate internal type roots.
  * - L2104: `ErrorDetail` is the main symbol and `ErrorOperand0` is its inferred
  *   type root, or `LAZULI_NO_INDEX` when main has no definition.
  */
-export const LAZULI_INFERENCE_STATE_WORD_LENGTH = 64;
+export const LAZULI_INFERENCE_STATE_WORD_LENGTH = 72;
 export const LAZULI_INFERENCE_SCHEDULER_WORD_LENGTH = 1 +
   LAZULI_COMPILATION_STATE_WORD_LENGTH;
 export const LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH = LAZULI_INFERENCE_STATE_WORD_LENGTH +
@@ -231,7 +240,7 @@ export const LazuliInferenceStateWord = {
   ConstructorFieldBase: 21,
   ConstructorFieldCount: 22,
   ConstructorFieldOffsetsBase: 23,
-  DeclaredResultKindBase: 24,
+  ConstructorResultBase: 24,
   Status: 25,
   ErrorCode: 26,
   ErrorStartByte: 27,
@@ -271,6 +280,14 @@ export const LazuliInferenceStateWord = {
   TarjanComponentRoot: 61,
   WorkResult: 62,
   WorkAux: 63,
+  RefinementBase: 64,
+  RefinementCapacity: 65,
+  RefinementTop: 66,
+  UntouchableTypeCutoff: 67,
+  ComponentRecursive: 68,
+  IndexedEliminationAllowed: 69,
+  IndexedEliminationRestrictionKind: 70,
+  IndexedEliminationRestrictionSymbol: 71,
   /** @deprecated Alias retained for callers using the former reserved word. */
   Reserved0: 53,
   /** @deprecated Alias retained for callers using the former reserved word. */
@@ -292,7 +309,7 @@ export interface LazuliInferenceShaderMetadata {
   readonly constructorFieldBase: number;
   readonly constructorFieldCount: number;
   readonly constructorFieldOffsetsBase: number;
-  readonly declaredResultKindBase: number;
+  readonly constructorResultBase: number;
 }
 
 /**
@@ -364,10 +381,16 @@ export function prepareLazuliInferenceShaderMetadata(
 
   const header = flattened.metadataWords;
   if (
+    header[LazuliTypeSchemaMetadataWord.AbiVersion] !== LAZULI_ABI_VERSION ||
     header[LazuliTypeSchemaMetadataWord.HeaderWordLength] !==
       LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH
   ) {
     throw new Error("Lazuli schema metadata has an incompatible header.");
+  }
+  if (flattened.constructorResultRoots.length !== surface.constructorCount) {
+    throw new Error(
+      `Lazuli schema metadata has ${flattened.constructorResultRoots.length} constructor results; expected ${surface.constructorCount}.`,
+    );
   }
   const offset = (word: number): number => header[word] ?? 0;
   return Object.freeze({
@@ -387,13 +410,13 @@ export function prepareLazuliInferenceShaderMetadata(
     constructorFieldOffsetsBase: offset(
       LazuliTypeSchemaMetadataWord.ConstructorFieldOffsetsOffset,
     ),
-    declaredResultKindBase: offset(LazuliTypeSchemaMetadataWord.DeclaredResultKindsOffset),
+    constructorResultBase: offset(LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset),
   });
 }
 
 /**
  * Persistent, bounded rank-1 Hindley-Milner inference for resolved Lazuli core
- * nodes and flattened ABI-v4 type metadata. The eight bindings stay within WebGPU's portable
+ * nodes and flattened ABI-v5 type metadata. The eight bindings stay within WebGPU's portable
  * per-stage storage-buffer minimum. A dispatch performs at most
  * `maximum_transitions_per_dispatch` state-machine transitions; all durable
  * cursors, Tarjan stacks, expression frames, and arenas live in GPU buffers.
@@ -508,7 +531,7 @@ struct InferenceState {
   constructor_field_base: u32,
   constructor_field_count: u32,
   constructor_field_offsets_base: u32,
-  declared_result_kind_base: u32,
+  constructor_result_base: u32,
   status: u32,
   error_code: u32,
   error_start_byte: u32,
@@ -548,6 +571,14 @@ struct InferenceState {
   tarjan_component_root: u32,
   work_result: u32,
   work_aux: u32,
+  refinement_base: u32,
+  refinement_capacity: u32,
+  refinement_top: u32,
+  untouchable_type_cutoff: u32,
+  component_recursive: u32,
+  indexed_elimination_allowed: u32,
+  indexed_elimination_restriction_kind: u32,
+  indexed_elimination_restriction_symbol: u32,
   previous_semantic_steps: u32,
   semantic: SemanticCompilationState,
 }
@@ -588,6 +619,8 @@ const ERROR_ENVIRONMENT_ARENA_EXHAUSTED: u32 = 2203u;
 const ERROR_FRAME_ARENA_EXHAUSTED: u32 = 2204u;
 const ERROR_SCRATCH_ARENA_EXHAUSTED: u32 = 2205u;
 const ERROR_OUTPUT_ARENA_EXHAUSTED: u32 = 2206u;
+const ERROR_REFINEMENT_ARENA_EXHAUSTED: u32 = 2207u;
+const TYPE_MISMATCH_INACCESSIBLE_CONSTRUCTOR: u32 = 1u;
 
 const METADATA_CASE_FIELD_COUNT_MISMATCH: u32 = ${LazuliInferenceMetadataFailure.CaseFieldCountMismatch}u;
 const METADATA_UNDECLARED_TYPE_PARAMETER: u32 = ${LazuliInferenceMetadataFailure.UndeclaredTypeParameter}u;
@@ -597,13 +630,20 @@ const METADATA_UNSUPPORTED_EXPRESSION: u32 = ${LazuliInferenceMetadataFailure.Un
 const METADATA_INVALID_DEFINITION_ANNOTATION: u32 = ${LazuliInferenceMetadataFailure.InvalidDefinitionAnnotation}u;
 const METADATA_INVALID_TYPE_DECLARATION: u32 = ${LazuliInferenceMetadataFailure.InvalidTypeDeclaration}u;
 const METADATA_REPEATED_TYPE_PARAMETER: u32 = ${LazuliInferenceMetadataFailure.RepeatedTypeParameter}u;
-const METADATA_BUILT_IN_TUPLE_PARAMETER_COUNT: u32 = ${LazuliInferenceMetadataFailure.BuiltInTupleParameterCount}u;
 const METADATA_INVALID_CONSTRUCTOR: u32 = ${LazuliInferenceMetadataFailure.InvalidConstructor}u;
 const METADATA_CONSTRUCTOR_FIELD_COUNT_MISMATCH: u32 = ${LazuliInferenceMetadataFailure.ConstructorFieldCountMismatch}u;
 const METADATA_INVALID_CONSTRUCTOR_FIELD: u32 = ${LazuliInferenceMetadataFailure.InvalidConstructorField}u;
 const METADATA_INVALID_SCHEMA_SHAPE: u32 = ${LazuliInferenceMetadataFailure.InvalidSchemaShape}u;
 const METADATA_INVALID_SCHEMA_CONVERSION: u32 = ${LazuliInferenceMetadataFailure.InvalidSchemaConversion}u;
 const METADATA_DUPLICATE_TYPE_NAME: u32 = ${LazuliInferenceMetadataFailure.DuplicateTypeName}u;
+const METADATA_INVALID_EMPTY_CASE_SCRUTINEE: u32 = ${LazuliInferenceMetadataFailure.InvalidEmptyCaseScrutinee}u;
+const METADATA_INVALID_CONSTRUCTOR_RESULT: u32 = ${LazuliInferenceMetadataFailure.InvalidConstructorResult}u;
+const METADATA_HIDDEN_CONSTRUCTOR_FIELD_PARAMETER: u32 = ${LazuliInferenceMetadataFailure.HiddenConstructorFieldParameter}u;
+const METADATA_INDEXED_EXPECTED_TYPE_MISSING: u32 = ${LazuliInferenceMetadataFailure.IndexedExpectedTypeMissing}u;
+const METADATA_INDEXED_EXPECTED_TYPE_UNRESOLVED: u32 = ${LazuliInferenceMetadataFailure.IndexedExpectedTypeUnresolved}u;
+const METADATA_INDEXED_SCRUTINEE_UNRESOLVED: u32 = ${LazuliInferenceMetadataFailure.IndexedScrutineeUnresolved}u;
+const METADATA_INDEXED_SCRUTINEE_TYPE_MISMATCH: u32 = ${LazuliInferenceMetadataFailure.IndexedScrutineeTypeMismatch}u;
+const METADATA_UNTOUCHABLE_INDEXED_VARIABLE: u32 = ${LazuliInferenceMetadataFailure.UntouchableIndexedVariable}u;
 
 const PHASE_VALIDATE: u32 = 1u;
 const PHASE_TARJAN: u32 = 2u;
@@ -617,10 +657,6 @@ const SCHEMA_PARAMETER: u32 = 4u;
 const SCHEMA_TUPLE: u32 = 5u;
 const SCHEMA_NAMED: u32 = 6u;
 const SCHEMA_FUNCTION: u32 = 7u;
-
-const DECLARED_RESULT_NAMED: u32 = 1u;
-const DECLARED_RESULT_UNIT: u32 = 2u;
-const DECLARED_RESULT_TUPLE: u32 = 3u;
 
 const TYPE_VARIABLE: u32 = 1u;
 const TYPE_GENERIC: u32 = 2u;
@@ -636,6 +672,7 @@ const TYPE_NAMED_GENERIC: u32 = 11u;
 const TYPE_RECORD_WORDS: u32 = 5u;
 const ENVIRONMENT_WORDS: u32 = 3u;
 const FRAME_WORDS: u32 = 12u;
+const REFINEMENT_WORDS: u32 = ${LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH}u;
 
 const FRAME_EXPRESSION: u32 = 0u;
 const FRAME_PRUNE: u32 = 1u;
@@ -659,6 +696,11 @@ const FRAME_SERIALIZE: u32 = 18u;
 const FRAME_EPOCH_CLEAR: u32 = 19u;
 const FRAME_FIND_TYPE: u32 = 20u;
 const FRAME_SCHEMA_PARAMETER_CHECK: u32 = 21u;
+const FRAME_FIELD_PARAMETER_RECOVERABILITY: u32 = 22u;
+const FRAME_PATTERN_MATCH: u32 = 23u;
+const FRAME_REFINEMENT_ROLLBACK: u32 = 24u;
+const FRAME_FULLY_ZONKED: u32 = 25u;
+const FRAME_FULLY_ZONKED_VISIT: u32 = 26u;
 
 const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
 const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
@@ -741,6 +783,22 @@ fn schema_node(index: u32) -> SchemaNode {
   );
 }
 
+fn validation_schema_start(schema: SchemaNode) -> u32 {
+  if schema.start_byte == NO_INDEX && schema.end_byte == NO_INDEX &&
+    state.work_result < state.constructor_count {
+    return constructors[state.work_result].start_byte;
+  }
+  return schema.start_byte;
+}
+
+fn validation_schema_end(schema: SchemaNode) -> u32 {
+  if schema.start_byte == NO_INDEX && schema.end_byte == NO_INDEX &&
+    state.work_result < state.constructor_count {
+    return constructors[state.work_result].end_byte;
+  }
+  return schema.end_byte;
+}
+
 fn schema_table_word(base: u32, index: u32) -> u32 {
   return schema_words[base + index];
 }
@@ -754,14 +812,21 @@ fn type_metadata(type_index: u32, word: u32) -> u32 {
       schema_words[state.type_parameter_offsets_base + type_index];
   }
   if word == 2u { return algebraic_types[type_index].first_constructor; }
-  if word == 3u { return algebraic_types[type_index].constructor_count; }
-  return schema_words[state.declared_result_kind_base + type_index];
+  return algebraic_types[type_index].constructor_count;
 }
 
 fn constructor_metadata(constructor_index: u32, word: u32) -> u32 {
   if word == 0u { return schema_words[state.constructor_field_offsets_base + constructor_index]; }
-  return schema_words[state.constructor_field_offsets_base + constructor_index + 1u] -
-    schema_words[state.constructor_field_offsets_base + constructor_index];
+  if word == 1u {
+    return schema_words[state.constructor_field_offsets_base + constructor_index + 1u] -
+      schema_words[state.constructor_field_offsets_base + constructor_index];
+  }
+  return schema_words[state.constructor_result_base + constructor_index];
+}
+
+fn constructor_result_is_explicit(constructor_index: u32) -> bool {
+  let result = schema_node(constructor_metadata(constructor_index, 2u));
+  return result.start_byte != NO_INDEX || result.end_byte != NO_INDEX;
 }
 
 fn scratch_index(vector: u32, index: u32) -> u32 {
@@ -841,6 +906,40 @@ fn require_environment_slots(count: u32) -> bool {
   return true;
 }
 
+fn require_refinement_slots(count: u32) -> bool {
+  if state.refinement_top > state.refinement_capacity ||
+    count > state.refinement_capacity - state.refinement_top {
+    exhausted(ERROR_REFINEMENT_ARENA_EXHAUSTED, state.refinement_top + count);
+    return false;
+  }
+  return true;
+}
+
+fn refinement_address(index: u32) -> u32 {
+  return state.refinement_base + index * REFINEMENT_WORDS;
+}
+
+fn refinement_get(index: u32, word: u32) -> u32 {
+  return workspace[refinement_address(index) + word];
+}
+
+fn push_refinement(source: u32, refinement_target: u32) -> bool {
+  if !require_refinement_slots(1u) { return false; }
+  let address = refinement_address(state.refinement_top);
+  workspace[address] = source;
+  workspace[address + 1u] = type_get(source, 3u);
+  type_set(source, 3u, refinement_target);
+  state.refinement_top += 1u;
+  return true;
+}
+
+fn start_refinement_rollback(checkpoint: u32) -> bool {
+  let frame = push_work_frame(FRAME_REFINEMENT_ROLLBACK);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, checkpoint);
+  return true;
+}
+
 fn clear_frame(index: u32, kind: u32) {
   let address = frame_address(index);
   var word = 0u;
@@ -877,8 +976,22 @@ fn prune_transition(frame: u32) {
     frame_set(frame, 0u, type_get(current, 1u));
     return;
   }
+  if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 3u));
+    return;
+  }
   state.returned_type = current;
   pop_work_frame();
+}
+
+fn refinement_rollback_transition(frame: u32) {
+  if state.refinement_top <= frame_get(frame, 0u) {
+    pop_work_frame();
+    return;
+  }
+  state.refinement_top -= 1u;
+  let source = refinement_get(state.refinement_top, 0u);
+  type_set(source, 3u, refinement_get(state.refinement_top, 1u));
 }
 
 fn epoch_clear_transition(frame: u32) {
@@ -975,6 +1088,10 @@ fn occurs_visit_transition(frame: u32) {
     frame_set(frame, 0u, type_get(current, 1u));
     return;
   }
+  if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 3u));
+    return;
+  }
   if current == frame_get(frame, 1u) {
     state.work_result = 1u;
     pop_work_frame();
@@ -1042,11 +1159,23 @@ fn unify_transition(frame: u32) {
   let left_kind = type_get(left, 0u);
   let right_kind = type_get(right, 0u);
   if left_kind == TYPE_VARIABLE {
+    if state.untouchable_type_cutoff != NO_INDEX && left < state.untouchable_type_cutoff {
+      report_metadata_diagnostic(
+        METADATA_UNTOUCHABLE_INDEXED_VARIABLE,
+        frame_get(frame, 3u), frame_get(frame, 4u), left, left, right);
+      return;
+    }
     if !start_occurs(left, right) { return; }
     frame_set(frame, 1u, 3u);
     return;
   }
   if right_kind == TYPE_VARIABLE {
+    if state.untouchable_type_cutoff != NO_INDEX && right < state.untouchable_type_cutoff {
+      report_metadata_diagnostic(
+        METADATA_UNTOUCHABLE_INDEXED_VARIABLE,
+        frame_get(frame, 3u), frame_get(frame, 4u), right, right, left);
+      return;
+    }
     if !start_occurs(right, left) { return; }
     frame_set(frame, 1u, 4u);
     return;
@@ -1086,10 +1215,12 @@ fn unify_transition(frame: u32) {
   if left_second != NO_INDEX && !require_frame_slots(1u) { return; }
   let start_byte = frame_get(frame, 3u);
   let end_byte = frame_get(frame, 4u);
-  configure_unify_frame(frame, left_first, right_first, start_byte, end_byte);
-  if left_second != NO_INDEX {
-    let sibling = push_work_frame(FRAME_UNIFY);
-    configure_unify_frame(sibling, left_second, right_second, start_byte, end_byte);
+  if left_second == NO_INDEX {
+    configure_unify_frame(frame, left_first, right_first, start_byte, end_byte);
+  } else {
+    configure_unify_frame(frame, left_second, right_second, start_byte, end_byte);
+    let first = push_work_frame(FRAME_UNIFY);
+    configure_unify_frame(first, left_first, right_first, start_byte, end_byte);
   }
 }
 
@@ -1118,6 +1249,9 @@ fn generalize_visit_transition(frame: u32) {
   let current = frame_get(frame, 0u);
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
+  }
+  if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 3u)); return;
   }
   let epoch = frame_get(frame, 3u);
   if type_get(current, 4u) == epoch { pop_work_frame(); return; }
@@ -1182,6 +1316,9 @@ fn instantiate_visit_transition(frame: u32) {
   let current = frame_get(frame, 0u);
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
+  }
+  if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 3u)); return;
   }
   let parent = frame_get(frame, 1u); let field = frame_get(frame, 2u);
   let epoch = frame_get(frame, 3u); let kind = type_get(current, 0u);
@@ -1272,6 +1409,9 @@ fn concrete_visit_transition(frame: u32) {
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
   }
+  if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 3u)); return;
+  }
   let epoch = frame_get(frame, 3u);
   if type_get(current, 4u) == epoch { pop_work_frame(); return; }
   let kind = type_get(current, 0u);
@@ -1291,6 +1431,177 @@ fn concrete_visit_transition(frame: u32) {
   if second != NO_INDEX {
     let sibling = push_work_frame(FRAME_CONCRETE_VISIT);
     configure_concrete_visit(sibling, second, epoch);
+  }
+}
+
+fn configure_pattern_match(frame: u32, left: u32, right: u32) {
+  frame_set(frame, 0u, left);
+  frame_set(frame, 1u, 0u);
+  frame_set(frame, 2u, right);
+  frame_set(frame, 10u, FRAME_PATTERN_MATCH);
+}
+
+fn start_pattern_match(left: u32, right: u32) -> bool {
+  let frame = push_work_frame(FRAME_PATTERN_MATCH);
+  if frame == NO_INDEX { return false; }
+  state.work_result = 0u;
+  configure_pattern_match(frame, left, right);
+  return true;
+}
+
+fn pattern_mismatch() {
+  state.work_result = 1u;
+  pop_work_frame();
+}
+
+fn pattern_match_transition(frame: u32) {
+  if state.work_result != 0u { pop_work_frame(); return; }
+  let stage = frame_get(frame, 1u);
+  if stage == 0u {
+    if start_prune(frame_get(frame, 0u)) { frame_set(frame, 1u, 1u); }
+    return;
+  }
+  if stage == 1u {
+    frame_set(frame, 5u, state.returned_type);
+    if start_prune(frame_get(frame, 2u)) { frame_set(frame, 1u, 2u); }
+    return;
+  }
+  if stage == 3u {
+    if state.work_result != 0u { pattern_mismatch(); return; }
+    if push_refinement(frame_get(frame, 6u), frame_get(frame, 7u)) {
+      pop_work_frame();
+    }
+    return;
+  }
+
+  let left = frame_get(frame, 5u);
+  let right = state.returned_type;
+  if left == right { pop_work_frame(); return; }
+  let left_kind = type_get(left, 0u);
+  let right_kind = type_get(right, 0u);
+  if left_kind == TYPE_VARIABLE || right_kind == TYPE_VARIABLE ||
+    left_kind == TYPE_GENERIC || right_kind == TYPE_GENERIC ||
+    left_kind == TYPE_NAMED_GENERIC || right_kind == TYPE_NAMED_GENERIC {
+    pattern_mismatch();
+    return;
+  }
+  if left_kind == TYPE_RIGID || right_kind == TYPE_RIGID {
+    var source = left;
+    var refinement_target = right;
+    if left_kind == TYPE_RIGID && right_kind == TYPE_RIGID {
+      source = max(left, right);
+      refinement_target = min(left, right);
+      if push_refinement(source, refinement_target) { pop_work_frame(); }
+      return;
+    }
+    if right_kind == TYPE_RIGID {
+      source = right;
+      refinement_target = left;
+    }
+    if !start_occurs(source, refinement_target) { return; }
+    frame_set(frame, 6u, source);
+    frame_set(frame, 7u, refinement_target);
+    frame_set(frame, 1u, 3u);
+    return;
+  }
+  if left_kind != right_kind {
+    pattern_mismatch();
+    return;
+  }
+  if left_kind == TYPE_INTEGER || left_kind == TYPE_BOOLEAN || left_kind == TYPE_UNIT {
+    pop_work_frame();
+    return;
+  }
+
+  var left_first = NO_INDEX;
+  var right_first = NO_INDEX;
+  var left_second = NO_INDEX;
+  var right_second = NO_INDEX;
+  if left_kind == TYPE_TUPLE || left_kind == TYPE_FUNCTION {
+    left_first = type_get(left, 2u); right_first = type_get(right, 2u);
+    left_second = type_get(left, 3u); right_second = type_get(right, 3u);
+  } else if left_kind == TYPE_NAMED {
+    if type_get(left, 1u) != type_get(right, 1u) { pattern_mismatch(); return; }
+    left_first = type_get(left, 2u); right_first = type_get(right, 2u);
+  } else if left_kind == TYPE_LIST {
+    left_first = type_get(left, 1u); right_first = type_get(right, 1u);
+    left_second = type_get(left, 2u); right_second = type_get(right, 2u);
+  } else {
+    pattern_mismatch();
+    return;
+  }
+  if (left_first == NO_INDEX) != (right_first == NO_INDEX) ||
+    (left_second == NO_INDEX) != (right_second == NO_INDEX) {
+    pattern_mismatch();
+    return;
+  }
+  if left_first == NO_INDEX { pop_work_frame(); return; }
+  if left_second != NO_INDEX && !require_frame_slots(1u) { return; }
+  if left_second == NO_INDEX {
+    configure_pattern_match(frame, left_first, right_first);
+    return;
+  }
+  configure_pattern_match(frame, left_second, right_second);
+  let first = push_work_frame(FRAME_PATTERN_MATCH);
+  configure_pattern_match(first, left_first, right_first);
+}
+
+fn start_fully_zonked(type_index: u32) -> bool {
+  let frame = push_work_frame(FRAME_FULLY_ZONKED);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, type_index);
+  frame_set(frame, 1u, 0u);
+  return true;
+}
+
+fn configure_fully_zonked_visit(frame: u32, type_index: u32, epoch: u32) {
+  frame_set(frame, 0u, type_index);
+  frame_set(frame, 3u, epoch);
+  frame_set(frame, 10u, FRAME_FULLY_ZONKED_VISIT);
+}
+
+fn fully_zonked_transition(frame: u32) {
+  if frame_get(frame, 1u) == 0u {
+    if !acquire_epoch(frame, 3u, 1u) { return; }
+  }
+  state.work_result = 0u;
+  configure_fully_zonked_visit(frame, frame_get(frame, 0u), frame_get(frame, 3u));
+}
+
+fn fully_zonked_visit_transition(frame: u32) {
+  if state.work_result != 0u { pop_work_frame(); return; }
+  let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 1u)); return;
+  }
+  if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 3u)); return;
+  }
+  let epoch = frame_get(frame, 3u);
+  if type_get(current, 4u) == epoch { pop_work_frame(); return; }
+  let kind = type_get(current, 0u);
+  if kind == TYPE_VARIABLE || kind == TYPE_GENERIC || kind == TYPE_NAMED_GENERIC {
+    state.work_result = 1u;
+    state.returned_type = current;
+    pop_work_frame();
+    return;
+  }
+  var first = NO_INDEX;
+  var second = NO_INDEX;
+  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+    first = type_get(current, 2u); second = type_get(current, 3u);
+  } else if kind == TYPE_NAMED {
+    first = type_get(current, 2u);
+  } else if kind == TYPE_LIST {
+    first = type_get(current, 1u); second = type_get(current, 2u);
+  }
+  if first != NO_INDEX && second != NO_INDEX && !require_frame_slots(1u) { return; }
+  type_set(current, 4u, epoch);
+  if first == NO_INDEX { pop_work_frame(); return; }
+  configure_fully_zonked_visit(frame, first, epoch);
+  if second != NO_INDEX {
+    let sibling = push_work_frame(FRAME_FULLY_ZONKED_VISIT);
+    configure_fully_zonked_visit(sibling, second, epoch);
   }
 }
 
@@ -1317,6 +1628,13 @@ fn work_transition() {
   else if kind == FRAME_EPOCH_CLEAR { epoch_clear_transition(frame); }
   else if kind == FRAME_FIND_TYPE { find_type_transition(frame); }
   else if kind == FRAME_SCHEMA_PARAMETER_CHECK { schema_parameter_check_transition(frame); }
+  else if kind == FRAME_FIELD_PARAMETER_RECOVERABILITY {
+    field_parameter_recoverability_transition(frame);
+  }
+  else if kind == FRAME_PATTERN_MATCH { pattern_match_transition(frame); }
+  else if kind == FRAME_REFINEMENT_ROLLBACK { refinement_rollback_transition(frame); }
+  else if kind == FRAME_FULLY_ZONKED { fully_zonked_transition(frame); }
+  else if kind == FRAME_FULLY_ZONKED_VISIT { fully_zonked_visit_transition(frame); }
   else { invalid_input(ERROR_INVALID_SURFACE, kind); }
 }
 
@@ -1503,11 +1821,12 @@ fn temporary_field_base() -> u32 {
   return temporary_base() + schema_field_offset();
 }
 
-fn start_constructor(constructor_index: u32, curry_fields: u32) -> bool {
+fn start_constructor(constructor_index: u32, curry_fields: u32, pattern_mode: u32) -> bool {
   let frame = push_work_frame(FRAME_CONSTRUCTOR);
   if frame == NO_INDEX { return false; }
   frame_set(frame, 0u, constructor_index); frame_set(frame, 1u, 0u);
   frame_set(frame, 2u, curry_fields);
+  frame_set(frame, 6u, pattern_mode);
   return true;
 }
 
@@ -1536,7 +1855,12 @@ fn constructor_transition(frame: u32) {
     let first_parameter = type_metadata(constructor.type_index, 0u);
     let address = temporary_base() + cursor * 2u;
     workspace[address] = schema_words[state.type_parameter_base + first_parameter + cursor];
-    workspace[address + 1u] = fresh_variable();
+    if frame_get(frame, 6u) == 0u {
+      workspace[address + 1u] = fresh_variable();
+    } else {
+      workspace[address + 1u] = allocate_type(
+        TYPE_RIGID, workspace[address], 0u, NO_INDEX);
+    }
     frame_set(frame, 3u, cursor + 1u);
     return;
   }
@@ -1556,36 +1880,12 @@ fn constructor_transition(frame: u32) {
     return;
   }
   if stage == 4u {
-    let result_kind = type_metadata(constructor.type_index, 4u);
-    if result_kind == DECLARED_RESULT_UNIT {
-      frame_set(frame, 5u, 2u); frame_set(frame, 1u, 7u); return;
-    }
-    if result_kind == DECLARED_RESULT_TUPLE {
-      if !require_type_slots(1u) { return; }
-      frame_set(frame, 5u, allocate_type(
-        TYPE_TUPLE, NO_INDEX, workspace[temporary_base() + 1u],
-        workspace[temporary_base() + 3u]));
-      frame_set(frame, 1u, 7u); return;
-    }
-    frame_set(frame, 3u, map_count); frame_set(frame, 5u, NO_INDEX);
-    frame_set(frame, 1u, 5u); return;
-  }
-  if stage == 5u {
-    let cursor = frame_get(frame, 3u);
-    if cursor == 0u { frame_set(frame, 1u, 6u); return; }
-    if !require_type_slots(1u) { return; }
-    let next_cursor = cursor - 1u;
-    frame_set(frame, 5u, allocate_type(
-      TYPE_LIST, workspace[temporary_base() + next_cursor * 2u + 1u],
-      frame_get(frame, 5u), NO_INDEX));
-    frame_set(frame, 3u, next_cursor);
+    let result_root = constructor_metadata(constructor_index, 2u);
+    if start_schema_convert(result_root, map_count, 0u) { frame_set(frame, 1u, 5u); }
     return;
   }
-  if stage == 6u {
-    if !require_type_slots(1u) { return; }
-    frame_set(frame, 5u, allocate_type(
-      TYPE_NAMED, constructor.type_index, frame_get(frame, 5u), NO_INDEX));
-    frame_set(frame, 1u, 7u);
+  if stage == 5u {
+    frame_set(frame, 5u, state.returned_type); frame_set(frame, 1u, 6u);
     return;
   }
   let field_cursor = frame_get(frame, 4u);
@@ -1760,6 +2060,63 @@ fn schema_parameter_check_transition(frame: u32) {
   frame_set(child_frame, 2u, 0u); frame_set(child_frame, 3u, 0u);
 }
 
+fn start_field_parameter_recoverability(
+  field_root: u32,
+  result_root: u32,
+  constructor_index: u32,
+) -> bool {
+  let frame = push_work_frame(FRAME_FIELD_PARAMETER_RECOVERABILITY);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, field_root); frame_set(frame, 1u, result_root);
+  frame_set(frame, 2u, constructor_index); frame_set(frame, 3u, 0u);
+  frame_set(frame, 4u, NO_INDEX);
+  return true;
+}
+
+fn field_parameter_recoverability_transition(frame: u32) {
+  let field_schema = schema_node(frame_get(frame, 0u));
+  let stage = frame_get(frame, 3u);
+  if stage == 0u {
+    if field_schema.tag == SCHEMA_PARAMETER {
+      frame_set(frame, 3u, 1u);
+      frame_set(frame, 4u, schema_node(frame_get(frame, 1u)).first_child);
+      return;
+    }
+    frame_set(frame, 3u, 2u); frame_set(frame, 4u, field_schema.first_child);
+    return;
+  }
+  if stage == 1u {
+    let direct_argument = frame_get(frame, 4u);
+    if direct_argument == NO_INDEX {
+      report_metadata_diagnostic(
+        METADATA_HIDDEN_CONSTRUCTOR_FIELD_PARAMETER,
+        field_schema.start_byte,
+        field_schema.end_byte,
+        frame_get(frame, 2u),
+        field_schema.payload,
+        frame_get(frame, 1u),
+      );
+      return;
+    }
+    let argument_schema = schema_node(direct_argument);
+    if argument_schema.tag == SCHEMA_PARAMETER &&
+      argument_schema.payload == field_schema.payload {
+      pop_work_frame();
+      return;
+    }
+    frame_set(frame, 4u, argument_schema.next_sibling);
+    return;
+  }
+  let child = frame_get(frame, 4u);
+  if child == NO_INDEX { pop_work_frame(); return; }
+  if !require_frame_slots(1u) { return; }
+  frame_set(frame, 4u, schema_node(child).next_sibling);
+  let child_frame = push_work_frame(FRAME_FIELD_PARAMETER_RECOVERABILITY);
+  frame_set(child_frame, 0u, child); frame_set(child_frame, 1u, frame_get(frame, 1u));
+  frame_set(child_frame, 2u, frame_get(frame, 2u)); frame_set(child_frame, 3u, 0u);
+  frame_set(child_frame, 4u, NO_INDEX);
+}
+
 fn complete_expression(type_index: u32) {
   state.frame_top -= 1u;
   state.returned_type = type_index;
@@ -1787,7 +2144,7 @@ fn expression_transition() {
       return;
     }
     if node.tag == TAG_CONSTRUCTOR {
-      if start_constructor(node.payload, 1u) { frame_set(frame, 1u, 92u); }
+      if start_constructor(node.payload, 1u, 0u) { frame_set(frame, 1u, 92u); }
       return;
     }
     if node.tag == TAG_LET {
@@ -1810,16 +2167,29 @@ fn expression_transition() {
       if state.status != STATUS_PENDING { return; }
       frame_set(frame, 3u, placeholder);
       frame_set(frame, 5u, recursive_environment);
+      frame_set(frame, 4u, state.indexed_elimination_allowed);
+      frame_set(frame, 6u, state.indexed_elimination_restriction_kind);
+      frame_set(frame, 7u, state.indexed_elimination_restriction_symbol);
+      state.indexed_elimination_allowed = 0u;
+      state.indexed_elimination_restriction_kind = 2u;
+      state.indexed_elimination_restriction_symbol = node.payload;
       push_expression(node.child0, recursive_environment);
       return;
     }
     if node.tag == TAG_IF {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 20u);
-      push_expression(node.child0, environment);
+      if push_expression(node.child0, environment) {
+        frame_set(state.frame_top - 1u, 11u, 1u);
+      }
       return;
     }
     if node.tag == TAG_LAMBDA {
+      let expected = frame_get(frame, 11u);
+      if expected != NO_INDEX {
+        if start_prune(expected) { frame_set(frame, 1u, 31u); }
+        return;
+      }
       if !require_type_slots(1u) || !require_environment_slots(1u) ||
         !require_frame_slots(1u) { return; }
       let parameter = fresh_variable();
@@ -1840,13 +2210,17 @@ fn expression_transition() {
     if node.tag == TAG_UNARY {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 50u);
-      push_expression(node.child0, environment);
+      if push_expression(node.child0, environment) {
+        frame_set(state.frame_top - 1u, 11u, 0u);
+      }
       return;
     }
     if node.tag == TAG_BINARY {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 60u);
-      push_expression(node.child0, environment);
+      if push_expression(node.child0, environment) {
+        frame_set(state.frame_top - 1u, 11u, 0u);
+      }
       return;
     }
     if node.tag == TAG_CASE {
@@ -1882,12 +2256,17 @@ fn expression_transition() {
     let body_environment = allocate_environment(state.returned_type, environment);
     if state.status != STATUS_PENDING { return; }
     frame_set(frame, 1u, 2u);
-    push_expression(node.child1, body_environment);
+    if push_expression(node.child1, body_environment) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+    }
     return;
   }
   if stage == 2u { complete_expression(state.returned_type); return; }
 
   if stage == 10u {
+    state.indexed_elimination_allowed = frame_get(frame, 4u);
+    state.indexed_elimination_restriction_kind = frame_get(frame, 6u);
+    state.indexed_elimination_restriction_symbol = frame_get(frame, 7u);
     if start_unify(frame_get(frame, 3u), state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 12u);
     }
@@ -1901,7 +2280,9 @@ fn expression_transition() {
   if stage == 13u {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 11u);
-    push_expression(node.child1, frame_get(frame, 5u));
+    if push_expression(node.child1, frame_get(frame, 5u)) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+    }
     return;
   }
   if stage == 11u { complete_expression(state.returned_type); return; }
@@ -1915,14 +2296,18 @@ fn expression_transition() {
   if stage == 23u {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 21u);
-    push_expression(node.child1, environment);
+    if push_expression(node.child1, environment) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+    }
     return;
   }
   if stage == 21u {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 3u, state.returned_type);
     frame_set(frame, 1u, 22u);
-    push_expression(node.child2, environment);
+    if push_expression(node.child2, environment) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+    }
     return;
   }
   if stage == 22u {
@@ -1937,6 +2322,29 @@ fn expression_transition() {
     if !require_type_slots(1u) { return; }
     let function_type = allocate_type(TYPE_FUNCTION, NO_INDEX, frame_get(frame, 3u), state.returned_type);
     if state.status == STATUS_PENDING { complete_expression(function_type); }
+    return;
+  }
+  if stage == 31u {
+    let expected = state.returned_type;
+    let expected_is_function = type_get(expected, 0u) == TYPE_FUNCTION;
+    let required_types = select(1u, 0u, expected_is_function);
+    if !require_type_slots(required_types) || !require_environment_slots(1u) ||
+      !require_frame_slots(1u) { return; }
+    var parameter = NO_INDEX;
+    var expected_body = NO_INDEX;
+    if expected_is_function {
+      parameter = type_get(expected, 2u);
+      expected_body = type_get(expected, 3u);
+    } else {
+      parameter = fresh_variable();
+      if state.status != STATUS_PENDING { return; }
+    }
+    let body_environment = allocate_environment(parameter, environment);
+    if state.status != STATUS_PENDING { return; }
+    if !push_expression(node.child0, body_environment) { return; }
+    frame_set(frame, 3u, parameter);
+    frame_set(frame, 1u, 30u);
+    frame_set(state.frame_top - 1u, 11u, expected_body);
     return;
   }
 
@@ -1980,7 +2388,9 @@ fn expression_transition() {
   if stage == 62u {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 61u);
-    push_expression(node.child1, environment);
+    if push_expression(node.child1, environment) {
+      frame_set(state.frame_top - 1u, 11u, 0u);
+    }
     return;
   }
   if stage == 61u {
@@ -1995,12 +2405,127 @@ fn expression_transition() {
   }
 
   if stage == 70u {
-    if !require_type_slots(1u) { return; }
     frame_set(frame, 3u, state.returned_type);
-    frame_set(frame, 4u, fresh_variable());
     frame_set(frame, 5u, node.child1);
-    frame_set(frame, 6u, NO_INDEX);
-    frame_set(frame, 1u, 71u);
+    if start_prune(state.returned_type) { frame_set(frame, 1u, 79u); }
+    return;
+  }
+  if stage == 79u {
+    if type_get(state.returned_type, 0u) == TYPE_NAMED {
+      frame_set(frame, 6u, type_get(state.returned_type, 1u));
+      frame_set(frame, 7u, 0u);
+      frame_set(frame, 1u, 80u);
+    } else {
+      frame_set(frame, 1u, 81u);
+    }
+    return;
+  }
+  if stage == 80u {
+    let type_index = frame_get(frame, 6u);
+    let offset = frame_get(frame, 7u);
+    if offset >= type_metadata(type_index, 3u) {
+      frame_set(frame, 1u, 81u);
+      return;
+    }
+    let constructor_index = type_metadata(type_index, 2u) + offset;
+    if constructor_result_is_explicit(constructor_index) {
+      frame_set(frame, 1u, 83u);
+      return;
+    }
+    frame_set(frame, 7u, offset + 1u);
+    return;
+  }
+  if stage == 81u {
+    let arm_index = frame_get(frame, 5u);
+    if arm_index == NO_INDEX {
+      if !require_type_slots(1u) { return; }
+      frame_set(frame, 4u, fresh_variable());
+      frame_set(frame, 5u, node.child1);
+      frame_set(frame, 6u, NO_INDEX);
+      frame_set(frame, 8u, node.child1);
+      frame_set(frame, 1u, select(71u, 78u, node.child1 == NO_INDEX));
+      return;
+    }
+    let constructor_index = core_nodes[arm_index].payload;
+    frame_set(frame, 5u, core_nodes[arm_index].child1);
+    frame_set(frame, 6u, constructors[constructor_index].type_index);
+    frame_set(frame, 7u, 0u);
+    frame_set(frame, 1u, 80u);
+    return;
+  }
+  if stage == 83u {
+    if state.indexed_elimination_allowed == 0u {
+      state.error_context = state.indexed_elimination_restriction_kind;
+      report_diagnostic_with_operands(
+        ERROR_NON_CONCRETE_MAIN, node.start_byte, node.end_byte,
+        state.indexed_elimination_restriction_symbol, NO_INDEX, NO_INDEX);
+      return;
+    }
+    if frame_get(frame, 11u) == NO_INDEX {
+      report_metadata_diagnostic(
+        METADATA_INDEXED_EXPECTED_TYPE_MISSING, node.start_byte, node.end_byte,
+        algebraic_types[frame_get(frame, 6u)].symbol, NO_INDEX, NO_INDEX);
+      return;
+    }
+    if start_fully_zonked(frame_get(frame, 11u)) { frame_set(frame, 1u, 84u); }
+    return;
+  }
+  if stage == 84u {
+    if state.work_result != 0u {
+      report_metadata_diagnostic(
+        METADATA_INDEXED_EXPECTED_TYPE_UNRESOLVED, node.start_byte, node.end_byte,
+        algebraic_types[frame_get(frame, 6u)].symbol,
+        frame_get(frame, 11u), state.returned_type);
+      return;
+    }
+    if start_fully_zonked(frame_get(frame, 3u)) { frame_set(frame, 1u, 85u); }
+    return;
+  }
+  if stage == 85u {
+    if state.work_result != 0u {
+      report_metadata_diagnostic(
+        METADATA_INDEXED_SCRUTINEE_UNRESOLVED, node.start_byte, node.end_byte,
+        algebraic_types[frame_get(frame, 6u)].symbol,
+        frame_get(frame, 3u), state.returned_type);
+      return;
+    }
+    if start_prune(frame_get(frame, 3u)) { frame_set(frame, 1u, 86u); }
+    return;
+  }
+  if stage == 86u {
+    let scrutinee_type = state.returned_type;
+    if type_get(scrutinee_type, 0u) != TYPE_NAMED ||
+      type_get(scrutinee_type, 1u) != frame_get(frame, 6u) {
+      report_metadata_diagnostic(
+        METADATA_INDEXED_SCRUTINEE_TYPE_MISMATCH, node.start_byte, node.end_byte,
+        algebraic_types[frame_get(frame, 6u)].symbol, scrutinee_type, NO_INDEX);
+      return;
+    }
+    frame_set(frame, 3u, scrutinee_type);
+    frame_set(frame, 5u, node.child1);
+    frame_set(frame, 7u, 0u);
+    frame_set(frame, 1u, 100u);
+    return;
+  }
+
+  if stage == 78u {
+    let scrutinee_type = state.returned_type;
+    if type_get(scrutinee_type, 0u) == TYPE_NAMED {
+      let type_index = type_get(scrutinee_type, 1u);
+      let constructor_count = type_metadata(type_index, 3u);
+      if constructor_count == 0u {
+        complete_expression(frame_get(frame, 4u));
+        return;
+      }
+      report_diagnostic_with_operands(
+        ERROR_NON_EXHAUSTIVE_CASE, node.start_byte, node.end_byte,
+        constructors[algebraic_types[type_index].first_constructor].symbol,
+        NO_INDEX, NO_INDEX);
+      return;
+    }
+    report_metadata_diagnostic(
+      METADATA_INVALID_EMPTY_CASE_SCRUTINEE, node.start_byte, node.end_byte,
+      NO_INDEX, scrutinee_type, NO_INDEX);
     return;
   }
   if stage == 71u {
@@ -2017,14 +2542,13 @@ fn expression_transition() {
       return;
     }
     let constructor_index = core_nodes[arm_index].payload;
-    if !start_constructor(constructor_index, 0u) { return; }
+    if !start_constructor(constructor_index, 0u, 0u) { return; }
     frame_set(frame, 7u, constructor_index);
     frame_set(frame, 1u, 75u);
     return;
   }
   if stage == 75u {
     let arm_index = frame_get(frame, 5u);
-    let constructor_index = frame_get(frame, 7u);
     if !start_unify(frame_get(frame, 3u), state.returned_type,
       core_nodes[arm_index].start_byte, core_nodes[arm_index].end_byte) { return; }
     frame_set(frame, 1u, 73u);
@@ -2070,6 +2594,129 @@ fn expression_transition() {
     frame_set(frame, 1u, 71u);
     return;
   }
+
+  if stage == 100u {
+    let arm_index = frame_get(frame, 5u);
+    if arm_index == NO_INDEX {
+      frame_set(frame, 7u, 0u);
+      frame_set(frame, 1u, 110u);
+      return;
+    }
+    let constructor_index = core_nodes[arm_index].payload;
+    let previous_cutoff = state.untouchable_type_cutoff;
+    let arm_cutoff = state.type_top;
+    if !start_constructor(constructor_index, 0u, 1u) { return; }
+    frame_set(frame, 4u, previous_cutoff);
+    frame_set(frame, 9u, state.refinement_top);
+    state.untouchable_type_cutoff = arm_cutoff;
+    frame_set(frame, 7u, constructor_index);
+    frame_set(frame, 1u, 101u);
+    return;
+  }
+  if stage == 101u {
+    frame_set(frame, 8u, state.returned_type);
+    if start_pattern_match(state.returned_type, frame_get(frame, 3u)) {
+      frame_set(frame, 1u, 102u);
+    }
+    return;
+  }
+  if stage == 102u {
+    if state.work_result != 0u {
+      if start_refinement_rollback(frame_get(frame, 9u)) { frame_set(frame, 1u, 108u); }
+      return;
+    }
+    if !start_case_bind(
+      frame_get(frame, 5u), frame_get(frame, 7u), environment) { return; }
+    frame_set(frame, 1u, 103u);
+    return;
+  }
+  if stage == 103u {
+    if !require_frame_slots(1u) { return; }
+    let arm_index = frame_get(frame, 5u);
+    frame_set(frame, 8u, core_nodes[arm_index].child1);
+    frame_set(frame, 1u, 104u);
+    if push_expression(state.current_arm, state.returned_type) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+    }
+    return;
+  }
+  if stage == 104u {
+    let arm = core_nodes[frame_get(frame, 5u)];
+    if start_unify(frame_get(frame, 11u), state.returned_type, arm.start_byte, arm.end_byte) {
+      frame_set(frame, 1u, 105u);
+    }
+    return;
+  }
+  if stage == 105u {
+    if start_refinement_rollback(frame_get(frame, 9u)) { frame_set(frame, 1u, 106u); }
+    return;
+  }
+  if stage == 106u {
+    state.untouchable_type_cutoff = frame_get(frame, 4u);
+    frame_set(frame, 5u, frame_get(frame, 8u));
+    frame_set(frame, 1u, 100u);
+    return;
+  }
+  if stage == 108u {
+    state.untouchable_type_cutoff = frame_get(frame, 4u);
+    let arm = core_nodes[frame_get(frame, 5u)];
+    state.error_context = TYPE_MISMATCH_INACCESSIBLE_CONSTRUCTOR;
+    report_diagnostic_with_operands(
+      ERROR_TYPE_MISMATCH, arm.start_byte, arm.end_byte,
+      frame_get(frame, 7u), frame_get(frame, 8u), frame_get(frame, 3u));
+    return;
+  }
+
+  if stage == 110u {
+    let offset = frame_get(frame, 7u);
+    let type_index = frame_get(frame, 6u);
+    if offset >= type_metadata(type_index, 3u) {
+      complete_expression(frame_get(frame, 11u));
+      return;
+    }
+    let constructor_index = type_metadata(type_index, 2u) + offset;
+    frame_set(frame, 8u, constructor_index);
+    frame_set(frame, 9u, state.refinement_top);
+    if start_constructor(constructor_index, 0u, 1u) { frame_set(frame, 1u, 111u); }
+    return;
+  }
+  if stage == 111u {
+    if start_pattern_match(state.returned_type, frame_get(frame, 3u)) {
+      frame_set(frame, 1u, 112u);
+    }
+    return;
+  }
+  if stage == 112u {
+    frame_set(frame, 5u, state.work_result);
+    if start_refinement_rollback(frame_get(frame, 9u)) { frame_set(frame, 1u, 113u); }
+    return;
+  }
+  if stage == 113u {
+    if frame_get(frame, 5u) != 0u {
+      frame_set(frame, 7u, frame_get(frame, 7u) + 1u);
+      frame_set(frame, 1u, 110u);
+      return;
+    }
+    frame_set(frame, 5u, node.child1);
+    frame_set(frame, 1u, 114u);
+    return;
+  }
+  if stage == 114u {
+    let arm_index = frame_get(frame, 5u);
+    if arm_index == NO_INDEX {
+      report_diagnostic_with_operands(
+        ERROR_NON_EXHAUSTIVE_CASE, node.start_byte, node.end_byte,
+        constructors[frame_get(frame, 8u)].symbol, NO_INDEX, NO_INDEX);
+      return;
+    }
+    if core_nodes[arm_index].payload == frame_get(frame, 8u) {
+      frame_set(frame, 7u, frame_get(frame, 7u) + 1u);
+      frame_set(frame, 1u, 110u);
+      return;
+    }
+    frame_set(frame, 5u, core_nodes[arm_index].child1);
+    return;
+  }
 }
 
 fn required_child_is_valid(parent_index: u32, child_index: u32) -> bool {
@@ -2108,7 +2755,7 @@ fn node_shape_is_valid(node_index: u32) -> bool {
   }
   if node.tag == TAG_CASE {
     return required_child_is_valid(node_index, node.child0) &&
-      required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
+      optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
   }
   if node.tag == TAG_CASE_ARM {
     return required_child_is_valid(node_index, node.child0) &&
@@ -2151,23 +2798,33 @@ fn validation_transition() {
       !range_is_valid(state.constructor_field_base, state.constructor_field_count, schema_length) ||
       !range_is_valid(state.constructor_field_offsets_base,
         state.constructor_count + 1u, schema_length) ||
-      !range_is_valid(state.declared_result_kind_base, state.type_count, schema_length) ||
+      !range_is_valid(state.constructor_result_base, state.constructor_count, schema_length) ||
       !workspace_region_is_valid(state.type_base, state.type_capacity, TYPE_RECORD_WORDS) ||
       !workspace_region_is_valid(state.environment_base, state.environment_capacity,
         ENVIRONMENT_WORDS) ||
       !workspace_region_is_valid(state.frame_base, state.frame_capacity, FRAME_WORDS) ||
+      !workspace_region_is_valid(
+        state.refinement_base, state.refinement_capacity, REFINEMENT_WORDS) ||
       !range_is_valid(state.scratch_base, state.scratch_capacity, arrayLength(&workspace)) ||
       regions_overlap(state.type_base, state.type_capacity * TYPE_RECORD_WORDS,
         state.environment_base, state.environment_capacity * ENVIRONMENT_WORDS) ||
       regions_overlap(state.type_base, state.type_capacity * TYPE_RECORD_WORDS,
         state.frame_base, state.frame_capacity * FRAME_WORDS) ||
       regions_overlap(state.type_base, state.type_capacity * TYPE_RECORD_WORDS,
+        state.refinement_base, state.refinement_capacity * REFINEMENT_WORDS) ||
+      regions_overlap(state.type_base, state.type_capacity * TYPE_RECORD_WORDS,
         state.scratch_base, state.scratch_capacity) ||
       regions_overlap(state.environment_base, state.environment_capacity * ENVIRONMENT_WORDS,
         state.frame_base, state.frame_capacity * FRAME_WORDS) ||
       regions_overlap(state.environment_base, state.environment_capacity * ENVIRONMENT_WORDS,
+        state.refinement_base, state.refinement_capacity * REFINEMENT_WORDS) ||
+      regions_overlap(state.environment_base, state.environment_capacity * ENVIRONMENT_WORDS,
         state.scratch_base, state.scratch_capacity) ||
       regions_overlap(state.frame_base, state.frame_capacity * FRAME_WORDS,
+        state.refinement_base, state.refinement_capacity * REFINEMENT_WORDS) ||
+      regions_overlap(state.frame_base, state.frame_capacity * FRAME_WORDS,
+        state.scratch_base, state.scratch_capacity) ||
+      regions_overlap(state.refinement_base, state.refinement_capacity * REFINEMENT_WORDS,
         state.scratch_base, state.scratch_capacity) ||
       state.scratch_capacity < scratch_required ||
       state.output_capacity > arrayLength(&output_types) {
@@ -2223,22 +2880,14 @@ fn validation_transition() {
     let parameter_count = type_metadata(index, 1u);
     let first_constructor = type_metadata(index, 2u);
     let constructor_count = type_metadata(index, 3u);
-    let result_kind = type_metadata(index, 4u);
     if state.substage == 0u {
-      if result_kind == DECLARED_RESULT_TUPLE && parameter_count != 2u {
-        report_metadata_diagnostic(
-          METADATA_BUILT_IN_TUPLE_PARAMETER_COUNT, declared.start_byte, declared.end_byte,
-          declared.symbol, 2u, parameter_count);
-        return;
-      }
       if declared.start_byte > declared.end_byte ||
         first_parameter > state.type_parameter_count ||
         parameter_count > state.type_parameter_count - first_parameter ||
         first_constructor != declared.first_constructor ||
         constructor_count != declared.constructor_count ||
         first_constructor > state.constructor_count ||
-        constructor_count > state.constructor_count - first_constructor ||
-        result_kind < DECLARED_RESULT_NAMED || result_kind > DECLARED_RESULT_TUPLE {
+        constructor_count > state.constructor_count - first_constructor {
         report_metadata_diagnostic(
           METADATA_INVALID_TYPE_DECLARATION, declared.start_byte, declared.end_byte,
           index, constructor_count, parameter_count);
@@ -2288,6 +2937,7 @@ fn validation_transition() {
     let constructor = constructors[index];
     let first_field = constructor_metadata(index, 0u);
     let field_count = constructor_metadata(index, 1u);
+    let result_root = constructor_metadata(index, 2u);
     if state.substage == 0u {
       if field_count != constructor.arity {
         report_metadata_diagnostic(
@@ -2314,6 +2964,17 @@ fn validation_transition() {
           index, constructor.type_index, declared.symbol);
         return;
       }
+      if result_root >= state.schema_node_count {
+        report_metadata_diagnostic(
+          METADATA_INVALID_CONSTRUCTOR_RESULT,
+          constructor.start_byte,
+          constructor.end_byte,
+          index,
+          result_root,
+          state.schema_node_count,
+        );
+        return;
+      }
       state.cursor0 = 0u; state.substage = 1u;
       return;
     }
@@ -2337,12 +2998,19 @@ fn validation_transition() {
     }
     let schema = schema_node(index);
     if state.substage == 0u {
+      let synthetic_result_root = schema.start_byte == NO_INDEX && schema.end_byte == NO_INDEX;
+      if synthetic_result_root {
+        state.work_result = NO_INDEX; state.cursor0 = 0u; state.substage = 3u; return;
+      }
       if schema.start_byte > schema.end_byte {
         report_metadata_diagnostic(
-          METADATA_INVALID_SCHEMA_SHAPE, schema.start_byte, schema.end_byte,
+          METADATA_INVALID_SCHEMA_SHAPE,
+          validation_schema_start(schema), validation_schema_end(schema),
           index, schema.tag, 0u);
         return;
       }
+    }
+    if state.substage == 0u || state.substage == 4u {
       if schema.tag == SCHEMA_NAMED {
         if start_find_type(schema.payload) { state.substage = 1u; }
         return;
@@ -2353,17 +3021,32 @@ fn validation_transition() {
         state.work_aux = 0u;
       } else {
         report_metadata_diagnostic(
-          METADATA_INVALID_SCHEMA_SHAPE, schema.start_byte, schema.end_byte,
+          METADATA_INVALID_SCHEMA_SHAPE,
+          validation_schema_start(schema), validation_schema_end(schema),
           index, schema.tag, 0u);
         return;
       }
       state.cursor0 = schema.first_child; state.cursor1 = 0u; state.substage = 2u;
       return;
     }
+    if state.substage == 3u {
+      if state.cursor0 >= state.constructor_count {
+        report_metadata_diagnostic(
+          METADATA_INVALID_SCHEMA_SHAPE, schema.start_byte, schema.end_byte,
+          index, schema.tag, 0u);
+        return;
+      }
+      if constructor_metadata(state.cursor0, 2u) == index {
+        state.work_result = state.cursor0; state.substage = 4u; return;
+      }
+      state.cursor0 += 1u;
+      return;
+    }
     if state.substage == 1u {
       if state.returned_type == NO_INDEX {
         report_metadata_diagnostic(
-          METADATA_UNKNOWN_TYPE, schema.start_byte, schema.end_byte,
+          METADATA_UNKNOWN_TYPE,
+          validation_schema_start(schema), validation_schema_end(schema),
           schema.payload, NO_INDEX, NO_INDEX);
         return;
       }
@@ -2377,7 +3060,7 @@ fn validation_transition() {
           METADATA_INVALID_SCHEMA_SHAPE, METADATA_TYPE_ARGUMENT_COUNT_MISMATCH,
           schema.tag == SCHEMA_NAMED);
         report_metadata_diagnostic(
-          context, schema.start_byte, schema.end_byte,
+          context, validation_schema_start(schema), validation_schema_end(schema),
           select(index, schema.payload, schema.tag == SCHEMA_NAMED),
           state.work_aux, state.cursor1);
         return;
@@ -2388,14 +3071,16 @@ fn validation_transition() {
     let child = state.cursor0;
     if child >= state.schema_node_count || child <= index {
       report_metadata_diagnostic(
-        METADATA_INVALID_SCHEMA_SHAPE, schema.start_byte, schema.end_byte,
+        METADATA_INVALID_SCHEMA_SHAPE,
+        validation_schema_start(schema), validation_schema_end(schema),
         index, schema.tag, state.cursor1);
       return;
     }
     let next = schema_node(child).next_sibling;
     if next != NO_INDEX && (next >= state.schema_node_count || next <= child) {
       report_metadata_diagnostic(
-        METADATA_INVALID_SCHEMA_SHAPE, schema.start_byte, schema.end_byte,
+        METADATA_INVALID_SCHEMA_SHAPE,
+        validation_schema_start(schema), validation_schema_end(schema),
         index, schema.tag, state.cursor1);
       return;
     }
@@ -2409,6 +3094,7 @@ fn validation_transition() {
     let constructor = constructors[index];
     let first_field = constructor_metadata(index, 0u);
     let field_count = constructor_metadata(index, 1u);
+    let result_root = constructor_metadata(index, 2u);
     if state.substage == 0u {
       state.cursor0 = 0u; state.substage = 1u; return;
     }
@@ -2422,8 +3108,55 @@ fn validation_transition() {
       }
       state.cursor0 += 1u; state.substage = 1u; return;
     }
+    if state.substage == 3u {
+      if state.work_result != 0u {
+        let schema = schema_node(state.returned_type);
+        report_metadata_diagnostic(
+          METADATA_UNDECLARED_TYPE_PARAMETER, schema.start_byte, schema.end_byte,
+          schema.payload, constructor.type_index, constructor.symbol);
+        return;
+      }
+      let result_schema = schema_node(result_root);
+      let declared = algebraic_types[constructor.type_index];
+      var result_head_is_valid = result_schema.tag == SCHEMA_NAMED &&
+        result_schema.payload == declared.symbol;
+      if constructor.type_index + 2u == state.type_count {
+        result_head_is_valid = result_schema.tag == SCHEMA_UNIT;
+      } else if constructor.type_index + 1u == state.type_count {
+        result_head_is_valid = result_schema.tag == SCHEMA_TUPLE;
+      }
+      if !result_head_is_valid {
+        report_metadata_diagnostic(
+          METADATA_INVALID_CONSTRUCTOR_RESULT,
+          result_schema.start_byte,
+          result_schema.end_byte,
+          index,
+          result_root,
+          declared.symbol,
+        );
+        return;
+      }
+      state.cursor0 = 0u; state.substage = 4u;
+      return;
+    }
+    if state.substage == 5u {
+      state.cursor0 += 1u; state.substage = 4u; return;
+    }
+    if state.substage == 4u {
+      if state.cursor0 >= field_count {
+        state.cursor += 1u; state.substage = 0u; return;
+      }
+      let field_root = schema_words[state.constructor_field_base + first_field + state.cursor0];
+      if start_field_parameter_recoverability(field_root, result_root, index) {
+        state.substage = 5u;
+      }
+      return;
+    }
     if state.cursor0 >= field_count {
-      state.cursor += 1u; state.substage = 0u; return;
+      if start_schema_parameter_check(result_root, constructor.type_index) {
+        state.substage = 3u;
+      }
+      return;
     }
     let root = schema_words[state.constructor_field_base + first_field + state.cursor0];
     if start_schema_parameter_check(root, constructor.type_index) {
@@ -2512,6 +3245,11 @@ fn tarjan_transition() {
     state.tarjan_stage = 0u;
     state.component_stage = 0u;
     state.component_cursor = 0u;
+    state.component_recursive = select(
+      0u,
+      1u,
+      state.component_count > 1u || scratch_get(0u, member) == 0u,
+    );
     state.expression_definition = NO_INDEX;
     state.current_level = 1u;
     state.phase = PHASE_COMPONENT;
@@ -2538,6 +3276,7 @@ fn tarjan_transition() {
     let node = core_nodes[node_index];
     if node.tag != TAG_GLOBAL { return; }
     let dependency = node.payload;
+    if dependency == current { scratch_set(0u, current, 0u); }
     if scratch_get(1u, dependency) == NO_INDEX {
       enter_tarjan_definition(dependency);
       return;
@@ -2614,7 +3353,17 @@ fn component_transition() {
       state.frame_top = 0u;
       state.returned_type = NO_INDEX;
       state.expression_definition = definition_index;
-      push_expression(definitions[definition_index].root_node, NO_INDEX);
+      let annotation = schema_words[state.definition_annotation_base + definition_index];
+      state.indexed_elimination_allowed = select(
+        0u, 1u, state.component_recursive == 0u || annotation != NO_INDEX);
+      state.indexed_elimination_restriction_kind = select(
+        1u, 0u, state.indexed_elimination_allowed != 0u);
+      state.indexed_elimination_restriction_symbol = definitions[definition_index].symbol;
+      if push_expression(definitions[definition_index].root_node, NO_INDEX) {
+        if annotation != NO_INDEX {
+          frame_set(state.frame_top - 1u, 11u, scratch_get(0u, definition_index));
+        }
+      }
       return;
     }
     if state.frame_top > 0u {
@@ -2851,6 +3600,12 @@ fn initialize_inference() {
   state.tarjan_component_root = NO_INDEX;
   state.work_result = 0u;
   state.work_aux = NO_INDEX;
+  state.refinement_top = 0u;
+  state.untouchable_type_cutoff = NO_INDEX;
+  state.component_recursive = 0u;
+  state.indexed_elimination_allowed = 1u;
+  state.indexed_elimination_restriction_kind = 0u;
+  state.indexed_elimination_restriction_symbol = NO_INDEX;
 }
 
 @compute @workgroup_size(1)

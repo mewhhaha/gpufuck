@@ -114,12 +114,12 @@ export type AnyNamedTokenKind = NamedTokenKind extends never
 export type LiteralKind =
   | "data"
   | "="
-  | "|"
   | ";"
+  | "|"
+  | ":"
   | "("
   | ")"
   | ","
-  | ":"
   | "fn"
   | "let"
   | "const"
@@ -211,7 +211,10 @@ export type RuleName =
   | "module"
   | "declaration"
   | "data_declaration"
+  | "data_constructors"
+  | "data_constructor_tail"
   | "constructor_declaration"
+  | "constructor_result"
   | "constructor_fields"
   | "constructor_field_list"
   | "constructor_field_tail"
@@ -330,17 +333,36 @@ export interface DeclarationCursor extends RuleCursorBase<"declaration"> {
 }
 
 export interface DataDeclarationCursor extends RuleCursorBase<"data_declaration"> {
-  field(name: "constructors"): ReadonlyArray<ConstructorDeclarationCursor>;
+  field(name: "constructors"): DataConstructorsCursor | null;
   field(name: "name"): TokenCursor<"named", "IDENT">;
   field(name: "parameters"): ReadonlyArray<TokenCursor<"named", "IDENT">>;
   field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: "constructors"): ReadonlyArray<ConstructorDeclarationCursor>;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface DataConstructorsCursor extends RuleCursorBase<"data_constructors"> {
+  field(name: "head"): ConstructorDeclarationCursor;
+  field(name: "tail"): ReadonlyArray<DataConstructorTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface DataConstructorTailCursor extends RuleCursorBase<"data_constructor_tail"> {
+  field(name: "value"): ConstructorDeclarationCursor;
+  field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface ConstructorDeclarationCursor extends RuleCursorBase<"constructor_declaration"> {
   field(name: "fields"): ConstructorFieldsCursor | null;
   field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "result"): ConstructorResultCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstructorResultCursor extends RuleCursorBase<"constructor_result"> {
+  field(name: "type"): SourceTypeCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -785,7 +807,10 @@ export type AnyRuleCursor =
   | ModuleCursor
   | DeclarationCursor
   | DataDeclarationCursor
+  | DataConstructorsCursor
+  | DataConstructorTailCursor
   | ConstructorDeclarationCursor
+  | ConstructorResultCursor
   | ConstructorFieldsCursor
   | ConstructorFieldListCursor
   | ConstructorFieldTailCursor

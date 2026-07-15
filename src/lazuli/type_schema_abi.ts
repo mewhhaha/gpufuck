@@ -12,7 +12,7 @@ import {
   LazuliTypeWord,
 } from "./abi.ts";
 
-/** The schema buffer accompanies version 4 of the Lazuli surface ABI. */
+/** The schema buffer accompanies version 5 of the Lazuli surface ABI. */
 export const LAZULI_TYPE_SCHEMA_ABI_VERSION = LAZULI_ABI_VERSION;
 export const LAZULI_TYPE_SCHEMA_WORD_LENGTH = 6;
 export const LAZULI_TYPE_SCHEMA_BYTE_LENGTH = LAZULI_TYPE_SCHEMA_WORD_LENGTH *
@@ -47,8 +47,8 @@ export const LazuliTypeSchemaMetadataWord = {
   ConstructorFieldOffsetsLength: 11,
   ConstructorFieldRootsOffset: 12,
   ConstructorFieldRootsLength: 13,
-  DeclaredResultKindsOffset: 14,
-  DeclaredResultKindsLength: 15,
+  ConstructorResultRootsOffset: 14,
+  ConstructorResultRootsLength: 15,
 } as const;
 
 /**
@@ -67,17 +67,7 @@ export const LazuliTypeSchemaTag = {
 
 export type LazuliTypeSchemaTag = (typeof LazuliTypeSchemaTag)[keyof typeof LazuliTypeSchemaTag];
 
-/** The result representation produced when a constructor is fully applied. */
-export const LazuliDeclaredResultKind = {
-  Named: 1,
-  Unit: 2,
-  Tuple: 3,
-} as const;
-
-export type LazuliDeclaredResultKind =
-  (typeof LazuliDeclaredResultKind)[keyof typeof LazuliDeclaredResultKind];
-
-/** Numeric buffers ready to upload alongside an ABI-v4 Lazuli surface. */
+/** Numeric buffers ready to upload alongside an ABI-v5 Lazuli surface. */
 export interface FlattenedLazuliTypeSchemas {
   /** One GPU-uploadable buffer: a fixed header followed by the seven logical arrays below. */
   readonly metadataWords: Uint32Array;
@@ -95,8 +85,8 @@ export interface FlattenedLazuliTypeSchemas {
   readonly constructorFieldOffsets: Uint32Array;
   /** Field-schema roots in encoded-constructor and source-field order. */
   readonly constructorFieldRoots: Uint32Array;
-  /** One `LazuliDeclaredResultKind` for every encoded type. */
-  readonly declaredResultKinds: Uint32Array;
+  /** One canonical result-schema root for every encoded constructor. */
+  readonly constructorResultRoots: Uint32Array;
 }
 
 /** A portable representation of one inferred, concrete Lazuli type. */
@@ -114,7 +104,10 @@ export function flattenLazuliTypeSchemas(
   surface: EncodedLazuliSurface,
 ): FlattenedLazuliTypeSchemas {
   const counts = validateSurfaceShape(surface);
-  const identifiers = new TypeSchemaIdentifiers(surface.symbolNames);
+  const identifiers = new TypeSchemaIdentifiers(
+    surface.symbolNames,
+    surface.typeDeclarations.map((declaration) => declaration.name),
+  );
   const schemaEncoder = new TypeSchemaEncoder(identifiers);
 
   const definitionAnnotationRoots = new Uint32Array(counts.definitionCount);
@@ -124,7 +117,7 @@ export function flattenLazuliTypeSchemas(
   const typeParameterSymbols: number[] = [];
   const constructorFieldOffsets: number[] = [0];
   const constructorFieldRoots: number[] = [];
-  const declaredResultKinds: number[] = [];
+  const constructorResultRoots: number[] = [];
   let constructorIndex = 0;
 
   for (let typeIndex = 0; typeIndex < counts.typeCount; typeIndex++) {
@@ -145,8 +138,6 @@ export function flattenLazuliTypeSchemas(
       typeParameterSymbols.push(identifiers.parameterId(parameter, `type ${typeIndex} parameter`));
     }
     typeParameterOffsets.push(typeParameterSymbols.length);
-    declaredResultKinds.push(declaredResultKind(declaration.constructors));
-
     for (const constructor of declaration.constructors) {
       for (let fieldIndex = 0; fieldIndex < constructor.fields.length; fieldIndex++) {
         const field = constructor.fields[fieldIndex];
@@ -163,6 +154,14 @@ export function flattenLazuliTypeSchemas(
         ));
       }
       constructorFieldOffsets.push(constructorFieldRoots.length);
+      constructorResultRoots.push(schemaEncoder.encode(
+        constructor.result ?? synthesizedConstructorResult(declaration, constructor.name),
+        `constructor ${constructorIndex} result`,
+        {
+          implicitNamedParameters: false,
+          syntheticResultRoot: constructor.result === undefined,
+        },
+      ));
       constructorIndex++;
     }
   }
@@ -182,6 +181,7 @@ export function flattenLazuliTypeSchemas(
       definitionAnnotationRoots[definitionIndex] = schemaEncoder.encode(
         definitionType.annotation,
         `definition ${definitionIndex} annotation`,
+        { implicitNamedParameters: true, syntheticResultRoot: false },
       );
     }
   }
@@ -193,7 +193,7 @@ export function flattenLazuliTypeSchemas(
     Uint32Array.from(typeParameterSymbols),
     Uint32Array.from(constructorFieldOffsets),
     Uint32Array.from(constructorFieldRoots),
-    Uint32Array.from(declaredResultKinds),
+    Uint32Array.from(constructorResultRoots),
   ], identifiers.names);
 }
 
@@ -281,7 +281,9 @@ function decodeLazuliTypeRecords(
       const firstChild = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.FirstChild, index);
       const startByte = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.StartByte, index);
       const endByte = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.EndByte, index);
-      if (startByte > endByte) {
+      const isSyntheticResultRoot = depth === 0 &&
+        startByte === LAZULI_NO_INDEX && endByte === LAZULI_NO_INDEX;
+      if (startByte > endByte && !isSyntheticResultRoot) {
         throw new Error(
           `Lazuli type schema record ${index} starts at byte ${startByte} after it ends at byte ${endByte}.`,
         );
@@ -433,8 +435,15 @@ class TypeSchemaEncoder {
     this.#identifiers = identifiers;
   }
 
-  encode(type: LazuliTypeSchema | LazuliType, context: string): number {
-    return this.encodeAtDepth(type, context, 0, { startByte: 0, endByte: 0 });
+  encode(
+    type: LazuliTypeSchema | LazuliType,
+    context: string,
+    options: {
+      readonly implicitNamedParameters: boolean;
+      readonly syntheticResultRoot: boolean;
+    } = { implicitNamedParameters: false, syntheticResultRoot: false },
+  ): number {
+    return this.encodeAtDepth(type, context, 0, { startByte: 0, endByte: 0 }, options);
   }
 
   private encodeAtDepth(
@@ -442,6 +451,10 @@ class TypeSchemaEncoder {
     context: string,
     depth: number,
     inheritedSpan: { readonly startByte: number; readonly endByte: number },
+    options: {
+      readonly implicitNamedParameters: boolean;
+      readonly syntheticResultRoot: boolean;
+    },
   ): number {
     if (depth > LAZULI_MAXIMUM_PARSE_DEPTH) {
       throw new Error(
@@ -455,7 +468,10 @@ class TypeSchemaEncoder {
     if (index >= LAZULI_NO_INDEX) {
       throw new Error(`${context} exceeds the maximum schema-record index ${LAZULI_NO_INDEX - 1}.`);
     }
-    const span = typeSchemaSpan(type, context, inheritedSpan);
+    const declaredSpan = typeSchemaSpan(type, context, inheritedSpan);
+    const span = options.syntheticResultRoot && depth === 0
+      ? { startByte: LAZULI_NO_INDEX, endByte: LAZULI_NO_INDEX }
+      : declaredSpan;
 
     const write = (tag: LazuliTypeSchemaTag, symbol = LAZULI_NO_INDEX): number => {
       this.words.push(
@@ -471,7 +487,7 @@ class TypeSchemaEncoder {
     const attachChildren = (children: readonly (LazuliTypeSchema | LazuliType)[]): void => {
       let previous = LAZULI_NO_INDEX;
       for (const child of children) {
-        const childIndex = this.encodeAtDepth(child, context, depth + 1, span);
+        const childIndex = this.encodeAtDepth(child, context, depth + 1, declaredSpan, options);
         if (previous === LAZULI_NO_INDEX) {
           this.words[index * LAZULI_TYPE_SCHEMA_WORD_LENGTH + LazuliTypeSchemaWord.FirstChild] =
             childIndex;
@@ -510,9 +526,21 @@ class TypeSchemaEncoder {
             `${context} named type ${JSON.stringify(type.name)} has non-array arguments.`,
           );
         }
+        if (
+          options.implicitNamedParameters && type.arguments.length === 0 &&
+          !this.#identifiers.hasNamedType(type.name)
+        ) {
+          return write(
+            LazuliTypeSchemaTag.Parameter,
+            this.#identifiers.parameterId(type.name, `${context} implicit parameter`),
+          );
+        }
         write(
           LazuliTypeSchemaTag.Named,
-          this.#identifiers.namedTypeSymbol(type.name, `${context} named type`),
+          this.#identifiers.namedTypeSymbol(
+            type.name,
+            `${context} named type`,
+          ),
         );
         attachChildren(type.arguments);
         return index;
@@ -598,7 +626,7 @@ function validateTypeDeclaration(
   );
   if (firstConstructor !== expectedFirstConstructor) {
     throw new Error(
-      `Lazuli type ${typeIndex} starts at constructor ${firstConstructor}; ABI-v4 types must start at ${expectedFirstConstructor}.`,
+      `Lazuli type ${typeIndex} starts at constructor ${firstConstructor}; ABI-v5 types must start at ${expectedFirstConstructor}.`,
     );
   }
   if (
@@ -665,12 +693,14 @@ function validateTypeDeclaration(
 
 class TypeSchemaIdentifiers {
   readonly #surfaceSymbols = new Map<string, number>();
+  readonly #namedTypes: ReadonlySet<string>;
   readonly #parameterIds = new Map<string, number>();
   readonly #unknownTypeIds = new Map<string, number>();
   readonly names: string[];
   #nextParameterId: number;
 
-  constructor(symbolNames: readonly string[]) {
+  constructor(symbolNames: readonly string[], namedTypes: readonly string[] = []) {
+    this.#namedTypes = new Set(namedTypes);
     this.names = [...symbolNames];
     if (symbolNames.length >= LAZULI_NO_INDEX) {
       throw new Error(
@@ -703,6 +733,10 @@ class TypeSchemaIdentifiers {
     this.#unknownTypeIds.set(name, id);
     this.names[id] = name;
     return id;
+  }
+
+  hasNamedType(name: string): boolean {
+    return this.#namedTypes.has(name);
   }
 
   parameterId(name: string, context: string): number {
@@ -757,13 +791,24 @@ function schemaByteOffset(value: unknown, context: string): number {
   return value as number;
 }
 
-function declaredResultKind(
-  constructors: readonly { readonly name: string }[],
-): LazuliDeclaredResultKind {
-  const firstConstructor = constructors[0]?.name;
-  if (firstConstructor === "$Unit") return LazuliDeclaredResultKind.Unit;
-  if (firstConstructor === "$Tuple") return LazuliDeclaredResultKind.Tuple;
-  return LazuliDeclaredResultKind.Named;
+function synthesizedConstructorResult(
+  declaration: EncodedLazuliSurface["typeDeclarations"][number],
+  constructorName: string,
+): LazuliTypeSchema {
+  const parameters = declaration.parameters.map((name): LazuliTypeSchema => ({
+    kind: "parameter",
+    name,
+  }));
+  if (constructorName === "$Unit") return { kind: "unit" };
+  if (constructorName === "$Tuple") {
+    const first = parameters[0];
+    const second = parameters[1];
+    if (first === undefined || second === undefined || parameters.length !== 2) {
+      throw new Error("the built-in tuple constructor must declare exactly two parameters");
+    }
+    return { kind: "tuple", values: [first, second] };
+  }
+  return { kind: "named", name: declaration.name, arguments: parameters };
 }
 
 function packSchemaMetadata(
@@ -807,13 +852,13 @@ function packSchemaMetadata(
     typeParameterSymbols,
     constructorFieldOffsets,
     constructorFieldRoots,
-    declaredResultKinds,
+    constructorResultRoots,
   ] = views;
   if (
     schemaWords === undefined || definitionAnnotationRoots === undefined ||
     typeParameterOffsets === undefined || typeParameterSymbols === undefined ||
     constructorFieldOffsets === undefined || constructorFieldRoots === undefined ||
-    declaredResultKinds === undefined
+    constructorResultRoots === undefined
   ) {
     throw new Error("Lazuli type schema metadata packing omitted a logical array.");
   }
@@ -826,7 +871,7 @@ function packSchemaMetadata(
     typeParameterSymbols,
     constructorFieldOffsets,
     constructorFieldRoots,
-    declaredResultKinds,
+    constructorResultRoots,
   });
 }
 

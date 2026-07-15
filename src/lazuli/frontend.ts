@@ -63,6 +63,7 @@ interface ConstDefinition {
 interface ConstructorDeclaration {
   readonly name: Identifier;
   readonly fields: readonly ConstructorField[];
+  readonly result: SourceType | null;
   readonly span: Utf16Span;
 }
 
@@ -457,6 +458,7 @@ function builtinDataDeclarations(
       constructors: constructors.map((constructor) => ({
         name: { spelling: constructor.name, span },
         fields: constructor.fields,
+        result: null,
         span,
       })),
       span,
@@ -555,9 +557,11 @@ function parseDataDeclaration(node: AnyRuleCursor, symbols: SymbolInterner): Dat
   rejectReservedBuiltinDeclaration(name);
   symbols.intern(name.spelling);
   const parameters = tokenFieldArray(node, "parameters").map(identifier);
-  const constructors = ruleFieldArray(node, "constructors").map((constructor) =>
-    parseConstructorDeclaration(constructor, symbols)
-  );
+  const constructorsNode = optionalRuleField(node, "constructors");
+  const constructors = constructorsNode === null ? [] : [
+    requiredRuleField(constructorsNode, "head"),
+    ...ruleFieldArray(constructorsNode, "tail").map((tail) => requiredRuleField(tail, "value")),
+  ].map((constructor) => parseConstructorDeclaration(constructor, symbols));
   return { name, parameters, constructors, span: node.span };
 }
 
@@ -575,10 +579,16 @@ function parseConstructorDeclaration(
   const constructorFields = fields
     ? parseConstructorFieldList(requiredRuleField(fields, "values"))
     : [];
+  const result = optionalRuleField(node, "result");
   if (constructorFields.length > LAZULI_MAXIMUM_CONSTRUCTOR_ARITY) {
     throw new ConstructorArityLimit(node.span, name.spelling, constructorFields.length);
   }
-  return { name, fields: constructorFields, span: node.span };
+  return {
+    name,
+    fields: constructorFields,
+    result: result === null ? null : parseSourceType(requiredRuleField(result, "type")),
+    span: node.span,
+  };
 }
 
 function parseDefinition(node: AnyRuleCursor, symbols: SymbolInterner): Definition {
@@ -1630,6 +1640,9 @@ function encodeSurface(
             name: field.name.spelling,
             type: encodeSourceType(field.type, byteOffsets, parameterNames),
           })),
+          ...(constructor.result === null ? {} : {
+            result: encodeSourceType(constructor.result, byteOffsets, parameterNames),
+          }),
         })),
       };
     }),

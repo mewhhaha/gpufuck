@@ -296,7 +296,7 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     }
     case SURFACE_CASE: {
       return required_child_is_valid(node_index, node.child0) &&
-        required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
+        optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
     case SURFACE_CASE_ARM: {
       return case_arm_parent_is_valid(node_index, node.parent) &&

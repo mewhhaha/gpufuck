@@ -78,8 +78,8 @@ export class GpuDispatchScheduler {
       errorScopeOpen = true;
       const commands = this.#device.createCommandEncoder({
         label: dispatches.length === 1
-          ? "Lazuli inference dispatch"
-          : `Lazuli inference dispatch batch (${dispatches.length} lanes)`,
+          ? "Functional compiler dispatch"
+          : `Functional compiler dispatch batch (${dispatches.length} lanes)`,
       });
       for (const dispatch of dispatches) dispatch.encode(commands);
       this.#device.queue.submit([commands.finish()]);
