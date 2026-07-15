@@ -19,8 +19,8 @@ export async function main(
     !isLazuliCommand(command) || sourcePaths.length === 0 ||
     (command !== "run-batch" && sourcePaths.length !== 1)
   ) {
-    output.error("usage: lazuli_cli.ts <compile|run> <source.lz>");
-    output.error("       lazuli_cli.ts run-batch <first.lz> <second.lz> [...]");
+    output.error("usage: lazuli_cli.ts <compile|run> <source.laz>");
+    output.error("       lazuli_cli.ts run-batch <first.laz> <second.laz> [...]");
     return 2;
   }
 

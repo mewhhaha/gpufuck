@@ -47,7 +47,12 @@ function renderTreeSitterGrammar(grammar: GrammarDocument): string {
     );
   }
 
-  lines.push("  conflicts: $ => [", "    [$.named],", "  ],", "");
+  lines.push(
+    "  conflicts: $ => [",
+    "    [$.type_atom, $.const_descriptor],",
+    "  ],",
+    "",
+  );
   lines.push("  rules: {", "    source_file: $ => $.module,");
   for (const rule of grammarRuleDeclarations(grammar)) {
     lines.push(`    ${rule.name}: $ => ${renderTreeSitterExpression(rule.expression)},`);

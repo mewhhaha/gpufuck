@@ -123,8 +123,8 @@ export type LiteralKind =
   | "fn"
   | "let"
   | "const"
-  | "["
-  | "]"
+  | "{"
+  | "}"
   | "->"
   | "rec"
   | "in"
@@ -146,8 +146,10 @@ export type LiteralKind =
   | "-"
   | "*"
   | "/"
-  | "{"
-  | "}"
+  | "@"
+  | "_"
+  | "["
+  | "]"
   | "true"
   | "false";
 
@@ -225,7 +227,13 @@ export type RuleName =
   | "let_declaration"
   | "let_annotation"
   | "const_declaration"
-  | "const_parameters"
+  | "const_parameter"
+  | "const_parameter_bind"
+  | "const_parameter_tuple"
+  | "const_parameter_record"
+  | "const_parameter_field_list"
+  | "const_parameter_field_tail"
+  | "const_parameter_field"
   | "source_type"
   | "type_function_tail"
   | "type_application"
@@ -277,8 +285,13 @@ export type RuleName =
   | "named"
   | "named_suffix"
   | "const_instantiation"
-  | "type_argument_list"
-  | "type_argument_tail"
+  | "const_descriptor"
+  | "const_descriptor_hole"
+  | "const_descriptor_tuple"
+  | "const_descriptor_record"
+  | "const_descriptor_field_list"
+  | "const_descriptor_field_tail"
+  | "const_descriptor_field"
   | "string"
   | "list"
   | "list_values"
@@ -431,13 +444,49 @@ export interface LetAnnotationCursor extends RuleCursorBase<"let_annotation"> {
 export interface ConstDeclarationCursor extends RuleCursorBase<"const_declaration"> {
   field(name: "body"): ExprCursor;
   field(name: "name"): TokenCursor<"named", "IDENT">;
-  field(name: "parameters"): ConstParametersCursor | null;
+  field(name: "parameter"): ConstParameterCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface ConstParametersCursor extends RuleCursorBase<"const_parameters"> {
-  field(name: "values"): IdentifierListCursor;
+export interface ConstParameterCursor extends RuleCursorBase<"const_parameter"> {
+}
+
+export interface ConstParameterBindCursor extends RuleCursorBase<"const_parameter_bind"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstParameterTupleCursor extends RuleCursorBase<"const_parameter_tuple"> {
+  field(name: "first"): ConstParameterCursor;
+  field(name: "second"): ConstParameterCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstParameterRecordCursor extends RuleCursorBase<"const_parameter_record"> {
+  field(name: "fields"): ConstParameterFieldListCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstParameterFieldListCursor extends RuleCursorBase<"const_parameter_field_list"> {
+  field(name: "head"): ConstParameterFieldCursor;
+  field(name: "tail"): ReadonlyArray<ConstParameterFieldTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstParameterFieldTailCursor extends RuleCursorBase<"const_parameter_field_tail"> {
+  field(name: "value"): ConstParameterFieldCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstParameterFieldCursor extends RuleCursorBase<"const_parameter_field"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "value"): ConstParameterCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -703,20 +752,46 @@ export interface NamedSuffixCursor extends RuleCursorBase<"named_suffix"> {
 }
 
 export interface ConstInstantiationCursor extends RuleCursorBase<"const_instantiation"> {
-  field(name: "arguments"): TypeArgumentListCursor;
+  field(name: "argument"): ConstDescriptorCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface TypeArgumentListCursor extends RuleCursorBase<"type_argument_list"> {
-  field(name: "head"): SourceTypeCursor;
-  field(name: "tail"): ReadonlyArray<TypeArgumentTailCursor>;
+export interface ConstDescriptorCursor extends RuleCursorBase<"const_descriptor"> {
+}
+
+export interface ConstDescriptorHoleCursor extends RuleCursorBase<"const_descriptor_hole"> {
+}
+
+export interface ConstDescriptorTupleCursor extends RuleCursorBase<"const_descriptor_tuple"> {
+  field(name: "first"): ConstDescriptorCursor;
+  field(name: "second"): ConstDescriptorCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface TypeArgumentTailCursor extends RuleCursorBase<"type_argument_tail"> {
-  field(name: "value"): SourceTypeCursor;
+export interface ConstDescriptorRecordCursor extends RuleCursorBase<"const_descriptor_record"> {
+  field(name: "fields"): ConstDescriptorFieldListCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstDescriptorFieldListCursor extends RuleCursorBase<"const_descriptor_field_list"> {
+  field(name: "head"): ConstDescriptorFieldCursor;
+  field(name: "tail"): ReadonlyArray<ConstDescriptorFieldTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstDescriptorFieldTailCursor extends RuleCursorBase<"const_descriptor_field_tail"> {
+  field(name: "value"): ConstDescriptorFieldCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConstDescriptorFieldCursor extends RuleCursorBase<"const_descriptor_field"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "value"): ConstDescriptorCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -821,7 +896,13 @@ export type AnyRuleCursor =
   | LetDeclarationCursor
   | LetAnnotationCursor
   | ConstDeclarationCursor
-  | ConstParametersCursor
+  | ConstParameterCursor
+  | ConstParameterBindCursor
+  | ConstParameterTupleCursor
+  | ConstParameterRecordCursor
+  | ConstParameterFieldListCursor
+  | ConstParameterFieldTailCursor
+  | ConstParameterFieldCursor
   | SourceTypeCursor
   | TypeFunctionTailCursor
   | TypeApplicationCursor
@@ -873,8 +954,13 @@ export type AnyRuleCursor =
   | NamedCursor
   | NamedSuffixCursor
   | ConstInstantiationCursor
-  | TypeArgumentListCursor
-  | TypeArgumentTailCursor
+  | ConstDescriptorCursor
+  | ConstDescriptorHoleCursor
+  | ConstDescriptorTupleCursor
+  | ConstDescriptorRecordCursor
+  | ConstDescriptorFieldListCursor
+  | ConstDescriptorFieldTailCursor
+  | ConstDescriptorFieldCursor
   | StringCursor
   | ListCursor
   | ListValuesCursor

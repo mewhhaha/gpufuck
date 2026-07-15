@@ -701,6 +701,9 @@ const FRAME_PATTERN_MATCH: u32 = 23u;
 const FRAME_REFINEMENT_ROLLBACK: u32 = 24u;
 const FRAME_FULLY_ZONKED: u32 = 25u;
 const FRAME_FULLY_ZONKED_VISIT: u32 = 26u;
+const FRAME_RIGIDIFY: u32 = 27u;
+const FRAME_RIGIDIFY_VISIT: u32 = 28u;
+const FRAME_INDEXED_SHAPE: u32 = 29u;
 
 const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
 const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
@@ -1386,12 +1389,19 @@ fn local_lookup_transition(frame: u32) {
 fn start_concrete(type_index: u32) -> bool {
   let frame = push_work_frame(FRAME_CONCRETE);
   if frame == NO_INDEX { return false; }
-  frame_set(frame, 0u, type_index); frame_set(frame, 1u, 0u);
+  frame_set(frame, 0u, type_index); frame_set(frame, 1u, 0u); frame_set(frame, 2u, 0u);
   return true;
 }
 
-fn configure_concrete_visit(frame: u32, source: u32, epoch: u32) {
-  frame_set(frame, 0u, source); frame_set(frame, 3u, epoch);
+fn start_stable_concrete(type_index: u32) -> bool {
+  let frame = push_work_frame(FRAME_CONCRETE);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, type_index); frame_set(frame, 1u, 0u); frame_set(frame, 2u, 1u);
+  return true;
+}
+
+fn configure_concrete_visit(frame: u32, source: u32, mode: u32, epoch: u32) {
+  frame_set(frame, 0u, source); frame_set(frame, 2u, mode); frame_set(frame, 3u, epoch);
   frame_set(frame, 10u, FRAME_CONCRETE_VISIT);
 }
 
@@ -1400,7 +1410,8 @@ fn concrete_transition(frame: u32) {
     if !acquire_epoch(frame, 3u, 1u) { return; }
   }
   state.work_result = 1u;
-  configure_concrete_visit(frame, frame_get(frame, 0u), frame_get(frame, 3u));
+  configure_concrete_visit(
+    frame, frame_get(frame, 0u), frame_get(frame, 2u), frame_get(frame, 3u));
 }
 
 fn concrete_visit_transition(frame: u32) {
@@ -1409,7 +1420,8 @@ fn concrete_visit_transition(frame: u32) {
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
   }
-  if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
+  if frame_get(frame, 2u) == 0u && type_get(current, 0u) == TYPE_RIGID &&
+    type_get(current, 3u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 3u)); return;
   }
   let epoch = frame_get(frame, 3u);
@@ -1427,10 +1439,10 @@ fn concrete_visit_transition(frame: u32) {
   if first != NO_INDEX && second != NO_INDEX && !require_frame_slots(1u) { return; }
   type_set(current, 4u, epoch);
   if first == NO_INDEX { pop_work_frame(); return; }
-  configure_concrete_visit(frame, first, epoch);
+  configure_concrete_visit(frame, first, frame_get(frame, 2u), epoch);
   if second != NO_INDEX {
     let sibling = push_work_frame(FRAME_CONCRETE_VISIT);
-    configure_concrete_visit(sibling, second, epoch);
+    configure_concrete_visit(sibling, second, frame_get(frame, 2u), epoch);
   }
 }
 
@@ -1605,6 +1617,103 @@ fn fully_zonked_visit_transition(frame: u32) {
   }
 }
 
+fn start_rigidify(type_index: u32, identifier: u32) -> bool {
+  let frame = push_work_frame(FRAME_RIGIDIFY);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, type_index); frame_set(frame, 1u, 0u);
+  frame_set(frame, 2u, identifier);
+  return true;
+}
+
+fn configure_rigidify_visit(frame: u32, type_index: u32, identifier: u32, epoch: u32) {
+  frame_set(frame, 0u, type_index); frame_set(frame, 2u, identifier);
+  frame_set(frame, 3u, epoch); frame_set(frame, 10u, FRAME_RIGIDIFY_VISIT);
+}
+
+fn rigidify_transition(frame: u32) {
+  if frame_get(frame, 1u) == 0u {
+    if !acquire_epoch(frame, 3u, 1u) { return; }
+  }
+  configure_rigidify_visit(
+    frame, frame_get(frame, 0u), frame_get(frame, 2u), frame_get(frame, 3u));
+}
+
+fn rigidify_visit_transition(frame: u32) {
+  let current = frame_get(frame, 0u);
+  let kind = type_get(current, 0u);
+  if kind == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 1u)); return;
+  }
+  if kind == TYPE_VARIABLE {
+    type_set(current, 0u, TYPE_RIGID);
+    type_set(current, 1u, frame_get(frame, 2u));
+    type_set(current, 3u, NO_INDEX);
+    pop_work_frame();
+    return;
+  }
+  let epoch = frame_get(frame, 3u);
+  if type_get(current, 4u) == epoch { pop_work_frame(); return; }
+  var first = NO_INDEX;
+  var second = NO_INDEX;
+  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+    first = type_get(current, 2u); second = type_get(current, 3u);
+  } else if kind == TYPE_NAMED {
+    first = type_get(current, 2u);
+  } else if kind == TYPE_LIST {
+    first = type_get(current, 1u); second = type_get(current, 2u);
+  }
+  if first != NO_INDEX && second != NO_INDEX && !require_frame_slots(1u) { return; }
+  type_set(current, 4u, epoch);
+  if first == NO_INDEX { pop_work_frame(); return; }
+  configure_rigidify_visit(frame, first, frame_get(frame, 2u), epoch);
+  if second != NO_INDEX {
+    let sibling = push_work_frame(FRAME_RIGIDIFY_VISIT);
+    configure_rigidify_visit(sibling, second, frame_get(frame, 2u), epoch);
+  }
+}
+
+fn start_indexed_shape(type_index: u32) -> bool {
+  let frame = push_work_frame(FRAME_INDEXED_SHAPE);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, type_index); frame_set(frame, 1u, 0u);
+  frame_set(frame, 2u, 0u); frame_set(frame, 3u, NO_INDEX); frame_set(frame, 4u, NO_INDEX);
+  return true;
+}
+
+fn indexed_shape_transition(frame: u32) {
+  let stage = frame_get(frame, 1u);
+  if stage == 0u {
+    if !require_type_slots(1u) { return; }
+    frame_set(frame, 3u, allocate_type(TYPE_NAMED, frame_get(frame, 0u), NO_INDEX, NO_INDEX));
+    frame_set(frame, 1u, 1u);
+    return;
+  }
+  let cursor = frame_get(frame, 2u);
+  let type_index = frame_get(frame, 0u);
+  if stage == 1u {
+    if cursor >= type_metadata(type_index, 1u) {
+      state.returned_type = frame_get(frame, 3u);
+      pop_work_frame();
+      return;
+    }
+    if !require_type_slots(1u) { return; }
+    let list = allocate_type(TYPE_LIST, NO_INDEX, NO_INDEX, NO_INDEX);
+    let tail = frame_get(frame, 4u);
+    if tail == NO_INDEX { type_set(frame_get(frame, 3u), 2u, list); }
+    else { type_set(tail, 2u, list); }
+    frame_set(frame, 4u, list);
+    frame_set(frame, 1u, 2u);
+    return;
+  }
+  if !require_type_slots(1u) { return; }
+  let first_parameter = type_metadata(type_index, 0u);
+  let identifier = schema_words[state.type_parameter_base + first_parameter + cursor];
+  let parameter = allocate_type(TYPE_RIGID, identifier, state.current_level, NO_INDEX);
+  type_set(frame_get(frame, 4u), 1u, parameter);
+  frame_set(frame, 2u, cursor + 1u);
+  frame_set(frame, 1u, 1u);
+}
+
 fn work_transition() {
   let frame = state.frame_top - 1u;
   let kind = frame_get(frame, 10u);
@@ -1635,6 +1744,9 @@ fn work_transition() {
   else if kind == FRAME_REFINEMENT_ROLLBACK { refinement_rollback_transition(frame); }
   else if kind == FRAME_FULLY_ZONKED { fully_zonked_transition(frame); }
   else if kind == FRAME_FULLY_ZONKED_VISIT { fully_zonked_visit_transition(frame); }
+  else if kind == FRAME_RIGIDIFY { rigidify_transition(frame); }
+  else if kind == FRAME_RIGIDIFY_VISIT { rigidify_visit_transition(frame); }
+  else if kind == FRAME_INDEXED_SHAPE { indexed_shape_transition(frame); }
   else { invalid_input(ERROR_INVALID_SURFACE, kind); }
 }
 
@@ -2167,18 +2279,17 @@ fn expression_transition() {
       if state.status != STATUS_PENDING { return; }
       frame_set(frame, 3u, placeholder);
       frame_set(frame, 5u, recursive_environment);
-      frame_set(frame, 4u, state.indexed_elimination_allowed);
-      frame_set(frame, 6u, state.indexed_elimination_restriction_kind);
-      frame_set(frame, 7u, state.indexed_elimination_restriction_symbol);
-      state.indexed_elimination_allowed = 0u;
-      state.indexed_elimination_restriction_kind = 2u;
-      state.indexed_elimination_restriction_symbol = node.payload;
-      push_expression(node.child0, recursive_environment);
+      if push_expression(node.child0, recursive_environment) {
+        frame_set(state.frame_top - 1u, 11u, placeholder);
+      }
       return;
     }
     if node.tag == TAG_IF {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 20u);
+      frame_set(frame, 4u, select(
+        0u, 1u,
+        core_nodes[node.child1].tag == TAG_CASE && core_nodes[node.child2].tag != TAG_CASE));
       if push_expression(node.child0, environment) {
         frame_set(state.frame_top - 1u, 11u, 1u);
       }
@@ -2197,6 +2308,7 @@ fn expression_transition() {
       let body_environment = allocate_environment(parameter, environment);
       if state.status != STATUS_PENDING { return; }
       frame_set(frame, 3u, parameter);
+      frame_set(frame, 6u, NO_INDEX);
       frame_set(frame, 1u, 30u);
       push_expression(node.child0, body_environment);
       return;
@@ -2264,9 +2376,6 @@ fn expression_transition() {
   if stage == 2u { complete_expression(state.returned_type); return; }
 
   if stage == 10u {
-    state.indexed_elimination_allowed = frame_get(frame, 4u);
-    state.indexed_elimination_restriction_kind = frame_get(frame, 6u);
-    state.indexed_elimination_restriction_symbol = frame_get(frame, 7u);
     if start_unify(frame_get(frame, 3u), state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 12u);
     }
@@ -2296,37 +2405,79 @@ fn expression_transition() {
   if stage == 23u {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 21u);
-    if push_expression(node.child1, environment) {
+    let first = select(node.child1, node.child2, frame_get(frame, 4u) != 0u);
+    if push_expression(first, environment) {
       frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
     }
     return;
   }
   if stage == 21u {
-    if !require_frame_slots(1u) { return; }
     frame_set(frame, 3u, state.returned_type);
+    if frame_get(frame, 11u) != NO_INDEX {
+      let first = select(node.child1, node.child2, frame_get(frame, 4u) != 0u);
+      let first_node = core_nodes[first];
+      if start_unify(
+        frame_get(frame, 11u), state.returned_type,
+        first_node.start_byte, first_node.end_byte) {
+        frame_set(frame, 1u, 25u);
+      }
+      return;
+    }
+    frame_set(frame, 1u, 25u);
+    return;
+  }
+  if stage == 25u {
+    if !require_frame_slots(1u) { return; }
+    let second = select(node.child2, node.child1, frame_get(frame, 4u) != 0u);
     frame_set(frame, 1u, 22u);
-    if push_expression(node.child2, environment) {
-      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+    if push_expression(second, environment) {
+      let expected = select(
+        frame_get(frame, 3u), frame_get(frame, 11u), frame_get(frame, 11u) != NO_INDEX);
+      frame_set(state.frame_top - 1u, 11u, expected);
     }
     return;
   }
   if stage == 22u {
-    if start_unify(frame_get(frame, 3u), state.returned_type, node.start_byte, node.end_byte) {
+    let second = select(node.child2, node.child1, frame_get(frame, 4u) != 0u);
+    let second_node = core_nodes[second];
+    if start_unify(
+      frame_get(frame, 3u), state.returned_type,
+      second_node.start_byte, second_node.end_byte) {
       frame_set(frame, 1u, 24u);
     }
     return;
   }
-  if stage == 24u { complete_expression(frame_get(frame, 3u)); return; }
+  if stage == 24u {
+    complete_expression(select(
+      frame_get(frame, 3u), frame_get(frame, 11u), frame_get(frame, 11u) != NO_INDEX));
+    return;
+  }
 
   if stage == 30u {
+    if frame_get(frame, 6u) != NO_INDEX {
+      if start_unify(
+        type_get(frame_get(frame, 6u), 3u), state.returned_type,
+        node.start_byte, node.end_byte) {
+        frame_set(frame, 1u, 35u);
+      }
+      return;
+    }
     if !require_type_slots(1u) { return; }
     let function_type = allocate_type(TYPE_FUNCTION, NO_INDEX, frame_get(frame, 3u), state.returned_type);
     if state.status == STATUS_PENDING { complete_expression(function_type); }
     return;
   }
+  if stage == 35u { complete_expression(frame_get(frame, 6u)); return; }
   if stage == 31u {
     let expected = state.returned_type;
     let expected_is_function = type_get(expected, 0u) == TYPE_FUNCTION;
+    if type_get(expected, 0u) == TYPE_VARIABLE {
+      if !require_type_slots(1u) { return; }
+      frame_set(frame, 4u, expected);
+      frame_set(frame, 3u, fresh_variable());
+      frame_set(frame, 1u, 32u);
+      return;
+    }
     let required_types = select(1u, 0u, expected_is_function);
     if !require_type_slots(required_types) || !require_environment_slots(1u) ||
       !require_frame_slots(1u) { return; }
@@ -2335,9 +2486,11 @@ fn expression_transition() {
     if expected_is_function {
       parameter = type_get(expected, 2u);
       expected_body = type_get(expected, 3u);
+      frame_set(frame, 6u, expected);
     } else {
       parameter = fresh_variable();
       if state.status != STATUS_PENDING { return; }
+      frame_set(frame, 6u, NO_INDEX);
     }
     let body_environment = allocate_environment(parameter, environment);
     if state.status != STATUS_PENDING { return; }
@@ -2345,6 +2498,32 @@ fn expression_transition() {
     frame_set(frame, 3u, parameter);
     frame_set(frame, 1u, 30u);
     frame_set(state.frame_top - 1u, 11u, expected_body);
+    return;
+  }
+  if stage == 32u {
+    if !require_type_slots(1u) { return; }
+    frame_set(frame, 5u, fresh_variable());
+    frame_set(frame, 1u, 33u);
+    return;
+  }
+  if stage == 33u {
+    if !require_type_slots(1u) { return; }
+    let function_type = allocate_type(
+      TYPE_FUNCTION, NO_INDEX, frame_get(frame, 3u), frame_get(frame, 5u));
+    frame_set(frame, 6u, function_type);
+    if start_unify(frame_get(frame, 4u), function_type, node.start_byte, node.end_byte) {
+      frame_set(frame, 1u, 34u);
+    }
+    return;
+  }
+  if stage == 34u {
+    if !require_environment_slots(1u) || !require_frame_slots(1u) { return; }
+    let body_environment = allocate_environment(frame_get(frame, 3u), environment);
+    if state.status != STATUS_PENDING { return; }
+    frame_set(frame, 1u, 30u);
+    if push_expression(node.child0, body_environment) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 5u));
+    }
     return;
   }
 
@@ -2356,6 +2535,11 @@ fn expression_transition() {
     return;
   }
   if stage == 41u {
+    if frame_get(frame, 11u) != NO_INDEX {
+      frame_set(frame, 4u, frame_get(frame, 11u));
+      frame_set(frame, 1u, 42u);
+      return;
+    }
     if !require_type_slots(1u) { return; }
     frame_set(frame, 4u, fresh_variable());
     frame_set(frame, 1u, 42u);
@@ -2454,30 +2638,48 @@ fn expression_transition() {
     return;
   }
   if stage == 83u {
-    if state.indexed_elimination_allowed == 0u {
-      state.error_context = state.indexed_elimination_restriction_kind;
-      report_diagnostic_with_operands(
-        ERROR_NON_CONCRETE_MAIN, node.start_byte, node.end_byte,
-        state.indexed_elimination_restriction_symbol, NO_INDEX, NO_INDEX);
-      return;
-    }
-    if frame_get(frame, 11u) == NO_INDEX {
-      report_metadata_diagnostic(
-        METADATA_INDEXED_EXPECTED_TYPE_MISSING, node.start_byte, node.end_byte,
-        algebraic_types[frame_get(frame, 6u)].symbol, NO_INDEX, NO_INDEX);
-      return;
-    }
-    if start_fully_zonked(frame_get(frame, 11u)) { frame_set(frame, 1u, 84u); }
+    if start_fully_zonked(frame_get(frame, 3u)) { frame_set(frame, 1u, 84u); }
     return;
   }
   if stage == 84u {
-    if state.work_result != 0u {
-      report_metadata_diagnostic(
-        METADATA_INDEXED_EXPECTED_TYPE_UNRESOLVED, node.start_byte, node.end_byte,
-        algebraic_types[frame_get(frame, 6u)].symbol,
-        frame_get(frame, 11u), state.returned_type);
+    if start_prune(frame_get(frame, 3u)) {
+      frame_set(frame, 1u, select(87u, 86u, state.work_result == 0u));
+    }
+    return;
+  }
+  if stage == 87u {
+    if type_get(state.returned_type, 0u) == TYPE_VARIABLE {
+      if start_indexed_shape(frame_get(frame, 6u)) { frame_set(frame, 1u, 88u); }
       return;
     }
+    let parameter_count = type_metadata(frame_get(frame, 6u), 1u);
+    var identifier = 0u;
+    if parameter_count > 0u {
+      identifier = schema_words[
+        state.type_parameter_base + type_metadata(frame_get(frame, 6u), 0u)];
+    }
+    if start_rigidify(frame_get(frame, 3u), identifier) { frame_set(frame, 1u, 93u); }
+    return;
+  }
+  if stage == 88u {
+    frame_set(frame, 7u, state.returned_type);
+    if start_unify(
+      frame_get(frame, 3u), state.returned_type, node.start_byte, node.end_byte) {
+      frame_set(frame, 1u, 89u);
+    }
+    return;
+  }
+  if stage == 89u {
+    let parameter_count = type_metadata(frame_get(frame, 6u), 1u);
+    var identifier = 0u;
+    if parameter_count > 0u {
+      identifier = schema_words[
+        state.type_parameter_base + type_metadata(frame_get(frame, 6u), 0u)];
+    }
+    if start_rigidify(frame_get(frame, 3u), identifier) { frame_set(frame, 1u, 93u); }
+    return;
+  }
+  if stage == 93u {
     if start_fully_zonked(frame_get(frame, 3u)) { frame_set(frame, 1u, 85u); }
     return;
   }
@@ -2631,11 +2833,22 @@ fn expression_transition() {
     return;
   }
   if stage == 103u {
+    if frame_get(frame, 11u) == NO_INDEX {
+      if !require_frame_slots(1u) { return; }
+      frame_set(frame, 1u, 115u);
+      if push_expression(state.current_arm, state.returned_type) {
+        frame_set(state.frame_top - 1u, 11u, NO_INDEX);
+      }
+      return;
+    }
+    frame_set(frame, 8u, state.returned_type);
+    if start_fully_zonked(frame_get(frame, 11u)) { frame_set(frame, 1u, 107u); }
+    return;
+  }
+  if stage == 107u {
     if !require_frame_slots(1u) { return; }
-    let arm_index = frame_get(frame, 5u);
-    frame_set(frame, 8u, core_nodes[arm_index].child1);
-    frame_set(frame, 1u, 104u);
-    if push_expression(state.current_arm, state.returned_type) {
+    frame_set(frame, 1u, select(115u, 104u, state.work_result == 0u));
+    if push_expression(state.current_arm, frame_get(frame, 8u)) {
       frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
     }
     return;
@@ -2653,7 +2866,7 @@ fn expression_transition() {
   }
   if stage == 106u {
     state.untouchable_type_cutoff = frame_get(frame, 4u);
-    frame_set(frame, 5u, frame_get(frame, 8u));
+    frame_set(frame, 5u, core_nodes[frame_get(frame, 5u)].child1);
     frame_set(frame, 1u, 100u);
     return;
   }
@@ -2664,6 +2877,58 @@ fn expression_transition() {
     report_diagnostic_with_operands(
       ERROR_TYPE_MISMATCH, arm.start_byte, arm.end_byte,
       frame_get(frame, 7u), frame_get(frame, 8u), frame_get(frame, 3u));
+    return;
+  }
+  if stage == 115u {
+    frame_set(frame, 7u, state.returned_type);
+    if frame_get(frame, 11u) != NO_INDEX {
+      if start_prune(state.returned_type) { frame_set(frame, 1u, 119u); }
+      return;
+    }
+    if start_stable_concrete(state.returned_type) { frame_set(frame, 1u, 116u); }
+    return;
+  }
+  if stage == 119u {
+    frame_set(frame, 8u, state.returned_type);
+    if start_prune(frame_get(frame, 11u)) { frame_set(frame, 1u, 120u); }
+    return;
+  }
+  if stage == 120u {
+    if state.returned_type == frame_get(frame, 8u) {
+      frame_set(frame, 7u, frame_get(frame, 11u));
+      if start_refinement_rollback(frame_get(frame, 9u)) { frame_set(frame, 1u, 117u); }
+      return;
+    }
+    if start_stable_concrete(frame_get(frame, 7u)) { frame_set(frame, 1u, 116u); }
+    return;
+  }
+  if stage == 116u {
+    if state.work_result == 0u {
+      report_metadata_diagnostic(
+        METADATA_INDEXED_EXPECTED_TYPE_MISSING, node.start_byte, node.end_byte,
+        algebraic_types[frame_get(frame, 6u)].symbol, NO_INDEX, NO_INDEX);
+      return;
+    }
+    if start_refinement_rollback(frame_get(frame, 9u)) { frame_set(frame, 1u, 117u); }
+    return;
+  }
+  if stage == 117u {
+    state.untouchable_type_cutoff = frame_get(frame, 4u);
+    if frame_get(frame, 11u) == NO_INDEX {
+      frame_set(frame, 11u, frame_get(frame, 7u));
+      frame_set(frame, 5u, core_nodes[frame_get(frame, 5u)].child1);
+      frame_set(frame, 1u, 100u);
+      return;
+    }
+    let arm = core_nodes[frame_get(frame, 5u)];
+    if start_unify(frame_get(frame, 11u), frame_get(frame, 7u), arm.start_byte, arm.end_byte) {
+      frame_set(frame, 1u, 118u);
+    }
+    return;
+  }
+  if stage == 118u {
+    frame_set(frame, 5u, core_nodes[frame_get(frame, 5u)].child1);
+    frame_set(frame, 1u, 100u);
     return;
   }
 
@@ -3353,16 +3618,8 @@ fn component_transition() {
       state.frame_top = 0u;
       state.returned_type = NO_INDEX;
       state.expression_definition = definition_index;
-      let annotation = schema_words[state.definition_annotation_base + definition_index];
-      state.indexed_elimination_allowed = select(
-        0u, 1u, state.component_recursive == 0u || annotation != NO_INDEX);
-      state.indexed_elimination_restriction_kind = select(
-        1u, 0u, state.indexed_elimination_allowed != 0u);
-      state.indexed_elimination_restriction_symbol = definitions[definition_index].symbol;
       if push_expression(definitions[definition_index].root_node, NO_INDEX) {
-        if annotation != NO_INDEX {
-          frame_set(state.frame_top - 1u, 11u, scratch_get(0u, definition_index));
-        }
+        frame_set(state.frame_top - 1u, 11u, scratch_get(0u, definition_index));
       }
       return;
     }

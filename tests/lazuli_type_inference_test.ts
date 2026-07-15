@@ -211,7 +211,7 @@ Deno.test("indexed constructor results match the host across dispatch quanta", a
   });
 });
 
-Deno.test("indexed elimination scopes refinements and filters coverage on host and GPU", async () => {
+Deno.test("indexed elimination infers safe results and scopes refinements on host and GPU", async () => {
   const successes = [
     {
       source:
@@ -269,8 +269,30 @@ Deno.test("indexed elimination scopes refinements and filters coverage on host a
       mainType: { kind: "integer" },
     },
     {
+      source: "data Equal a b = Refl : Equal a a; let main = case Refl of | Refl -> 42 end;",
+      mainType: { kind: "integer" },
+    },
+    {
+      source:
+        "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let classify = tag => case tag of | TagInt -> 1 | TagBool -> 0 end; let main = (classify TagInt, classify TagBool);",
+      mainType: {
+        kind: "tuple",
+        values: [{ kind: "integer" }, { kind: "integer" }],
+      },
+    },
+    {
       source:
         "data Equal a b = Refl : Equal a a; let loop : Equal a b -> a -> b = proof => value => if true then case proof of | Refl -> value end else loop proof value; let main = loop Refl 42;",
+      mainType: { kind: "integer" },
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; fn loop proof = if true then case proof of | Refl -> loop proof end else 0; let main = loop Refl;",
+      mainType: { kind: "integer" },
+    },
+    {
+      source:
+        "data Equal a b = Refl : Equal a a; let main = let rec loop proof = case proof of | Refl -> loop proof end in 0;",
       mainType: { kind: "integer" },
     },
   ] as const;
@@ -300,12 +322,6 @@ Deno.test("indexed elimination rejects unsound or inaccessible arms on host and 
   const failures = [
     {
       source:
-        "data Equal a b = Refl : Equal a a; let bad = case Refl of | Refl -> 1 end; let main = 0;",
-      code: "L2101",
-      message: 'indexed case for "Equal" requires a propagated expected type',
-    },
-    {
-      source:
         "-- żółć\ndata Tag a = TagInt : Tag Int | TagBool : Tag Bool; let bad : Tag Int -> Int = tag => case tag of | TagInt -> 1 | TagBool -> 0 end; let main = 0;",
       code: "L2102",
       message:
@@ -321,6 +337,12 @@ Deno.test("indexed elimination rejects unsound or inaccessible arms on host and 
     },
     {
       source:
+        "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let untag = tag => case tag of | TagInt -> 1 | TagBool -> true end; let main = 0;",
+      code: "L2102",
+      message: "type mismatch: expected Int, received Bool",
+    },
+    {
+      source:
         "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let bad : Tag a -> a = tag => case tag of | TagInt -> true | TagBool -> true end; let main = 0;",
       code: "L2102",
       message: "type mismatch: expected Int, received Bool",
@@ -329,7 +351,7 @@ Deno.test("indexed elimination rejects unsound or inaccessible arms on host and 
       source:
         "data Equal a b = Refl : Equal a a; let bad : Int = case (value => value) of | Refl -> 0 end; let main = 0;",
       code: "L2101",
-      message: 'indexed case for "Equal" requires a fully zonked scrutinee',
+      message: 'indexed case requires scrutinee "Equal"; received a -> a',
     },
     {
       source:
@@ -342,18 +364,6 @@ Deno.test("indexed elimination rejects unsound or inaccessible arms on host and 
         "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; fn left tag = right tag; let right : Tag a -> a = tag => case tag of | TagInt -> left tag | TagBool -> left tag end; let main = 0;",
       code: "L2101",
       message: "indexed case arm cannot solve pre-existing inference variable",
-    },
-    {
-      source:
-        "data Equal a b = Refl : Equal a a; fn loop proof = if true then case proof of | Refl -> loop proof end else 0; let main = 0;",
-      code: "L2104",
-      message: 'recursive definition "loop" requires an explicit type annotation',
-    },
-    {
-      source:
-        "data Equal a b = Refl : Equal a a; let main = let rec loop proof = case proof of | Refl -> loop proof end in 0;",
-      code: "L2104",
-      message: 'local recursive definition "loop" requires a complete type signature',
     },
   ] as const;
 

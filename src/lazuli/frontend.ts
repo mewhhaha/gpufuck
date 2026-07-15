@@ -55,10 +55,43 @@ interface DataDeclaration {
 interface ConstDefinition {
   readonly kind: "const";
   readonly name: Identifier;
-  readonly parameters: readonly Identifier[];
+  readonly parameter: ConstParameter | null;
   readonly body: Expression;
   readonly span: Utf16Span;
 }
+
+type ConstParameter =
+  | { readonly kind: "bind"; readonly name: Identifier; readonly span: Utf16Span }
+  | {
+    readonly kind: "tuple";
+    readonly values: readonly [ConstParameter, ConstParameter];
+    readonly span: Utf16Span;
+  }
+  | {
+    readonly kind: "record";
+    readonly fields: readonly {
+      readonly name: Identifier;
+      readonly value: ConstParameter;
+    }[];
+    readonly span: Utf16Span;
+  };
+
+type ConstDescriptor =
+  | { readonly kind: "type"; readonly type: SourceType; readonly span: Utf16Span }
+  | {
+    readonly kind: "tuple";
+    readonly values: readonly [ConstDescriptor, ConstDescriptor];
+    readonly span: Utf16Span;
+  }
+  | {
+    readonly kind: "record";
+    readonly fields: readonly {
+      readonly name: Identifier;
+      readonly value: ConstDescriptor;
+    }[];
+    readonly span: Utf16Span;
+  }
+  | { readonly kind: "hole"; readonly span: Utf16Span };
 
 interface ConstructorDeclaration {
   readonly name: Identifier;
@@ -115,7 +148,7 @@ type Expression =
   | {
     readonly kind: "const-instantiation";
     readonly name: Identifier;
-    readonly arguments: readonly SourceType[];
+    readonly argument: ConstDescriptor;
     readonly span: Utf16Span;
   }
   | {
@@ -316,6 +349,14 @@ export function parseLazuliSource(source: string): LazuliFrontendResult {
           span: byteOffsets.span(error.span),
         });
       }
+      if (error instanceof ConstSpecializationSpacingError) {
+        return failure({
+          stage: "parse",
+          code: "L1001",
+          message: error.message,
+          span: byteOffsets.span(error.span),
+        });
+      }
       throw error;
     }
     let definitions: readonly Definition[] = declarations.filter(isDefinition);
@@ -423,6 +464,16 @@ class TypeApplicationError extends Error {
 class TypeApplicationSpacingError extends Error {
   constructor(readonly span: Utf16Span) {
     super("Type application requires whitespace before its argument.");
+  }
+}
+
+class ConstSpecializationSpacingError extends Error {
+  constructor(readonly span: Utf16Span, name: string) {
+    super(
+      `Const specialization ${
+        JSON.stringify(name)
+      } requires whitespace before its @ type descriptor.`,
+    );
   }
 }
 
@@ -634,17 +685,52 @@ function parseConstDefinition(node: AnyRuleCursor, symbols: SymbolInterner): Con
   }
   const name = identifier(requiredToken(node, "name"));
   rejectReservedBuiltinDeclaration(name);
-  const parametersNode = optionalRuleField(node, "parameters");
-  const parameters = parametersNode === null
-    ? []
-    : parseIdentifierList(requiredRuleField(parametersNode, "values"));
+  const parameterNode = optionalRuleField(node, "parameter");
+  const parameter = parameterNode === null ? null : parseConstParameter(parameterNode);
   return {
     kind: "const",
     name,
-    parameters,
+    parameter,
     body: parseExpression(requiredRuleField(node, "body"), symbols, 1),
     span: node.span,
   };
+}
+
+function parseConstParameter(node: AnyRuleCursor): ConstParameter {
+  const parameter = node.name === "const_parameter" ? childRule(node) : node;
+  if (parameter.name === "const_parameter_bind") {
+    return {
+      kind: "bind",
+      name: identifier(requiredToken(parameter, "name")),
+      span: parameter.span,
+    };
+  }
+  if (parameter.name === "const_parameter_tuple") {
+    return {
+      kind: "tuple",
+      values: [
+        parseConstParameter(requiredRuleField(parameter, "first")),
+        parseConstParameter(requiredRuleField(parameter, "second")),
+      ],
+      span: parameter.span,
+    };
+  }
+  if (parameter.name === "const_parameter_record") {
+    const fields = requiredRuleField(parameter, "fields");
+    const fieldNodes = [
+      requiredRuleField(fields, "head"),
+      ...ruleFieldArray(fields, "tail").map((tail) => requiredRuleField(tail, "value")),
+    ];
+    return {
+      kind: "record",
+      fields: fieldNodes.map((field) => ({
+        name: identifier(requiredToken(field, "name")),
+        value: parseConstParameter(requiredRuleField(field, "value")),
+      })),
+      span: parameter.span,
+    };
+  }
+  throw new Error(`Unsupported const parameter syntax node ${parameter.name}.`);
 }
 
 function parseConstructorFieldList(node: AnyRuleCursor): readonly ConstructorField[] {
@@ -868,7 +954,8 @@ function parseExpression(
       return list;
     }
     case "named": {
-      const constructor = identifier(requiredToken(node, "name"));
+      const nameToken = requiredToken(node, "name");
+      const constructor = identifier(nameToken);
       symbols.intern(constructor.spelling);
       const suffixNode = optionalRuleField(node, "suffix");
       if (suffixNode === null) {
@@ -876,11 +963,13 @@ function parseExpression(
       }
       const suffix = childRule(suffixNode);
       if (suffix.name === "const_instantiation") {
-        const arguments_ = parseTypeArgumentList(requiredRuleField(suffix, "arguments"));
+        if (suffix.span.start <= nameToken.span.end) {
+          throw new ConstSpecializationSpacingError(suffix.span, constructor.spelling);
+        }
         return {
           kind: "const-instantiation",
           name: constructor,
-          arguments: arguments_,
+          argument: parseConstDescriptor(requiredRuleField(suffix, "argument")),
           span: node.span,
         };
       }
@@ -979,16 +1068,47 @@ function parseIdentifierList(node: AnyRuleCursor): readonly Identifier[] {
   ];
 }
 
-function parseTypeArgumentList(node: AnyRuleCursor): readonly SourceType[] {
-  if (node.name !== "type_argument_list") {
-    throw new Error(`Expected type argument list syntax node, got ${node.name}.`);
+function parseConstDescriptor(node: AnyRuleCursor): ConstDescriptor {
+  const descriptor = node.name === "const_descriptor" ? childRule(node) : node;
+  if (descriptor.name === "const_descriptor_hole") {
+    return { kind: "hole", span: descriptor.span };
   }
-  return [
-    parseSourceType(requiredRuleField(node, "head")),
-    ...ruleFieldArray(node, "tail").map((tail) =>
-      parseSourceType(requiredRuleField(tail, "value"))
-    ),
-  ];
+  if (descriptor.name === "const_descriptor_tuple") {
+    return {
+      kind: "tuple",
+      values: [
+        parseConstDescriptor(requiredRuleField(descriptor, "first")),
+        parseConstDescriptor(requiredRuleField(descriptor, "second")),
+      ],
+      span: descriptor.span,
+    };
+  }
+  if (descriptor.name === "const_descriptor_record") {
+    const fields = requiredRuleField(descriptor, "fields");
+    const fieldNodes = [
+      requiredRuleField(fields, "head"),
+      ...ruleFieldArray(fields, "tail").map((tail) => requiredRuleField(tail, "value")),
+    ];
+    return {
+      kind: "record",
+      fields: fieldNodes.map((field) => ({
+        name: identifier(requiredToken(field, "name")),
+        value: parseConstDescriptor(requiredRuleField(field, "value")),
+      })),
+      span: descriptor.span,
+    };
+  }
+  if (
+    descriptor.name === "type_named" || descriptor.name === "type_unit" ||
+    descriptor.name === "type_group"
+  ) {
+    return {
+      kind: "type",
+      type: parseTypeAtom(descriptor),
+      span: descriptor.span,
+    };
+  }
+  throw new Error(`Unsupported const descriptor syntax node ${descriptor.name}.`);
 }
 
 function parseCall(node: AnyRuleCursor, symbols: SymbolInterner, depth: number): Expression {
@@ -1139,6 +1259,7 @@ function specializeConstDefinitions(
         `Duplicate const declaration ${JSON.stringify(definition.name.spelling)}.`,
       );
     }
+    validateConstParameter(definition);
     templates.set(definition.name.spelling, definition);
   }
   const types = new Map(
@@ -1158,8 +1279,8 @@ function specializeConstDefinitions(
 
   const instantiate = (
     name: Identifier,
-    arguments_: readonly SourceType[],
-    descriptors: ReadonlyMap<string, SourceType>,
+    argument: ConstDescriptor | null,
+    descriptors: ReadonlyMap<string, ConstDescriptor>,
     span: Utf16Span,
   ): Expression => {
     const template = templates.get(name.spelling);
@@ -1169,18 +1290,24 @@ function specializeConstDefinitions(
         `Unknown const declaration ${JSON.stringify(name.spelling)}.`,
       );
     }
-    if (arguments_.length !== template.parameters.length) {
+    if (template.parameter === null && argument !== null) {
       throw new ConstSpecializationError(
         span,
-        `Const ${
-          JSON.stringify(name.spelling)
-        } expects ${template.parameters.length} type arguments; received ${arguments_.length}.`,
+        `Const ${JSON.stringify(name.spelling)} does not accept a type descriptor.`,
       );
     }
-    const resolvedTypes = arguments_.map((argument) =>
-      resolveConstDescriptor(argument, descriptors, types)
-    );
-    const key = `${name.spelling}[${resolvedTypes.map(typeStructuralKey).join(",")}]`;
+    if (template.parameter !== null && argument === null) {
+      throw new ConstSpecializationError(
+        span,
+        `Const ${JSON.stringify(name.spelling)} requires one type descriptor after @.`,
+      );
+    }
+    const resolvedArgument = argument === null
+      ? null
+      : resolveConstDescriptor(argument, descriptors, types);
+    const key = resolvedArgument === null
+      ? name.spelling
+      : `${name.spelling}@${constDescriptorStructuralKey(resolvedArgument)}`;
     let generatedName = specializations.get(key);
     if (generatedName === undefined) {
       generatedName = { spelling: `$const$${specializations.size}`, span: template.name.span };
@@ -1194,14 +1321,14 @@ function specializeConstDefinitions(
         body: { kind: "boolean", value: false, span: template.span },
         span: template.span,
       });
-      const templateDescriptors = new Map<string, SourceType>();
-      for (let index = 0; index < template.parameters.length; index++) {
-        const parameter = template.parameters[index];
-        const type = resolvedTypes[index];
-        if (parameter === undefined || type === undefined) {
-          throw new Error(`Const specialization ${key} omitted type argument ${index}.`);
-        }
-        templateDescriptors.set(parameter.spelling, type);
+      const templateDescriptors = new Map<string, ConstDescriptor>();
+      if (template.parameter !== null && resolvedArgument !== null) {
+        bindConstParameter(
+          template.name.spelling,
+          template.parameter,
+          resolvedArgument,
+          templateDescriptors,
+        );
       }
       generated[generatedIndex] = {
         name: generatedName,
@@ -1216,7 +1343,7 @@ function specializeConstDefinitions(
 
   const expand = (
     expression: Expression,
-    descriptors: ReadonlyMap<string, SourceType>,
+    descriptors: ReadonlyMap<string, ConstDescriptor>,
     boundNames: ReadonlySet<string>,
   ): Expression => {
     const withBoundName = (name: string): ReadonlySet<string> => {
@@ -1231,16 +1358,23 @@ function specializeConstDefinitions(
       case "name": {
         const template = templates.get(expression.identifier.spelling);
         if (
-          template !== undefined && template.parameters.length === 0 &&
-          !boundNames.has(expression.identifier.spelling) &&
+          template !== undefined && !boundNames.has(expression.identifier.spelling) &&
           !runtimeNames.has(expression.identifier.spelling)
         ) {
-          return instantiate(expression.identifier, [], descriptors, expression.span);
+          if (template.parameter === null) {
+            return instantiate(expression.identifier, null, descriptors, expression.span);
+          }
+          throw new ConstSpecializationError(
+            expression.span,
+            `Const ${
+              JSON.stringify(expression.identifier.spelling)
+            } requires one type descriptor after @.`,
+          );
         }
         return expression;
       }
       case "const-instantiation":
-        return instantiate(expression.name, expression.arguments, descriptors, expression.span);
+        return instantiate(expression.name, expression.argument, descriptors, expression.span);
       case "record": {
         const constructor = constructors.get(expression.constructor.spelling);
         if (constructor === undefined) {
@@ -1366,89 +1500,238 @@ function specializeConstDefinitions(
   );
 }
 
+function validateConstParameter(definition: ConstDefinition): void {
+  if (definition.parameter === null) return;
+  const names = new Set<string>();
+  const pending = [definition.parameter];
+  while (pending.length > 0) {
+    const parameter = pending.pop();
+    if (parameter === undefined) throw new Error("Const parameter traversal ended unexpectedly.");
+    if (parameter.kind === "bind") {
+      if (names.has(parameter.name.spelling)) {
+        throw new ConstSpecializationError(
+          parameter.name.span,
+          `Const ${JSON.stringify(definition.name.spelling)} repeats type parameter ${
+            JSON.stringify(parameter.name.spelling)
+          }.`,
+        );
+      }
+      names.add(parameter.name.spelling);
+      continue;
+    }
+    if (parameter.kind === "tuple") {
+      pending.push(parameter.values[1], parameter.values[0]);
+      continue;
+    }
+    const fields = new Set<string>();
+    for (const field of parameter.fields) {
+      if (fields.has(field.name.spelling)) {
+        throw new ConstSpecializationError(
+          field.name.span,
+          `Const ${JSON.stringify(definition.name.spelling)} repeats descriptor field ${
+            JSON.stringify(field.name.spelling)
+          }.`,
+        );
+      }
+      fields.add(field.name.spelling);
+      pending.push(field.value);
+    }
+  }
+}
+
+function bindConstParameter(
+  templateName: string,
+  parameter: ConstParameter,
+  descriptor: ConstDescriptor,
+  bindings: Map<string, ConstDescriptor>,
+): void {
+  if (parameter.kind === "bind") {
+    bindings.set(parameter.name.spelling, descriptor);
+    return;
+  }
+  if (parameter.kind === "tuple") {
+    if (descriptor.kind !== "tuple") {
+      throw new ConstSpecializationError(
+        descriptor.span,
+        `Const ${JSON.stringify(templateName)} expects a tuple type descriptor; received ${
+          JSON.stringify(descriptor.kind)
+        }.`,
+      );
+    }
+    bindConstParameter(templateName, parameter.values[0], descriptor.values[0], bindings);
+    bindConstParameter(templateName, parameter.values[1], descriptor.values[1], bindings);
+    return;
+  }
+  if (descriptor.kind !== "record") {
+    throw new ConstSpecializationError(
+      descriptor.span,
+      `Const ${JSON.stringify(templateName)} expects a record type descriptor; received ${
+        JSON.stringify(descriptor.kind)
+      }.`,
+    );
+  }
+  const supplied = new Map(descriptor.fields.map((field) => [field.name.spelling, field]));
+  for (const field of parameter.fields) {
+    const suppliedField = supplied.get(field.name.spelling);
+    if (suppliedField === undefined) {
+      throw new ConstSpecializationError(
+        descriptor.span,
+        `Const ${JSON.stringify(templateName)} descriptor is missing field ${
+          JSON.stringify(field.name.spelling)
+        }.`,
+      );
+    }
+    supplied.delete(field.name.spelling);
+    bindConstParameter(templateName, field.value, suppliedField.value, bindings);
+  }
+  const unknownField = supplied.keys().next().value;
+  if (typeof unknownField === "string") {
+    throw new ConstSpecializationError(
+      descriptor.span,
+      `Const ${JSON.stringify(templateName)} descriptor has unknown field ${
+        JSON.stringify(unknownField)
+      }.`,
+    );
+  }
+}
+
 function resolveConstDescriptor(
-  descriptor: SourceType,
-  forwardingDescriptors: ReadonlyMap<string, SourceType>,
+  descriptor: ConstDescriptor,
+  forwardingDescriptors: ReadonlyMap<string, ConstDescriptor>,
+  declaredTypes: ReadonlyMap<string, DataDeclaration>,
+): ConstDescriptor {
+  if (descriptor.kind === "hole") return descriptor;
+  if (descriptor.kind === "tuple") {
+    return {
+      ...descriptor,
+      values: [
+        resolveConstDescriptor(descriptor.values[0], forwardingDescriptors, declaredTypes),
+        resolveConstDescriptor(descriptor.values[1], forwardingDescriptors, declaredTypes),
+      ],
+    };
+  }
+  if (descriptor.kind === "record") {
+    const fields = new Set<string>();
+    return {
+      ...descriptor,
+      fields: descriptor.fields.map((field) => {
+        if (fields.has(field.name.spelling)) {
+          throw new ConstSpecializationError(
+            field.name.span,
+            `Const descriptor repeats field ${JSON.stringify(field.name.spelling)}.`,
+          );
+        }
+        fields.add(field.name.spelling);
+        return {
+          ...field,
+          value: resolveConstDescriptor(field.value, forwardingDescriptors, declaredTypes),
+        };
+      }),
+    };
+  }
+  if (
+    descriptor.type.kind === "named" && descriptor.type.arguments.length === 0
+  ) {
+    const forwarded = forwardingDescriptors.get(descriptor.type.name);
+    if (forwarded !== undefined) return forwarded;
+  }
+  return {
+    ...descriptor,
+    type: resolveConstType(descriptor.type, forwardingDescriptors, declaredTypes),
+  };
+}
+
+function resolveConstType(
+  type: SourceType,
+  forwardingDescriptors: ReadonlyMap<string, ConstDescriptor>,
   declaredTypes: ReadonlyMap<string, DataDeclaration>,
 ): SourceType {
-  switch (descriptor.kind) {
+  switch (type.kind) {
     case "integer":
     case "boolean":
     case "unit":
-      return descriptor;
+      return type;
     case "parameter":
       throw new ConstSpecializationError(
-        descriptor.span,
-        `Const type descriptor ${JSON.stringify(descriptor.name)} is not closed.`,
+        type.span,
+        `Const type descriptor ${JSON.stringify(type.name)} is not closed.`,
       );
     case "tuple":
       return {
-        ...descriptor,
+        ...type,
         values: [
-          resolveClosedConstDescriptor(descriptor.values[0], forwardingDescriptors, declaredTypes),
-          resolveClosedConstDescriptor(descriptor.values[1], forwardingDescriptors, declaredTypes),
+          resolveConstType(type.values[0], forwardingDescriptors, declaredTypes),
+          resolveConstType(type.values[1], forwardingDescriptors, declaredTypes),
         ],
       };
     case "function":
       return {
-        ...descriptor,
-        parameter: resolveClosedConstDescriptor(
-          descriptor.parameter,
-          forwardingDescriptors,
-          declaredTypes,
-        ),
-        result: resolveClosedConstDescriptor(
-          descriptor.result,
-          forwardingDescriptors,
-          declaredTypes,
-        ),
+        ...type,
+        parameter: resolveConstType(type.parameter, forwardingDescriptors, declaredTypes),
+        result: resolveConstType(type.result, forwardingDescriptors, declaredTypes),
       };
     case "named": {
-      if (descriptor.arguments.length === 0) {
-        const forwarded = forwardingDescriptors.get(descriptor.name);
-        if (forwarded !== undefined) return forwarded;
+      if (type.arguments.length === 0) {
+        const forwarded = forwardingDescriptors.get(type.name);
+        if (forwarded !== undefined) {
+          const forwardedType = constDescriptorType(forwarded);
+          if (forwardedType === null) {
+            throw new ConstSpecializationError(
+              type.span,
+              `Const type parameter ${JSON.stringify(type.name)} cannot embed descriptor kind ${
+                JSON.stringify(forwarded.kind)
+              }.`,
+            );
+          }
+          return { ...forwardedType, span: type.span };
+        }
       }
-      const declaration = declaredTypes.get(descriptor.name);
+      const declaration = declaredTypes.get(type.name);
       if (declaration === undefined) {
         throw new ConstSpecializationError(
-          descriptor.span,
-          `Unknown const type descriptor ${JSON.stringify(descriptor.name)}.`,
+          type.span,
+          `Unknown const type descriptor ${JSON.stringify(type.name)}.`,
         );
       }
-      if (descriptor.arguments.length !== declaration.parameters.length) {
+      if (type.arguments.length !== declaration.parameters.length) {
         throw new ConstSpecializationError(
-          descriptor.span,
+          type.span,
           `Type descriptor ${
-            JSON.stringify(descriptor.name)
-          } expects ${declaration.parameters.length} type arguments; received ${descriptor.arguments.length}.`,
+            JSON.stringify(type.name)
+          } expects ${declaration.parameters.length} type arguments; received ${type.arguments.length}.`,
         );
       }
       return {
-        ...descriptor,
-        arguments: descriptor.arguments.map((argument) =>
-          resolveClosedConstDescriptor(argument, forwardingDescriptors, declaredTypes)
+        ...type,
+        arguments: type.arguments.map((argument) =>
+          resolveConstType(argument, forwardingDescriptors, declaredTypes)
         ),
       };
     }
   }
 }
 
-function resolveClosedConstDescriptor(
-  descriptor: SourceType,
-  forwardingDescriptors: ReadonlyMap<string, SourceType>,
-  declaredTypes: ReadonlyMap<string, DataDeclaration>,
-): SourceType {
-  if (
-    descriptor.kind === "named" && descriptor.arguments.length === 0 &&
-    forwardingDescriptors.has(descriptor.name)
-  ) {
-    throw new ConstSpecializationError(
-      descriptor.span,
-      `Const type descriptor ${JSON.stringify(descriptor.name)} must be closed; ` +
-        "only a descriptor parameter may be forwarded directly.",
-    );
+function constDescriptorType(descriptor: ConstDescriptor): SourceType | null {
+  if (descriptor.kind === "type") return descriptor.type;
+  if (descriptor.kind !== "tuple") return null;
+  const first = constDescriptorType(descriptor.values[0]);
+  const second = constDescriptorType(descriptor.values[1]);
+  if (first === null || second === null) return null;
+  return { kind: "tuple", values: [first, second], span: descriptor.span };
+}
+
+function constDescriptorStructuralKey(descriptor: ConstDescriptor): string {
+  if (descriptor.kind === "hole") return "hole";
+  if (descriptor.kind === "type") return `type(${typeStructuralKey(descriptor.type)})`;
+  if (descriptor.kind === "tuple") {
+    return `tuple(${constDescriptorStructuralKey(descriptor.values[0])},${
+      constDescriptorStructuralKey(descriptor.values[1])
+    })`;
   }
-  return resolveConstDescriptor(descriptor, new Map(), declaredTypes);
+  const fields = descriptor.fields.map((field) =>
+    `${JSON.stringify(field.name.spelling)}:${constDescriptorStructuralKey(field.value)}`
+  ).sort();
+  return `record({${fields.join(",")}})`;
 }
 
 function typeStructuralKey(type: SourceType): string {

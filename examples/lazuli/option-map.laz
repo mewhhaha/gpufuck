@@ -2,7 +2,7 @@
 
 data Option a = None | Some(value: a);
 
-let map : (a -> b) -> Option a -> Option b = transform => option =>
+let map = transform => option =>
   case option of
     | None -> None
     | Some(value) -> Some (transform value)

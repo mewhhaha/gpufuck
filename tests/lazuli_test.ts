@@ -430,6 +430,17 @@ Deno.test("requires whitespace before every function argument", () => {
   }
 });
 
+Deno.test("requires whitespace before a specialization type descriptor", () => {
+  const parsing = parseLazuliSource(
+    "const identity a = value => value; let main = identity@Int 42;",
+  );
+  equal(parsing.ok, false);
+  if (!parsing.ok) {
+    equal(parsing.diagnostics[0].code, "L1001");
+    match(parsing.diagnostics[0].message, /requires whitespace/i);
+  }
+});
+
 Deno.test("resolves shadowed bindings by lexical depth", async () => {
   await withLazuliRuntime(async (runtime) => {
     const result = await evaluateSource(
@@ -968,7 +979,7 @@ Deno.test("destroys GPU Lazuli modules idempotently", async () => {
   });
 });
 
-Deno.test("recurses over immutable algebraic lists", async () => {
+Deno.test("applies recursive functions directly to list literals", async () => {
   await withLazuliRuntime(async (runtime) => {
     const result = await evaluateSource(
       runtime,
@@ -976,7 +987,7 @@ Deno.test("recurses over immutable algebraic lists", async () => {
          | Nil -> 0
          | Cons(head, tail) -> head + sum tail
        end;
-       fn main = sum (Cons 20 (Cons 22 Nil));`,
+       fn main = sum [20, 22];`,
     );
 
     ok(result.ok);
@@ -1686,9 +1697,9 @@ Deno.test("specializes const values and erases forwarded type descriptors", asyn
       runtime,
       `data Box a = Box(value: a);
        const answer = 40;
-       const identity[T] = value => value;
-       const forwarded[T] = identity[T];
-       let main = forwarded[Box Int] (answer + 2);`,
+       const identity a = value => value;
+       const forwarded a = identity @a;
+       let main = forwarded @(Box Int) (answer + 2);`,
     );
 
     ok(result.ok);
@@ -1696,18 +1707,51 @@ Deno.test("specializes const values and erases forwarded type descriptors", asyn
   });
 });
 
-Deno.test("reports unknown and mismatched const type descriptors", () => {
+Deno.test("destructures structured const descriptors and infers holes", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const result = await evaluateSource(
+      runtime,
+      `data Box a = Box(value: a);
+       const identity a = value => value;
+       const boxed a = identity @(Box a);
+       const tupleChoice (a, b) = boxed @b;
+       const recordChoice { fst: a, snd: b } = boxed @a;
+       let main = (
+         tupleChoice @(_, Bool) true,
+         recordChoice @{ snd = Bool, fst = Int } 42
+       );`,
+      { resultForm: "deep" },
+    );
+
+    ok(result.ok);
+    deepStrictEqual(result.value, {
+      kind: "tuple",
+      fieldCount: 2,
+      fields: [{ kind: "boolean", value: true }, { kind: "integer", value: 42 }],
+    });
+  });
+});
+
+Deno.test("reports unknown and structurally mismatched const type descriptors", () => {
   const unknownType = parseLazuliSource(
-    "const identity[T] = value => value; let main = identity[Missing] 42;",
+    "const identity a = value => value; let main = identity @Missing 42;",
   );
   equal(unknownType.ok, false);
   if (!unknownType.ok) match(unknownType.diagnostics[0].message, /unknown const type descriptor/i);
 
-  const wrongArity = parseLazuliSource(
-    "data Box a = Box(value: a); const identity[T] = value => value; let main = identity[Box Int, Box Int] 42;",
+  const wrongShape = parseLazuliSource(
+    "const choose (a, b) = value => value; let main = choose @Int 42;",
   );
-  equal(wrongArity.ok, false);
-  if (!wrongArity.ok) match(wrongArity.diagnostics[0].message, /expects 1 type arguments/i);
+  equal(wrongShape.ok, false);
+  if (!wrongShape.ok) match(wrongShape.diagnostics[0].message, /expects a tuple type descriptor/i);
+
+  const unspecialized = parseLazuliSource(
+    "const choose (a, b) = value => value; let main = choose 42;",
+  );
+  equal(unspecialized.ok, false);
+  if (!unspecialized.ok) {
+    match(unspecialized.diagnostics[0].message, /requires one type descriptor/i);
+  }
 });
 
 Deno.test("lazily manipulates structured host input with top-level lets and arrows", async () => {

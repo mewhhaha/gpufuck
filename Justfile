@@ -3,7 +3,7 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 default:
   @just --list
 
-# Generate Lazuli syntax artifacts and install Helix highlighting for .lz files.
+# Generate Lazuli syntax artifacts and install Helix highlighting for .laz files.
 install: install-helix
   @hx --health lazuli
 

@@ -1,14 +1,8 @@
-import {
-  FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
-  FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
-  type FunctionalTypeSchema,
-} from "./abi.ts";
+import type { FunctionalTypeSchema } from "./abi.ts";
 import type { FunctionalSurfaceTypeDeclaration } from "./surface_builder.ts";
 
 const TYPE_CORE_TYPE = "$TypeCoreType";
 const TYPE_CORE_LIST = "$TypeCoreList";
-const UNIT_TYPE = "$UnitType";
-const PAIR_TYPE = "$TupleType";
 
 export const TYPE_CORE_VALUE = "$TypeCoreValue";
 export const TYPE_CORE_ENTRY_DEFINITION = "$TypeCoreEntry";
@@ -83,19 +77,6 @@ export function typeCoreRuntimeDeclarations(): readonly FunctionalSurfaceTypeDec
           ["tail", namedType(TYPE_CORE_LIST)],
         ]),
       ],
-    },
-    {
-      name: UNIT_TYPE,
-      parameters: [],
-      constructors: [constructor(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME)],
-    },
-    {
-      name: PAIR_TYPE,
-      parameters: ["first", "second"],
-      constructors: [constructor(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME, [
-        ["first", { kind: "parameter", name: "first" }],
-        ["second", { kind: "parameter", name: "second" }],
-      ])],
     },
   ];
 }

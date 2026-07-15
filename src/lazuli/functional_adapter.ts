@@ -22,6 +22,7 @@ export function lazuliSurfaceToFunctionalModule(
     evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
     typecheckingProfile: FunctionalTypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
+    hostCapabilities: [],
     nodeWords: surface.nodeWords,
     definitionWords: surface.definitionWords,
     typeWords: surface.typeWords,

@@ -2,15 +2,15 @@
 
 data Reading = Reading(label: Text, value: Int);
 
-const identity[T] = value => value;
+const identity a = value => value;
 
-let area : (Int, Int) -> Int = dimensions =>
+let area = dimensions =>
   case dimensions of
     | (width, height) -> width * height
   end;
 
 fn main =
-  let title = identity[Text] "highlight me" in
+  let title = identity @Text "highlight me" in
   let samples = [20, 22] in
   let reading = Reading { value: area (6, 7), label: title } in
   case reading of

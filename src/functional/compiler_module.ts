@@ -4,6 +4,7 @@ import type {
   FunctionalType,
   FunctionalTypeDeclaration,
 } from "./abi.ts";
+import type { FunctionalHostCapabilityDeclaration } from "./host_contract.ts";
 
 export interface FunctionalCoreNode {
   readonly tag: FunctionalCoreTag;
@@ -24,9 +25,11 @@ export interface GpuFunctionalModule {
   readonly typeCount: number;
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
+  readonly definitionRoots: readonly number[];
   readonly entryDefinition: number;
   readonly entryType: FunctionalType;
   readonly typeDeclarations: readonly FunctionalTypeDeclaration[];
+  readonly hostCapabilities: readonly FunctionalHostCapabilityDeclaration[];
   readCoreNodes(): Promise<readonly FunctionalCoreNode[]>;
   destroy(): void;
 }
