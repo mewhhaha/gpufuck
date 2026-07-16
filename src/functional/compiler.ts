@@ -343,17 +343,17 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
   }
   if (
     module.typecheckingProfile !== FunctionalTypecheckingProfile.HindleyMilnerIndexed &&
-    module.typecheckingProfile !== FunctionalTypecheckingProfile.PredicativeRank2Indexed
+    module.typecheckingProfile !== FunctionalTypecheckingProfile.PredicativeRankNIndexed
   ) {
     throw new Error(
       `functional module typechecking profile ${
         JSON.stringify(module.typecheckingProfile)
       } is unsupported; expected ${
         JSON.stringify(FunctionalTypecheckingProfile.HindleyMilnerIndexed)
-      } or ${JSON.stringify(FunctionalTypecheckingProfile.PredicativeRank2Indexed)}`,
+      } or ${JSON.stringify(FunctionalTypecheckingProfile.PredicativeRankNIndexed)}`,
     );
   }
-  const declaresRank2 =
+  const declaresHigherRankTypes =
     module.definitionTypes.some((definition) =>
       definition.annotation !== null && schemaContainsForall(definition.annotation)
     ) || module.typeDeclarations.some((declaration) =>
@@ -365,13 +365,13 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
       )
     );
   if (
-    declaresRank2 !==
-      (module.typecheckingProfile === FunctionalTypecheckingProfile.PredicativeRank2Indexed)
+    declaresHigherRankTypes !==
+      (module.typecheckingProfile === FunctionalTypecheckingProfile.PredicativeRankNIndexed)
   ) {
     throw new Error(
       `functional module typechecking profile ${
         JSON.stringify(module.typecheckingProfile)
-      } does not match rank-2 schema presence ${declaresRank2}`,
+      } does not match higher-rank schema presence ${declaresHigherRankTypes}`,
     );
   }
   validatePrimitiveCapabilities(module.primitiveCapabilities);

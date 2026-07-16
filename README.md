@@ -161,6 +161,7 @@ deno task run:onesubml-functional examples/onesubml-functional/modules.ml
 deno task run:onesubml-functional examples/onesubml-functional/combinators.ml
 deno task run:onesubml-functional examples/onesubml-functional/blocks.ml
 deno task run:onesubml-functional examples/onesubml-functional/rank2.ml
+deno task run:onesubml-functional examples/onesubml-functional/rank3.ml
 ```
 
 Generate the same source-to-surface-to-core trace as the other interoperability profiles:
@@ -174,15 +175,16 @@ deno task trace:onesubml-functional \
 The [1SubML example index](examples/onesubml-functional/README.md) links all sources and traces and
 contains the exact support matrix. This first profile covers pure i32 and boolean expressions,
 sequential and recursive bindings, lambdas, tuples, immutable anonymous records, field projection,
-conditionals, arithmetic, and annotated rank-2 polymorphic function parameters. It preserves
+conditionals, arithmetic, and explicitly annotated predicative rank-N polymorphism. It preserves
 1SubML's sequential scope, explicit generic functions, and right-associative calls.
 
 This is deliberately not a claim of full 1SubML compatibility. Structural width subtyping, variants,
-mutable records, loops, arbitrary-precision integers, floats, strings, newtypes, subsumption and
-implicit coercions, existential module members, rank-3 or impredicative types, higher-kinded source
-types, imports, and effects are not implemented. Record shapes must currently be evident at the
-projection site rather than inferred through function parameters or results. Those omissions
-identify concrete backend/frontend milestones instead of silently giving them nominal semantics.
+mutable records, loops, arbitrary-precision integers, floats, strings, newtypes, record-width
+subsumption and implicit structural coercions, existential module members, impredicative types,
+higher-kinded source types, imports, and effects are not implemented. Record shapes must currently
+be evident at the projection site rather than inferred through function parameters or results. Those
+omissions identify concrete backend/frontend milestones instead of silently giving them nominal
+semantics.
 
 ## Haskell functional profile
 
@@ -264,19 +266,20 @@ and structural packing, but production name resolution, dependency analysis, typ
 coverage checking, and core lowering belong to the GPU backend.
 
 Language neutrality also applies to semantics. The current implementation provides lazy
-Hindley–Milner-plus-indexed-types and predicative-rank-2 profiles. Rank-2 annotations may place
-`forall` at a function-parameter boundary; generalized arguments are instantiated independently at
-each use, while deeper or impredicative quantifiers are rejected. A strict frontend will need either
-an explicit strictness profile or forcing constructs in its lowering; a language with its own type
-system should be able to submit a pretyped module for GPU verification instead of being forced
+Hindley–Milner-plus-indexed-types and predicative-rank-N profiles. Explicit annotations may place
+`forall` at recursively nested function-parameter boundaries. Actual schemes are instantiated,
+expected schemes are skolemized, and function parameters are compared contravariantly while results
+are compared covariantly. Impredicative quantifiers remain unsupported. A strict frontend will need
+either an explicit strictness profile or forcing constructs in its lowering; a language with its own
+type system should be able to submit a pretyped module for GPU verification instead of being forced
 through inference. Effects and module systems can be lowered into explicit core values and
 operations rather than becoming parser-specific backend branches.
 
 The functional API does not assume Lazuli keywords, its Baba parser, or its source diagnostic
 prefix. Likewise, the Brainfuck instruction format is not a backend IR. ABI v5 currently accepts the
 `lazy-call-by-need-v1` evaluation profile with either `hindley-milner-indexed-v1` or
-`predicative-rank2-indexed-v1` typechecking; profile metadata prevents a rank-1 module from silently
-acquiring first-class polymorphic parameters.
+`predicative-rank-n-indexed-v1` typechecking; profile metadata prevents a rank-1 module from
+silently acquiring first-class polymorphic parameters.
 
 ## Compile-time Type Core
 
@@ -564,7 +567,7 @@ The implementation keeps the boundary explicit:
    used by the Rust, Haskell, and OCaml `run` commands.
 
 The TypeScript inference implementation is a rank-1/indexed differential-test oracle, not a
-production fallback. Rank-2 schemes are checked only by the production GPU path and covered by
+production fallback. Higher-rank schemes are checked only by the production GPU path and covered by
 canonical-schema, positive/negative subsumption, fuel, and dispatch-quantum tests. Parsing,
 syntax-specific desugaring, structural schema packing, and WASM byte emission remain host-side;
 semantic resolution, type inference, and core lowering are GPU-side.
@@ -855,11 +858,11 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
 - Compilation has a default budget of 1,000,000 persistent semantic transitions and returns `L1003`
   when that fuel is exhausted.
 - The current functional core uses Hindley–Milner inference with GADT-style indexed constructor
-  results plus predicative rank-2 function parameters, not full dependent or impredicative types.
-  Ordinary and recursive bindings are inferred, including indexed cases with a concrete result or a
-  result fixed by their context. An annotation remains necessary at a rank-2 parameter and when it
-  selects a non-principal indexed contract whose result depends on an arm-local refinement. The
-  entry definition must resolve to a concrete type.
+  results plus explicitly annotated predicative rank-N function parameters, not full dependent or
+  impredicative types. Ordinary and recursive bindings are inferred, including indexed cases with a
+  concrete result or a result fixed by their context. An annotation remains necessary at a
+  higher-rank boundary and when it selects a non-principal indexed contract whose result depends on
+  an arm-local refinement. The entry definition must resolve to a concrete type.
 - Every type parameter used by an indexed constructor field must be a bare, direct argument of that
   constructor's result. Existential field recovery is not implemented.
 - Proof witnesses are runtime values and are not erased. Primitive operand errors, constructor

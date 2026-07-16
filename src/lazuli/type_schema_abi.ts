@@ -151,7 +151,7 @@ export function flattenLazuliTypeSchemas(
         }
         if (containsForall(field.type)) {
           throw new Error(
-            `constructor ${constructorIndex} field ${fieldIndex} cannot contain rank-2 forall`,
+            `constructor ${constructorIndex} field ${fieldIndex} cannot contain higher-rank forall`,
           );
         }
         constructorFieldRoots.push(schemaEncoder.encode(
@@ -161,7 +161,7 @@ export function flattenLazuliTypeSchemas(
       }
       constructorFieldOffsets.push(constructorFieldRoots.length);
       if (constructor.result !== undefined && containsForall(constructor.result)) {
-        throw new Error(`constructor ${constructorIndex} result cannot contain rank-2 forall`);
+        throw new Error(`constructor ${constructorIndex} result cannot contain higher-rank forall`);
       }
       constructorResultRoots.push(schemaEncoder.encode(
         constructor.result ?? synthesizedConstructorResult(declaration, constructor.name),
@@ -187,7 +187,7 @@ export function flattenLazuliTypeSchemas(
       throw new Error(`Lazuli type metadata omitted definition ${definitionIndex}.`);
     }
     if (definitionType.annotation !== null) {
-      validateRank2DefinitionSchema(
+      validateHigherRankDefinitionSchema(
         definitionType.annotation,
         `definition ${definitionIndex} annotation`,
       );
@@ -210,13 +210,12 @@ export function flattenLazuliTypeSchemas(
   ], identifiers.names);
 }
 
-function validateRank2DefinitionSchema(schema: LazuliTypeSchema, context: string): void {
+function validateHigherRankDefinitionSchema(schema: LazuliTypeSchema, context: string): void {
   const forallNames = new Set<string>();
   const freeParameters = new Set<string>();
   const visit = (
     current: LazuliTypeSchema,
     forallAllowed: boolean,
-    insideForall: boolean,
     bound: ReadonlySet<string>,
   ): void => {
     switch (current.kind) {
@@ -229,19 +228,19 @@ function validateRank2DefinitionSchema(schema: LazuliTypeSchema, context: string
         }
         return;
       case "tuple":
-        visit(current.values[0], false, insideForall, bound);
-        visit(current.values[1], false, insideForall, bound);
+        visit(current.values[0], false, bound);
+        visit(current.values[1], false, bound);
         return;
       case "named":
-        for (const argument of current.arguments) visit(argument, false, insideForall, bound);
+        for (const argument of current.arguments) visit(argument, false, bound);
         return;
       case "function":
-        visit(current.parameter, !insideForall && !forallAllowed, insideForall, bound);
-        visit(current.result, false, insideForall, bound);
+        visit(current.parameter, true, bound);
+        visit(current.result, false, bound);
         return;
       case "forall": {
         if (!forallAllowed) {
-          throw new Error(`${context} places forall deeper than rank 2`);
+          throw new Error(`${context} places forall outside a function parameter`);
         }
         if (current.parameters.length === 0) {
           throw new Error(`${context} forall must bind at least one type parameter`);
@@ -262,12 +261,12 @@ function validateRank2DefinitionSchema(schema: LazuliTypeSchema, context: string
           forallNames.add(parameter);
           nested.add(parameter);
         }
-        visit(current.body, false, true, nested);
+        visit(current.body, false, nested);
         return;
       }
     }
   };
-  visit(schema, false, false, new Set());
+  visit(schema, false, new Set());
   for (const parameter of forallNames) {
     if (freeParameters.has(parameter)) {
       throw new Error(

@@ -103,7 +103,7 @@ Deno.test("compiles and evaluates a parser-independent functional module", async
   }
 });
 
-Deno.test("checks a parser-independent rank-2 function parameter on the GPU", async () => {
+Deno.test("checks a parser-independent rank-3 function parameter on the GPU", async () => {
   const identity = {
     name: "identity",
     parameters: [],
@@ -140,13 +140,30 @@ Deno.test("checks a parser-independent rank-2 function parameter on the GPU", as
       ),
     ),
   } as const;
+  const withIdentity = {
+    name: "with_identity",
+    parameters: [],
+    annotation: {
+      kind: "function",
+      parameter: {
+        kind: "function",
+        parameter: use.annotation.parameter,
+        result: use.annotation.result,
+      },
+      result: use.annotation.result,
+    },
+    body: surface.lambda(
+      "consumer",
+      surface.apply(surface.name("consumer"), surface.name("identity")),
+    ),
+  } as const;
   const main = {
     name: "main",
     parameters: [],
     annotation: null,
     body: {
       kind: "case",
-      value: surface.apply(surface.name("use"), surface.name("identity")),
+      value: surface.apply(surface.name("with_identity"), surface.name("use")),
       arms: [{
         constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
         binders: ["answer", "condition"],
@@ -159,8 +176,8 @@ Deno.test("checks a parser-independent rank-2 function parameter on the GPU", as
       }],
     },
   } as const;
-  const module = buildFunctionalSurfaceModule([identity, use, main], [], "main", 0);
-  equal(module.typecheckingProfile, FunctionalTypecheckingProfile.PredicativeRank2Indexed);
+  const module = buildFunctionalSurfaceModule([identity, use, withIdentity, main], [], "main", 0);
+  equal(module.typecheckingProfile, FunctionalTypecheckingProfile.PredicativeRankNIndexed);
   const { compiler, evaluator } = functionalRuntime();
   const compilation = await compiler.compileModule(module);
 

@@ -435,7 +435,7 @@ class OneSubmlFunctionalLowering {
     ) {
       throw new OneSubmlFunctionalLoweringError(
         expression.span,
-        "Rank-2 annotations currently belong on a top-level 1SubML function definition.",
+        "Higher-rank annotations currently belong on a top-level 1SubML function definition.",
       );
     }
     if (expression.typeParameters.length !== 0 && expression !== this.#annotatedDefinitionLambda) {
