@@ -1,14 +1,14 @@
-import {
-  type TypeCoreCapabilityEvidence,
-  type TypeCoreCapabilityGoal,
-  type TypeCoreCapabilityPattern,
-  type TypeCoreCapabilityPremise,
-  type TypeCoreCapabilityResolution,
-  type TypeCoreCapabilityResolutionOptions,
-  type TypeCoreCapabilityRule,
-  type TypeCoreCapabilityTypePattern,
-  type TypeCoreCapabilityVerification,
-  type TypeCoreCapabilityWitness,
+import type {
+  TypeCoreCapabilityEvidence,
+  TypeCoreCapabilityGoal,
+  TypeCoreCapabilityPattern,
+  TypeCoreCapabilityPremise,
+  TypeCoreCapabilityResolution,
+  TypeCoreCapabilityResolutionOptions,
+  TypeCoreCapabilityRule,
+  TypeCoreCapabilityTypePattern,
+  TypeCoreCapabilityVerification,
+  TypeCoreCapabilityWitness,
 } from "./capability_contract.ts";
 import {
   type TypeCoreKind,

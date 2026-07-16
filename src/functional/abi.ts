@@ -92,16 +92,17 @@ export const FunctionalPrimitiveCapability = {
 export type FunctionalPrimitiveCapability =
   (typeof FunctionalPrimitiveCapability)[keyof typeof FunctionalPrimitiveCapability];
 
-export const FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES = Object.freeze(
-  [
-    FunctionalPrimitiveCapability.SignedInteger32,
-    FunctionalPrimitiveCapability.Boolean,
-    FunctionalPrimitiveCapability.Unit,
-    FunctionalPrimitiveCapability.Pair,
-    FunctionalPrimitiveCapability.Function,
-    FunctionalPrimitiveCapability.AlgebraicData,
-  ] as const,
-);
+export const FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES: readonly FunctionalPrimitiveCapability[] =
+  Object.freeze(
+    [
+      FunctionalPrimitiveCapability.SignedInteger32,
+      FunctionalPrimitiveCapability.Boolean,
+      FunctionalPrimitiveCapability.Unit,
+      FunctionalPrimitiveCapability.Pair,
+      FunctionalPrimitiveCapability.Function,
+      FunctionalPrimitiveCapability.AlgebraicData,
+    ] as const,
+  );
 
 export type FunctionalSpan = LazuliSpan;
 export type FunctionalType = LazuliType;

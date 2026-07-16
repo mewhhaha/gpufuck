@@ -1,3 +1,12 @@
+/**
+ * GPU-backed semantic compilation and WASM emission for functional-language frontends.
+ *
+ * Frontends lower their syntax into the portable surface module, compile it through WebGPU, and
+ * emit ordinary WebAssembly that no longer depends on this package or a GPU.
+ *
+ * @module
+ */
+
 export {
   type EncodedFunctionalDefinitionType,
   type EncodedFunctionalModule,

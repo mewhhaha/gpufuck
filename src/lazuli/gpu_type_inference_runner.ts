@@ -1,13 +1,13 @@
 import { LAZULI_NO_INDEX } from "./abi.ts";
 import { LazuliCompilationStatus } from "./compiler_shader.ts";
-import { type GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
-import { type GpuLazuliSemanticCompilationPass } from "./gpu_semantic_contract.ts";
-import {
-  type GpuLazuliCompilationInferenceRun,
-  type GpuLazuliTypeInferenceOptions,
-  type GpuLazuliTypeInferenceRun,
-  type InferenceStateSnapshot,
-  type WorkspaceLayout,
+import type { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
+import type { GpuLazuliSemanticCompilationPass } from "./gpu_semantic_contract.ts";
+import type {
+  GpuLazuliCompilationInferenceRun,
+  GpuLazuliTypeInferenceOptions,
+  GpuLazuliTypeInferenceRun,
+  InferenceStateSnapshot,
+  WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import {
   copyOutputForReadback,

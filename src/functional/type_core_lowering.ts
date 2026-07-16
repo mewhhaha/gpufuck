@@ -6,12 +6,12 @@ import {
   type FunctionalSurfaceExpression,
   surface,
 } from "./surface_builder.ts";
-import {
-  type TypeCoreExpression,
-  type TypeCoreKind,
-  type TypeCorePattern,
-  type TypeCoreTypeExpression,
-  type TypeCoreTypePattern,
+import type {
+  TypeCoreExpression,
+  TypeCoreKind,
+  TypeCorePattern,
+  TypeCoreTypeExpression,
+  TypeCoreTypePattern,
 } from "./type_core_contract.ts";
 import {
   compileValueFunctionType,

@@ -1,11 +1,11 @@
 import { type EncodedLazuliSurface, LAZULI_NO_INDEX } from "./abi.ts";
 import { LazuliCompilationStateWord, LazuliCompilationStatus } from "./compiler_shader.ts";
-import {
-  type GpuLazuliTypeInferenceOptions,
-  type GpuLazuliTypeInferenceWorkspaceCapacities,
-  type InferenceStateSnapshot,
-  type WorkspaceCapacities,
-  type WorkspaceLayout,
+import type {
+  GpuLazuliTypeInferenceOptions,
+  GpuLazuliTypeInferenceWorkspaceCapacities,
+  InferenceStateSnapshot,
+  WorkspaceCapacities,
+  WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import {
   LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
@@ -18,7 +18,7 @@ import {
   LazuliInferenceSchedulerWord,
   LazuliInferenceStateWord,
   LazuliInferenceStatus,
-  prepareLazuliInferenceShaderMetadata,
+  type prepareLazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;

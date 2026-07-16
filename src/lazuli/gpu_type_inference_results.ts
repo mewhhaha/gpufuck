@@ -10,12 +10,12 @@ import {
   type LazuliTypeSchema,
   LazuliTypeWord,
 } from "./abi.ts";
-import { type GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
-import {
-  type GpuLazuliTypeInferenceOptions,
-  type GpuLazuliTypeInferenceRun,
-  type InferenceStateSnapshot,
-  type WorkspaceLayout,
+import type { GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
+import type {
+  GpuLazuliTypeInferenceOptions,
+  GpuLazuliTypeInferenceRun,
+  InferenceStateSnapshot,
+  WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import { inferenceArenaName } from "./gpu_type_inference_workspace.ts";
 import { LazuliCompilationStatus } from "./compiler_shader.ts";
@@ -29,7 +29,7 @@ import {
   LazuliInferenceSchemaWord,
   type LazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
-import { type LazuliTypeInferenceSuccess } from "./type_inference.ts";
+import type { LazuliTypeInferenceSuccess } from "./type_inference.ts";
 import { decodeLazuliType } from "./type_schema_abi.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;

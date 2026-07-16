@@ -1,18 +1,18 @@
-import { type EncodedLazuliSurface } from "./abi.ts";
+import type { EncodedLazuliSurface } from "./abi.ts";
 import {
   LAZULI_COMPILATION_STATE_BYTE_LENGTH,
   LazuliCompilationStateWord,
   LazuliCompilationStatus,
 } from "./compiler_shader.ts";
-import { type GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
-import {
-  type GpuLazuliSemanticCompilationPass,
-  type GpuLazuliSemanticStateSnapshot,
+import type { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
+import type {
+  GpuLazuliSemanticCompilationPass,
+  GpuLazuliSemanticStateSnapshot,
 } from "./gpu_semantic_contract.ts";
-import {
-  type GpuLazuliTypeInferenceOptions,
-  type InferenceStateSnapshot,
-  type WorkspaceLayout,
+import type {
+  GpuLazuliTypeInferenceOptions,
+  InferenceStateSnapshot,
+  WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import {
   checkedProduct,

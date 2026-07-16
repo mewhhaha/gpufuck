@@ -1,0 +1,41 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  jsr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Require the tag to match the package version
+        run: |
+          version=$(deno eval --allow-read=deno.json 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).version)')
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Check package types
+        run: deno check functional.ts
+
+      - name: Check formatting
+        run: deno task fmt
+
+      - name: Lint
+        run: deno task lint
+
+      - name: Validate package contents
+        run: deno publish --dry-run
+
+      - name: Publish with provenance
+        run: deno publish

@@ -1,8 +1,4 @@
-import {
-  type EncodedLazuliSurface,
-  type LazuliDiagnostic,
-  type LazuliDiagnosticCode,
-} from "./abi.ts";
+import type { EncodedLazuliSurface, LazuliDiagnostic, LazuliDiagnosticCode } from "./abi.ts";
 import {
   type EncodedFunctionalModule,
   FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,

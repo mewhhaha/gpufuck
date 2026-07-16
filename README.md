@@ -25,29 +25,37 @@ Compilation requires:
 - a WebGPU adapter visible to Deno;
 - Deno's `webgpu` unstable API enabled.
 
-The library is currently distributed as Deno source rather than a published JSR package. Vendor it
-at a fixed revision; a Git submodule records the exact compiler source with your project:
+Add the package to a Deno project:
 
 ```sh
-git submodule add git@github.com:mewhhaha/gpufuck.git vendor/gpufuck
-git -C vendor/gpufuck checkout c9a93b628ec43580d79fda6c56383e1b03be44e6
-git add .gitmodules vendor/gpufuck
+deno add jsr:@mewhhaha/gpufuck@^0.1.0
 ```
 
-Map the language-neutral entry point in your `deno.json`:
+Enable WebGPU in `deno.json`:
 
 ```json
 {
-  "unstable": ["webgpu"],
-  "imports": {
-    "@gpufuck/functional": "./vendor/gpufuck/functional.ts"
-  }
+  "unstable": ["webgpu"]
 }
 ```
 
-`functional.ts` is the language-neutral entry point. It does not load the Lazuli parser or the
-historical Brainfuck compiler. Update and review the submodule commit deliberately when upgrading.
-Use an authenticated HTTPS repository URL instead when your GitHub access is token-based.
+Import the language-neutral API from `@mewhhaha/gpufuck`. The published entry point does not load
+the Lazuli parser or the historical Brainfuck compiler.
+
+The package is prepared for `0.1.0`; the install command becomes available after that version is
+published. Until then, clone this repository and map `@mewhhaha/gpufuck` to its `functional.ts` at a
+fixed commit.
+
+### Machines without a GPU
+
+There is no CPU semantic-compiler fallback. `requestWebGpuDevice()` throws if WebGPU is disabled or
+the host exposes no compatible adapter. A software WebGPU adapter can compile without physical GPU
+hardware when the host makes one available, but it is substantially slower and is best treated as a
+compatibility path.
+
+This restriction ends at compilation. The emitted `.wasm` is an ordinary WebAssembly module and runs
+without WebGPU, this package, or a GPU. A build machine can therefore compile and cache WASM for
+CPU-only deployment targets.
 
 To work from a clone and run the repository's checks:
 
@@ -70,7 +78,7 @@ import {
   GpuFunctionalCompiler,
   requestWebGpuDevice,
   surface,
-} from "@gpufuck/functional";
+} from "@mewhhaha/gpufuck";
 
 const source = "main = 40 + 2";
 const encodedModule = buildFunctionalSurfaceModule(
@@ -149,7 +157,7 @@ import {
   FunctionalBinaryOperator,
   type FunctionalSurfaceExpression,
   surface,
-} from "@gpufuck/functional";
+} from "@mewhhaha/gpufuck";
 
 type SourceExpression =
   | { kind: "integer"; value: number }
@@ -820,7 +828,7 @@ import {
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
   runFunctionalWasmModule,
-} from "@gpufuck/functional";
+} from "@mewhhaha/gpufuck";
 
 const encodedModule = {
   abiVersion: FUNCTIONAL_MODULE_ABI_VERSION,

@@ -1,6 +1,6 @@
-import { type EncodedLazuliSurface } from "./abi.ts";
-import { type GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
-import { type LazuliTypeInferenceResult } from "./type_inference.ts";
+import type { EncodedLazuliSurface } from "./abi.ts";
+import type { GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
+import type { LazuliTypeInferenceResult } from "./type_inference.ts";
 
 export interface GpuLazuliTypeInferenceBuffers {
   readonly coreNodeBuffer: GPUBuffer;

@@ -588,7 +588,25 @@ function parentSpan(words: readonly number[], parent: number): FunctionalSpan | 
   return { startByte, endByte };
 }
 
-export const surface = {
+export const surface: Readonly<{
+  integer(value: number): FunctionalSurfaceExpression;
+  boolean(value: boolean): FunctionalSurfaceExpression;
+  name(name: string): FunctionalSurfaceExpression;
+  lambda(parameter: string, body: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
+  apply(
+    callee: FunctionalSurfaceExpression,
+    ...arguments_: readonly FunctionalSurfaceExpression[]
+  ): FunctionalSurfaceExpression;
+  binary(
+    operator: FunctionalBinaryOperator,
+    left: FunctionalSurfaceExpression,
+    right: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
+  equal(
+    left: FunctionalSurfaceExpression,
+    right: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
+}> = {
   integer(value: number): FunctionalSurfaceExpression {
     return { kind: "integer", value };
   },
