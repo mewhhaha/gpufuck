@@ -9,6 +9,7 @@ import { LazuliInferenceStatus } from "../src/lazuli/type_inference_shader.ts";
 const DEFAULT_SOURCE_PATH = "examples/lazuli-brainfuck/compiler.laz";
 const SAMPLE_COUNT = 5;
 const BATCH_SIZE = 16;
+const BATCH_SCALING_SIZES = [2, 4, 8, 16, 32, 64, 128] as const;
 const BATCH_DISPATCH_QUANTUM = 65_536;
 const DISPATCH_QUANTA = [4_096, 8_192, 16_384, 65_536] as const;
 const MAXIMUM_STEPS = 10_000_000;
@@ -170,6 +171,34 @@ try {
     compilation.module.destroy();
   }
 
+  const packedScaling: {
+    readonly programCount: number;
+    readonly totalMilliseconds: number;
+    readonly millisecondsPerProgram: number;
+  }[] = [];
+  for (const programCount of BATCH_SCALING_SIZES) {
+    const start = performance.now();
+    const compilations = await compiler.compileBatch(
+      Array.from({ length: programCount }, () => ({
+        surface: semanticSurface,
+        sourceByteLength: sourceBytes,
+        maximumSteps: MAXIMUM_STEPS,
+        maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
+      })),
+      undefined,
+    );
+    const totalMilliseconds = performance.now() - start;
+    for (const compilation of compilations) {
+      if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+      compilation.module.destroy();
+    }
+    packedScaling.push({
+      programCount,
+      totalMilliseconds,
+      millisecondsPerProgram: totalMilliseconds / programCount,
+    });
+  }
+
   console.log(JSON.stringify(
     {
       sourcePath,
@@ -211,6 +240,7 @@ try {
           dispatchLaneCounts: packedDispatchLaneCounts,
           throughputRatio: scheduledBatchMilliseconds / packedBatchMilliseconds,
         },
+        packedScaling,
       },
     },
     null,

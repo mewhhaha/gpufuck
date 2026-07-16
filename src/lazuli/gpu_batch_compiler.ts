@@ -26,6 +26,7 @@ import {
   checkedProduct,
   createInitialState,
   INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
+  inferredTypeOutputByteLength,
   workspaceLayout,
 } from "./gpu_type_inference_workspace.ts";
 import type {
@@ -44,6 +45,8 @@ import {
 import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
+const FAST_OUTPUT_RECORD_CAPACITY = 64;
+const FAST_COMPLETION_MINIMUM_DISPATCH_QUANTUM = 4_096;
 
 export interface LazuliBatchCompilationInput {
   readonly surface: EncodedLazuliSurface;
@@ -68,6 +71,14 @@ export interface BatchLane extends LazuliBatchCompilationInput {
   readonly metadataBase: number;
   readonly workspaceBase: number;
   readonly outputBase: number;
+  readonly fastOutputBase: number;
+  readonly fastOutputCapacity: number;
+}
+
+export interface BatchModuleBuffers {
+  readonly nodes: GPUBuffer;
+  readonly definitions: GPUBuffer;
+  readonly constructors: GPUBuffer;
 }
 
 export async function compileLazuliBatch(
@@ -191,6 +202,9 @@ async function runPackedCompilation(
   instrumentation: LazuliBatchCompilationInstrumentation | undefined,
 ): Promise<readonly (LazuliCompileResult | undefined)[]> {
   const totals = batchTotals(lanes);
+  const fastCompletion = lanes.every((lane) =>
+    lane.maximumStepsPerDispatch >= FAST_COMPLETION_MINIMUM_DISPATCH_QUANTUM
+  );
   const surfaceWords = new Uint32Array(totals.nodes * 8);
   const definitionWords = new Uint32Array(totals.definitions * 4);
   const typeWords = new Uint32Array(totals.types * 5);
@@ -222,6 +236,7 @@ async function runPackedCompilation(
   let outputBuffer: GPUBuffer | undefined;
   let inferenceStateBuffer: GPUBuffer | undefined;
   let stateReadbackBuffer: GPUBuffer | undefined;
+  let preparedModuleBuffers: (BatchModuleBuffers | undefined)[] = [];
   let stateReadbackMapped = false;
 
   try {
@@ -237,6 +252,9 @@ async function runPackedCompilation(
     outputBuffer = buffers.output;
     inferenceStateBuffer = buffers.inferenceStates;
     stateReadbackBuffer = buffers.stateReadback;
+    if (fastCompletion) {
+      preparedModuleBuffers = await allocateBatchModuleBuffers(device, lanes);
+    }
 
     device.queue.writeBuffer(surfaceBuffer, 0, surfaceWords);
     device.queue.writeBuffer(definitionBuffer, 0, definitionWords);
@@ -277,6 +295,7 @@ async function runPackedCompilation(
 
     const results: (LazuliCompileResult | undefined)[] = new Array(lanes.length);
     const terminalInference: (TerminalInference | undefined)[] = new Array(lanes.length);
+    const terminalOutputs: (ArrayBuffer | undefined)[] = new Array(lanes.length);
     const previousSemanticSteps = new Uint32Array(lanes.length);
     const previousInferenceTransitions = new Uint32Array(lanes.length);
     let terminalLaneCount = 0;
@@ -292,7 +311,13 @@ async function runPackedCompilation(
         semanticStateBuffer,
         inferenceStateBuffer,
         stateReadbackBuffer,
-        lanes.length,
+        outputBuffer,
+        coreBuffer,
+        definitionBuffer,
+        constructorBuffer,
+        lanes,
+        preparedModuleBuffers,
+        fastCompletion,
         signal,
       );
       instrumentation?.observeDispatch(lanes.length);
@@ -373,6 +398,18 @@ async function runPackedCompilation(
           inferenceState.status === LazuliInferenceStatus.Diagnostic
         ) {
           terminalInference[laneIndex] = { state: inferenceState, semanticState };
+          if (
+            fastCompletion &&
+            inferenceState.status === LazuliInferenceStatus.Complete &&
+            inferenceState.outputCount <= lane.fastOutputCapacity
+          ) {
+            const outputByteLength = inferredTypeOutputByteLength(inferenceState.outputCount);
+            const outputByteOffset = fastOutputByteOffset(lanes.length, lane);
+            terminalOutputs[laneIndex] = stateBytes.slice(
+              outputByteOffset,
+              outputByteOffset + outputByteLength,
+            );
+          }
           terminalLaneCount++;
           continue;
         }
@@ -395,6 +432,8 @@ async function runPackedCompilation(
       device,
       lanes,
       terminalInference,
+      terminalOutputs,
+      preparedModuleBuffers,
       results,
       workspaceBuffer,
       outputBuffer,
@@ -416,6 +455,7 @@ async function runPackedCompilation(
     outputBuffer?.destroy();
     inferenceStateBuffer?.destroy();
     stateReadbackBuffer?.destroy();
+    for (const buffers of preparedModuleBuffers) destroyModuleBuffers(buffers);
   }
 }
 
@@ -430,6 +470,7 @@ function prepareBatchLanes(
   let metadataWords = 0;
   let workspaceWords = 0;
   let outputRecords = 0;
+  let fastOutputRecords = 0;
   const lanes = inputs.map((input, resultIndex): BatchLane => {
     const metadata = prepareLazuliInferenceShaderMetadata(
       input.surface,
@@ -454,6 +495,11 @@ function prepareBatchLanes(
       metadataBase: metadataWords,
       workspaceBase: workspaceWords,
       outputBase: outputRecords,
+      fastOutputBase: fastOutputRecords,
+      fastOutputCapacity: Math.min(
+        localWorkspace.outputCapacity,
+        FAST_OUTPUT_RECORD_CAPACITY,
+      ),
     };
     nodes = checkedSum("packed node count", nodes, input.surface.nodeCount);
     definitions = checkedSum(
@@ -477,6 +523,11 @@ function prepareBatchLanes(
       "packed output records",
       outputRecords,
       localWorkspace.outputCapacity,
+    );
+    fastOutputRecords = checkedSum(
+      "packed fast output records",
+      fastOutputRecords,
+      lane.fastOutputCapacity,
     );
     return lane;
   });
@@ -503,6 +554,23 @@ function prepareBatchLanes(
     "inference states",
     lanes.length,
     LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
+    limits,
+  );
+  assertStorageSize(
+    "packed state and fast output readback",
+    checkedSum(
+      "packed state and fast output readback words",
+      checkedProduct(
+        "packed inference state readback words",
+        lanes.length,
+        LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
+      ),
+      checkedProduct(
+        "packed fast output readback words",
+        fastOutputRecords,
+        LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
+      ),
+    ),
     limits,
   );
   return lanes;
@@ -585,6 +653,7 @@ interface BatchTotals {
   readonly metadataWords: number;
   readonly workspaceWords: number;
   readonly outputRecords: number;
+  readonly fastOutputRecords: number;
 }
 
 function batchTotals(lanes: readonly BatchLane[]): BatchTotals {
@@ -597,6 +666,7 @@ function batchTotals(lanes: readonly BatchLane[]): BatchTotals {
     metadataWords: last.metadataBase + last.metadata.words.length,
     workspaceWords: last.workspaceBase + last.localWorkspace.workspaceWordLength,
     outputRecords: last.outputBase + last.localWorkspace.outputCapacity,
+    fastOutputRecords: last.fastOutputBase + last.fastOutputCapacity,
   };
 }
 
@@ -693,7 +763,8 @@ async function allocateBatchBuffers(
       ),
       stateReadback: create(
         "Lazuli packed state readback",
-        lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
+        lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
+          totals.fastOutputRecords * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
         GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
       ),
     };
@@ -720,6 +791,66 @@ async function allocateBatchBuffers(
   return buffers;
 }
 
+async function allocateBatchModuleBuffers(
+  device: GPUDevice,
+  lanes: readonly BatchLane[],
+): Promise<BatchModuleBuffers[]> {
+  device.pushErrorScope("validation");
+  device.pushErrorScope("out-of-memory");
+  const buffers: BatchModuleBuffers[] = [];
+  const created: GPUBuffer[] = [];
+  let cause: unknown;
+  try {
+    for (const lane of lanes) {
+      const nodes = device.createBuffer({
+        label: `Lazuli packed lane ${lane.resultIndex} core nodes`,
+        size: Math.max(LAZULI_NODE_BYTE_LENGTH, lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH),
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+      });
+      created.push(nodes);
+      const definitions = device.createBuffer({
+        label: `Lazuli packed lane ${lane.resultIndex} definitions`,
+        size: Math.max(
+          LAZULI_DEFINITION_BYTE_LENGTH,
+          lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
+        ),
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+      });
+      created.push(definitions);
+      const constructors = device.createBuffer({
+        label: `Lazuli packed lane ${lane.resultIndex} constructors`,
+        size: Math.max(
+          LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+          lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+        ),
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+      });
+      created.push(constructors);
+      buffers.push({ nodes, definitions, constructors });
+    }
+  } catch (error) {
+    cause = error;
+  }
+  const outOfMemory = await device.popErrorScope();
+  const validation = await device.popErrorScope();
+  if (outOfMemory !== null || validation !== null || buffers.length !== lanes.length) {
+    for (const buffer of created) buffer.destroy();
+    if (validation !== null) {
+      throw new Error(
+        `WebGPU rejected packed Lazuli module buffers for ${lanes.length} lanes: ${validation.message}`,
+        cause === undefined ? undefined : { cause },
+      );
+    }
+    throw new PackedAllocationError(
+      `could not allocate packed Lazuli module buffers for ${lanes.length} lanes${
+        outOfMemory === null ? "" : `: ${outOfMemory.message}`
+      }`,
+      cause,
+    );
+  }
+  return buffers;
+}
+
 async function dispatchBatch(
   device: GPUDevice,
   semanticPipeline: GPUComputePipeline,
@@ -729,9 +860,16 @@ async function dispatchBatch(
   semanticStateBuffer: GPUBuffer,
   inferenceStateBuffer: GPUBuffer,
   stateReadbackBuffer: GPUBuffer,
-  laneCount: number,
+  outputBuffer: GPUBuffer,
+  coreBuffer: GPUBuffer,
+  definitionBuffer: GPUBuffer,
+  constructorBuffer: GPUBuffer,
+  lanes: readonly BatchLane[],
+  moduleBuffers: readonly (BatchModuleBuffers | undefined)[],
+  fastCompletion: boolean,
   signal: AbortSignal | undefined,
 ): Promise<void> {
+  const laneCount = lanes.length;
   device.pushErrorScope("validation");
   let validation: Promise<GPUError | null>;
   try {
@@ -765,6 +903,52 @@ async function dispatchBatch(
       0,
       laneCount * INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
     );
+    if (fastCompletion) {
+      for (const [laneIndex, lane] of lanes.entries()) {
+        const destination = moduleBuffers[laneIndex];
+        if (destination === undefined) {
+          throw new Error(`Lazuli packed lane ${lane.resultIndex} omitted fast module buffers`);
+        }
+        const fastOutputByteLength = lane.fastOutputCapacity *
+          LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
+        if (fastOutputByteLength > 0) {
+          commands.copyBufferToBuffer(
+            outputBuffer,
+            lane.outputBase * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
+            stateReadbackBuffer,
+            fastOutputByteOffset(laneCount, lane),
+            fastOutputByteLength,
+          );
+        }
+        if (lane.surface.nodeCount > 0) {
+          commands.copyBufferToBuffer(
+            coreBuffer,
+            lane.nodeBase * LAZULI_NODE_BYTE_LENGTH,
+            destination.nodes,
+            0,
+            lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH,
+          );
+        }
+        if (lane.surface.definitionCount > 0) {
+          commands.copyBufferToBuffer(
+            definitionBuffer,
+            lane.definitionBase * LAZULI_DEFINITION_BYTE_LENGTH,
+            destination.definitions,
+            0,
+            lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
+          );
+        }
+        if (lane.surface.constructorCount > 0) {
+          commands.copyBufferToBuffer(
+            constructorBuffer,
+            lane.constructorBase * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+            destination.constructors,
+            0,
+            lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+          );
+        }
+      }
+    }
     signal?.throwIfAborted();
     device.queue.submit([commands.finish()]);
     validation = device.popErrorScope();
@@ -859,6 +1043,17 @@ function semanticStateByteOffset(laneIndex: number): number {
 
 function inferenceStateByteOffset(laneIndex: number): number {
   return laneIndex * INFERENCE_INTERNAL_STATE_BYTE_LENGTH;
+}
+
+function fastOutputByteOffset(laneCount: number, lane: BatchLane): number {
+  return laneCount * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
+    lane.fastOutputBase * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
+}
+
+function destroyModuleBuffers(buffers: BatchModuleBuffers | undefined): void {
+  buffers?.nodes.destroy();
+  buffers?.definitions.destroy();
+  buffers?.constructors.destroy();
 }
 
 class PackedAllocationError extends Error {

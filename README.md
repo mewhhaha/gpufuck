@@ -660,9 +660,10 @@ an arena, completed siblings remain valid and only that lane falls back to the s
 path. `compileModule()` and compatibility `compile()` retain their scalar paths and share a
 resource-weighted admission queue.
 
-On an RTX 4080 SUPER, the checked-in 1,128-node compiler fixture took 381.9 ms for sixteen coalesced
-scalar compilations and 48.0 ms through `compileBatch()`—23.9 versus 3.00 ms per program, or 8.0×
-the throughput in that run. Sixteen tiny programs take about 24.9 ms total. Use
+On an RTX 4080 SUPER, the checked-in 1,128-node compiler fixture took 379.3 ms for sixteen coalesced
+scalar compilations and 36.9 ms through `compileBatch()`—23.7 versus 2.30 ms per program, or 10.3×
+the throughput in that run. The same large fixture scales to 39.5 ms for 64 programs and 47.9 ms for
+128 programs, or 0.62 and 0.37 ms per program. Sixteen tiny programs take about 13.9 ms total. Use
 `deno task bench:lazuli` for repeated measurements and `deno task profile:lazuli-compiler` for cold
 initialization, parser, dispatch, quantum, core readback, and scalar-versus-packed profiles on the
 active WebGPU adapter. Profile output includes the adapter description and fallback status; software

@@ -296,12 +296,23 @@ Deno.test("GPU inference bounds deep types and repeated constructor schemes", as
 
     let duplicatedValue = "1";
     for (let depth = 0; depth < 10; depth++) duplicatedValue = `duplicate (${duplicatedValue})`;
-    const expandedOutputCompilation = await compiler.compile(
-      `let duplicate = value => (value, value); let main = ${duplicatedValue};`,
-    );
+    const expandedOutputSource =
+      `let duplicate = value => (value, value); let main = ${duplicatedValue};`;
+    const expandedOutputCompilation = await compiler.compile(expandedOutputSource);
     ok(expandedOutputCompilation.ok);
     equal(typeNodeCount(expandedOutputCompilation.module.mainType), 2_047);
     expandedOutputCompilation.module.destroy();
+
+    const expandedBatch = await compiler.compileBatch([
+      expandedOutputSource,
+      "let main = 42;",
+    ]);
+    ok(expandedBatch[0]?.ok);
+    ok(expandedBatch[1]?.ok);
+    if (expandedBatch[0]?.ok) {
+      equal(typeNodeCount(expandedBatch[0].module.mainType), 2_047);
+    }
+    for (const compilation of expandedBatch) if (compilation.ok) compilation.module.destroy();
   } finally {
     device.destroy();
   }

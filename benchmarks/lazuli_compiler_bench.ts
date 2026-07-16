@@ -119,25 +119,27 @@ for (const benchmark of benchmarks) {
   });
 }
 
-Deno.bench({
-  name: "compile Lazuli: packed batch of 16 small programs",
-  async fn(context) {
-    context.start();
-    const compilations = await compiler.compileBatch(
-      Array.from({ length: 16 }, (_, index) => `fn main = ${index} + 1;`),
-    );
-    context.end();
+for (const batchSize of [8, 16, 64] as const) {
+  Deno.bench({
+    name: `compile Lazuli: packed batch of ${batchSize} small programs`,
+    async fn(context) {
+      context.start();
+      const compilations = await compiler.compileBatch(
+        Array.from({ length: batchSize }, (_, index) => `fn main = ${index} + 1;`),
+      );
+      context.end();
 
-    for (const compilation of compilations) {
-      if (!compilation.ok) {
-        throw new Error(
-          `packed benchmark source did not compile: ${compilation.diagnostics[0].message}`,
-        );
+      for (const compilation of compilations) {
+        if (!compilation.ok) {
+          throw new Error(
+            `packed benchmark source did not compile: ${compilation.diagnostics[0].message}`,
+          );
+        }
+        compilation.module.destroy();
       }
-      compilation.module.destroy();
-    }
-  },
-});
+    },
+  });
+}
 
 const typeCoreProgram: TypeCoreProgram = {
   typeConstructors: [{ name: "Vector", parameterKinds: ["type", "integer"] }],
