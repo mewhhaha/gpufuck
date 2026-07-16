@@ -1,218 +1,295 @@
 # GPU functional compiler
 
-The goal of this repository is a reusable compiler backend that functional-language frontends can
-target. A frontend owns its syntax and desugaring, emits a bounded language-neutral functional
-module, and hands that module to persistent GPU passes for validation, name resolution, type
-inference, and core lowering. The resolved core is emitted as WebAssembly for execution.
+This library is a reusable GPU compiler backend for functional languages. You provide parsing and
+language-specific desugaring; the library resolves names, infers and checks types on WebGPU, lowers
+the program to a numeric core, and emits an ordinary WebAssembly module. The resulting WASM runs
+without a GPU or this library.
 
-Lazuli is the current reference frontend used to develop and test that backend. Its lazy semantics,
-algebraic data, polymorphism, indexed constructor results, and evaluator exercise the reusable
-functional core; they are not intended to define the final compiler API. The original Brainfuck
-compiler is a separate historical prototype and is not part of the functional backend contract.
+The current semantic profile is lazy call-by-need with signed `i32`, Boolean, unit, tuples,
+higher-order functions, immutable bindings, recursion, algebraic data, pattern matching,
+Hindley–Milner inference, indexed constructor results, and explicitly annotated predicative rank-N
+parameters. Read [Current constraints](#current-constraints-for-a-frontend) before targeting a
+strict language or choosing a public entry type.
 
-The public `GpuFunctionalCompiler.compileModule()` and `compileBatch()` entry points accept that
-portable module directly. They do not import or load the Baba parser. `GpuLazuliCompiler` is a
-compatibility frontend that parses, desugars, adds explicit profile metadata, and delegates to the
-same entry points.
+```text
+source → your parser/AST → portable functional module → GPU resolution and typechecking
+                                                       ↓
+                                           resolved numeric core → WASM bytes → any WASM runtime
+```
 
-## Run the reference frontend
+## Requirements and installation
 
-Requirements:
+Compilation requires:
 
 - Deno 2.9 or newer;
-- a WebGPU adapter available to Deno.
+- a WebGPU adapter visible to Deno;
+- Deno's `webgpu` unstable API enabled.
 
-Direct API use also needs read permission because the frontend loads the checked-in Baba parser
-assets. The tasks below already grant it.
-
-Run a Lazuli program:
-
-```sh
-deno task run:lazuli examples/lazuli/list.laz
-```
-
-Install Lazuli syntax highlighting and rainbow brackets for `.laz` files in Helix:
+The library is currently distributed as Deno source rather than a published JSR package. Vendor it
+at a fixed revision; a Git submodule records the exact compiler source with your project:
 
 ```sh
-just install
+git submodule add git@github.com:mewhhaha/gpufuck.git vendor/gpufuck
+git -C vendor/gpufuck checkout c9a93b628ec43580d79fda6c56383e1b03be44e6
+git add .gitmodules vendor/gpufuck
 ```
 
-The install regenerates the Baba syntax artifacts, builds a native Tree-sitter parser, and updates
-only the Lazuli-managed block in the Helix user language configuration.
+Map the language-neutral entry point in your `deno.json`:
 
-Run independent Lazuli programs in one GPU evaluation batch. The JSON output preserves the input
-path order; each entry contains either a value or a runtime fault.
+```json
+{
+  "unstable": ["webgpu"],
+  "imports": {
+    "@gpufuck/functional": "./vendor/gpufuck/functional.ts"
+  }
+}
+```
+
+`functional.ts` is the language-neutral entry point. It does not load the Lazuli parser or the
+historical Brainfuck compiler. Update and review the submodule commit deliberately when upgrading.
+Use an authenticated HTTPS repository URL instead when your GitHub access is token-based.
+
+To work from a clone and run the repository's checks:
 
 ```sh
-deno task run:lazuli-batch examples/lazuli/answer.laz examples/lazuli/list.laz
+git clone git@github.com:mewhhaha/gpufuck.git
+cd gpufuck
+deno task test
 ```
 
-Compile Lazuli and inspect the GPU-produced core IR:
+## Compile a first module to WASM
+
+Save this as `compile.ts`. It constructs `main = 40 + 2`, asks the GPU to infer and compile it,
+writes the WASM artifact, and runs the exported `main` function:
+
+```ts
+import {
+  buildFunctionalSurfaceModule,
+  compileFunctionalModuleToWasm,
+  FunctionalBinaryOperator,
+  GpuFunctionalCompiler,
+  requestWebGpuDevice,
+  surface,
+} from "@gpufuck/functional";
+
+const source = "main = 40 + 2";
+const encodedModule = buildFunctionalSurfaceModule(
+  [{
+    name: "main",
+    parameters: [],
+    annotation: null,
+    body: surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.integer(40),
+      surface.integer(2),
+    ),
+  }],
+  [],
+  "main",
+  new TextEncoder().encode(source).byteLength,
+);
+
+const device = await requestWebGpuDevice();
+try {
+  const compiler = await GpuFunctionalCompiler.create(device);
+  const compilation = await compiler.compileModule(encodedModule);
+  if (!compilation.ok) {
+    const diagnostic = compilation.diagnostics[0];
+    throw new Error(
+      `${diagnostic.code} at bytes ${diagnostic.span.startByte}..${diagnostic.span.endByte}: ${diagnostic.message}`,
+    );
+  }
+
+  try {
+    const wasmBytes = await compileFunctionalModuleToWasm(compilation.module);
+    await Deno.writeFile("answer.wasm", wasmBytes);
+
+    const { instance } = await WebAssembly.instantiate(wasmBytes);
+    const main = instance.exports.main;
+    if (typeof main !== "function") throw new Error("compiled module did not export main");
+    console.log(main()); // 42
+  } finally {
+    compilation.module.destroy();
+  }
+} finally {
+  device.destroy();
+}
+```
 
 ```sh
-deno task compile:lazuli examples/lazuli/local-rec.laz
+deno run --allow-write=answer.wasm compile.ts
 ```
 
-Run equality proofs and typed facts checked by GPU inference:
+`runFunctionalWasmModule(compilation.module)` is the shorter emit, instantiate, run, and decode
+path. Use `compileFunctionalModuleToWasm()` when you need to persist, cache, ship, or instantiate
+the bytes yourself. If the program needs host values or operations, continue with
+[Host capabilities and `Init`](#host-capabilities-and-init).
 
-```sh
-deno task run:lazuli examples/lazuli/proofs.laz
+Expected compile errors are returned as `FunctionalCompileResult` diagnostics with frontend-neutral
+`F` codes and UTF-8 byte spans. WebGPU failures and violated host invariants throw. A successful
+`GpuFunctionalModule` owns GPU buffers and must be destroyed; emitted WASM bytes remain valid after
+that destruction.
+
+## Connect your language frontend
+
+Your frontend should perform syntax-specific work and stop at the functional surface:
+
+1. Parse source into your AST and enforce source-language scoping rules that differ from the core.
+2. Desugar language conveniences into unary functions, immutable bindings, applications,
+   conditionals, constructors, and cases.
+3. Convert source type declarations and optional annotations into `FunctionalTypeSchema` values.
+4. Call `buildFunctionalSurfaceModule()` or encode the ABI tables directly.
+5. Reuse one `GpuFunctionalCompiler` to compile modules, then emit WASM.
+
+The surface builder interns symbols, curries `parameters`, appends the reserved unit and pair types,
+and packs the flat ABI. A small expression lowering typically looks like this:
+
+```ts
+import {
+  FunctionalBinaryOperator,
+  type FunctionalSurfaceExpression,
+  surface,
+} from "@gpufuck/functional";
+
+type SourceExpression =
+  | { kind: "integer"; value: number }
+  | { kind: "variable"; name: string }
+  | { kind: "lambda"; parameter: string; body: SourceExpression }
+  | { kind: "call"; callee: SourceExpression; arguments: readonly SourceExpression[] }
+  | { kind: "add"; left: SourceExpression; right: SourceExpression };
+
+function lowerExpression(expression: SourceExpression): FunctionalSurfaceExpression {
+  switch (expression.kind) {
+    case "integer":
+      return surface.integer(expression.value);
+    case "variable":
+      return surface.name(expression.name);
+    case "lambda":
+      return surface.lambda(expression.parameter, lowerExpression(expression.body));
+    case "call":
+      return surface.apply(
+        lowerExpression(expression.callee),
+        ...expression.arguments.map(lowerExpression),
+      );
+    case "add":
+      return surface.binary(
+        FunctionalBinaryOperator.Add,
+        lowerExpression(expression.left),
+        lowerExpression(expression.right),
+      );
+  }
+}
 ```
 
-Other useful examples:
+Attach `{ startByte, endByte }` spans from the original source to definitions, declarations, and
+expressions. Offsets are UTF-8 bytes, not JavaScript string indices. These spans are the evidence
+reported by GPU diagnostics.
 
-```sh
-deno task run:lazuli examples/lazuli/syntax-tour.laz
-deno task run:lazuli examples/lazuli/option-map.laz
-deno task run:lazuli examples/lazuli/collections.laz
-deno task run:lazuli examples/lazuli/answer.laz
-deno task run:lazuli examples/lazuli/lazy.laz
-deno task run:lazuli examples/lazuli/closure.laz
-deno task run:lazuli examples/lazuli/factorial.laz
-deno task run:lazuli examples/lazuli/constructor.laz
+### Source-feature mapping
+
+| Source-language construct | Functional surface lowering                                          |
+| ------------------------- | -------------------------------------------------------------------- |
+| Multiple parameters       | `parameters` or nested unary lambdas                                 |
+| Function call             | Left-associated unary `apply` nodes                                  |
+| Tuple `(a, b)`            | Apply `FUNCTIONAL_PAIR_CONSTRUCTOR_NAME` to `a`, then `b`            |
+| Unit                      | `FUNCTIONAL_UNIT_CONSTRUCTOR_NAME`                                   |
+| Struct or variant         | A nominal type declaration plus constructor applications             |
+| Pattern match             | `case` with flat constructor binders; nest cases for nested patterns |
+| Local binding             | `let`                                                                |
+| Local recursive function  | `let-rec` whose value is a lambda                                    |
+| Module or record          | A generated immutable algebraic type, or frontend erasure            |
+| Typeclass or trait        | Resolve statically or pass an explicit dictionary value              |
+| Effect                    | Lower to Effect Core or an explicit host capability                  |
+
+Names in the portable module are deliberately unresolved. The GPU resolves lexical locals, global
+definitions, constructors, dependencies, recursive SCCs, annotations, and case coverage. Your
+frontend should still reject constructs whose meaning belongs to its language—for example OCaml
+forward references or Rust mutation—before building the module.
+
+### Algebraic data and annotations
+
+Declare nominal data with `FunctionalSurfaceTypeDeclaration`. Constructor fields have structural
+schemas and may optionally declare an indexed result:
+
+```ts
+const optionType = {
+  name: "Option",
+  parameters: ["value"],
+  constructors: [
+    { name: "None", fields: [] },
+    {
+      name: "Some",
+      fields: [{
+        name: "value",
+        type: { kind: "parameter", name: "value" },
+      }],
+    },
+  ],
+} as const;
 ```
 
-## Rust functional profile
+Pass declarations such as `optionType` in the second argument to `buildFunctionalSurfaceModule()`.
+Constructors are ordinary curried values in expressions, so `Some 42` lowers to
+`surface.apply(surface.name("Some"), surface.integer(42))`.
 
-The repository includes a second, independent frontend as an interoperability fixture. It accepts a
-bounded subset of ordinary Rust syntax, normalizes it into the public functional surface, and sends
-the resulting module through `GpuFunctionalCompiler`. It does not import Lazuli or its Baba parser.
+Leave `definition.annotation` as `null` for ordinary inference. Use a `FunctionalTypeSchema` when a
+higher-rank boundary or a non-principal indexed contract needs an explicit choice. Type parameters
+are names local to their schema or declaration; the builder converts them to canonical metadata.
 
-```sh
-deno task run:rust-functional examples/rust-functional/option_map.rs
-deno task run:rust-functional examples/rust-functional/point.rs
-deno task run:rust-functional examples/rust-functional/factorial.rs
-deno task run:rust-functional examples/rust-functional/tuple.rs
+### Compile many modules
+
+`compileBatch()` packs independent modules into GPU lanes and preserves input order:
+
+```ts
+const results = await compiler.compileBatch(encodedModules);
+for (const result of results) {
+  if (!result.ok) {
+    console.error(result.diagnostics);
+    continue;
+  }
+  try {
+    const wasmBytes = await compileFunctionalModuleToWasm(result.module);
+    // Cache or publish wasmBytes.
+  } finally {
+    result.module.destroy();
+  }
+}
 ```
 
-Generate a Markdown trace that puts the source and normalized surface beside the encoded functional
-ABI and GPU-resolved core IR:
+Create the device and compiler once per worker or service lifetime. Batch independent requests when
+latency permits; do not create a device for each source file. Compilation options provide total
+fuel, dispatch-quantum, and cancellation bounds.
 
-```sh
-deno task trace:rust-functional \
-  examples/rust-functional/option_map.rs \
-  examples/rust-functional/option_map.trace.md
-```
+## Current constraints for a frontend
 
-Checked-in traces are available for [`option_map.rs`](examples/rust-functional/option_map.trace.md),
-[`point.rs`](examples/rust-functional/point.trace.md),
-[`factorial.rs`](examples/rust-functional/factorial.trace.md), and
-[`tuple.rs`](examples/rust-functional/tuple.trace.md). They include the inferred entry type,
-evaluated result, and evaluator statistics after the two IR stages.
+- Evaluation is currently lazy call-by-need. A strict-language frontend must insert an explicit
+  forcing discipline or restrict itself to code whose behavior is unchanged by laziness.
+- Direct WASM execution currently exports only scalar `integer`, `boolean`, or `unit` results, with
+  an optional `Init -> scalar` entry. Algebraic values and higher-order functions are supported
+  internally but do not yet have a public structured WASM result ABI.
+- The core integer is wrapping signed `i32`. Numeric classes, overflow policies, floats, and wider
+  integers are frontend work until corresponding primitive profiles exist.
+- Mutation, ownership, exceptions, async suspension, layout, FFI, and garbage collection are not
+  implicit backend services. Lower them explicitly or reject them at your frontend boundary.
+- Semantic compilation requires WebGPU. The emitted WASM does not.
 
-The profile uses `fn gpu_main()` as the GPU entry, allowing each fixture to retain an ordinary
-unit-returning Rust `fn main()` and pass `rustc` independently. It currently covers pure `fn`
-declarations, generic signatures, `i32`, `bool`, tuples, immutable `let`, arithmetic and
-comparisons, `if`, structs, enums, constructor calls, named struct construction, and `match`.
-Multi-argument Rust functions are curried at the functional boundary; named struct fields are
-reordered to their declaration order. Mutation, references, ownership checking, traits, methods,
-async, macros, `unsafe`, layout, and FFI are deliberately rejected or unimplemented. The backend
-remains lazy, so the examples avoid expressions whose behavior depends on Rust's strict evaluation
-order. This is a frontend-boundary test, not a claim of Rust compatibility.
+See [Deliberate limits](#deliberate-limits) for exact structural and runtime bounds.
 
-## OCaml functional profile
+## Learn from the included frontends
 
-The OCaml fixture adds a third independent frontend and stresses different language assumptions:
-sequential value scope, explicit `rec`, postfix type application, variants, OCaml list syntax, and
-strict source semantics. It parses on the host, emits the same functional surface as the other
-frontends, and leaves name resolution, Hindley–Milner inference, coverage checking, and core
-lowering to the GPU.
+The repository contains independent frontends that all target the same public surface. They are
+integration examples, not compatibility claims for their source languages.
 
-```sh
-deno task run:ocaml-functional examples/ocaml-functional/option_map.ml
-deno task run:ocaml-functional examples/ocaml-functional/factorial.ml
-deno task run:ocaml-functional examples/ocaml-functional/tuple.ml
-deno task run:ocaml-functional examples/ocaml-functional/list.ml
-deno task run:ocaml-functional examples/ocaml-functional/tree.ml
-```
+| Frontend                                         | What it demonstrates                                                                             | Run an example                                                                |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| [Rust](examples/rust-functional/)                | Enums, structs, generics, matches, and source-level rejection of mutation                        | `deno task run:rust-functional examples/rust-functional/option_map.rs`        |
+| [Haskell](examples/haskell-functional/README.md) | Laziness, inferred polymorphism, higher-order functions, dictionaries, GADTs, and recursive data | `deno task run:haskell-functional examples/haskell-functional/combinators.hs` |
+| [OCaml](examples/ocaml-functional/README.md)     | Sequential scope, explicit recursion, variants, lists, and frontend desugaring                   | `deno task run:ocaml-functional examples/ocaml-functional/tree.ml`            |
+| [1SubML](examples/onesubml-functional/README.md) | Rank-N parameters, records as modules, and expression blocks                                     | `deno task run:onesubml-functional examples/onesubml-functional/rank3.ml`     |
+| [Lazuli](examples/lazuli/)                       | The full reference syntax, indexed proofs, host values, and lazy evaluation                      | `deno task run:lazuli examples/lazuli/list.laz`                               |
 
-Generate a source-to-surface-to-core trace:
-
-```sh
-deno task trace:ocaml-functional \
-  examples/ocaml-functional/tree.ml \
-  examples/ocaml-functional/tree.trace.md
-```
-
-The [OCaml example index](examples/ocaml-functional/README.md) documents every supported construct
-and links all five traces. The frontend currently covers generic variants, recursive and
-higher-order functions, lambdas, tuples, lists, `let`, `if`, `match`, arithmetic, and comparisons.
-It rejects forward value references and self-reference without `rec`, preserving OCaml scope even
-though the portable GPU module can resolve arbitrary globals.
-
-This is a bounded interoperability profile, not an OCaml implementation. Records, modules, objects,
-polymorphic variants, labelled arguments, mutual recursion, exceptions, mutation, the value
-restriction, and effect syntax remain outside it. The shared evaluator is lazy while OCaml is
-strict, so fixtures are intentionally pure and total. A production OCaml frontend needs a strict
-evaluation profile or explicit forcing operations before programs whose behavior depends on
-evaluation order can be supported faithfully.
-
-## 1SubML functional profile
-
-The [1SubML](https://github.com/Storyyeller/1subml) fixture tests another frontend shape: expression
-blocks, right-associative application, and a unified value/module language where immutable records
-serve as modules. Its host adapter converts each anonymous record field set into one generated
-parametric core type. Record field values remain unannotated, so the GPU still resolves names and
-infers their concrete function and value types.
-
-```sh
-deno task run:onesubml-functional examples/onesubml-functional/factorial.ml
-deno task run:onesubml-functional examples/onesubml-functional/modules.ml
-deno task run:onesubml-functional examples/onesubml-functional/combinators.ml
-deno task run:onesubml-functional examples/onesubml-functional/blocks.ml
-deno task run:onesubml-functional examples/onesubml-functional/rank2.ml
-deno task run:onesubml-functional examples/onesubml-functional/rank3.ml
-```
-
-Generate the same source-to-surface-to-core trace as the other interoperability profiles:
-
-```sh
-deno task trace:onesubml-functional \
-  examples/onesubml-functional/modules.ml \
-  examples/onesubml-functional/modules.trace.md
-```
-
-The [1SubML example index](examples/onesubml-functional/README.md) links all sources and traces and
-contains the exact support matrix. This first profile covers pure i32 and boolean expressions,
-sequential and recursive bindings, lambdas, tuples, immutable anonymous records, field projection,
-conditionals, arithmetic, and explicitly annotated predicative rank-N polymorphism. It preserves
-1SubML's sequential scope, explicit generic functions, and right-associative calls.
-
-This is deliberately not a claim of full 1SubML compatibility. Structural width subtyping, variants,
-mutable records, loops, arbitrary-precision integers, floats, strings, newtypes, record-width
-subsumption and implicit structural coercions, existential module members, impredicative types,
-higher-kinded source types, imports, and effects are not implemented. Record shapes must currently
-be evident at the projection site rather than inferred through function parameters or results. Those
-omissions identify concrete backend/frontend milestones instead of silently giving them nominal
-semantics.
-
-## Haskell functional profile
-
-The Haskell fixture is a closer semantic match for the current lazy functional core. Its examples
-are valid Haskell modules that also pass GHC unchanged; a small host frontend normalizes them into
-the same public functional surface used by the Rust fixture. Definitions without signatures are
-uploaded with no annotation, so their name resolution, generalization, and Hindley–Milner inference
-happen on the GPU.
-
-```sh
-deno task run:haskell-functional examples/haskell-functional/combinators.hs
-deno task run:haskell-functional examples/haskell-functional/dictionary.hs
-deno task run:haskell-functional examples/haskell-functional/list.hs
-deno task run:haskell-functional examples/haskell-functional/option_map.hs
-deno task run:haskell-functional examples/haskell-functional/factorial.hs
-deno task run:haskell-functional examples/haskell-functional/reader.hs
-deno task run:haskell-functional examples/haskell-functional/result.hs
-deno task run:haskell-functional examples/haskell-functional/state.hs
-deno task run:haskell-functional examples/haskell-functional/tuple.hs
-deno task run:haskell-functional examples/haskell-functional/tree.hs
-deno task run:haskell-functional examples/haskell-functional/lambda_list.hs
-deno task run:haskell-functional examples/haskell-functional/pattern_guards.hs
-deno task run:haskell-functional examples/haskell-functional/records.hs
-deno task run:haskell-functional examples/haskell-functional/gadt.hs
-deno task run:haskell-functional examples/haskell-functional/classes.hs
-```
-
-Generate the same source-to-surface-to-core trace used by the Rust profile:
+Each frontend has a `trace` task that writes source, normalized surface, encoded ABI, and
+GPU-resolved core side by side. For example:
 
 ```sh
 deno task trace:haskell-functional \
@@ -220,28 +297,10 @@ deno task trace:haskell-functional \
   examples/haskell-functional/tree.trace.md
 ```
 
-The [example index](examples/haskell-functional/README.md) links every source to its checked-in
-trace. Together they exercise optional type signatures, inferred polymorphism, higher-order
-combinators, partial application, built-in and custom lists, records, GADT refinement, nested
-patterns, guards, local definitions, manual dictionaries, resolved first-order classes, `Result`,
-pure `Reader` and `State`, recursive generic algebraic data types, tuples, unit, conditionals,
-arithmetic, and comparisons. `gpuMain` is the GPU entry.
+The smallest backend-only examples live in [`examples/functional-ir`](examples/functional-ir/). They
+cover type programming, effects, Effect Core, and host `Init` without involving Lazuli.
 
-This remains a bounded interoperability profile, not a Haskell implementation. Layout, lambdas,
-lists, records, multiple equations, guards, nested patterns, GADT signatures, and first-order class
-evidence are desugared into the shared functional contract. Primitive arithmetic and comparisons are
-fixed to signed `Int` values represented by the core's `i32`; they do not implement Haskell's
-numeric typeclasses. Imports, strings, higher-rank and existential types, higher-kinded classes,
-generic or overlapping instances, associated-family syntax, `do`, and host `IO` remain outside this
-frontend profile.
-
-The historical Brainfuck prototype remains available independently:
-
-```sh
-deno task compile examples/nested.bf
-```
-
-## Frontend contract
+## Frontend contract reference
 
 A functional-language frontend should need to provide only a versioned module with:
 
@@ -281,7 +340,13 @@ prefix. Likewise, the Brainfuck instruction format is not a backend IR. ABI v5 c
 `predicative-rank-n-indexed-v1` typechecking; profile metadata prevents a rank-1 module from
 silently acquiring first-class polymorphic parameters.
 
-## Compile-time Type Core
+## Optional frontend services
+
+The basic frontend path needs only the surface builder and `GpuFunctionalCompiler`. The following
+APIs are optional stages for languages that want compile-time type execution, capability evidence,
+or checked effects.
+
+### Compile-time Type Core
 
 Frontends that need type-level computation can target the parser-independent `TypeCoreProgram` API.
 It is a small, pure, kinded language rather than an extension of Lazuli syntax. Its closed values
@@ -333,7 +398,7 @@ requires every output and prerequisite variable to be determined by the rule inp
 predicates can describe `field(owner, name) -> fieldType`, `method(owner, name) -> implementation`,
 or ordinary propositions such as `copy(type)`.
 
-### Higher-kinded normalization and associated families
+#### Higher-kinded normalization and associated families
 
 `FunctionalTypeNormalizer` is the specialization stage between a richer frontend type language and
 the deliberately first-order GPU schema ABI. Type functions may accept constructor-kinded parameters
@@ -355,7 +420,7 @@ The example normalizes `Twice List Int` to `List (List Int)` and resolves `eleme
 the GPU through `GpuTypeCoreExecutor`; higher-kinded specialization erases constructor parameters
 before producing that first-order input.
 
-### Idris2-style indices and Zig-style comptime
+#### Idris2-style indices and Zig-style comptime
 
 The [type-programming profile examples](examples/type-programming/README.md) exercise two richer
 frontend mappings. The Idris2-style example reduces Peano addition to compute `Vect 3 Int`, converts
@@ -451,7 +516,7 @@ interaction reducer can replace the lowering without making frontend IRs depend 
 rewrite scheduling. Capability search remains a distinct operation because proof selection may be
 ambiguous even when type normalization must be deterministic.
 
-## Lazuli reference frontend
+## Reference language: Lazuli
 
 ```lazuli
 let sum = values =>
@@ -687,13 +752,14 @@ call-by-need sharing.
 Each evaluation owns a bounded bump-allocated region for thunks, environments, closures,
 constructors, and recursive cycles. Its buffers are destroyed in `finally`, reclaiming the entire
 region in constant time without a tracing collector or a background GC process. Memory is not reused
-inside one run yet; a program that exceeds its configured region returns `L3003` rather than
-accessing outside a GPU buffer.
+inside one run yet; a program that exceeds its configured region returns `F3003` through the neutral
+API (`L3003` through Lazuli) rather than accessing outside a GPU buffer.
 
 Type inference starts with input-derived arena capacities. If one arena fills, only that region is
 doubled; live logical records are copied into a replacement workspace and inference resumes without
 resetting its phase, fuel, refinements, or results. Device and allocation limits produce an
-evidence-rich `L1003`, and failed or cancelled growth destroys both temporary workspaces.
+evidence-rich `F1003` through the neutral API, and failed or cancelled growth destroys both
+temporary workspaces.
 
 A successful compilation owns its GPU module buffers. Call `module.destroy()` when finished;
 destruction is idempotent. Evaluations borrow the module and automatically release only their own
@@ -730,10 +796,11 @@ The paired benchmark emits and runs a 1,000-iteration higher-order loop beside i
 first-order equivalent. It keeps both WASM emission cost and residual abstraction overhead visible
 as the specialization pass evolves.
 
-## Functional module API
+## Packed ABI reference
 
-The smallest module below is assembled without a parser or Lazuli source. A real frontend interns
-its own names and packs the same record tables while lowering its AST.
+Most frontends should use `buildFunctionalSurfaceModule()` as shown above. Consumers that generate
+the packed ABI directly can use the lower-level constants and record tables in this section. The
+smallest raw module below is assembled without a parser or Lazuli source.
 
 `buildFunctionalSurfaceModule()` is exported for frontends that prefer typed surface objects over
 packing words directly. It preserves supplied source spans and appends the reserved unit and pair
@@ -753,7 +820,7 @@ import {
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
   runFunctionalWasmModule,
-} from "./functional.ts";
+} from "@gpufuck/functional";
 
 const encodedModule = {
   abiVersion: FUNCTIONAL_MODULE_ABI_VERSION,
@@ -904,7 +971,7 @@ Compilation diagnostics use UTF-8 byte spans (`L1001`–`L2010`, `L2101`–`L210
 cover invalid modules and inputs, fuel, heap and stack limits, blackholes, division by zero,
 oversized deep results, and cyclic results (`L3001`–`L3011`).
 
-## Backend boundary
+## Architecture boundary
 
 The parser-independent boundary is implemented:
 
@@ -921,7 +988,7 @@ The WGSL kernels and several internal implementation files retain legacy Lazuli 
 moved mechanically behind the neutral package. They consume only the encoded functional tables on
 the generic path; no parser state or Lazuli source syntax crosses the boundary.
 
-## Development
+## Contributing and verification
 
 ```sh
 deno task check
@@ -960,8 +1027,8 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
   variables, and suspended asynchronous resumptions remain frontend concerns for now.
 - Source is capped at 1 MiB, surface trees at 65,536 nodes, semantic depth at 512, and constructor
   arity at 64. Extremely deep concrete syntax can reach the generated parser's stack-safe limit
-  sooner and returns `L1003`.
-- Compilation has a default budget of 1,000,000 persistent semantic transitions and returns `L1003`
+  sooner and returns `F1003` through the neutral API.
+- Compilation has a default budget of 1,000,000 persistent semantic transitions and returns `F1003`
   when that fuel is exhausted.
 - The current functional core uses Hindley–Milner inference with GADT-style indexed constructor
   results plus explicitly annotated predicative rank-N function parameters, not full dependent or
