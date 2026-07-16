@@ -1545,7 +1545,7 @@ class InferenceContext {
         };
       case "forall":
         throw this.invalidTypeMetadata(
-          "rank-2 forall schemas are checked only by the production GPU inferencer",
+          "higher-rank forall schemas are checked only by the production GPU inferencer",
           span,
         );
     }

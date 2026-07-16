@@ -419,7 +419,7 @@ export function prepareLazuliInferenceShaderMetadata(
 }
 
 /**
- * Persistent, bounded Hindley-Milner and predicative rank-2 inference for resolved core
+ * Persistent, bounded Hindley-Milner and predicative rank-N inference for resolved core
  * nodes and flattened ABI-v5 type metadata. The eight bindings stay within WebGPU's portable
  * per-stage storage-buffer minimum. A dispatch performs at most
  * `maximum_transitions_per_dispatch` state-machine transitions; all durable
@@ -710,7 +710,8 @@ const FRAME_FULLY_ZONKED_VISIT: u32 = 26u;
 const FRAME_RIGIDIFY: u32 = 27u;
 const FRAME_RIGIDIFY_VISIT: u32 = 28u;
 const FRAME_INDEXED_SHAPE: u32 = 29u;
-const FRAME_RANK2_CHECK: u32 = 30u;
+const FRAME_SUBSUME: u32 = 30u;
+const FRAME_FORALL_SEARCH: u32 = 31u;
 
 const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
 const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
@@ -1343,10 +1344,10 @@ fn instantiate_visit_transition(frame: u32) {
   let parent = frame_get(frame, 1u); let field = frame_get(frame, 2u);
   let epoch = frame_get(frame, 3u); let kind = type_get(current, 0u);
   if kind == TYPE_FORALL {
+    state.work_result = 1u;
     if frame_get(frame, 5u) == 0u {
       attach_instantiated(parent, field, current); pop_work_frame(); return;
     }
-    state.work_result = 1u;
     configure_instantiate_visit(
       frame, type_get(current, 2u), parent, field, epoch,
       frame_get(frame, 4u), 1u);
@@ -1396,42 +1397,115 @@ fn instantiate_visit_transition(frame: u32) {
   }
 }
 
-fn start_rank2_check(actual: u32, expected: u32, start_byte: u32, end_byte: u32) -> bool {
-  let frame = push_work_frame(FRAME_RANK2_CHECK);
-  if frame == NO_INDEX { return false; }
+fn configure_subsume_frame(
+  frame: u32, actual: u32, expected: u32, start_byte: u32, end_byte: u32,
+) {
   frame_set(frame, 0u, actual); frame_set(frame, 1u, 0u);
   frame_set(frame, 2u, expected); frame_set(frame, 3u, start_byte);
-  frame_set(frame, 4u, end_byte);
+  frame_set(frame, 4u, end_byte); frame_set(frame, 10u, FRAME_SUBSUME);
+}
+
+fn start_subsume(actual: u32, expected: u32, start_byte: u32, end_byte: u32) -> bool {
+  let frame = push_work_frame(FRAME_SUBSUME);
+  if frame == NO_INDEX { return false; }
+  configure_subsume_frame(frame, actual, expected, start_byte, end_byte);
   return true;
 }
 
-fn rank2_check_transition(frame: u32) {
+fn subsume_transition(frame: u32) {
   let stage = frame_get(frame, 1u);
   if stage == 0u {
-    if start_instantiate_mode(frame_get(frame, 2u), 1u) { frame_set(frame, 1u, 1u); }
+    if start_instantiate(frame_get(frame, 0u)) { frame_set(frame, 1u, 1u); }
     return;
   }
   if stage == 1u {
     frame_set(frame, 5u, state.returned_type);
-    if start_instantiate(frame_get(frame, 0u)) { frame_set(frame, 1u, 2u); }
+    frame_set(frame, 6u, state.work_result);
+    if start_prune(frame_get(frame, 2u)) { frame_set(frame, 1u, 2u); }
     return;
   }
   if stage == 2u {
-    if state.work_result == 0u {
+    frame_set(frame, 7u, state.returned_type);
+    if type_get(state.returned_type, 0u) != TYPE_FORALL {
+      frame_set(frame, 1u, 4u);
+      return;
+    }
+    if frame_get(frame, 6u) == 0u {
       report_type_mismatch(
         frame_get(frame, 0u), frame_get(frame, 2u),
         frame_get(frame, 3u), frame_get(frame, 4u));
       return;
     }
-    if start_unify(
-      state.returned_type, frame_get(frame, 5u),
-      frame_get(frame, 3u), frame_get(frame, 4u)) {
+    if start_instantiate_mode(state.returned_type, 1u) {
       frame_set(frame, 1u, 3u);
     }
     return;
   }
-  state.returned_type = frame_get(frame, 2u);
-  pop_work_frame();
+  if stage == 3u {
+    frame_set(frame, 7u, state.returned_type);
+    frame_set(frame, 1u, 4u);
+    return;
+  }
+  if stage == 5u { pop_work_frame(); return; }
+
+  let actual = frame_get(frame, 5u);
+  let expected = frame_get(frame, 7u);
+  let actual_kind = type_get(actual, 0u);
+  let expected_kind = type_get(expected, 0u);
+  if expected_kind == TYPE_FUNCTION && actual_kind != TYPE_FUNCTION {
+    report_type_mismatch(actual, expected, frame_get(frame, 3u), frame_get(frame, 4u));
+    return;
+  }
+  if actual_kind != TYPE_FUNCTION || expected_kind != TYPE_FUNCTION {
+    if start_unify(actual, expected, frame_get(frame, 3u), frame_get(frame, 4u)) {
+      frame_set(frame, 1u, 5u);
+    }
+    return;
+  }
+  if !require_frame_slots(1u) { return; }
+  let start_byte = frame_get(frame, 3u);
+  let end_byte = frame_get(frame, 4u);
+  configure_subsume_frame(
+    frame, type_get(actual, 3u), type_get(expected, 3u), start_byte, end_byte);
+  let parameter = push_work_frame(FRAME_SUBSUME);
+  configure_subsume_frame(
+    parameter, type_get(expected, 2u), type_get(actual, 2u), start_byte, end_byte);
+}
+
+fn start_forall_search(type_index: u32) -> bool {
+  let frame = push_work_frame(FRAME_FORALL_SEARCH);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, type_index);
+  state.work_result = 0u;
+  return true;
+}
+
+fn configure_forall_search(frame: u32, type_index: u32) {
+  frame_set(frame, 0u, type_index);
+  frame_set(frame, 10u, FRAME_FORALL_SEARCH);
+}
+
+fn forall_search_transition(frame: u32) {
+  if state.work_result != 0u { pop_work_frame(); return; }
+  let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
+    frame_set(frame, 0u, type_get(current, 1u));
+    return;
+  }
+  let kind = type_get(current, 0u);
+  if kind == TYPE_FORALL {
+    state.work_result = 1u;
+    pop_work_frame();
+    return;
+  }
+  if kind != TYPE_FUNCTION {
+    pop_work_frame();
+    return;
+  }
+  if !require_frame_slots(1u) { return; }
+  configure_forall_search(frame, type_get(current, 2u));
+  let result = push_work_frame(FRAME_FORALL_SEARCH);
+  configure_forall_search(result, type_get(current, 3u));
 }
 
 fn start_local_lookup(depth: u32, environment: u32, node_index: u32) -> bool {
@@ -1836,7 +1910,8 @@ fn work_transition() {
   else if kind == FRAME_RIGIDIFY { rigidify_transition(frame); }
   else if kind == FRAME_RIGIDIFY_VISIT { rigidify_visit_transition(frame); }
   else if kind == FRAME_INDEXED_SHAPE { indexed_shape_transition(frame); }
-  else if kind == FRAME_RANK2_CHECK { rank2_check_transition(frame); }
+  else if kind == FRAME_SUBSUME { subsume_transition(frame); }
+  else if kind == FRAME_FORALL_SEARCH { forall_search_transition(frame); }
   else { invalid_input(ERROR_INVALID_SURFACE, kind); }
 }
 
@@ -2666,43 +2741,59 @@ fn expression_transition() {
     }
     let callee = frame_get(frame, 3u);
     if type_get(callee, 0u) == TYPE_FUNCTION {
-      if type_get(type_get(callee, 2u), 0u) != TYPE_FORALL {
-        frame_set(frame, 1u, 42u);
+      let parameter = type_get(callee, 2u);
+      let parameter_kind = type_get(parameter, 0u);
+      if parameter_kind == TYPE_FORALL {
+        frame_set(frame, 6u, parameter);
+        state.work_result = 1u;
+        frame_set(frame, 1u, 47u);
         return;
       }
-      let argument = core_nodes[node.child1];
-      frame_set(frame, 6u, type_get(callee, 2u));
-      if argument.tag == TAG_GLOBAL {
-        let scheme = scratch_get(0u, argument.payload);
-        if scheme == NO_INDEX { invalid_input(ERROR_INVALID_SURFACE, node.child1); return; }
-        if start_rank2_check(
-          scheme, frame_get(frame, 6u), argument.start_byte, argument.end_byte) {
-          frame_set(frame, 1u, 46u);
-        }
+      if parameter_kind == TYPE_FUNCTION {
+        frame_set(frame, 6u, parameter);
+        if start_forall_search(parameter) { frame_set(frame, 1u, 47u); }
         return;
       }
-      if argument.tag == TAG_LOCAL {
-        if start_local_scheme_lookup(argument.payload, environment, node.child1) {
-          frame_set(frame, 1u, 45u);
-        }
-        return;
-      }
-      report_type_mismatch(
-        state.returned_type, frame_get(frame, 6u), argument.start_byte, argument.end_byte);
-      return;
     }
     frame_set(frame, 1u, 42u);
     return;
   }
+  if stage == 47u {
+    if state.work_result == 0u {
+      frame_set(frame, 1u, 42u);
+      return;
+    }
+    let argument = core_nodes[node.child1];
+    if argument.tag == TAG_GLOBAL {
+      let scheme = scratch_get(0u, argument.payload);
+      if scheme == NO_INDEX { invalid_input(ERROR_INVALID_SURFACE, node.child1); return; }
+      if start_subsume(scheme, frame_get(frame, 6u), argument.start_byte, argument.end_byte) {
+        frame_set(frame, 1u, 46u);
+      }
+      return;
+    }
+    if argument.tag == TAG_LOCAL {
+      if start_local_scheme_lookup(argument.payload, environment, node.child1) {
+        frame_set(frame, 1u, 45u);
+      }
+      return;
+    }
+    if start_subsume(
+      state.returned_type, frame_get(frame, 6u), argument.start_byte, argument.end_byte) {
+      frame_set(frame, 1u, 46u);
+    }
+    return;
+  }
   if stage == 45u {
     let argument = core_nodes[node.child1];
-    if start_rank2_check(
+    if start_subsume(
       state.returned_type, frame_get(frame, 6u), argument.start_byte, argument.end_byte) {
       frame_set(frame, 1u, 46u);
     }
     return;
   }
   if stage == 46u {
+    state.returned_type = frame_get(frame, 6u);
     frame_set(frame, 1u, 42u);
     return;
   }

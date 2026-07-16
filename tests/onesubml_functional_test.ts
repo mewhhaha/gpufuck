@@ -58,7 +58,7 @@ Deno.test("passes one rank-1 generic function through a rank-2 parameter", async
   const lowered = requireLowered(source);
   equal(
     lowered.module.typecheckingProfile,
-    FunctionalTypecheckingProfile.PredicativeRank2Indexed,
+    FunctionalTypecheckingProfile.PredicativeRankNIndexed,
   );
   const value = await runSource(source);
 
@@ -95,31 +95,38 @@ let gpu_main = (
   }
 });
 
-Deno.test("rank-2 compilation is invariant across dispatch quanta", async () => {
-  const source = await Deno.readTextFile("examples/onesubml-functional/rank2.ml");
-  const lowered = requireLowered(source);
+Deno.test("higher-rank compilation is invariant across dispatch quanta", async () => {
+  const sources = await Promise.all([
+    Deno.readTextFile("examples/onesubml-functional/rank2.ml"),
+    Deno.readTextFile("examples/onesubml-functional/rank3.ml"),
+  ]);
   const values = [];
-  for (const maximumStepsPerDispatch of [7, 4_096]) {
-    const compilation = await onesubmlRuntime().compiler.compileModule(lowered.module, {
-      maximumStepsPerDispatch,
-    });
-    ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
-    if (!compilation.ok) throw new Error("rank-2 module did not compile");
-    try {
-      values.push((await runFunctionalWasmModule(compilation.module)).value);
-    } finally {
-      compilation.module.destroy();
+  for (const source of sources) {
+    const lowered = requireLowered(source);
+    for (const maximumStepsPerDispatch of [7, 4_096]) {
+      const compilation = await onesubmlRuntime().compiler.compileModule(lowered.module, {
+        maximumStepsPerDispatch,
+      });
+      ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+      if (!compilation.ok) throw new Error("higher-rank module did not compile");
+      try {
+        values.push((await runFunctionalWasmModule(compilation.module)).value);
+      } finally {
+        compilation.module.destroy();
+      }
     }
   }
 
   deepStrictEqual(values, [
     { kind: "integer", value: 42 },
     { kind: "integer", value: 42 },
+    { kind: "integer", value: 42 },
+    { kind: "integer", value: 42 },
   ]);
 });
 
-Deno.test("rank-2 compilation succeeds exactly at its fuel threshold", async () => {
-  const source = await Deno.readTextFile("examples/onesubml-functional/rank2.ml");
+Deno.test("rank-3 compilation succeeds exactly at its fuel threshold", async () => {
+  const source = await Deno.readTextFile("examples/onesubml-functional/rank3.ml");
   const lowered = requireLowered(source);
   const compiler = onesubmlRuntime().compiler;
   let exhaustedSteps = 0;
@@ -169,14 +176,57 @@ Deno.test("rank-2 compilation succeeds exactly at its fuel threshold", async () 
   }
 });
 
-Deno.test("rejects a quantifier placed deeper than rank 2", async () => {
-  const lowered = requireLowered(`let use = fun f: (([T]. T -> T) -> int) :: int -> 0;
-let gpu_main = use;
+Deno.test("passes rank-2 consumers through rank-3 functions", async () => {
+  const value = await runExample("examples/onesubml-functional/rank3.ml");
+
+  deepStrictEqual(value, { kind: "integer", value: 42 });
+});
+
+Deno.test("compares higher-rank function parameters contravariantly", async () => {
+  const value = await runSource(`let identity = fun[T] value: T :: T -> value;
+let consume_integer = fun f: (int -> int) :: int -> f 42;
+let with_identity = fun consumer: (([T]. T -> T) -> int) :: int -> consumer identity;
+let gpu_main = with_identity consume_integer;
+`);
+
+  deepStrictEqual(value, { kind: "integer", value: 42 });
+});
+
+Deno.test("rejects a higher-rank consumer where a monomorphic callback may be supplied", async () => {
+  const lowered = requireLowered(`let integer_identity = fun value -> value + 0;
+let consume = fun f: ([T]. T -> T) :: int -> if f true then f 42 else 0;
+let with_integer = fun consumer: ((int -> int) -> int) :: int ->
+  consumer integer_identity;
+let gpu_main = with_integer consume;
+`);
+  const compilation = await onesubmlRuntime().compiler.compileModule(lowered.module);
+
+  equal(compilation.ok, false);
+  if (!compilation.ok) {
+    equal(compilation.diagnostics[0].code, "F2102");
+    match(compilation.diagnostics[0].message, /type mismatch/);
+  }
+});
+
+Deno.test("checks explicitly annotated rank-4 function parameters", async () => {
+  const value = await runSource(`let identity = fun[T] value: T :: T -> value;
+let consume = fun f: ([T]. T -> T) :: int -> if f true then f 42 else 0;
+let with_identity = fun consumer: (([T]. T -> T) -> int) :: int -> consumer identity;
+let run = fun provider: ((([T]. T -> T) -> int) -> int) :: int -> provider consume;
+let gpu_main = run with_identity;
+`);
+
+  deepStrictEqual(value, { kind: "integer", value: 42 });
+});
+
+Deno.test("rejects a quantifier outside a function parameter", async () => {
+  const lowered = requireLowered(`let invalid = fun value: ([T]. T -> T, int) :: int -> 0;
+let gpu_main = invalid;
 `);
 
   await rejects(
     () => onesubmlRuntime().compiler.compileModule(lowered.module),
-    /places forall deeper than rank 2/,
+    /places forall outside a function parameter/,
   );
 });
 

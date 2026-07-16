@@ -114,7 +114,7 @@ export function buildFunctionalSurfaceModule(
   options: FunctionalSurfaceModuleOptions = {},
 ): EncodedFunctionalModule {
   const hostCapabilities = normalizeFunctionalHostCapabilities(options.hostCapabilities);
-  const usesRank2Types =
+  const usesHigherRankTypes =
     definitions.some((definition) =>
       definition.annotation !== null && schemaContainsForall(definition.annotation)
     ) || typeDeclarations.some((declaration) =>
@@ -188,8 +188,8 @@ export function buildFunctionalSurfaceModule(
     abiVersion: FUNCTIONAL_MODULE_ABI_VERSION,
     sourceByteLength,
     evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
-    typecheckingProfile: usesRank2Types
-      ? FunctionalTypecheckingProfile.PredicativeRank2Indexed
+    typecheckingProfile: usesHigherRankTypes
+      ? FunctionalTypecheckingProfile.PredicativeRankNIndexed
       : FunctionalTypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities,
