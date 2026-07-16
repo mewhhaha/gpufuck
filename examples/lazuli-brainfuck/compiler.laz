@@ -1,0 +1,132 @@
+-- A complete Brainfuck-to-WebAssembly compiler written in Lazuli.
+-- Its public contract is Text -> Text: successful output is lowercase WASM hex.
+
+data ParseResult =
+  Parsed(code: List Int -> List Int, rest: Bytes, closed: Bool)
+  | ParseFailure(message: Text);
+
+let append : List Int -> List Int -> List Int = left => right =>
+  case left of
+    | Nil -> right
+    | Cons(head, tail) -> Cons head (append tail right)
+  end;
+
+let length : List Int -> Int = values =>
+  case values of
+    | Nil -> 0
+    | Cons(head, tail) -> 1 + length tail
+  end;
+
+let unsignedLeb128 : Int -> List Int = value =>
+  let quotient = value / 128 in
+  let remainder = value - quotient * 128 in
+  if quotient == 0
+  then [remainder]
+  else Cons (remainder + 128) (unsignedLeb128 quotient);
+
+let commandBytes : Int -> List Int = byte =>
+  if byte == 43 then [32, 0, 32, 0, 45, 0, 0, 65, 1, 106, 58, 0, 0]
+  else if byte == 45 then [32, 0, 32, 0, 45, 0, 0, 65, 1, 107, 58, 0, 0]
+  else if byte == 62 then [32, 0, 65, 1, 106, 33, 0]
+  else if byte == 60 then [32, 0, 65, 1, 107, 33, 0]
+  else if byte == 46 then [32, 0, 45, 0, 0, 16, 1]
+  else if byte == 44 then [32, 0, 16, 0, 58, 0, 0]
+  else [];
+
+let prependCode : List Int -> ParseResult -> ParseResult = prefix => parsed =>
+  case parsed of
+    | ParseFailure(message) -> ParseFailure message
+    | Parsed(code, rest, closed) ->
+      Parsed (tail => append prefix (code tail)) rest closed
+  end;
+
+let prependLoop : (List Int -> List Int) -> ParseResult -> ParseResult = body => parsed =>
+  case parsed of
+    | ParseFailure(message) -> ParseFailure message
+    | Parsed(code, rest, closed) -> Parsed
+      (tail => append
+        [2, 64, 3, 64, 32, 0, 45, 0, 0, 69, 13, 1]
+        (body (append [12, 0, 11, 11] (code tail))))
+      rest
+      closed
+  end;
+
+let compileLoop : ParseResult -> ParseResult = parsed =>
+  case parsed of
+    | ParseFailure(message) -> ParseFailure message
+    | Parsed(body, rest, closed) ->
+      if closed
+      then prependLoop body (compileSequence rest)
+      else ParseFailure "error: unmatched ["
+  end;
+
+let compileSequence : Bytes -> ParseResult = bytes =>
+  case bytes of
+    | BytesNil -> Parsed (tail => tail) BytesNil false
+    | BytesCons(byte, rest) ->
+      if byte == 93 then Parsed (tail => tail) rest true
+      else if byte == 91 then compileLoop (compileSequence rest)
+      else prependCode (commandBytes byte) (compileSequence rest)
+  end;
+
+let moduleHeader : List Int = [0, 97, 115, 109, 1, 0, 0, 0];
+
+let typeSection : List Int = [
+  1, 9, 2,
+  96, 0, 1, 127,
+  96, 1, 127, 0
+];
+
+let importSection : List Int = [
+  2, 26, 2,
+  3, 101, 110, 118, 5, 105, 110, 112, 117, 116, 0, 0,
+  3, 101, 110, 118, 6, 111, 117, 116, 112, 117, 116, 0, 1
+];
+
+let functionSection : List Int = [3, 2, 1, 0];
+
+let memorySection : List Int = [5, 3, 1, 0, 1];
+
+let exportSection : List Int = [
+  7, 16, 2, 3, 114, 117, 110, 0, 2,
+  6, 109, 101, 109, 111, 114, 121, 2, 0
+];
+
+let modulePrefix : List Int =
+  append moduleHeader
+    (append typeSection
+      (append importSection
+        (append functionSection
+          (append memorySection exportSection))));
+
+let wasmModule : List Int -> List Int = instructions =>
+  let body = append [1, 1, 127] (append instructions [32, 0, 45, 0, 0, 11]) in
+  let functionBody = append (unsignedLeb128 (length body)) body in
+  let codePayload = Cons 1 functionBody in
+  append modulePrefix
+    (Cons 10 (append (unsignedLeb128 (length codePayload)) codePayload));
+
+let hexDigit : Int -> Int = value =>
+  if value < 10 then value + 48 else value + 87;
+
+let hexBytes : List Int -> Bytes = values =>
+  case values of
+    | Nil -> BytesNil
+    | Cons(byte, rest) ->
+      let high = byte / 16 in
+      let low = byte - high * 16 in
+      BytesCons (hexDigit high) (BytesCons (hexDigit low) (hexBytes rest))
+  end;
+
+let compile : Text -> Text = source =>
+  case source of
+    | Utf8(bytes) -> case compileSequence bytes of
+      | ParseFailure(message) -> message
+      | Parsed(code, rest, closed) ->
+        if closed
+        then "error: unmatched ]"
+        else Utf8 (hexBytes (wasmModule (code [])))
+    end
+  end;
+
+fn main source = compile source;

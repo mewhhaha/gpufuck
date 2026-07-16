@@ -340,9 +340,7 @@ function metadataFailureMessage(
     case LazuliInferenceMetadataFailure.HiddenConstructorFieldParameter:
       return `constructor ${
         JSON.stringify(constructorName(surface, state.errorDetail))
-      } field parameter ${
-        JSON.stringify(name(state.errorOperand0))
-      } is not a bare direct argument of its result`;
+      } field parameter ${JSON.stringify(name(state.errorOperand0))} does not occur in its result`;
     case LazuliInferenceMetadataFailure.IndexedExpectedTypeMissing:
       return `indexed case for ${
         JSON.stringify(name(state.errorDetail))

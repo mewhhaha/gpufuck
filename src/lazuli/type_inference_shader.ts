@@ -712,6 +712,7 @@ const FRAME_RIGIDIFY_VISIT: u32 = 28u;
 const FRAME_INDEXED_SHAPE: u32 = 29u;
 const FRAME_SUBSUME: u32 = 30u;
 const FRAME_FORALL_SEARCH: u32 = 31u;
+const FRAME_SCHEMA_OCCURRENCE: u32 = 32u;
 
 const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
 const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
@@ -1912,6 +1913,7 @@ fn work_transition() {
   else if kind == FRAME_INDEXED_SHAPE { indexed_shape_transition(frame); }
   else if kind == FRAME_SUBSUME { subsume_transition(frame); }
   else if kind == FRAME_FORALL_SEARCH { forall_search_transition(frame); }
+  else if kind == FRAME_SCHEMA_OCCURRENCE { schema_occurrence_transition(frame); }
   else { invalid_input(ERROR_INVALID_SURFACE, kind); }
 }
 
@@ -2383,38 +2385,67 @@ fn start_field_parameter_recoverability(
   return true;
 }
 
+fn configure_schema_occurrence(frame: u32, root: u32, parameter: u32) {
+  frame_set(frame, 0u, root); frame_set(frame, 1u, NO_INDEX);
+  frame_set(frame, 2u, parameter); frame_set(frame, 3u, 0u);
+  frame_set(frame, 10u, FRAME_SCHEMA_OCCURRENCE);
+}
+
+fn start_schema_occurrence(root: u32, parameter: u32) -> bool {
+  let frame = push_work_frame(FRAME_SCHEMA_OCCURRENCE);
+  if frame == NO_INDEX { return false; }
+  state.work_result = 0u;
+  configure_schema_occurrence(frame, root, parameter);
+  return true;
+}
+
+fn schema_occurrence_transition(frame: u32) {
+  if state.work_result != 0u { pop_work_frame(); return; }
+  let node = schema_node(frame_get(frame, 0u));
+  if frame_get(frame, 3u) == 0u {
+    if node.tag == SCHEMA_PARAMETER && node.payload == frame_get(frame, 2u) {
+      state.work_result = 1u;
+      pop_work_frame();
+      return;
+    }
+    frame_set(frame, 1u, node.first_child);
+    frame_set(frame, 3u, 1u);
+    return;
+  }
+  let child = frame_get(frame, 1u);
+  if child == NO_INDEX { pop_work_frame(); return; }
+  if !require_frame_slots(1u) { return; }
+  frame_set(frame, 1u, schema_node(child).next_sibling);
+  let child_frame = push_work_frame(FRAME_SCHEMA_OCCURRENCE);
+  configure_schema_occurrence(child_frame, child, frame_get(frame, 2u));
+}
+
 fn field_parameter_recoverability_transition(frame: u32) {
   let field_schema = schema_node(frame_get(frame, 0u));
   let stage = frame_get(frame, 3u);
   if stage == 0u {
     if field_schema.tag == SCHEMA_PARAMETER {
-      frame_set(frame, 3u, 1u);
-      frame_set(frame, 4u, schema_node(frame_get(frame, 1u)).first_child);
+      if start_schema_occurrence(frame_get(frame, 1u), field_schema.payload) {
+        frame_set(frame, 3u, 1u);
+      }
       return;
     }
     frame_set(frame, 3u, 2u); frame_set(frame, 4u, field_schema.first_child);
     return;
   }
   if stage == 1u {
-    let direct_argument = frame_get(frame, 4u);
-    if direct_argument == NO_INDEX {
-      report_metadata_diagnostic(
-        METADATA_HIDDEN_CONSTRUCTOR_FIELD_PARAMETER,
-        field_schema.start_byte,
-        field_schema.end_byte,
-        frame_get(frame, 2u),
-        field_schema.payload,
-        frame_get(frame, 1u),
-      );
-      return;
-    }
-    let argument_schema = schema_node(direct_argument);
-    if argument_schema.tag == SCHEMA_PARAMETER &&
-      argument_schema.payload == field_schema.payload {
+    if state.work_result != 0u {
       pop_work_frame();
       return;
     }
-    frame_set(frame, 4u, argument_schema.next_sibling);
+    report_metadata_diagnostic(
+      METADATA_HIDDEN_CONSTRUCTOR_FIELD_PARAMETER,
+      field_schema.start_byte,
+      field_schema.end_byte,
+      frame_get(frame, 2u),
+      field_schema.payload,
+      frame_get(frame, 1u),
+    );
     return;
   }
   let child = frame_get(frame, 4u);

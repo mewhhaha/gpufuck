@@ -51,7 +51,8 @@ export type {
 
 const DEFAULT_MAXIMUM_COMPILATION_STEPS = 1_000_000;
 const HARD_MAXIMUM_COMPILATION_STEPS = 10_000_000;
-const DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 4_096;
+const DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 65_536;
+const DEFAULT_CANCELLABLE_COMPILATION_STEPS_PER_DISPATCH = 16_384;
 const HARD_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 65_536;
 // One source byte upper-bounds one schema or type-parameter record. Six KiB covers its
 // semantic storage, inference metadata/workspace/output/readback, and one workspace growth.
@@ -302,7 +303,9 @@ function compilationLimits(
     maximumStepsPerDispatch: boundedCompilationOption(
       "maximumStepsPerDispatch",
       options.maximumStepsPerDispatch,
-      DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH,
+      options.signal === undefined
+        ? DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH
+        : DEFAULT_CANCELLABLE_COMPILATION_STEPS_PER_DISPATCH,
       HARD_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH,
     ),
   };
@@ -486,7 +489,7 @@ function validateRecordTable(
   }
 }
 
-function semanticSurfaceFromModule(module: EncodedFunctionalModule): EncodedLazuliSurface {
+export function semanticSurfaceFromModule(module: EncodedFunctionalModule): EncodedLazuliSurface {
   return {
     nodeWords: module.nodeWords,
     definitionWords: module.definitionWords,

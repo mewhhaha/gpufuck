@@ -179,10 +179,18 @@ Deno.test("indexed constructor results match the host across dispatch quanta", a
     },
     {
       source: "-- żółć\ndata Indexed a b = Mk(value: b) : Indexed a (b, b); let main = 0;",
+      ok: true,
+    },
+    {
+      source:
+        "data Indexed a b = Mk(value: b) : Indexed a (b, b); let main : Indexed Int (Bool, Bool) = Mk true;",
+      ok: true,
+    },
+    {
+      source: "data Indexed a b = Mk(value: b) : Indexed a Int; let main = 0;",
       ok: false,
       code: "L2101",
-      message: 'constructor "Mk" field parameter "b" is not a bare direct argument of its result',
-      span: { startByte: 41, endByte: 42 },
+      message: 'constructor "Mk" field parameter "b" does not occur in its result',
     },
   ] as const;
 
@@ -200,7 +208,7 @@ Deno.test("indexed constructor results match the host across dispatch quanta", a
     for (let fixtureIndex = 0; fixtureIndex < fixtures.length; fixtureIndex++) {
       const fixture = fixtures[fixtureIndex];
       if (fixture === undefined) throw new Error(`missing indexed constructor ${fixtureIndex}`);
-      const dispatchQuanta = fixtureIndex === 0 ? [1, 7, 4_096] : [4_096];
+      const dispatchQuanta = fixtureIndex === 0 || fixtureIndex === 7 ? [1, 7, 4_096] : [4_096];
       for (const maximumStepsPerDispatch of dispatchQuanta) {
         const snapshot = await compilerInferenceSnapshot(compiler, fixture.source, {
           maximumStepsPerDispatch,
