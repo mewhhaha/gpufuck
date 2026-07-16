@@ -114,6 +114,17 @@ export function buildFunctionalSurfaceModule(
   options: FunctionalSurfaceModuleOptions = {},
 ): EncodedFunctionalModule {
   const hostCapabilities = normalizeFunctionalHostCapabilities(options.hostCapabilities);
+  const usesRank2Types =
+    definitions.some((definition) =>
+      definition.annotation !== null && schemaContainsForall(definition.annotation)
+    ) || typeDeclarations.some((declaration) =>
+      declaration.constructors.some((constructor) =>
+        constructor.fields.some((field) =>
+          schemaContainsForall(field.type)
+        ) ||
+        constructor.result !== undefined && schemaContainsForall(constructor.result)
+      )
+    );
   const declaredNames = new Set(typeDeclarations.map((declaration) => declaration.name));
   for (const reservedName of ["$UnitType", "$TupleType", FUNCTIONAL_INIT_TYPE_NAME]) {
     if (declaredNames.has(reservedName)) {
@@ -177,7 +188,9 @@ export function buildFunctionalSurfaceModule(
     abiVersion: FUNCTIONAL_MODULE_ABI_VERSION,
     sourceByteLength,
     evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
-    typecheckingProfile: FunctionalTypecheckingProfile.HindleyMilnerIndexed,
+    typecheckingProfile: usesRank2Types
+      ? FunctionalTypecheckingProfile.PredicativeRank2Indexed
+      : FunctionalTypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities,
     nodeWords: Uint32Array.from(encoder.words),
@@ -210,6 +223,24 @@ export function buildFunctionalSurfaceModule(
       })),
     })),
   };
+}
+
+function schemaContainsForall(schema: FunctionalTypeSchema): boolean {
+  switch (schema.kind) {
+    case "forall":
+      return true;
+    case "tuple":
+      return schemaContainsForall(schema.values[0]) || schemaContainsForall(schema.values[1]);
+    case "named":
+      return schema.arguments.some(schemaContainsForall);
+    case "function":
+      return schemaContainsForall(schema.parameter) || schemaContainsForall(schema.result);
+    case "integer":
+    case "boolean":
+    case "unit":
+    case "parameter":
+      return false;
+  }
 }
 
 function hostInitTypeDeclaration(
@@ -536,6 +567,13 @@ function sourceType(
         ...schema,
         parameter: sourceType(schema.parameter, span),
         result: sourceType(schema.result, span),
+        ...sourceSpan,
+      };
+    case "forall":
+      return {
+        ...schema,
+        parameters: [...schema.parameters],
+        body: sourceType(schema.body, span),
         ...sourceSpan,
       };
   }

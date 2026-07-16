@@ -506,6 +506,12 @@ export function publicTypeMetadata(surface: EncodedLazuliSurface): Pick<
           parameter: copySchema(schema.parameter),
           result: copySchema(schema.result),
         });
+      case "forall":
+        return Object.freeze({
+          kind: "forall",
+          parameters: Object.freeze([...schema.parameters]),
+          body: copySchema(schema.body),
+        });
     }
   };
   const typeDeclarations: LazuliTypeDeclaration[] = [];
@@ -645,6 +651,8 @@ function formatWorkspaceType(
         }`;
         return nestedFunction ? `(${rendered})` : rendered;
       }
+      case 12:
+        return `forall. ${format(typeWord(typeIndex, 2), false)}`;
       default:
         throw new Error(`GPU Lazuli diagnostic type ${typeIndex} has unknown kind ${kind}`);
     }

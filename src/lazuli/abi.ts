@@ -163,6 +163,11 @@ export type LazuliTypeSchema =
     readonly kind: "function";
     readonly parameter: LazuliTypeSchema;
     readonly result: LazuliTypeSchema;
+  }
+  | {
+    readonly kind: "forall";
+    readonly parameters: readonly string[];
+    readonly body: LazuliTypeSchema;
   };
 
 export interface LazuliConstructorFieldDeclaration {

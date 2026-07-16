@@ -74,6 +74,7 @@ export type FunctionalEvaluationProfile =
 
 export const FunctionalTypecheckingProfile = {
   HindleyMilnerIndexed: "hindley-milner-indexed-v1",
+  PredicativeRank2Indexed: "predicative-rank2-indexed-v1",
 } as const;
 
 export type FunctionalTypecheckingProfile =

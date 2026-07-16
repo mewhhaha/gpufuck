@@ -1543,6 +1543,11 @@ class InferenceContext {
           parameter: this.typeFromSchema(schema.parameter, parameters, parameterPolicy, span),
           result: this.typeFromSchema(schema.result, parameters, parameterPolicy, span),
         };
+      case "forall":
+        throw this.invalidTypeMetadata(
+          "rank-2 forall schemas are checked only by the production GPU inferencer",
+          span,
+        );
     }
   }
 
@@ -1573,6 +1578,12 @@ class InferenceContext {
           kind: "function",
           parameter: this.copySchema(schema.parameter),
           result: this.copySchema(schema.result),
+        });
+      case "forall":
+        return Object.freeze({
+          kind: "forall",
+          parameters: Object.freeze([...schema.parameters]),
+          body: this.copySchema(schema.body),
         });
     }
   }

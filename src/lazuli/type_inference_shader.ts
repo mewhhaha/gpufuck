@@ -34,6 +34,7 @@ export const LazuliInferenceSchemaTag = {
   Tuple: 5,
   Named: 6,
   Function: 7,
+  Forall: 8,
 } as const;
 
 /**
@@ -78,6 +79,7 @@ export const LazuliInferenceInternalTypeKind = {
   Function: 9,
   List: 10,
   NamedGeneric: 11,
+  Forall: 12,
 } as const;
 
 export const LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH = 3;
@@ -346,7 +348,9 @@ export function prepareLazuliInferenceShaderMetadata(
     if (tag === undefined || symbol === undefined) {
       throw new Error(`Lazuli schema record ${schemaIndex} is incomplete.`);
     }
-    if (tag === LazuliInferenceSchemaTag.Parameter) {
+    if (
+      tag === LazuliInferenceSchemaTag.Parameter || tag === LazuliInferenceSchemaTag.Forall
+    ) {
       const parameterName = flattened.identifierNames[symbol];
       if (parameterName === undefined) {
         throw new Error(
@@ -415,7 +419,7 @@ export function prepareLazuliInferenceShaderMetadata(
 }
 
 /**
- * Persistent, bounded rank-1 Hindley-Milner inference for resolved Lazuli core
+ * Persistent, bounded Hindley-Milner and predicative rank-2 inference for resolved core
  * nodes and flattened ABI-v5 type metadata. The eight bindings stay within WebGPU's portable
  * per-stage storage-buffer minimum. A dispatch performs at most
  * `maximum_transitions_per_dispatch` state-machine transitions; all durable
@@ -657,6 +661,7 @@ const SCHEMA_PARAMETER: u32 = 4u;
 const SCHEMA_TUPLE: u32 = 5u;
 const SCHEMA_NAMED: u32 = 6u;
 const SCHEMA_FUNCTION: u32 = 7u;
+const SCHEMA_FORALL: u32 = 8u;
 
 const TYPE_VARIABLE: u32 = 1u;
 const TYPE_GENERIC: u32 = 2u;
@@ -669,6 +674,7 @@ const TYPE_NAMED: u32 = 8u;
 const TYPE_FUNCTION: u32 = 9u;
 const TYPE_LIST: u32 = 10u;
 const TYPE_NAMED_GENERIC: u32 = 11u;
+const TYPE_FORALL: u32 = 12u;
 const TYPE_RECORD_WORDS: u32 = 5u;
 const ENVIRONMENT_WORDS: u32 = 3u;
 const FRAME_WORDS: u32 = 12u;
@@ -704,6 +710,7 @@ const FRAME_FULLY_ZONKED_VISIT: u32 = 26u;
 const FRAME_RIGIDIFY: u32 = 27u;
 const FRAME_RIGIDIFY_VISIT: u32 = 28u;
 const FRAME_INDEXED_SHAPE: u32 = 29u;
+const FRAME_RANK2_CHECK: u32 = 30u;
 
 const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
 const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
@@ -1289,25 +1296,35 @@ fn assign_type_field(parent: u32, field: u32, value: u32) {
   else { type_set(parent, 3u, value); }
 }
 
-fn start_instantiate(source: u32) -> bool {
+fn start_instantiate_mode(source: u32, mode: u32) -> bool {
   let frame = push_work_frame(FRAME_INSTANTIATE);
   if frame == NO_INDEX { return false; }
   frame_set(frame, 0u, source); frame_set(frame, 1u, 0u);
+  frame_set(frame, 4u, mode); frame_set(frame, 5u, 1u);
+  state.work_result = 0u;
   return true;
+}
+
+fn start_instantiate(source: u32) -> bool {
+  return start_instantiate_mode(source, 0u);
 }
 
 fn configure_instantiate_visit(
   frame: u32, source: u32, parent: u32, field: u32, epoch: u32,
+  mode: u32, open_forall: u32,
 ) {
   frame_set(frame, 0u, source); frame_set(frame, 1u, parent); frame_set(frame, 2u, field);
-  frame_set(frame, 3u, epoch); frame_set(frame, 10u, FRAME_INSTANTIATE_VISIT);
+  frame_set(frame, 3u, epoch); frame_set(frame, 4u, mode); frame_set(frame, 5u, open_forall);
+  frame_set(frame, 10u, FRAME_INSTANTIATE_VISIT);
 }
 
 fn instantiate_transition(frame: u32) {
   if frame_get(frame, 1u) == 0u {
     if !acquire_epoch(frame, 3u, 1u) { return; }
   }
-  configure_instantiate_visit(frame, frame_get(frame, 0u), NO_INDEX, 0u, frame_get(frame, 3u));
+  configure_instantiate_visit(
+    frame, frame_get(frame, 0u), NO_INDEX, 0u, frame_get(frame, 3u),
+    frame_get(frame, 4u), frame_get(frame, 5u));
 }
 
 fn attach_instantiated(parent: u32, field: u32, replacement: u32) {
@@ -1325,13 +1342,30 @@ fn instantiate_visit_transition(frame: u32) {
   }
   let parent = frame_get(frame, 1u); let field = frame_get(frame, 2u);
   let epoch = frame_get(frame, 3u); let kind = type_get(current, 0u);
+  if kind == TYPE_FORALL {
+    if frame_get(frame, 5u) == 0u {
+      attach_instantiated(parent, field, current); pop_work_frame(); return;
+    }
+    state.work_result = 1u;
+    configure_instantiate_visit(
+      frame, type_get(current, 2u), parent, field, epoch,
+      frame_get(frame, 4u), 1u);
+    return;
+  }
   if kind == TYPE_GENERIC || kind == TYPE_NAMED_GENERIC {
     if type_get(current, 2u) == epoch {
       attach_instantiated(parent, field, type_get(current, 3u)); pop_work_frame(); return;
     }
     if !require_type_slots(1u) { return; }
-    let replacement = fresh_variable();
+    var replacement = NO_INDEX;
+    if frame_get(frame, 4u) == 1u {
+      replacement = allocate_type(TYPE_RIGID, state.next_generic, state.current_level, NO_INDEX);
+      state.next_generic += 1u;
+    } else {
+      replacement = fresh_variable();
+    }
     type_set(current, 2u, epoch); type_set(current, 3u, replacement);
+    state.work_result = 1u;
     attach_instantiated(parent, field, replacement); pop_work_frame(); return;
   }
   var first = NO_INDEX; var second = NO_INDEX; var first_field = 0u; var second_field = 0u;
@@ -1353,11 +1387,51 @@ fn instantiate_visit_transition(frame: u32) {
   if kind == TYPE_LIST { type_set(replacement, 1u, NO_INDEX); }
   attach_instantiated(parent, field, replacement);
   if first == NO_INDEX { pop_work_frame(); return; }
-  configure_instantiate_visit(frame, first, replacement, first_field, epoch);
+  configure_instantiate_visit(
+    frame, first, replacement, first_field, epoch, frame_get(frame, 4u), 0u);
   if second != NO_INDEX {
     let sibling = push_work_frame(FRAME_INSTANTIATE_VISIT);
-    configure_instantiate_visit(sibling, second, replacement, second_field, epoch);
+    configure_instantiate_visit(
+      sibling, second, replacement, second_field, epoch, frame_get(frame, 4u), 0u);
   }
+}
+
+fn start_rank2_check(actual: u32, expected: u32, start_byte: u32, end_byte: u32) -> bool {
+  let frame = push_work_frame(FRAME_RANK2_CHECK);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, actual); frame_set(frame, 1u, 0u);
+  frame_set(frame, 2u, expected); frame_set(frame, 3u, start_byte);
+  frame_set(frame, 4u, end_byte);
+  return true;
+}
+
+fn rank2_check_transition(frame: u32) {
+  let stage = frame_get(frame, 1u);
+  if stage == 0u {
+    if start_instantiate_mode(frame_get(frame, 2u), 1u) { frame_set(frame, 1u, 1u); }
+    return;
+  }
+  if stage == 1u {
+    frame_set(frame, 5u, state.returned_type);
+    if start_instantiate(frame_get(frame, 0u)) { frame_set(frame, 1u, 2u); }
+    return;
+  }
+  if stage == 2u {
+    if state.work_result == 0u {
+      report_type_mismatch(
+        frame_get(frame, 0u), frame_get(frame, 2u),
+        frame_get(frame, 3u), frame_get(frame, 4u));
+      return;
+    }
+    if start_unify(
+      state.returned_type, frame_get(frame, 5u),
+      frame_get(frame, 3u), frame_get(frame, 4u)) {
+      frame_set(frame, 1u, 3u);
+    }
+    return;
+  }
+  state.returned_type = frame_get(frame, 2u);
+  pop_work_frame();
 }
 
 fn start_local_lookup(depth: u32, environment: u32, node_index: u32) -> bool {
@@ -1365,6 +1439,16 @@ fn start_local_lookup(depth: u32, environment: u32, node_index: u32) -> bool {
   if frame == NO_INDEX { return false; }
   frame_set(frame, 0u, depth); frame_set(frame, 1u, 0u);
   frame_set(frame, 2u, environment); frame_set(frame, 3u, node_index);
+  frame_set(frame, 4u, 0u);
+  return true;
+}
+
+fn start_local_scheme_lookup(depth: u32, environment: u32, node_index: u32) -> bool {
+  let frame = push_work_frame(FRAME_LOCAL_LOOKUP);
+  if frame == NO_INDEX { return false; }
+  frame_set(frame, 0u, depth); frame_set(frame, 1u, 0u);
+  frame_set(frame, 2u, environment); frame_set(frame, 3u, node_index);
+  frame_set(frame, 4u, 1u);
   return true;
 }
 
@@ -1380,6 +1464,11 @@ fn local_lookup_transition(frame: u32) {
   if remaining > 0u {
     frame_set(frame, 0u, remaining - 1u);
     frame_set(frame, 2u, workspace[address + 1u]);
+    return;
+  }
+  if frame_get(frame, 4u) != 0u {
+    state.returned_type = workspace[address];
+    pop_work_frame();
     return;
   }
   if !start_instantiate(workspace[address]) { return; }
@@ -1428,7 +1517,7 @@ fn concrete_visit_transition(frame: u32) {
   if type_get(current, 4u) == epoch { pop_work_frame(); return; }
   let kind = type_get(current, 0u);
   if kind == TYPE_VARIABLE || kind == TYPE_GENERIC || kind == TYPE_RIGID ||
-    kind == TYPE_NAMED_GENERIC {
+    kind == TYPE_NAMED_GENERIC || kind == TYPE_FORALL {
     state.work_result = 0u; pop_work_frame(); return;
   }
   var first = NO_INDEX; var second = NO_INDEX;
@@ -1747,6 +1836,7 @@ fn work_transition() {
   else if kind == FRAME_RIGIDIFY { rigidify_transition(frame); }
   else if kind == FRAME_RIGIDIFY_VISIT { rigidify_visit_transition(frame); }
   else if kind == FRAME_INDEXED_SHAPE { indexed_shape_transition(frame); }
+  else if kind == FRAME_RANK2_CHECK { rank2_check_transition(frame); }
   else { invalid_input(ERROR_INVALID_SURFACE, kind); }
 }
 
@@ -1863,6 +1953,35 @@ fn schema_visit_transition(frame: u32) {
     attach_schema_type(parent, field, converted, frame_get(frame, 9u));
     pop_work_frame(); return;
   }
+  if stage == 4u {
+    if state.work_result != 0u {
+      report_metadata_diagnostic(
+        METADATA_INVALID_SCHEMA_CONVERSION, node.start_byte, node.end_byte,
+        frame_get(frame, 0u), node.payload, NO_INDEX);
+      return;
+    }
+    if state.work_aux >= schema_mapping_capacity() ||
+      state.work_aux * 2u + 2u > temporary_capacity() {
+      exhausted(ERROR_SCRATCH_ARENA_EXHAUSTED, state.work_aux * 2u + 2u); return;
+    }
+    if !require_type_slots(1u) { return; }
+    let generic = allocate_type(TYPE_GENERIC, state.next_generic, NO_INDEX, NO_INDEX);
+    state.next_generic += 1u;
+    let mapping = temporary_base() + state.work_aux * 2u;
+    workspace[mapping] = node.payload; workspace[mapping + 1u] = generic;
+    state.work_aux += 1u;
+    frame_set(frame, 3u, 5u);
+    return;
+  }
+  if stage == 5u {
+    if !require_type_slots(1u) { return; }
+    let converted = allocate_type(TYPE_FORALL, NO_INDEX, NO_INDEX, NO_INDEX);
+    let owner = frame_get(frame, 9u);
+    let allow_implicit = frame_get(frame, 8u);
+    attach_schema_type(parent, field, converted, owner);
+    configure_schema_visit(frame, node.first_child, converted, 2u, allow_implicit, owner);
+    return;
+  }
   if stage == 2u {
     if state.returned_type == NO_INDEX {
       report_metadata_diagnostic(
@@ -1918,6 +2037,10 @@ fn schema_visit_transition(frame: u32) {
     configure_schema_visit(frame, first_child, converted, 2u, frame_get(frame, 8u), owner);
     let sibling = push_work_frame(FRAME_SCHEMA_VISIT);
     configure_schema_visit(sibling, second_child, converted, 3u, frame_get(frame, 8u), owner);
+    return;
+  }
+  if node.tag == SCHEMA_FORALL {
+    if start_mapping_lookup(node.payload, state.work_aux) { frame_set(frame, 3u, 4u); }
     return;
   }
   if node.tag == SCHEMA_NAMED {
@@ -2537,11 +2660,49 @@ fn expression_transition() {
   if stage == 41u {
     if frame_get(frame, 11u) != NO_INDEX {
       frame_set(frame, 4u, frame_get(frame, 11u));
-      frame_set(frame, 1u, 42u);
+    } else {
+      if !require_type_slots(1u) { return; }
+      frame_set(frame, 4u, fresh_variable());
+    }
+    let callee = frame_get(frame, 3u);
+    if type_get(callee, 0u) == TYPE_FUNCTION {
+      if type_get(type_get(callee, 2u), 0u) != TYPE_FORALL {
+        frame_set(frame, 1u, 42u);
+        return;
+      }
+      let argument = core_nodes[node.child1];
+      frame_set(frame, 6u, type_get(callee, 2u));
+      if argument.tag == TAG_GLOBAL {
+        let scheme = scratch_get(0u, argument.payload);
+        if scheme == NO_INDEX { invalid_input(ERROR_INVALID_SURFACE, node.child1); return; }
+        if start_rank2_check(
+          scheme, frame_get(frame, 6u), argument.start_byte, argument.end_byte) {
+          frame_set(frame, 1u, 46u);
+        }
+        return;
+      }
+      if argument.tag == TAG_LOCAL {
+        if start_local_scheme_lookup(argument.payload, environment, node.child1) {
+          frame_set(frame, 1u, 45u);
+        }
+        return;
+      }
+      report_type_mismatch(
+        state.returned_type, frame_get(frame, 6u), argument.start_byte, argument.end_byte);
       return;
     }
-    if !require_type_slots(1u) { return; }
-    frame_set(frame, 4u, fresh_variable());
+    frame_set(frame, 1u, 42u);
+    return;
+  }
+  if stage == 45u {
+    let argument = core_nodes[node.child1];
+    if start_rank2_check(
+      state.returned_type, frame_get(frame, 6u), argument.start_byte, argument.end_byte) {
+      frame_set(frame, 1u, 46u);
+    }
+    return;
+  }
+  if stage == 46u {
     frame_set(frame, 1u, 42u);
     return;
   }
@@ -3282,6 +3443,8 @@ fn validation_transition() {
       }
       if schema.tag == SCHEMA_TUPLE || schema.tag == SCHEMA_FUNCTION {
         state.work_aux = 2u;
+      } else if schema.tag == SCHEMA_FORALL {
+        state.work_aux = 1u;
       } else if schema.tag >= SCHEMA_INTEGER && schema.tag <= SCHEMA_PARAMETER {
         state.work_aux = 0u;
       } else {

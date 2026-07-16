@@ -538,6 +538,8 @@ function matchConstructorResultSchema(
       return type.kind === "function" &&
         matchConstructorResultSchema(schema.parameter, type.parameter, parameters) &&
         matchConstructorResultSchema(schema.result, type.result, parameters);
+    case "forall":
+      return false;
   }
 }
 

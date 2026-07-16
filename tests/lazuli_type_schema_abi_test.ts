@@ -222,6 +222,26 @@ Deno.test("concrete types round-trip through the shared six-word records", () =>
   deepStrictEqual(decodeLazuliType(serialized.schemaWords, serialized.root, ["Box"]), type);
 });
 
+Deno.test("rank-2 forall schemas decode through canonical records", () => {
+  const words = schemaWords([
+    [LazuliTypeSchemaTag.Forall, 0, 1, LAZULI_NO_INDEX, 0, 0],
+    [LazuliTypeSchemaTag.Function, LAZULI_NO_INDEX, 2, LAZULI_NO_INDEX, 0, 0],
+    [LazuliTypeSchemaTag.Parameter, 0, LAZULI_NO_INDEX, 3, 0, 0],
+    [LazuliTypeSchemaTag.Parameter, 0, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 0, 0],
+  ]);
+
+  deepStrictEqual(decodeLazuliTypeSchema(words, 0, ["T"]), {
+    kind: "forall",
+    parameters: ["T"],
+    body: {
+      kind: "function",
+      parameter: { kind: "parameter", name: "T" },
+      result: { kind: "parameter", name: "T" },
+    },
+  });
+  throws(() => decodeLazuliType(words, 0, ["T"]), /must not be a parameter|must not be a forall/);
+});
+
 Deno.test("schema decoding rejects cycles, reused records, and malformed links", () => {
   throws(
     () =>
