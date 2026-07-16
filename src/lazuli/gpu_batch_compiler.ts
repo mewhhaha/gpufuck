@@ -27,7 +27,8 @@ import {
   createInitialState,
   INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
   inferredTypeOutputByteLength,
-  workspaceLayout,
+  PACKED_INFERENCE_OUTPUT_RECORD_CAPACITY,
+  packedWorkspaceLayout,
 } from "./gpu_type_inference_workspace.ts";
 import type {
   GpuLazuliTypeInferenceWorkspaceCapacities,
@@ -45,7 +46,6 @@ import {
 import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
-const FAST_OUTPUT_RECORD_CAPACITY = 64;
 const FAST_COMPLETION_MINIMUM_DISPATCH_QUANTUM = 4_096;
 
 export interface LazuliBatchCompilationInput {
@@ -90,6 +90,28 @@ export async function compileLazuliBatch(
   compileScalar: (input: LazuliBatchCompilationInput) => Promise<LazuliCompileResult>,
   instrumentation?: LazuliBatchCompilationInstrumentation,
 ): Promise<readonly LazuliCompileResult[]> {
+  return await compileLazuliBatchWithin(
+    device,
+    semanticPipeline,
+    inferencePipeline,
+    inputs,
+    signal,
+    compileScalar,
+    instrumentation,
+    true,
+  );
+}
+
+async function compileLazuliBatchWithin(
+  device: GPUDevice,
+  semanticPipeline: GPUComputePipeline,
+  inferencePipeline: GPUComputePipeline,
+  inputs: readonly LazuliBatchCompilationInput[],
+  signal: AbortSignal | undefined,
+  compileScalar: (input: LazuliBatchCompilationInput) => Promise<LazuliCompileResult>,
+  instrumentation: LazuliBatchCompilationInstrumentation | undefined,
+  parallelSplitAvailable: boolean,
+): Promise<readonly LazuliCompileResult[]> {
   signal?.throwIfAborted();
   if (inputs.length === 0) return [];
   if (inputs.length === 1) return [await compileScalar(inputs[0]!)];
@@ -102,6 +124,7 @@ export async function compileLazuliBatch(
       signal,
       compileScalar,
       instrumentation,
+      parallelSplitAvailable,
     );
   }
 
@@ -118,6 +141,7 @@ export async function compileLazuliBatch(
         signal,
         compileScalar,
         instrumentation,
+        parallelSplitAvailable,
       );
     }
     throw error;
@@ -143,6 +167,7 @@ export async function compileLazuliBatch(
         signal,
         compileScalar,
         instrumentation,
+        parallelSplitAvailable,
       );
     }
     throw error;
@@ -156,7 +181,7 @@ export async function compileLazuliBatch(
       results[lane.resultIndex] = await compileScalar(lane);
     }
   } catch (error) {
-    for (const result of results) if (result?.ok) result.module.destroy();
+    destroySuccessfulModules(results);
     throw error;
   }
   return completeResults(results);
@@ -170,11 +195,12 @@ async function compileSplitBatch(
   signal: AbortSignal | undefined,
   compileScalar: (input: LazuliBatchCompilationInput) => Promise<LazuliCompileResult>,
   instrumentation: LazuliBatchCompilationInstrumentation | undefined,
+  parallelSplitAvailable: boolean,
 ): Promise<readonly LazuliCompileResult[]> {
   if (inputs.length <= 2) return await compileScalars(inputs, compileScalar);
   const middle = Math.floor(inputs.length / 2);
   const compileHalf = (half: readonly LazuliBatchCompilationInput[]) =>
-    compileLazuliBatch(
+    compileLazuliBatchWithin(
       device,
       semanticPipeline,
       inferencePipeline,
@@ -182,13 +208,31 @@ async function compileSplitBatch(
       signal,
       compileScalar,
       instrumentation,
+      false,
     );
-  const left = await compileHalf(inputs.slice(0, middle));
+  const leftInputs = inputs.slice(0, middle);
+  const rightInputs = inputs.slice(middle);
+  if (parallelSplitAvailable) {
+    const [left, right] = await Promise.allSettled([
+      compileHalf(leftInputs),
+      compileHalf(rightInputs),
+    ]);
+    if (left.status === "rejected") {
+      if (right.status === "fulfilled") destroySuccessfulModules(right.value);
+      throw left.reason;
+    }
+    if (right.status === "rejected") {
+      destroySuccessfulModules(left.value);
+      throw right.reason;
+    }
+    return [...left.value, ...right.value];
+  }
+  const left = await compileHalf(leftInputs);
   try {
-    const right = await compileHalf(inputs.slice(middle));
+    const right = await compileHalf(rightInputs);
     return [...left, ...right];
   } catch (error) {
-    for (const result of left) if (result.ok) result.module.destroy();
+    destroySuccessfulModules(left);
     throw error;
   }
 }
@@ -476,7 +520,7 @@ function prepareBatchLanes(
       input.surface,
       flattenLazuliTypeSchemas(input.surface),
     );
-    const localWorkspace = workspaceLayout(
+    const localWorkspace = packedWorkspaceLayout(
       input.surface,
       metadata.schemaNodeCount,
       metadata.typeParameterCount,
@@ -498,7 +542,7 @@ function prepareBatchLanes(
       fastOutputBase: fastOutputRecords,
       fastOutputCapacity: Math.min(
         localWorkspace.outputCapacity,
-        FAST_OUTPUT_RECORD_CAPACITY,
+        PACKED_INFERENCE_OUTPUT_RECORD_CAPACITY,
       ),
     };
     nodes = checkedSum("packed node count", nodes, input.surface.nodeCount);
@@ -904,6 +948,25 @@ async function dispatchBatch(
       laneCount * INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
     );
     if (fastCompletion) {
+      const contiguousFastOutput = lanes.every((lane) =>
+        lane.outputBase === lane.fastOutputBase &&
+        lane.localWorkspace.outputCapacity === lane.fastOutputCapacity
+      );
+      if (contiguousFastOutput) {
+        const lastLane = lanes.at(-1);
+        if (lastLane === undefined) throw new Error("packed dispatch omitted all lanes");
+        const fastOutputByteLength = (lastLane.fastOutputBase + lastLane.fastOutputCapacity) *
+          LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
+        if (fastOutputByteLength > 0) {
+          commands.copyBufferToBuffer(
+            outputBuffer,
+            0,
+            stateReadbackBuffer,
+            laneCount * INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
+            fastOutputByteLength,
+          );
+        }
+      }
       for (const [laneIndex, lane] of lanes.entries()) {
         const destination = moduleBuffers[laneIndex];
         if (destination === undefined) {
@@ -911,7 +974,7 @@ async function dispatchBatch(
         }
         const fastOutputByteLength = lane.fastOutputCapacity *
           LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
-        if (fastOutputByteLength > 0) {
+        if (!contiguousFastOutput && fastOutputByteLength > 0) {
           commands.copyBufferToBuffer(
             outputBuffer,
             lane.outputBase * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
@@ -1005,10 +1068,16 @@ async function compileScalars(
     results.push(outcome.value);
   }
   if (firstRejection !== undefined) {
-    for (const result of results) if (result.ok) result.module.destroy();
+    destroySuccessfulModules(results);
     throw firstRejection;
   }
   return results;
+}
+
+function destroySuccessfulModules(
+  results: readonly (LazuliCompileResult | undefined)[],
+): void {
+  for (const result of results) if (result?.ok) result.module.destroy();
 }
 
 function completeResults(

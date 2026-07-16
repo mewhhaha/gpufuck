@@ -23,6 +23,25 @@ import {
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 const MAXIMUM_CONSTRUCTOR_ARITY = 64;
+export const PACKED_INFERENCE_OUTPUT_RECORD_CAPACITY = 64;
+interface WorkspaceDefaults {
+  readonly typeRecordsPerInput: number;
+  readonly framesPerExpressionInput: number;
+  readonly minimumFrameCapacity: number;
+  readonly maximumOutputRecords: number;
+}
+const STANDARD_WORKSPACE_DEFAULTS: WorkspaceDefaults = {
+  typeRecordsPerInput: 32,
+  framesPerExpressionInput: 2,
+  minimumFrameCapacity: 0,
+  maximumOutputRecords: LAZULI_NO_INDEX,
+};
+const PACKED_WORKSPACE_DEFAULTS: WorkspaceDefaults = {
+  typeRecordsPerInput: 4,
+  framesPerExpressionInput: 1,
+  minimumFrameCapacity: 64,
+  maximumOutputRecords: PACKED_INFERENCE_OUTPUT_RECORD_CAPACITY,
+};
 export const INFERENCE_INTERNAL_STATE_BYTE_LENGTH = LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH *
   WORD_BYTES;
 // Full-arena copies need a substantial dispatch quantum to amortize their bandwidth cost.
@@ -61,6 +80,41 @@ export function workspaceLayout(
   limits: GPUSupportedLimits,
   overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
 ): WorkspaceLayout {
+  return inputDerivedWorkspaceLayout(
+    surface,
+    schemaNodeCount,
+    typeParameterCount,
+    limits,
+    overrides,
+    STANDARD_WORKSPACE_DEFAULTS,
+  );
+}
+
+export function packedWorkspaceLayout(
+  surface: EncodedLazuliSurface,
+  schemaNodeCount: number,
+  typeParameterCount: number,
+  limits: GPUSupportedLimits,
+  overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
+): WorkspaceLayout {
+  return inputDerivedWorkspaceLayout(
+    surface,
+    schemaNodeCount,
+    typeParameterCount,
+    limits,
+    overrides,
+    PACKED_WORKSPACE_DEFAULTS,
+  );
+}
+
+function inputDerivedWorkspaceLayout(
+  surface: EncodedLazuliSurface,
+  schemaNodeCount: number,
+  typeParameterCount: number,
+  limits: GPUSupportedLimits,
+  overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
+  defaults: WorkspaceDefaults,
+): WorkspaceLayout {
   const inferenceInputs = checkedSum(
     "inference input count",
     surface.nodeCount,
@@ -70,16 +124,23 @@ export function workspaceLayout(
     schemaNodeCount,
     1,
   );
-  const defaultTypeCapacity = checkedProduct("type arena capacity", inferenceInputs, 32);
+  const defaultTypeCapacity = checkedProduct(
+    "type arena capacity",
+    inferenceInputs,
+    defaults.typeRecordsPerInput,
+  );
   const defaultEnvironmentCapacity = checkedProduct(
     "environment arena capacity",
     checkedSum("environment input count", surface.nodeCount, surface.definitionCount, 1),
     2,
   );
-  const defaultFrameCapacity = checkedProduct(
-    "frame arena capacity",
-    checkedSum("frame input count", surface.nodeCount, surface.definitionCount, 1),
-    2,
+  const defaultFrameCapacity = Math.max(
+    defaults.minimumFrameCapacity,
+    checkedProduct(
+      "frame arena capacity",
+      checkedSum("frame input count", surface.nodeCount, surface.definitionCount, 1),
+      defaults.framesPerExpressionInput,
+    ),
   );
   const defaultRefinementCapacity = checkedProduct(
     "refinement arena capacity",
@@ -121,7 +182,7 @@ export function workspaceLayout(
       frame: defaultFrameCapacity,
       refinement: defaultRefinementCapacity,
       scratch: defaultScratchCapacity,
-      output: defaultTypeCapacity,
+      output: Math.min(defaultTypeCapacity, defaults.maximumOutputRecords),
     },
     checkedProduct("minimum scratch arena capacity", surface.definitionCount, 8),
     overrides,

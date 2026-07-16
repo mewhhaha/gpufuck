@@ -9,7 +9,7 @@ import { LazuliInferenceStatus } from "../src/lazuli/type_inference_shader.ts";
 const DEFAULT_SOURCE_PATH = "examples/lazuli-brainfuck/compiler.laz";
 const SAMPLE_COUNT = 5;
 const BATCH_SIZE = 16;
-const BATCH_SCALING_SIZES = [2, 4, 8, 16, 32, 64, 128] as const;
+const BATCH_SCALING_SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512] as const;
 const BATCH_DISPATCH_QUANTUM = 65_536;
 const DISPATCH_QUANTA = [4_096, 8_192, 16_384, 65_536] as const;
 const MAXIMUM_STEPS = 10_000_000;
@@ -137,65 +137,81 @@ try {
     };
   }
 
-  const scheduledBatchStart = performance.now();
-  const scheduledBatch = await Promise.all(
-    Array.from({ length: BATCH_SIZE }, () =>
-      compiler.compile(
-        semanticSurface,
-        sourceBytes,
-        { maximumSteps: MAXIMUM_STEPS, maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM },
-        undefined,
-      )),
-  );
-  const scheduledBatchMilliseconds = performance.now() - scheduledBatchStart;
-  for (const compilation of scheduledBatch) {
-    if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
-    compilation.module.destroy();
+  const scheduledBatchSamplesMilliseconds: number[] = [];
+  for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
+    const scheduledBatchStart = performance.now();
+    const scheduledBatch = await Promise.all(
+      Array.from({ length: BATCH_SIZE }, () =>
+        compiler.compile(
+          semanticSurface,
+          sourceBytes,
+          { maximumSteps: MAXIMUM_STEPS, maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM },
+          undefined,
+        )),
+    );
+    scheduledBatchSamplesMilliseconds.push(performance.now() - scheduledBatchStart);
+    for (const compilation of scheduledBatch) {
+      if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+      compilation.module.destroy();
+    }
   }
+  const scheduledBatchMilliseconds = median(scheduledBatchSamplesMilliseconds);
 
-  const packedDispatchLaneCounts: number[] = [];
-  const packedBatchStart = performance.now();
-  const packedBatch = await compiler.compileBatch(
-    Array.from({ length: BATCH_SIZE }, () => ({
-      surface: semanticSurface,
-      sourceByteLength: sourceBytes,
-      maximumSteps: MAXIMUM_STEPS,
-      maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
-    })),
-    undefined,
-    { observeDispatch: (laneCount) => packedDispatchLaneCounts.push(laneCount) },
-  );
-  const packedBatchMilliseconds = performance.now() - packedBatchStart;
-  for (const compilation of packedBatch) {
-    if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
-    compilation.module.destroy();
-  }
-
-  const packedScaling: {
-    readonly programCount: number;
-    readonly totalMilliseconds: number;
-    readonly millisecondsPerProgram: number;
-  }[] = [];
-  for (const programCount of BATCH_SCALING_SIZES) {
-    const start = performance.now();
-    const compilations = await compiler.compileBatch(
-      Array.from({ length: programCount }, () => ({
+  const packedBatchSamplesMilliseconds: number[] = [];
+  let packedDispatchLaneCounts: number[] = [];
+  for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
+    const dispatchLaneCounts: number[] = [];
+    const packedBatchStart = performance.now();
+    const packedBatch = await compiler.compileBatch(
+      Array.from({ length: BATCH_SIZE }, () => ({
         surface: semanticSurface,
         sourceByteLength: sourceBytes,
         maximumSteps: MAXIMUM_STEPS,
         maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
       })),
       undefined,
+      { observeDispatch: (laneCount) => dispatchLaneCounts.push(laneCount) },
     );
-    const totalMilliseconds = performance.now() - start;
-    for (const compilation of compilations) {
+    packedBatchSamplesMilliseconds.push(performance.now() - packedBatchStart);
+    packedDispatchLaneCounts = dispatchLaneCounts;
+    for (const compilation of packedBatch) {
       if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
       compilation.module.destroy();
     }
+  }
+  const packedBatchMilliseconds = median(packedBatchSamplesMilliseconds);
+
+  const packedScaling: {
+    readonly programCount: number;
+    readonly samplesMilliseconds: readonly number[];
+    readonly medianMilliseconds: number;
+    readonly millisecondsPerProgram: number;
+  }[] = [];
+  for (const programCount of BATCH_SCALING_SIZES) {
+    const samplesMilliseconds: number[] = [];
+    for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
+      const start = performance.now();
+      const compilations = await compiler.compileBatch(
+        Array.from({ length: programCount }, () => ({
+          surface: semanticSurface,
+          sourceByteLength: sourceBytes,
+          maximumSteps: MAXIMUM_STEPS,
+          maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
+        })),
+        undefined,
+      );
+      samplesMilliseconds.push(performance.now() - start);
+      for (const compilation of compilations) {
+        if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+        compilation.module.destroy();
+      }
+    }
+    const medianMilliseconds = median(samplesMilliseconds);
     packedScaling.push({
       programCount,
-      totalMilliseconds,
-      millisecondsPerProgram: totalMilliseconds / programCount,
+      samplesMilliseconds,
+      medianMilliseconds,
+      millisecondsPerProgram: medianMilliseconds / programCount,
     });
   }
 
@@ -230,11 +246,13 @@ try {
         programCount: BATCH_SIZE,
         maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
         scheduled: {
-          totalMilliseconds: scheduledBatchMilliseconds,
+          samplesMilliseconds: scheduledBatchSamplesMilliseconds,
+          medianMilliseconds: scheduledBatchMilliseconds,
           millisecondsPerProgram: scheduledBatchMilliseconds / BATCH_SIZE,
         },
         packed: {
-          totalMilliseconds: packedBatchMilliseconds,
+          samplesMilliseconds: packedBatchSamplesMilliseconds,
+          medianMilliseconds: packedBatchMilliseconds,
           millisecondsPerProgram: packedBatchMilliseconds / BATCH_SIZE,
           dispatchCount: packedDispatchLaneCounts.length,
           dispatchLaneCounts: packedDispatchLaneCounts,

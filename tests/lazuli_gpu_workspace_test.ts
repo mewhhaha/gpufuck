@@ -185,6 +185,39 @@ Deno.test("packed inference falls back only the exhausted lane", async () => {
   }
 });
 
+Deno.test("packed inference keeps 512 representative programs in one GPU pack", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const source = await Deno.readTextFile("examples/lazuli-brainfuck/compiler.laz");
+    const parsed = parseLazuliSource(source);
+    ok(parsed.ok);
+    if (!parsed.ok) throw new Error("representative packed fixture did not parse");
+    const input = {
+      surface: parsed.surface,
+      sourceByteLength: new TextEncoder().encode(source).byteLength,
+      maximumSteps: 10_000_000,
+      maximumStepsPerDispatch: 65_536,
+    };
+    const dispatchLaneCounts: number[] = [];
+    const results = await compiler.compileBatch(
+      Array.from({ length: 512 }, () => input),
+      undefined,
+      { observeDispatch: (laneCount) => dispatchLaneCounts.push(laneCount) },
+    );
+    try {
+      equal(results.length, 512);
+      ok(results.every((result) => result.ok));
+      ok(dispatchLaneCounts.length > 0);
+      ok(dispatchLaneCounts.every((laneCount) => laneCount === 512));
+    } finally {
+      for (const result of results) if (result.ok) result.module.destroy();
+    }
+  } finally {
+    device.destroy();
+  }
+});
+
 Deno.test("GPU inference rejects a constructor result root outside the schema table", async () => {
   const device = await requestWebGpuDevice();
   try {
