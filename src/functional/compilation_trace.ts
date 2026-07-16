@@ -271,7 +271,9 @@ function formatCoreModule(
   nodes: readonly FunctionalCoreNode[],
 ): string {
   const lines = [
-    `entry=d${module.entryDefinition}; type=${formatType(module.entryType)}`,
+    `entry=d${module.entryDefinition}; type=${formatType(module.entryType)}; effects=${
+      JSON.stringify(module.entryEffects)
+    }`,
     "",
     "nodes:",
   ];

@@ -31,7 +31,10 @@ import {
   FunctionalTypecheckingProfile,
 } from "./abi.ts";
 import { CompilationAdmissionQueue } from "./compilation_admission.ts";
+import type { FunctionalEffectCoreModule } from "./effect_core_contract.ts";
+import { GpuFunctionalEffectCoreVerifier } from "./effect_core.ts";
 import { normalizeFunctionalHostCapabilities } from "./host_contract.ts";
+import { buildFunctionalSurfaceModule } from "./surface_builder.ts";
 import type {
   FunctionalCompilationOptions,
   FunctionalCompileResult,
@@ -56,6 +59,7 @@ const COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH = 16_384;
 
 export class GpuFunctionalCompiler {
   readonly #semanticCompiler: GpuLazuliSemanticCompiler;
+  readonly #effectVerifier: GpuFunctionalEffectCoreVerifier;
   readonly #compilationAdmission: CompilationAdmissionQueue<FunctionalCompileResult>;
   readonly #maximumNodeCount: number;
   readonly #maximumDefinitionCount: number;
@@ -64,6 +68,7 @@ export class GpuFunctionalCompiler {
 
   private constructor(
     semanticCompiler: GpuLazuliSemanticCompiler,
+    effectVerifier: GpuFunctionalEffectCoreVerifier,
     maximumNodeCount: number,
     maximumDefinitionCount: number,
     maximumTypeCount: number,
@@ -71,6 +76,7 @@ export class GpuFunctionalCompiler {
     maximumConcurrentCompilationWeight: number,
   ) {
     this.#semanticCompiler = semanticCompiler;
+    this.#effectVerifier = effectVerifier;
     this.#compilationAdmission = new CompilationAdmissionQueue(
       maximumConcurrentCompilationWeight,
     );
@@ -115,14 +121,73 @@ export class GpuFunctionalCompiler {
       );
     }
 
+    const [semanticCompiler, effectVerifier] = await Promise.all([
+      GpuLazuliSemanticCompiler.create(device),
+      GpuFunctionalEffectCoreVerifier.create(device),
+    ]);
     return new GpuFunctionalCompiler(
-      await GpuLazuliSemanticCompiler.create(device),
+      semanticCompiler,
+      effectVerifier,
       maximumNodeCount,
       maximumDefinitionCount,
       maximumTypeCount,
       maximumConstructorCount,
       maximumConcurrentCompilationWeight,
     );
+  }
+
+  async compileEffectModule(
+    effectModule: FunctionalEffectCoreModule,
+    options: FunctionalCompilationOptions = {},
+  ): Promise<FunctionalCompileResult> {
+    const limits = compilationLimits(options);
+    options.signal?.throwIfAborted();
+    if (!Number.isSafeInteger(effectModule.sourceByteLength) || effectModule.sourceByteLength < 0) {
+      throw new Error(
+        `functional effect module has invalid source byte length ${effectModule.sourceByteLength}`,
+      );
+    }
+    if (effectModule.sourceByteLength > FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH) {
+      return failedLimit(
+        `module spans ${effectModule.sourceByteLength} UTF-8 source bytes; this compiler accepts at most ${FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH}`,
+        FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH,
+        effectModule.sourceByteLength,
+      );
+    }
+    const effect = await this.#effectVerifier.verifyAndLower(effectModule, {
+      maximumTransitions: limits.maximumSteps,
+      maximumTransitionsPerDispatch: limits.maximumStepsPerDispatch,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    if (!effect.ok) return { ok: false, diagnostics: [effect.diagnostic] };
+    const remainingSteps = limits.maximumSteps - effect.transitions;
+    if (remainingSteps < 1) {
+      return failedLimit(
+        `Functional Effect Core used all ${limits.maximumSteps} compiler transitions before semantic inference`,
+        0,
+        effectModule.sourceByteLength,
+      );
+    }
+    const encoded = buildFunctionalSurfaceModule(
+      effect.lowered.definitions,
+      effect.lowered.typeDeclarations,
+      effect.lowered.entryName,
+      effect.lowered.sourceByteLength,
+      { hostCapabilities: effect.lowered.hostCapabilities },
+    );
+    const compilation = await this.compileModule(encoded, {
+      maximumSteps: remainingSteps,
+      maximumStepsPerDispatch: limits.maximumStepsPerDispatch,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    if (!compilation.ok) return compilation;
+    return {
+      ok: true,
+      module: {
+        ...compilation.module,
+        entryEffects: effect.lowered.computationType.effects,
+      },
+    };
   }
 
   async compileModule(
@@ -211,6 +276,7 @@ function functionalModule(
     definitionRoots: Object.freeze(definitionRoots),
     hostCapabilities: normalizeFunctionalHostCapabilities(encodedModule.hostCapabilities),
     entryType: module.mainType,
+    entryEffects: Object.freeze([]),
     readCoreNodes: async () => await module.readCoreNodes(),
     destroy: () => module.destroy(),
   };

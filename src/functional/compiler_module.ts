@@ -28,6 +28,7 @@ export interface GpuFunctionalModule {
   readonly definitionRoots: readonly number[];
   readonly entryDefinition: number;
   readonly entryType: FunctionalType;
+  readonly entryEffects: readonly string[];
   readonly typeDeclarations: readonly FunctionalTypeDeclaration[];
   readonly hostCapabilities: readonly FunctionalHostCapabilityDeclaration[];
   readCoreNodes(): Promise<readonly FunctionalCoreNode[]>;

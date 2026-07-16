@@ -44,6 +44,11 @@ export {
   GpuFunctionalCompiler,
   type GpuFunctionalModule,
 } from "./src/functional/compiler.ts";
+export type {
+  FunctionalEffectCoreExpression,
+  FunctionalEffectCoreModule,
+  LoweredFunctionalEffectCoreModule,
+} from "./src/functional/effect_core_contract.ts";
 export {
   compileFunctionalModuleToWasm,
   type FunctionalWasmExecution,
