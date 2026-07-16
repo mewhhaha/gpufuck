@@ -423,8 +423,11 @@ export async function readDiagnosticWorkspace(
   }
 }
 
-export function readInferenceState(view: DataView): InferenceStateSnapshot {
-  const word = (offset: number) => view.getUint32(offset * WORD_BYTES, true);
+export function readInferenceState(
+  view: DataView,
+  byteOffset = 0,
+): InferenceStateSnapshot {
+  const word = (offset: number) => view.getUint32(byteOffset + offset * WORD_BYTES, true);
   return {
     status: word(LazuliInferenceStateWord.Status),
     errorCode: word(LazuliInferenceStateWord.ErrorCode),

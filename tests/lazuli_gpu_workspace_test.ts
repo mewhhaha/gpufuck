@@ -13,6 +13,7 @@ import {
   type GpuLazuliTypeInferenceWorkspaceCapacities,
   runGpuLazuliTypeInference,
 } from "../src/lazuli/gpu_type_inference.ts";
+import { GpuLazuliSemanticCompiler } from "../src/lazuli/gpu_semantic_compiler.ts";
 import { inferLazuliTypes } from "../src/lazuli/type_inference.ts";
 import {
   LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
@@ -143,6 +144,45 @@ Deno.test("GPU inference keeps its ABI-v5 state prefix ahead of the scheduler en
   equal(LazuliInferenceSchedulerWord.PreviousSemanticSteps, 72);
   equal(LazuliInferenceSchedulerWord.SemanticState, 73);
   equal(LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH, 97);
+});
+
+Deno.test("packed inference falls back only the exhausted lane", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const sources = ["let main = (1, true);", "let main = 42;"] as const;
+    const inputs = sources.map((source, index) => {
+      const parsed = parseLazuliSource(source);
+      ok(parsed.ok);
+      if (!parsed.ok) throw new Error(`packed workspace fixture ${index} did not parse`);
+      return {
+        surface: parsed.surface,
+        sourceByteLength: new TextEncoder().encode(source).byteLength,
+        maximumSteps: 1_000_000,
+        maximumStepsPerDispatch: 4_096,
+        ...(index === 0 ? { initialWorkspaceCapacities: { output: 1 } } : {}),
+      };
+    });
+    const dispatchLaneCounts: number[] = [];
+    const results = await compiler.compileBatch(inputs, undefined, {
+      observeDispatch: (laneCount) => dispatchLaneCounts.push(laneCount),
+    });
+    equal(results.length, 2);
+    ok(dispatchLaneCounts.length > 0);
+    ok(dispatchLaneCounts.every((laneCount) => laneCount === 2));
+    ok(results[0]?.ok);
+    ok(results[1]?.ok);
+    if (results[0]?.ok) {
+      deepStrictEqual(results[0].module.mainType, {
+        kind: "tuple",
+        values: [{ kind: "integer" }, { kind: "boolean" }],
+      });
+    }
+    if (results[1]?.ok) deepStrictEqual(results[1].module.mainType, { kind: "integer" });
+    for (const result of results) if (result.ok) result.module.destroy();
+  } finally {
+    device.destroy();
+  }
 });
 
 Deno.test("GPU inference rejects a constructor result root outside the schema table", async () => {

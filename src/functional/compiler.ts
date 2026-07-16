@@ -62,7 +62,7 @@ const COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH = 16_384;
 export class GpuFunctionalCompiler {
   readonly #semanticCompiler: GpuLazuliSemanticCompiler;
   readonly #effectVerifier: GpuFunctionalEffectCoreVerifier;
-  readonly #compilationAdmission: CompilationAdmissionQueue<FunctionalCompileResult>;
+  readonly #compilationAdmission: CompilationAdmissionQueue;
   readonly #maximumNodeCount: number;
   readonly #maximumDefinitionCount: number;
   readonly #maximumTypeCount: number;
@@ -260,6 +260,120 @@ export class GpuFunctionalCompiler {
       options.signal,
     );
   }
+
+  async compileBatch(
+    modules: readonly EncodedFunctionalModule[],
+    options: FunctionalCompilationOptions = {},
+  ): Promise<readonly FunctionalCompileResult[]> {
+    const limits = compilationLimits(options);
+    options.signal?.throwIfAborted();
+    if (modules.length === 0) return [];
+    if (modules.length === 1) return [await this.compileModule(modules[0]!, options)];
+
+    const results: (FunctionalCompileResult | undefined)[] = new Array(modules.length);
+    const accepted: { readonly resultIndex: number; readonly module: EncodedFunctionalModule }[] =
+      [];
+    let estimatedTransientByteLength = 0;
+    for (const [resultIndex, module] of modules.entries()) {
+      validateEncodedModule(module);
+      if (module.sourceByteLength > FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH) {
+        results[resultIndex] = failedLimit(
+          `module spans ${module.sourceByteLength} UTF-8 source bytes; this compiler accepts at most ${FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH}`,
+          FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH,
+          module.sourceByteLength,
+        );
+        continue;
+      }
+      if (module.nodeCount > this.#maximumNodeCount) {
+        results[resultIndex] = functionalFailure(
+          nodeLimitDiagnostic(module.nodeCount, this.#maximumNodeCount),
+        );
+        continue;
+      }
+      if (module.definitionCount > this.#maximumDefinitionCount) {
+        results[resultIndex] = functionalFailure(
+          definitionLimitDiagnostic(module.definitionCount, this.#maximumDefinitionCount),
+        );
+        continue;
+      }
+      if (module.typeCount > this.#maximumTypeCount) {
+        results[resultIndex] = functionalFailure(
+          typeLimitDiagnostic(module.typeCount, this.#maximumTypeCount),
+        );
+        continue;
+      }
+      if (module.constructorCount > this.#maximumConstructorCount) {
+        results[resultIndex] = functionalFailure(
+          constructorLimitDiagnostic(module.constructorCount, this.#maximumConstructorCount),
+        );
+        continue;
+      }
+      accepted.push({ resultIndex, module });
+      estimatedTransientByteLength += COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH +
+        COMPILATION_TRANSIENT_BYTES_PER_INPUT *
+          (module.sourceByteLength + module.nodeCount + module.definitionCount +
+            module.typeCount + module.constructorCount);
+    }
+    if (accepted.length === 0) return completedBatchResults(results);
+
+    const compiled = await this.#compilationAdmission.admit(
+      async () => {
+        options.signal?.throwIfAborted();
+        return await this.#semanticCompiler.compileBatch(
+          accepted.map(({ module }) => ({
+            surface: semanticSurfaceFromModule(module),
+            sourceByteLength: module.sourceByteLength,
+            ...limits,
+          })),
+          options.signal,
+        );
+      },
+      estimatedTransientByteLength,
+      options.signal,
+    );
+    try {
+      options.signal?.throwIfAborted();
+    } catch (error) {
+      for (const result of compiled) if (result.ok) result.module.destroy();
+      throw error;
+    }
+    if (compiled.length !== accepted.length) {
+      for (const result of compiled) if (result.ok) result.module.destroy();
+      throw new Error(
+        `functional batch compiler returned ${compiled.length} results for ${accepted.length} modules`,
+      );
+    }
+    try {
+      for (const [acceptedIndex, entry] of accepted.entries()) {
+        const result = compiled[acceptedIndex];
+        if (result === undefined) {
+          throw new Error(`functional batch compiler omitted accepted module ${acceptedIndex}`);
+        }
+        results[entry.resultIndex] = result.ok
+          ? { ok: true, module: functionalModule(result.module, entry.module) }
+          : {
+            ok: false,
+            diagnostics: result.diagnostics.map(functionalDiagnostic) as [
+              FunctionalDiagnostic,
+              ...FunctionalDiagnostic[],
+            ],
+          };
+      }
+    } catch (error) {
+      for (const result of compiled) if (result.ok) result.module.destroy();
+      throw error;
+    }
+    return completedBatchResults(results);
+  }
+}
+
+function completedBatchResults(
+  results: readonly (FunctionalCompileResult | undefined)[],
+): readonly FunctionalCompileResult[] {
+  return results.map((result, index) => {
+    if (result === undefined) throw new Error(`functional batch compiler omitted result ${index}`);
+    return result;
+  });
 }
 
 function functionalModule(

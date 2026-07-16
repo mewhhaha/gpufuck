@@ -135,16 +135,36 @@ try {
     };
   }
 
-  const batchStart = performance.now();
-  const batch = await Promise.all(Array.from({ length: BATCH_SIZE }, () =>
-    compiler.compile(
-      semanticSurface,
-      sourceBytes,
-      { maximumSteps: MAXIMUM_STEPS, maximumStepsPerDispatch: 16_384 },
-      undefined,
-    )));
-  const batchMilliseconds = performance.now() - batchStart;
-  for (const compilation of batch) {
+  const scheduledBatchStart = performance.now();
+  const scheduledBatch = await Promise.all(
+    Array.from({ length: BATCH_SIZE }, () =>
+      compiler.compile(
+        semanticSurface,
+        sourceBytes,
+        { maximumSteps: MAXIMUM_STEPS, maximumStepsPerDispatch: 16_384 },
+        undefined,
+      )),
+  );
+  const scheduledBatchMilliseconds = performance.now() - scheduledBatchStart;
+  for (const compilation of scheduledBatch) {
+    if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+    compilation.module.destroy();
+  }
+
+  const packedDispatchLaneCounts: number[] = [];
+  const packedBatchStart = performance.now();
+  const packedBatch = await compiler.compileBatch(
+    Array.from({ length: BATCH_SIZE }, () => ({
+      surface: semanticSurface,
+      sourceByteLength: sourceBytes,
+      maximumSteps: MAXIMUM_STEPS,
+      maximumStepsPerDispatch: 16_384,
+    })),
+    undefined,
+    { observeDispatch: (laneCount) => packedDispatchLaneCounts.push(laneCount) },
+  );
+  const packedBatchMilliseconds = performance.now() - packedBatchStart;
+  for (const compilation of packedBatch) {
     if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
     compilation.module.destroy();
   }
@@ -178,9 +198,18 @@ try {
       quantumProfiles,
       batch: {
         programCount: BATCH_SIZE,
-        totalMilliseconds: batchMilliseconds,
-        millisecondsPerProgram: batchMilliseconds / BATCH_SIZE,
         maximumStepsPerDispatch: 16_384,
+        scheduled: {
+          totalMilliseconds: scheduledBatchMilliseconds,
+          millisecondsPerProgram: scheduledBatchMilliseconds / BATCH_SIZE,
+        },
+        packed: {
+          totalMilliseconds: packedBatchMilliseconds,
+          millisecondsPerProgram: packedBatchMilliseconds / BATCH_SIZE,
+          dispatchCount: packedDispatchLaneCounts.length,
+          dispatchLaneCounts: packedDispatchLaneCounts,
+          throughputRatio: scheduledBatchMilliseconds / packedBatchMilliseconds,
+        },
       },
     },
     null,

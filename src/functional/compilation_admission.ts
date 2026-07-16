@@ -1,22 +1,22 @@
 import { MAXIMUM_GPU_DISPATCH_BATCH_SIZE } from "./gpu_dispatch_scheduler.ts";
 
-interface PendingCompilation<Result> {
-  readonly compile: () => Promise<Result>;
+interface PendingCompilation {
+  readonly compile: () => Promise<unknown>;
   readonly admissionWeight: number;
   readonly signal?: AbortSignal;
   readonly cancelWhileQueued: () => void;
-  readonly resolve: (result: Result) => void;
+  readonly resolve: (result: unknown) => void;
   readonly reject: (reason: unknown) => void;
-  previous: PendingCompilation<Result> | undefined;
-  next: PendingCompilation<Result> | undefined;
+  previous: PendingCompilation | undefined;
+  next: PendingCompilation | undefined;
   queued: boolean;
 }
 
-export class CompilationAdmissionQueue<Result> {
+export class CompilationAdmissionQueue {
   readonly #maximumConcurrentWeight: number;
   readonly #minimumAdmissionWeight: number;
-  #firstPendingCompilation: PendingCompilation<Result> | undefined;
-  #lastPendingCompilation: PendingCompilation<Result> | undefined;
+  #firstPendingCompilation: PendingCompilation | undefined;
+  #lastPendingCompilation: PendingCompilation | undefined;
   #activeCompilationCount = 0;
   #activeCompilationWeight = 0;
 
@@ -28,7 +28,7 @@ export class CompilationAdmissionQueue<Result> {
     );
   }
 
-  admit(
+  admit<Result>(
     compile: () => Promise<Result>,
     estimatedTransientByteLength: number,
     signal: AbortSignal | undefined,
@@ -41,12 +41,12 @@ export class CompilationAdmissionQueue<Result> {
         reject(signal?.reason);
         this.#startQueuedCompilations();
       };
-      const pendingCompilation: PendingCompilation<Result> = {
+      const pendingCompilation: PendingCompilation = {
         compile,
         admissionWeight,
         ...(signal === undefined ? {} : { signal }),
         cancelWhileQueued,
-        resolve,
+        resolve: (result) => resolve(result as Result),
         reject,
         previous: undefined,
         next: undefined,
@@ -65,7 +65,7 @@ export class CompilationAdmissionQueue<Result> {
     });
   }
 
-  #enqueueCompilation(pendingCompilation: PendingCompilation<Result>): void {
+  #enqueueCompilation(pendingCompilation: PendingCompilation): void {
     pendingCompilation.previous = this.#lastPendingCompilation;
     pendingCompilation.queued = true;
     if (this.#lastPendingCompilation === undefined) {
@@ -76,7 +76,7 @@ export class CompilationAdmissionQueue<Result> {
     this.#lastPendingCompilation = pendingCompilation;
   }
 
-  #removeQueuedCompilation(pendingCompilation: PendingCompilation<Result>): void {
+  #removeQueuedCompilation(pendingCompilation: PendingCompilation): void {
     const { previous, next } = pendingCompilation;
     if (previous === undefined) {
       this.#firstPendingCompilation = next;
@@ -93,7 +93,7 @@ export class CompilationAdmissionQueue<Result> {
     pendingCompilation.queued = false;
   }
 
-  #startCompilation(pendingCompilation: PendingCompilation<Result>): void {
+  #startCompilation(pendingCompilation: PendingCompilation): void {
     pendingCompilation.signal?.removeEventListener(
       "abort",
       pendingCompilation.cancelWhileQueued,
@@ -107,7 +107,7 @@ export class CompilationAdmissionQueue<Result> {
     void this.#settleCompilation(pendingCompilation);
   }
 
-  async #settleCompilation(pendingCompilation: PendingCompilation<Result>): Promise<void> {
+  async #settleCompilation(pendingCompilation: PendingCompilation): Promise<void> {
     try {
       pendingCompilation.resolve(await pendingCompilation.compile());
     } catch (error) {

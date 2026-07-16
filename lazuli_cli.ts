@@ -124,28 +124,23 @@ async function runBatch(
   const modules: GpuLazuliModule[] = [];
   try {
     const compiler = await GpuLazuliCompiler.create(device);
-    const compilationOutcomes = await Promise.allSettled(
-      sources.map((source) => compiler.compile(source)),
-    );
-    for (const outcome of compilationOutcomes) {
-      if (outcome.status === "fulfilled" && outcome.value.ok) {
-        modules.push(outcome.value.module);
-      }
+    const compilations = await compiler.compileBatch(sources);
+    for (const compilation of compilations) {
+      if (compilation.ok) modules.push(compilation.module);
     }
 
     let hasCompilationFailure = false;
-    for (let index = 0; index < compilationOutcomes.length; index += 1) {
-      const outcome = compilationOutcomes[index];
+    for (let index = 0; index < compilations.length; index += 1) {
+      const compilation = compilations[index];
       const sourcePath = sourcePaths[index];
-      if (outcome === undefined || sourcePath === undefined) {
+      if (compilation === undefined || sourcePath === undefined) {
         throw new Error(`batch source ${index} is missing`);
       }
 
-      if (outcome.status === "rejected") throw outcome.reason;
-      if (outcome.value.ok) continue;
+      if (compilation.ok) continue;
 
       hasCompilationFailure = true;
-      for (const diagnostic of outcome.value.diagnostics) {
+      for (const diagnostic of compilation.diagnostics) {
         const displayPath = JSON.stringify(sourcePath);
         output.error(
           `${displayPath}: error[${diagnostic.code}] bytes ${diagnostic.span.startByte}..${diagnostic.span.endByte}: ${diagnostic.message}`,

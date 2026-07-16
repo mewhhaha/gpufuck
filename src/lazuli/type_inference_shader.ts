@@ -185,8 +185,8 @@ export const LazuliInferenceMetadataFailure = {
 } as const;
 
 /**
- * Binding 7 is a single state record. Words through `ConstructorResultBase` are
- * immutable dispatch inputs; the shader initializes and owns the rest.
+ * Binding 7 is an array of state records. Words through `ConstructorResultBase`
+ * are immutable dispatch inputs; the shader initializes and owns the rest.
  *
  * Diagnostic payloads are durable workspace references/scalars:
  *
@@ -594,7 +594,9 @@ struct InferenceState {
 @group(0) @binding(4) var<storage, read> schema_words: array<u32>;
 @group(0) @binding(5) var<storage, read_write> workspace: array<u32>;
 @group(0) @binding(6) var<storage, read_write> output_types: array<OutputTypeNode>;
-@group(0) @binding(7) var<storage, read_write> state: InferenceState;
+@group(0) @binding(7) var<storage, read_write> inference_states: array<InferenceState>;
+
+var<private> state: InferenceState;
 
 const NO_INDEX: u32 = ${LAZULI_NO_INDEX}u;
 const NODE_WORD_LENGTH: u32 = ${LAZULI_NODE_WORD_LENGTH}u;
@@ -625,6 +627,26 @@ const ERROR_SCRATCH_ARENA_EXHAUSTED: u32 = 2205u;
 const ERROR_OUTPUT_ARENA_EXHAUSTED: u32 = 2206u;
 const ERROR_REFINEMENT_ARENA_EXHAUSTED: u32 = 2207u;
 const TYPE_MISMATCH_INACCESSIBLE_CONSTRUCTOR: u32 = 1u;
+
+fn core_node(index: u32) -> CoreNode {
+  return core_nodes[state.semantic.phase + index];
+}
+
+fn definition_record(index: u32) -> Definition {
+  return definitions[state.semantic.primary_cursor + index];
+}
+
+fn algebraic_type_record(index: u32) -> AlgebraicType {
+  return algebraic_types[state.semantic.secondary_cursor + index];
+}
+
+fn constructor_record(index: u32) -> Constructor {
+  return constructors[state.semantic.tertiary_cursor + index];
+}
+
+fn output_address(index: u32) -> u32 {
+  return state.semantic.resolution_node + index;
+}
 
 const METADATA_CASE_FIELD_COUNT_MISMATCH: u32 = ${LazuliInferenceMetadataFailure.CaseFieldCountMismatch}u;
 const METADATA_UNDECLARED_TYPE_PARAMETER: u32 = ${LazuliInferenceMetadataFailure.UndeclaredTypeParameter}u;
@@ -798,7 +820,7 @@ fn schema_node(index: u32) -> SchemaNode {
 fn validation_schema_start(schema: SchemaNode) -> u32 {
   if schema.start_byte == NO_INDEX && schema.end_byte == NO_INDEX &&
     state.work_result < state.constructor_count {
-    return constructors[state.work_result].start_byte;
+    return constructor_record(state.work_result).start_byte;
   }
   return schema.start_byte;
 }
@@ -806,7 +828,7 @@ fn validation_schema_start(schema: SchemaNode) -> u32 {
 fn validation_schema_end(schema: SchemaNode) -> u32 {
   if schema.start_byte == NO_INDEX && schema.end_byte == NO_INDEX &&
     state.work_result < state.constructor_count {
-    return constructors[state.work_result].end_byte;
+    return constructor_record(state.work_result).end_byte;
   }
   return schema.end_byte;
 }
@@ -823,8 +845,8 @@ fn type_metadata(type_index: u32, word: u32) -> u32 {
     return schema_words[state.type_parameter_offsets_base + type_index + 1u] -
       schema_words[state.type_parameter_offsets_base + type_index];
   }
-  if word == 2u { return algebraic_types[type_index].first_constructor; }
-  return algebraic_types[type_index].constructor_count;
+  if word == 2u { return algebraic_type_record(type_index).first_constructor; }
+  return algebraic_type_record(type_index).constructor_count;
 }
 
 fn constructor_metadata(constructor_index: u32, word: u32) -> u32 {
@@ -1961,7 +1983,7 @@ fn find_type_transition(frame: u32) {
   if cursor >= state.type_count {
     state.returned_type = NO_INDEX; pop_work_frame(); return;
   }
-  if algebraic_types[cursor].symbol == frame_get(frame, 0u) {
+  if algebraic_type_record(cursor).symbol == frame_get(frame, 0u) {
     state.returned_type = cursor; pop_work_frame(); return;
   }
   frame_set(frame, 1u, cursor + 1u);
@@ -2144,7 +2166,7 @@ fn start_constructor(constructor_index: u32, curry_fields: u32, pattern_mode: u3
 
 fn constructor_transition(frame: u32) {
   let constructor_index = frame_get(frame, 0u);
-  let constructor = constructors[constructor_index];
+  let constructor = constructor_record(constructor_index);
   let stage = frame_get(frame, 1u);
   let map_count = type_metadata(constructor.type_index, 1u);
   if stage == 0u {
@@ -2261,28 +2283,28 @@ fn start_case_bind(arm_index: u32, constructor_index: u32, environment: u32) -> 
   if frame == NO_INDEX { return false; }
   frame_set(frame, 0u, arm_index); frame_set(frame, 1u, 0u);
   frame_set(frame, 2u, constructor_index); frame_set(frame, 3u, environment);
-  frame_set(frame, 4u, core_nodes[arm_index].child0); frame_set(frame, 5u, 0u);
+  frame_set(frame, 4u, core_node(arm_index).child0); frame_set(frame, 5u, 0u);
   return true;
 }
 
 fn case_bind_transition(frame: u32) {
   if frame_get(frame, 1u) == 0u {
     let body = frame_get(frame, 4u);
-    if core_nodes[body].tag == TAG_PATTERN_BIND {
+    if core_node(body).tag == TAG_PATTERN_BIND {
       let count = frame_get(frame, 5u);
       if count >= MAXIMUM_CONSTRUCTOR_ARITY {
         invalid_input(ERROR_INVALID_SURFACE, frame_get(frame, 0u)); return;
       }
-      frame_set(frame, 4u, core_nodes[body].child0);
+      frame_set(frame, 4u, core_node(body).child0);
       frame_set(frame, 5u, count + 1u);
       return;
     }
     let field_count = constructor_metadata(frame_get(frame, 2u), 1u);
     if frame_get(frame, 5u) != field_count {
-      let arm = core_nodes[frame_get(frame, 0u)];
+      let arm = core_node(frame_get(frame, 0u));
       report_metadata_diagnostic(
         METADATA_CASE_FIELD_COUNT_MISMATCH, arm.start_byte, arm.end_byte,
-        constructors[frame_get(frame, 2u)].symbol, field_count, frame_get(frame, 5u));
+        constructor_record(frame_get(frame, 2u)).symbol, field_count, frame_get(frame, 5u));
       return;
     }
     frame_set(frame, 5u, field_count); frame_set(frame, 1u, 1u);
@@ -2313,20 +2335,20 @@ fn start_case_coverage(type_index: u32, first_arm: u32) -> bool {
 fn case_coverage_transition(frame: u32) {
   let type_index = frame_get(frame, 0u);
   let offset = frame_get(frame, 1u);
-  let declared = algebraic_types[type_index];
+  let declared = algebraic_type_record(type_index);
   if offset >= declared.constructor_count {
     state.returned_type = NO_INDEX; pop_work_frame(); return;
   }
   let constructor_index = declared.first_constructor + offset;
   let arm = frame_get(frame, 3u);
   if arm == NO_INDEX {
-    state.returned_type = constructors[constructor_index].symbol; pop_work_frame(); return;
+    state.returned_type = constructor_record(constructor_index).symbol; pop_work_frame(); return;
   }
-  if core_nodes[arm].payload == constructor_index {
+  if core_node(arm).payload == constructor_index {
     frame_set(frame, 1u, offset + 1u); frame_set(frame, 3u, frame_get(frame, 2u));
     return;
   }
-  frame_set(frame, 3u, core_nodes[arm].child1);
+  frame_set(frame, 3u, core_node(arm).child1);
 }
 
 fn start_schema_parameter_check(root: u32, type_index: u32) -> bool {
@@ -2469,7 +2491,7 @@ fn expression_transition() {
   let node_index = frame_get(frame, 0u);
   let stage = frame_get(frame, 1u);
   let environment = frame_get(frame, 2u);
-  let node = core_nodes[node_index];
+  let node = core_node(node_index);
 
   if stage == 0u {
     if node.tag == TAG_INTEGER { complete_expression(0u); return; }
@@ -2518,7 +2540,7 @@ fn expression_transition() {
       frame_set(frame, 1u, 20u);
       frame_set(frame, 4u, select(
         0u, 1u,
-        core_nodes[node.child1].tag == TAG_CASE && core_nodes[node.child2].tag != TAG_CASE));
+        core_node(node.child1).tag == TAG_CASE && core_node(node.child2).tag != TAG_CASE));
       if push_expression(node.child0, environment) {
         frame_set(state.frame_top - 1u, 11u, 1u);
       }
@@ -2644,7 +2666,7 @@ fn expression_transition() {
     frame_set(frame, 3u, state.returned_type);
     if frame_get(frame, 11u) != NO_INDEX {
       let first = select(node.child1, node.child2, frame_get(frame, 4u) != 0u);
-      let first_node = core_nodes[first];
+      let first_node = core_node(first);
       if start_unify(
         frame_get(frame, 11u), state.returned_type,
         first_node.start_byte, first_node.end_byte) {
@@ -2668,7 +2690,7 @@ fn expression_transition() {
   }
   if stage == 22u {
     let second = select(node.child2, node.child1, frame_get(frame, 4u) != 0u);
-    let second_node = core_nodes[second];
+    let second_node = core_node(second);
     if start_unify(
       frame_get(frame, 3u), state.returned_type,
       second_node.start_byte, second_node.end_byte) {
@@ -2794,7 +2816,7 @@ fn expression_transition() {
       frame_set(frame, 1u, 42u);
       return;
     }
-    let argument = core_nodes[node.child1];
+    let argument = core_node(node.child1);
     if argument.tag == TAG_GLOBAL {
       let scheme = scratch_get(0u, argument.payload);
       if scheme == NO_INDEX { invalid_input(ERROR_INVALID_SURFACE, node.child1); return; }
@@ -2816,7 +2838,7 @@ fn expression_transition() {
     return;
   }
   if stage == 45u {
-    let argument = core_nodes[node.child1];
+    let argument = core_node(node.child1);
     if start_subsume(
       state.returned_type, frame_get(frame, 6u), argument.start_byte, argument.end_byte) {
       frame_set(frame, 1u, 46u);
@@ -2913,9 +2935,9 @@ fn expression_transition() {
       frame_set(frame, 1u, select(71u, 78u, node.child1 == NO_INDEX));
       return;
     }
-    let constructor_index = core_nodes[arm_index].payload;
-    frame_set(frame, 5u, core_nodes[arm_index].child1);
-    frame_set(frame, 6u, constructors[constructor_index].type_index);
+    let constructor_index = core_node(arm_index).payload;
+    frame_set(frame, 5u, core_node(arm_index).child1);
+    frame_set(frame, 6u, constructor_record(constructor_index).type_index);
     frame_set(frame, 7u, 0u);
     frame_set(frame, 1u, 80u);
     return;
@@ -2970,7 +2992,7 @@ fn expression_transition() {
     if state.work_result != 0u {
       report_metadata_diagnostic(
         METADATA_INDEXED_SCRUTINEE_UNRESOLVED, node.start_byte, node.end_byte,
-        algebraic_types[frame_get(frame, 6u)].symbol,
+        algebraic_type_record(frame_get(frame, 6u)).symbol,
         frame_get(frame, 3u), state.returned_type);
       return;
     }
@@ -2983,7 +3005,7 @@ fn expression_transition() {
       type_get(scrutinee_type, 1u) != frame_get(frame, 6u) {
       report_metadata_diagnostic(
         METADATA_INDEXED_SCRUTINEE_TYPE_MISMATCH, node.start_byte, node.end_byte,
-        algebraic_types[frame_get(frame, 6u)].symbol, scrutinee_type, NO_INDEX);
+        algebraic_type_record(frame_get(frame, 6u)).symbol, scrutinee_type, NO_INDEX);
       return;
     }
     frame_set(frame, 3u, scrutinee_type);
@@ -3004,7 +3026,7 @@ fn expression_transition() {
       }
       report_diagnostic_with_operands(
         ERROR_NON_EXHAUSTIVE_CASE, node.start_byte, node.end_byte,
-        constructors[algebraic_types[type_index].first_constructor].symbol,
+        constructor_record(algebraic_type_record(type_index).first_constructor).symbol,
         NO_INDEX, NO_INDEX);
       return;
     }
@@ -3026,7 +3048,7 @@ fn expression_transition() {
       }
       return;
     }
-    let constructor_index = core_nodes[arm_index].payload;
+    let constructor_index = core_node(arm_index).payload;
     if !start_constructor(constructor_index, 0u, 0u) { return; }
     frame_set(frame, 7u, constructor_index);
     frame_set(frame, 1u, 75u);
@@ -3035,7 +3057,7 @@ fn expression_transition() {
   if stage == 75u {
     let arm_index = frame_get(frame, 5u);
     if !start_unify(frame_get(frame, 3u), state.returned_type,
-      core_nodes[arm_index].start_byte, core_nodes[arm_index].end_byte) { return; }
+      core_node(arm_index).start_byte, core_node(arm_index).end_byte) { return; }
     frame_set(frame, 1u, 73u);
     return;
   }
@@ -3043,7 +3065,7 @@ fn expression_transition() {
     let arm_index = frame_get(frame, 5u);
     let constructor_index = frame_get(frame, 7u);
     if frame_get(frame, 6u) == NO_INDEX {
-      frame_set(frame, 6u, constructors[constructor_index].type_index);
+      frame_set(frame, 6u, constructor_record(constructor_index).type_index);
     }
     if !start_case_bind(arm_index, constructor_index, environment) { return; }
     frame_set(frame, 1u, 77u);
@@ -3052,7 +3074,7 @@ fn expression_transition() {
   if stage == 77u {
     if !require_frame_slots(1u) { return; }
     let arm_index = frame_get(frame, 5u);
-    frame_set(frame, 7u, core_nodes[arm_index].child1);
+    frame_set(frame, 7u, core_node(arm_index).child1);
     frame_set(frame, 1u, 72u);
     push_expression(state.current_arm, state.returned_type);
     return;
@@ -3069,8 +3091,8 @@ fn expression_transition() {
   }
   if stage == 72u {
     if !start_unify(frame_get(frame, 4u), state.returned_type,
-      core_nodes[frame_get(frame, 5u)].start_byte,
-      core_nodes[frame_get(frame, 5u)].end_byte) { return; }
+      core_node(frame_get(frame, 5u)).start_byte,
+      core_node(frame_get(frame, 5u)).end_byte) { return; }
     frame_set(frame, 1u, 74u);
     return;
   }
@@ -3087,7 +3109,7 @@ fn expression_transition() {
       frame_set(frame, 1u, 110u);
       return;
     }
-    let constructor_index = core_nodes[arm_index].payload;
+    let constructor_index = core_node(arm_index).payload;
     let previous_cutoff = state.untouchable_type_cutoff;
     let arm_cutoff = state.type_top;
     if !start_constructor(constructor_index, 0u, 1u) { return; }
@@ -3137,7 +3159,7 @@ fn expression_transition() {
     return;
   }
   if stage == 104u {
-    let arm = core_nodes[frame_get(frame, 5u)];
+    let arm = core_node(frame_get(frame, 5u));
     if start_unify(frame_get(frame, 11u), state.returned_type, arm.start_byte, arm.end_byte) {
       frame_set(frame, 1u, 105u);
     }
@@ -3149,13 +3171,13 @@ fn expression_transition() {
   }
   if stage == 106u {
     state.untouchable_type_cutoff = frame_get(frame, 4u);
-    frame_set(frame, 5u, core_nodes[frame_get(frame, 5u)].child1);
+    frame_set(frame, 5u, core_node(frame_get(frame, 5u)).child1);
     frame_set(frame, 1u, 100u);
     return;
   }
   if stage == 108u {
     state.untouchable_type_cutoff = frame_get(frame, 4u);
-    let arm = core_nodes[frame_get(frame, 5u)];
+    let arm = core_node(frame_get(frame, 5u));
     state.error_context = TYPE_MISMATCH_INACCESSIBLE_CONSTRUCTOR;
     report_diagnostic_with_operands(
       ERROR_TYPE_MISMATCH, arm.start_byte, arm.end_byte,
@@ -3189,7 +3211,7 @@ fn expression_transition() {
     if state.work_result == 0u {
       report_metadata_diagnostic(
         METADATA_INDEXED_EXPECTED_TYPE_MISSING, node.start_byte, node.end_byte,
-        algebraic_types[frame_get(frame, 6u)].symbol, NO_INDEX, NO_INDEX);
+        algebraic_type_record(frame_get(frame, 6u)).symbol, NO_INDEX, NO_INDEX);
       return;
     }
     if start_refinement_rollback(frame_get(frame, 9u)) { frame_set(frame, 1u, 117u); }
@@ -3199,18 +3221,18 @@ fn expression_transition() {
     state.untouchable_type_cutoff = frame_get(frame, 4u);
     if frame_get(frame, 11u) == NO_INDEX {
       frame_set(frame, 11u, frame_get(frame, 7u));
-      frame_set(frame, 5u, core_nodes[frame_get(frame, 5u)].child1);
+      frame_set(frame, 5u, core_node(frame_get(frame, 5u)).child1);
       frame_set(frame, 1u, 100u);
       return;
     }
-    let arm = core_nodes[frame_get(frame, 5u)];
+    let arm = core_node(frame_get(frame, 5u));
     if start_unify(frame_get(frame, 11u), frame_get(frame, 7u), arm.start_byte, arm.end_byte) {
       frame_set(frame, 1u, 118u);
     }
     return;
   }
   if stage == 118u {
-    frame_set(frame, 5u, core_nodes[frame_get(frame, 5u)].child1);
+    frame_set(frame, 5u, core_node(frame_get(frame, 5u)).child1);
     frame_set(frame, 1u, 100u);
     return;
   }
@@ -3254,15 +3276,15 @@ fn expression_transition() {
     if arm_index == NO_INDEX {
       report_diagnostic_with_operands(
         ERROR_NON_EXHAUSTIVE_CASE, node.start_byte, node.end_byte,
-        constructors[frame_get(frame, 8u)].symbol, NO_INDEX, NO_INDEX);
+        constructor_record(frame_get(frame, 8u)).symbol, NO_INDEX, NO_INDEX);
       return;
     }
-    if core_nodes[arm_index].payload == frame_get(frame, 8u) {
+    if core_node(arm_index).payload == frame_get(frame, 8u) {
       frame_set(frame, 7u, frame_get(frame, 7u) + 1u);
       frame_set(frame, 1u, 110u);
       return;
     }
-    frame_set(frame, 5u, core_nodes[arm_index].child1);
+    frame_set(frame, 5u, core_node(arm_index).child1);
     return;
   }
 }
@@ -3276,7 +3298,7 @@ fn optional_child_is_valid(parent_index: u32, child_index: u32) -> bool {
 }
 
 fn node_shape_is_valid(node_index: u32) -> bool {
-  let node = core_nodes[node_index];
+  let node = core_node(node_index);
   if node.start_byte > node.end_byte || node.reserved1 != 0u { return false; }
   if node.tag == TAG_INTEGER || node.tag == TAG_BOOLEAN || node.tag == TAG_LOCAL ||
     node.tag == TAG_GLOBAL || node.tag == TAG_CONSTRUCTOR {
@@ -3289,7 +3311,7 @@ fn node_shape_is_valid(node_index: u32) -> bool {
     node.tag == TAG_BINARY {
     return required_child_is_valid(node_index, node.child0) &&
       required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
-      (node.tag != TAG_LET_REC || core_nodes[node.child0].tag == TAG_LAMBDA) &&
+      (node.tag != TAG_LET_REC || core_node(node.child0).tag == TAG_LAMBDA) &&
       (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 10u));
   }
   if node.tag == TAG_IF {
@@ -3334,10 +3356,22 @@ fn validation_transition() {
     let schema_length = arrayLength(&schema_words);
     let scratch_required = state.definition_count * 8u;
     if state.maximum_transitions_per_dispatch == 0u ||
-      state.node_count > arrayLength(&core_nodes) ||
-      state.definition_count > arrayLength(&definitions) ||
-      state.type_count > arrayLength(&algebraic_types) ||
-      state.constructor_count > arrayLength(&constructors) ||
+      !range_is_valid(state.semantic.phase, state.node_count, arrayLength(&core_nodes)) ||
+      !range_is_valid(
+        state.semantic.primary_cursor,
+        state.definition_count,
+        arrayLength(&definitions),
+      ) ||
+      !range_is_valid(
+        state.semantic.secondary_cursor,
+        state.type_count,
+        arrayLength(&algebraic_types),
+      ) ||
+      !range_is_valid(
+        state.semantic.tertiary_cursor,
+        state.constructor_count,
+        arrayLength(&constructors),
+      ) ||
       !range_is_valid(
         state.schema_base, state.schema_node_count * 6u, schema_length) ||
       !range_is_valid(state.definition_annotation_base, state.definition_count, schema_length) ||
@@ -3375,7 +3409,11 @@ fn validation_transition() {
       regions_overlap(state.refinement_base, state.refinement_capacity * REFINEMENT_WORDS,
         state.scratch_base, state.scratch_capacity) ||
       state.scratch_capacity < scratch_required ||
-      state.output_capacity > arrayLength(&output_types) {
+      !range_is_valid(
+        state.semantic.resolution_node,
+        state.output_capacity,
+        arrayLength(&output_types),
+      ) {
       invalid_input(ERROR_INVALID_SURFACE, 0u);
       return;
     }
@@ -3395,10 +3433,10 @@ fn validation_transition() {
     if index >= state.definition_count {
       state.validation_section = 3u; state.cursor = 0u; return;
     }
-    let definition = definitions[index];
+    let definition = definition_record(index);
     var root_order_is_valid = definition.root_node == 0u;
     if index > 0u {
-      root_order_is_valid = definition.root_node > definitions[index - 1u].root_node;
+      root_order_is_valid = definition.root_node > definition_record(index - 1u).root_node;
     }
     if definition.root_node >= state.node_count || definition.start_byte > definition.end_byte ||
       !root_order_is_valid {
@@ -3423,7 +3461,7 @@ fn validation_transition() {
     if index >= state.type_count {
       state.validation_section = 4u; state.cursor = 0u; state.substage = 0u; return;
     }
-    let declared = algebraic_types[index];
+    let declared = algebraic_type_record(index);
     let first_parameter = type_metadata(index, 0u);
     let parameter_count = type_metadata(index, 1u);
     let first_constructor = type_metadata(index, 2u);
@@ -3449,7 +3487,7 @@ fn validation_transition() {
         state.cursor0 = 0u; state.cursor1 = 0u; state.substage = 2u;
         return;
       }
-      if algebraic_types[state.cursor0].symbol == declared.symbol {
+      if algebraic_type_record(state.cursor0).symbol == declared.symbol {
         report_metadata_diagnostic(
           METADATA_DUPLICATE_TYPE_NAME, declared.start_byte, declared.end_byte,
           declared.symbol, state.cursor0, index);
@@ -3482,7 +3520,7 @@ fn validation_transition() {
     if index >= state.constructor_count {
       state.validation_section = 5u; state.cursor = 0u; state.substage = 0u; return;
     }
-    let constructor = constructors[index];
+    let constructor = constructor_record(index);
     let first_field = constructor_metadata(index, 0u);
     let field_count = constructor_metadata(index, 1u);
     let result_root = constructor_metadata(index, 2u);
@@ -3504,7 +3542,7 @@ fn validation_transition() {
           index, constructor.type_index, constructor.arity);
         return;
       }
-      let declared = algebraic_types[constructor.type_index];
+      let declared = algebraic_type_record(constructor.type_index);
       if index < declared.first_constructor ||
         index - declared.first_constructor >= declared.constructor_count {
         report_metadata_diagnostic(
@@ -3641,7 +3679,7 @@ fn validation_transition() {
     if index >= state.constructor_count {
       state.validation_section = 7u; state.cursor = 0u; state.substage = 0u; return;
     }
-    let constructor = constructors[index];
+    let constructor = constructor_record(index);
     let first_field = constructor_metadata(index, 0u);
     let field_count = constructor_metadata(index, 1u);
     let result_root = constructor_metadata(index, 2u);
@@ -3667,7 +3705,7 @@ fn validation_transition() {
         return;
       }
       let result_schema = schema_node(result_root);
-      let declared = algebraic_types[constructor.type_index];
+      let declared = algebraic_type_record(constructor.type_index);
       var result_head_is_valid = result_schema.tag == SCHEMA_NAMED &&
         result_schema.payload == declared.symbol;
       if constructor.type_index + 2u == state.type_count {
@@ -3748,7 +3786,7 @@ fn validation_transition() {
         ERROR_NON_CONCRETE_MAIN, 0u, 0u, state.main_symbol, NO_INDEX, NO_INDEX);
       return;
     }
-    if definitions[state.cursor0].symbol != state.main_symbol {
+    if definition_record(state.cursor0).symbol != state.main_symbol {
       state.cursor0 += 1u;
       return;
     }
@@ -3762,7 +3800,7 @@ fn validation_transition() {
 
 fn definition_node_end(definition_index: u32) -> u32 {
   if definition_index + 1u < state.definition_count {
-    return definitions[definition_index + 1u].root_node;
+    return definition_record(definition_index + 1u).root_node;
   }
   return state.node_count;
 }
@@ -3776,7 +3814,7 @@ fn enter_tarjan_definition(definition_index: u32) {
   scratch_set(4u, state.tarjan_stack_top, definition_index);
   state.tarjan_stack_top += 1u;
   scratch_set(5u, state.tarjan_dfs_top, definition_index);
-  scratch_set(6u, state.tarjan_dfs_top, definitions[definition_index].root_node);
+  scratch_set(6u, state.tarjan_dfs_top, definition_record(definition_index).root_node);
   state.tarjan_dfs_top += 1u;
 }
 
@@ -3823,7 +3861,7 @@ fn tarjan_transition() {
   let node_index = scratch_get(6u, depth);
   if node_index < definition_node_end(current) {
     scratch_set(6u, depth, node_index + 1u);
-    let node = core_nodes[node_index];
+    let node = core_node(node_index);
     if node.tag != TAG_GLOBAL { return; }
     let dependency = node.payload;
     if dependency == current { scratch_set(0u, current, 0u); }
@@ -3903,7 +3941,7 @@ fn component_transition() {
       state.frame_top = 0u;
       state.returned_type = NO_INDEX;
       state.expression_definition = definition_index;
-      if push_expression(definitions[definition_index].root_node, NO_INDEX) {
+      if push_expression(definition_record(definition_index).root_node, NO_INDEX) {
         frame_set(state.frame_top - 1u, 11u, scratch_get(0u, definition_index));
       }
       return;
@@ -3918,9 +3956,9 @@ fn component_transition() {
       state.component_cursor += 1u;
       return;
     }
-    let root = definitions[definition_index].root_node;
+    let root = definition_record(definition_index).root_node;
     if start_unify(scratch_get(0u, definition_index), state.returned_type,
-      core_nodes[root].start_byte, core_nodes[root].end_byte) {
+      core_node(root).start_byte, core_node(root).end_byte) {
       state.substage = 1u;
     }
     return;
@@ -3979,13 +4017,13 @@ fn require_output_slots(count: u32) -> bool {
 }
 
 fn initialize_output(index: u32, next_sibling: u32) {
-  output_types[index] = OutputTypeNode(
+  output_types[output_address(index)] = OutputTypeNode(
     0u, NO_INDEX, NO_INDEX, next_sibling, 0u, 0u);
 }
 
 fn write_output(index: u32, tag: u32, symbol: u32, first_child: u32) {
-  output_types[index] = OutputTypeNode(
-    tag, symbol, first_child, output_types[index].next_sibling, 0u, 0u);
+  output_types[output_address(index)] = OutputTypeNode(
+    tag, symbol, first_child, output_types[output_address(index)].next_sibling, 0u, 0u);
 }
 
 fn serialize_main_type() {
@@ -4001,7 +4039,7 @@ fn serialize_main_type() {
     }
     if state.work_result == 0u {
       if state.status == STATUS_PENDING {
-        let definition = definitions[state.main_definition];
+        let definition = definition_record(state.main_definition);
         report_diagnostic_with_operands(
           ERROR_NON_CONCRETE_MAIN, definition.start_byte, definition.end_byte,
           state.main_symbol, main_type, NO_INDEX);
@@ -4050,7 +4088,7 @@ fn serialize_main_type() {
     if kind == TYPE_NAMED {
       write_output(
         output_index, OUTPUT_NAMED,
-        algebraic_types[type_get(source, 1u)].symbol, NO_INDEX);
+        algebraic_type_record(type_get(source, 1u)).symbol, NO_INDEX);
       frame_set(frame, 3u, type_get(source, 2u));
       frame_set(frame, 4u, NO_INDEX);
       frame_set(frame, 2u, 5u);
@@ -4064,7 +4102,7 @@ fn serialize_main_type() {
     let source = frame_get(frame, 0u);
     let child_output = reserve_output(1u);
     initialize_output(child_output, NO_INDEX);
-    output_types[frame_get(frame, 1u)].first_child = child_output;
+    output_types[output_address(frame_get(frame, 1u))].first_child = child_output;
     frame_set(frame, 4u, child_output);
     frame_set(frame, 2u, 3u);
     push_serialization_task(type_get(source, 2u), child_output);
@@ -4075,7 +4113,7 @@ fn serialize_main_type() {
     let source = frame_get(frame, 0u);
     let child_output = reserve_output(1u);
     initialize_output(child_output, NO_INDEX);
-    output_types[frame_get(frame, 4u)].next_sibling = child_output;
+    output_types[output_address(frame_get(frame, 4u))].next_sibling = child_output;
     frame_set(frame, 2u, 4u);
     push_serialization_task(type_get(source, 3u), child_output);
     return;
@@ -4094,9 +4132,9 @@ fn serialize_main_type() {
   initialize_output(child_output, NO_INDEX);
   let previous = frame_get(frame, 4u);
   if previous == NO_INDEX {
-    output_types[frame_get(frame, 1u)].first_child = child_output;
+    output_types[output_address(frame_get(frame, 1u))].first_child = child_output;
   } else {
-    output_types[previous].next_sibling = child_output;
+    output_types[output_address(previous)].next_sibling = child_output;
   }
   frame_set(frame, 3u, type_get(list, 2u));
   frame_set(frame, 4u, child_output);
@@ -4150,8 +4188,7 @@ fn initialize_inference() {
   state.indexed_elimination_restriction_symbol = NO_INDEX;
 }
 
-@compute @workgroup_size(1)
-fn infer_lazuli_types() {
+fn infer_lane() {
   let semantic_steps = state.semantic.total_steps;
   if state.semantic.status != SEMANTIC_STATUS_OK {
     state.previous_semantic_steps = semantic_steps;
@@ -4194,5 +4231,16 @@ fn infer_lazuli_types() {
     dispatch_transitions += 1u;
     state.transitions += 1u;
   }
+}
+
+@compute @workgroup_size(1)
+fn infer_lazuli_types(@builtin(global_invocation_id) invocation: vec3<u32>) {
+  let lane_index = invocation.x;
+  if lane_index >= arrayLength(&inference_states) {
+    return;
+  }
+  state = inference_states[lane_index];
+  infer_lane();
+  inference_states[lane_index] = state;
 }
 `;

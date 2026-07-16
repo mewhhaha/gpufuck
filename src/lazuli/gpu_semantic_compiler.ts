@@ -7,7 +7,7 @@ import {
   LAZULI_TYPE_BYTE_LENGTH,
 } from "./abi.ts";
 import {
-  LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+  LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
   LAZULI_COMPILER_SHADER,
   LazuliCompilationStateWord as StateWord,
   LazuliCompilationStatus as Status,
@@ -20,6 +20,11 @@ import {
   semanticWorkLimitDiagnostic,
 } from "./compilation_diagnostics.ts";
 import { CompiledGpuLazuliModule, type LazuliCompileResult } from "./compiler_module.ts";
+import {
+  compileLazuliBatch,
+  type LazuliBatchCompilationInput,
+  type LazuliBatchCompilationInstrumentation,
+} from "./gpu_batch_compiler.ts";
 import { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
 import { runGpuLazuliCompilationInference } from "./gpu_type_inference_runner.ts";
 import type { GpuLazuliCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
@@ -114,7 +119,7 @@ export class GpuLazuliSemanticCompiler {
     const definitionBytes = encodeWords(surface.definitionWords);
     const typeBytes = encodeWords(surface.typeWords);
     const constructorBytes = encodeWords(surface.constructorWords);
-    const initialState = new ArrayBuffer(LAZULI_COMPILATION_STATE_BYTE_LENGTH);
+    const initialState = new ArrayBuffer(LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH);
     const initialStateView = new DataView(initialState);
     initialStateView.setUint32(StateWord.NodeCount * 4, surface.nodeCount, true);
     initialStateView.setUint32(StateWord.DefinitionCount * 4, surface.definitionCount, true);
@@ -158,7 +163,7 @@ export class GpuLazuliSemanticCompiler {
       LAZULI_CONSTRUCTOR_BYTE_LENGTH,
     );
     const allocationEvidence =
-      `surface nodes=${surfaceNodeByteLength} bytes, core nodes=${surfaceNodeByteLength} bytes, definitions=${definitionByteLength} bytes, algebraic types=${typeByteLength} bytes, constructors=${constructorByteLength} bytes, state=${LAZULI_COMPILATION_STATE_BYTE_LENGTH} bytes`;
+      `surface nodes=${surfaceNodeByteLength} bytes, core nodes=${surfaceNodeByteLength} bytes, definitions=${definitionByteLength} bytes, algebraic types=${typeByteLength} bytes, constructors=${constructorByteLength} bytes, state=${LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH} bytes`;
 
     try {
       this.#device.pushErrorScope("validation");
@@ -192,7 +197,7 @@ export class GpuLazuliSemanticCompiler {
         });
         stateBuffer = this.#device.createBuffer({
           label: "Lazuli compilation state",
-          size: LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+          size: LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
 
@@ -367,6 +372,28 @@ export class GpuLazuliSemanticCompiler {
         constructorBuffer?.destroy();
       }
     }
+  }
+
+  async compileBatch(
+    inputs: readonly LazuliBatchCompilationInput[],
+    signal: AbortSignal | undefined,
+    instrumentation?: LazuliBatchCompilationInstrumentation,
+  ): Promise<readonly LazuliCompileResult[]> {
+    return await compileLazuliBatch(
+      this.#device,
+      this.#pipeline,
+      this.#inferencePipeline,
+      inputs,
+      signal,
+      async (input) =>
+        await this.compile(
+          input.surface,
+          input.sourceByteLength,
+          input,
+          signal,
+        ),
+      instrumentation,
+    );
   }
 }
 

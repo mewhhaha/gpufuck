@@ -10,10 +10,10 @@ algebraic data, polymorphism, indexed constructor results, and evaluator exercis
 functional core; they are not intended to define the final compiler API. The original Brainfuck
 compiler is a separate historical prototype and is not part of the functional backend contract.
 
-The public `GpuFunctionalCompiler.compileModule()` entry point accepts that portable module
-directly. It does not import or load the Baba parser. `GpuLazuliCompiler` is now a compatibility
-frontend that parses, desugars, adds explicit profile metadata, and delegates to the same entry
-point.
+The public `GpuFunctionalCompiler.compileModule()` and `compileBatch()` entry points accept that
+portable module directly. They do not import or load the Baba parser. `GpuLazuliCompiler` is a
+compatibility frontend that parses, desugars, adds explicit profile metadata, and delegates to the
+same entry points.
 
 ## Run the reference frontend
 
@@ -652,16 +652,22 @@ useful for deterministic fuel, cancellation, and workspace-growth tests, but int
 every semantic transition into a separate GPU submission and mapped readback. Those tests can take
 seconds even when a normal steady-state compilation takes milliseconds.
 
-Independent `compileModule()` and compatibility `compile()` calls share a resource-weighted
-admission queue per compiler and can be coalesced into GPU dispatch batches. A single module still
-advances through its own ordered transition machine; batching improves throughput rather than
-changing its semantics. The `run-batch` CLI submits its source compilations concurrently while
-preserving source-order diagnostics and results. Use `deno task bench:lazuli` for criterion-style
-measurements and `deno task profile:lazuli-compiler` for cold initialization, parser, dispatch,
-quantum, core readback, and concurrent-throughput profiles on the active WebGPU adapter. Profile
-output includes the adapter description and fallback status; software adapters such as llvmpipe are
-useful for correctness and synchronization analysis but do not predict hardware-GPU JIT or execution
-latency.
+`compileBatch()` packs every lane's surface, resolved core, schema metadata, inference workspace,
+output, and durable state into aggregate GPU buffers. One workgroup advances each program, terminal
+lanes become inactive, and the host maps the state array once per quantum. Results retain source
+order and are copied into ordinary independently owned module buffers. If one packed lane exhausts
+an arena, completed siblings remain valid and only that lane falls back to the scalar elastic-growth
+path. `compileModule()` and compatibility `compile()` retain their scalar paths and share a
+resource-weighted admission queue.
+
+On an RTX 4080 SUPER, the checked-in 1,128-node compiler fixture took 414.6 ms for sixteen coalesced
+scalar compilations and 82.9 ms through `compileBatch()`—25.9 versus 5.18 ms per program, or 5.0×
+the throughput in that run. Sixteen tiny programs take about 36.6 ms total. Use
+`deno task bench:lazuli` for repeated measurements and `deno task profile:lazuli-compiler` for cold
+initialization, parser, dispatch, quantum, core readback, and scalar-versus-packed profiles on the
+active WebGPU adapter. Profile output includes the adapter description and fallback status; software
+adapters such as llvmpipe are useful for correctness and synchronization analysis but do not predict
+hardware-GPU JIT or execution latency.
 
 ## Memory and ownership
 
@@ -818,7 +824,8 @@ fuel, heap, stack, and cancellation.
 ## Lazuli compatibility API
 
 This source-oriented wrapper parses Lazuli and invokes the functional module API. Its existing
-types, diagnostics, text/list conveniences, and `mainType` property remain compatible.
+types, diagnostics, text/list conveniences, and `mainType` property remain compatible. Its
+`compileBatch()` method accepts an ordered source array and returns one result per source.
 
 ```ts
 import { GpuLazuliCompiler, GpuLazuliEvaluator, requestWebGpuDevice } from "./mod.ts";
@@ -941,9 +948,9 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
 - Direct WASM execution is synchronous and currently relies on the engine's stack and memory traps;
   fuel, cancellation, and an explicit linear-memory ceiling remain features of the GPU evaluator.
 - A run has bounded fuel, heap, and continuation stack. It has no in-run collector or free list.
-- GPU compilation is ordered within one module but concurrent modules are admitted by estimated
-  transient memory and coalesced into dispatch batches. Evaluation can batch heterogeneous modules
-  in independent runtime regions.
+- GPU compilation is ordered within one module; `compileBatch()` executes heterogeneous modules as
+  independent packed lanes. Evaluation can likewise batch heterogeneous modules in independent
+  runtime regions.
 
 ## Historical Brainfuck prototype
 

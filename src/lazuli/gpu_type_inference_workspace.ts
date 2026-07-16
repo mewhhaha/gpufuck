@@ -234,7 +234,10 @@ function createWorkspaceLayout(
 }
 
 export function createInitialState(
-  options: GpuLazuliTypeInferenceOptions,
+  options: Pick<
+    GpuLazuliTypeInferenceOptions,
+    "surface" | "maximumSteps" | "maximumStepsPerDispatch" | "initialSteps"
+  >,
   metadata: ReturnType<typeof prepareLazuliInferenceShaderMetadata>,
   layout: WorkspaceLayout,
   syntheticSemanticSuccess: boolean,

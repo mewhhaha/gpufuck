@@ -556,6 +556,22 @@ Deno.test("GPU type inference completes exactly at its derived compiler fuel thr
         maximumStepsPerDispatch,
       });
     }
+
+    const insufficientBatch = await compiler.compileBatch([source, source], {
+      maximumSteps: threshold - 1,
+      maximumStepsPerDispatch: 4_096,
+    });
+    equal(insufficientBatch.length, 2);
+    for (const compilation of insufficientBatch) {
+      equal(compilation.ok, false);
+      if (!compilation.ok) equal(compilation.diagnostics[0].code, "L1003");
+    }
+    const exactBatch = await compiler.compileBatch([source, source], {
+      maximumSteps: threshold,
+      maximumStepsPerDispatch: 4_096,
+    });
+    ok(exactBatch.every((compilation) => compilation.ok));
+    for (const compilation of exactBatch) if (compilation.ok) compilation.module.destroy();
   });
 });
 

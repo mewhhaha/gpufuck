@@ -266,3 +266,40 @@ Deno.test("same GPU compiler batches concurrent results and remains reusable aft
     device.destroy();
   }
 });
+
+Deno.test("packed compilation cleans up after cancellation and remains reusable", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliCompiler.create(device);
+    const submit = device.queue.submit.bind(device.queue);
+    const controller = new AbortController();
+    let abortAfterSubmit = true;
+    Object.defineProperty(device.queue, "submit", {
+      configurable: true,
+      value: (commandBuffers: GPUCommandBuffer[]) => {
+        submit(commandBuffers);
+        if (!abortAfterSubmit) return;
+        abortAfterSubmit = false;
+        controller.abort(new Error("cancel packed compilation after submit"));
+      },
+    });
+
+    await rejects(
+      () =>
+        compiler.compileBatch([
+          "let identity = value => value; let main = identity 1;",
+          "let identity = value => value; let main = identity true;",
+        ], {
+          maximumStepsPerDispatch: 1,
+          signal: controller.signal,
+        }),
+      /cancel packed compilation after submit/,
+    );
+
+    const reused = await compiler.compileBatch(["let main = 2;", "let main = 3;"]);
+    ok(reused.every((result) => result.ok));
+    for (const result of reused) if (result.ok) result.module.destroy();
+  } finally {
+    device.destroy();
+  }
+});

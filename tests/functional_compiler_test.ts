@@ -214,6 +214,54 @@ Deno.test("compiles independent functional modules concurrently", async () => {
   }
 });
 
+Deno.test("packed functional compilation preserves lane order and scalar results", async () => {
+  const { compiler, evaluator } = functionalRuntime();
+  const missingEntry = {
+    ...integerModule(0, "available"),
+    entrySymbol: 1,
+    symbolNames: ["available", "missing"],
+  };
+  const compilations = await compiler.compileBatch([
+    integerModule(20, "left_result"),
+    missingEntry,
+    integerModule(22, "right_result"),
+  ]);
+  equal(compilations.length, 3);
+  ok(compilations[0]?.ok);
+  equal(compilations[1]?.ok, false);
+  ok(compilations[2]?.ok);
+  if (compilations[1]?.ok === false) {
+    equal(compilations[1].diagnostics[0].code, "F2003");
+  }
+  const modules = compilations.flatMap((compilation) => compilation.ok ? [compilation.module] : []);
+  try {
+    equal(modules.length, 2);
+    const evaluations = await evaluator.evaluateBatch(modules);
+    deepStrictEqual(
+      evaluations.map((evaluation) => evaluation.ok ? evaluation.value : evaluation.fault),
+      [
+        { kind: "integer", value: 20 },
+        { kind: "integer", value: 22 },
+      ],
+    );
+    const scalar = await compiler.compileModule(integerModule(20, "left_result"));
+    ok(scalar.ok);
+    if (scalar.ok && compilations[0]?.ok) {
+      try {
+        deepStrictEqual(compilations[0].module.entryType, scalar.module.entryType);
+        deepStrictEqual(
+          await compilations[0].module.readCoreNodes(),
+          await scalar.module.readCoreNodes(),
+        );
+      } finally {
+        scalar.module.destroy();
+      }
+    }
+  } finally {
+    for (const module of modules) module.destroy();
+  }
+});
+
 Deno.test("runs handled algebraic effects as explicit GPU continuations", async () => {
   const handled = lowerFunctionalEffectProgram({
     operations: [{
