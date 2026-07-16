@@ -108,6 +108,7 @@ export function encodeWasmModule(
   indirectFunctionIndices: readonly number[],
   entryFunctionIndex: number,
   heapStart: number,
+  specializedCallSiteCount: number,
 ): Uint8Array<ArrayBuffer> {
   const types = [
     functionType([WasmValueType.I32], [WasmValueType.I32]),
@@ -136,6 +137,7 @@ export function encodeWasmModule(
         [0x7f, 0x01, 0x41, ...encodeSigned(BigInt(heapStart)), 0x0b],
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        [0x7f, 0x00, 0x41, ...encodeSigned(BigInt(specializedCallSiteCount)), 0x0b],
       ]),
     ),
     section(
@@ -146,6 +148,7 @@ export function encodeWasmModule(
         [...name("thunkEvaluations"), 0x03, 0x01],
         [...name("runtimeFault"), 0x03, 0x02],
         [...name("heapTop"), 0x03, 0x00],
+        [...name("specializedCallSites"), 0x03, 0x03],
       ]),
     ),
     section(

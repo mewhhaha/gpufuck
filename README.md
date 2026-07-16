@@ -705,6 +705,31 @@ thunks. A thunk stores its specialized code slot, captures, state, and cached va
 `runFunctionalWasmModule()` reports observable sharing without counting cached forces. Its
 `allocatedBytes` statistic reports linear-memory growth during initialization and execution.
 
+### Lambda-set specialization
+
+WASM emission applies
+[lambda set specialization](https://www.cs.princeton.edu/~mpmilano/publication/lss/) as an internal
+representation pass over the GPU-resolved core. It follows lambda values through globals, lexical
+bindings, applications, branches, recursion, and algebraic constructor fields. A singleton set
+becomes a direct call, while a finite multi-lambda set becomes tagged direct dispatch. Structurally
+known higher-order arguments remain virtual through specialization, which can remove their closure
+objects and expose their bodies to the WASM engine.
+
+This pass does not alter semantic function types or the frontend ABI. Incomplete flows, callable
+constructors, host operations, sets wider than 64 lambdas, and specialization beyond 512 inline
+sites retain the ordinary closure representation and `call_indirect` path. Those limits bound code
+growth without changing program behavior. `FunctionalWasmStats.specializedCallSites` reports the
+number of emitted direct lambda candidates; it is static for one emitted module, unlike the dynamic
+thunk and allocation counters.
+
+```sh
+deno task bench:functional-wasm
+```
+
+The paired benchmark emits and runs a 1,000-iteration higher-order loop beside its direct
+first-order equivalent. It keeps both WASM emission cost and residual abstraction overhead visible
+as the specialization pass evolves.
+
 ## Functional module API
 
 The smallest module below is assembled without a parser or Lazuli source. A real frontend interns

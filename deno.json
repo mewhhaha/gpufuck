@@ -26,6 +26,7 @@
     "singleQuote": false
   },
   "tasks": {
+    "bench:functional-wasm": "deno bench benchmarks/functional_wasm_bench.ts",
     "bench:lazuli": "deno bench --allow-read=language/lazuli/generated benchmarks/lazuli_compiler_bench.ts",
     "compare:type-programming": "deno run --allow-read --allow-run=zig --allow-write=/tmp tools/compare_type_programming.ts",
     "profile:lazuli-compiler": "deno run --allow-read tools/profile_lazuli_compiler.ts",

@@ -486,7 +486,21 @@ Deno.test("omits closure captures that the closure body does not reference", asy
       kind: "let",
       name: "function",
       value: surface.lambda("inner", body),
-      body: surface.apply(surface.name("function"), surface.integer(2)),
+      body: {
+        kind: "case",
+        value: surface.apply(
+          surface.apply(
+            surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+            surface.name("function"),
+          ),
+          surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+        ),
+        arms: [{
+          constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+          binders: ["storedFunction", "ignored"],
+          body: surface.apply(surface.name("storedFunction"), surface.integer(2)),
+        }],
+      },
     },
   });
   const captured = await runCompiledWasm(singleDefinitionModule(closure(
@@ -503,6 +517,86 @@ Deno.test("omits closure captures that the closure body does not reference", asy
   deepStrictEqual(captured.value, { kind: "integer", value: 42 });
   deepStrictEqual(pruned.value, { kind: "integer", value: 2 });
   equal(captured.stats.allocatedBytes - pruned.stats.allocatedBytes, 8);
+  ok(captured.stats.specializedCallSites >= 1);
+  ok(pruned.stats.specializedCallSites >= 1);
+});
+
+Deno.test("specializes let-bound higher-order functions without allocating closures", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "applyOnce",
+    value: surface.lambda(
+      "function",
+      surface.apply(surface.name("function"), surface.integer(41)),
+    ),
+    body: {
+      kind: "let",
+      name: "increment",
+      value: surface.lambda(
+        "value",
+        surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("value"),
+          surface.integer(1),
+        ),
+      ),
+      body: surface.apply(surface.name("applyOnce"), surface.name("increment")),
+    },
+  }));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 24);
+  ok(execution.stats.specializedCallSites >= 1);
+});
+
+Deno.test("dispatches branch-selected lambda sets with their own captures", async () => {
+  const chooseFunction = (condition: boolean): FunctionalSurfaceExpression => ({
+    kind: "let",
+    name: "offset",
+    value: surface.integer(40),
+    body: {
+      kind: "let",
+      name: "function",
+      value: {
+        kind: "if",
+        condition: surface.boolean(condition),
+        consequent: surface.lambda(
+          "value",
+          surface.binary(
+            FunctionalBinaryOperator.Add,
+            surface.name("value"),
+            surface.name("offset"),
+          ),
+        ),
+        alternate: surface.lambda(
+          "value",
+          surface.binary(
+            FunctionalBinaryOperator.Multiply,
+            surface.name("value"),
+            surface.integer(2),
+          ),
+        ),
+      },
+      body: surface.apply(surface.name("function"), surface.integer(2)),
+    },
+  });
+
+  const selectedCapturedFunction = await runCompiledWasm(
+    singleDefinitionModule(chooseFunction(true)),
+  );
+  const selectedCapturelessFunction = await runCompiledWasm(
+    singleDefinitionModule(chooseFunction(false)),
+  );
+
+  deepStrictEqual(selectedCapturedFunction.value, { kind: "integer", value: 42 });
+  deepStrictEqual(selectedCapturelessFunction.value, { kind: "integer", value: 4 });
+  equal(
+    selectedCapturedFunction.stats.allocatedBytes -
+      selectedCapturelessFunction.stats.allocatedBytes,
+    8,
+  );
+  ok(selectedCapturedFunction.stats.specializedCallSites >= 2);
+  ok(selectedCapturelessFunction.stats.specializedCallSites >= 2);
 });
 
 Deno.test("omits thunk captures that the suspended expression does not reference", async () => {
