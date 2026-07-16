@@ -338,11 +338,34 @@ class InferenceContext {
             );
           }
 
-          const directResultParameters = new Set(
-            constructor.result.arguments.flatMap((argument) =>
-              argument.kind === "parameter" ? [argument.name] : []
-            ),
-          );
+          const resultParameters = new Set<string>();
+          const pendingResultTypes: LazuliTypeSchema[] = [...constructor.result.arguments]
+            .reverse();
+          while (pendingResultTypes.length > 0) {
+            const resultType = pendingResultTypes.pop();
+            if (resultType === undefined) break;
+            switch (resultType.kind) {
+              case "parameter":
+                resultParameters.add(resultType.name);
+                break;
+              case "tuple":
+                pendingResultTypes.push(resultType.values[1], resultType.values[0]);
+                break;
+              case "named":
+                for (let index = resultType.arguments.length - 1; index >= 0; index--) {
+                  const argument = resultType.arguments[index];
+                  if (argument !== undefined) pendingResultTypes.push(argument);
+                }
+                break;
+              case "function":
+                pendingResultTypes.push(resultType.result, resultType.parameter);
+                break;
+              case "integer":
+              case "boolean":
+              case "unit":
+                break;
+            }
+          }
           const fieldParameters = new Map<string, LazuliTypeSchema>();
           const pendingFieldTypes: LazuliTypeSchema[] = constructor.fields
             .map((field) => field.type)
@@ -375,11 +398,11 @@ class InferenceContext {
             }
           }
           for (const [parameterName, parameterSchema] of fieldParameters) {
-            if (directResultParameters.has(parameterName)) continue;
+            if (resultParameters.has(parameterName)) continue;
             throw this.invalidTypeMetadata(
               `constructor ${JSON.stringify(constructor.name)} field parameter ${
                 JSON.stringify(parameterName)
-              } is not a bare direct argument of its result`,
+              } does not occur in its result`,
               this.sourceSpan(parameterSchema, constructorSpan),
             );
           }

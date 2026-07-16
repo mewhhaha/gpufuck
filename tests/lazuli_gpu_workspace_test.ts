@@ -8,6 +8,7 @@ import {
   requestWebGpuDevice,
 } from "../mod.ts";
 import {
+  type GpuLazuliCompilationDispatchObservation,
   type GpuLazuliTypeInferenceDispatchObservation,
   type GpuLazuliTypeInferenceWorkspaceCapacities,
   runGpuLazuliTypeInference,
@@ -68,6 +69,7 @@ async function runInferenceWithCapacities(
     return buffer;
   };
   const observations: GpuLazuliTypeInferenceDispatchObservation[] = [];
+  const compilationObservations: GpuLazuliCompilationDispatchObservation[] = [];
   try {
     const result = await runGpuLazuliTypeInference({
       device,
@@ -90,8 +92,11 @@ async function runInferenceWithCapacities(
         observations.push(observation);
         controls.onDispatch?.(observation);
       },
+      observeCompilationDispatch: (observation) => {
+        compilationObservations.push(observation);
+      },
     });
-    return { result, observations, surface };
+    return { result, observations, compilationObservations, surface };
   } finally {
     for (const buffer of buffers) buffer.destroy();
     compilation.module.destroy();
@@ -662,6 +667,9 @@ Deno.test("GPU inference transition counts are invariant across dispatch quanta"
       deepStrictEqual(seven.result, large.result, source);
       equal(one.result.transitions, seven.result.transitions, source);
       equal(seven.result.transitions, large.result.transitions, source);
+      const finalObservation = large.compilationObservations.at(-1);
+      ok(finalObservation !== undefined, `${source} omitted compilation dispatch observations`);
+      equal(finalObservation.inferenceTransitions, large.result.transitions, source);
     }
   } finally {
     device.destroy();

@@ -143,5 +143,8 @@ export type {
   FunctionalTypeNormalizationOptions,
   FunctionalTypeProgram,
 } from "./src/functional/type_program_contract.ts";
-export { FunctionalTypeNormalizer } from "./src/functional/type_program.ts";
+export {
+  functionalSchemaFromTypeCoreType,
+  FunctionalTypeNormalizer,
+} from "./src/functional/type_program.ts";
 export { requestWebGpuDevice } from "./src/webgpu.ts";

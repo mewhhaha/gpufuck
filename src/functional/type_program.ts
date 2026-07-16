@@ -164,7 +164,10 @@ export class FunctionalTypeNormalizer {
             } output ${expression.output} has kind ${output.kind}; expected type`,
           );
         }
-        return Object.freeze({ kind: "schema", schema: typeCoreSchema(output.type) });
+        return Object.freeze({
+          kind: "schema",
+          schema: functionalSchemaFromTypeCoreType(output.type),
+        });
       }
     }
   }
@@ -529,41 +532,102 @@ function schemaTypeCoreType(schema: FunctionalTypeSchema): TypeCoreType {
   }
 }
 
-function typeCoreSchema(type: TypeCoreType): FunctionalTypeSchema {
-  switch (type.kind) {
-    case "integer":
-    case "boolean":
-    case "unit":
-      return Object.freeze({ kind: type.kind });
-    case "named":
-      return Object.freeze({
-        kind: "named",
-        name: type.name,
-        arguments: Object.freeze(type.arguments.map((argument, argumentIndex) => {
-          if (argument.kind !== "type") {
-            throw new Error(
-              `Functional associated type ${
-                JSON.stringify(type.name)
-              } argument ${argumentIndex} has kind ${argument.kind}; the functional ABI accepts type arguments only`,
-            );
-          }
-          return typeCoreSchema(argument.type);
-        })),
-      });
-    case "tuple":
-      return Object.freeze({
-        kind: "tuple",
-        values: Object.freeze([
-          typeCoreSchema(type.values[0]),
-          typeCoreSchema(type.values[1]),
-        ]) as readonly [FunctionalTypeSchema, FunctionalTypeSchema],
-      });
-    case "function":
-      return Object.freeze({
-        kind: "function",
-        parameter: typeCoreSchema(type.parameter),
-        result: typeCoreSchema(type.result),
-      });
+export function functionalSchemaFromTypeCoreType(type: TypeCoreType): FunctionalTypeSchema {
+  return functionalSchemaAtDepth(type, 0, new Set());
+}
+
+function functionalSchemaAtDepth(
+  type: TypeCoreType,
+  depth: number,
+  active: Set<object>,
+): FunctionalTypeSchema {
+  if (depth > MAXIMUM_STRUCTURAL_DEPTH) {
+    throw new Error(
+      `Functional Type Core result exceeds the maximum structural depth of ${MAXIMUM_STRUCTURAL_DEPTH}`,
+    );
+  }
+  if (type === null || typeof type !== "object") {
+    throw new Error(`Functional Type Core result is not a type object; received ${String(type)}`);
+  }
+  if (active.has(type)) throw new Error("Functional Type Core result contains a type cycle");
+  active.add(type);
+  try {
+    switch (type.kind) {
+      case "integer":
+      case "boolean":
+      case "unit":
+        return Object.freeze({ kind: type.kind });
+      case "named":
+        if (typeof type.name !== "string" || type.name.length === 0) {
+          throw new Error(
+            `Functional Type Core result has invalid named type ${JSON.stringify(type.name)}`,
+          );
+        }
+        if (!Array.isArray(type.arguments)) {
+          throw new Error(
+            `Functional Type Core result ${JSON.stringify(type.name)} has non-array arguments`,
+          );
+        }
+        if (type.arguments.length > MAXIMUM_WIDTH) {
+          throw new Error(
+            `Functional Type Core result ${
+              JSON.stringify(type.name)
+            } exceeds the maximum width of ${MAXIMUM_WIDTH}; received ${type.arguments.length} arguments`,
+          );
+        }
+        return Object.freeze({
+          kind: "named",
+          name: type.name,
+          arguments: Object.freeze(type.arguments.map((argument, argumentIndex) => {
+            if (argument === null || typeof argument !== "object") {
+              throw new Error(
+                `Functional Type Core result ${
+                  JSON.stringify(type.name)
+                } argument ${argumentIndex} is not a value object; received ${String(argument)}`,
+              );
+            }
+            if (argument.kind !== "type") {
+              throw new Error(
+                `Functional Type Core result ${
+                  JSON.stringify(type.name)
+                } argument ${argumentIndex} has kind ${argument.kind}; the functional ABI accepts type arguments only`,
+              );
+            }
+            return functionalSchemaAtDepth(argument.type, depth + 1, active);
+          })),
+        });
+      case "tuple": {
+        if (!Array.isArray(type.values) || type.values.length !== 2) {
+          throw new Error("Functional Type Core tuple result must contain exactly two types");
+        }
+        return Object.freeze({
+          kind: "tuple",
+          values: Object.freeze([
+            functionalSchemaAtDepth(type.values[0], depth + 1, active),
+            functionalSchemaAtDepth(type.values[1], depth + 1, active),
+          ]) as readonly [FunctionalTypeSchema, FunctionalTypeSchema],
+        });
+      }
+      case "function":
+        if (type.parameter === undefined || type.result === undefined) {
+          throw new Error(
+            "Functional Type Core function result must contain parameter and result types",
+          );
+        }
+        return Object.freeze({
+          kind: "function",
+          parameter: functionalSchemaAtDepth(type.parameter, depth + 1, active),
+          result: functionalSchemaAtDepth(type.result, depth + 1, active),
+        });
+      default:
+        throw new Error(
+          `Functional Type Core result has unsupported type kind ${
+            JSON.stringify((type as { readonly kind?: unknown }).kind)
+          }`,
+        );
+    }
+  } finally {
+    active.delete(type);
   }
 }
 

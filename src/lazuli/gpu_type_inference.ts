@@ -3,6 +3,7 @@ export type {
   GpuLazuliSemanticStateSnapshot,
 } from "./gpu_semantic_contract.ts";
 export type {
+  GpuLazuliCompilationDispatchObservation,
   GpuLazuliCompilationInferenceRun,
   GpuLazuliTypeInferenceBuffers,
   GpuLazuliTypeInferenceDispatchObservation,

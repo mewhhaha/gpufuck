@@ -6,6 +6,7 @@ import {
   type GpuLazuliCompilationInferenceRun,
   type GpuLazuliTypeInferenceOptions,
   type GpuLazuliTypeInferenceRun,
+  type InferenceStateSnapshot,
   type WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import {
@@ -51,13 +52,11 @@ import {
   validateFuel,
   workspaceArenaCapacity,
   workspaceLayout,
-  writeStateWord,
 } from "./gpu_type_inference_workspace.ts";
 import {
   LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
   LazuliInferenceDiagnosticCode,
   LazuliInferenceMetadataFailure,
-  LazuliInferenceStateWord,
   LazuliInferenceStatus,
   prepareLazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
@@ -211,12 +210,6 @@ async function runGpuLazuliTypeInferenceMachine(
         };
       }
       const dispatchTransitions = Math.min(options.maximumStepsPerDispatch, remainingSteps);
-      writeStateWord(
-        options.device,
-        stateBuffer,
-        LazuliInferenceStateWord.MaximumTransitionsPerDispatch,
-        dispatchTransitions,
-      );
 
       await dispatchForReadback(
         options.device,
@@ -236,23 +229,44 @@ async function runGpuLazuliTypeInferenceMachine(
 
       await stateReadbackBuffer.mapAsync(GPUMapMode.READ);
       stateReadbackMapped = true;
-      const dispatchReadback = stateReadbackBuffer.getMappedRange().slice(0);
-      const dispatchView = new DataView(dispatchReadback);
-      const state = readInferenceState(dispatchView);
-      semanticState = readSemanticState(dispatchView, SEMANTIC_SNAPSHOT_BYTE_OFFSET);
-      stateReadbackBuffer.unmap();
-      stateReadbackMapped = false;
+      let state: InferenceStateSnapshot;
+      let completedOutput: ArrayBuffer | undefined;
+      try {
+        const mappedRange = stateReadbackBuffer.getMappedRange();
+        const dispatchView = new DataView(mappedRange);
+        state = readInferenceState(dispatchView);
+        semanticState = readSemanticState(dispatchView, SEMANTIC_SNAPSHOT_BYTE_OFFSET);
+        assertConsistentState(
+          state,
+          semanticState,
+          layout,
+          outputCapacity,
+          previousSemanticSteps,
+          previousTransitions,
+          dispatchTransitions,
+        );
+        if (
+          readbackIncludesOutput && semanticState.status === LazuliCompilationStatus.Ok &&
+          state.status === LazuliInferenceStatus.Complete
+        ) {
+          completedOutput = mappedRange.slice(
+            INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
+            INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
+              inferredTypeOutputByteLength(state.outputCount),
+          );
+        }
+      } finally {
+        stateReadbackBuffer.unmap();
+        stateReadbackMapped = false;
+      }
       options.signal?.throwIfAborted();
-
-      assertConsistentState(
-        state,
-        semanticState,
-        layout,
-        outputCapacity,
-        previousSemanticSteps,
-        previousTransitions,
-        dispatchTransitions,
-      );
+      options.observeCompilationDispatch?.({
+        semanticStatus: semanticState.status,
+        semanticSteps: semanticState.totalSteps,
+        inferenceStatus: state.status,
+        inferenceTransitions: state.transitions,
+        requiredCapacity: state.errorDetail,
+      });
       if (semanticState.status === LazuliCompilationStatus.Pending) {
         previousSemanticSteps = semanticState.totalSteps;
         continue;
@@ -296,11 +310,10 @@ async function runGpuLazuliTypeInferenceMachine(
         }
         let output: DataView;
         if (readbackIncludesOutput) {
-          output = new DataView(
-            dispatchReadback,
-            INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
-            outputByteLength,
-          );
+          if (completedOutput === undefined) {
+            throw new Error("GPU Lazuli type inference omitted its staged output readback");
+          }
+          output = new DataView(completedOutput);
         } else {
           outputReadbackBuffer = await createOutputReadbackBuffer(
             options.device,

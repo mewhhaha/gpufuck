@@ -355,6 +355,37 @@ The example normalizes `Twice List Int` to `List (List Int)` and resolves `eleme
 the GPU through `GpuTypeCoreExecutor`; higher-kinded specialization erases constructor parameters
 before producing that first-order input.
 
+### Idris2-style indices and Zig-style comptime
+
+The [type-programming profile examples](examples/type-programming/README.md) exercise two richer
+frontend mappings. The Idris2-style example reduces Peano addition to compute `Vect 3 Int`, converts
+that closed Type Core result through `functionalSchemaFromTypeCoreType()`, and then asks ordinary
+GPU inference to verify a three-element indexed vector. Constructor field parameters may occur
+anywhere structurally in an indexed result; only parameters absent from the result remain
+existential and are rejected.
+
+The first Zig-style example constructs `Array 6 (Array 7 i32)` from mixed-kinded `comptime`
+parameters and computes the cell count `42`. The reflection example represents synthesized fields
+and attached methods as recursive Type Core metadata. GPU execution walks the fields, finds a method
+by symbol, and erases the selected implementation to a statically checked functional call. Both
+pipelines emit WebAssembly that returns `42`, while the checked-in Zig sources independently pass
+`zig test`.
+
+```sh
+deno task run:idris2-type-programming
+deno task run:zig-comptime
+deno task run:zig-reflection
+deno task compare:type-programming
+```
+
+These are semantic lowering profiles, not complete syntax frontends. Idris2 still needs elaboration,
+`Pi` types, universes, implicit search, and totality checking. Zig still needs compile-time memory,
+imperative loops, exact aggregate layout, explicit compile errors, and general specialized term
+generation. Type Core values with non-type indices must be erased or converted to generated nominal
+runtime types before entering the functional schema ABI. The timing task reports GPU startup and
+steady-state latency, fresh-cache Zig compilation, and 32-program results. Its output states the
+phase and batching differences.
+
 ### Algebraic effects
 
 `GpuFunctionalCompiler.compileEffectModule()` accepts a portable Effect Core built from `return`,
@@ -452,6 +483,25 @@ fn main =
   factorial 6;
 ```
 
+### A compiler written in Lazuli
+
+[`examples/lazuli-brainfuck/compiler.laz`](examples/lazuli-brainfuck/compiler.laz) is a typed,
+higher-order Brainfuck-to-WebAssembly compiler with a `Text -> Text` entry point. It validates
+nested loops, lowers all eight instructions, constructs WebAssembly sections with unsigned LEB128
+lengths, and returns the binary as lowercase hexadecimal text. Its parser composes instruction
+streams as `List Int -> List Int` difference lists so larger inputs do not repeatedly copy generated
+code.
+
+```sh
+deno task run:lazuli-brainfuck
+```
+
+The runner asks the GPU to compile the Lazuli compiler, runs that compiler on the GPU evaluator,
+decodes and validates the emitted module, and executes it through WebAssembly. It reports
+initialization, first-dispatch shader warmup, one-time compiler compilation, and first-input and
+warm-input compilation separately, plus a labelled comparison with the specialized Brainfuck-to-IR
+GPU pass.
+
 ### Current syntax
 
 - declarations: `let name = expression;`, arrow closures such as `value => value + 1`, and the
@@ -485,8 +535,8 @@ Arithmetic is wrapping signed `i32`; division by zero is a structured runtime fa
 are first-class curried functions, their fields are lazy, and matching reuses the original field
 thunks rather than copying or forcing them. For example, `Pair first second` is two unary
 applications, while `consume (first, second)` is one application with a tuple. Every type parameter
-used by an indexed constructor field must also be a bare, direct argument of that constructor's
-result type.
+used by an indexed constructor field must occur structurally in that constructor's result type, so
+matching the result can recover the field type without inventing an existential.
 
 ### Proofs and typed facts
 
@@ -590,15 +640,24 @@ Unification, occurs checks, generalization, instantiation, indexed coverage, SCC
 serialization all resume from GPU-resident frames. Fuel therefore bounds semantic work, while
 cancellation can be observed between dispatches.
 
-The default dispatch quantum is 4,096 transitions. Setting `maximumStepsPerDispatch: 1` is useful
-for deterministic fuel, cancellation, and workspace-growth tests, but it intentionally turns every
-semantic transition into a separate GPU submission and mapped readback. Those tests can take seconds
-even when a normal steady-state compilation takes milliseconds.
+Compiler calls without an `AbortSignal` default to the 65,536-transition maximum. Calls carrying a
+signal default to 16,384 transitions so cancellation retains a finer observation interval. Profiling
+a 1,128-node compiler source showed that mapped state readback, rather than semantic execution,
+dominated each approximately 12-ms dispatch: the previous 4,096-transition default required twelve
+round trips, while the non-cancellable default completes the same 46,389 semantic transitions in
+one. An explicit `maximumStepsPerDispatch` always overrides this choice. Setting it to `1` remains
+useful for deterministic fuel, cancellation, and workspace-growth tests, but intentionally turns
+every semantic transition into a separate GPU submission and mapped readback. Those tests can take
+seconds even when a normal steady-state compilation takes milliseconds.
 
 Independent `compileModule()` and compatibility `compile()` calls share a resource-weighted
 admission queue per compiler and can be coalesced into GPU dispatch batches. A single module still
 advances through its own ordered transition machine; batching improves throughput rather than
-changing its semantics. Use `deno task bench:lazuli` for measurements on the active WebGPU adapter.
+changing its semantics. Use `deno task bench:lazuli` for criterion-style measurements and
+`deno task profile:lazuli-compiler` for cold initialization, parser, dispatch, quantum, core
+readback, and concurrent-throughput profiles on the active WebGPU adapter. Profile output includes
+the adapter description and fallback status; software adapters such as llvmpipe are useful for
+correctness and synchronization analysis but do not predict hardware-GPU JIT or execution latency.
 
 ## Memory and ownership
 
@@ -863,8 +922,9 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
   concrete result or a result fixed by their context. An annotation remains necessary at a
   higher-rank boundary and when it selects a non-principal indexed contract whose result depends on
   an arm-local refinement. The entry definition must resolve to a concrete type.
-- Every type parameter used by an indexed constructor field must be a bare, direct argument of that
-  constructor's result. Existential field recovery is not implemented.
+- Every type parameter used by an indexed constructor field must occur structurally in that
+  constructor's result. Parameters absent from the result would be existential and remain
+  unsupported.
 - Proof witnesses are runtime values and are not erased. Primitive operand errors, constructor
   mismatches, inaccessible arms, and non-exhaustive cases are compile diagnostics.
 - Pattern fields are flat binders; nested destructuring is expressed with a nested `case`.

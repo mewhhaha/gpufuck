@@ -23,8 +23,20 @@ export interface GpuLazuliTypeInferenceOptions extends GpuLazuliTypeInferenceBuf
   readonly initialWorkspaceCapacities?: GpuLazuliTypeInferenceWorkspaceCapacities;
   /** Internal runner observation point invoked after each completed dispatch. */
   readonly observeDispatch?: (observation: GpuLazuliTypeInferenceDispatchObservation) => void;
+  /** Internal profiling point covering both semantic resolution and inference dispatches. */
+  readonly observeCompilationDispatch?: (
+    observation: GpuLazuliCompilationDispatchObservation,
+  ) => void;
   /** Internal test hook invoked on the prepared schema buffer before upload. */
   readonly mutateMetadataForTest?: (words: Uint32Array) => void;
+}
+
+export interface GpuLazuliCompilationDispatchObservation {
+  readonly semanticStatus: number;
+  readonly semanticSteps: number;
+  readonly inferenceStatus: number;
+  readonly inferenceTransitions: number;
+  readonly requiredCapacity: number;
 }
 
 export interface GpuLazuliTypeInferenceWorkspaceCapacities {

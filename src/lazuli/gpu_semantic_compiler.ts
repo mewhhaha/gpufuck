@@ -22,11 +22,16 @@ import {
 import { CompiledGpuLazuliModule, type LazuliCompileResult } from "./compiler_module.ts";
 import { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
 import { runGpuLazuliCompilationInference } from "./gpu_type_inference_runner.ts";
+import type { GpuLazuliCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
 import { LAZULI_TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
 
 export interface LazuliSemanticCompilationLimits {
   readonly maximumSteps: number;
   readonly maximumStepsPerDispatch: number;
+}
+
+export interface LazuliSemanticCompilationInstrumentation {
+  readonly observeDispatch: (observation: GpuLazuliCompilationDispatchObservation) => void;
 }
 
 export class GpuLazuliSemanticCompiler {
@@ -103,6 +108,7 @@ export class GpuLazuliSemanticCompiler {
     sourceByteLength: number,
     limits: LazuliSemanticCompilationLimits,
     signal: AbortSignal | undefined,
+    instrumentation?: LazuliSemanticCompilationInstrumentation,
   ): Promise<LazuliCompileResult> {
     const surfaceNodeBytes = encodeWords(surface.nodeWords);
     const definitionBytes = encodeWords(surface.definitionWords);
@@ -259,6 +265,9 @@ export class GpuLazuliSemanticCompiler {
         maximumStepsPerDispatch: limits.maximumStepsPerDispatch,
         sourceByteLength,
         ...(signal === undefined ? {} : { signal }),
+        ...(instrumentation === undefined
+          ? {}
+          : { observeCompilationDispatch: instrumentation.observeDispatch }),
       }, {
         pipeline: this.#pipeline,
         bindGroup,
