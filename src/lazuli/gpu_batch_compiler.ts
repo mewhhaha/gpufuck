@@ -16,8 +16,6 @@ import { LazuliSemanticCompilerErrorCode } from "./compilation_diagnostics.ts";
 import type { LazuliCompileResult } from "./compiler_module.ts";
 import {
   batchSemanticFailure,
-  type CompletedInference,
-  createCompletedBatchModules,
   finishBatchInferenceResults,
   type TerminalInference,
 } from "./gpu_batch_results.ts";
@@ -279,7 +277,6 @@ async function runPackedCompilation(
 
     const results: (LazuliCompileResult | undefined)[] = new Array(lanes.length);
     const terminalInference: (TerminalInference | undefined)[] = new Array(lanes.length);
-    const completedInference: (CompletedInference | undefined)[] = new Array(lanes.length);
     const previousSemanticSteps = new Uint32Array(lanes.length);
     const previousInferenceTransitions = new Uint32Array(lanes.length);
     let terminalLaneCount = 0;
@@ -398,17 +395,9 @@ async function runPackedCompilation(
       device,
       lanes,
       terminalInference,
-      completedInference,
       results,
       workspaceBuffer,
       outputBuffer,
-    );
-    await createCompletedBatchModules(
-      device,
-      lanes,
-      terminalInference,
-      completedInference,
-      results,
       coreBuffer,
       definitionBuffer,
       constructorBuffer,

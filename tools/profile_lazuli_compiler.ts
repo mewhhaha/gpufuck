@@ -9,6 +9,7 @@ import { LazuliInferenceStatus } from "../src/lazuli/type_inference_shader.ts";
 const DEFAULT_SOURCE_PATH = "examples/lazuli-brainfuck/compiler.laz";
 const SAMPLE_COUNT = 5;
 const BATCH_SIZE = 16;
+const BATCH_DISPATCH_QUANTUM = 65_536;
 const DISPATCH_QUANTA = [4_096, 8_192, 16_384, 65_536] as const;
 const MAXIMUM_STEPS = 10_000_000;
 
@@ -141,7 +142,7 @@ try {
       compiler.compile(
         semanticSurface,
         sourceBytes,
-        { maximumSteps: MAXIMUM_STEPS, maximumStepsPerDispatch: 16_384 },
+        { maximumSteps: MAXIMUM_STEPS, maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM },
         undefined,
       )),
   );
@@ -158,7 +159,7 @@ try {
       surface: semanticSurface,
       sourceByteLength: sourceBytes,
       maximumSteps: MAXIMUM_STEPS,
-      maximumStepsPerDispatch: 16_384,
+      maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
     })),
     undefined,
     { observeDispatch: (laneCount) => packedDispatchLaneCounts.push(laneCount) },
@@ -198,7 +199,7 @@ try {
       quantumProfiles,
       batch: {
         programCount: BATCH_SIZE,
-        maximumStepsPerDispatch: 16_384,
+        maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
         scheduled: {
           totalMilliseconds: scheduledBatchMilliseconds,
           millisecondsPerProgram: scheduledBatchMilliseconds / BATCH_SIZE,

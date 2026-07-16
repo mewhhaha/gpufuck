@@ -3,8 +3,6 @@ import {
   LAZULI_DEFINITION_BYTE_LENGTH,
   LAZULI_NO_INDEX,
   LAZULI_NODE_BYTE_LENGTH,
-  type LazuliType,
-  type LazuliTypeDeclaration,
 } from "./abi.ts";
 import { LazuliCompilationStatus } from "./compiler_shader.ts";
 import {
@@ -38,20 +36,16 @@ export interface TerminalInference {
   readonly semanticState: GpuLazuliSemanticStateSnapshot;
 }
 
-export interface CompletedInference {
-  readonly entryDefinition: number;
-  readonly mainType: LazuliType;
-  readonly typeDeclarations: readonly LazuliTypeDeclaration[];
-}
-
 export async function finishBatchInferenceResults(
   device: GPUDevice,
   lanes: readonly BatchLane[],
   terminal: readonly (TerminalInference | undefined)[],
-  completedInference: (CompletedInference | undefined)[],
   results: (LazuliCompileResult | undefined)[],
   workspaceBuffer: GPUBuffer,
   outputBuffer: GPUBuffer,
+  coreSource: GPUBuffer,
+  definitionSource: GPUBuffer,
+  constructorSource: GPUBuffer,
 ): Promise<void> {
   const successfulLaneIndexes: number[] = [];
   for (const [laneIndex, completed] of terminal.entries()) {
@@ -68,6 +62,12 @@ export async function finishBatchInferenceResults(
   }
   let outputReadback: GPUBuffer | undefined;
   let outputMapped = false;
+  const createdBuffers: GPUBuffer[] = [];
+  const moduleBuffers = new Map<number, {
+    readonly nodes: GPUBuffer;
+    readonly definitions: GPUBuffer;
+    readonly constructors: GPUBuffer;
+  }>();
   try {
     let outputView: DataView | undefined;
     if (outputBytes > 0) {
@@ -76,7 +76,7 @@ export async function finishBatchInferenceResults(
         size: outputBytes,
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
       });
-      const commands = device.createCommandEncoder({ label: "Read packed inferred types" });
+      const commands = device.createCommandEncoder({ label: "Finish packed Lazuli compilation" });
       for (const laneIndex of successfulLaneIndexes) {
         const lane = lanes[laneIndex]!;
         const completed = terminal[laneIndex]!;
@@ -87,6 +87,52 @@ export async function finishBatchInferenceResults(
           outputOffsets.get(laneIndex)!,
           inferredTypeOutputByteLength(completed.state.outputCount),
         );
+        const nodes = device.createBuffer({
+          label: `Lazuli packed lane ${lane.resultIndex} core nodes`,
+          size: Math.max(LAZULI_NODE_BYTE_LENGTH, lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH),
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+        });
+        const definitions = device.createBuffer({
+          label: `Lazuli packed lane ${lane.resultIndex} definitions`,
+          size: Math.max(
+            LAZULI_DEFINITION_BYTE_LENGTH,
+            lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
+          ),
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+        });
+        const constructors = device.createBuffer({
+          label: `Lazuli packed lane ${lane.resultIndex} constructors`,
+          size: Math.max(
+            LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+            lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+          ),
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+        });
+        createdBuffers.push(nodes, definitions, constructors);
+        moduleBuffers.set(laneIndex, { nodes, definitions, constructors });
+        commands.copyBufferToBuffer(
+          coreSource,
+          lane.nodeBase * LAZULI_NODE_BYTE_LENGTH,
+          nodes,
+          0,
+          lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH,
+        );
+        commands.copyBufferToBuffer(
+          definitionSource,
+          lane.definitionBase * LAZULI_DEFINITION_BYTE_LENGTH,
+          definitions,
+          0,
+          lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
+        );
+        if (lane.surface.constructorCount > 0) {
+          commands.copyBufferToBuffer(
+            constructorSource,
+            lane.constructorBase * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+            constructors,
+            0,
+            lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+          );
+        }
       }
       device.queue.submit([commands.finish()]);
       await outputReadback.mapAsync(GPUMapMode.READ);
@@ -109,10 +155,22 @@ export async function finishBatchInferenceResults(
           completed.state,
           lane.surface,
         );
-        completedInference[laneIndex] = {
-          entryDefinition: completed.semanticState.entryDefinition,
-          mainType,
-          typeDeclarations: publicTypeMetadata(lane.surface).typeDeclarations,
+        const buffers = moduleBuffers.get(laneIndex);
+        if (buffers === undefined) {
+          throw new Error(`GPU Lazuli packed lane ${lane.resultIndex} omitted module buffers`);
+        }
+        results[lane.resultIndex] = {
+          ok: true,
+          module: new CompiledGpuLazuliModule(
+            device,
+            buffers.nodes,
+            buffers.definitions,
+            buffers.constructors,
+            lane.surface,
+            completed.semanticState.entryDefinition,
+            mainType,
+            publicTypeMetadata(lane.surface).typeDeclarations,
+          ),
         };
         continue;
       }
@@ -134,108 +192,11 @@ export async function finishBatchInferenceResults(
         );
       }
     }
+    createdBuffers.length = 0;
   } finally {
     if (outputMapped) outputReadback?.unmap();
     outputReadback?.destroy();
-  }
-}
-
-export async function createCompletedBatchModules(
-  device: GPUDevice,
-  lanes: readonly BatchLane[],
-  terminal: readonly (TerminalInference | undefined)[],
-  completedInference: readonly (CompletedInference | undefined)[],
-  results: (LazuliCompileResult | undefined)[],
-  coreSource: GPUBuffer,
-  definitionSource: GPUBuffer,
-  constructorSource: GPUBuffer,
-): Promise<void> {
-  const created: GPUBuffer[] = [];
-  let completionReadback: GPUBuffer | undefined;
-  let completionMapped = false;
-  try {
-    const commands = device.createCommandEncoder({ label: "Extract packed Lazuli modules" });
-    for (const [laneIndex, lane] of lanes.entries()) {
-      const completedType = completedInference[laneIndex];
-      if (completedType === undefined) continue;
-      const nodeBuffer = device.createBuffer({
-        label: `Lazuli packed lane ${lane.resultIndex} core nodes`,
-        size: Math.max(LAZULI_NODE_BYTE_LENGTH, lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH),
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
-      });
-      const definitionBuffer = device.createBuffer({
-        label: `Lazuli packed lane ${lane.resultIndex} definitions`,
-        size: Math.max(
-          LAZULI_DEFINITION_BYTE_LENGTH,
-          lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
-        ),
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
-      });
-      const constructorBuffer = device.createBuffer({
-        label: `Lazuli packed lane ${lane.resultIndex} constructors`,
-        size: Math.max(
-          LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-          lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-        ),
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
-      });
-      created.push(nodeBuffer, definitionBuffer, constructorBuffer);
-      commands.copyBufferToBuffer(
-        coreSource,
-        lane.nodeBase * LAZULI_NODE_BYTE_LENGTH,
-        nodeBuffer,
-        0,
-        lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH,
-      );
-      commands.copyBufferToBuffer(
-        definitionSource,
-        lane.definitionBase * LAZULI_DEFINITION_BYTE_LENGTH,
-        definitionBuffer,
-        0,
-        lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
-      );
-      if (lane.surface.constructorCount > 0) {
-        commands.copyBufferToBuffer(
-          constructorSource,
-          lane.constructorBase * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-          constructorBuffer,
-          0,
-          lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-        );
-      }
-      results[lane.resultIndex] = {
-        ok: true,
-        module: new CompiledGpuLazuliModule(
-          device,
-          nodeBuffer,
-          definitionBuffer,
-          constructorBuffer,
-          lane.surface,
-          completedType.entryDefinition,
-          completedType.mainType,
-          completedType.typeDeclarations,
-        ),
-      };
-      if (terminal[laneIndex] === undefined) {
-        throw new Error(`Lazuli packed lane ${lane.resultIndex} lost its terminal state`);
-      }
-    }
-    completionReadback = device.createBuffer({
-      label: "Lazuli packed module extraction completion",
-      size: WORD_BYTES,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
-    commands.copyBufferToBuffer(coreSource, 0, completionReadback, 0, WORD_BYTES);
-    device.queue.submit([commands.finish()]);
-    await completionReadback.mapAsync(GPUMapMode.READ);
-    completionMapped = true;
-    completionReadback.unmap();
-    completionMapped = false;
-    created.length = 0;
-  } finally {
-    if (completionMapped) completionReadback?.unmap();
-    completionReadback?.destroy();
-    for (const buffer of created) buffer.destroy();
+    for (const buffer of createdBuffers) buffer.destroy();
   }
 }
 
