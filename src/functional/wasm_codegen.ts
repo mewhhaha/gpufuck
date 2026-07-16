@@ -40,6 +40,10 @@ type ValueSource =
   | { readonly kind: "i32-pointer"; readonly index: number }
   | { readonly kind: "capture"; readonly byteOffset: number };
 
+// `undefined` marks a binding that is in scope but pruned from this closure's
+// captures because its body never references it.
+type FunctionalEnvironment = readonly (ValueSource | undefined)[];
+
 interface HostField {
   readonly capability: string;
   readonly declaration: FunctionalHostFieldDeclaration;
@@ -56,6 +60,7 @@ export type FunctionalWasmValue = FunctionalWasmHostValue;
 
 export interface FunctionalWasmStats {
   readonly thunkEvaluations: number;
+  readonly allocatedBytes: number;
 }
 
 export interface FunctionalWasmExecution {
@@ -106,6 +111,13 @@ export async function runFunctionalWasmModule(
       `functional WASM entry d${module.entryDefinition} did not export a callable main function`,
     );
   }
+  const heapTop = instantiated.instance.exports.heapTop;
+  if (!(heapTop instanceof WebAssembly.Global)) {
+    throw new Error(
+      `functional WASM entry d${module.entryDefinition} did not export its allocator heap top`,
+    );
+  }
+  const heapBase = Number(heapTop.value);
   let result: number;
   try {
     result = exportedMain() as number;
@@ -131,7 +143,10 @@ export async function runFunctionalWasmModule(
     bytes,
     instance: instantiated.instance,
     value,
-    stats: { thunkEvaluations: Number(thunkEvaluations.value) },
+    stats: {
+      thunkEvaluations: Number(thunkEvaluations.value),
+      allocatedBytes: Number(heapTop.value) - heapBase,
+    },
   };
 }
 
@@ -351,7 +366,7 @@ class FunctionalWasmCompiler {
   compileExpression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
   ): void {
     const node = this.node(nodeIndex);
     switch (node.tag) {
@@ -361,17 +376,10 @@ class FunctionalWasmCompiler {
       case FunctionalCoreTag.Boolean:
         instructions.i64Const((BigInt(node.payload) << 3n) | 2n);
         return;
-      case FunctionalCoreTag.Local: {
-        const source = environment[node.payload];
-        if (source === undefined) {
-          throw new Error(
-            `functional WASM local depth ${node.payload} at core node ${nodeIndex} exceeds environment depth ${environment.length}`,
-          );
-        }
-        this.emitValueSource(instructions, source);
+      case FunctionalCoreTag.Local:
+        this.emitValueSource(instructions, this.localSource(environment, node.payload, nodeIndex));
         this.emitForceValue(instructions);
         return;
-      }
       case FunctionalCoreTag.Global:
         if (node.payload >= this.#module.definitionCount) {
           throw new Error(
@@ -436,31 +444,28 @@ class FunctionalWasmCompiler {
   compileLambda(
     instructions: WasmInstructions,
     bodyNode: number,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
   ): void {
     const slot = this.reserveIndirectFunction();
+    const captured = this.prunedCaptures(bodyNode, 1, environment, OBJECT_HEADER_BYTE_LENGTH, 0);
     const bodyInstructions = new WasmInstructions(2);
-    const capturedEnvironment: ValueSource[] = environment.map((_, index) => ({
-      kind: "capture",
-      byteOffset: OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH,
-    }));
     this.compileExpression(
       bodyInstructions,
       bodyNode,
-      [{ kind: "i64-local", index: 1 }, ...capturedEnvironment],
+      [{ kind: "i64-local", index: 1 }, ...captured.environment],
     );
     this.#indirectFunctions[slot] = functionBody(
       2,
       bodyInstructions,
       `lambda core node ${bodyNode}`,
     );
-    this.emitClosure(instructions, slot, environment);
+    this.emitClosure(instructions, slot, captured.sources);
   }
 
   compileApply(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
   ): void {
     this.compileExpression(instructions, node.child0, environment);
     instructions.emit(0xa7);
@@ -473,7 +478,7 @@ class FunctionalWasmCompiler {
     ) {
       this.compileExpression(instructions, node.child1, environment);
     } else {
-      this.compileThunk(instructions, node.child1, environment);
+      this.compileLazyOperand(instructions, node.child1, environment);
     }
     instructions.localGet(closure);
     instructions.i32Load(4);
@@ -485,12 +490,12 @@ class FunctionalWasmCompiler {
   compileLet(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
   ): void {
     if (this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0)) {
       this.compileExpression(instructions, node.child0, environment);
     } else {
-      this.compileThunk(instructions, node.child0, environment);
+      this.compileLazyOperand(instructions, node.child0, environment);
     }
     const value = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(value);
@@ -504,7 +509,7 @@ class FunctionalWasmCompiler {
   compileLetRec(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
     const lambda = this.node(node.child0);
@@ -514,18 +519,22 @@ class FunctionalWasmCompiler {
       );
     }
     const slot = this.reserveIndirectFunction();
-    const bodyInstructions = new WasmInstructions(2);
-    const capturedEnvironment: ValueSource[] = Array.from(
-      { length: environment.length + 1 },
-      (_, index) => ({
-        kind: "capture",
-        byteOffset: OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH,
-      }),
+    const captured = this.prunedCaptures(
+      lambda.child0,
+      2,
+      environment,
+      OBJECT_HEADER_BYTE_LENGTH,
+      1,
     );
+    const bodyInstructions = new WasmInstructions(2);
     this.compileExpression(
       bodyInstructions,
       lambda.child0,
-      [{ kind: "i64-local", index: 1 }, ...capturedEnvironment],
+      [
+        { kind: "i64-local", index: 1 },
+        { kind: "capture", byteOffset: OBJECT_HEADER_BYTE_LENGTH },
+        ...captured.environment,
+      ],
     );
     this.#indirectFunctions[slot] = functionBody(
       2,
@@ -537,13 +546,13 @@ class FunctionalWasmCompiler {
       instructions,
       CLOSURE_OBJECT_KIND,
       slot,
-      environment.length + 1,
+      captured.sources.length + 1,
     );
     instructions.localGet(pointer);
     instructions.localGet(pointer);
     instructions.emit(0xad);
     instructions.i64Store(OBJECT_HEADER_BYTE_LENGTH);
-    for (const [index, source] of environment.entries()) {
+    for (const [index, source] of captured.sources.entries()) {
       instructions.localGet(pointer);
       this.emitValueSource(instructions, source);
       instructions.i64Store(OBJECT_HEADER_BYTE_LENGTH + (index + 1) * VALUE_BYTE_LENGTH);
@@ -558,7 +567,7 @@ class FunctionalWasmCompiler {
   compileIf(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
   ): void {
     this.compileExpression(instructions, node.child0, environment);
     instructions.i64Const(10n);
@@ -572,7 +581,7 @@ class FunctionalWasmCompiler {
   compileUnary(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
     if (node.payload !== FunctionalUnaryOperator.Negate) {
@@ -590,7 +599,7 @@ class FunctionalWasmCompiler {
   compileBinary(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
     this.compileExpression(instructions, node.child0, environment);
@@ -658,7 +667,7 @@ class FunctionalWasmCompiler {
   compileCase(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
     this.compileExpression(instructions, node.child0, environment);
@@ -672,7 +681,7 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     armIndex: number,
     constructor: number,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
     caseNodeIndex: number,
   ): void {
     let currentArmIndex = armIndex;
@@ -721,24 +730,154 @@ class FunctionalWasmCompiler {
     for (let index = 0; index < openArmCount; index++) instructions.emit(0x0b);
   }
 
+  compileLazyOperand(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const node = this.node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Local) {
+      this.emitValueSource(instructions, this.localSource(environment, node.payload, nodeIndex));
+      return;
+    }
+    if (node.tag === FunctionalCoreTag.Global) {
+      if (node.payload >= this.#module.definitionCount) {
+        throw new Error(
+          `functional WASM global d${node.payload} at core node ${nodeIndex} exceeds ${this.#module.definitionCount} definitions`,
+        );
+      }
+      instructions.i32Const(node.payload * VALUE_BYTE_LENGTH);
+      instructions.i64Load(0);
+      return;
+    }
+    this.compileThunk(instructions, nodeIndex, environment);
+  }
+
   compileThunk(
     instructions: WasmInstructions,
     expressionNode: number,
-    environment: readonly ValueSource[],
+    environment: FunctionalEnvironment,
   ): void {
     const slot = this.reserveIndirectFunction();
+    const captured = this.prunedCaptures(
+      expressionNode,
+      0,
+      environment,
+      THUNK_HEADER_BYTE_LENGTH,
+      0,
+    );
     const bodyInstructions = new WasmInstructions(1);
-    const capturedEnvironment: ValueSource[] = environment.map((_, index) => ({
-      kind: "capture",
-      byteOffset: THUNK_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH,
-    }));
-    this.compileExpression(bodyInstructions, expressionNode, capturedEnvironment);
+    this.compileExpression(bodyInstructions, expressionNode, captured.environment);
     this.#indirectFunctions[slot] = functionBody(
       4,
       bodyInstructions,
       `thunk core node ${expressionNode}`,
     );
-    this.emitThunkObject(instructions, slot, environment);
+    this.emitThunkObject(instructions, slot, captured.sources);
+  }
+
+  localSource(
+    environment: FunctionalEnvironment,
+    depth: number,
+    nodeIndex: number,
+  ): ValueSource {
+    const source = environment[depth];
+    if (source !== undefined) return source;
+    throw new Error(
+      depth < environment.length
+        ? `functional WASM local depth ${depth} at core node ${nodeIndex} was pruned from its closure captures`
+        : `functional WASM local depth ${depth} at core node ${nodeIndex} exceeds environment depth ${environment.length}`,
+    );
+  }
+
+  prunedCaptures(
+    bodyNode: number,
+    binderDepth: number,
+    environment: FunctionalEnvironment,
+    headerByteLength: number,
+    reservedSlots: number,
+  ): {
+    readonly sources: readonly ValueSource[];
+    readonly environment: FunctionalEnvironment;
+  } {
+    const free = new Set<number>();
+    this.collectFreeLocals(bodyNode, binderDepth, free);
+    const sources: ValueSource[] = [];
+    const captured: (ValueSource | undefined)[] = Array.from(
+      { length: environment.length },
+      () => undefined,
+    );
+    for (const depth of [...free].sort((left, right) => left - right)) {
+      if (depth >= environment.length) continue;
+      const source = environment[depth];
+      if (source === undefined) {
+        throw new Error(
+          `functional WASM closure at core node ${bodyNode} referenced local depth ${
+            depth + binderDepth
+          } that an enclosing closure pruned`,
+        );
+      }
+      captured[depth] = {
+        kind: "capture",
+        byteOffset: headerByteLength + (reservedSlots + sources.length) * VALUE_BYTE_LENGTH,
+      };
+      sources.push(source);
+    }
+    return { sources, environment: captured };
+  }
+
+  collectFreeLocals(nodeIndex: number, binderDepth: number, free: Set<number>): void {
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.Boolean:
+      case FunctionalCoreTag.Global:
+      case FunctionalCoreTag.Constructor:
+        return;
+      case FunctionalCoreTag.Local:
+        if (node.payload >= binderDepth) free.add(node.payload - binderDepth);
+        return;
+      case FunctionalCoreTag.Lambda:
+        this.collectFreeLocals(node.child0, binderDepth + 1, free);
+        return;
+      case FunctionalCoreTag.Apply:
+      case FunctionalCoreTag.Binary:
+        this.collectFreeLocals(node.child0, binderDepth, free);
+        this.collectFreeLocals(node.child1, binderDepth, free);
+        return;
+      case FunctionalCoreTag.Unary:
+        this.collectFreeLocals(node.child0, binderDepth, free);
+        return;
+      case FunctionalCoreTag.Let:
+        this.collectFreeLocals(node.child0, binderDepth, free);
+        this.collectFreeLocals(node.child1, binderDepth + 1, free);
+        return;
+      case FunctionalCoreTag.LetRec:
+        this.collectFreeLocals(node.child0, binderDepth + 1, free);
+        this.collectFreeLocals(node.child1, binderDepth + 1, free);
+        return;
+      case FunctionalCoreTag.If:
+        this.collectFreeLocals(node.child0, binderDepth, free);
+        this.collectFreeLocals(node.child1, binderDepth, free);
+        this.collectFreeLocals(node.child2, binderDepth, free);
+        return;
+      case FunctionalCoreTag.Case: {
+        this.collectFreeLocals(node.child0, binderDepth, free);
+        let armIndex = node.child1;
+        while (armIndex !== FUNCTIONAL_NO_INDEX) {
+          const arm = this.node(armIndex);
+          if (arm.tag !== FunctionalCoreTag.CaseArm) return;
+          this.collectFreeLocals(arm.child0, binderDepth, free);
+          armIndex = arm.child1;
+        }
+        return;
+      }
+      case FunctionalCoreTag.PatternBind:
+        this.collectFreeLocals(node.child0, binderDepth + 1, free);
+        return;
+      case FunctionalCoreTag.CaseArm:
+        return;
+    }
   }
 
   emitThunkObject(

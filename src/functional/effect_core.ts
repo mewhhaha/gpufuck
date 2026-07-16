@@ -189,18 +189,20 @@ export class GpuFunctionalEffectCoreVerifier {
         GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         buffers,
       );
+      // Freshly created WebGPU buffers are guaranteed zero-initialized, which is
+      // the state the shader expects for results and parents.
       const resultBuffer = createBuffer(
         this.#device,
         "Functional Effect Core results",
         resultByteLength,
-        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        GPUBufferUsage.STORAGE,
         buffers,
       );
       const parentBuffer = createBuffer(
         this.#device,
         "Functional Effect Core parents",
         parentByteLength,
-        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        GPUBufferUsage.STORAGE,
         buffers,
       );
       const stateBuffer = createBuffer(
@@ -233,8 +235,6 @@ export class GpuFunctionalEffectCoreVerifier {
           prepared.operationWords.byteLength,
         );
       }
-      this.#device.queue.writeBuffer(resultBuffer, 0, new Uint32Array(resultByteLength / 4));
-      this.#device.queue.writeBuffer(parentBuffer, 0, new Uint32Array(parentByteLength / 4));
       this.#device.queue.writeBuffer(stateBuffer, 0, stateWords);
 
       const bindGroup = this.#device.createBindGroup({
