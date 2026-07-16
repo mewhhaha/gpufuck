@@ -63,6 +63,7 @@ export const LazuliTypeSchemaTag = {
   Tuple: 5,
   Named: 6,
   Function: 7,
+  Forall: 8,
 } as const;
 
 export type LazuliTypeSchemaTag = (typeof LazuliTypeSchemaTag)[keyof typeof LazuliTypeSchemaTag];
@@ -148,12 +149,20 @@ export function flattenLazuliTypeSchemas(
             } omitted field ${fieldIndex}.`,
           );
         }
+        if (containsForall(field.type)) {
+          throw new Error(
+            `constructor ${constructorIndex} field ${fieldIndex} cannot contain rank-2 forall`,
+          );
+        }
         constructorFieldRoots.push(schemaEncoder.encode(
           field.type,
           `constructor ${constructorIndex} field ${fieldIndex}`,
         ));
       }
       constructorFieldOffsets.push(constructorFieldRoots.length);
+      if (constructor.result !== undefined && containsForall(constructor.result)) {
+        throw new Error(`constructor ${constructorIndex} result cannot contain rank-2 forall`);
+      }
       constructorResultRoots.push(schemaEncoder.encode(
         constructor.result ?? synthesizedConstructorResult(declaration, constructor.name),
         `constructor ${constructorIndex} result`,
@@ -178,6 +187,10 @@ export function flattenLazuliTypeSchemas(
       throw new Error(`Lazuli type metadata omitted definition ${definitionIndex}.`);
     }
     if (definitionType.annotation !== null) {
+      validateRank2DefinitionSchema(
+        definitionType.annotation,
+        `definition ${definitionIndex} annotation`,
+      );
       definitionAnnotationRoots[definitionIndex] = schemaEncoder.encode(
         definitionType.annotation,
         `definition ${definitionIndex} annotation`,
@@ -195,6 +208,91 @@ export function flattenLazuliTypeSchemas(
     Uint32Array.from(constructorFieldRoots),
     Uint32Array.from(constructorResultRoots),
   ], identifiers.names);
+}
+
+function validateRank2DefinitionSchema(schema: LazuliTypeSchema, context: string): void {
+  const forallNames = new Set<string>();
+  const freeParameters = new Set<string>();
+  const visit = (
+    current: LazuliTypeSchema,
+    forallAllowed: boolean,
+    insideForall: boolean,
+    bound: ReadonlySet<string>,
+  ): void => {
+    switch (current.kind) {
+      case "integer":
+      case "boolean":
+      case "unit":
+      case "parameter":
+        if (current.kind === "parameter" && !bound.has(current.name)) {
+          freeParameters.add(current.name);
+        }
+        return;
+      case "tuple":
+        visit(current.values[0], false, insideForall, bound);
+        visit(current.values[1], false, insideForall, bound);
+        return;
+      case "named":
+        for (const argument of current.arguments) visit(argument, false, insideForall, bound);
+        return;
+      case "function":
+        visit(current.parameter, !insideForall && !forallAllowed, insideForall, bound);
+        visit(current.result, false, insideForall, bound);
+        return;
+      case "forall": {
+        if (!forallAllowed) {
+          throw new Error(`${context} places forall deeper than rank 2`);
+        }
+        if (current.parameters.length === 0) {
+          throw new Error(`${context} forall must bind at least one type parameter`);
+        }
+        const nested = new Set(bound);
+        for (const parameter of current.parameters) {
+          requireTypeName(parameter, `${context} forall parameter`);
+          if (nested.has(parameter)) {
+            throw new Error(
+              `${context} repeats forall parameter ${JSON.stringify(parameter)}`,
+            );
+          }
+          if (forallNames.has(parameter)) {
+            throw new Error(
+              `${context} repeats forall parameter ${JSON.stringify(parameter)}`,
+            );
+          }
+          forallNames.add(parameter);
+          nested.add(parameter);
+        }
+        visit(current.body, false, true, nested);
+        return;
+      }
+    }
+  };
+  visit(schema, false, false, new Set());
+  for (const parameter of forallNames) {
+    if (freeParameters.has(parameter)) {
+      throw new Error(
+        `${context} uses ${JSON.stringify(parameter)} as both free and forall-bound`,
+      );
+    }
+  }
+}
+
+function containsForall(schema: LazuliTypeSchema): boolean {
+  switch (schema.kind) {
+    case "forall":
+      return true;
+    case "tuple":
+      return containsForall(schema.values[0]) || containsForall(schema.values[1]);
+    case "named":
+      return schema.arguments.some(containsForall);
+    case "function":
+      return containsForall(schema.parameter) || containsForall(schema.result);
+    case "integer":
+    case "boolean":
+    case "unit":
+    case "parameter":
+      return false;
+  }
 }
 
 /** Serializes a concrete inferred type using the same records as `schemaWords`. */
@@ -406,6 +504,29 @@ function decodeLazuliTypeRecords(
           }
           return Object.freeze({ kind: "function", parameter, result });
         }
+        case LazuliTypeSchemaTag.Forall: {
+          const parameter = symbolName(identifierNames, symbol, index);
+          const values = children(1);
+          const body = values[0];
+          if (body === undefined) {
+            throw new Error(`Lazuli forall schema record ${index} omitted its body.`);
+          }
+          if (!allowParameters) {
+            throw new Error(`Lazuli inferred type record ${index} must not be a forall.`);
+          }
+          if (body.kind === "forall") {
+            return Object.freeze({
+              kind: "forall",
+              parameters: Object.freeze([parameter, ...body.parameters]),
+              body: body.body,
+            });
+          }
+          return Object.freeze({
+            kind: "forall",
+            parameters: Object.freeze([parameter]),
+            body,
+          });
+        }
         default:
           throw new Error(`Lazuli type schema record ${index} has unsupported tag ${tag}.`);
       }
@@ -551,6 +672,25 @@ class TypeSchemaEncoder {
         write(LazuliTypeSchemaTag.Function);
         attachChildren([type.parameter, type.result]);
         return index;
+      case "forall": {
+        if (!Array.isArray(type.parameters) || type.parameters.length === 0) {
+          throw new Error(`${context} forall must bind at least one type parameter.`);
+        }
+        const [parameter, ...remaining] = type.parameters;
+        if (parameter === undefined) {
+          throw new Error(`${context} forall omitted its first type parameter.`);
+        }
+        requireTypeName(parameter, `${context} forall parameter`);
+        write(
+          LazuliTypeSchemaTag.Forall,
+          this.#identifiers.parameterId(parameter, `${context} forall parameter`),
+        );
+        const body: LazuliTypeSchema = remaining.length === 0
+          ? type.body
+          : { kind: "forall", parameters: remaining, body: type.body };
+        attachChildren([body]);
+        return index;
+      }
       default:
         throw new Error(`${context} has an unsupported Lazuli type kind.`);
     }

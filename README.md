@@ -147,6 +147,43 @@ strict, so fixtures are intentionally pure and total. A production OCaml fronten
 evaluation profile or explicit forcing operations before programs whose behavior depends on
 evaluation order can be supported faithfully.
 
+## 1SubML functional profile
+
+The [1SubML](https://github.com/Storyyeller/1subml) fixture tests another frontend shape: expression
+blocks, right-associative application, and a unified value/module language where immutable records
+serve as modules. Its host adapter converts each anonymous record field set into one generated
+parametric core type. Record field values remain unannotated, so the GPU still resolves names and
+infers their concrete function and value types.
+
+```sh
+deno task run:onesubml-functional examples/onesubml-functional/factorial.ml
+deno task run:onesubml-functional examples/onesubml-functional/modules.ml
+deno task run:onesubml-functional examples/onesubml-functional/combinators.ml
+deno task run:onesubml-functional examples/onesubml-functional/blocks.ml
+deno task run:onesubml-functional examples/onesubml-functional/rank2.ml
+```
+
+Generate the same source-to-surface-to-core trace as the other interoperability profiles:
+
+```sh
+deno task trace:onesubml-functional \
+  examples/onesubml-functional/modules.ml \
+  examples/onesubml-functional/modules.trace.md
+```
+
+The [1SubML example index](examples/onesubml-functional/README.md) links all sources and traces and
+contains the exact support matrix. This first profile covers pure i32 and boolean expressions,
+sequential and recursive bindings, lambdas, tuples, immutable anonymous records, field projection,
+conditionals, arithmetic, and annotated rank-2 polymorphic function parameters. It preserves
+1SubML's sequential scope, explicit generic functions, and right-associative calls.
+
+This is deliberately not a claim of full 1SubML compatibility. Structural width subtyping, variants,
+mutable records, loops, arbitrary-precision integers, floats, strings, newtypes, subsumption and
+implicit coercions, existential module members, rank-3 or impredicative types, higher-kinded source
+types, imports, and effects are not implemented. Record shapes must currently be evident at the
+projection site rather than inferred through function parameters or results. Those omissions
+identify concrete backend/frontend milestones instead of silently giving them nominal semantics.
+
 ## Haskell functional profile
 
 The Haskell fixture is a closer semantic match for the current lazy functional core. Its examples
@@ -226,18 +263,20 @@ functional core rather than requiring syntax-specific shader paths. A frontend m
 and structural packing, but production name resolution, dependency analysis, type inference,
 coverage checking, and core lowering belong to the GPU backend.
 
-Language neutrality also applies to semantics. The current implementation provides a lazy,
-Hindley–Milner-plus-indexed-types profile. A strict frontend will need either an explicit strictness
-profile or forcing constructs in its lowering; a language with its own type system should be able to
-submit a pretyped module for GPU verification instead of being forced through HM inference. Effects
-and module systems can be lowered into explicit core values and operations rather than becoming
-parser-specific backend branches.
+Language neutrality also applies to semantics. The current implementation provides lazy
+Hindley–Milner-plus-indexed-types and predicative-rank-2 profiles. Rank-2 annotations may place
+`forall` at a function-parameter boundary; generalized arguments are instantiated independently at
+each use, while deeper or impredicative quantifiers are rejected. A strict frontend will need either
+an explicit strictness profile or forcing constructs in its lowering; a language with its own type
+system should be able to submit a pretyped module for GPU verification instead of being forced
+through inference. Effects and module systems can be lowered into explicit core values and
+operations rather than becoming parser-specific backend branches.
 
 The functional API does not assume Lazuli keywords, its Baba parser, or its source diagnostic
 prefix. Likewise, the Brainfuck instruction format is not a backend IR. ABI v5 currently accepts the
-`lazy-call-by-need-v1` evaluation profile and `hindley-milner-indexed-v1` typechecking profile;
-profile metadata is versioned so later strict or pretyped frontends do not silently receive the
-wrong semantics.
+`lazy-call-by-need-v1` evaluation profile with either `hindley-milner-indexed-v1` or
+`predicative-rank2-indexed-v1` typechecking; profile metadata prevents a rank-1 module from silently
+acquiring first-class polymorphic parameters.
 
 ## Compile-time Type Core
 
@@ -524,9 +563,11 @@ The implementation keeps the boundary explicit:
    backend results in tests and produces the evaluator-specific traces; it is not the normal runtime
    used by the Rust, Haskell, and OCaml `run` commands.
 
-The TypeScript inference implementation is a differential-test oracle, not a production fallback.
-Parsing, syntax-specific desugaring, structural schema packing, and WASM byte emission remain
-host-side; semantic resolution, type inference, and core lowering are GPU-side.
+The TypeScript inference implementation is a rank-1/indexed differential-test oracle, not a
+production fallback. Rank-2 schemes are checked only by the production GPU path and covered by
+canonical-schema, positive/negative subsumption, fuel, and dispatch-quantum tests. Parsing,
+syntax-specific desugaring, structural schema packing, and WASM byte emission remain host-side;
+semantic resolution, type inference, and core lowering are GPU-side.
 
 The direct WASM backend currently exports scalar `integer`, `boolean`, and `unit` entries, including
 entries shaped as `$FunctionalInitType -> scalar`. Its runtime representation supports higher-order
@@ -814,10 +855,11 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
 - Compilation has a default budget of 1,000,000 persistent semantic transitions and returns `L1003`
   when that fuel is exhausted.
 - The current functional core uses Hindley–Milner inference with GADT-style indexed constructor
-  results, not full dependent types. Ordinary and recursive bindings are inferred, including indexed
-  cases with a concrete result or a result fixed by their context. An annotation remains necessary
-  when it selects a non-principal indexed contract whose result depends on an arm-local refinement.
-  The entry definition must resolve to a concrete type.
+  results plus predicative rank-2 function parameters, not full dependent or impredicative types.
+  Ordinary and recursive bindings are inferred, including indexed cases with a concrete result or a
+  result fixed by their context. An annotation remains necessary at a rank-2 parameter and when it
+  selects a non-principal indexed contract whose result depends on an arm-local refinement. The
+  entry definition must resolve to a concrete type.
 - Every type parameter used by an indexed constructor field must be a bare, direct argument of that
   constructor's result. Existential field recovery is not implemented.
 - Proof witnesses are runtime values and are not erased. Primitive operand errors, constructor

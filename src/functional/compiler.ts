@@ -29,6 +29,7 @@ import {
   type FunctionalDiagnosticCode,
   FunctionalEvaluationProfile,
   FunctionalTypecheckingProfile,
+  type FunctionalTypeSchema,
 } from "./abi.ts";
 import { CompilationAdmissionQueue } from "./compilation_admission.ts";
 import type { FunctionalEffectCoreModule } from "./effect_core_contract.ts";
@@ -340,13 +341,37 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
       } is unsupported; expected ${JSON.stringify(FunctionalEvaluationProfile.LazyCallByNeed)}`,
     );
   }
-  if (module.typecheckingProfile !== FunctionalTypecheckingProfile.HindleyMilnerIndexed) {
+  if (
+    module.typecheckingProfile !== FunctionalTypecheckingProfile.HindleyMilnerIndexed &&
+    module.typecheckingProfile !== FunctionalTypecheckingProfile.PredicativeRank2Indexed
+  ) {
     throw new Error(
       `functional module typechecking profile ${
         JSON.stringify(module.typecheckingProfile)
       } is unsupported; expected ${
         JSON.stringify(FunctionalTypecheckingProfile.HindleyMilnerIndexed)
-      }`,
+      } or ${JSON.stringify(FunctionalTypecheckingProfile.PredicativeRank2Indexed)}`,
+    );
+  }
+  const declaresRank2 =
+    module.definitionTypes.some((definition) =>
+      definition.annotation !== null && schemaContainsForall(definition.annotation)
+    ) || module.typeDeclarations.some((declaration) =>
+      declaration.constructors.some((constructor) =>
+        constructor.fields.some((field) =>
+          schemaContainsForall(field.type)
+        ) ||
+        constructor.result !== undefined && schemaContainsForall(constructor.result)
+      )
+    );
+  if (
+    declaresRank2 !==
+      (module.typecheckingProfile === FunctionalTypecheckingProfile.PredicativeRank2Indexed)
+  ) {
+    throw new Error(
+      `functional module typechecking profile ${
+        JSON.stringify(module.typecheckingProfile)
+      } does not match rank-2 schema presence ${declaresRank2}`,
     );
   }
   validatePrimitiveCapabilities(module.primitiveCapabilities);
@@ -387,6 +412,24 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
     throw new Error(
       `functional module has ${module.typeDeclarations.length} type declarations for ${module.typeCount} type records`,
     );
+  }
+}
+
+function schemaContainsForall(schema: FunctionalTypeSchema): boolean {
+  switch (schema.kind) {
+    case "forall":
+      return true;
+    case "tuple":
+      return schemaContainsForall(schema.values[0]) || schemaContainsForall(schema.values[1]);
+    case "named":
+      return schema.arguments.some(schemaContainsForall);
+    case "function":
+      return schemaContainsForall(schema.parameter) || schemaContainsForall(schema.result);
+    case "integer":
+    case "boolean":
+    case "unit":
+    case "parameter":
+      return false;
   }
 }
 

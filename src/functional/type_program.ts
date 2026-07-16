@@ -524,6 +524,8 @@ function schemaTypeCoreType(schema: FunctionalTypeSchema): TypeCoreType {
         parameter: schemaTypeCoreType(schema.parameter),
         result: schemaTypeCoreType(schema.result),
       };
+    case "forall":
+      throw new Error("Functional Type Core inputs must be monotypes; received forall");
   }
 }
 

@@ -378,10 +378,12 @@ function formatType(type: FunctionalTypeSchema | FunctionalType): string {
     }
     case "function":
       return `${
-        type.parameter.kind === "function"
+        type.parameter.kind === "function" || type.parameter.kind === "forall"
           ? `(${formatType(type.parameter)})`
           : formatType(type.parameter)
       } -> ${formatType(type.result)}`;
+    case "forall":
+      return `forall ${type.parameters.join(" ")}. ${formatType(type.body)}`;
   }
 }
 

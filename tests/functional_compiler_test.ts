@@ -7,6 +7,7 @@ import {
   FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH,
   FUNCTIONAL_MODULE_ABI_VERSION,
   FUNCTIONAL_NO_INDEX,
+  FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
   FunctionalCoreTag,
@@ -97,6 +98,78 @@ Deno.test("compiles and evaluates a parser-independent functional module", async
     if (evaluation.ok) {
       deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
     }
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("checks a parser-independent rank-2 function parameter on the GPU", async () => {
+  const identity = {
+    name: "identity",
+    parameters: [],
+    annotation: null,
+    body: surface.lambda("value", surface.name("value")),
+  } as const;
+  const use = {
+    name: "use",
+    parameters: [],
+    annotation: {
+      kind: "function",
+      parameter: {
+        kind: "forall",
+        parameters: ["T"],
+        body: {
+          kind: "function",
+          parameter: { kind: "parameter", name: "T" },
+          result: { kind: "parameter", name: "T" },
+        },
+      },
+      result: {
+        kind: "tuple",
+        values: [{ kind: "integer" }, { kind: "boolean" }],
+      },
+    },
+    body: surface.lambda(
+      "function",
+      surface.apply(
+        surface.apply(
+          surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+          surface.apply(surface.name("function"), surface.integer(42)),
+        ),
+        surface.apply(surface.name("function"), surface.boolean(true)),
+      ),
+    ),
+  } as const;
+  const main = {
+    name: "main",
+    parameters: [],
+    annotation: null,
+    body: {
+      kind: "case",
+      value: surface.apply(surface.name("use"), surface.name("identity")),
+      arms: [{
+        constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        binders: ["answer", "condition"],
+        body: {
+          kind: "if",
+          condition: surface.name("condition"),
+          consequent: surface.name("answer"),
+          alternate: surface.integer(0),
+        },
+      }],
+    },
+  } as const;
+  const module = buildFunctionalSurfaceModule([identity, use, main], [], "main", 0);
+  equal(module.typecheckingProfile, FunctionalTypecheckingProfile.PredicativeRank2Indexed);
+  const { compiler, evaluator } = functionalRuntime();
+  const compilation = await compiler.compileModule(module);
+
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const evaluation = await evaluator.evaluate(compilation.module);
+    ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
+    if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
   } finally {
     compilation.module.destroy();
   }

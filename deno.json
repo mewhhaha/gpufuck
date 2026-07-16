@@ -16,6 +16,7 @@
       "language/lazuli/generated",
       "examples/haskell-functional/*.trace.md",
       "examples/ocaml-functional/*.trace.md",
+      "examples/onesubml-functional/*.trace.md",
       "examples/rust-functional/*.trace.md",
       ".claude"
     ],
@@ -29,16 +30,18 @@
     "compile": "deno run --allow-read cli.ts",
     "compile:lazuli": "deno run --allow-read lazuli_cli.ts compile",
     "generate:lazuli": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@4.0.0/cli language/lazuli/grammar.baba --metadata language/lazuli/baba.json --out language/lazuli/generated --name lazuli --root module --target wasm",
-    "check": "deno check mod.ts functional.ts haskell_functional.ts ocaml_functional.ts rust_functional.ts cli.ts haskell_functional_cli.ts lazuli_cli.ts ocaml_functional_cli.ts rust_functional_cli.ts benchmarks/*.ts tests/*.ts tools/*.ts",
+    "check": "deno check mod.ts functional.ts haskell_functional.ts ocaml_functional.ts onesubml_functional.ts rust_functional.ts cli.ts haskell_functional_cli.ts lazuli_cli.ts ocaml_functional_cli.ts onesubml_functional_cli.ts rust_functional_cli.ts benchmarks/*.ts tests/*.ts tools/*.ts",
     "fmt": "deno fmt --check",
     "lint": "deno lint",
     "run:lazuli": "deno run --allow-read lazuli_cli.ts run",
     "run:lazuli-batch": "deno run --allow-read lazuli_cli.ts run-batch",
     "run:haskell-functional": "deno run --allow-read haskell_functional_cli.ts run",
     "run:ocaml-functional": "deno run --allow-read ocaml_functional_cli.ts run",
+    "run:onesubml-functional": "deno run --allow-read onesubml_functional_cli.ts run",
     "run:rust-functional": "deno run --allow-read rust_functional_cli.ts run",
     "trace:haskell-functional": "deno run --allow-read --allow-write haskell_functional_cli.ts trace",
     "trace:ocaml-functional": "deno run --allow-read --allow-write ocaml_functional_cli.ts trace",
+    "trace:onesubml-functional": "deno run --allow-read --allow-write onesubml_functional_cli.ts trace",
     "trace:rust-functional": "deno run --allow-read --allow-write rust_functional_cli.ts trace",
     "test": "DENO_JOBS=2 deno test --parallel --allow-read tests/*.ts"
   }
