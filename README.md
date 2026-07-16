@@ -315,20 +315,36 @@ before producing that first-order input.
 
 ### Algebraic effects
 
-`lowerFunctionalEffectProgram` accepts declared operation signatures, an effect expression built
-from `pure`, `perform`, and `bind`, and explicit handlers. It reports the computation's effect row,
-emits each handler as a precisely annotated functional definition, and lowers the handled program to
-ordinary continuations. GPU inference therefore checks operation parameters, resumption result
-types, and the final value without adding effect-specific shader tags. The resulting effect row is
-empty only after every performed operation has a handler.
+`GpuFunctionalCompiler.compileEffectModule()` accepts a portable Effect Core built from `return`,
+`host-call`, `perform`, `bind`, `branch`, and `handle`. A separate persistent GPU pass validates one
+computation record per transition. Its bottom-up phase checks scalar operation inputs and branch
+results while inferring the operation row; its linear phase requires the root to have no parent and
+every other computation exactly one. Reused or cyclic computation records therefore fail before
+lowering.
+
+Handlers are ordinary `parameter -> result` functions. The shared lowering creates their
+continuations, so user code cannot discard or invoke a resumption twice. Unhandled local operations
+are rejected. Effectful host calls and handled operations lower through a strict, shared
+continuation; pure host calls remain ordinary lazy expressions and may be skipped or memoized by the
+call-by-need core. The resulting surface then goes through the existing GPU name resolver and
+Hindley–Milner inferencer, which independently checks the actual embedded value expressions against
+the Effect Core annotations.
+
+Effect verification and ordinary semantic compilation share the caller's fuel budget.
+`maximumStepsPerDispatch` bounds both stages, cancellation is observed between GPU submissions, and
+`GpuFunctionalModule.entryEffects` records the host requirements remaining at the executable
+boundary. The internal verifier exposes dispatch observations only to deterministic tests.
 
 ```sh
 deno run --allow-read examples/functional-ir/effects.ts
+deno run --allow-read examples/functional-ir/effect_core.ts
 ```
 
-Handled algebraic effects stay entirely inside the compiled module. Operations that escape to the
-host use the separate `Init` capability boundary below; suspended async resumptions are not yet part
-of that synchronous protocol.
+`lowerFunctionalEffectProgram()` remains as a small host-only lowering utility. New frontends should
+prefer Effect Core when they need GPU-verified rows, linear sequencing, fuel, or cancellation.
+Handled algebraic effects stay inside the compiled module. Operations that escape to the host use
+the `Init` capability boundary below; suspended async resumptions are not yet part of this
+synchronous protocol.
 
 ### Host capabilities and `Init`
 
@@ -346,12 +362,11 @@ current host ABI supports `integer`, `boolean`, and `unit` fields, is synchronou
 host exceptions to the caller.
 
 Purity is a frontend contract recorded on each operation as `pure` or `effectful`; the backend never
-guesses it from a JavaScript implementation. A language with effects lowers its sequencing policy
-into demanded dependencies before this boundary. For example, matching the `unit` returned by a
-write forces that write before the matching arm continues. Pure languages can expose only pure
-operations, while a frontend without effect analysis can conservatively label every host operation
-effectful. The shared compiler preserves those dependencies and supplies the runtime mechanism; the
-source language still decides which operations are effects and what its `IO` abstraction means.
+guesses it from a JavaScript implementation. The language decides which operations are effects and
+what its `IO` abstraction means. Effect Core owns the shared sequencing mechanism, so strict and
+lazy frontends do not need separate token-threading implementations. Pure languages can expose only
+pure operations, while a frontend without effect analysis can conservatively label every host
+operation effectful.
 
 ```sh
 deno run --allow-read examples/functional-ir/host_init.ts
@@ -790,6 +805,9 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
 
 ## Deliberate limits
 
+- Effect Core v1 supports synchronous `integer`, `boolean`, and `unit` operation signatures with at
+  most 32 distinct effectful operations per module. Higher-order operation values, open effect-row
+  variables, and suspended asynchronous resumptions remain frontend concerns for now.
 - Source is capped at 1 MiB, surface trees at 65,536 nodes, semantic depth at 512, and constructor
   arity at 64. Extremely deep concrete syntax can reach the generated parser's stack-safe limit
   sooner and returns `L1003`.
