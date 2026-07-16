@@ -629,8 +629,10 @@ examples can return their final integer through `main()`. Lazy-profile globals, 
 arguments, and constructor fields compile to specialized WASM thunks. Each thunk carries a direct
 code-table slot and captured environment; its first force transitions from unevaluated through
 evaluating to a cached value, and recursive forcing traps as a blackhole. Force sites inline the
-evaluated fast path. Conservative demand analysis omits thunks for values already in weak-head
-normal form and bindings or literal lambdas whose next operation must force the value.
+evaluated fast path. Closure conversion captures only referenced lexical bindings and forwards
+existing local or global suspensions without wrapping them. Immediately applied lambdas and
+statically saturated constructors lower directly, partial constructors emit only their remaining
+application stages, and repeated nullary constructors share one immutable object.
 
 ## Bounded work, latency, and batching
 
@@ -653,11 +655,13 @@ seconds even when a normal steady-state compilation takes milliseconds.
 Independent `compileModule()` and compatibility `compile()` calls share a resource-weighted
 admission queue per compiler and can be coalesced into GPU dispatch batches. A single module still
 advances through its own ordered transition machine; batching improves throughput rather than
-changing its semantics. Use `deno task bench:lazuli` for criterion-style measurements and
-`deno task profile:lazuli-compiler` for cold initialization, parser, dispatch, quantum, core
-readback, and concurrent-throughput profiles on the active WebGPU adapter. Profile output includes
-the adapter description and fallback status; software adapters such as llvmpipe are useful for
-correctness and synchronization analysis but do not predict hardware-GPU JIT or execution latency.
+changing its semantics. The `run-batch` CLI submits its source compilations concurrently while
+preserving source-order diagnostics and results. Use `deno task bench:lazuli` for criterion-style
+measurements and `deno task profile:lazuli-compiler` for cold initialization, parser, dispatch,
+quantum, core readback, and concurrent-throughput profiles on the active WebGPU adapter. Profile
+output includes the adapter description and fallback status; software adapters such as llvmpipe are
+useful for correctness and synchronization analysis but do not predict hardware-GPU JIT or execution
+latency.
 
 ## Memory and ownership
 
@@ -682,7 +686,8 @@ temporary region and stack buffers.
 The WASM runtime uses an aligned, growing linear-memory arena for closures, constructors, and
 thunks. A thunk stores its specialized code slot, captures, state, and cached value. The exported
 `thunkEvaluations` counter increments only on the unevaluated slow path, so
-`runFunctionalWasmModule()` reports observable sharing without counting cached forces.
+`runFunctionalWasmModule()` reports observable sharing without counting cached forces. Its
+`allocatedBytes` statistic reports linear-memory growth during initialization and execution.
 
 ## Functional module API
 
@@ -803,12 +808,12 @@ parameters, fields, and optional indexed constructor results.
 `compileFunctionalModuleToWasm()` consumes only a successfully GPU-resolved module and returns valid
 WASM bytes. `runFunctionalWasmModule()` is the convenience path that validates an optional `init`,
 emits, instantiates, calls `main`, decodes its scalar result, and reports the number of thunks
-actually evaluated. Modules without declared host capabilities remain import-free and keep the
-original zero-argument `main()` ABI. The WASM runtime preserves unused bindings, arguments,
-branches, and constructor fields and shares every demanded thunk. `GpuFunctionalEvaluator` remains
-available for differential testing and detailed traces; it accepts recursively nested declared
-constructors and supports weak-head and bounded deep results, batching, fuel, heap, stack, and
-cancellation.
+actually evaluated together with allocated runtime bytes. Modules without declared host capabilities
+remain import-free and keep the original zero-argument `main()` ABI. The WASM runtime preserves
+unused bindings, arguments, branches, and constructor fields and shares every demanded thunk.
+`GpuFunctionalEvaluator` remains available for differential testing and detailed traces; it accepts
+recursively nested declared constructors and supports weak-head and bounded deep results, batching,
+fuel, heap, stack, and cancellation.
 
 ## Lazuli compatibility API
 

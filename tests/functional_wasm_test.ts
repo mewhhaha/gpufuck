@@ -5,6 +5,7 @@ import {
   compileFunctionalModuleToWasm,
   type EncodedFunctionalModule,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+  FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
   type FunctionalSurfaceExpression,
@@ -267,6 +268,53 @@ Deno.test("sequences unit-returning host effects through an explicit demand", as
   }
 });
 
+Deno.test("passes unit host values through the shared nullary constructor", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["ready"],
+          body: {
+            kind: "case",
+            value: surface.name("ready"),
+            arms: [{
+              constructor: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+              binders: [],
+              body: surface.integer(42),
+            }],
+          },
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{ kind: "value", name: "ready", type: { kind: "unit" } }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("unit host value module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      init: { Environment: { ready: { kind: "unit" } } },
+    });
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("rejects missing and ill-typed init fields before WebAssembly execution", async () => {
   const compilation = await functionalWasmRuntime().compiler.compileModule(
     hostInitModule(surface.name("base")),
@@ -394,7 +442,7 @@ Deno.test("eliminates a thunk when demand analysis proves an immediate force", a
   await assertLazyWasmResult(singleDefinitionModule(strictBinding), 42, 1, "strict local binding");
 });
 
-Deno.test("shares a let-bound suspension with a callee instead of wrapping it in a new thunk", async () => {
+Deno.test("shares a let-bound suspension with a callee instead of wrapping it", async () => {
   const module = singleDefinitionModule({
     kind: "let",
     name: "shared",
@@ -405,7 +453,7 @@ Deno.test("shares a let-bound suspension with a callee instead of wrapping it in
   await assertLazyWasmResult(module, 84, 2, "shared local suspension");
 });
 
-Deno.test("shares a global suspension with a callee instead of wrapping it in a new thunk", async () => {
+Deno.test("shares a global suspension with a callee instead of wrapping it", async () => {
   const module = buildFunctionalSurfaceModule(
     [
       {
@@ -429,27 +477,172 @@ Deno.test("shares a global suspension with a callee instead of wrapping it in a 
   await assertLazyWasmResult(module, 84, 2, "shared global suspension");
 });
 
-Deno.test("closures allocate no captures for bindings their bodies never reference", async () => {
-  const applyIdentity = (argument: FunctionalSurfaceExpression): FunctionalSurfaceExpression =>
-    surface.apply(
-      surface.lambda(
-        "outer",
-        surface.apply(surface.lambda("inner", surface.name("inner")), surface.integer(42)),
-      ),
-      argument,
-    );
-  const bare = await runCompiledWasm(singleDefinitionModule(applyIdentity(surface.integer(7))));
-  const scoped = await runCompiledWasm(singleDefinitionModule({
+Deno.test("omits closure captures that the closure body does not reference", async () => {
+  const closure = (body: FunctionalSurfaceExpression): FunctionalSurfaceExpression => ({
     kind: "let",
-    name: "ignored",
-    value: surface.integer(7),
-    body: applyIdentity(surface.name("ignored")),
+    name: "outer",
+    value: surface.integer(40),
+    body: {
+      kind: "let",
+      name: "function",
+      value: surface.lambda("inner", body),
+      body: surface.apply(surface.name("function"), surface.integer(2)),
+    },
+  });
+  const captured = await runCompiledWasm(singleDefinitionModule(closure(
+    surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.name("outer"),
+      surface.name("inner"),
+    ),
+  )));
+  const pruned = await runCompiledWasm(
+    singleDefinitionModule(closure(surface.name("inner"))),
+  );
+
+  deepStrictEqual(captured.value, { kind: "integer", value: 42 });
+  deepStrictEqual(pruned.value, { kind: "integer", value: 2 });
+  equal(captured.stats.allocatedBytes - pruned.stats.allocatedBytes, 8);
+});
+
+Deno.test("omits thunk captures that the suspended expression does not reference", async () => {
+  const applySuspension = (argument: FunctionalSurfaceExpression): FunctionalSurfaceExpression => ({
+    kind: "let",
+    name: "outer",
+    value: surface.integer(40),
+    body: surface.apply(doubleWithoutImmediateForce(), argument),
+  });
+  const captured = await runCompiledWasm(singleDefinitionModule(applySuspension(
+    surface.binary(FunctionalBinaryOperator.Add, surface.name("outer"), surface.integer(2)),
+  )));
+  const pruned = await runCompiledWasm(singleDefinitionModule(applySuspension(
+    surface.binary(FunctionalBinaryOperator.Add, surface.integer(1), surface.integer(1)),
+  )));
+
+  deepStrictEqual(captured.value, { kind: "integer", value: 84 });
+  deepStrictEqual(pruned.value, { kind: "integer", value: 4 });
+  equal(captured.stats.allocatedBytes - pruned.stats.allocatedBytes, 8);
+});
+
+Deno.test("omits a let-rec self capture when the function is not recursive", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "constant",
+    value: surface.lambda("ignored", surface.integer(42)),
+    body: surface.apply(surface.name("constant"), surface.integer(0)),
   }));
 
-  deepStrictEqual(bare.value, { kind: "integer", value: 42 });
-  deepStrictEqual(scoped.value, { kind: "integer", value: 42 });
-  ok(bare.stats.allocatedBytes > 0, "the WASM allocator reported no heap growth");
-  equal(scoped.stats.allocatedBytes, bare.stats.allocatedBytes);
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 40);
+});
+
+Deno.test("immediately applied lambdas allocate no closure", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule(
+    surface.apply(
+      surface.lambda(
+        "value",
+        surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("value"),
+          surface.integer(1),
+        ),
+      ),
+      surface.integer(41),
+    ),
+  ));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 24);
+});
+
+Deno.test("saturated constructors allocate their result without staged closures", async () => {
+  const pair = surface.apply(
+    surface.apply(surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME), surface.integer(20)),
+    surface.integer(22),
+  );
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "case",
+    value: pair,
+    arms: [{
+      constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+      binders: ["left", "right"],
+      body: surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.name("left"),
+        surface.name("right"),
+      ),
+    }],
+  }));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 56);
+});
+
+Deno.test("partially applied constructors retain callable staged closures", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "withLeft",
+    value: surface.apply(
+      surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+      surface.integer(20),
+    ),
+    body: {
+      kind: "case",
+      value: surface.apply(surface.name("withLeft"), surface.integer(22)),
+      arms: [{
+        constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        binders: ["left", "right"],
+        body: surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("left"),
+          surface.name("right"),
+        ),
+      }],
+    },
+  }));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 80);
+});
+
+Deno.test("reuses one nullary constructor object for repeated references", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "first",
+    value: surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+    body: {
+      kind: "let",
+      name: "second",
+      value: surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+      body: {
+        kind: "case",
+        value: surface.name("first"),
+        arms: [{
+          constructor: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+          binders: [],
+          body: {
+            kind: "case",
+            value: surface.name("second"),
+            arms: [{
+              constructor: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+              binders: [],
+              body: surface.integer(42),
+            }],
+          },
+        }],
+      },
+    },
+  }));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 40);
+});
+
+Deno.test("reports zero allocation for an immediate scalar entry", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule(surface.integer(42)));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 0);
 });
 
 Deno.test("traps a recursively forced thunk as a blackhole", async () => {
@@ -605,7 +798,10 @@ async function assertWasmMatchesGpu(
 ) {
   const { compiler, evaluator } = functionalWasmRuntime();
   const compilation = await compiler.compileModule(module);
-  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  ok(
+    compilation.ok,
+    compilation.ok ? undefined : `${sourcePath}: ${compilation.diagnostics[0].message}`,
+  );
   if (!compilation.ok) throw new Error("functional example did not compile on the GPU");
   try {
     const gpuEvaluation = await evaluator.evaluate(compilation.module);

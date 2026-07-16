@@ -116,11 +116,12 @@ Deno.test("reports every batch compilation failure without evaluation output", a
 
   equal(exitCode, 1);
   equal(captured.logs.length, 0);
-  for (const sourcePath of invalidSourcePaths) {
-    ok(
-      captured.errors.some((message) =>
-        message.startsWith(`${JSON.stringify(sourcePath)}: error[`)
-      ),
-    );
-  }
+  const diagnosticSourceIndices = captured.errors.map((message) =>
+    invalidSourcePaths.findIndex((sourcePath) =>
+      message.startsWith(`${JSON.stringify(sourcePath)}: error[`)
+    )
+  );
+  ok(diagnosticSourceIndices.every((index) => index >= 0));
+  deepStrictEqual([...new Set(diagnosticSourceIndices)], [0, 1]);
+  deepStrictEqual(diagnosticSourceIndices, diagnosticSourceIndices.toSorted());
 });
