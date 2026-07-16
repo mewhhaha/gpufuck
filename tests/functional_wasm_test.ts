@@ -8,6 +8,7 @@ import {
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
   type FunctionalSurfaceExpression,
+  type FunctionalWasmExecution,
   FunctionalWasmRuntimeError,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
@@ -393,6 +394,64 @@ Deno.test("eliminates a thunk when demand analysis proves an immediate force", a
   await assertLazyWasmResult(singleDefinitionModule(strictBinding), 42, 1, "strict local binding");
 });
 
+Deno.test("shares a let-bound suspension with a callee instead of wrapping it in a new thunk", async () => {
+  const module = singleDefinitionModule({
+    kind: "let",
+    name: "shared",
+    value: surface.binary(FunctionalBinaryOperator.Add, surface.integer(40), surface.integer(2)),
+    body: surface.apply(doubleWithoutImmediateForce(), surface.name("shared")),
+  });
+
+  await assertLazyWasmResult(module, 84, 2, "shared local suspension");
+});
+
+Deno.test("shares a global suspension with a callee instead of wrapping it in a new thunk", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [
+      {
+        name: "shared",
+        parameters: [],
+        annotation: null,
+        body: surface.binary(FunctionalBinaryOperator.Add, surface.integer(40), surface.integer(2)),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: null,
+        body: surface.apply(doubleWithoutImmediateForce(), surface.name("shared")),
+      },
+    ],
+    [],
+    "main",
+    0,
+  );
+
+  await assertLazyWasmResult(module, 84, 2, "shared global suspension");
+});
+
+Deno.test("closures allocate no captures for bindings their bodies never reference", async () => {
+  const applyIdentity = (argument: FunctionalSurfaceExpression): FunctionalSurfaceExpression =>
+    surface.apply(
+      surface.lambda(
+        "outer",
+        surface.apply(surface.lambda("inner", surface.name("inner")), surface.integer(42)),
+      ),
+      argument,
+    );
+  const bare = await runCompiledWasm(singleDefinitionModule(applyIdentity(surface.integer(7))));
+  const scoped = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "ignored",
+    value: surface.integer(7),
+    body: applyIdentity(surface.name("ignored")),
+  }));
+
+  deepStrictEqual(bare.value, { kind: "integer", value: 42 });
+  deepStrictEqual(scoped.value, { kind: "integer", value: 42 });
+  ok(bare.stats.allocatedBytes > 0, "the WASM allocator reported no heap growth");
+  equal(scoped.stats.allocatedBytes, bare.stats.allocatedBytes);
+});
+
 Deno.test("traps a recursively forced thunk as a blackhole", async () => {
   const module = buildFunctionalSurfaceModule(
     [
@@ -436,6 +495,31 @@ Deno.test("traps a recursively forced thunk as a blackhole", async () => {
     compilation.module.destroy();
   }
 });
+
+function doubleWithoutImmediateForce(): FunctionalSurfaceExpression {
+  return surface.lambda("value", {
+    kind: "if",
+    condition: surface.boolean(true),
+    consequent: surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.name("value"),
+      surface.name("value"),
+    ),
+    alternate: surface.integer(0),
+  });
+}
+
+async function runCompiledWasm(module: EncodedFunctionalModule): Promise<FunctionalWasmExecution> {
+  const { compiler } = functionalWasmRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("functional module did not compile on the GPU");
+  try {
+    return await runFunctionalWasmModule(compilation.module);
+  } finally {
+    compilation.module.destroy();
+  }
+}
 
 function singleDefinitionModule(expression: FunctionalSurfaceExpression): EncodedFunctionalModule {
   return buildFunctionalSurfaceModule(
