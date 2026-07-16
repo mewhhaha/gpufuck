@@ -145,6 +145,7 @@ export function encodeWasmModule(
         [...name("memory"), 0x02, 0x00],
         [...name("thunkEvaluations"), 0x03, 0x01],
         [...name("runtimeFault"), 0x03, 0x02],
+        [...name("heapTop"), 0x03, 0x00],
       ]),
     ),
     section(
