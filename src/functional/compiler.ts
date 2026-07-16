@@ -60,8 +60,9 @@ const COMPILATION_TRANSIENT_BYTES_PER_INPUT = 6_144;
 const COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH = 16_384;
 
 export class GpuFunctionalCompiler {
+  readonly #device: GPUDevice;
   readonly #semanticCompiler: GpuLazuliSemanticCompiler;
-  readonly #effectVerifier: GpuFunctionalEffectCoreVerifier;
+  #effectVerifier: Promise<GpuFunctionalEffectCoreVerifier> | undefined;
   readonly #compilationAdmission: CompilationAdmissionQueue;
   readonly #maximumNodeCount: number;
   readonly #maximumDefinitionCount: number;
@@ -69,16 +70,16 @@ export class GpuFunctionalCompiler {
   readonly #maximumConstructorCount: number;
 
   private constructor(
+    device: GPUDevice,
     semanticCompiler: GpuLazuliSemanticCompiler,
-    effectVerifier: GpuFunctionalEffectCoreVerifier,
     maximumNodeCount: number,
     maximumDefinitionCount: number,
     maximumTypeCount: number,
     maximumConstructorCount: number,
     maximumConcurrentCompilationWeight: number,
   ) {
+    this.#device = device;
     this.#semanticCompiler = semanticCompiler;
-    this.#effectVerifier = effectVerifier;
     this.#compilationAdmission = new CompilationAdmissionQueue(
       maximumConcurrentCompilationWeight,
     );
@@ -123,13 +124,10 @@ export class GpuFunctionalCompiler {
       );
     }
 
-    const [semanticCompiler, effectVerifier] = await Promise.all([
-      GpuLazuliSemanticCompiler.create(device),
-      GpuFunctionalEffectCoreVerifier.create(device),
-    ]);
+    const semanticCompiler = await GpuLazuliSemanticCompiler.create(device);
     return new GpuFunctionalCompiler(
+      device,
       semanticCompiler,
-      effectVerifier,
       maximumNodeCount,
       maximumDefinitionCount,
       maximumTypeCount,
@@ -156,7 +154,9 @@ export class GpuFunctionalCompiler {
         effectModule.sourceByteLength,
       );
     }
-    const effect = await this.#effectVerifier.verifyAndLower(effectModule, {
+    this.#effectVerifier ??= GpuFunctionalEffectCoreVerifier.create(this.#device);
+    const effectVerifier = await this.#effectVerifier;
+    const effect = await effectVerifier.verifyAndLower(effectModule, {
       maximumTransitions: limits.maximumSteps,
       maximumTransitionsPerDispatch: limits.maximumStepsPerDispatch,
       ...(options.signal === undefined ? {} : { signal: options.signal }),

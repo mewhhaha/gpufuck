@@ -12,7 +12,7 @@ import {
   semanticWorkLimitDiagnostic,
 } from "./compilation_diagnostics.ts";
 import { CompiledGpuLazuliModule, type LazuliCompileResult } from "./compiler_module.ts";
-import type { BatchLane, BatchModuleBuffers } from "./gpu_batch_compiler.ts";
+import type { BatchLane } from "./gpu_batch_compiler.ts";
 import type { GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 import type { InferenceStateSnapshot } from "./gpu_type_inference_contract.ts";
 import {
@@ -36,12 +36,17 @@ export interface TerminalInference {
   readonly semanticState: GpuLazuliSemanticStateSnapshot;
 }
 
+interface ModuleBuffers {
+  readonly nodes: GPUBuffer;
+  readonly definitions: GPUBuffer;
+  readonly constructors: GPUBuffer;
+}
+
 export async function finishBatchInferenceResults(
   device: GPUDevice,
   lanes: readonly BatchLane[],
   terminal: readonly (TerminalInference | undefined)[],
   terminalOutputs: readonly (ArrayBuffer | undefined)[],
-  preparedModuleBuffers: (BatchModuleBuffers | undefined)[],
   results: (LazuliCompileResult | undefined)[],
   workspaceBuffer: GPUBuffer,
   outputBuffer: GPUBuffer,
@@ -67,28 +72,60 @@ export async function finishBatchInferenceResults(
   let outputMapped = false;
   const createdBuffers: GPUBuffer[] = [];
   const completedModules: CompiledGpuLazuliModule[] = [];
-  const moduleBuffers = new Map<number, {
-    readonly nodes: GPUBuffer;
-    readonly definitions: GPUBuffer;
-    readonly constructors: GPUBuffer;
-  }>();
+  const moduleBuffers = new Map<number, ModuleBuffers>();
   try {
-    for (const laneIndex of successfulLaneIndexes) {
-      const prepared = preparedModuleBuffers[laneIndex];
-      if (prepared !== undefined) moduleBuffers.set(laneIndex, prepared);
-    }
     let outputView: DataView | undefined;
-    if (outputBytes > 0) {
-      outputReadback = device.createBuffer({
-        label: "Lazuli packed inferred type readback",
-        size: outputBytes,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-      });
+    if (successfulLaneIndexes.length > 0) {
+      device.pushErrorScope("validation");
+      device.pushErrorScope("out-of-memory");
+      let allocationCause: unknown;
+      try {
+        for (const laneIndex of successfulLaneIndexes) {
+          const buffers = allocateModuleBuffers(device, lanes[laneIndex]!);
+          createdBuffers.push(buffers.nodes, buffers.definitions, buffers.constructors);
+          moduleBuffers.set(laneIndex, buffers);
+        }
+      } catch (error) {
+        allocationCause = error;
+      }
+      const [outOfMemory, validation] = await Promise.all([
+        device.popErrorScope(),
+        device.popErrorScope(),
+      ]);
+      if (validation !== null) {
+        throw new Error(
+          `WebGPU rejected module buffers for ${successfulLaneIndexes.length} packed Lazuli lanes: ${validation.message}`,
+          allocationCause === undefined ? undefined : { cause: allocationCause },
+        );
+      }
+      if (
+        outOfMemory !== null || allocationCause !== undefined ||
+        moduleBuffers.size !== successfulLaneIndexes.length
+      ) {
+        throw new PackedModuleAllocationError(
+          `could not allocate independent module buffers for ${successfulLaneIndexes.length} packed Lazuli lanes${
+            outOfMemory === null ? "" : `: ${outOfMemory.message}`
+          }`,
+          allocationCause,
+        );
+      }
+
+      let commandsRequired = false;
+      if (outputBytes > 0) {
+        outputReadback = device.createBuffer({
+          label: "Lazuli packed inferred type readback",
+          size: outputBytes,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+      }
       const commands = device.createCommandEncoder({ label: "Finish packed Lazuli compilation" });
       for (const laneIndex of successfulLaneIndexes) {
         const lane = lanes[laneIndex]!;
         const completed = terminal[laneIndex]!;
         if (terminalOutputs[laneIndex] === undefined) {
+          if (outputReadback === undefined) {
+            throw new Error(`GPU Lazuli packed lane ${lane.resultIndex} omitted output readback`);
+          }
           commands.copyBufferToBuffer(
             outputBuffer,
             lane.outputBase * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
@@ -96,11 +133,9 @@ export async function finishBatchInferenceResults(
             outputOffsets.get(laneIndex)!,
             inferredTypeOutputByteLength(completed.state.outputCount),
           );
+          commandsRequired = true;
         }
-        if (moduleBuffers.has(laneIndex)) continue;
-        const buffers = allocateModuleBuffers(device, lane);
-        createdBuffers.push(buffers.nodes, buffers.definitions, buffers.constructors);
-        moduleBuffers.set(laneIndex, buffers);
+        const buffers = moduleBuffers.get(laneIndex)!;
         if (lane.surface.nodeCount > 0) {
           commands.copyBufferToBuffer(
             coreSource,
@@ -109,6 +144,7 @@ export async function finishBatchInferenceResults(
             0,
             lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH,
           );
+          commandsRequired = true;
         }
         if (lane.surface.definitionCount > 0) {
           commands.copyBufferToBuffer(
@@ -118,6 +154,7 @@ export async function finishBatchInferenceResults(
             0,
             lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
           );
+          commandsRequired = true;
         }
         if (lane.surface.constructorCount > 0) {
           commands.copyBufferToBuffer(
@@ -127,12 +164,15 @@ export async function finishBatchInferenceResults(
             0,
             lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
           );
+          commandsRequired = true;
         }
       }
-      device.queue.submit([commands.finish()]);
-      await outputReadback.mapAsync(GPUMapMode.READ);
-      outputMapped = true;
-      outputView = new DataView(outputReadback.getMappedRange());
+      if (commandsRequired) device.queue.submit([commands.finish()]);
+      if (outputReadback !== undefined) {
+        await outputReadback.mapAsync(GPUMapMode.READ);
+        outputMapped = true;
+        outputView = new DataView(outputReadback.getMappedRange());
+      }
     }
 
     for (const [laneIndex, completed] of terminal.entries()) {
@@ -171,7 +211,6 @@ export async function finishBatchInferenceResults(
           publicTypeMetadata(lane.surface).typeDeclarations,
         );
         completedModules.push(module);
-        preparedModuleBuffers[laneIndex] = undefined;
         results[lane.resultIndex] = { ok: true, module };
         continue;
       }
@@ -193,10 +232,6 @@ export async function finishBatchInferenceResults(
         );
       }
     }
-    for (let laneIndex = 0; laneIndex < preparedModuleBuffers.length; laneIndex++) {
-      destroyModuleBuffers(preparedModuleBuffers[laneIndex]);
-      preparedModuleBuffers[laneIndex] = undefined;
-    }
     createdBuffers.length = 0;
     completedModules.length = 0;
   } catch (error) {
@@ -209,7 +244,14 @@ export async function finishBatchInferenceResults(
   }
 }
 
-function allocateModuleBuffers(device: GPUDevice, lane: BatchLane): BatchModuleBuffers {
+export class PackedModuleAllocationError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "PackedModuleAllocationError";
+  }
+}
+
+function allocateModuleBuffers(device: GPUDevice, lane: BatchLane): ModuleBuffers {
   let nodes: GPUBuffer | undefined;
   let definitions: GPUBuffer | undefined;
   let constructors: GPUBuffer | undefined;
@@ -242,12 +284,6 @@ function allocateModuleBuffers(device: GPUDevice, lane: BatchLane): BatchModuleB
     constructors?.destroy();
     throw error;
   }
-}
-
-function destroyModuleBuffers(buffers: BatchModuleBuffers | undefined): void {
-  buffers?.nodes.destroy();
-  buffers?.definitions.destroy();
-  buffers?.constructors.destroy();
 }
 
 export function batchSemanticFailure(

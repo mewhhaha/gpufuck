@@ -17,6 +17,7 @@ import type { LazuliCompileResult } from "./compiler_module.ts";
 import {
   batchSemanticFailure,
   finishBatchInferenceResults,
+  PackedModuleAllocationError,
   type TerminalInference,
 } from "./gpu_batch_results.ts";
 import { readInferenceState, readSemanticState } from "./gpu_type_inference_gpu_io.ts";
@@ -27,8 +28,8 @@ import {
   createInitialState,
   INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
   inferredTypeOutputByteLength,
-  PACKED_INFERENCE_OUTPUT_RECORD_CAPACITY,
-  packedWorkspaceLayout,
+  INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY,
+  workspaceLayout,
 } from "./gpu_type_inference_workspace.ts";
 import type {
   GpuLazuliTypeInferenceWorkspaceCapacities,
@@ -73,12 +74,6 @@ export interface BatchLane extends LazuliBatchCompilationInput {
   readonly outputBase: number;
   readonly fastOutputBase: number;
   readonly fastOutputCapacity: number;
-}
-
-export interface BatchModuleBuffers {
-  readonly nodes: GPUBuffer;
-  readonly definitions: GPUBuffer;
-  readonly constructors: GPUBuffer;
 }
 
 export async function compileLazuliBatch(
@@ -158,7 +153,7 @@ async function compileLazuliBatchWithin(
       instrumentation,
     );
   } catch (error) {
-    if (error instanceof PackedAllocationError) {
+    if (error instanceof PackedAllocationError || error instanceof PackedModuleAllocationError) {
       return await compileSplitBatch(
         device,
         semanticPipeline,
@@ -280,7 +275,6 @@ async function runPackedCompilation(
   let outputBuffer: GPUBuffer | undefined;
   let inferenceStateBuffer: GPUBuffer | undefined;
   let stateReadbackBuffer: GPUBuffer | undefined;
-  let preparedModuleBuffers: (BatchModuleBuffers | undefined)[] = [];
   let stateReadbackMapped = false;
 
   try {
@@ -296,9 +290,6 @@ async function runPackedCompilation(
     outputBuffer = buffers.output;
     inferenceStateBuffer = buffers.inferenceStates;
     stateReadbackBuffer = buffers.stateReadback;
-    if (fastCompletion) {
-      preparedModuleBuffers = await allocateBatchModuleBuffers(device, lanes);
-    }
 
     device.queue.writeBuffer(surfaceBuffer, 0, surfaceWords);
     device.queue.writeBuffer(definitionBuffer, 0, definitionWords);
@@ -356,11 +347,7 @@ async function runPackedCompilation(
         inferenceStateBuffer,
         stateReadbackBuffer,
         outputBuffer,
-        coreBuffer,
-        definitionBuffer,
-        constructorBuffer,
         lanes,
-        preparedModuleBuffers,
         fastCompletion,
         signal,
       );
@@ -477,7 +464,6 @@ async function runPackedCompilation(
       lanes,
       terminalInference,
       terminalOutputs,
-      preparedModuleBuffers,
       results,
       workspaceBuffer,
       outputBuffer,
@@ -499,7 +485,6 @@ async function runPackedCompilation(
     outputBuffer?.destroy();
     inferenceStateBuffer?.destroy();
     stateReadbackBuffer?.destroy();
-    for (const buffers of preparedModuleBuffers) destroyModuleBuffers(buffers);
   }
 }
 
@@ -520,7 +505,7 @@ function prepareBatchLanes(
       input.surface,
       flattenLazuliTypeSchemas(input.surface),
     );
-    const localWorkspace = packedWorkspaceLayout(
+    const localWorkspace = workspaceLayout(
       input.surface,
       metadata.schemaNodeCount,
       metadata.typeParameterCount,
@@ -542,7 +527,7 @@ function prepareBatchLanes(
       fastOutputBase: fastOutputRecords,
       fastOutputCapacity: Math.min(
         localWorkspace.outputCapacity,
-        PACKED_INFERENCE_OUTPUT_RECORD_CAPACITY,
+        INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY,
       ),
     };
     nodes = checkedSum("packed node count", nodes, input.surface.nodeCount);
@@ -835,66 +820,6 @@ async function allocateBatchBuffers(
   return buffers;
 }
 
-async function allocateBatchModuleBuffers(
-  device: GPUDevice,
-  lanes: readonly BatchLane[],
-): Promise<BatchModuleBuffers[]> {
-  device.pushErrorScope("validation");
-  device.pushErrorScope("out-of-memory");
-  const buffers: BatchModuleBuffers[] = [];
-  const created: GPUBuffer[] = [];
-  let cause: unknown;
-  try {
-    for (const lane of lanes) {
-      const nodes = device.createBuffer({
-        label: `Lazuli packed lane ${lane.resultIndex} core nodes`,
-        size: Math.max(LAZULI_NODE_BYTE_LENGTH, lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH),
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
-      });
-      created.push(nodes);
-      const definitions = device.createBuffer({
-        label: `Lazuli packed lane ${lane.resultIndex} definitions`,
-        size: Math.max(
-          LAZULI_DEFINITION_BYTE_LENGTH,
-          lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
-        ),
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
-      });
-      created.push(definitions);
-      const constructors = device.createBuffer({
-        label: `Lazuli packed lane ${lane.resultIndex} constructors`,
-        size: Math.max(
-          LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-          lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-        ),
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
-      });
-      created.push(constructors);
-      buffers.push({ nodes, definitions, constructors });
-    }
-  } catch (error) {
-    cause = error;
-  }
-  const outOfMemory = await device.popErrorScope();
-  const validation = await device.popErrorScope();
-  if (outOfMemory !== null || validation !== null || buffers.length !== lanes.length) {
-    for (const buffer of created) buffer.destroy();
-    if (validation !== null) {
-      throw new Error(
-        `WebGPU rejected packed Lazuli module buffers for ${lanes.length} lanes: ${validation.message}`,
-        cause === undefined ? undefined : { cause },
-      );
-    }
-    throw new PackedAllocationError(
-      `could not allocate packed Lazuli module buffers for ${lanes.length} lanes${
-        outOfMemory === null ? "" : `: ${outOfMemory.message}`
-      }`,
-      cause,
-    );
-  }
-  return buffers;
-}
-
 async function dispatchBatch(
   device: GPUDevice,
   semanticPipeline: GPUComputePipeline,
@@ -905,11 +830,7 @@ async function dispatchBatch(
   inferenceStateBuffer: GPUBuffer,
   stateReadbackBuffer: GPUBuffer,
   outputBuffer: GPUBuffer,
-  coreBuffer: GPUBuffer,
-  definitionBuffer: GPUBuffer,
-  constructorBuffer: GPUBuffer,
   lanes: readonly BatchLane[],
-  moduleBuffers: readonly (BatchModuleBuffers | undefined)[],
   fastCompletion: boolean,
   signal: AbortSignal | undefined,
 ): Promise<void> {
@@ -967,11 +888,7 @@ async function dispatchBatch(
           );
         }
       }
-      for (const [laneIndex, lane] of lanes.entries()) {
-        const destination = moduleBuffers[laneIndex];
-        if (destination === undefined) {
-          throw new Error(`Lazuli packed lane ${lane.resultIndex} omitted fast module buffers`);
-        }
+      for (const lane of lanes) {
         const fastOutputByteLength = lane.fastOutputCapacity *
           LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
         if (!contiguousFastOutput && fastOutputByteLength > 0) {
@@ -981,33 +898,6 @@ async function dispatchBatch(
             stateReadbackBuffer,
             fastOutputByteOffset(laneCount, lane),
             fastOutputByteLength,
-          );
-        }
-        if (lane.surface.nodeCount > 0) {
-          commands.copyBufferToBuffer(
-            coreBuffer,
-            lane.nodeBase * LAZULI_NODE_BYTE_LENGTH,
-            destination.nodes,
-            0,
-            lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH,
-          );
-        }
-        if (lane.surface.definitionCount > 0) {
-          commands.copyBufferToBuffer(
-            definitionBuffer,
-            lane.definitionBase * LAZULI_DEFINITION_BYTE_LENGTH,
-            destination.definitions,
-            0,
-            lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
-          );
-        }
-        if (lane.surface.constructorCount > 0) {
-          commands.copyBufferToBuffer(
-            constructorBuffer,
-            lane.constructorBase * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-            destination.constructors,
-            0,
-            lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
           );
         }
       }
@@ -1117,12 +1007,6 @@ function inferenceStateByteOffset(laneIndex: number): number {
 function fastOutputByteOffset(laneCount: number, lane: BatchLane): number {
   return laneCount * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
     lane.fastOutputBase * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
-}
-
-function destroyModuleBuffers(buffers: BatchModuleBuffers | undefined): void {
-  buffers?.nodes.destroy();
-  buffers?.definitions.destroy();
-  buffers?.constructors.destroy();
 }
 
 class PackedAllocationError extends Error {

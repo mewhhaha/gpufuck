@@ -657,22 +657,27 @@ output, and durable state into aggregate GPU buffers. One workgroup advances eac
 lanes become inactive, and the host maps the state array once per quantum. Results retain source
 order and are copied into ordinary independently owned module buffers. If one packed lane exhausts
 an arena, completed siblings remain valid and only that lane falls back to the scalar elastic-growth
-path. Packed lanes start with smaller input-derived type arenas and at most 64 output records, so
-ordinary batches do not reserve scalar growth headroom they rarely use. Oversized batches overlap at
-most two fitting partitions; recursive splits remain sequential to bound aggregate device memory.
+path. Every lane starts with compact input-derived type arenas and at most 64 output records; scalar
+inference grows only the exhausted region, while packed inference reruns only exceptional lanes on
+that elastic path. Successful packed lanes allocate and copy their independent module buffers once,
+after terminal states are known; diagnostic lanes allocate none. Oversized batches overlap at most
+two fitting partitions, while recursive splits remain sequential to bound aggregate device memory.
 `compileModule()` and compatibility `compile()` retain their scalar paths and share a
-resource-weighted admission queue.
+resource-weighted admission queue. Lazuli source batches parse and pack each distinct source once;
+frontends targeting encoded functional IR already bypass that host parser entirely.
 
-On an RTX 4080 SUPER, the checked-in 1,128-node compiler fixture took a five-sample median 376.3 ms
-for sixteen coalesced scalar compilations and 35.7 ms through `compileBatch()`—23.5 versus 2.23 ms
-per program, or 10.5× the throughput. The same large fixture scales to median times of 38.3 ms for
-64 programs, 44.3 ms for 128, 51.3 ms for 256, and 78.0 ms for 512: respectively 0.60, 0.35, 0.20,
-and 0.15 ms per program. Sixteen tiny programs take about 13.9 ms total. Use
-`deno task bench:lazuli` for repeated measurements and `deno task profile:lazuli-compiler` for cold
-initialization, parser, dispatch, quantum, core readback, and scalar-versus-packed profiles on the
-active WebGPU adapter. Profile output includes the adapter description and fallback status; software
-adapters such as llvmpipe are useful for correctness and synchronization analysis but do not predict
-hardware-GPU JIT or execution latency.
+On an RTX 4080 SUPER, the checked-in 1,128-node compiler fixture took a five-sample median 379.3 ms
+for sixteen coalesced scalar compilations and 35.5 ms through `compileBatch()`—23.7 versus 2.22 ms
+per program, or 10.7× the throughput. The same large fixture scales to median times of 38.6 ms for
+64 programs, 45.1 ms for 128, 54.2 ms for 256, and 75.3 ms for 512: respectively 0.60, 0.35, 0.21,
+and 0.15 ms per program. End-to-end compilation of one Lazuli source, including parsing and packing,
+takes about 37.8 ms warm; an identical 512-source batch takes about 86.2 ms total because frontend
+preparation is shared. Sixteen tiny programs take about 13.9 ms total. Use `deno task bench:lazuli`
+for repeated measurements and `deno task profile:lazuli-compiler` for cold initialization, parser,
+dispatch, quantum, core readback, and scalar-versus-packed profiles on the active WebGPU adapter.
+Profile output includes the adapter description and fallback status; software adapters such as
+llvmpipe are useful for correctness and synchronization analysis but do not predict hardware-GPU JIT
+or execution latency.
 
 ## Memory and ownership
 

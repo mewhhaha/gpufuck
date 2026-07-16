@@ -61,7 +61,14 @@ export class GpuLazuliSemanticCompiler {
       label: "Lazuli semantic compiler",
       code: LAZULI_COMPILER_SHADER,
     });
-    const compilation = await shaderModule.getCompilationInfo();
+    const inferenceShaderModule = device.createShaderModule({
+      label: "Lazuli type inference",
+      code: LAZULI_TYPE_INFERENCE_SHADER,
+    });
+    const [compilation, inferenceCompilation] = await Promise.all([
+      shaderModule.getCompilationInfo(),
+      inferenceShaderModule.getCompilationInfo(),
+    ]);
     const errors = compilation.messages.filter((message) => message.type === "error");
     if (errors.length > 0) {
       const formattedErrors = errors.map((message) =>
@@ -69,12 +76,6 @@ export class GpuLazuliSemanticCompiler {
       ).join("\n");
       throw new Error(`WebGPU rejected the Lazuli compiler shader:\n${formattedErrors}`);
     }
-
-    const inferenceShaderModule = device.createShaderModule({
-      label: "Lazuli type inference",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
-    });
-    const inferenceCompilation = await inferenceShaderModule.getCompilationInfo();
     const inferenceErrors = inferenceCompilation.messages.filter((message) =>
       message.type === "error"
     );
@@ -86,22 +87,24 @@ export class GpuLazuliSemanticCompiler {
     }
 
     try {
-      const pipeline = await device.createComputePipelineAsync({
-        label: "Lazuli semantic compiler pipeline",
-        layout: "auto",
-        compute: {
-          module: shaderModule,
-          entryPoint: "compile_lazuli",
-        },
-      });
-      const inferencePipeline = await device.createComputePipelineAsync({
-        label: "Lazuli type inference pipeline",
-        layout: "auto",
-        compute: {
-          module: inferenceShaderModule,
-          entryPoint: "infer_lazuli_types",
-        },
-      });
+      const [pipeline, inferencePipeline] = await Promise.all([
+        device.createComputePipelineAsync({
+          label: "Lazuli semantic compiler pipeline",
+          layout: "auto",
+          compute: {
+            module: shaderModule,
+            entryPoint: "compile_lazuli",
+          },
+        }),
+        device.createComputePipelineAsync({
+          label: "Lazuli type inference pipeline",
+          layout: "auto",
+          compute: {
+            module: inferenceShaderModule,
+            entryPoint: "infer_lazuli_types",
+          },
+        }),
+      ]);
       return new GpuLazuliSemanticCompiler(device, pipeline, inferencePipeline);
     } catch (cause) {
       throw new Error("WebGPU could not create the Lazuli semantic compiler pipeline", { cause });

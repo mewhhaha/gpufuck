@@ -1,4 +1,5 @@
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
+import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
 import { lazuliSurfaceToFunctionalModule } from "../src/lazuli/functional_adapter.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { GpuLazuliSemanticCompiler } from "../src/lazuli/gpu_semantic_compiler.ts";
@@ -215,6 +216,36 @@ try {
     });
   }
 
+  const sourceCompilerStart = performance.now();
+  const sourceCompiler = await GpuLazuliCompiler.create(device);
+  const sourceCompilerInitializationMilliseconds = performance.now() - sourceCompilerStart;
+  const sourceCompilationSamplesMilliseconds: number[] = [];
+  const duplicateSourceBatchSamplesMilliseconds: number[] = [];
+  for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
+    const compilationStart = performance.now();
+    const compilation = await sourceCompiler.compile(source, {
+      maximumSteps: MAXIMUM_STEPS,
+      maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
+    });
+    sourceCompilationSamplesMilliseconds.push(performance.now() - compilationStart);
+    if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+    compilation.module.destroy();
+
+    const batchStart = performance.now();
+    const compilations = await sourceCompiler.compileBatch(
+      Array.from({ length: 512 }, () => source),
+      {
+        maximumSteps: MAXIMUM_STEPS,
+        maximumStepsPerDispatch: BATCH_DISPATCH_QUANTUM,
+      },
+    );
+    duplicateSourceBatchSamplesMilliseconds.push(performance.now() - batchStart);
+    for (const batchCompilation of compilations) {
+      if (!batchCompilation.ok) throw new Error(batchCompilation.diagnostics[0].message);
+      batchCompilation.module.destroy();
+    }
+  }
+
   console.log(JSON.stringify(
     {
       sourcePath,
@@ -239,6 +270,14 @@ try {
         : "Hardware WebGPU adapter.",
       deviceInitializationMilliseconds,
       compilerInitializationMilliseconds,
+      sourceApi: {
+        compilerInitializationMilliseconds: sourceCompilerInitializationMilliseconds,
+        singleSourceSamplesMilliseconds: sourceCompilationSamplesMilliseconds,
+        singleSourceMedianMilliseconds: median(sourceCompilationSamplesMilliseconds),
+        duplicateSourceBatchSize: 512,
+        duplicateSourceBatchSamplesMilliseconds,
+        duplicateSourceBatchMedianMilliseconds: median(duplicateSourceBatchSamplesMilliseconds),
+      },
       firstDispatchWarmupMilliseconds,
       sampleCount: SAMPLE_COUNT,
       quantumProfiles,

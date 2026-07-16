@@ -41,6 +41,7 @@ import {
   createInitialState,
   createOutputReadbackBuffer,
   discardGrowthTransition,
+  dispatchOutputReadbackCapacity,
   growWorkspaceLayout,
   INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
   inferenceArenaName,
@@ -48,7 +49,6 @@ import {
   isWorkspaceArenaExhaustion,
   resumeOutputAfterGrowth,
   resumeWorkspaceAfterGrowth,
-  shouldCopyOutputWithDispatch,
   validateFuel,
   workspaceArenaCapacity,
   workspaceLayout,
@@ -162,15 +162,13 @@ async function runGpuLazuliTypeInferenceMachine(
     stateBuffer = buffers.stateBuffer;
 
     let outputCapacity = layout.outputCapacity;
-    let readbackIncludesOutput = shouldCopyOutputWithDispatch(
+    const outputReadbackCapacity = dispatchOutputReadbackCapacity(
       options.maximumStepsPerDispatch,
-      outputCapacity,
       options.device.limits,
     );
     const stateReadback = await createInferenceReadbackBuffer(
       options.device,
-      outputCapacity,
-      readbackIncludesOutput,
+      outputReadbackCapacity,
     );
     if (!stateReadback.ok) {
       metadataBuffer.destroy();
@@ -219,7 +217,7 @@ async function runGpuLazuliTypeInferenceMachine(
         outputCapacity,
         stateBuffer,
         stateReadbackBuffer,
-        readbackIncludesOutput,
+        outputReadbackCapacity,
         options.surface,
         semanticPass,
         options.signal,
@@ -246,7 +244,8 @@ async function runGpuLazuliTypeInferenceMachine(
           dispatchTransitions,
         );
         if (
-          readbackIncludesOutput && semanticState.status === LazuliCompilationStatus.Ok &&
+          state.outputCount <= outputReadbackCapacity &&
+          semanticState.status === LazuliCompilationStatus.Ok &&
           state.status === LazuliInferenceStatus.Complete
         ) {
           completedOutput = mappedRange.slice(
@@ -309,10 +308,7 @@ async function runGpuLazuliTypeInferenceMachine(
           throw new Error("GPU Lazuli type inference completed without an output type");
         }
         let output: DataView;
-        if (readbackIncludesOutput) {
-          if (completedOutput === undefined) {
-            throw new Error("GPU Lazuli type inference omitted its staged output readback");
-          }
+        if (completedOutput !== undefined) {
           output = new DataView(completedOutput);
         } else {
           outputReadbackBuffer = await createOutputReadbackBuffer(
@@ -412,13 +408,6 @@ async function runGpuLazuliTypeInferenceMachine(
               ),
             };
           }
-          const expandedReadbackIncludesOutput = readbackIncludesOutput &&
-            shouldCopyOutputWithDispatch(
-              options.maximumStepsPerDispatch,
-              nextOutputCapacity,
-              options.device.limits,
-            );
-          let expandedReadbackBuffer: GPUBuffer | undefined;
           try {
             await copyOutputForGrowth(
               options.device,
@@ -427,29 +416,8 @@ async function runGpuLazuliTypeInferenceMachine(
               state.outputCount,
               options.surface,
             );
-            if (expandedReadbackIncludesOutput) {
-              const expandedReadback = await createInferenceReadbackBuffer(
-                options.device,
-                nextOutputCapacity,
-                true,
-              );
-              if (!expandedReadback.ok) {
-                expandedOutput.buffer.destroy();
-                return {
-                  semanticState,
-                  inference: compilerWorkspaceExhausted(
-                    options,
-                    state,
-                    semanticState.totalSteps,
-                    `could not allocate expanded output readback (${expandedReadback.byteLength} bytes): ${expandedReadback.reason}`,
-                  ),
-                };
-              }
-              expandedReadbackBuffer = expandedReadback.buffer;
-            }
           } catch (error) {
             expandedOutput.buffer.destroy();
-            expandedReadbackBuffer?.destroy();
             throw error;
           }
           let expandedBindGroup: GPUBindGroup;
@@ -463,7 +431,6 @@ async function runGpuLazuliTypeInferenceMachine(
             );
           } catch (error) {
             expandedOutput.buffer.destroy();
-            expandedReadbackBuffer?.destroy();
             throw error;
           }
           const previousOutputBuffer = outputBuffer;
@@ -471,12 +438,6 @@ async function runGpuLazuliTypeInferenceMachine(
           outputCapacity = nextOutputCapacity;
           bindGroup = expandedBindGroup;
           previousOutputBuffer.destroy();
-          if (expandedReadbackBuffer !== undefined) {
-            const previousReadbackBuffer = stateReadbackBuffer;
-            stateReadbackBuffer = expandedReadbackBuffer;
-            previousReadbackBuffer.destroy();
-          }
-          readbackIncludesOutput = expandedReadbackIncludesOutput;
           resumeOutputAfterGrowth(options.device, stateBuffer, outputCapacity);
           previousSemanticSteps = semanticState.totalSteps;
           previousTransitions = discardGrowthTransition(options.device, stateBuffer, state);

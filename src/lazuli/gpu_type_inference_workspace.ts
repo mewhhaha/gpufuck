@@ -23,28 +23,12 @@ import {
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 const MAXIMUM_CONSTRUCTOR_ARITY = 64;
-export const PACKED_INFERENCE_OUTPUT_RECORD_CAPACITY = 64;
-interface WorkspaceDefaults {
-  readonly typeRecordsPerInput: number;
-  readonly framesPerExpressionInput: number;
-  readonly minimumFrameCapacity: number;
-  readonly maximumOutputRecords: number;
-}
-const STANDARD_WORKSPACE_DEFAULTS: WorkspaceDefaults = {
-  typeRecordsPerInput: 32,
-  framesPerExpressionInput: 2,
-  minimumFrameCapacity: 0,
-  maximumOutputRecords: LAZULI_NO_INDEX,
-};
-const PACKED_WORKSPACE_DEFAULTS: WorkspaceDefaults = {
-  typeRecordsPerInput: 4,
-  framesPerExpressionInput: 1,
-  minimumFrameCapacity: 64,
-  maximumOutputRecords: PACKED_INFERENCE_OUTPUT_RECORD_CAPACITY,
-};
+export const INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY = 64;
+const INITIAL_TYPE_RECORDS_PER_INPUT = 4;
+const INITIAL_MINIMUM_FRAME_CAPACITY = 64;
 export const INFERENCE_INTERNAL_STATE_BYTE_LENGTH = LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH *
   WORD_BYTES;
-// Full-arena copies need a substantial dispatch quantum to amortize their bandwidth cost.
+// Staged output copies need a substantial dispatch quantum to amortize their bandwidth cost.
 const COMBINED_READBACK_MINIMUM_DISPATCH_TRANSITIONS = 256;
 
 export function validateFuel(
@@ -80,41 +64,6 @@ export function workspaceLayout(
   limits: GPUSupportedLimits,
   overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
 ): WorkspaceLayout {
-  return inputDerivedWorkspaceLayout(
-    surface,
-    schemaNodeCount,
-    typeParameterCount,
-    limits,
-    overrides,
-    STANDARD_WORKSPACE_DEFAULTS,
-  );
-}
-
-export function packedWorkspaceLayout(
-  surface: EncodedLazuliSurface,
-  schemaNodeCount: number,
-  typeParameterCount: number,
-  limits: GPUSupportedLimits,
-  overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
-): WorkspaceLayout {
-  return inputDerivedWorkspaceLayout(
-    surface,
-    schemaNodeCount,
-    typeParameterCount,
-    limits,
-    overrides,
-    PACKED_WORKSPACE_DEFAULTS,
-  );
-}
-
-function inputDerivedWorkspaceLayout(
-  surface: EncodedLazuliSurface,
-  schemaNodeCount: number,
-  typeParameterCount: number,
-  limits: GPUSupportedLimits,
-  overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
-  defaults: WorkspaceDefaults,
-): WorkspaceLayout {
   const inferenceInputs = checkedSum(
     "inference input count",
     surface.nodeCount,
@@ -127,7 +76,7 @@ function inputDerivedWorkspaceLayout(
   const defaultTypeCapacity = checkedProduct(
     "type arena capacity",
     inferenceInputs,
-    defaults.typeRecordsPerInput,
+    INITIAL_TYPE_RECORDS_PER_INPUT,
   );
   const defaultEnvironmentCapacity = checkedProduct(
     "environment arena capacity",
@@ -135,11 +84,11 @@ function inputDerivedWorkspaceLayout(
     2,
   );
   const defaultFrameCapacity = Math.max(
-    defaults.minimumFrameCapacity,
+    INITIAL_MINIMUM_FRAME_CAPACITY,
     checkedProduct(
       "frame arena capacity",
       checkedSum("frame input count", surface.nodeCount, surface.definitionCount, 1),
-      defaults.framesPerExpressionInput,
+      1,
     ),
   );
   const defaultRefinementCapacity = checkedProduct(
@@ -182,7 +131,7 @@ function inputDerivedWorkspaceLayout(
       frame: defaultFrameCapacity,
       refinement: defaultRefinementCapacity,
       scratch: defaultScratchCapacity,
-      output: Math.min(defaultTypeCapacity, defaults.maximumOutputRecords),
+      output: Math.min(defaultTypeCapacity, INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY),
     },
     checkedProduct("minimum scratch arena capacity", surface.definitionCount, 8),
     overrides,
@@ -370,15 +319,18 @@ export function createInitialState(
   return state;
 }
 
-export function shouldCopyOutputWithDispatch(
+export function dispatchOutputReadbackCapacity(
   maximumStepsPerDispatch: number,
-  outputCapacity: number,
   limits: GPUSupportedLimits,
-): boolean {
-  if (maximumStepsPerDispatch < COMBINED_READBACK_MINIMUM_DISPATCH_TRANSITIONS) return false;
-  const outputByteLength = inferenceOutputBufferByteLength(outputCapacity);
+): number {
+  if (maximumStepsPerDispatch < COMBINED_READBACK_MINIMUM_DISPATCH_TRANSITIONS) return 0;
+  const outputByteLength = inferenceOutputBufferByteLength(
+    INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY,
+  );
   return outputByteLength <= limits.maxBufferSize - INFERENCE_INTERNAL_STATE_BYTE_LENGTH &&
-    outputByteLength <= LAZULI_NO_INDEX - INFERENCE_INTERNAL_STATE_BYTE_LENGTH;
+      outputByteLength <= LAZULI_NO_INDEX - INFERENCE_INTERNAL_STATE_BYTE_LENGTH
+    ? INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY
+    : 0;
 }
 
 function combinedInferenceReadbackByteLength(outputCapacity: number): number {
@@ -552,11 +504,11 @@ type InferenceBuffersAllocation =
 
 export async function createInferenceReadbackBuffer(
   device: GPUDevice,
-  outputCapacity: number,
-  includesOutput: boolean,
+  outputReadbackCapacity: number,
 ): Promise<BufferAllocation> {
+  const includesOutput = outputReadbackCapacity > 0;
   const size = includesOutput
-    ? combinedInferenceReadbackByteLength(outputCapacity)
+    ? combinedInferenceReadbackByteLength(outputReadbackCapacity)
     : INFERENCE_INTERNAL_STATE_BYTE_LENGTH;
   const errorSubject = includesOutput
     ? "Lazuli inferred type readback"

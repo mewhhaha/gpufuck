@@ -5,7 +5,7 @@ import type {
   LazuliCompilationOptions,
   LazuliCompileResult,
 } from "./compiler_module.ts";
-import { parseLazuliSource } from "./frontend.ts";
+import { parseLazuliSourceForCompilation } from "./frontend.ts";
 import {
   lazuliDiagnosticFromFunctional,
   lazuliSurfaceToFunctionalModule,
@@ -21,6 +21,10 @@ export type {
   LazuliCompileResult,
   LazuliCoreNode,
 } from "./compiler_module.ts";
+
+type PreparedLazuliSource =
+  | { readonly ok: true; readonly module: ReturnType<typeof lazuliSurfaceToFunctionalModule> }
+  | { readonly ok: false; readonly result: LazuliCompileResult };
 
 export class GpuLazuliCompiler {
   readonly #compiler: GpuFunctionalCompiler;
@@ -39,7 +43,8 @@ export class GpuLazuliCompiler {
   ): Promise<LazuliCompileResult> {
     validateFunctionalCompilationOptions(options);
     options.signal?.throwIfAborted();
-    const sourceByteLength = new TextEncoder().encode(source).byteLength;
+    const parsed = parseLazuliSourceForCompilation(source);
+    const sourceByteLength = parsed.sourceByteLength;
     if (sourceByteLength > LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH) {
       return {
         ok: false,
@@ -49,7 +54,7 @@ export class GpuLazuliCompiler {
       };
     }
 
-    const frontend = parseLazuliSource(source);
+    const frontend = parsed.frontend;
     if (!frontend.ok) return frontend;
     const result = await this.#compiler.compileModule(
       lazuliSurfaceToFunctionalModule(frontend.surface, sourceByteLength),
@@ -76,31 +81,49 @@ export class GpuLazuliCompiler {
     if (sources.length === 0) return [];
     if (sources.length === 1) return [await this.compile(sources[0]!, options)];
 
-    const encoder = new TextEncoder();
     const results: (LazuliCompileResult | undefined)[] = new Array(sources.length);
     const accepted: {
       readonly resultIndex: number;
       readonly module: ReturnType<typeof lazuliSurfaceToFunctionalModule>;
     }[] = [];
+    const preparedSources = new Map<string, PreparedLazuliSource>();
     for (const [resultIndex, source] of sources.entries()) {
-      const sourceByteLength = encoder.encode(source).byteLength;
-      if (sourceByteLength > LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH) {
-        results[resultIndex] = {
-          ok: false,
-          diagnostics: [
-            sourceTooLargeDiagnostic(sourceByteLength, LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH),
-          ],
-        };
-        continue;
+      let prepared = preparedSources.get(source);
+      if (prepared === undefined) {
+        const parsed = parseLazuliSourceForCompilation(source);
+        if (parsed.sourceByteLength > LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH) {
+          prepared = {
+            ok: false,
+            result: {
+              ok: false,
+              diagnostics: [
+                sourceTooLargeDiagnostic(
+                  parsed.sourceByteLength,
+                  LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH,
+                ),
+              ],
+            },
+          };
+        } else if (!parsed.frontend.ok) {
+          prepared = { ok: false, result: parsed.frontend };
+        } else {
+          prepared = {
+            ok: true,
+            module: lazuliSurfaceToFunctionalModule(
+              parsed.frontend.surface,
+              parsed.sourceByteLength,
+            ),
+          };
+        }
+        preparedSources.set(source, prepared);
       }
-      const frontend = parseLazuliSource(source);
-      if (!frontend.ok) {
-        results[resultIndex] = frontend;
+      if (!prepared.ok) {
+        results[resultIndex] = prepared.result;
         continue;
       }
       accepted.push({
         resultIndex,
-        module: lazuliSurfaceToFunctionalModule(frontend.surface, sourceByteLength),
+        module: prepared.module,
       });
     }
     if (accepted.length === 0) return completedBatchResults(results);

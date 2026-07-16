@@ -27,6 +27,11 @@ type ParseResult = ReturnType<ReturnType<typeof createParser>["parse"]>;
 type AnyRuleCursor = Extract<ParseResult, { readonly ok: true }>["cursor"];
 type LazuliParser = ReturnType<typeof createParser>;
 
+export interface ParsedLazuliSource {
+  readonly sourceByteLength: number;
+  readonly frontend: LazuliFrontendResult;
+}
+
 interface Utf16Span {
   readonly start: number;
   readonly end: number;
@@ -266,7 +271,21 @@ function getLazuliParser(): LazuliParser {
 
 /** Parses Lazuli source into the stable surface-node ABI without resolving names. */
 export function parseLazuliSource(source: string): LazuliFrontendResult {
+  return parseLazuliSourceForCompilation(source).frontend;
+}
+
+export function parseLazuliSourceForCompilation(source: string): ParsedLazuliSource {
   const byteOffsets = new Utf8ByteOffsets(source);
+  return {
+    sourceByteLength: byteOffsets.byteLength,
+    frontend: parseLazuliSourceWithOffsets(source, byteOffsets),
+  };
+}
+
+function parseLazuliSourceWithOffsets(
+  source: string,
+  byteOffsets: Utf8ByteOffsets,
+): LazuliFrontendResult {
   if (byteOffsets.byteLength > LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH) {
     return failure(limitDiagnostic(
       `Source is ${byteOffsets.byteLength} bytes; the ABI limit is ${LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH}.`,
