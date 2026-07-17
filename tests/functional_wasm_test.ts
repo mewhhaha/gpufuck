@@ -505,6 +505,62 @@ Deno.test("a lazy argument overrides a strict module default", async () => {
   }
 });
 
+Deno.test("a lazy numeric loop argument overrides strict profile unboxing", async () => {
+  const lazyInitialValue: FunctionalSurfaceExpression = {
+    kind: "apply",
+    callee: surface.name("choose"),
+    argument: surface.binary(
+      FunctionalBinaryOperator.Divide,
+      surface.integer(1),
+      surface.integer(0),
+    ),
+    argumentEvaluation: FunctionalEvaluationProfile.LazyCallByNeed,
+  };
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let-rec",
+    name: "choose",
+    value: surface.lambda(
+      "unused",
+      surface.lambda("remaining", {
+        kind: "if",
+        condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+        consequent: surface.integer(42),
+        alternate: surface.apply(
+          surface.apply(
+            surface.name("choose"),
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("unused"),
+              surface.integer(1),
+            ),
+          ),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("remaining"),
+            surface.integer(1),
+          ),
+        ),
+      }),
+    ),
+    body: surface.apply(lazyInitialValue, surface.integer(0)),
+  };
+  const module = singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager);
+  const { compiler, evaluator } = functionalWasmRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("lazy numeric loop argument did not compile");
+  try {
+    const gpuExecution = await evaluator.evaluate(compilation.module);
+    ok(gpuExecution.ok, gpuExecution.ok ? undefined : gpuExecution.fault.message);
+    if (!gpuExecution.ok) throw new Error("GPU evaluator forced a lazy numeric loop argument");
+    deepStrictEqual(gpuExecution.value, { kind: "integer", value: 42 });
+    const wasmExecution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(wasmExecution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("a lazy local binding overrides a strict module default", async () => {
   const expression: FunctionalSurfaceExpression = {
     kind: "let",
@@ -813,6 +869,52 @@ Deno.test("saturated numeric tail recursion uses an uncurried constant-space wor
   equal(execution.stats.specializedCallSites, 1);
 });
 
+Deno.test("strict scalar tail loops omit the lazy WebAssembly runtime", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "count",
+    value: surface.lambda(
+      "value",
+      surface.lambda("remaining", {
+        kind: "if",
+        condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+        consequent: surface.name("value"),
+        alternate: surface.apply(
+          surface.apply(
+            surface.name("count"),
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("value"),
+              surface.integer(1),
+            ),
+          ),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("remaining"),
+            surface.integer(1),
+          ),
+        ),
+      }),
+    ),
+    body: surface.apply(
+      surface.apply(surface.name("count"), surface.integer(42)),
+      surface.integer(4_096),
+    ),
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 4_138 });
+  equal(execution.stats.thunkEvaluations, 0);
+  equal(execution.stats.allocatedBytes, 0);
+  equal(execution.stats.specializedCallSites, 1);
+  equal(
+    WebAssembly.Module.exports(new WebAssembly.Module(execution.bytes)).some((entry) =>
+      entry.kind === "memory"
+    ),
+    false,
+  );
+  equal((execution.instance.exports.main as () => number)(), 4_138);
+});
+
 Deno.test("known global tail recursion uses one uncurried worker", async () => {
   const module = buildFunctionalSurfaceModule(
     [
@@ -861,8 +963,8 @@ Deno.test("known global tail recursion uses one uncurried worker", async () => {
   const execution = await runCompiledWasm(module);
 
   deepStrictEqual(execution.value, { kind: "integer", value: 4_096 });
-  equal(execution.stats.thunkEvaluations, 1);
-  equal(execution.stats.allocatedBytes, 40);
+  equal(execution.stats.thunkEvaluations, 0);
+  equal(execution.stats.allocatedBytes, 0);
   equal(execution.stats.specializedCallSites, 1);
 });
 

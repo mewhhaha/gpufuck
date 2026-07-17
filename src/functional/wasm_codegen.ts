@@ -4,6 +4,7 @@ import {
   FunctionalBinaryOperator,
   FunctionalCoreTag,
   FunctionalEvaluationMode,
+  FunctionalEvaluationProfile,
   type FunctionalType,
   FunctionalUnaryOperator,
 } from "./abi.ts";
@@ -19,6 +20,7 @@ import {
   type FunctionalWasmInitBinding,
 } from "./host_contract.ts";
 import {
+  encodeCompactScalarWasmModule,
   encodeWasmModule,
   type WasmFunctionBody,
   type WasmFunctionImport,
@@ -45,12 +47,18 @@ const OBJECT_HEADER_BYTE_LENGTH = 16;
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = 8;
 const BASE_WASM_FUNCTION_TYPE_COUNT = 5;
+const COMPACT_ENTRY_INITIALIZED_GLOBAL = 4;
+const COMPACT_ENTRY_RESULT_GLOBAL = 5;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
 
 type ValueSource =
   | { readonly kind: "i64-local"; readonly index: number }
+  | { readonly kind: "i64-value"; readonly index: number }
   | { readonly kind: "i32-integer"; readonly index: number }
+  | { readonly kind: "i32-integer-constant"; readonly literal: number }
+  | { readonly kind: "i32-boolean"; readonly index: number }
+  | { readonly kind: "i32-boolean-constant"; readonly literal: boolean }
   | { readonly kind: "i32-pointer"; readonly index: number }
   | { readonly kind: "capture"; readonly byteOffset: number };
 
@@ -127,7 +135,8 @@ export async function compileFunctionalModuleToWasm(
 ): Promise<Uint8Array<ArrayBuffer>> {
   functionalWasmEntry(module);
   const nodes = await module.readCoreNodes();
-  return new FunctionalWasmCompiler(module, nodes).compile();
+  const compactModule = new FunctionalWasmCompiler(module, nodes, true).compileCompactScalar();
+  return compactModule ?? new FunctionalWasmCompiler(module, nodes, false).compile();
 }
 
 export async function runFunctionalWasmModule(
@@ -215,12 +224,25 @@ class FunctionalWasmCompiler {
   readonly #hostFields: readonly HostField[];
   readonly #functionImports: readonly WasmFunctionImport[];
   readonly #activeSpecializedLambdas = new Set<number>();
+  readonly #compactScalar: boolean;
+  readonly #hasLazyEvaluationBoundary: boolean;
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
   #specializedCallSiteCount = 0;
+  #requestedAllocator = false;
+  #requestedThunkForce = false;
 
-  constructor(module: GpuFunctionalModule, nodes: readonly FunctionalCoreNode[]) {
+  constructor(
+    module: GpuFunctionalModule,
+    nodes: readonly FunctionalCoreNode[],
+    compactScalar: boolean,
+  ) {
     this.#module = module;
     this.#nodes = nodes;
+    this.#compactScalar = compactScalar;
+    this.#hasLazyEvaluationBoundary = nodes.some((node) =>
+      (node.tag === FunctionalCoreTag.Apply || node.tag === FunctionalCoreTag.Let) &&
+      node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
+    );
     this.#captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes);
     this.#lambdaSetAnalysis = new FunctionalLambdaSetAnalysis(module, nodes);
     this.#functionAnalysis = new FunctionalWasmFunctionAnalysis(nodes, module.definitionRoots);
@@ -282,8 +304,67 @@ class FunctionalWasmCompiler {
       nullaryConstructorOffset += VALUE_BYTE_LENGTH;
       return offset;
     });
-    this.#globalThunkSlots = module.definitionRoots.map((rootNode) =>
-      this.expressionIsWhnf(rootNode) ? undefined : this.reserveIndirectFunction()
+    this.#globalThunkSlots = compactScalar
+      ? module.definitionRoots.map(() => undefined)
+      : module.definitionRoots.map((rootNode) =>
+        this.expressionIsWhnf(rootNode) ? undefined : this.reserveIndirectFunction()
+      );
+  }
+
+  compileCompactScalar(): Uint8Array<ArrayBuffer> | undefined {
+    if (
+      !this.#compactScalar ||
+      this.#module.evaluationProfile !== FunctionalEvaluationProfile.StrictEager ||
+      this.#module.entryEffects.length !== 0 ||
+      this.#hostFields.length !== 0 ||
+      this.#entry.takesInit ||
+      this.#entry.result.kind === "unit"
+    ) return undefined;
+
+    const entryRoot = this.#module.definitionRoots[this.#module.entryDefinition];
+    if (entryRoot === undefined) {
+      throw new Error(
+        `functional WASM entry d${this.#module.entryDefinition} exceeds ${this.#module.definitionCount} definitions`,
+      );
+    }
+    const entryInstructions = new WasmInstructions(0);
+    const result = entryInstructions.addLocal(WasmValueType.I32);
+    entryInstructions.globalGet(COMPACT_ENTRY_INITIALIZED_GLOBAL);
+    entryInstructions.emit(0x04, WasmValueType.I32);
+    entryInstructions.globalGet(COMPACT_ENTRY_RESULT_GLOBAL);
+    entryInstructions.emit(0x05);
+    if (this.#entry.result.kind === "integer") {
+      this.compileIntegerExpression(entryInstructions, entryRoot, []);
+    } else {
+      this.compileBooleanExpression(entryInstructions, entryRoot, []);
+    }
+    entryInstructions.localSet(result);
+    entryInstructions.localGet(result);
+    entryInstructions.globalSet(COMPACT_ENTRY_RESULT_GLOBAL);
+    entryInstructions.i32Const(1);
+    entryInstructions.globalSet(COMPACT_ENTRY_INITIALIZED_GLOBAL);
+    entryInstructions.localGet(result);
+    entryInstructions.emit(0x0b);
+
+    const entryBody = functionBody(3, entryInstructions, "compact scalar entry");
+    const emittedFunctions = [
+      ...this.#indirectFunctions.map((body, slot) => {
+        if (body === undefined) {
+          throw new Error(`functional WASM compact function slot ${slot} was not emitted`);
+        }
+        return body;
+      }),
+      entryBody,
+    ];
+    const requiresRuntime = this.#requestedAllocator || this.#requestedThunkForce ||
+      emittedFunctions.some((body) => body.usesMemory || body.usesIndirectCalls);
+    if (requiresRuntime) return undefined;
+
+    return encodeCompactScalarWasmModule(
+      emittedFunctions,
+      emittedFunctions.length - 1,
+      this.#specializedCallSiteCount,
+      this.#additionalFunctionTypes,
     );
   }
 
@@ -353,9 +434,7 @@ class FunctionalWasmCompiler {
     this.emitHostInit(instructions);
     instructions.localGet(closure);
     instructions.i32Load(4);
-    instructions.emit(0x11);
-    instructions.unsigned(2);
-    instructions.unsigned(0);
+    instructions.callIndirect(2);
   }
 
   emitHostInit(instructions: WasmInstructions): void {
@@ -453,8 +532,13 @@ class FunctionalWasmCompiler {
         instructions.i64Const((BigInt(node.payload) << 3n) | 2n);
         return;
       case FunctionalCoreTag.Local:
-        this.emitBinding(instructions, this.localSource(environment, node.payload, nodeIndex));
-        this.emitForceValue(instructions);
+        {
+          const source = this.localSource(environment, node.payload, nodeIndex);
+          this.emitBinding(instructions, source);
+          if (source.kind === "i64-local" || source.kind === "capture") {
+            this.emitForceValue(instructions);
+          }
+        }
         return;
       case FunctionalCoreTag.Global:
         if (node.payload >= this.#module.definitionCount) {
@@ -683,9 +767,7 @@ class FunctionalWasmCompiler {
     );
     instructions.localGet(closure);
     instructions.i32Load(4);
-    instructions.emit(0x11);
-    instructions.unsigned(2);
-    instructions.unsigned(0);
+    instructions.callIndirect(2);
   }
 
   uncurriedApplication(
@@ -700,7 +782,7 @@ class FunctionalWasmCompiler {
       baseNode = node.child0;
       node = this.node(baseNode);
     }
-    if (reverseArguments.length < 2) return undefined;
+    if (reverseArguments.length === 0) return undefined;
     const virtualBase = this.virtualLambda(baseNode, environment);
     if (virtualBase !== undefined && node.tag !== FunctionalCoreTag.Global) return undefined;
 
@@ -723,8 +805,22 @@ class FunctionalWasmCompiler {
     application: UncurriedApplication,
     environment: FunctionalEnvironment,
   ): void {
-    this.compileExpression(instructions, application.baseNode, environment);
-    instructions.emit(0xa7);
+    const base = this.node(application.baseNode);
+    const localBase = base.tag === FunctionalCoreTag.Local
+      ? this.localSource(environment, base.payload, application.baseNode)
+      : undefined;
+    if (localBase?.kind === "i32-pointer") {
+      instructions.localGet(localBase.index);
+    } else if (
+      this.#compactScalar &&
+      base.tag === FunctionalCoreTag.Global &&
+      this.#module.definitionRoots[base.payload] === application.functionShape.outerLambdaNode
+    ) {
+      instructions.i32Const(0);
+    } else {
+      this.compileExpression(instructions, application.baseNode, environment);
+      instructions.emit(0xa7);
+    }
     const closure = instructions.addLocal(WasmValueType.I32);
     instructions.localSet(closure);
 
@@ -821,8 +917,11 @@ class FunctionalWasmCompiler {
   }
 
   isUnboxedNumericParameter(functionShape: FunctionalFunctionShape, parameter: number): boolean {
+    const profileMakesParameterStrict =
+      this.#module.evaluationProfile === FunctionalEvaluationProfile.StrictEager &&
+      !this.#hasLazyEvaluationBoundary;
     return this.#module.entryEffects.length === 0 &&
-      functionShape.strictParameters[parameter] === true &&
+      (profileMakesParameterStrict || functionShape.strictParameters[parameter] === true) &&
       functionShape.numericParameters[parameter] === true;
   }
 
@@ -922,10 +1021,9 @@ class FunctionalWasmCompiler {
       this.compileExpression(instructions, node.child1, [virtualValue, ...environment]);
       return;
     }
-    if (
-      node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
-      this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0)
-    ) {
+    const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+      this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0);
+    if (eager) {
       this.compileExpression(instructions, node.child0, environment);
     } else {
       this.compileLazyValue(instructions, node.child0, environment);
@@ -935,7 +1033,7 @@ class FunctionalWasmCompiler {
     this.compileExpression(
       instructions,
       node.child1,
-      [{ kind: "i64-local", index: value }, ...environment],
+      [{ kind: eager ? "i64-value" : "i64-local", index: value }, ...environment],
     );
   }
 
@@ -951,7 +1049,6 @@ class FunctionalWasmCompiler {
         `functional WASM let-rec at core node ${nodeIndex} binds tag ${lambda.tag}; expected a lambda`,
       );
     }
-    const slot = this.lambdaSlot(node.child0);
     const capturesSelf = this.#captureAnalysis.freeLocalDepths(lambda.child0).includes(1);
     const firstOuterCaptureByteOffset = OBJECT_HEADER_BYTE_LENGTH +
       (capturesSelf ? VALUE_BYTE_LENGTH : 0);
@@ -961,6 +1058,24 @@ class FunctionalWasmCompiler {
       environment,
       firstOuterCaptureByteOffset,
     );
+    const functionShape = this.#functionAnalysis.function(node.child0);
+    if (
+      this.#compactScalar &&
+      captured.captureSources.length === 0 &&
+      functionShape !== undefined &&
+      this.#functionAnalysis.hasOnlySaturatedSelfReferences(functionShape)
+    ) {
+      instructions.i32Const(0);
+      const closure = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(closure);
+      this.compileExpression(
+        instructions,
+        node.child1,
+        [{ kind: "i32-pointer", index: closure }, ...environment],
+      );
+      return;
+    }
+    const slot = this.lambdaSlot(node.child0);
     const pointer = this.allocateObject(
       instructions,
       CLOSURE_OBJECT_KIND,
@@ -990,9 +1105,8 @@ class FunctionalWasmCompiler {
     node: FunctionalCoreNode,
     environment: FunctionalEnvironment,
   ): void {
-    this.compileExpression(instructions, node.child0, environment);
-    instructions.i64Const(10n);
-    instructions.emit(0x51, 0x04, WasmValueType.I64);
+    this.compileBooleanExpression(instructions, node.child0, environment);
+    instructions.emit(0x04, WasmValueType.I64);
     this.compileExpression(instructions, node.child1, environment);
     instructions.emit(0x05);
     this.compileExpression(instructions, node.child2, environment);
@@ -1021,6 +1135,11 @@ class FunctionalWasmCompiler {
     nodeIndex: number,
     environment: FunctionalEnvironment,
   ): void {
+    const constant = this.constantIntegerExpression(nodeIndex, environment);
+    if (constant !== undefined) {
+      instructions.i32Const(constant);
+      return;
+    }
     const node = this.node(nodeIndex);
     switch (node.tag) {
       case FunctionalCoreTag.Integer:
@@ -1033,7 +1152,9 @@ class FunctionalWasmCompiler {
           return;
         }
         this.emitBinding(instructions, source);
-        this.emitForceValue(instructions);
+        if (source.kind === "i64-local" || source.kind === "capture") {
+          this.emitForceValue(instructions);
+        }
         this.emitDecodeInteger(instructions);
         return;
       }
@@ -1059,13 +1180,8 @@ class FunctionalWasmCompiler {
           return;
         }
         this.compileIntegerExpression(instructions, node.child0, environment);
-        const left = instructions.addLocal(WasmValueType.I32);
-        instructions.localSet(left);
+        if (node.payload === FunctionalBinaryOperator.Divide) instructions.emit(0xac);
         this.compileIntegerExpression(instructions, node.child1, environment);
-        const right = instructions.addLocal(WasmValueType.I32);
-        instructions.localSet(right);
-        instructions.localGet(left);
-        instructions.localGet(right);
         if (node.payload === FunctionalBinaryOperator.Add) {
           instructions.emit(0x6a);
         } else if (node.payload === FunctionalBinaryOperator.Subtract) {
@@ -1073,18 +1189,13 @@ class FunctionalWasmCompiler {
         } else if (node.payload === FunctionalBinaryOperator.Multiply) {
           instructions.emit(0x6c);
         } else {
-          instructions.emit(0x1a, 0x1a);
-          instructions.localGet(left);
-          instructions.emit(0xac);
-          instructions.localGet(right);
           instructions.emit(0xac, 0x7f, 0xa7);
         }
         return;
       }
       case FunctionalCoreTag.If:
-        this.compileExpression(instructions, node.child0, environment);
-        instructions.i64Const(10n);
-        instructions.emit(0x51, 0x04, WasmValueType.I32);
+        this.compileBooleanExpression(instructions, node.child0, environment);
+        instructions.emit(0x04, WasmValueType.I32);
         this.compileIntegerExpression(instructions, node.child1, environment);
         instructions.emit(0x05);
         this.compileIntegerExpression(instructions, node.child2, environment);
@@ -1100,10 +1211,31 @@ class FunctionalWasmCompiler {
           );
           return;
         }
-        if (
-          node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
-          this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0)
-        ) {
+        const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+          this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0);
+        const constantValue = eager
+          ? this.constantIntegerExpression(node.child0, environment)
+          : undefined;
+        if (constantValue !== undefined) {
+          this.compileIntegerExpression(
+            instructions,
+            node.child1,
+            [{ kind: "i32-integer-constant", literal: constantValue }, ...environment],
+          );
+          return;
+        }
+        if (eager && this.canCompileIntegerExpression(node.child0)) {
+          this.compileIntegerExpression(instructions, node.child0, environment);
+          const value = instructions.addLocal(WasmValueType.I32);
+          instructions.localSet(value);
+          this.compileIntegerExpression(
+            instructions,
+            node.child1,
+            [{ kind: "i32-integer", index: value }, ...environment],
+          );
+          return;
+        }
+        if (eager) {
           this.compileExpression(instructions, node.child0, environment);
         } else {
           this.compileLazyValue(instructions, node.child0, environment);
@@ -1113,7 +1245,7 @@ class FunctionalWasmCompiler {
         this.compileIntegerExpression(
           instructions,
           node.child1,
-          [{ kind: "i64-local", index: value }, ...environment],
+          [{ kind: eager ? "i64-value" : "i64-local", index: value }, ...environment],
         );
         return;
       }
@@ -1123,62 +1255,132 @@ class FunctionalWasmCompiler {
     }
   }
 
+  compileBooleanExpression(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const constant = this.constantBooleanExpression(nodeIndex, environment);
+    if (constant !== undefined) {
+      instructions.i32Const(constant ? 1 : 0);
+      return;
+    }
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Boolean:
+        instructions.i32Const(node.payload === 0 ? 0 : 1);
+        return;
+      case FunctionalCoreTag.Local: {
+        const source = this.localSource(environment, node.payload, nodeIndex);
+        if (source.kind === "i32-boolean") {
+          instructions.localGet(source.index);
+          return;
+        }
+        this.emitBinding(instructions, source);
+        if (source.kind === "i64-local" || source.kind === "capture") {
+          this.emitForceValue(instructions);
+        }
+        this.emitDecodeBoolean(instructions);
+        return;
+      }
+      case FunctionalCoreTag.Binary:
+        if (!isComparisonOperator(node.payload)) break;
+        this.compileIntegerExpression(instructions, node.child0, environment);
+        this.compileIntegerExpression(instructions, node.child1, environment);
+        this.emitComparison(instructions, node.payload, nodeIndex);
+        return;
+      case FunctionalCoreTag.If:
+        this.compileBooleanExpression(instructions, node.child0, environment);
+        instructions.emit(0x04, WasmValueType.I32);
+        this.compileBooleanExpression(instructions, node.child1, environment);
+        instructions.emit(0x05);
+        this.compileBooleanExpression(instructions, node.child2, environment);
+        instructions.emit(0x0b);
+        return;
+      case FunctionalCoreTag.Let: {
+        const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+          this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0);
+        const constantValue = eager
+          ? this.constantBooleanExpression(node.child0, environment)
+          : undefined;
+        if (constantValue !== undefined) {
+          this.compileBooleanExpression(
+            instructions,
+            node.child1,
+            [{ kind: "i32-boolean-constant", literal: constantValue }, ...environment],
+          );
+          return;
+        }
+        if (eager && this.canCompileBooleanExpression(node.child0)) {
+          this.compileBooleanExpression(instructions, node.child0, environment);
+          const value = instructions.addLocal(WasmValueType.I32);
+          instructions.localSet(value);
+          this.compileBooleanExpression(
+            instructions,
+            node.child1,
+            [{ kind: "i32-boolean", index: value }, ...environment],
+          );
+          return;
+        }
+        if (eager) {
+          this.compileExpression(instructions, node.child0, environment);
+        } else {
+          this.compileLazyValue(instructions, node.child0, environment);
+        }
+        const value = instructions.addLocal(WasmValueType.I64);
+        instructions.localSet(value);
+        this.compileBooleanExpression(
+          instructions,
+          node.child1,
+          [{ kind: eager ? "i64-value" : "i64-local", index: value }, ...environment],
+        );
+        return;
+      }
+    }
+    this.compileExpression(instructions, nodeIndex, environment);
+    this.emitDecodeBoolean(instructions);
+  }
+
   compileBinary(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
     environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
-    this.compileIntegerExpression(instructions, node.child0, environment);
-    const left = instructions.addLocal(WasmValueType.I32);
-    instructions.localSet(left);
-    this.compileIntegerExpression(instructions, node.child1, environment);
-    const right = instructions.addLocal(WasmValueType.I32);
-    instructions.localSet(right);
-    instructions.localGet(left);
-    instructions.localGet(right);
     switch (node.payload) {
       case FunctionalBinaryOperator.Equal:
-        instructions.emit(0x46);
-        this.emitEncodeBoolean(instructions);
-        return;
       case FunctionalBinaryOperator.NotEqual:
-        instructions.emit(0x47);
-        this.emitEncodeBoolean(instructions);
-        return;
       case FunctionalBinaryOperator.Less:
-        instructions.emit(0x48);
-        this.emitEncodeBoolean(instructions);
-        return;
       case FunctionalBinaryOperator.LessEqual:
-        instructions.emit(0x4c);
-        this.emitEncodeBoolean(instructions);
-        return;
       case FunctionalBinaryOperator.Greater:
-        instructions.emit(0x4a);
-        this.emitEncodeBoolean(instructions);
-        return;
       case FunctionalBinaryOperator.GreaterEqual:
-        instructions.emit(0x4e);
+        this.compileIntegerExpression(instructions, node.child0, environment);
+        this.compileIntegerExpression(instructions, node.child1, environment);
+        this.emitComparison(instructions, node.payload, nodeIndex);
         this.emitEncodeBoolean(instructions);
         return;
       case FunctionalBinaryOperator.Add:
+        this.compileIntegerExpression(instructions, node.child0, environment);
+        this.compileIntegerExpression(instructions, node.child1, environment);
         instructions.emit(0x6a);
         this.emitEncodeInteger(instructions);
         return;
       case FunctionalBinaryOperator.Subtract:
+        this.compileIntegerExpression(instructions, node.child0, environment);
+        this.compileIntegerExpression(instructions, node.child1, environment);
         instructions.emit(0x6b);
         this.emitEncodeInteger(instructions);
         return;
       case FunctionalBinaryOperator.Multiply:
+        this.compileIntegerExpression(instructions, node.child0, environment);
+        this.compileIntegerExpression(instructions, node.child1, environment);
         instructions.emit(0x6c);
         this.emitEncodeInteger(instructions);
         return;
       case FunctionalBinaryOperator.Divide:
-        instructions.emit(0x1a, 0x1a);
-        instructions.localGet(left);
+        this.compileIntegerExpression(instructions, node.child0, environment);
         instructions.emit(0xac);
-        instructions.localGet(right);
+        this.compileIntegerExpression(instructions, node.child1, environment);
         instructions.emit(0xac, 0x7f, 0xa7);
         this.emitEncodeInteger(instructions);
         return;
@@ -1463,6 +1665,129 @@ class FunctionalWasmCompiler {
     }
   }
 
+  canCompileIntegerExpression(nodeIndex: number): boolean {
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Integer:
+        return true;
+      case FunctionalCoreTag.Unary:
+        return node.payload === FunctionalUnaryOperator.Negate &&
+          this.canCompileIntegerExpression(node.child0);
+      case FunctionalCoreTag.Binary:
+        return !isComparisonOperator(node.payload) &&
+          this.canCompileIntegerExpression(node.child0) &&
+          this.canCompileIntegerExpression(node.child1);
+      case FunctionalCoreTag.If:
+        return this.canCompileIntegerExpression(node.child1) &&
+          this.canCompileIntegerExpression(node.child2);
+      case FunctionalCoreTag.Let:
+      case FunctionalCoreTag.LetRec:
+        return this.canCompileIntegerExpression(node.child1);
+      default:
+        return false;
+    }
+  }
+
+  canCompileBooleanExpression(nodeIndex: number): boolean {
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Boolean:
+        return true;
+      case FunctionalCoreTag.Binary:
+        return isComparisonOperator(node.payload) &&
+          this.canCompileIntegerExpression(node.child0) &&
+          this.canCompileIntegerExpression(node.child1);
+      case FunctionalCoreTag.If:
+        return this.canCompileBooleanExpression(node.child1) &&
+          this.canCompileBooleanExpression(node.child2);
+      case FunctionalCoreTag.Let:
+      case FunctionalCoreTag.LetRec:
+        return this.canCompileBooleanExpression(node.child1);
+      default:
+        return false;
+    }
+  }
+
+  constantIntegerExpression(
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): number | undefined {
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Integer:
+        return node.payload | 0;
+      case FunctionalCoreTag.Local: {
+        const source = environment[node.payload];
+        return source?.kind === "i32-integer-constant" ? source.literal : undefined;
+      }
+      case FunctionalCoreTag.Unary: {
+        if (node.payload !== FunctionalUnaryOperator.Negate) return undefined;
+        const operand = this.constantIntegerExpression(node.child0, environment);
+        return operand === undefined ? undefined : Math.imul(operand, -1);
+      }
+      case FunctionalCoreTag.Binary: {
+        if (isComparisonOperator(node.payload)) return undefined;
+        const left = this.constantIntegerExpression(node.child0, environment);
+        const right = this.constantIntegerExpression(node.child1, environment);
+        if (left === undefined || right === undefined) return undefined;
+        if (node.payload === FunctionalBinaryOperator.Add) return (left + right) | 0;
+        if (node.payload === FunctionalBinaryOperator.Subtract) return (left - right) | 0;
+        if (node.payload === FunctionalBinaryOperator.Multiply) return Math.imul(left, right);
+        if (node.payload === FunctionalBinaryOperator.Divide && right !== 0) {
+          return Math.trunc(left / right) | 0;
+        }
+        return undefined;
+      }
+      case FunctionalCoreTag.If: {
+        const condition = this.constantBooleanExpression(node.child0, environment);
+        if (condition === undefined) return undefined;
+        return this.constantIntegerExpression(
+          condition ? node.child1 : node.child2,
+          environment,
+        );
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  constantBooleanExpression(
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): boolean | undefined {
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Boolean:
+        return node.payload !== 0;
+      case FunctionalCoreTag.Local: {
+        const source = environment[node.payload];
+        return source?.kind === "i32-boolean-constant" ? source.literal : undefined;
+      }
+      case FunctionalCoreTag.Binary: {
+        if (!isComparisonOperator(node.payload)) return undefined;
+        const left = this.constantIntegerExpression(node.child0, environment);
+        const right = this.constantIntegerExpression(node.child1, environment);
+        if (left === undefined || right === undefined) return undefined;
+        if (node.payload === FunctionalBinaryOperator.Equal) return left === right;
+        if (node.payload === FunctionalBinaryOperator.NotEqual) return left !== right;
+        if (node.payload === FunctionalBinaryOperator.Less) return left < right;
+        if (node.payload === FunctionalBinaryOperator.LessEqual) return left <= right;
+        if (node.payload === FunctionalBinaryOperator.Greater) return left > right;
+        return left >= right;
+      }
+      case FunctionalCoreTag.If: {
+        const condition = this.constantBooleanExpression(node.child0, environment);
+        if (condition === undefined) return undefined;
+        return this.constantBooleanExpression(
+          condition ? node.child1 : node.child2,
+          environment,
+        );
+      }
+      default:
+        return undefined;
+    }
+  }
+
   calleeImmediatelyForcesArgument(nodeIndex: number): boolean {
     const node = this.node(nodeIndex);
     return node.tag === FunctionalCoreTag.Lambda && this.immediatelyForcesLocal(node.child0, 0);
@@ -1560,11 +1885,24 @@ class FunctionalWasmCompiler {
   emitBinding(instructions: WasmInstructions, source: FunctionalBinding): void {
     switch (source.kind) {
       case "i64-local":
+      case "i64-value":
         instructions.localGet(source.index);
         return;
       case "i32-integer":
         instructions.localGet(source.index);
         this.emitEncodeInteger(instructions);
+        return;
+      case "i32-integer-constant":
+        instructions.i32Const(source.literal);
+        this.emitEncodeInteger(instructions);
+        return;
+      case "i32-boolean":
+        instructions.localGet(source.index);
+        this.emitEncodeBoolean(instructions);
+        return;
+      case "i32-boolean-constant":
+        instructions.i32Const(source.literal ? 1 : 0);
+        this.emitEncodeBoolean(instructions);
         return;
       case "i32-pointer":
         instructions.localGet(source.index);
@@ -1596,6 +1934,42 @@ class FunctionalWasmCompiler {
   emitDecodeInteger(instructions: WasmInstructions): void {
     instructions.i64Const(3n);
     instructions.emit(0x87, 0xa7);
+  }
+
+  emitDecodeBoolean(instructions: WasmInstructions): void {
+    instructions.i64Const(10n);
+    instructions.emit(0x51);
+  }
+
+  emitComparison(
+    instructions: WasmInstructions,
+    operator: number,
+    nodeIndex: number,
+  ): void {
+    switch (operator) {
+      case FunctionalBinaryOperator.Equal:
+        instructions.emit(0x46);
+        return;
+      case FunctionalBinaryOperator.NotEqual:
+        instructions.emit(0x47);
+        return;
+      case FunctionalBinaryOperator.Less:
+        instructions.emit(0x48);
+        return;
+      case FunctionalBinaryOperator.LessEqual:
+        instructions.emit(0x4c);
+        return;
+      case FunctionalBinaryOperator.Greater:
+        instructions.emit(0x4a);
+        return;
+      case FunctionalBinaryOperator.GreaterEqual:
+        instructions.emit(0x4e);
+        return;
+      default:
+        throw new Error(
+          `functional WASM comparison operator ${operator} at core node ${nodeIndex} is unsupported`,
+        );
+    }
   }
 
   emitHostArgument(
@@ -1879,9 +2253,8 @@ class FunctionalWasmCompiler {
 
     const node = this.node(nodeIndex);
     if (node.tag === FunctionalCoreTag.If) {
-      this.compileExpression(instructions, node.child0, environment);
-      instructions.i64Const(10n);
-      instructions.emit(0x51, 0x04, 0x40);
+      this.compileBooleanExpression(instructions, node.child0, environment);
+      instructions.emit(0x04, 0x40);
       this.compileTailPosition(
         instructions,
         node.child1,
@@ -1941,15 +2314,17 @@ class FunctionalWasmCompiler {
   }
 
   allocateFunctionIndex(): number {
+    this.#requestedAllocator = true;
     return this.#functionImports.length;
   }
 
   forceThunkFunctionIndex(): number {
+    this.#requestedThunkForce = true;
     return this.#functionImports.length + 1;
   }
 
   indirectFunctionOffset(): number {
-    return this.#functionImports.length + 2;
+    return this.#functionImports.length + (this.#compactScalar ? 0 : 2);
   }
 
   node(index: number): FunctionalCoreNode {
@@ -1961,6 +2336,15 @@ class FunctionalWasmCompiler {
     }
     return node;
   }
+}
+
+function isComparisonOperator(operator: number): boolean {
+  return operator === FunctionalBinaryOperator.Equal ||
+    operator === FunctionalBinaryOperator.NotEqual ||
+    operator === FunctionalBinaryOperator.Less ||
+    operator === FunctionalBinaryOperator.LessEqual ||
+    operator === FunctionalBinaryOperator.Greater ||
+    operator === FunctionalBinaryOperator.GreaterEqual;
 }
 
 function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasmEntry {
@@ -2200,9 +2584,7 @@ function forceThunkFunction(): WasmFunctionBody {
   instructions.localGet(0);
   instructions.localGet(0);
   instructions.i32Load(8);
-  instructions.emit(0x11);
-  instructions.unsigned(4);
-  instructions.unsigned(0);
+  instructions.callIndirect(4);
   instructions.localSet(value);
   instructions.localGet(0);
   instructions.localGet(value);
@@ -2227,5 +2609,7 @@ function functionBody(
     typeIndex,
     localTypes: instructions.localTypes,
     instructions: instructions.bytes,
+    usesMemory: instructions.usesMemory,
+    usesIndirectCalls: instructions.usesIndirectCalls,
   };
 }

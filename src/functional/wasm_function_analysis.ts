@@ -106,6 +106,11 @@ export class FunctionalWasmFunctionAnalysis {
     }
   }
 
+  hasOnlySaturatedSelfReferences(functionShape: FunctionalFunctionShape): boolean {
+    return functionShape.parameterCount >= 1 &&
+      !this.#containsUnsaturatedSelfReference(functionShape.bodyNode, functionShape, 0);
+  }
+
   #registerFunction(outerLambdaNode: number): FunctionalFunctionShape | undefined {
     const lambdaNodes: number[] = [];
     let bodyNode = outerLambdaNode;
@@ -148,6 +153,90 @@ export class FunctionalWasmFunctionAnalysis {
     this.#functions.set(outerLambdaNode, functionShape);
     if (tailRecursive) this.#loops.set(innermostLambda, functionShape);
     return functionShape;
+  }
+
+  #containsUnsaturatedSelfReference(
+    nodeIndex: number,
+    functionShape: FunctionalFunctionShape,
+    binderDepth: number,
+  ): boolean {
+    if (this.tailArguments(nodeIndex, functionShape, binderDepth) !== undefined) return false;
+    const node = this.#node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Local) {
+      return functionShape.recursiveLocal &&
+        node.payload === binderDepth + functionShape.parameterCount;
+    }
+    if (node.tag === FunctionalCoreTag.Global) {
+      return functionShape.recursiveDefinition !== undefined &&
+        node.payload === functionShape.recursiveDefinition;
+    }
+    switch (node.tag) {
+      case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.Boolean:
+      case FunctionalCoreTag.Constructor:
+        return false;
+      case FunctionalCoreTag.Unary:
+        return this.#containsUnsaturatedSelfReference(
+          node.child0,
+          functionShape,
+          binderDepth,
+        );
+      case FunctionalCoreTag.Binary:
+      case FunctionalCoreTag.Apply:
+        return this.#containsUnsaturatedSelfReference(
+          node.child0,
+          functionShape,
+          binderDepth,
+        ) || this.#containsUnsaturatedSelfReference(
+          node.child1,
+          functionShape,
+          binderDepth,
+        );
+      case FunctionalCoreTag.If:
+        return this.#containsUnsaturatedSelfReference(
+          node.child0,
+          functionShape,
+          binderDepth,
+        ) || this.#containsUnsaturatedSelfReference(
+          node.child1,
+          functionShape,
+          binderDepth,
+        ) || this.#containsUnsaturatedSelfReference(
+          node.child2,
+          functionShape,
+          binderDepth,
+        );
+      case FunctionalCoreTag.Lambda:
+      case FunctionalCoreTag.PatternBind:
+        return this.#containsUnsaturatedSelfReference(
+          node.child0,
+          functionShape,
+          binderDepth + 1,
+        );
+      case FunctionalCoreTag.Let:
+        return this.#containsUnsaturatedSelfReference(
+          node.child0,
+          functionShape,
+          binderDepth,
+        ) || this.#containsUnsaturatedSelfReference(
+          node.child1,
+          functionShape,
+          binderDepth + 1,
+        );
+      case FunctionalCoreTag.LetRec:
+        return this.#containsUnsaturatedSelfReference(
+          node.child0,
+          functionShape,
+          binderDepth + 1,
+        ) || this.#containsUnsaturatedSelfReference(
+          node.child1,
+          functionShape,
+          binderDepth + 1,
+        );
+      case FunctionalCoreTag.Case:
+      case FunctionalCoreTag.CaseArm:
+        return true;
+    }
   }
 
   #containsTailCall(

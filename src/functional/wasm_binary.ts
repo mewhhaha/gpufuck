@@ -7,6 +7,8 @@ export interface WasmFunctionBody {
   readonly typeIndex: number;
   readonly localTypes: readonly number[];
   readonly instructions: readonly number[];
+  readonly usesMemory: boolean;
+  readonly usesIndirectCalls: boolean;
 }
 
 export interface WasmFunctionImport {
@@ -23,6 +25,8 @@ export interface WasmFunctionType {
 export class WasmInstructions {
   readonly bytes: number[] = [];
   readonly localTypes: number[] = [];
+  usesMemory = false;
+  usesIndirectCalls = false;
 
   readonly #parameterCount: number;
 
@@ -72,6 +76,23 @@ export class WasmInstructions {
     this.unsigned(index);
   }
 
+  callIndirect(typeIndex: number, tableIndex = 0): void {
+    this.usesIndirectCalls = true;
+    this.emit(0x11);
+    this.unsigned(typeIndex);
+    this.unsigned(tableIndex);
+  }
+
+  globalGet(index: number): void {
+    this.emit(0x23);
+    this.unsigned(index);
+  }
+
+  globalSet(index: number): void {
+    this.emit(0x24);
+    this.unsigned(index);
+  }
+
   branch(depth: number): void {
     this.emit(0x0c);
     this.unsigned(depth);
@@ -88,24 +109,28 @@ export class WasmInstructions {
   }
 
   i32Load(offset: number, alignment = 2): void {
+    this.usesMemory = true;
     this.emit(0x28);
     this.unsigned(alignment);
     this.unsigned(offset);
   }
 
   i64Load(offset: number, alignment = 3): void {
+    this.usesMemory = true;
     this.emit(0x29);
     this.unsigned(alignment);
     this.unsigned(offset);
   }
 
   i32Store(offset: number, alignment = 2): void {
+    this.usesMemory = true;
     this.emit(0x36);
     this.unsigned(alignment);
     this.unsigned(offset);
   }
 
   i64Store(offset: number, alignment = 3): void {
+    this.usesMemory = true;
     this.emit(0x37);
     this.unsigned(alignment);
     this.unsigned(offset);
@@ -121,14 +146,7 @@ export function encodeWasmModule(
   specializedCallSiteCount: number,
   additionalFunctionTypes: readonly WasmFunctionType[],
 ): Uint8Array<ArrayBuffer> {
-  const types = [
-    functionType([WasmValueType.I32], [WasmValueType.I32]),
-    functionType([], [WasmValueType.I64]),
-    functionType([WasmValueType.I32, WasmValueType.I64], [WasmValueType.I64]),
-    functionType([], [WasmValueType.I32]),
-    functionType([WasmValueType.I32], [WasmValueType.I64]),
-    ...additionalFunctionTypes.map((type) => functionType(type.parameters, type.results)),
-  ];
+  const types = wasmFunctionTypes(additionalFunctionTypes);
   const sections = [
     section(1, vector(types)),
     ...(imports.length === 0 ? [] : [section(
@@ -189,6 +207,68 @@ export function encodeWasmModule(
     0x00,
     ...sections.flat(),
   ]);
+}
+
+export function encodeCompactScalarWasmModule(
+  functions: readonly WasmFunctionBody[],
+  entryFunctionIndex: number,
+  specializedCallSiteCount: number,
+  additionalFunctionTypes: readonly WasmFunctionType[],
+): Uint8Array<ArrayBuffer> {
+  const sections = [
+    section(1, vector(wasmFunctionTypes(additionalFunctionTypes))),
+    section(3, vector(functions.map((body) => encodeUnsigned(body.typeIndex)))),
+    section(
+      6,
+      vector([
+        [0x7f, 0x00, 0x41, 0x00, 0x0b],
+        [0x7f, 0x00, 0x41, 0x00, 0x0b],
+        [0x7f, 0x00, 0x41, 0x00, 0x0b],
+        [
+          0x7f,
+          0x00,
+          0x41,
+          ...encodeSigned(BigInt(specializedCallSiteCount)),
+          0x0b,
+        ],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+      ]),
+    ),
+    section(
+      7,
+      vector([
+        [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
+        [...name("thunkEvaluations"), 0x03, 0x01],
+        [...name("runtimeFault"), 0x03, 0x02],
+        [...name("heapTop"), 0x03, 0x00],
+        [...name("specializedCallSites"), 0x03, 0x03],
+      ]),
+    ),
+    section(10, vector(functions.map(encodeFunctionBody))),
+  ];
+  return new Uint8Array([
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    ...sections.flat(),
+  ]);
+}
+
+function wasmFunctionTypes(additionalFunctionTypes: readonly WasmFunctionType[]): number[][] {
+  return [
+    functionType([WasmValueType.I32], [WasmValueType.I32]),
+    functionType([], [WasmValueType.I64]),
+    functionType([WasmValueType.I32, WasmValueType.I64], [WasmValueType.I64]),
+    functionType([], [WasmValueType.I32]),
+    functionType([WasmValueType.I32], [WasmValueType.I64]),
+    ...additionalFunctionTypes.map((type) => functionType(type.parameters, type.results)),
+  ];
 }
 
 function functionType(parameters: readonly number[], results: readonly number[]): number[] {

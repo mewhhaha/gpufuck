@@ -789,11 +789,14 @@ A successful compilation owns its GPU module buffers. Call `module.destroy()` wh
 destruction is idempotent. Evaluations borrow the module and automatically release only their own
 temporary region and stack buffers.
 
-The WASM runtime uses an aligned, growing linear-memory arena for closures, constructors, and
-thunks. A thunk stores its specialized code slot, captures, state, and cached value. The exported
-`thunkEvaluations` counter increments only on the unevaluated slow path, so
-`runFunctionalWasmModule()` reports observable sharing without counting cached forces. Its
-`allocatedBytes` statistic reports linear-memory growth during initialization and execution.
+Strict, effect-free scalar entries use a compact WASM path when every reachable value can remain an
+unboxed scalar. Those modules omit linear memory, function tables, allocation, thunk forcing, and
+indirect calls while retaining the same `main` and statistics interface. Other entries use an
+aligned, growing linear-memory arena for closures, constructors, and thunks. A thunk stores its
+specialized code slot, captures, state, and cached value. The exported `thunkEvaluations` counter
+increments only on the unevaluated slow path, so `runFunctionalWasmModule()` reports observable
+sharing without counting cached forces. Its `allocatedBytes` statistic reports linear-memory growth
+during initialization and execution.
 
 ### Lambda-set specialization
 
