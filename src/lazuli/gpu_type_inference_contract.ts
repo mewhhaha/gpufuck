@@ -70,6 +70,7 @@ export type GpuLazuliCompilationInferenceRun =
   | {
     readonly semanticState: GpuLazuliSemanticStateSnapshot;
     readonly inference: GpuLazuliTypeInferenceRun;
+    readonly coreNodeBytes?: ArrayBuffer;
   }
   | {
     readonly semanticState: GpuLazuliSemanticStateSnapshot;

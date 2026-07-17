@@ -193,6 +193,23 @@ globalThis.addEventListener("unload", () => {
   device.destroy();
 }, { once: true });
 
+Deno.bench("compile and emit WebAssembly: higher-order loop", async () => {
+  const compilation = await compiler.compileModule(higherOrderModule);
+  if (!compilation.ok) {
+    throw new Error(
+      `higher-order WASM benchmark did not compile: ${compilation.diagnostics[0].message}`,
+    );
+  }
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    if (!WebAssembly.validate(bytes)) {
+      throw new Error("higher-order benchmark emitted invalid WASM");
+    }
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.bench("emit WebAssembly: lambda-set specialized higher-order loop", async () => {
   const bytes = await compileFunctionalModuleToWasm(higherOrderCompilation.module);
   if (!WebAssembly.validate(bytes)) throw new Error("higher-order benchmark emitted invalid WASM");

@@ -204,6 +204,9 @@ export async function dispatchForReadback(
   stateBuffer: GPUBuffer,
   readbackBuffer: GPUBuffer,
   outputReadbackCapacity: number,
+  coreNodeBuffer: GPUBuffer,
+  coreReadbackByteOffset: number,
+  coreReadbackByteLength: number,
   surface: EncodedLazuliSurface,
   semanticPass: GpuLazuliSemanticCompilationPass | undefined,
   signal: AbortSignal | undefined,
@@ -221,6 +224,9 @@ export async function dispatchForReadback(
           stateBuffer,
           readbackBuffer,
           outputReadbackCapacity,
+          coreNodeBuffer,
+          coreReadbackByteOffset,
+          coreReadbackByteLength,
           semanticPass,
         ),
       validationContext: `WebGPU rejected Lazuli type inference for ${surface.nodeCount} nodes`,
@@ -246,6 +252,9 @@ export async function dispatchForReadback(
       stateBuffer,
       readbackBuffer,
       outputReadbackCapacity,
+      coreNodeBuffer,
+      coreReadbackByteOffset,
+      coreReadbackByteLength,
       semanticPass,
     );
     signal?.throwIfAborted();
@@ -278,6 +287,9 @@ function encodeInferenceDispatch(
   stateBuffer: GPUBuffer,
   readbackBuffer: GPUBuffer,
   outputReadbackCapacity: number,
+  coreNodeBuffer: GPUBuffer,
+  coreReadbackByteOffset: number,
+  coreReadbackByteLength: number,
   semanticPass: GpuLazuliSemanticCompilationPass | undefined,
 ): void {
   if (semanticPass !== undefined) {
@@ -315,6 +327,15 @@ function encodeInferenceDispatch(
       readbackBuffer,
       INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
       inferenceOutputBufferByteLength(Math.min(outputCapacity, outputReadbackCapacity)),
+    );
+  }
+  if (semanticPass !== undefined && coreReadbackByteLength > 0) {
+    commands.copyBufferToBuffer(
+      coreNodeBuffer,
+      0,
+      readbackBuffer,
+      coreReadbackByteOffset,
+      coreReadbackByteLength,
     );
   }
 }

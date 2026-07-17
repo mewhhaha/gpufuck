@@ -320,6 +320,7 @@ export class GpuLazuliSemanticCompiler {
           state.entryDefinition,
           inference.mainType,
           inference.typeDeclarations,
+          combined.coreNodeBytes,
         );
         nodeBufferTransferred = true;
         definitionBufferTransferred = true;

@@ -608,6 +608,10 @@ Deno.test("validates compiler fuel, dispatch quanta, and cancellation controls",
     ok(largeQuantum.ok);
     if (!oneStep.ok || !largeQuantum.ok) return;
     deepStrictEqual(oneStep.module.mainType, largeQuantum.module.mainType);
+    deepStrictEqual(
+      await oneStep.module.readCoreNodes(),
+      await largeQuantum.module.readCoreNodes(),
+    );
     oneStep.module.destroy();
     largeQuantum.module.destroy();
   });

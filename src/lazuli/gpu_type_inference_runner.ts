@@ -1,4 +1,4 @@
-import { LAZULI_NO_INDEX } from "./abi.ts";
+import { LAZULI_NO_INDEX, LAZULI_NODE_BYTE_LENGTH } from "./abi.ts";
 import { LazuliCompilationStatus } from "./compiler_shader.ts";
 import type { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
 import type { GpuLazuliSemanticCompilationPass } from "./gpu_semantic_contract.ts";
@@ -45,6 +45,7 @@ import {
   growWorkspaceLayout,
   INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
   inferenceArenaName,
+  inferenceReadbackCoreByteOffset,
   inferredTypeOutputByteLength,
   isWorkspaceArenaExhaustion,
   resumeOutputAfterGrowth,
@@ -166,10 +167,26 @@ async function runGpuLazuliTypeInferenceMachine(
       options.maximumStepsPerDispatch,
       options.device.limits,
     );
-    const stateReadback = await createInferenceReadbackBuffer(
+    const coreNodeByteLength = semanticPass === undefined || outputReadbackCapacity === 0
+      ? 0
+      : options.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH;
+    const coreReadbackByteOffset = inferenceReadbackCoreByteOffset(outputReadbackCapacity);
+    let coreReadbackByteLength = coreNodeByteLength <=
+        options.device.limits.maxBufferSize - coreReadbackByteOffset
+      ? coreNodeByteLength
+      : 0;
+    let stateReadback = await createInferenceReadbackBuffer(
       options.device,
       outputReadbackCapacity,
+      coreReadbackByteLength,
     );
+    if (!stateReadback.ok && coreReadbackByteLength > 0) {
+      coreReadbackByteLength = 0;
+      stateReadback = await createInferenceReadbackBuffer(
+        options.device,
+        outputReadbackCapacity,
+      );
+    }
     if (!stateReadback.ok) {
       metadataBuffer.destroy();
       workspaceBuffer.destroy();
@@ -198,6 +215,8 @@ async function runGpuLazuliTypeInferenceMachine(
     let previousSemanticSteps = initialSteps;
     let previousTransitions = 0;
     let semanticState = syntheticSemanticState(options, initialSteps);
+    let activeSemanticPass = semanticPass;
+    let coreNodeBytes: ArrayBuffer | undefined;
     while (true) {
       options.signal?.throwIfAborted();
       const remainingSteps = options.maximumSteps - previousSemanticSteps - previousTransitions;
@@ -218,8 +237,11 @@ async function runGpuLazuliTypeInferenceMachine(
         stateBuffer,
         stateReadbackBuffer,
         outputReadbackCapacity,
+        options.coreNodeBuffer,
+        coreReadbackByteOffset,
+        coreReadbackByteLength,
         options.surface,
-        semanticPass,
+        activeSemanticPass,
         options.signal,
         dispatchScheduler,
       );
@@ -229,6 +251,7 @@ async function runGpuLazuliTypeInferenceMachine(
       stateReadbackMapped = true;
       let state: InferenceStateSnapshot;
       let completedOutput: ArrayBuffer | undefined;
+      let semanticPassCompleted = false;
       try {
         const mappedRange = stateReadbackBuffer.getMappedRange();
         const dispatchView = new DataView(mappedRange);
@@ -243,6 +266,17 @@ async function runGpuLazuliTypeInferenceMachine(
           previousTransitions,
           dispatchTransitions,
         );
+        semanticPassCompleted = activeSemanticPass !== undefined &&
+          semanticState.status !== LazuliCompilationStatus.Pending;
+        if (
+          semanticPassCompleted && semanticState.status === LazuliCompilationStatus.Ok &&
+          coreReadbackByteLength > 0
+        ) {
+          coreNodeBytes = mappedRange.slice(
+            coreReadbackByteOffset,
+            coreReadbackByteOffset + coreReadbackByteLength,
+          );
+        }
         if (
           state.outputCount <= outputReadbackCapacity &&
           semanticState.status === LazuliCompilationStatus.Ok &&
@@ -258,6 +292,7 @@ async function runGpuLazuliTypeInferenceMachine(
         stateReadbackBuffer.unmap();
         stateReadbackMapped = false;
       }
+      if (semanticPassCompleted) activeSemanticPass = undefined;
       options.signal?.throwIfAborted();
       options.observeCompilationDispatch?.({
         semanticStatus: semanticState.status,
@@ -336,7 +371,11 @@ async function runGpuLazuliTypeInferenceMachine(
           transitions: state.transitions,
           totalSteps,
         });
-        return { semanticState, inference };
+        return {
+          semanticState,
+          inference,
+          ...(coreNodeBytes === undefined ? {} : { coreNodeBytes }),
+        };
       }
 
       if (state.status === LazuliInferenceStatus.Diagnostic) {

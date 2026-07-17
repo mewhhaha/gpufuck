@@ -505,12 +505,17 @@ type InferenceBuffersAllocation =
 export async function createInferenceReadbackBuffer(
   device: GPUDevice,
   outputReadbackCapacity: number,
+  coreNodeByteLength = 0,
 ): Promise<BufferAllocation> {
   const includesOutput = outputReadbackCapacity > 0;
-  const size = includesOutput
-    ? combinedInferenceReadbackByteLength(outputReadbackCapacity)
-    : INFERENCE_INTERNAL_STATE_BYTE_LENGTH;
-  const errorSubject = includesOutput
+  const size = checkedSum(
+    "type inference readback bytes",
+    inferenceReadbackCoreByteOffset(outputReadbackCapacity),
+    coreNodeByteLength,
+  );
+  const errorSubject = coreNodeByteLength > 0
+    ? "Lazuli compilation readback"
+    : includesOutput
     ? "Lazuli inferred type readback"
     : "Lazuli type inference buffers";
   device.pushErrorScope("validation");
@@ -520,7 +525,9 @@ export async function createInferenceReadbackBuffer(
   let validation: Promise<GPUError | null>;
   try {
     buffer = device.createBuffer({
-      label: includesOutput
+      label: coreNodeByteLength > 0
+        ? "Lazuli compilation state, output, and core readback"
+        : includesOutput
         ? "Lazuli type inference state and output readback"
         : "Lazuli type inference state readback",
       size,
@@ -560,12 +567,20 @@ export async function createInferenceReadbackBuffer(
   }
   if (buffer === undefined) {
     throw new Error(
-      includesOutput
+      coreNodeByteLength > 0
+        ? "WebGPU did not create a Lazuli compilation readback"
+        : includesOutput
         ? "WebGPU did not create Lazuli inferred type readback"
         : "WebGPU did not create Lazuli type inference buffers",
     );
   }
   return { ok: true, buffer };
+}
+
+export function inferenceReadbackCoreByteOffset(outputReadbackCapacity: number): number {
+  return outputReadbackCapacity > 0
+    ? combinedInferenceReadbackByteLength(outputReadbackCapacity)
+    : INFERENCE_INTERNAL_STATE_BYTE_LENGTH;
 }
 
 export async function createOutputReadbackBuffer(

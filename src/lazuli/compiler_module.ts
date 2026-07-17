@@ -79,6 +79,7 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
     entryDefinition: number,
     mainType: LazuliType,
     typeDeclarations: readonly LazuliTypeDeclaration[],
+    coreNodeBytes?: ArrayBuffer,
   ) {
     this.#device = device;
     this.nodeBuffer = nodeBuffer;
@@ -94,6 +95,9 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
     this.entryType = deepFreeze(mainType);
     this.mainType = this.entryType;
     this.typeDeclarations = deepFreeze([...typeDeclarations]);
+    if (coreNodeBytes !== undefined) {
+      this.#coreNodes = decodeCoreNodes(new DataView(coreNodeBytes), this.nodeCount);
+    }
   }
 
   async readCoreNodes(): Promise<readonly LazuliCoreNode[]> {
@@ -147,21 +151,7 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
       await readbackBuffer.mapAsync(GPUMapMode.READ);
       mapped = true;
       const words = new DataView(readbackBuffer.getMappedRange().slice(0));
-      const nodes: LazuliCoreNode[] = [];
-      for (let nodeIndex = 0; nodeIndex < this.nodeCount; nodeIndex++) {
-        const byteOffset = nodeIndex * LAZULI_NODE_BYTE_LENGTH;
-        const tag = decodeCoreTag(words.getUint32(byteOffset, true), nodeIndex);
-        nodes.push({
-          tag,
-          payload: words.getUint32(byteOffset + 4, true),
-          child0: words.getUint32(byteOffset + 8, true),
-          child1: words.getUint32(byteOffset + 12, true),
-          child2: words.getUint32(byteOffset + 16, true),
-          sourceByteOffset: words.getUint32(byteOffset + 20, true),
-          evaluationMode: decodeEvaluationMode(words.getUint32(byteOffset + 28, true), nodeIndex),
-        });
-      }
-      this.#coreNodes = deepFreeze(nodes);
+      this.#coreNodes = decodeCoreNodes(words, this.nodeCount);
       return this.#coreNodes;
     } finally {
       if (mapped) {
@@ -178,6 +168,30 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
     this.definitionBuffer.destroy();
     this.constructorBuffer.destroy();
   }
+}
+
+function decodeCoreNodes(words: DataView, nodeCount: number): readonly LazuliCoreNode[] {
+  const expectedByteLength = nodeCount * LAZULI_NODE_BYTE_LENGTH;
+  if (words.byteLength !== expectedByteLength) {
+    throw new Error(
+      `GPU Lazuli core readback has ${words.byteLength} bytes for ${nodeCount} nodes; expected ${expectedByteLength}`,
+    );
+  }
+  const nodes: LazuliCoreNode[] = [];
+  for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex++) {
+    const byteOffset = nodeIndex * LAZULI_NODE_BYTE_LENGTH;
+    const tag = decodeCoreTag(words.getUint32(byteOffset, true), nodeIndex);
+    nodes.push({
+      tag,
+      payload: words.getUint32(byteOffset + 4, true),
+      child0: words.getUint32(byteOffset + 8, true),
+      child1: words.getUint32(byteOffset + 12, true),
+      child2: words.getUint32(byteOffset + 16, true),
+      sourceByteOffset: words.getUint32(byteOffset + 20, true),
+      evaluationMode: decodeEvaluationMode(words.getUint32(byteOffset + 28, true), nodeIndex),
+    });
+  }
+  return deepFreeze(nodes);
 }
 
 function decodeEvaluationMode(value: number, nodeIndex: number): LazuliEvaluationMode {
