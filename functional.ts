@@ -40,6 +40,8 @@ export {
   FunctionalNodeWord,
   FunctionalNumericConversion,
   FunctionalPrimitiveCapability,
+  type FunctionalRelatedDiagnostic,
+  type FunctionalSourceRange,
   type FunctionalSourceType,
   type FunctionalSpan,
   type FunctionalType,
@@ -49,12 +51,73 @@ export {
   FunctionalUnaryOperator,
 } from "./src/functional/abi.ts";
 export {
+  type FunctionalLocatedDiagnostic,
+  type FunctionalSourceSpan,
+  locateFunctionalDiagnostic,
+  locateFunctionalSpan,
+} from "./src/functional/diagnostics.ts";
+export {
   type FunctionalCompilationOptions,
   type FunctionalCompileResult,
   type FunctionalCoreNode,
   GpuFunctionalCompiler,
   type GpuFunctionalModule,
 } from "./src/functional/compiler.ts";
+export type { FunctionalCompiledCoreArtifact } from "./src/functional/core_artifact.ts";
+export { GpuFunctionalComptimeExecutor } from "./src/functional/comptime.ts";
+export {
+  decodeFunctionalConstant,
+  encodeFunctionalConstant,
+  FUNCTIONAL_COMPTIME_DESCRIPTOR_SCHEMA,
+  FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPE_NAME,
+  FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPES,
+  FUNCTIONAL_COMPTIME_TYPE_TREE_NAME,
+  FUNCTIONAL_CONSTANT_ABI_VERSION,
+  functionalComptimeStringFromConstant,
+  functionalConstantExpression,
+  functionalConstantFromComptimeString,
+  functionalConstantFromTypeCoreValue,
+  type FunctionalConstantMeasurements,
+  measureFunctionalConstant,
+  validateFunctionalConstant,
+} from "./src/functional/comptime_constant.ts";
+export {
+  FUNCTIONAL_COMPTIME_IR_DEFINITION_LIST_NAME,
+  FUNCTIONAL_COMPTIME_IR_EXPRESSION_NAME,
+  FUNCTIONAL_COMPTIME_IR_SCHEMA,
+  FUNCTIONAL_COMPTIME_IR_TYPES,
+  functionalConstantFromGeneratedDefinitions,
+  functionalConstantFromSurfaceExpression,
+  type FunctionalGeneratedDefinition,
+  functionalGeneratedDefinitionsFromConstant,
+  functionalSurfaceExpressionFromConstant,
+  spliceFunctionalGeneratedDefinitions,
+} from "./src/functional/comptime_ir.ts";
+export type {
+  CompiledFunctionalComptimeFunction,
+  FunctionalComptimeDiagnostic,
+  FunctionalComptimeDiagnosticCode,
+  FunctionalComptimeExecutionOptions,
+  FunctionalComptimeExecutionResult,
+  FunctionalComptimeExportSelection,
+  FunctionalComptimeExportValue,
+  FunctionalComptimeFaultKind,
+  FunctionalComptimeFunctionCompilationOptions,
+  FunctionalComptimeFunctionCompilationResult,
+  FunctionalComptimeInvocationOptions,
+  FunctionalComptimeInvocationResult,
+  FunctionalComptimeInvocationStats,
+  FunctionalComptimeModuleArtifact,
+  FunctionalComptimeStats,
+  FunctionalConstant,
+  FunctionalPartialEvaluationResult,
+} from "./src/functional/comptime_contract.ts";
+export {
+  type FunctionalIncrementalComptimeResult,
+  type FunctionalIncrementalComptimeStats,
+  IncrementalGpuFunctionalComptimeExecutor,
+} from "./src/functional/comptime_incremental.ts";
+export { partiallyEvaluateFunctionalModule } from "./src/functional/partial_evaluation.ts";
 export type {
   FunctionalEffectCoreExpression,
   FunctionalEffectCoreModule,
@@ -62,12 +125,15 @@ export type {
 } from "./src/functional/effect_core_contract.ts";
 export {
   compileFunctionalModuleToWasm,
+  type FunctionalWasmAsyncRunOptions,
+  FunctionalWasmBoundaryError,
   type FunctionalWasmExecution,
   type FunctionalWasmRunOptions,
   FunctionalWasmRuntimeError,
   type FunctionalWasmStats,
   type FunctionalWasmValue,
   runFunctionalWasmModule,
+  runFunctionalWasmModuleAsync,
 } from "./src/functional/wasm_codegen.ts";
 export {
   FUNCTIONAL_WASM_VALUE_ABI_VERSION,
@@ -75,20 +141,42 @@ export {
   type FunctionalWasmValueAbiLayout,
 } from "./src/functional/wasm_abi.ts";
 export {
+  markFunctionalWasmScratch,
+  resetFunctionalWasmScratch,
+} from "./src/functional/wasm_value_codec.ts";
+export {
+  FUNCTIONAL_ARRAY_TYPE_NAME,
+  FUNCTIONAL_BYTES_TYPE_NAME,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
+  FUNCTIONAL_RESOURCE_TYPE_PREFIX,
+  FUNCTIONAL_SLICE_TYPE_NAME,
+  FUNCTIONAL_TEXT_TYPE_NAME,
   type FunctionalHostCapabilityDeclaration,
   type FunctionalHostFieldDeclaration,
   type FunctionalHostOperationDeclaration,
+  FunctionalHostOwnership,
   type FunctionalHostScalarType,
   type FunctionalHostType,
+  FunctionalHostTypes,
   type FunctionalHostValueDeclaration,
   type FunctionalSurfaceModuleOptions,
-  type FunctionalWasmHostOperation,
-  type FunctionalWasmHostValue,
-  type FunctionalWasmInit,
-  type FunctionalWasmInitBinding,
 } from "./src/functional/host_contract.ts";
+export type {
+  FunctionalWasmAsyncHostOperation,
+  FunctionalWasmAsyncInit,
+  FunctionalWasmBoundaryDiagnosticCode,
+  FunctionalWasmBoundaryErrorDetails,
+  FunctionalWasmBoundaryFaultKind,
+  FunctionalWasmExportDeclaration,
+  FunctionalWasmHostOperation,
+  FunctionalWasmHostValue,
+  FunctionalWasmInit,
+  FunctionalWasmInitBinding,
+  FunctionalWasmRuntimeDiagnosticCode,
+  FunctionalWasmRuntimeErrorDetails,
+  FunctionalWasmRuntimeFaultKind,
+} from "./src/functional/wasm_contract.ts";
 export {
   buildFunctionalSurfaceModule,
   type FunctionalSurfaceCaseArm,
@@ -99,13 +187,36 @@ export {
 } from "./src/functional/surface_builder.ts";
 export {
   createFunctionalModuleArtifact,
+  type FunctionalLinkDiagnosticCode,
   type FunctionalLinkedSource,
+  FunctionalLinkError,
+  type FunctionalLinkErrorDetails,
+  type FunctionalLinkFaultKind,
   type FunctionalModuleArtifact,
   type FunctionalModuleExport,
   type FunctionalModuleImport,
   type LinkedFunctionalModule,
   linkFunctionalModules,
 } from "./src/functional/module_linker.ts";
+export {
+  DirectoryFunctionalIncrementalCache,
+  type FunctionalIncrementalCache,
+  MemoryFunctionalIncrementalCache,
+} from "./src/functional/incremental_cache.ts";
+export {
+  type FunctionalIncrementalCompilationOptions,
+  type FunctionalIncrementalCompilationStats,
+  type FunctionalIncrementalCompileResult,
+  IncrementalGpuFunctionalCompiler,
+} from "./src/functional/incremental_compiler.ts";
+export {
+  buildFunctionalModuleGraph,
+  fingerprintFunctionalModuleArtifact,
+  FUNCTIONAL_INCREMENTAL_CACHE_FORMAT_VERSION,
+  type FunctionalModuleFingerprint,
+  type FunctionalModuleGraph,
+  type FunctionalModuleScc,
+} from "./src/functional/incremental_graph.ts";
 export {
   type FunctionalBatchEvaluationOptions,
   type FunctionalDeepBatchEvaluationOptions,

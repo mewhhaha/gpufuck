@@ -18,6 +18,7 @@ export interface LazuliCoreNode {
   readonly child1: number;
   readonly child2: number;
   readonly sourceByteOffset: number;
+  readonly sourceEndByte: number;
   readonly evaluationMode: LazuliEvaluationMode;
 }
 
@@ -188,6 +189,7 @@ function decodeCoreNodes(words: DataView, nodeCount: number): readonly LazuliCor
       child1: words.getUint32(byteOffset + 12, true),
       child2: words.getUint32(byteOffset + 16, true),
       sourceByteOffset: words.getUint32(byteOffset + 20, true),
+      sourceEndByte: words.getUint32(byteOffset + 24, true),
       evaluationMode: decodeEvaluationMode(words.getUint32(byteOffset + 28, true), nodeIndex),
     });
   }

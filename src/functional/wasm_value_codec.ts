@@ -5,15 +5,82 @@ import {
   type FunctionalTypeSchema,
 } from "./abi.ts";
 import type { GpuFunctionalModule } from "./compiler_module.ts";
-import type { FunctionalWasmHostValue } from "./host_contract.ts";
+import type { FunctionalWasmHostValue } from "./wasm_contract.ts";
+import {
+  FUNCTIONAL_ARRAY_TYPE_NAME,
+  FUNCTIONAL_BYTES_TYPE_NAME,
+  FUNCTIONAL_RESOURCE_TYPE_PREFIX,
+  FUNCTIONAL_SLICE_TYPE_NAME,
+  FUNCTIONAL_TEXT_TYPE_NAME,
+} from "./host_contract.ts";
 import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
 
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
 const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
+const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
+const BYTES_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.bytes;
+const ARRAY_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.array;
+const SLICE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.slice;
+const RESOURCE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.resource;
 const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
 const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
 
 export type FunctionalWasmValue = FunctionalWasmHostValue;
+
+export class FunctionalWasmValueError extends Error {
+  readonly kind: "result-too-large" | "cyclic-result";
+
+  constructor(kind: "result-too-large" | "cyclic-result", message: string) {
+    super(message);
+    this.name = "FunctionalWasmValueError";
+    this.kind = kind;
+  }
+}
+
+const allocationGroups = new WeakMap<
+  WebAssembly.Instance,
+  Map<number, readonly { readonly pointer: number; readonly byteLength: number }[]>
+>();
+const scratchMarks = new WeakMap<WebAssembly.Instance, Set<number>>();
+
+export function markFunctionalWasmScratch(instance: WebAssembly.Instance): number {
+  const heapTop = instance.exports.heapTop;
+  if (!(heapTop instanceof WebAssembly.Global)) {
+    throw new Error("functional WASM module omitted its heapTop export");
+  }
+  const mark = Number(heapTop.value) >>> 0;
+  let marks = scratchMarks.get(instance);
+  if (marks === undefined) {
+    marks = new Set();
+    scratchMarks.set(instance, marks);
+  }
+  marks.add(mark);
+  return mark;
+}
+
+export function resetFunctionalWasmScratch(
+  instance: WebAssembly.Instance,
+  mark: number,
+): void {
+  const marks = scratchMarks.get(instance);
+  if (!Number.isSafeInteger(mark) || mark < 0 || mark > 0xffffffff || !marks?.has(mark)) {
+    throw new RangeError(`functional WASM scratch mark is not active for this instance: ${mark}`);
+  }
+  const heapTop = instance.exports.heapTop;
+  const freeListHead = instance.exports.freeListHead;
+  if (!(heapTop instanceof WebAssembly.Global) || !(freeListHead instanceof WebAssembly.Global)) {
+    throw new Error("functional WASM module omitted heapTop or freeListHead exports");
+  }
+  const current = Number(heapTop.value) >>> 0;
+  if (mark > current) {
+    throw new RangeError(`functional WASM scratch mark ${mark} exceeds heap top ${current}`);
+  }
+  heapTop.value = mark;
+  freeListHead.value = 0;
+  for (const activeMark of marks) {
+    if (activeMark >= mark) marks.delete(activeMark);
+  }
+}
 
 export function describeFunctionalType(type: FunctionalType): string {
   switch (type.kind) {
@@ -30,6 +97,19 @@ export function describeFunctionalType(type: FunctionalType): string {
     case "unit":
       return "unit";
     case "named":
+      if (type.name === FUNCTIONAL_TEXT_TYPE_NAME) return "text";
+      if (type.name === FUNCTIONAL_BYTES_TYPE_NAME) return "bytes";
+      if (type.name === FUNCTIONAL_ARRAY_TYPE_NAME) {
+        return `array(${type.arguments.map(describeFunctionalType).join(", ")})`;
+      }
+      if (type.name === FUNCTIONAL_SLICE_TYPE_NAME) {
+        return `slice(${type.arguments.map(describeFunctionalType).join(", ")})`;
+      }
+      if (type.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
+        return `resource(${
+          decodeURIComponent(type.name.slice(FUNCTIONAL_RESOURCE_TYPE_PREFIX.length))
+        })`;
+      }
       return type.arguments.length === 0
         ? type.name
         : `${type.name}(${type.arguments.map(describeFunctionalType).join(", ")})`;
@@ -47,26 +127,31 @@ export function encodeFunctionalWasmValue(
   value: FunctionalWasmValue,
 ): bigint {
   const memory = instance.exports.memory;
-  const heapTop = instance.exports.heapTop;
-  if (!(memory instanceof WebAssembly.Memory) || !(heapTop instanceof WebAssembly.Global)) {
-    throw new Error("functional WASM input module omitted memory or heapTop exports");
+  const allocate = instance.exports.allocate;
+  if (!(memory instanceof WebAssembly.Memory) || typeof allocate !== "function") {
+    throw new Error("functional WASM input module omitted memory or allocate exports");
   }
+  const allocations: { readonly pointer: number; readonly byteLength: number }[] = [];
+  const allocateBytesLength = (byteLength: number): number => {
+    const alignedByteLength = (byteLength + 7) & ~7;
+    const rawPointer = allocate(alignedByteLength) as number;
+    const pointer = rawPointer >>> 0;
+    const end = pointer + alignedByteLength;
+    if (!Number.isSafeInteger(end) || end > memory.buffer.byteLength) {
+      throw new RangeError(
+        `functional WASM allocator returned ${pointer} for ${alignedByteLength} bytes with memory length ${memory.buffer.byteLength}`,
+      );
+    }
+    allocations.push({ pointer, byteLength: alignedByteLength });
+    return pointer;
+  };
   const allocateObject = (
     objectKind: number,
     payload: number,
     fields: readonly bigint[],
   ): bigint => {
     const byteLength = OBJECT_HEADER_BYTE_LENGTH + fields.length * VALUE_BYTE_LENGTH;
-    const pointer = (Number(heapTop.value) + 7) & ~7;
-    const end = pointer + byteLength;
-    if (!Number.isSafeInteger(end) || end > 0xffffffff) {
-      throw new RangeError(
-        `functional WASM input allocation from ${pointer} by ${byteLength} bytes exceeds 32-bit memory`,
-      );
-    }
-    if (end > memory.buffer.byteLength) {
-      memory.grow(Math.ceil((end - memory.buffer.byteLength) / 65_536));
-    }
+    const pointer = allocateBytesLength(byteLength);
     const view = new DataView(memory.buffer);
     view.setUint32(pointer, objectKind, true);
     view.setUint32(pointer + 4, payload, true);
@@ -79,7 +164,17 @@ export function encodeFunctionalWasmValue(
         true,
       );
     }
-    heapTop.value = end;
+    return BigInt(pointer);
+  };
+  const allocateBytes = (objectKind: number, bytes: Uint8Array): bigint => {
+    const byteLength = OBJECT_HEADER_BYTE_LENGTH + bytes.byteLength;
+    const pointer = allocateBytesLength(byteLength);
+    const view = new DataView(memory.buffer);
+    view.setUint32(pointer, objectKind, true);
+    view.setUint32(pointer + 4, 0, true);
+    view.setUint32(pointer + 8, bytes.byteLength, true);
+    view.setUint32(pointer + 12, 0, true);
+    new Uint8Array(memory.buffer, pointer + OBJECT_HEADER_BYTE_LENGTH, bytes.byteLength).set(bytes);
     return BigInt(pointer);
   };
   const allocateConstructor = (constructorIndex: number, fields: readonly bigint[]): bigint =>
@@ -132,6 +227,37 @@ export function encodeFunctionalWasmValue(
     if (expected.kind === "function") {
       throw new TypeError("functional WASM ABI does not accept host function arguments");
     }
+    if (expected.kind === "named" && expected.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+      if (input.kind !== "text") throw wasmArgumentTypeMismatch(expected, input);
+      return allocateBytes(TEXT_OBJECT_KIND, new TextEncoder().encode(input.value));
+    }
+    if (expected.kind === "named" && expected.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+      if (input.kind !== "bytes") throw wasmArgumentTypeMismatch(expected, input);
+      return allocateBytes(BYTES_OBJECT_KIND, input.value);
+    }
+    if (
+      expected.kind === "named" &&
+      (expected.name === FUNCTIONAL_ARRAY_TYPE_NAME || expected.name === FUNCTIONAL_SLICE_TYPE_NAME)
+    ) {
+      const expectedKind = expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ? "array" : "slice";
+      if (input.kind !== expectedKind) throw wasmArgumentTypeMismatch(expected, input);
+      const elementType = expected.arguments[0];
+      if (elementType === undefined || expected.arguments.length !== 1) {
+        throw new TypeError(`${expectedKind} boundary type requires exactly one element type`);
+      }
+      return allocateObject(
+        expectedKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
+        0,
+        input.values.map((element) => encode(elementType, element)),
+      );
+    }
+    if (expected.kind === "named" && expected.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
+      if (input.kind !== "resource") throw wasmArgumentTypeMismatch(expected, input);
+      if (!Number.isInteger(input.id) || input.id < 0 || input.id > 0xffffffff) {
+        throw new RangeError(`functional WASM resource id is outside u32: ${input.id}`);
+      }
+      return allocateObject(RESOURCE_OBJECT_KIND, input.id, []);
+    }
     if (expected.kind === "tuple") {
       if (input.kind !== "tuple") throw wasmArgumentTypeMismatch(expected, input);
       const constructorIndex = module.constructorNames.indexOf(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME);
@@ -161,7 +287,39 @@ export function encodeFunctionalWasmValue(
       fieldTypes.map((fieldType, index) => encode(fieldType, input.fields[index]!)),
     );
   };
-  return encode(type, value);
+  const encoded = encode(type, value);
+  if (allocations.length !== 0) {
+    let groups = allocationGroups.get(instance);
+    if (groups === undefined) {
+      groups = new Map();
+      allocationGroups.set(instance, groups);
+    }
+    groups.set(Number(BigInt.asUintN(32, encoded)), Object.freeze([...allocations]));
+  }
+  return encoded;
+}
+
+export function releaseEncodedFunctionalWasmValue(
+  instance: WebAssembly.Instance,
+  encoded: bigint,
+): void {
+  const groups = allocationGroups.get(instance);
+  if (groups === undefined) return;
+  const root = Number(BigInt.asUintN(32, encoded));
+  const allocations = groups.get(root);
+  if (allocations === undefined) return;
+  const free = instance.exports.free;
+  if (typeof free !== "function") {
+    throw new Error("functional WASM input module omitted its free export");
+  }
+  for (let index = allocations.length - 1; index >= 0; index--) {
+    const allocation = allocations[index];
+    if (allocation === undefined) {
+      throw new Error(`functional WASM allocation group omitted entry ${index}`);
+    }
+    free(allocation.pointer, allocation.byteLength);
+  }
+  groups.delete(root);
 }
 
 export function decodeFunctionalWasmValue(
@@ -199,7 +357,8 @@ export function decodeFunctionalWasmValue(
   const decode = (rawValue: bigint, expected: FunctionalType): FunctionalWasmValue => {
     decodedNodes += 1;
     if (decodedNodes > maximumResultNodes) {
-      throw new RangeError(
+      throw new FunctionalWasmValueError(
+        "result-too-large",
         `functional WASM result exceeded maximumResultNodes ${maximumResultNodes} while decoding ${
           describeFunctionalType(type)
         }`,
@@ -222,7 +381,8 @@ export function decodeFunctionalWasmValue(
     }
     const pointer = Number(BigInt.asUintN(32, forced));
     if (activePointers.has(pointer)) {
-      throw new Error(
+      throw new FunctionalWasmValueError(
+        "cyclic-result",
         `functional WASM structured result contains a cycle through pointer ${pointer}`,
       );
     }
@@ -235,13 +395,56 @@ export function decodeFunctionalWasmValue(
         );
       }
       const objectKind = view.getUint32(pointer, true);
+      const valueCount = view.getUint32(pointer + 8, true);
+      if (expected.kind === "named" && expected.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+        requireObjectKind(pointer, objectKind, TEXT_OBJECT_KIND, "text");
+        const bytes = boundedBytes(view, pointer, valueCount, "text");
+        return { kind: "text", value: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+      }
+      if (expected.kind === "named" && expected.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+        requireObjectKind(pointer, objectKind, BYTES_OBJECT_KIND, "bytes");
+        return { kind: "bytes", value: boundedBytes(view, pointer, valueCount, "bytes").slice() };
+      }
+      if (
+        expected.kind === "named" &&
+        (expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
+          expected.name === FUNCTIONAL_SLICE_TYPE_NAME)
+      ) {
+        const expectedKind = expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ? "array" : "slice";
+        requireObjectKind(
+          pointer,
+          objectKind,
+          expectedKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
+          expectedKind,
+        );
+        const elementType = expected.arguments[0];
+        if (elementType === undefined || expected.arguments.length !== 1) {
+          throw new TypeError(`${expectedKind} boundary type requires exactly one element type`);
+        }
+        const values: FunctionalWasmValue[] = [];
+        for (let index = 0; index < valueCount; index++) {
+          const offset = pointer + OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH;
+          if (offset > view.byteLength - VALUE_BYTE_LENGTH) {
+            throw new RangeError(
+              `functional WASM ${expectedKind} element ${index} exceeds memory length ${view.byteLength}`,
+            );
+          }
+          values.push(decode(view.getBigInt64(offset, true), elementType));
+        }
+        if (expectedKind === "array") return { kind: "array", values };
+        return { kind: "slice", values };
+      }
+      if (expected.kind === "named" && expected.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
+        requireObjectKind(pointer, objectKind, RESOURCE_OBJECT_KIND, "resource");
+        return { kind: "resource", id: view.getUint32(pointer + 4, true) };
+      }
       if (objectKind !== CONSTRUCTOR_OBJECT_KIND) {
         throw new Error(
           `functional WASM result pointer ${pointer} has object kind ${objectKind}; expected constructor kind ${CONSTRUCTOR_OBJECT_KIND}`,
         );
       }
       const constructorIndex = view.getUint32(pointer + 4, true);
-      const fieldCount = view.getUint32(pointer + 8, true);
+      const fieldCount = valueCount;
       const constructorName = module.constructorNames[constructorIndex];
       if (constructorName === undefined) {
         throw new Error(
@@ -314,6 +517,13 @@ export function requireFirstOrderFunctionalWasmType(
         for (const [index, argument] of current.arguments.entries()) {
           visit(argument, `${path}.arguments[${index}]`);
         }
+        if (
+          current.name === FUNCTIONAL_TEXT_TYPE_NAME ||
+          current.name === FUNCTIONAL_BYTES_TYPE_NAME ||
+          current.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
+          current.name === FUNCTIONAL_SLICE_TYPE_NAME ||
+          current.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
+        ) return;
         const key = JSON.stringify(current);
         if (visitedNamedTypes.has(key)) return;
         visitedNamedTypes.add(key);
@@ -404,6 +614,34 @@ function wasmArgumentTypeMismatch(type: FunctionalType, value: FunctionalWasmVal
   return new TypeError(
     `functional WASM argument expected ${describeFunctionalType(type)}; received ${value.kind}`,
   );
+}
+
+function requireObjectKind(
+  pointer: number,
+  actual: number,
+  expected: number,
+  valueKind: string,
+): void {
+  if (actual === expected) return;
+  throw new Error(
+    `functional WASM ${valueKind} pointer ${pointer} has object kind ${actual}; expected ${expected}`,
+  );
+}
+
+function boundedBytes(
+  view: DataView,
+  pointer: number,
+  byteLength: number,
+  valueKind: string,
+): Uint8Array {
+  const start = pointer + OBJECT_HEADER_BYTE_LENGTH;
+  const end = start + byteLength;
+  if (!Number.isSafeInteger(end) || end > view.byteLength) {
+    throw new RangeError(
+      `functional WASM ${valueKind} at pointer ${pointer} stores ${byteLength} bytes beyond memory length ${view.byteLength}`,
+    );
+  }
+  return new Uint8Array(view.buffer, start, byteLength);
 }
 
 function structuredFieldTypes(

@@ -13,11 +13,17 @@ import {
   FunctionalCoreTag,
   FunctionalEvaluationProfile,
   FunctionalExpressionTag,
+  type FunctionalIncrementalCache,
+  type FunctionalModuleArtifact,
   FunctionalTypecheckingProfile,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
+  IncrementalGpuFunctionalCompiler,
+  locateFunctionalDiagnostic,
   lowerFunctionalEffectProgram,
+  MemoryFunctionalIncrementalCache,
   requestWebGpuDevice,
+  runFunctionalWasmModule,
   surface,
 } from "../functional.ts";
 import { GpuLazuliCompiler, lazuliSurfaceToFunctionalModule, parseLazuliSource } from "../mod.ts";
@@ -101,6 +107,374 @@ Deno.test("compiles and evaluates a parser-independent functional module", async
   } finally {
     compilation.module.destroy();
   }
+});
+
+Deno.test("GPU functional evaluation accepts i64 and f32 inputs", async () => {
+  const modules = [
+    buildFunctionalSurfaceModule(
+      [{
+        name: "main",
+        parameters: ["input"],
+        annotation: null,
+        body: surface.binary(
+          FunctionalBinaryOperator.AddSignedInteger64,
+          surface.name("input"),
+          surface.signedInteger64(9n),
+        ),
+      }],
+      [],
+      "main",
+      10,
+    ),
+    buildFunctionalSurfaceModule(
+      [{
+        name: "main",
+        parameters: ["input"],
+        annotation: null,
+        body: surface.binary(
+          FunctionalBinaryOperator.MultiplyFloat32,
+          surface.name("input"),
+          surface.float32(4),
+        ),
+      }],
+      [],
+      "main",
+      10,
+    ),
+  ];
+  const compilations = await functionalRuntime().compiler.compileBatch(modules);
+  ok(compilations.every((compilation) => compilation.ok));
+  const compiled = compilations.flatMap((compilation) =>
+    compilation.ok ? [compilation.module] : []
+  );
+  try {
+    const results = await functionalRuntime().evaluator.evaluateBatch(compiled, {
+      resultForm: "deep",
+      inputs: [
+        { kind: "signed-integer-64", value: 33n },
+        { kind: "float-32", value: 1.5 },
+      ],
+    });
+    ok(results[0]?.ok);
+    ok(results[1]?.ok);
+    if (results[0]?.ok) {
+      deepStrictEqual(results[0].value, { kind: "signed-integer-64", value: 42n });
+    }
+    if (results[1]?.ok) {
+      deepStrictEqual(results[1].value, { kind: "float-32", value: 6 });
+    }
+  } finally {
+    for (const module of compiled) module.destroy();
+  }
+});
+
+Deno.test("incremental compilation rechecks dependents only when an imported interface changes", async () => {
+  const { compiler, evaluator } = functionalRuntime();
+  const cache = new MemoryFunctionalIncrementalCache();
+  const incremental = new IncrementalGpuFunctionalCompiler(compiler, { cache });
+  const integerFunction = {
+    kind: "function",
+    parameter: { kind: "integer" },
+    result: { kind: "integer" },
+  } as const;
+  const application = {
+    name: "application",
+    definitions: [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.apply(surface.name("transform"), surface.integer(21)),
+    }],
+    typeDeclarations: [],
+    imports: [{
+      name: "transform",
+      fromModule: "math",
+      exportName: "transform",
+      type: integerFunction,
+    }],
+    exports: [{ name: "main", definition: "main", type: { kind: "integer" } }],
+    sourceByteLength: 20,
+    options: {},
+  } satisfies FunctionalModuleArtifact;
+  const math = (increment: number): FunctionalModuleArtifact => ({
+    name: "math",
+    definitions: [{
+      name: "transform",
+      parameters: ["value"],
+      annotation: null,
+      body: surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.name("value"),
+        surface.integer(increment),
+      ),
+    }],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "transform", definition: "transform", type: integerFunction }],
+    sourceByteLength: 10,
+    options: {},
+  });
+  const entry = { module: "application", exportName: "main" } as const;
+
+  const first = await incremental.compile([math(1), application], entry);
+  ok(first.ok, first.ok ? undefined : first.diagnostics[0].message);
+  if (!first.ok) return;
+  try {
+    deepStrictEqual(first.incremental.compiledModules, ["application", "math"]);
+    const evaluation = await evaluator.evaluate(first.module);
+    ok(evaluation.ok);
+    if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "integer", value: 22 });
+  } finally {
+    first.module.destroy();
+  }
+
+  const restartedIncremental = new IncrementalGpuFunctionalCompiler(compiler, { cache });
+  const unchanged = await restartedIncremental.compile([math(1), application], entry);
+  ok(unchanged.ok, unchanged.ok ? undefined : unchanged.diagnostics[0].message);
+  if (!unchanged.ok) return;
+  try {
+    deepStrictEqual(unchanged.incremental.compiledModules, []);
+    deepStrictEqual(unchanged.incremental.reusedModules, ["application", "math"]);
+  } finally {
+    unchanged.module.destroy();
+  }
+
+  const implementationChange = await incremental.compile([math(2), application], entry);
+  ok(
+    implementationChange.ok,
+    implementationChange.ok ? undefined : implementationChange.diagnostics[0].message,
+  );
+  if (!implementationChange.ok) return;
+  try {
+    deepStrictEqual(implementationChange.incremental.compiledModules, ["math"]);
+    deepStrictEqual(implementationChange.incremental.reusedModules, ["application"]);
+    const evaluation = await evaluator.evaluate(implementationChange.module);
+    ok(evaluation.ok);
+    if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "integer", value: 23 });
+    const execution = await runFunctionalWasmModule(implementationChange.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 23 });
+  } finally {
+    implementationChange.module.destroy();
+  }
+
+  const booleanMath: FunctionalModuleArtifact = {
+    ...math(0),
+    definitions: [{
+      name: "transform",
+      parameters: ["value"],
+      annotation: null,
+      body: surface.boolean(true),
+    }],
+    exports: [{
+      name: "transform",
+      definition: "transform",
+      type: {
+        kind: "function",
+        parameter: { kind: "integer" },
+        result: { kind: "boolean" },
+      },
+    }],
+  };
+  const interfaceChange = await incremental.compile([booleanMath, application], entry);
+  equal(interfaceChange.ok, false);
+  if (interfaceChange.ok) return;
+  deepStrictEqual(interfaceChange.incremental.compiledModules, ["application", "math"]);
+  match(interfaceChange.diagnostics[0].message, /type|integer|boolean/i);
+});
+
+Deno.test("incremental compilation treats mutually recursive modules as one cache unit", async () => {
+  const { compiler, evaluator } = functionalRuntime();
+  const cache = new MemoryFunctionalIncrementalCache();
+  const incremental = new IncrementalGpuFunctionalCompiler(compiler, { cache });
+  const integer = { kind: "integer" } as const;
+  const left = (fallback: number): FunctionalModuleArtifact => ({
+    name: "left",
+    definitions: [{
+      name: "answer",
+      parameters: [],
+      annotation: null,
+      body: surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.name("rightAnswer"),
+        surface.integer(fallback),
+      ),
+    }],
+    typeDeclarations: [],
+    imports: [{
+      name: "rightAnswer",
+      fromModule: "right",
+      exportName: "answer",
+      type: integer,
+    }],
+    exports: [{ name: "answer", definition: "answer", type: integer }],
+    sourceByteLength: 10,
+    options: {},
+  });
+  const right: FunctionalModuleArtifact = {
+    name: "right",
+    definitions: [{
+      name: "answer",
+      parameters: [],
+      annotation: null,
+      body: surface.integer(40),
+    }],
+    typeDeclarations: [],
+    imports: [{
+      name: "leftAnswer",
+      fromModule: "left",
+      exportName: "answer",
+      type: integer,
+    }],
+    exports: [{ name: "answer", definition: "answer", type: integer }],
+    sourceByteLength: 10,
+    options: {},
+  };
+  const entry = { module: "left", exportName: "answer" } as const;
+
+  const first = await incremental.compile([left(1), right], entry);
+  ok(first.ok, first.ok ? undefined : first.diagnostics[0].message);
+  if (!first.ok) return;
+  first.module.destroy();
+  equal(first.incremental.compiledComponents, 1);
+
+  const changed = await incremental.compile([left(2), right], entry);
+  ok(changed.ok, changed.ok ? undefined : changed.diagnostics[0].message);
+  if (!changed.ok) return;
+  try {
+    deepStrictEqual(changed.incremental.compiledModules, ["left", "right"]);
+    const evaluation = await evaluator.evaluate(changed.module);
+    ok(evaluation.ok);
+    if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
+  } finally {
+    changed.module.destroy();
+  }
+});
+
+Deno.test("incremental Core relinking preserves imported constructors and case arms", async () => {
+  const { compiler } = functionalRuntime();
+  const incremental = new IncrementalGpuFunctionalCompiler(compiler, {
+    cache: new MemoryFunctionalIncrementalCache(),
+  });
+  const optionalInteger = {
+    kind: "named",
+    name: "Option",
+    arguments: [{ kind: "integer" }],
+  } as const;
+  const library: FunctionalModuleArtifact = {
+    name: "library",
+    definitions: [{
+      name: "some",
+      parameters: ["value"],
+      annotation: null,
+      body: surface.apply(surface.name("Some"), surface.name("value")),
+    }],
+    typeDeclarations: [{
+      name: "Option",
+      parameters: ["value"],
+      constructors: [
+        { name: "None", fields: [] },
+        {
+          name: "Some",
+          fields: [{ name: "value", type: { kind: "parameter", name: "value" } }],
+        },
+      ],
+    }],
+    imports: [],
+    exports: [{
+      name: "some",
+      definition: "some",
+      type: {
+        kind: "function",
+        parameter: { kind: "integer" },
+        result: optionalInteger,
+      },
+    }],
+    sourceByteLength: 20,
+    options: {},
+  };
+  const application: FunctionalModuleArtifact = {
+    name: "application",
+    definitions: [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.apply(surface.name("some"), surface.integer(42)),
+        arms: [
+          { constructor: "library::Some", binders: ["value"], body: surface.name("value") },
+          { constructor: "library::None", binders: [], body: surface.integer(0) },
+        ],
+      },
+    }],
+    typeDeclarations: [],
+    imports: [{
+      name: "some",
+      fromModule: "library",
+      exportName: "some",
+      type: {
+        kind: "function",
+        parameter: { kind: "integer" },
+        result: optionalInteger,
+      },
+    }],
+    exports: [{ name: "main", definition: "main", type: { kind: "integer" } }],
+    sourceByteLength: 20,
+    options: {},
+  };
+
+  const first = await incremental.compile(
+    [library, application],
+    { module: "application", exportName: "main" },
+  );
+  ok(first.ok, first.ok ? undefined : first.diagnostics[0].message);
+  if (!first.ok) return;
+  first.module.destroy();
+  const reused = await incremental.compile(
+    [library, application],
+    { module: "application", exportName: "main" },
+  );
+  ok(reused.ok, reused.ok ? undefined : reused.diagnostics[0].message);
+  if (!reused.ok) return;
+  try {
+    deepStrictEqual(reused.incremental.compiledModules, []);
+    const execution = await runFunctionalWasmModule(reused.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    reused.module.destroy();
+  }
+});
+
+Deno.test("incremental compilation rejects corrupted persistent cache entries with their key", async () => {
+  const corruptCache: FunctionalIncrementalCache = {
+    read: () => Promise.resolve(Uint8Array.of(0xff)),
+    write: () => Promise.resolve(),
+  };
+  const incremental = new IncrementalGpuFunctionalCompiler(functionalRuntime().compiler, {
+    cache: corruptCache,
+  });
+  const application: FunctionalModuleArtifact = {
+    name: "application",
+    definitions: [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.integer(42),
+    }],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "main", definition: "main", type: { kind: "integer" } }],
+    sourceByteLength: 10,
+    options: {},
+  };
+  await rejects(
+    () =>
+      incremental.compile(
+        [application],
+        { module: "application", exportName: "main" },
+      ),
+    /cache entry [0-9a-f]{64} is not valid UTF-8 JSON/,
+  );
 });
 
 Deno.test("checks a parser-independent rank-3 function parameter on the GPU", async () => {
@@ -507,6 +881,71 @@ Deno.test("reports functional diagnostic codes without frontend-specific prefixe
   if (compilation.ok) return;
   equal(compilation.diagnostics[0].code, "F2003");
   match(compilation.diagnostics[0].message, /missing required entry definition/);
+});
+
+Deno.test("duplicate declarations report the original source span", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [
+      {
+        name: "answer",
+        parameters: [],
+        annotation: null,
+        body: surface.integer(1),
+        span: { startByte: 0, endByte: 10 },
+      },
+      {
+        name: "answer",
+        parameters: [],
+        annotation: null,
+        body: surface.integer(2),
+        span: { startByte: 11, endByte: 21 },
+      },
+    ],
+    [],
+    "answer",
+    21,
+  );
+  const compilation = await functionalRuntime().compiler.compileModule(module);
+  equal(compilation.ok, false);
+  if (compilation.ok) return;
+  equal(compilation.diagnostics[0].code, "F2002");
+  deepStrictEqual(compilation.diagnostics[0].span, { startByte: 11, endByte: 21 });
+  deepStrictEqual(compilation.diagnostics[0].related, [{
+    message: "first declaration",
+    span: { startByte: 0, endByte: 10 },
+  }]);
+});
+
+Deno.test("linked diagnostics map primary and related spans back to frontend modules", () => {
+  const located = locateFunctionalDiagnostic(
+    [
+      { module: "library.duck", startByte: 0, endByte: 10 },
+      { module: "application.duck", startByte: 10, endByte: 30 },
+    ],
+    {
+      stage: "compile",
+      code: "F2002",
+      message: "duplicate top-level definition answer",
+      span: { startByte: 18, endByte: 24 },
+      related: [{ message: "first declaration", span: { startByte: 2, endByte: 8 } }],
+    },
+  );
+  deepStrictEqual(located, {
+    stage: "compile",
+    code: "F2002",
+    message: "duplicate top-level definition answer",
+    location: {
+      module: "application.duck",
+      span: { startByte: 8, endByte: 14 },
+    },
+    related: [{
+      message: "first declaration",
+      location: {
+        module: "library.duck",
+        span: { startByte: 2, endByte: 8 },
+      },
+    }],
+  });
 });
 
 Deno.test("keeps frontend collection names as ordinary constructors", async () => {

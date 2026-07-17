@@ -3,10 +3,17 @@ import type {
   FunctionalDiagnostic,
   FunctionalEvaluationMode,
   FunctionalEvaluationProfile,
+  FunctionalSourceRange,
   FunctionalType,
   FunctionalTypeDeclaration,
 } from "./abi.ts";
 import type { FunctionalHostCapabilityDeclaration } from "./host_contract.ts";
+
+export interface FunctionalWasmExport {
+  readonly name: string;
+  readonly definitionIndex: number;
+  readonly type: FunctionalType;
+}
 
 export interface FunctionalCoreNode {
   readonly tag: FunctionalCoreTag;
@@ -15,6 +22,7 @@ export interface FunctionalCoreNode {
   readonly child1: number;
   readonly child2: number;
   readonly sourceByteOffset: number;
+  readonly sourceEndByte: number;
   readonly evaluationMode: FunctionalEvaluationMode;
 }
 
@@ -28,12 +36,15 @@ export interface GpuFunctionalModule {
   readonly typeCount: number;
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
+  readonly definitionNames: readonly string[];
   readonly definitionRoots: readonly number[];
   readonly entryDefinition: number;
   readonly entryType: FunctionalType;
   readonly entryEffects: readonly string[];
   readonly typeDeclarations: readonly FunctionalTypeDeclaration[];
   readonly hostCapabilities: readonly FunctionalHostCapabilityDeclaration[];
+  readonly wasmExports: readonly FunctionalWasmExport[];
+  readonly sources: readonly FunctionalSourceRange[];
   readonly evaluationProfile: FunctionalEvaluationProfile;
   readCoreNodes(): Promise<readonly FunctionalCoreNode[]>;
   destroy(): void;

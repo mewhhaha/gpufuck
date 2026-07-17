@@ -14,6 +14,11 @@ export interface FunctionalWasmValueAbiLayout {
     constructor: number;
     thunk: number;
     numeric: number;
+    text: number;
+    bytes: number;
+    array: number;
+    slice: number;
+    resource: number;
   }>;
   readonly numericKinds: Readonly<{
     signedInteger64: number;
@@ -43,6 +48,11 @@ export const FunctionalWasmValueAbi: FunctionalWasmValueAbiLayout = Object.freez
       constructor: 2,
       thunk: 3,
       numeric: 4,
+      text: 5,
+      bytes: 6,
+      array: 7,
+      slice: 8,
+      resource: 9,
     }),
     numericKinds: Object.freeze({
       signedInteger64: 1,

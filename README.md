@@ -147,6 +147,37 @@ Expected compile errors are returned as `FunctionalCompileResult` diagnostics wi
 `GpuFunctionalModule` owns GPU buffers and must be destroyed; emitted WASM bytes remain valid after
 that destruction.
 
+### Failure model
+
+The public API separates source-program failures from invalid calls and infrastructure failures:
+
+| Boundary                                                        | Failure channel                                       | Structured evidence                                                                |
+| --------------------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `compileModule()` and `compileBatch()`                          | `{ ok: false, diagnostics }`                          | `F1xxx`/`F2xxx`, UTF-8 span, and related declaration spans                         |
+| `GpuFunctionalEvaluator` and Type Core execution                | `{ ok: false, fault }`                                | `F3001`–`F3012`, fault kind, source offset, and execution statistics               |
+| required compile-time execution                                 | compile result, runtime fault, or comptime diagnostic | `F1xxx`/`F2xxx`, `F3xxx`, or `F5001`–`F5002` with the responsible export and limit |
+| `linkFunctionalModules()`                                       | throws `FunctionalLinkError`                          | `F4001`–`F4007`, fault kind, module, and referenced import or export               |
+| WASM arguments and `init`                                       | throws `FunctionalWasmBoundaryError`                  | `F4101`/`F4102`, fault kind, and field path                                        |
+| `runFunctionalWasmModule()` and its async variant               | throws `FunctionalWasmRuntimeError`                   | runtime code, entry name, core node, source span, and original cause               |
+| WebGPU discovery, cancellation, or violated internal invariants | rejects or throws                                     | actionable message with the original cause where one exists                        |
+
+Malformed encoded IR and invalid numeric options throw before GPU submission because they are API
+contract violations, not source-language diagnostics. Cancellation rejects with the caller's abort
+reason. A host operation failure is wrapped as `F3101` with its capability and operation while
+retaining the host exception in `cause`; division by zero, blackholes, allocation failure, result
+limits, cyclic results, replay divergence, and suspension limits likewise have distinct runtime
+kinds.
+
+The typed translation belongs to the library runners. Code that instantiates emitted bytes directly
+receives native `WebAssembly.RuntimeError` traps; generated modules export `runtimeFault` and
+`runtimeFaultNode` globals so another runtime adapter can perform the same translation.
+
+`FunctionalDiagnostic.related` points to declarations involved in conflicts. Linked modules retain
+their source ranges on the compiled module, so runtime faults are remapped automatically.
+`locateFunctionalDiagnostic(linked.sources, diagnostic)` performs the same remapping for compile
+diagnostics. Frontends remain responsible for converting module-relative UTF-8 byte spans into
+filenames, lines, columns, and source-language wording.
+
 ## Connect your language frontend
 
 Your frontend should perform syntax-specific work and stop at the functional surface:
@@ -294,13 +325,18 @@ fuel, dispatch-quantum, and cancellation bounds.
   values; tuples and nominal constructors use the versioned `FunctionalWasmValueAbi` memory layout.
   Higher-order functions remain internal and cannot cross the public WASM boundary.
 - Primitive numeric profiles include wrapping signed `i32`, signed `i64`, IEEE-754 `f32`, and
-  IEEE-754 `f64`, with typed comparisons, arithmetic, negation, and explicit conversions. A frontend
-  still owns numeric-class defaulting and its source language's overflow policy.
-- The bounded GPU graph evaluator remains an `i32`/Boolean/unit/algebraic-value oracle. Wide numeric
-  programs are typechecked on the GPU and executed by the WASM backend; the evaluator rejects their
-  primitive nodes instead of silently narrowing them.
-- Mutation, ownership, exceptions, async suspension, source layout, FFI, and garbage collection are
-  not implicit backend services. Lower them explicitly or reject them at your frontend boundary.
+  IEEE-754 `f64`, with typed comparisons, arithmetic, signed remainder, integer bit operations and
+  shifts, `f32` square root, numeric conversions, and `i32`/`f32` bit reinterpretation. A frontend
+  still owns numeric-class defaulting and its source language's overflow policy. Raw memory
+  intrinsics and native `v128` operations are not functional-core primitives.
+- The graph evaluator executes `i32`, two-word software `i64`, and exactly representable basic `f32`
+  operations on the GPU. `f64`, `f32` division, and `f32` square root use separately cached,
+  fuel-instrumented WASM because portable WGSL does not provide `i64`/`f64` and may relax division
+  rounding. GPU dispatch, heap, and stack controls apply only to the GPU path; the WASM path accepts
+  the common semantic fuel bound.
+- Mutation, exceptions, source layout, FFI, and garbage collection are not implicit backend
+  services. Ownership is explicit at the host boundary, and frontends still prove borrow and move
+  correctness before selecting those contracts.
 - Semantic compilation requires WebGPU. The emitted WASM does not.
 
 See [Deliberate limits](#deliberate-limits) for exact structural and runtime bounds.
@@ -360,18 +396,32 @@ Consumers that instantiate emitted bytes themselves can use `FunctionalWasmValue
 depending on private code-generator details. ABI v1 uses eight-byte values and aligned objects with
 this public header:
 
-| Byte offset | Width | Meaning                                              |
-| ----------- | ----- | ---------------------------------------------------- |
-| 0           | 4     | Object kind: closure, constructor, thunk, or numeric |
-| 4           | 4     | Constructor index, thunk state, or numeric kind      |
-| 8           | 4     | Number of following eight-byte values                |
-| 12          | 4     | Reserved                                             |
-| 16          | ...   | Contiguous values                                    |
+| Byte offset | Width | Meaning                                                |
+| ----------- | ----- | ------------------------------------------------------ |
+| 0           | 4     | Object kind                                            |
+| 4           | 4     | Constructor index, state, numeric kind, or resource ID |
+| 8           | 4     | Field count or byte length                             |
+| 12          | 4     | Reserved                                               |
+| 16          | ...   | Contiguous values or bytes                             |
 
 Call the exported `initialize()` before allocating an entry argument. `forceValue(i64) -> i64`
 forces a possibly lazy field. Scalar entry parameters and results use native WASM values; structured
 values use the shared `i64` value representation. Higher-order values are deliberately excluded from
 this boundary.
+
+`FunctionalHostTypes` adds UTF-8 text, bytes, typed arrays, typed slices, and nominal resource
+handles to that boundary. Generated modules export `allocate`, `free`, `heapTop`, and
+`freeListHead`; transferred arguments are released into a reusable free list, while
+`markFunctionalWasmScratch()` and `resetFunctionalWasmScratch()` provide explicit region cleanup.
+Host fields can declare bounded-borrow, frozen-shareable, ownership-transfer, and unique contracts.
+
+Use `wasmExports` in `FunctionalSurfaceModuleOptions` to publish additional annotated definitions as
+independent persistent WASM callables. `main` remains the selected whole-program entry.
+
+Suspending operations execute with `runFunctionalWasmModuleAsync()`. The runner memoizes completed
+host calls, unwinds at an unresolved Promise, awaits it, and resumes by deterministic replay without
+repeating already completed effects. `maximumSuspensions` bounds that protocol. The ordinary direct
+runner remains synchronous and rejects a module that declares suspending operations.
 
 ### Link separately prepared modules
 
@@ -397,6 +447,224 @@ Nominal types referenced by an import are resolved from its source module. An im
 refer to `Box` when that name is unambiguous or use `library::Box` explicitly. Linked constructor
 names are likewise qualified in decoded WASM values, which prevents unrelated modules from silently
 sharing a nominal type.
+
+### Recompile changed modules incrementally
+
+Use `IncrementalGpuFunctionalCompiler` when a frontend retains module artifacts across builds. It
+fingerprints each module's exported interface separately from its implementation, compiles changed
+dependency SCCs in one GPU batch, and relinks cached resolved Core by symbolic definition and
+constructor names:
+
+```ts
+import {
+  compileFunctionalModuleToWasm,
+  DirectoryFunctionalIncrementalCache,
+  GpuFunctionalCompiler,
+  IncrementalGpuFunctionalCompiler,
+} from "@mewhhaha/gpufuck";
+
+const compiler = await GpuFunctionalCompiler.create(device);
+const incremental = new IncrementalGpuFunctionalCompiler(compiler, {
+  cache: new DirectoryFunctionalIncrementalCache(".gpufuck-cache"),
+  // Change this when the frontend's lowering rules or private IR ABI change.
+  compilerVersion: "my-language-frontend@3",
+});
+const result = await incremental.compile(
+  [libraryArtifact, applicationArtifact],
+  { module: "application", exportName: "main" },
+);
+if (!result.ok) {
+  console.error(result.diagnostics);
+} else {
+  try {
+    console.log(result.incremental.compiledModules);
+    const wasmBytes = await compileFunctionalModuleToWasm(result.module);
+    // Store or instantiate wasmBytes.
+  } finally {
+    result.module.destroy();
+  }
+}
+```
+
+Changing only a module body invalidates that module's SCC. Importers reuse their typechecked Core as
+long as every imported interface is unchanged. Changing an exported type, nominal declaration,
+effect/capability boundary, evaluation profile, or WASM export invalidates reverse dependencies.
+Mutually recursive modules are always compiled and cached as one unit. All cache keys also include
+the Functional ABI, cache format, target, and compiler/frontend version.
+
+`MemoryFunctionalIncrementalCache` is useful for a watch process. The directory cache survives
+processes and requires Deno read/write permission for its directory. Cache entries contain portable
+resolved Core and inferred entry types, never live `GPUBuffer` objects. WASM emission still performs
+whole-program capture analysis and specialization after relinking, so cached modules do not prevent
+cross-module optimization. The ordinary `linkFunctionalModules()` plus `compileModule()` path
+remains a whole-program compilation, and the portable cache is not a dynamic-linking or public WASM
+object-file format.
+
+### Evaluate required constants at compile time
+
+`GpuFunctionalComptimeExecutor` is the target-neutral staging boundary for frontends that have a
+`comptime`, `consteval`, type-reflection, or required-constant construct. A comptime artifact uses
+the same definitions, nominal types, imports, exports, and evaluation profiles as an ordinary
+Functional module, but it deliberately has no host capabilities or effects. Its selected exports
+must evaluate to closed first-order constants.
+
+```ts
+import {
+  FunctionalBinaryOperator,
+  type FunctionalComptimeModuleArtifact,
+  GpuFunctionalComptimeExecutor,
+  requestWebGpuDevice,
+  surface,
+} from "@mewhhaha/gpufuck";
+
+const constants: FunctionalComptimeModuleArtifact = {
+  name: "configuration",
+  definitions: [{
+    name: "bufferSize",
+    parameters: [],
+    annotation: { kind: "integer" },
+    body: surface.binary(
+      FunctionalBinaryOperator.Multiply,
+      surface.integer(64),
+      surface.integer(1024),
+    ),
+  }],
+  typeDeclarations: [],
+  imports: [],
+  exports: [{
+    name: "bufferSize",
+    definition: "bufferSize",
+    type: { kind: "integer" },
+  }],
+  sourceByteLength: 24,
+};
+
+const device = await requestWebGpuDevice();
+try {
+  const executor = await GpuFunctionalComptimeExecutor.create(device);
+  const result = await executor.execute([constants], {
+    maximumCompilationSteps: 100_000,
+    maximumExecutionSteps: 100_000,
+    maximumOutputBytes: 64 * 1024,
+  });
+  if (!result.ok) throw new Error(JSON.stringify(result));
+  console.log(result.exports[0]?.value); // { kind: "integer", value: 65536 }
+} finally {
+  device.destroy();
+}
+```
+
+An exported single-argument comptime function can be compiled once and invoked repeatedly. Use a
+tuple when the metaprogram has several logical arguments. Each call is bounded independently, and a
+bounded in-process LRU memoizes successful calls by the resolved-Core fingerprint, encoded constant
+argument, and execution-fuel policy:
+
+```ts
+const specializer: FunctionalComptimeModuleArtifact = {
+  name: "specializer",
+  definitions: [{
+    name: "specialize",
+    parameters: ["value"],
+    annotation: {
+      kind: "function",
+      parameter: { kind: "integer" },
+      result: { kind: "integer" },
+    },
+    body: surface.binary(
+      FunctionalBinaryOperator.Multiply,
+      surface.name("value"),
+      surface.integer(2),
+    ),
+  }],
+  typeDeclarations: [],
+  imports: [],
+  exports: [{
+    name: "specialize",
+    definition: "specialize",
+    type: {
+      kind: "function",
+      parameter: { kind: "integer" },
+      result: { kind: "integer" },
+    },
+  }],
+  sourceByteLength: 32,
+};
+const compilation = await executor.compileFunction(
+  [specializer],
+  { module: "specializer", exportName: "specialize" },
+);
+if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+try {
+  const result = await compilation.compiledFunction.invoke(
+    { kind: "integer", value: 64 },
+    { maximumExecutionSteps: 100_000 },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result));
+  console.log(result.value, result.stats.memoized);
+} finally {
+  compilation.compiledFunction.destroy();
+}
+```
+
+The result remains an ordinary typed `FunctionalConstant`. Scalar and aggregate constants are
+values; `FUNCTIONAL_COMPTIME_DESCRIPTOR_SCHEMA` carries type trees; frontend-declared ADTs carry
+proofs and capability evidence. Because those distinctions are represented by the metaprogram's
+checked result type rather than by privileged host tags, a frontend can define richer evidence
+without extending gpufuck.
+
+Code generation uses the canonical `FUNCTIONAL_COMPTIME_IR_TYPES` ADTs. A metaprogram returns a
+`FUNCTIONAL_COMPTIME_IR_SCHEMA` definition list, the host decodes it with
+`functionalGeneratedDefinitionsFromConstant()`, and `spliceFunctionalGeneratedDefinitions()` adds
+the inferred definitions to a normal module artifact. The decoder rejects malformed constructors,
+UTF-8 names, operator identifiers, evaluation profiles, and list shapes before the generated code
+reaches the compiler. Linking, resolution, inference, diagnostics, and Wasm emission then follow the
+same path as handwritten Functional IR. Generated fragments currently contain definitions and
+expressions; imports, exports, nominal declarations, and annotations remain explicit host artifact
+metadata.
+
+```sh
+deno task run:comptime-codegen
+```
+
+Required execution supports pure functions, bounded recursion, all Functional scalar types, tuples,
+ADTs, cases, and constants imported across modules. Compiler fuel, semantic execution fuel, output
+nodes, output bytes, and output depth are bounded on every path. Closed first-order constants
+execute through fuel-instrumented WASM by default; the GPU still performs resolution and inference.
+Passing `maximumStepsPerDispatch`, `heapSlots`, or `stackFrames` explicitly selects GPU evaluation
+for deterministic dispatch and workspace testing. Outputs containing functions also use the GPU so
+they can be reported as `F5001` rather than failing at the first-order WASM boundary. Exhausting a
+compiler or evaluator budget returns that subsystem's structured diagnostic or fault; an invalid
+float-to-integer conversion returns `F3012`, while a closure or oversized result returns `F5001` or
+`F5002`.
+
+The canonical `FunctionalConstant` ABI represents `i64`, `f32`, and `f64`, including NaN,
+infinities, and negative zero. GPU `i64` arithmetic wraps to two's-complement 64-bit results. The
+default instrumented WASM path charges deterministic semantic steps, including recursive calls.
+Generated instrumented modules are retained in a bounded cache keyed by the resolved Core and its
+code-generation metadata, so equivalent recompilations reuse the same executable artifact without
+retaining GPU buffers. An `AbortSignal` is observed between GPU dispatches and before and after
+synchronous WASM execution; it cannot interrupt the engine while one WASM call is on the stack.
+
+Use `IncrementalGpuFunctionalComptimeExecutor` with a memory or directory incremental cache for
+cross-module constants. Cache entries are keyed by implementation and dependency output. If a
+dependency's implementation changes but computes the same exported constants, its consumers remain
+valid; a changed constant invalidates the reverse dependency closure. Mutually recursive modules
+remain one cache unit.
+
+Use `deno task bench:functional-comptime` to compare default bounded-WASM execution, explicit GPU
+evaluation, packed batches, and unchanged incremental cache hits on the active machine. Tiny scalar
+constants are intentionally a WASM workload: GPU submission and readback latency is larger than the
+computation, while the GPU compiler continues to amortize well across wide source batches.
+
+Type Core results can cross the same staging boundary without a second reflection runtime.
+`functionalConstantFromTypeCoreValue()` converts a Type Core integer, Boolean, symbol, or type tree
+to ordinary descriptor ADTs declared by `FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPES`. A frontend may add
+those declarations to a comptime artifact and inspect them with normal constructors and cases.
+
+`partiallyEvaluateFunctionalModule()` is the optional optimization form. It attempts exported or
+annotated nullary definitions and replaces successful pure results with literal Functional
+expressions. Compile errors, runtime faults, closures, and limits leave the original artifact
+unchanged, so this optimization never decides whether a valid runtime program compiles.
 
 ## Learn from the included frontends
 
@@ -643,8 +911,8 @@ every use of a host field without needing host-specific inference rules or core 
 instantiation. Immutable values are read once while constructing `Init`. Operations become direct
 WASM imports under `functional_init:<capability>` and receive and return the same values accepted by
 `runFunctionalWasmModule()`. The host ABI supports `i32`, `i64`, `f32`, `f64`, boolean, unit, tuple,
-and nominal constructor fields and operations. It is synchronous and propagates host exceptions to
-the caller.
+and nominal constructor fields and operations. It is synchronous and wraps host exceptions with the
+capability and operation name while preserving the original exception as `cause`.
 
 Purity is a frontend contract recorded on each operation as `pure` or `effectful`; the backend never
 guesses it from a JavaScript implementation. The language decides which operations are effects and
@@ -940,14 +1208,17 @@ number of emitted direct lambda candidates; it is static for one emitted module,
 thunk and allocation counters.
 
 ```sh
+deno task bench:functional-comptime
 deno task bench:functional-wasm
 ```
 
-The benchmark emits and runs a 1,000-iteration higher-order loop, its direct first-order form, an
-uncurried tail worker, and a hand-written structured-control-flow WASM loop. The last pair
-determines whether another CFG/SSA IR would currently buy runtime performance rather than merely add
-a compiler stage. It separately reports cached emission, fresh-instance execution, and calls on one
-warm instance so setup cost is not mistaken for generated-code cost.
+The comptime benchmark compares bounded-WASM scalar and batch execution with explicit GPU controls
+and unchanged incremental-result reuse. The runtime benchmark emits and runs a 1,000-iteration
+higher-order loop, its direct first-order form, an uncurried tail worker, and a hand-written
+structured-control-flow WASM loop. The last pair determines whether another CFG/SSA IR would
+currently buy runtime performance rather than merely add a compiler stage. It separately reports
+cached emission, fresh-instance execution, and calls on one warm instance so setup cost is not
+mistaken for generated-code cost.
 
 ## Packed ABI reference
 
@@ -1034,7 +1305,8 @@ The module declares its ABI version, source extent, entry symbol, semantic profi
 primitive capability set before its four typed-array tables. The host validates this envelope and
 all record lengths before allocating or submitting GPU work. Unsupported versions, profiles, or
 capabilities fail with evidence at that boundary. Compile diagnostics use frontend-neutral `F` codes
-and UTF-8 byte spans; runtime faults use `F3001`–`F3011`.
+and UTF-8 byte spans; evaluator faults use `F3001`–`F3012`, WASM runtime integration uses `F31xx`,
+linking uses `F40xx`, and invalid WASM boundary values use `F41xx`.
 
 Unit and pair are core primitives represented by the reserved constructor names exported as
 `FUNCTIONAL_UNIT_CONSTRUCTOR_NAME` and `FUNCTIONAL_PAIR_CONSTRUCTOR_NAME`. Other constructor and
@@ -1183,10 +1455,10 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
 
 ## Deliberate limits
 
-- Effect Core supports concrete first-order scalar, tuple, and nominal operation signatures with at
-  most 32 distinct effectful operations per module. Higher-order operation values and open
-  effect-row variables remain frontend concerns. Suspending host operations are represented at the
-  boundary but require a frontend runtime rather than the synchronous direct WASM runner.
+- Effect Core supports concrete first-order scalar, tuple, nominal, text, bytes, array, slice, and
+  resource operation signatures with at most 32 distinct effectful operations per module.
+  Higher-order operation values and open effect-row variables remain frontend concerns. Suspending
+  host operations require the async replay runner rather than the synchronous direct WASM runner.
 - Source is capped at 1 MiB, surface trees at 65,536 nodes, semantic depth at 512, and constructor
   arity at 64. Extremely deep concrete syntax can reach the generated parser's stack-safe limit
   sooner and returns `F1003` through the neutral API.
@@ -1210,9 +1482,11 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
   entry. `FunctionalWasmValueAbi` v1 defines the shared eight-byte values, sixteen-byte object
   headers, constructor fields, and boxed wide numerics used by arguments, results, and host
   capabilities. Cyclic structured results and higher-order boundary values are rejected.
-- Direct WASM execution is synchronous and currently relies on the engine's stack and memory traps;
-  fuel, cancellation, and an explicit linear-memory ceiling remain features of the GPU evaluator.
-- A run has bounded fuel, heap, and continuation stack. It has no in-run collector or free list.
+- Direct public WASM execution relies on the engine's stack and memory traps. Required compile-time
+  IEEE execution uses a separate fuel-instrumented artifact; it does not accept GPU dispatch, heap,
+  or continuation-stack controls.
+- A GPU run has bounded fuel, heap, and continuation stack. Generated WASM uses a reusable explicit
+  free list but does not trace unreachable objects or infer ownership.
 - GPU compilation is ordered within one module; `compileBatch()` executes heterogeneous modules as
   independent packed lanes. Evaluation can likewise batch heterogeneous modules in independent
   runtime regions.

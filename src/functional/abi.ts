@@ -32,6 +32,7 @@ import {
   LazuliUnaryOperator,
 } from "../lazuli/abi.ts";
 import type { FunctionalHostCapabilityDeclaration } from "./host_contract.ts";
+import type { FunctionalWasmExportDeclaration } from "./wasm_contract.ts";
 
 export const FUNCTIONAL_MODULE_ABI_VERSION = LAZULI_ABI_VERSION;
 export const FUNCTIONAL_NO_INDEX = LAZULI_NO_INDEX;
@@ -132,11 +133,23 @@ type FunctionalCode<Code extends string> = Code extends `L${infer Suffix}` ? `F$
 
 export type FunctionalDiagnosticCode = FunctionalCode<LazuliDiagnosticCode>;
 
+export interface FunctionalRelatedDiagnostic {
+  readonly message: string;
+  readonly span: FunctionalSpan;
+}
+
 export interface FunctionalDiagnostic {
   readonly stage: "compile";
   readonly code: FunctionalDiagnosticCode;
   readonly message: string;
   readonly span: FunctionalSpan;
+  readonly related?: readonly FunctionalRelatedDiagnostic[];
+}
+
+export interface FunctionalSourceRange {
+  readonly module: string;
+  readonly startByte: number;
+  readonly endByte: number;
 }
 
 export interface EncodedFunctionalModule {
@@ -146,6 +159,8 @@ export interface EncodedFunctionalModule {
   readonly typecheckingProfile: FunctionalTypecheckingProfile;
   readonly primitiveCapabilities: readonly FunctionalPrimitiveCapability[];
   readonly hostCapabilities?: readonly FunctionalHostCapabilityDeclaration[];
+  readonly wasmExports?: readonly FunctionalWasmExportDeclaration[];
+  readonly sources?: readonly FunctionalSourceRange[];
   readonly nodeWords: Uint32Array;
   readonly definitionWords: Uint32Array;
   readonly typeWords: Uint32Array;

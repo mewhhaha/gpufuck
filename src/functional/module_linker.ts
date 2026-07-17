@@ -1,6 +1,7 @@
 import {
   type EncodedFunctionalModule,
   FunctionalEvaluationProfile,
+  type FunctionalSourceRange,
   type FunctionalSpan,
   type FunctionalTypeSchema,
 } from "./abi.ts";
@@ -15,6 +16,48 @@ import {
   type FunctionalSurfaceExpression,
   type FunctionalSurfaceTypeDeclaration,
 } from "./surface_builder.ts";
+
+export type FunctionalLinkDiagnosticCode =
+  | "F4001"
+  | "F4002"
+  | "F4003"
+  | "F4004"
+  | "F4005"
+  | "F4006"
+  | "F4007";
+
+export type FunctionalLinkFaultKind =
+  | "invalid-artifact"
+  | "duplicate-module"
+  | "missing-import"
+  | "incompatible-profile"
+  | "incompatible-capability"
+  | "missing-entry"
+  | "duplicate-export";
+
+export interface FunctionalLinkErrorDetails {
+  readonly code: FunctionalLinkDiagnosticCode;
+  readonly kind: FunctionalLinkFaultKind;
+  readonly message: string;
+  readonly module?: string;
+  readonly reference?: string;
+}
+
+export class FunctionalLinkError extends Error {
+  readonly code: FunctionalLinkDiagnosticCode;
+  readonly kind: FunctionalLinkFaultKind;
+  readonly module: string | undefined;
+  readonly reference: string | undefined;
+
+  constructor(details: FunctionalLinkErrorDetails, cause?: unknown) {
+    super(`${details.code}: ${details.message}`, { cause });
+    this.name = "FunctionalLinkError";
+    this.code = details.code;
+    this.kind = details.kind;
+    this.module = details.module;
+    this.reference = details.reference;
+  }
+}
 
 export interface FunctionalModuleImport {
   readonly name: string;
@@ -39,11 +82,7 @@ export interface FunctionalModuleArtifact {
   readonly options: FunctionalSurfaceModuleOptions;
 }
 
-export interface FunctionalLinkedSource {
-  readonly module: string;
-  readonly startByte: number;
-  readonly endByte: number;
-}
+export type FunctionalLinkedSource = FunctionalSourceRange;
 
 export interface LinkedFunctionalModule {
   readonly module: EncodedFunctionalModule;
@@ -55,7 +94,8 @@ export function createFunctionalModuleArtifact(
 ): FunctionalModuleArtifact {
   requireModuleName(artifact.name, "module name");
   if (!Number.isSafeInteger(artifact.sourceByteLength) || artifact.sourceByteLength < 0) {
-    throw new RangeError(
+    throw invalidFunctionalArtifact(
+      artifact.name,
       `functional module ${
         JSON.stringify(artifact.name)
       } sourceByteLength must be non-negative; received ${artifact.sourceByteLength}`,
@@ -67,7 +107,8 @@ export function createFunctionalModuleArtifact(
     requireModuleName(imported.fromModule, `import ${JSON.stringify(imported.name)} source module`);
     requireModuleName(imported.exportName, `import ${JSON.stringify(imported.name)} export name`);
     if (importNames.has(imported.name)) {
-      throw new Error(
+      throw invalidFunctionalArtifact(
+        artifact.name,
         `functional module ${JSON.stringify(artifact.name)} repeats import ${
           JSON.stringify(imported.name)
         }`,
@@ -78,7 +119,8 @@ export function createFunctionalModuleArtifact(
   const definitionNames = new Set(artifact.definitions.map((definition) => definition.name));
   for (const imported of artifact.imports) {
     if (definitionNames.has(imported.name)) {
-      throw new Error(
+      throw invalidFunctionalArtifact(
+        artifact.name,
         `functional module ${JSON.stringify(artifact.name)} import ${
           JSON.stringify(imported.name)
         } conflicts with a definition`,
@@ -89,18 +131,23 @@ export function createFunctionalModuleArtifact(
   for (const exported of artifact.exports) {
     requireModuleName(exported.name, `module ${JSON.stringify(artifact.name)} export name`);
     if (!definitionNames.has(exported.definition)) {
-      throw new Error(
+      throw invalidFunctionalArtifact(
+        artifact.name,
         `functional module ${JSON.stringify(artifact.name)} export ${
           JSON.stringify(exported.name)
         } references unknown definition ${JSON.stringify(exported.definition)}`,
       );
     }
     if (exportNames.has(exported.name)) {
-      throw new Error(
-        `functional module ${JSON.stringify(artifact.name)} repeats export ${
+      throw new FunctionalLinkError({
+        code: "F4007",
+        kind: "duplicate-export",
+        module: artifact.name,
+        reference: exported.name,
+        message: `functional module ${JSON.stringify(artifact.name)} repeats export ${
           JSON.stringify(exported.name)
         }`,
-      );
+      });
     }
     exportNames.add(exported.name);
   }
@@ -119,13 +166,22 @@ export function linkFunctionalModules(
   entry: { readonly module: string; readonly exportName: string },
 ): LinkedFunctionalModule {
   if (artifacts.length === 0) {
-    throw new Error("functional module linker requires at least one module");
+    throw new FunctionalLinkError({
+      code: "F4001",
+      kind: "invalid-artifact",
+      message: "functional module linker requires at least one module",
+    });
   }
   const modules = new Map<string, FunctionalModuleArtifact>();
   for (const candidate of artifacts) {
     const artifact = createFunctionalModuleArtifact(candidate);
     if (modules.has(artifact.name)) {
-      throw new Error(`functional module linker repeats module ${JSON.stringify(artifact.name)}`);
+      throw new FunctionalLinkError({
+        code: "F4002",
+        kind: "duplicate-module",
+        module: artifact.name,
+        message: `functional module linker repeats module ${JSON.stringify(artifact.name)}`,
+      });
     }
     modules.set(artifact.name, artifact);
   }
@@ -143,17 +199,22 @@ export function linkFunctionalModules(
   const sources: FunctionalLinkedSource[] = [];
   const capabilities: FunctionalHostCapabilityDeclaration[] = [];
   const capabilityKeys = new Set<string>();
+  const linkedWasmExports: { readonly name: string; readonly definition: string }[] = [];
+  const linkedWasmExportNames = new Set<string>();
   let sourceBase = 0;
   let evaluationProfile: FunctionalEvaluationProfile | undefined;
 
   for (const artifact of modules.values()) {
     const profile = artifact.options.evaluationProfile ?? FunctionalEvaluationProfile.StrictEager;
     if (evaluationProfile !== undefined && evaluationProfile !== profile) {
-      throw new Error(
-        `functional module linker cannot mix evaluation profiles ${
+      throw new FunctionalLinkError({
+        code: "F4004",
+        kind: "incompatible-profile",
+        module: artifact.name,
+        message: `functional module linker cannot mix evaluation profiles ${
           JSON.stringify(evaluationProfile)
         } and ${JSON.stringify(profile)}`,
-      );
+      });
     }
     evaluationProfile = profile;
     sources.push({
@@ -166,6 +227,28 @@ export function linkFunctionalModules(
         definition,
       ) => [definition.name, qualified(artifact.name, definition.name)]),
     );
+    for (const exported of artifact.options.wasmExports ?? []) {
+      const definition = definitionNames.get(exported.definition);
+      if (definition === undefined) {
+        throw invalidFunctionalArtifact(
+          artifact.name,
+          `functional module ${JSON.stringify(artifact.name)} WASM export ${
+            JSON.stringify(exported.name)
+          } references unknown definition ${JSON.stringify(exported.definition)}`,
+        );
+      }
+      if (linkedWasmExportNames.has(exported.name)) {
+        throw new FunctionalLinkError({
+          code: "F4007",
+          kind: "duplicate-export",
+          module: artifact.name,
+          reference: exported.name,
+          message: `linked functional modules repeat WASM export ${JSON.stringify(exported.name)}`,
+        });
+      }
+      linkedWasmExportNames.add(exported.name);
+      linkedWasmExports.push({ name: exported.name, definition });
+    }
     const localTypeNames = new Map(
       artifact.typeDeclarations.map((
         declaration,
@@ -200,13 +283,17 @@ export function linkFunctionalModules(
     for (const imported of artifact.imports) {
       const target = exportedDefinitions.get(exportKey(imported.fromModule, imported.exportName));
       if (target === undefined) {
-        throw new Error(
-          `functional module ${JSON.stringify(artifact.name)} import ${
+        throw new FunctionalLinkError({
+          code: "F4003",
+          kind: "missing-import",
+          module: artifact.name,
+          reference: `${imported.fromModule}.${imported.exportName}`,
+          message: `functional module ${JSON.stringify(artifact.name)} import ${
             JSON.stringify(imported.name)
           } references missing export ${
             JSON.stringify(`${imported.fromModule}.${imported.exportName}`)
           }`,
-        );
+        });
       }
       const alias = qualified(artifact.name, `$import$${imported.name}`);
       importNames.set(imported.name, alias);
@@ -276,11 +363,15 @@ export function linkFunctionalModules(
       const key = JSON.stringify(linkedCapability);
       if (capabilityKeys.has(key)) continue;
       if (capabilities.some((candidate) => candidate.name === linkedCapability.name)) {
-        throw new Error(
-          `functional modules declare incompatible host capability ${
+        throw new FunctionalLinkError({
+          code: "F4005",
+          kind: "incompatible-capability",
+          module: artifact.name,
+          reference: linkedCapability.name,
+          message: `functional modules declare incompatible host capability ${
             JSON.stringify(linkedCapability.name)
           }`,
-        );
+        });
       }
       capabilityKeys.add(key);
       capabilities.push(linkedCapability);
@@ -289,23 +380,29 @@ export function linkFunctionalModules(
   }
   const entryDefinition = exportedDefinitions.get(exportKey(entry.module, entry.exportName));
   if (entryDefinition === undefined) {
-    throw new Error(
-      `functional module linker entry references missing export ${
+    throw new FunctionalLinkError({
+      code: "F4006",
+      kind: "missing-entry",
+      module: entry.module,
+      reference: entry.exportName,
+      message: `functional module linker entry references missing export ${
         JSON.stringify(`${entry.module}.${entry.exportName}`)
       }`,
-    );
+    });
   }
+  const module = buildFunctionalSurfaceModule(
+    linkedDefinitions,
+    linkedTypes,
+    entryDefinition,
+    sourceBase,
+    {
+      hostCapabilities: capabilities,
+      evaluationProfile: evaluationProfile ?? FunctionalEvaluationProfile.StrictEager,
+      wasmExports: linkedWasmExports,
+    },
+  );
   return {
-    module: buildFunctionalSurfaceModule(
-      linkedDefinitions,
-      linkedTypes,
-      entryDefinition,
-      sourceBase,
-      {
-        hostCapabilities: capabilities,
-        evaluationProfile: evaluationProfile ?? FunctionalEvaluationProfile.StrictEager,
-      },
-    ),
+    module: { ...module, sources: Object.freeze(sources) },
     sources: Object.freeze(sources),
   };
 }
@@ -377,6 +474,8 @@ function rewriteExpression(
         argument: rewrite(expression.argument),
         span,
       };
+    case "unary":
+      return { ...expression, value: rewrite(expression.value), span };
     case "binary":
       return {
         ...expression,
@@ -469,8 +568,19 @@ function exportKey(module: string, name: string): string {
 
 function requireModuleName(name: string, location: string): void {
   if (typeof name !== "string" || name.length === 0) {
-    throw new TypeError(
-      `functional ${location} must be nonempty; received ${JSON.stringify(name)}`,
-    );
+    throw new FunctionalLinkError({
+      code: "F4001",
+      kind: "invalid-artifact",
+      message: `functional ${location} must be nonempty; received ${JSON.stringify(name)}`,
+    });
   }
+}
+
+function invalidFunctionalArtifact(module: string, message: string): FunctionalLinkError {
+  return new FunctionalLinkError({
+    code: "F4001",
+    kind: "invalid-artifact",
+    module,
+    message,
+  });
 }

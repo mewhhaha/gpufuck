@@ -322,17 +322,17 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
     case SURFACE_UNARY: {
-      return node.payload >= 1u && node.payload <= 4u &&
+      return node.payload >= 1u && node.payload <= 5u &&
         required_child_is_valid(node_index, node.child0) &&
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_NUMERIC_CONVERT: {
-      return node.payload >= 1u && node.payload <= 12u &&
+      return node.payload >= 1u && node.payload <= 14u &&
         required_child_is_valid(node_index, node.child0) &&
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_BINARY: {
-      return node.payload >= 1u && node.payload <= 40u &&
+      return node.payload >= 1u && node.payload <= 52u &&
         required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }

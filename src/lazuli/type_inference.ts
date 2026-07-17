@@ -152,6 +152,8 @@ function numericTypeForUnaryOperator(operator: number): InferenceType {
       return FLOAT_32;
     case 4:
       return FLOAT_64;
+    case 5:
+      return FLOAT_32;
     default:
       throw new Error(`Unsupported Lazuli unary operator ${operator}.`);
   }
@@ -162,11 +164,13 @@ function numericTypeForBinaryOperator(operator: number): InferenceType {
   if (operator <= 20) return SIGNED_INTEGER_64;
   if (operator <= 30) return FLOAT_32;
   if (operator <= 40) return FLOAT_64;
+  if (operator <= 46) return INTEGER;
+  if (operator <= 52) return SIGNED_INTEGER_64;
   throw new Error(`Unsupported Lazuli binary operator ${operator}.`);
 }
 
 function binaryOperatorIsComparison(operator: number): boolean {
-  return (operator - 1) % 10 < 6;
+  return operator <= 40 && (operator - 1) % 10 < 6;
 }
 
 function numericConversionTypes(operator: number): readonly [InferenceType, InferenceType] {
@@ -195,6 +199,10 @@ function numericConversionTypes(operator: number): readonly [InferenceType, Infe
       return [FLOAT_64, SIGNED_INTEGER_64];
     case 12:
       return [FLOAT_64, FLOAT_32];
+    case 13:
+      return [FLOAT_32, INTEGER];
+    case 14:
+      return [INTEGER, FLOAT_32];
     default:
       throw new Error(`Unsupported Lazuli numeric conversion ${operator}.`);
   }

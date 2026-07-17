@@ -7,6 +7,7 @@ import {
   LazuliBinaryOperator,
   LazuliCoreTag,
   LazuliEvaluationMode,
+  LazuliNumericConversion,
   LazuliUnaryOperator,
 } from "./abi.ts";
 
@@ -120,6 +121,16 @@ struct EvaluationState {
   reify_remaining: u32,
 }
 
+struct WideBits {
+  low: u32,
+  high: u32,
+}
+
+struct WideDivision {
+  quotient: WideBits,
+  remainder: WideBits,
+}
+
 @group(0) @binding(0)
 var<storage, read> nodes: array<CoreNode>;
 
@@ -167,6 +178,7 @@ const FAULT_DIVIDE_BY_ZERO: u32 = 7u;
 const FAULT_NON_EXHAUSTIVE_CASE: u32 = 8u;
 const FAULT_RESULT_TOO_LARGE: u32 = 9u;
 const FAULT_CYCLIC_RESULT: u32 = 10u;
+const FAULT_INVALID_NUMERIC_CONVERSION: u32 = 11u;
 
 const MODE_EVAL: u32 = 1u;
 const MODE_ENTER_THUNK: u32 = 2u;
@@ -183,6 +195,8 @@ const VALUE_BOOLEAN: u32 = 2u;
 const VALUE_CLOSURE: u32 = 3u;
 const VALUE_CONSTRUCTOR_PARTIAL: u32 = 4u;
 const VALUE_CONSTRUCTOR: u32 = 5u;
+const VALUE_SIGNED_INTEGER_64: u32 = 6u;
+const VALUE_FLOAT_32: u32 = 7u;
 
 const HEAP_THUNK: u32 = 1u;
 const HEAP_ENVIRONMENT: u32 = 2u;
@@ -190,6 +204,7 @@ const HEAP_CLOSURE: u32 = 3u;
 const HEAP_CONSTRUCTOR_PARTIAL: u32 = 4u;
 const HEAP_CONSTRUCTOR_FIELD: u32 = 5u;
 const HEAP_CONSTRUCTOR: u32 = 6u;
+const HEAP_WIDE_VALUE: u32 = 7u;
 
 const THUNK_UNEVALUATED: u32 = 0u;
 const THUNK_EVALUATING: u32 = 1u;
@@ -209,11 +224,14 @@ const FRAME_REIFY_END: u32 = 10u;
 const FRAME_STRICT_LET: u32 = 11u;
 const FRAME_STRICT_APPLY_CALLEE: u32 = 12u;
 const FRAME_STRICT_APPLY_ARGUMENT: u32 = 13u;
+const FRAME_NUMERIC_CONVERT: u32 = 14u;
 
 const EXPECT_INTEGER: u32 = 1u;
 const EXPECT_BOOLEAN: u32 = 2u;
 const EXPECT_CALLABLE: u32 = 3u;
 const EXPECT_CONSTRUCTOR: u32 = 4u;
+const EXPECT_SIGNED_INTEGER_64: u32 = 5u;
+const EXPECT_FLOAT_32: u32 = 6u;
 
 const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
 const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
@@ -230,11 +248,19 @@ const TAG_LOCAL: u32 = ${LazuliCoreTag.Local}u;
 const TAG_GLOBAL: u32 = ${LazuliCoreTag.Global}u;
 const TAG_CONSTRUCTOR: u32 = ${LazuliCoreTag.Constructor}u;
 const TAG_LET_REC: u32 = ${LazuliCoreTag.LetRec}u;
+const TAG_SIGNED_INTEGER_64: u32 = ${LazuliCoreTag.SignedInteger64}u;
+const TAG_FLOAT_32: u32 = ${LazuliCoreTag.Float32}u;
+const TAG_FLOAT_64: u32 = ${LazuliCoreTag.Float64}u;
+const TAG_NUMERIC_CONVERT: u32 = ${LazuliCoreTag.NumericConvert}u;
 
 const EVALUATION_LAZY: u32 = ${LazuliEvaluationMode.LazyCallByNeed}u;
 const EVALUATION_STRICT: u32 = ${LazuliEvaluationMode.StrictEager}u;
 
 const UNARY_NEGATE: u32 = ${LazuliUnaryOperator.Negate}u;
+const UNARY_NEGATE_SIGNED_INTEGER_64: u32 = ${LazuliUnaryOperator.NegateSignedInteger64}u;
+const UNARY_NEGATE_FLOAT_32: u32 = ${LazuliUnaryOperator.NegateFloat32}u;
+const UNARY_NEGATE_FLOAT_64: u32 = ${LazuliUnaryOperator.NegateFloat64}u;
+const UNARY_SQUARE_ROOT_FLOAT_32: u32 = ${LazuliUnaryOperator.SquareRootFloat32}u;
 const BINARY_EQUAL: u32 = ${LazuliBinaryOperator.Equal}u;
 const BINARY_NOT_EQUAL: u32 = ${LazuliBinaryOperator.NotEqual}u;
 const BINARY_LESS: u32 = ${LazuliBinaryOperator.Less}u;
@@ -245,6 +271,49 @@ const BINARY_ADD: u32 = ${LazuliBinaryOperator.Add}u;
 const BINARY_SUBTRACT: u32 = ${LazuliBinaryOperator.Subtract}u;
 const BINARY_MULTIPLY: u32 = ${LazuliBinaryOperator.Multiply}u;
 const BINARY_DIVIDE: u32 = ${LazuliBinaryOperator.Divide}u;
+const BINARY_REMAINDER: u32 = ${LazuliBinaryOperator.Remainder}u;
+const BINARY_BITWISE_AND: u32 = ${LazuliBinaryOperator.BitwiseAnd}u;
+const BINARY_BITWISE_OR: u32 = ${LazuliBinaryOperator.BitwiseOr}u;
+const BINARY_BITWISE_XOR: u32 = ${LazuliBinaryOperator.BitwiseXor}u;
+const BINARY_SHIFT_LEFT: u32 = ${LazuliBinaryOperator.ShiftLeft}u;
+const BINARY_SHIFT_RIGHT_UNSIGNED: u32 = ${LazuliBinaryOperator.ShiftRightUnsigned}u;
+const BINARY_EQUAL_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.EqualSignedInteger64}u;
+const BINARY_NOT_EQUAL_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.NotEqualSignedInteger64}u;
+const BINARY_LESS_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.LessSignedInteger64}u;
+const BINARY_LESS_EQUAL_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.LessEqualSignedInteger64}u;
+const BINARY_GREATER_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.GreaterSignedInteger64}u;
+const BINARY_GREATER_EQUAL_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.GreaterEqualSignedInteger64}u;
+const BINARY_ADD_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.AddSignedInteger64}u;
+const BINARY_SUBTRACT_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.SubtractSignedInteger64}u;
+const BINARY_MULTIPLY_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.MultiplySignedInteger64}u;
+const BINARY_DIVIDE_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.DivideSignedInteger64}u;
+const BINARY_EQUAL_FLOAT_32: u32 = ${LazuliBinaryOperator.EqualFloat32}u;
+const BINARY_NOT_EQUAL_FLOAT_32: u32 = ${LazuliBinaryOperator.NotEqualFloat32}u;
+const BINARY_LESS_FLOAT_32: u32 = ${LazuliBinaryOperator.LessFloat32}u;
+const BINARY_LESS_EQUAL_FLOAT_32: u32 = ${LazuliBinaryOperator.LessEqualFloat32}u;
+const BINARY_GREATER_FLOAT_32: u32 = ${LazuliBinaryOperator.GreaterFloat32}u;
+const BINARY_GREATER_EQUAL_FLOAT_32: u32 = ${LazuliBinaryOperator.GreaterEqualFloat32}u;
+const BINARY_ADD_FLOAT_32: u32 = ${LazuliBinaryOperator.AddFloat32}u;
+const BINARY_SUBTRACT_FLOAT_32: u32 = ${LazuliBinaryOperator.SubtractFloat32}u;
+const BINARY_MULTIPLY_FLOAT_32: u32 = ${LazuliBinaryOperator.MultiplyFloat32}u;
+const BINARY_DIVIDE_FLOAT_32: u32 = ${LazuliBinaryOperator.DivideFloat32}u;
+const BINARY_EQUAL_FLOAT_64: u32 = ${LazuliBinaryOperator.EqualFloat64}u;
+const BINARY_DIVIDE_FLOAT_64: u32 = ${LazuliBinaryOperator.DivideFloat64}u;
+const BINARY_REMAINDER_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.RemainderSignedInteger64}u;
+const BINARY_BITWISE_AND_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.BitwiseAndSignedInteger64}u;
+const BINARY_BITWISE_OR_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.BitwiseOrSignedInteger64}u;
+const BINARY_BITWISE_XOR_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.BitwiseXorSignedInteger64}u;
+const BINARY_SHIFT_LEFT_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.ShiftLeftSignedInteger64}u;
+const BINARY_SHIFT_RIGHT_UNSIGNED_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.ShiftRightUnsignedSignedInteger64}u;
+
+const CONVERT_SIGNED_INTEGER_32_TO_SIGNED_INTEGER_64: u32 = ${LazuliNumericConversion.SignedInteger32ToSignedInteger64}u;
+const CONVERT_SIGNED_INTEGER_64_TO_SIGNED_INTEGER_32: u32 = ${LazuliNumericConversion.SignedInteger64ToSignedInteger32}u;
+const CONVERT_SIGNED_INTEGER_32_TO_FLOAT_32: u32 = ${LazuliNumericConversion.SignedInteger32ToFloat32}u;
+const CONVERT_SIGNED_INTEGER_64_TO_FLOAT_32: u32 = ${LazuliNumericConversion.SignedInteger64ToFloat32}u;
+const CONVERT_FLOAT_32_TO_SIGNED_INTEGER_32: u32 = ${LazuliNumericConversion.Float32ToSignedInteger32}u;
+const CONVERT_FLOAT_32_TO_SIGNED_INTEGER_64: u32 = ${LazuliNumericConversion.Float32ToSignedInteger64}u;
+const CONVERT_REINTERPRET_FLOAT_32_AS_SIGNED_INTEGER_32: u32 = ${LazuliNumericConversion.ReinterpretFloat32AsSignedInteger32}u;
+const CONVERT_REINTERPRET_SIGNED_INTEGER_32_AS_FLOAT_32: u32 = ${LazuliNumericConversion.ReinterpretSignedInteger32AsFloat32}u;
 
 fn region_contains(base: u32, index: u32, storage_length: u32) -> bool {
   if base > storage_length {
@@ -343,6 +412,16 @@ fn valid_heap_value(value_tag: u32, value_payload: u32) -> bool {
     }
     case VALUE_BOOLEAN: {
       return value_payload <= 1u;
+    }
+    case VALUE_FLOAT_32: {
+      return true;
+    }
+    case VALUE_SIGNED_INTEGER_64: {
+      if !valid_heap(value_payload) {
+        return false;
+      }
+      let value = heap[heap_storage_index(value_payload)];
+      return value.kind == HEAP_WIDE_VALUE && value.field2 == VALUE_SIGNED_INTEGER_64;
     }
     case VALUE_CLOSURE: {
       if !valid_heap(value_payload) {
@@ -445,7 +524,182 @@ fn pop_frame() -> ContinuationFrame {
 }
 
 fn valid_binary_operator(operator_code: u32) -> bool {
-  return operator_code >= BINARY_EQUAL && operator_code <= BINARY_DIVIDE;
+  return (operator_code >= BINARY_EQUAL && operator_code <= BINARY_DIVIDE) ||
+    (operator_code >= BINARY_EQUAL_SIGNED_INTEGER_64 &&
+      operator_code <= BINARY_DIVIDE_FLOAT_64) ||
+    (operator_code >= BINARY_REMAINDER &&
+      operator_code <= BINARY_SHIFT_RIGHT_UNSIGNED_SIGNED_INTEGER_64);
+}
+
+fn binary_value_tag(operator_code: u32) -> u32 {
+  if (operator_code >= BINARY_EQUAL && operator_code <= BINARY_DIVIDE) ||
+      (operator_code >= BINARY_REMAINDER && operator_code <= BINARY_SHIFT_RIGHT_UNSIGNED) {
+    return VALUE_INTEGER;
+  }
+  if ((operator_code >= BINARY_EQUAL_SIGNED_INTEGER_64 &&
+      operator_code <= BINARY_DIVIDE_SIGNED_INTEGER_64) ||
+      operator_code >= BINARY_REMAINDER_SIGNED_INTEGER_64) {
+    return VALUE_SIGNED_INTEGER_64;
+  }
+  if operator_code >= BINARY_EQUAL_FLOAT_32 && operator_code <= BINARY_DIVIDE_FLOAT_32 {
+    return VALUE_FLOAT_32;
+  }
+  return 0u;
+}
+
+fn wide_bits(value_index: u32) -> WideBits {
+  let value = heap[heap_storage_index(value_index)];
+  return WideBits(value.field0, value.field1);
+}
+
+fn wide_is_zero(value: WideBits) -> bool {
+  return value.low == 0u && value.high == 0u;
+}
+
+fn wide_equal(left: WideBits, right: WideBits) -> bool {
+  return left.low == right.low && left.high == right.high;
+}
+
+fn wide_less_unsigned(left: WideBits, right: WideBits) -> bool {
+  return left.high < right.high || (left.high == right.high && left.low < right.low);
+}
+
+fn wide_less_signed(left: WideBits, right: WideBits) -> bool {
+  let left_high = bitcast<i32>(left.high);
+  let right_high = bitcast<i32>(right.high);
+  return left_high < right_high || (left_high == right_high && left.low < right.low);
+}
+
+fn wide_add(left: WideBits, right: WideBits) -> WideBits {
+  let low = left.low + right.low;
+  let carry = select(0u, 1u, low < left.low);
+  return WideBits(low, left.high + right.high + carry);
+}
+
+fn wide_negate(value: WideBits) -> WideBits {
+  return wide_add(WideBits(~value.low, ~value.high), WideBits(1u, 0u));
+}
+
+fn wide_subtract(left: WideBits, right: WideBits) -> WideBits {
+  return wide_add(left, wide_negate(right));
+}
+
+fn multiply_high_unsigned(left: u32, right: u32) -> u32 {
+  let left_low = left & 0xffffu;
+  let left_high = left >> 16u;
+  let right_low = right & 0xffffu;
+  let right_high = right >> 16u;
+  let word0 = left_low * right_low;
+  let partial = left_high * right_low + (word0 >> 16u);
+  let word1 = partial & 0xffffu;
+  let word2 = partial >> 16u;
+  let combined = left_low * right_high + word1;
+  return left_high * right_high + word2 + (combined >> 16u);
+}
+
+fn wide_multiply(left: WideBits, right: WideBits) -> WideBits {
+  return WideBits(
+    left.low * right.low,
+    multiply_high_unsigned(left.low, right.low) +
+      left.high * right.low + left.low * right.high,
+  );
+}
+
+fn wide_shift_left_one(value: WideBits) -> WideBits {
+  return WideBits(value.low << 1u, (value.high << 1u) | (value.low >> 31u));
+}
+
+fn wide_shift_left(value: WideBits, amount: u32) -> WideBits {
+  let shift = amount & 63u;
+  if shift == 0u {
+    return value;
+  }
+  if shift < 32u {
+    return WideBits(value.low << shift, (value.high << shift) | (value.low >> (32u - shift)));
+  }
+  return WideBits(0u, value.low << (shift - 32u));
+}
+
+fn wide_shift_right_unsigned(value: WideBits, amount: u32) -> WideBits {
+  let shift = amount & 63u;
+  if shift == 0u {
+    return value;
+  }
+  if shift < 32u {
+    return WideBits((value.low >> shift) | (value.high << (32u - shift)), value.high >> shift);
+  }
+  return WideBits(value.high >> (shift - 32u), 0u);
+}
+
+fn wide_divide_unsigned(dividend: WideBits, divisor: WideBits) -> WideDivision {
+  var quotient = WideBits(0u, 0u);
+  var remainder = WideBits(0u, 0u);
+  for (var remaining = 64u; remaining > 0u; remaining -= 1u) {
+    let bit_index = remaining - 1u;
+    var input_bit = 0u;
+    if bit_index < 32u {
+      input_bit = (dividend.low >> bit_index) & 1u;
+    } else {
+      input_bit = (dividend.high >> (bit_index - 32u)) & 1u;
+    }
+    remainder = wide_shift_left_one(remainder);
+    remainder.low |= input_bit;
+    if !wide_less_unsigned(remainder, divisor) {
+      remainder = wide_subtract(remainder, divisor);
+      if bit_index < 32u {
+        quotient.low |= 1u << bit_index;
+      } else {
+        quotient.high |= 1u << (bit_index - 32u);
+      }
+    }
+  }
+  return WideDivision(quotient, remainder);
+}
+
+fn wide_divide_signed(left: WideBits, right: WideBits) -> WideDivision {
+  let left_negative = (left.high & 0x80000000u) != 0u;
+  let right_negative = (right.high & 0x80000000u) != 0u;
+  var unsigned_left = left;
+  var unsigned_right = right;
+  if left_negative {
+    unsigned_left = wide_negate(left);
+  }
+  if right_negative {
+    unsigned_right = wide_negate(right);
+  }
+  let division = wide_divide_unsigned(unsigned_left, unsigned_right);
+  var quotient = division.quotient;
+  var remainder = division.remainder;
+  if left_negative != right_negative {
+    quotient = wide_negate(quotient);
+  }
+  if left_negative {
+    remainder = wide_negate(remainder);
+  }
+  return WideDivision(quotient, remainder);
+}
+
+fn wide_from_float32(value: f32) -> WideBits {
+  let negative = value < 0.0;
+  let magnitude = abs(trunc(value));
+  let high = u32(magnitude / 4294967296.0);
+  let low = u32(magnitude - f32(high) * 4294967296.0);
+  var bits = WideBits(low, high);
+  if negative {
+    bits = wide_negate(bits);
+  }
+  return bits;
+}
+
+fn return_wide_value(tag: u32, bits: WideBits, source_offset: u32) {
+  let value_index = allocate_heap_slot(HEAP_WIDE_VALUE, source_offset);
+  if value_index == NO_INDEX {
+    return;
+  }
+  heap[heap_storage_index(value_index)].field0 = bits.low;
+  heap[heap_storage_index(value_index)].field1 = bits.high;
+  heap[heap_storage_index(value_index)].field2 = tag;
+  return_value(tag, value_index);
 }
 
 fn return_value(tag: u32, payload: u32) {
@@ -476,6 +730,28 @@ fn evaluate_node() {
         return;
       }
       return_value(VALUE_INTEGER, node.payload);
+    }
+    case TAG_SIGNED_INTEGER_64: {
+      if node.child1 != NO_INDEX || node.child2 != NO_INDEX ||
+          node.evaluation_mode != EVALUATION_LAZY {
+        fail_bad_module(evaluation.expression);
+        return;
+      }
+      return_wide_value(
+        VALUE_SIGNED_INTEGER_64,
+        WideBits(node.payload, node.child0),
+        node.source_offset,
+      );
+    }
+    case TAG_FLOAT_32: {
+      if !children_are_absent(node) || node.evaluation_mode != EVALUATION_LAZY {
+        fail_bad_module(evaluation.expression);
+        return;
+      }
+      return_value(VALUE_FLOAT_32, node.payload);
+    }
+    case TAG_FLOAT_64: {
+      fail_bad_module(node.tag);
     }
     case TAG_BOOLEAN: {
       if node.payload > 1u || !children_are_absent(node) ||
@@ -619,7 +895,7 @@ fn evaluate_node() {
       evaluate_expression(node.child0, evaluation.environment);
     }
     case TAG_UNARY: {
-      if node.payload != UNARY_NEGATE ||
+      if node.payload < UNARY_NEGATE || node.payload > UNARY_SQUARE_ROOT_FLOAT_32 ||
           !valid_core_child(evaluation.expression, node.child0) || node.child1 != NO_INDEX ||
           node.child2 != NO_INDEX || node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(node.payload);
@@ -627,6 +903,36 @@ fn evaluate_node() {
       }
       let frame = ContinuationFrame(
         FRAME_UNARY,
+        node.payload,
+        0u,
+        0u,
+        0u,
+        0u,
+        node.source_offset,
+        0u,
+      );
+      if !push_frame(frame) {
+        return;
+      }
+      evaluate_expression(node.child0, evaluation.environment);
+    }
+    case TAG_NUMERIC_CONVERT: {
+      let supported = node.payload == CONVERT_SIGNED_INTEGER_32_TO_SIGNED_INTEGER_64 ||
+        node.payload == CONVERT_SIGNED_INTEGER_64_TO_SIGNED_INTEGER_32 ||
+        node.payload == CONVERT_SIGNED_INTEGER_32_TO_FLOAT_32 ||
+        node.payload == CONVERT_SIGNED_INTEGER_64_TO_FLOAT_32 ||
+        node.payload == CONVERT_FLOAT_32_TO_SIGNED_INTEGER_32 ||
+        node.payload == CONVERT_FLOAT_32_TO_SIGNED_INTEGER_64 ||
+        node.payload == CONVERT_REINTERPRET_FLOAT_32_AS_SIGNED_INTEGER_32 ||
+        node.payload == CONVERT_REINTERPRET_SIGNED_INTEGER_32_AS_FLOAT_32;
+      if !supported || !valid_core_child(evaluation.expression, node.child0) ||
+          node.child1 != NO_INDEX || node.child2 != NO_INDEX ||
+          node.evaluation_mode != EVALUATION_LAZY {
+        fail_bad_module(node.payload);
+        return;
+      }
+      let frame = ContinuationFrame(
+        FRAME_NUMERIC_CONVERT,
         node.payload,
         0u,
         0u,
@@ -842,6 +1148,35 @@ fn enter_thunk() {
         return_value(VALUE_BOOLEAN, input.payload);
         return;
       }
+      if input.tag == VALUE_FLOAT_32 {
+        if input.first_child != NO_INDEX || input.child_count != 0u {
+          fail_bad_module(input_index);
+          return;
+        }
+        heap[heap_storage_index(thunk_index)].state = THUNK_EVALUATED;
+        heap[heap_storage_index(thunk_index)].field2 = VALUE_FLOAT_32;
+        heap[heap_storage_index(thunk_index)].field3 = input.payload;
+        return_value(VALUE_FLOAT_32, input.payload);
+        return;
+      }
+      if input.tag == VALUE_SIGNED_INTEGER_64 {
+        if input.child_count != 0u {
+          fail_bad_module(input_index);
+          return;
+        }
+        let value_index = allocate_heap_slot(HEAP_WIDE_VALUE, NO_INDEX);
+        if value_index == NO_INDEX {
+          return;
+        }
+        heap[heap_storage_index(value_index)].field0 = input.payload;
+        heap[heap_storage_index(value_index)].field1 = input.first_child;
+        heap[heap_storage_index(value_index)].field2 = VALUE_SIGNED_INTEGER_64;
+        heap[heap_storage_index(thunk_index)].state = THUNK_EVALUATED;
+        heap[heap_storage_index(thunk_index)].field2 = VALUE_SIGNED_INTEGER_64;
+        heap[heap_storage_index(thunk_index)].field3 = value_index;
+        return_value(VALUE_SIGNED_INTEGER_64, value_index);
+        return;
+      }
       if input.tag != VALUE_CONSTRUCTOR || !valid_constructor(input.payload) {
         fail_bad_module(input_index);
         return;
@@ -966,9 +1301,28 @@ fn append_result_node(tag: u32, payload: u32, field_count: u32) -> bool {
   return true;
 }
 
+fn append_wide_result_node(tag: u32, bits: WideBits) -> bool {
+  if evaluation.result_top >= evaluation.result_capacity ||
+      !region_contains(evaluation.result_base, evaluation.result_top, arrayLength(&value_nodes)) {
+    fail(FAULT_RESULT_TOO_LARGE, evaluation.current_source_offset, evaluation.result_capacity);
+    return false;
+  }
+  value_nodes[result_storage_index(evaluation.result_top)] =
+    ValueNode(tag, bits.low, bits.high, 0u);
+  evaluation.result_top += 1u;
+  return true;
+}
+
 fn reify_value() {
   if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
     fail_bad_module(evaluation.value_payload);
+    return;
+  }
+  if evaluation.value_tag == VALUE_SIGNED_INTEGER_64 {
+    if !append_wide_result_node(evaluation.value_tag, wide_bits(evaluation.value_payload)) {
+      return;
+    }
+    evaluation.mode = MODE_REIFY_CONTINUE;
     return;
   }
   if evaluation.value_tag != VALUE_CONSTRUCTOR {
@@ -1279,19 +1633,55 @@ fn return_from_expression() {
       evaluate_expression(branch, frame.field2);
     }
     case FRAME_UNARY: {
-      if evaluation.value_tag != VALUE_INTEGER {
-        fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_INTEGER);
-        return;
+      switch frame.field0 {
+        case UNARY_NEGATE: {
+          if evaluation.value_tag != VALUE_INTEGER {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_INTEGER);
+            return;
+          }
+          return_value(VALUE_INTEGER, 0u - evaluation.value_payload);
+        }
+        case UNARY_NEGATE_SIGNED_INTEGER_64: {
+          if evaluation.value_tag != VALUE_SIGNED_INTEGER_64 ||
+              !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_SIGNED_INTEGER_64);
+            return;
+          }
+          return_wide_value(
+            VALUE_SIGNED_INTEGER_64,
+            wide_negate(wide_bits(evaluation.value_payload)),
+            frame.source_offset,
+          );
+        }
+        case UNARY_NEGATE_FLOAT_32: {
+          if evaluation.value_tag != VALUE_FLOAT_32 {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_FLOAT_32);
+            return;
+          }
+          return_value(VALUE_FLOAT_32, bitcast<u32>(-bitcast<f32>(evaluation.value_payload)));
+        }
+        case UNARY_SQUARE_ROOT_FLOAT_32: {
+          if evaluation.value_tag != VALUE_FLOAT_32 {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_FLOAT_32);
+            return;
+          }
+          return_value(VALUE_FLOAT_32, bitcast<u32>(sqrt(bitcast<f32>(evaluation.value_payload))));
+        }
+        default: {
+          fail_bad_module(frame.field0);
+        }
       }
-      if frame.field0 != UNARY_NEGATE {
-        fail_bad_module(frame.field0);
-        return;
-      }
-      return_value(VALUE_INTEGER, 0u - evaluation.value_payload);
     }
     case FRAME_BINARY_LEFT: {
-      if evaluation.value_tag != VALUE_INTEGER {
-        fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_INTEGER);
+      let expected_tag = binary_value_tag(frame.field0);
+      if expected_tag == 0u || evaluation.value_tag != expected_tag {
+        var expected = EXPECT_INTEGER;
+        if expected_tag == VALUE_SIGNED_INTEGER_64 {
+          expected = EXPECT_SIGNED_INTEGER_64;
+        } else if expected_tag == VALUE_FLOAT_32 {
+          expected = EXPECT_FLOAT_32;
+        }
+        fail(FAULT_TYPE_ERROR, frame.source_offset, expected);
         return;
       }
       if !valid_binary_operator(frame.field0) || !valid_node(frame.field1) {
@@ -1314,12 +1704,170 @@ fn return_from_expression() {
       evaluate_expression(frame.field1, frame.field2);
     }
     case FRAME_BINARY_RIGHT: {
-      if evaluation.value_tag != VALUE_INTEGER {
-        fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_INTEGER);
+      let expected_tag = binary_value_tag(frame.field0);
+      if expected_tag == 0u || evaluation.value_tag != expected_tag {
+        var expected = EXPECT_INTEGER;
+        if expected_tag == VALUE_SIGNED_INTEGER_64 {
+          expected = EXPECT_SIGNED_INTEGER_64;
+        } else if expected_tag == VALUE_FLOAT_32 {
+          expected = EXPECT_FLOAT_32;
+        }
+        fail(FAULT_TYPE_ERROR, frame.source_offset, expected);
         return;
       }
       let left = frame.field1;
       let right = evaluation.value_payload;
+      if expected_tag == VALUE_SIGNED_INTEGER_64 {
+        if !valid_heap_value(VALUE_SIGNED_INTEGER_64, left) ||
+            !valid_heap_value(VALUE_SIGNED_INTEGER_64, right) {
+          fail_bad_module(right);
+          return;
+        }
+        let left_bits = wide_bits(left);
+        let right_bits = wide_bits(right);
+        switch frame.field0 {
+          case BINARY_EQUAL_SIGNED_INTEGER_64: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, wide_equal(left_bits, right_bits)));
+          }
+          case BINARY_NOT_EQUAL_SIGNED_INTEGER_64: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, !wide_equal(left_bits, right_bits)));
+          }
+          case BINARY_LESS_SIGNED_INTEGER_64: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, wide_less_signed(left_bits, right_bits)));
+          }
+          case BINARY_LESS_EQUAL_SIGNED_INTEGER_64: {
+            return_value(
+              VALUE_BOOLEAN,
+              select(0u, 1u, wide_less_signed(left_bits, right_bits) || wide_equal(left_bits, right_bits)),
+            );
+          }
+          case BINARY_GREATER_SIGNED_INTEGER_64: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, wide_less_signed(right_bits, left_bits)));
+          }
+          case BINARY_GREATER_EQUAL_SIGNED_INTEGER_64: {
+            return_value(
+              VALUE_BOOLEAN,
+              select(0u, 1u, wide_less_signed(right_bits, left_bits) || wide_equal(left_bits, right_bits)),
+            );
+          }
+          case BINARY_ADD_SIGNED_INTEGER_64: {
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              wide_add(left_bits, right_bits),
+              frame.source_offset,
+            );
+          }
+          case BINARY_SUBTRACT_SIGNED_INTEGER_64: {
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              wide_subtract(left_bits, right_bits),
+              frame.source_offset,
+            );
+          }
+          case BINARY_MULTIPLY_SIGNED_INTEGER_64: {
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              wide_multiply(left_bits, right_bits),
+              frame.source_offset,
+            );
+          }
+          case BINARY_DIVIDE_SIGNED_INTEGER_64, BINARY_REMAINDER_SIGNED_INTEGER_64: {
+            if wide_is_zero(right_bits) {
+              fail(FAULT_DIVIDE_BY_ZERO, frame.source_offset, 0u);
+              return;
+            }
+            let division = wide_divide_signed(left_bits, right_bits);
+            var result = division.quotient;
+            if frame.field0 == BINARY_REMAINDER_SIGNED_INTEGER_64 {
+              result = division.remainder;
+            }
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              result,
+              frame.source_offset,
+            );
+          }
+          case BINARY_BITWISE_AND_SIGNED_INTEGER_64: {
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              WideBits(left_bits.low & right_bits.low, left_bits.high & right_bits.high),
+              frame.source_offset,
+            );
+          }
+          case BINARY_BITWISE_OR_SIGNED_INTEGER_64: {
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              WideBits(left_bits.low | right_bits.low, left_bits.high | right_bits.high),
+              frame.source_offset,
+            );
+          }
+          case BINARY_BITWISE_XOR_SIGNED_INTEGER_64: {
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              WideBits(left_bits.low ^ right_bits.low, left_bits.high ^ right_bits.high),
+              frame.source_offset,
+            );
+          }
+          case BINARY_SHIFT_LEFT_SIGNED_INTEGER_64: {
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              wide_shift_left(left_bits, right_bits.low),
+              frame.source_offset,
+            );
+          }
+          case BINARY_SHIFT_RIGHT_UNSIGNED_SIGNED_INTEGER_64: {
+            return_wide_value(
+              VALUE_SIGNED_INTEGER_64,
+              wide_shift_right_unsigned(left_bits, right_bits.low),
+              frame.source_offset,
+            );
+          }
+          default: {
+            fail_bad_module(frame.field0);
+          }
+        }
+        return;
+      }
+      if expected_tag == VALUE_FLOAT_32 {
+        let left_value = bitcast<f32>(left);
+        let right_value = bitcast<f32>(right);
+        switch frame.field0 {
+          case BINARY_EQUAL_FLOAT_32: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, left_value == right_value));
+          }
+          case BINARY_NOT_EQUAL_FLOAT_32: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, left_value != right_value));
+          }
+          case BINARY_LESS_FLOAT_32: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, left_value < right_value));
+          }
+          case BINARY_LESS_EQUAL_FLOAT_32: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, left_value <= right_value));
+          }
+          case BINARY_GREATER_FLOAT_32: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, left_value > right_value));
+          }
+          case BINARY_GREATER_EQUAL_FLOAT_32: {
+            return_value(VALUE_BOOLEAN, select(0u, 1u, left_value >= right_value));
+          }
+          case BINARY_ADD_FLOAT_32: {
+            return_value(VALUE_FLOAT_32, bitcast<u32>(left_value + right_value));
+          }
+          case BINARY_SUBTRACT_FLOAT_32: {
+            return_value(VALUE_FLOAT_32, bitcast<u32>(left_value - right_value));
+          }
+          case BINARY_MULTIPLY_FLOAT_32: {
+            return_value(VALUE_FLOAT_32, bitcast<u32>(left_value * right_value));
+          }
+          case BINARY_DIVIDE_FLOAT_32: {
+            return_value(VALUE_FLOAT_32, bitcast<u32>(left_value / right_value));
+          }
+          default: {
+            fail_bad_module(frame.field0);
+          }
+        }
+        return;
+      }
       switch frame.field0 {
         case BINARY_EQUAL: {
           return_value(VALUE_BOOLEAN, select(0u, 1u, left == right));
@@ -1358,6 +1906,124 @@ fn return_from_expression() {
             return;
           }
           return_value(VALUE_INTEGER, bitcast<u32>(bitcast<i32>(left) / bitcast<i32>(right)));
+        }
+        case BINARY_REMAINDER: {
+          if right == 0u {
+            fail(FAULT_DIVIDE_BY_ZERO, frame.source_offset, 0u);
+            return;
+          }
+          if left == 0x80000000u && right == 0xffffffffu {
+            return_value(VALUE_INTEGER, 0u);
+            return;
+          }
+          return_value(VALUE_INTEGER, bitcast<u32>(bitcast<i32>(left) % bitcast<i32>(right)));
+        }
+        case BINARY_BITWISE_AND: {
+          return_value(VALUE_INTEGER, left & right);
+        }
+        case BINARY_BITWISE_OR: {
+          return_value(VALUE_INTEGER, left | right);
+        }
+        case BINARY_BITWISE_XOR: {
+          return_value(VALUE_INTEGER, left ^ right);
+        }
+        case BINARY_SHIFT_LEFT: {
+          return_value(VALUE_INTEGER, left << (right & 31u));
+        }
+        case BINARY_SHIFT_RIGHT_UNSIGNED: {
+          return_value(VALUE_INTEGER, left >> (right & 31u));
+        }
+        default: {
+          fail_bad_module(frame.field0);
+        }
+      }
+    }
+    case FRAME_NUMERIC_CONVERT: {
+      switch frame.field0 {
+        case CONVERT_SIGNED_INTEGER_32_TO_SIGNED_INTEGER_64: {
+          if evaluation.value_tag != VALUE_INTEGER {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_INTEGER);
+            return;
+          }
+          let high = select(0u, 0xffffffffu, (evaluation.value_payload & 0x80000000u) != 0u);
+          return_wide_value(
+            VALUE_SIGNED_INTEGER_64,
+            WideBits(evaluation.value_payload, high),
+            frame.source_offset,
+          );
+        }
+        case CONVERT_SIGNED_INTEGER_64_TO_SIGNED_INTEGER_32: {
+          if evaluation.value_tag != VALUE_SIGNED_INTEGER_64 ||
+              !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_SIGNED_INTEGER_64);
+            return;
+          }
+          return_value(VALUE_INTEGER, wide_bits(evaluation.value_payload).low);
+        }
+        case CONVERT_SIGNED_INTEGER_32_TO_FLOAT_32: {
+          if evaluation.value_tag != VALUE_INTEGER {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_INTEGER);
+            return;
+          }
+          return_value(
+            VALUE_FLOAT_32,
+            bitcast<u32>(f32(bitcast<i32>(evaluation.value_payload))),
+          );
+        }
+        case CONVERT_SIGNED_INTEGER_64_TO_FLOAT_32: {
+          if evaluation.value_tag != VALUE_SIGNED_INTEGER_64 ||
+              !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_SIGNED_INTEGER_64);
+            return;
+          }
+          let bits = wide_bits(evaluation.value_payload);
+          let converted = f32(bitcast<i32>(bits.high)) * 4294967296.0 + f32(bits.low);
+          return_value(VALUE_FLOAT_32, bitcast<u32>(converted));
+        }
+        case CONVERT_FLOAT_32_TO_SIGNED_INTEGER_32: {
+          if evaluation.value_tag != VALUE_FLOAT_32 {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_FLOAT_32);
+            return;
+          }
+          let value = bitcast<f32>(evaluation.value_payload);
+          let non_finite = (evaluation.value_payload & 0x7f800000u) == 0x7f800000u;
+          if non_finite || value < -2147483648.0 || value >= 2147483648.0 {
+            fail(FAULT_INVALID_NUMERIC_CONVERSION, frame.source_offset, frame.field0);
+            return;
+          }
+          return_value(VALUE_INTEGER, bitcast<u32>(i32(value)));
+        }
+        case CONVERT_FLOAT_32_TO_SIGNED_INTEGER_64: {
+          if evaluation.value_tag != VALUE_FLOAT_32 {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_FLOAT_32);
+            return;
+          }
+          let value = bitcast<f32>(evaluation.value_payload);
+          let non_finite = (evaluation.value_payload & 0x7f800000u) == 0x7f800000u;
+          if non_finite ||
+              value < -9223372036854775808.0 || value >= 9223372036854775808.0 {
+            fail(FAULT_INVALID_NUMERIC_CONVERSION, frame.source_offset, frame.field0);
+            return;
+          }
+          return_wide_value(
+            VALUE_SIGNED_INTEGER_64,
+            wide_from_float32(value),
+            frame.source_offset,
+          );
+        }
+        case CONVERT_REINTERPRET_FLOAT_32_AS_SIGNED_INTEGER_32: {
+          if evaluation.value_tag != VALUE_FLOAT_32 {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_FLOAT_32);
+            return;
+          }
+          return_value(VALUE_INTEGER, evaluation.value_payload);
+        }
+        case CONVERT_REINTERPRET_SIGNED_INTEGER_32_AS_FLOAT_32: {
+          if evaluation.value_tag != VALUE_INTEGER {
+            fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_INTEGER);
+            return;
+          }
+          return_value(VALUE_FLOAT_32, evaluation.value_payload);
         }
         default: {
           fail_bad_module(frame.field0);

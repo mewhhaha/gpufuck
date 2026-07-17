@@ -191,6 +191,10 @@ export function encodeWasmModule(
   additionalFunctionTypes: readonly WasmFunctionType[],
   valueForceFunctionIndex?: number,
   initializeFunctionIndex?: number,
+  allocateFunctionIndex?: number,
+  freeFunctionIndex?: number,
+  functionExports: readonly { readonly name: string; readonly functionIndex: number }[] = [],
+  instrumentedFuel = false,
 ): Uint8Array<ArrayBuffer> {
   const types = wasmFunctionTypes(additionalFunctionTypes);
   const sections = [
@@ -215,6 +219,14 @@ export function encodeWasmModule(
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
         [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
         [0x7f, 0x00, 0x41, ...encodeSigned(BigInt(specializedCallSiteCount)), 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
+        ...(instrumentedFuel
+          ? [
+            [0x7f, 0x01, 0x41, 0x00, 0x0b],
+            [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          ]
+          : []),
       ]),
     ),
     section(
@@ -227,11 +239,30 @@ export function encodeWasmModule(
         ...(initializeFunctionIndex === undefined
           ? []
           : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
+        ...(allocateFunctionIndex === undefined
+          ? []
+          : [[...name("allocate"), 0x00, ...encodeUnsigned(allocateFunctionIndex)]]),
+        ...(freeFunctionIndex === undefined
+          ? []
+          : [[...name("free"), 0x00, ...encodeUnsigned(freeFunctionIndex)]]),
+        ...functionExports.map((exported) => [
+          ...name(exported.name),
+          0x00,
+          ...encodeUnsigned(exported.functionIndex),
+        ]),
         [...name("memory"), 0x02, 0x00],
         [...name("thunkEvaluations"), 0x03, 0x01],
         [...name("runtimeFault"), 0x03, 0x02],
+        [...name("runtimeFaultNode"), 0x03, 0x06],
         [...name("heapTop"), 0x03, 0x00],
+        [...name("freeListHead"), 0x03, 0x05],
         [...name("specializedCallSites"), 0x03, 0x04],
+        ...(instrumentedFuel
+          ? [
+            [...name("comptimeFuel"), 0x03, 0x07],
+            [...name("comptimeSteps"), 0x03, 0x08],
+          ]
+          : []),
       ]),
     ),
     section(
@@ -266,6 +297,7 @@ export function encodeCompactScalarWasmModule(
   entryFunctionIndex: number,
   specializedCallSiteCount: number,
   additionalFunctionTypes: readonly WasmFunctionType[],
+  instrumentedFuel = false,
 ): Uint8Array<ArrayBuffer> {
   const sections = [
     section(1, vector(wasmFunctionTypes(additionalFunctionTypes))),
@@ -275,7 +307,7 @@ export function encodeCompactScalarWasmModule(
       vector([
         [0x7f, 0x00, 0x41, 0x00, 0x0b],
         [0x7f, 0x00, 0x41, 0x00, 0x0b],
-        [0x7f, 0x00, 0x41, 0x00, 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
         [
           0x7f,
           0x00,
@@ -283,6 +315,13 @@ export function encodeCompactScalarWasmModule(
           ...encodeSigned(BigInt(specializedCallSiteCount)),
           0x0b,
         ],
+        [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
+        ...(instrumentedFuel
+          ? [
+            [0x7f, 0x01, 0x41, 0x00, 0x0b],
+            [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          ]
+          : []),
       ]),
     ),
     section(
@@ -291,8 +330,15 @@ export function encodeCompactScalarWasmModule(
         [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
         [...name("thunkEvaluations"), 0x03, 0x01],
         [...name("runtimeFault"), 0x03, 0x02],
+        [...name("runtimeFaultNode"), 0x03, 0x04],
         [...name("heapTop"), 0x03, 0x00],
         [...name("specializedCallSites"), 0x03, 0x03],
+        ...(instrumentedFuel
+          ? [
+            [...name("comptimeFuel"), 0x03, 0x05],
+            [...name("comptimeSteps"), 0x03, 0x06],
+          ]
+          : []),
       ]),
     ),
     section(10, vector(functions.map(encodeFunctionBody))),

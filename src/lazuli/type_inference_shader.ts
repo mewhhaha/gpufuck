@@ -794,27 +794,37 @@ fn numeric_type_index_for_operator(operation: u32) -> u32 {
   if operation <= 10u { return 0u; }
   if operation <= 20u { return 3u; }
   if operation <= 30u { return 4u; }
-  return 5u;
+  if operation <= 40u { return 5u; }
+  if operation <= 46u { return 0u; }
+  return 3u;
+}
+
+fn numeric_type_index_for_unary(operation: u32) -> u32 {
+  if operation == 1u { return 0u; }
+  if operation == 2u { return 3u; }
+  if operation == 4u { return 5u; }
+  return 4u;
 }
 
 fn numeric_operator_is_comparison(operation: u32) -> bool {
-  return (operation - 1u) % 10u < 6u;
+  return operation <= 40u && (operation - 1u) % 10u < 6u;
 }
 
 fn numeric_conversion_source(conversion: u32) -> u32 {
   switch conversion {
     case 1u, 3u, 4u: { return 0u; }
     case 2u, 5u, 6u: { return 3u; }
-    case 7u, 8u, 9u: { return 4u; }
+    case 7u, 8u, 9u, 13u: { return 4u; }
+    case 14u: { return 0u; }
     default: { return 5u; }
   }
 }
 
 fn numeric_conversion_result(conversion: u32) -> u32 {
   switch conversion {
-    case 2u, 7u, 10u: { return 0u; }
+    case 2u, 7u, 10u, 13u: { return 0u; }
     case 1u, 8u, 11u: { return 3u; }
-    case 3u, 5u, 12u: { return 4u; }
+    case 3u, 5u, 12u, 14u: { return 4u; }
     default: { return 5u; }
   }
 }
@@ -2641,7 +2651,7 @@ fn expression_transition() {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 50u);
       if push_expression(node.child0, environment) {
-        frame_set(state.frame_top - 1u, 11u, select(0u, node.payload + 1u, node.payload > 1u));
+        frame_set(state.frame_top - 1u, 11u, numeric_type_index_for_unary(node.payload));
       }
       return;
     }
@@ -2936,14 +2946,14 @@ fn expression_transition() {
   if stage == 43u { complete_expression(frame_get(frame, 4u)); return; }
 
   if stage == 50u {
-    let operand_type = select(0u, node.payload + 1u, node.payload > 1u);
+    let operand_type = numeric_type_index_for_unary(node.payload);
     if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 51u);
     }
     return;
   }
   if stage == 51u {
-    complete_expression(select(0u, node.payload + 1u, node.payload > 1u));
+    complete_expression(numeric_type_index_for_unary(node.payload));
     return;
   }
 
@@ -3413,7 +3423,7 @@ fn node_shape_is_valid(node_index: u32) -> bool {
       required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
       (node.evaluation_mode == 0u || node.tag == TAG_LET || node.tag == TAG_APPLY) &&
       (node.tag != TAG_LET_REC || core_node(node.child0).tag == TAG_LAMBDA) &&
-      (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 40u));
+      (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 52u));
   }
   if node.tag == TAG_IF {
     return required_child_is_valid(node_index, node.child0) &&
@@ -3424,8 +3434,8 @@ fn node_shape_is_valid(node_index: u32) -> bool {
     node.tag == TAG_NUMERIC_CONVERT || node.tag == TAG_PATTERN_BIND {
     return required_child_is_valid(node_index, node.child0) && node.child1 == NO_INDEX &&
       node.child2 == NO_INDEX && node.evaluation_mode == 0u &&
-      (node.tag != TAG_UNARY || (node.payload >= 1u && node.payload <= 4u)) &&
-      (node.tag != TAG_NUMERIC_CONVERT || (node.payload >= 1u && node.payload <= 12u));
+      (node.tag != TAG_UNARY || (node.payload >= 1u && node.payload <= 5u)) &&
+      (node.tag != TAG_NUMERIC_CONVERT || (node.payload >= 1u && node.payload <= 14u));
   }
   if node.tag == TAG_CASE {
     return required_child_is_valid(node_index, node.child0) &&

@@ -1,9 +1,48 @@
 import type { FunctionalEvaluationProfile, FunctionalTypeSchema } from "./abi.ts";
+import type { FunctionalWasmExportDeclaration } from "./wasm_contract.ts";
 
 export type FunctionalHostType = FunctionalTypeSchema;
 
 export const FUNCTIONAL_INIT_TYPE_NAME = "$FunctionalInitType";
 export const FUNCTIONAL_INIT_CONSTRUCTOR_NAME = "$FunctionalInit";
+export const FUNCTIONAL_TEXT_TYPE_NAME = "$FunctionalText";
+export const FUNCTIONAL_BYTES_TYPE_NAME = "$FunctionalBytes";
+export const FUNCTIONAL_ARRAY_TYPE_NAME = "$FunctionalArray";
+export const FUNCTIONAL_SLICE_TYPE_NAME = "$FunctionalSlice";
+export const FUNCTIONAL_RESOURCE_TYPE_PREFIX = "$FunctionalResource:";
+
+export const FunctionalHostTypes: Readonly<{
+  readonly text: FunctionalTypeSchema;
+  readonly bytes: FunctionalTypeSchema;
+  readonly array: (element: FunctionalTypeSchema) => FunctionalTypeSchema;
+  readonly slice: (element: FunctionalTypeSchema) => FunctionalTypeSchema;
+  readonly resource: (name: string) => FunctionalTypeSchema;
+}> = Object.freeze({
+  text: Object.freeze({ kind: "named", name: FUNCTIONAL_TEXT_TYPE_NAME, arguments: [] }),
+  bytes: Object.freeze({ kind: "named", name: FUNCTIONAL_BYTES_TYPE_NAME, arguments: [] }),
+  array(element: FunctionalTypeSchema): FunctionalTypeSchema {
+    return Object.freeze({
+      kind: "named",
+      name: FUNCTIONAL_ARRAY_TYPE_NAME,
+      arguments: Object.freeze([element]),
+    });
+  },
+  slice(element: FunctionalTypeSchema): FunctionalTypeSchema {
+    return Object.freeze({
+      kind: "named",
+      name: FUNCTIONAL_SLICE_TYPE_NAME,
+      arguments: Object.freeze([element]),
+    });
+  },
+  resource(name: string): FunctionalTypeSchema {
+    requireName(name, "resource type name");
+    return Object.freeze({
+      kind: "named",
+      name: FUNCTIONAL_RESOURCE_TYPE_PREFIX + encodeURIComponent(name),
+      arguments: Object.freeze([]),
+    });
+  },
+});
 
 export type FunctionalHostScalarType =
   | { readonly kind: "integer" }
@@ -13,10 +52,21 @@ export type FunctionalHostScalarType =
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" };
 
+export const FunctionalHostOwnership = {
+  BoundedBorrow: "bounded-borrow",
+  FrozenShareable: "frozen-shareable",
+  OwnershipTransfer: "ownership-transfer",
+  Unique: "unique",
+} as const;
+
+export type FunctionalHostOwnership =
+  (typeof FunctionalHostOwnership)[keyof typeof FunctionalHostOwnership];
+
 export interface FunctionalHostValueDeclaration {
   readonly kind: "value";
   readonly name: string;
   readonly type: FunctionalHostType;
+  readonly ownership?: "frozen-shareable" | "ownership-transfer";
 }
 
 export interface FunctionalHostOperationDeclaration {
@@ -26,6 +76,8 @@ export interface FunctionalHostOperationDeclaration {
   readonly execution?: "synchronous" | "suspending";
   readonly parameter: FunctionalHostType;
   readonly result: FunctionalHostType;
+  readonly parameterOwnership?: "bounded-borrow" | "ownership-transfer";
+  readonly resultOwnership?: "frozen-shareable" | "ownership-transfer" | "unique";
 }
 
 export type FunctionalHostFieldDeclaration =
@@ -40,33 +92,7 @@ export interface FunctionalHostCapabilityDeclaration {
 export interface FunctionalSurfaceModuleOptions {
   readonly hostCapabilities?: readonly FunctionalHostCapabilityDeclaration[];
   readonly evaluationProfile?: FunctionalEvaluationProfile;
-}
-
-export type FunctionalWasmHostOperation = (
-  argument: FunctionalWasmHostValue,
-) => FunctionalWasmHostValue;
-
-export type FunctionalWasmHostValue =
-  | { readonly kind: "integer"; readonly value: number }
-  | { readonly kind: "signed-integer-64"; readonly value: bigint }
-  | { readonly kind: "float-32"; readonly value: number }
-  | { readonly kind: "float-64"; readonly value: number }
-  | { readonly kind: "boolean"; readonly value: boolean }
-  | { readonly kind: "unit" }
-  | {
-    readonly kind: "tuple";
-    readonly values: readonly [FunctionalWasmHostValue, FunctionalWasmHostValue];
-  }
-  | {
-    readonly kind: "constructor";
-    readonly name: string;
-    readonly fields: readonly FunctionalWasmHostValue[];
-  };
-
-export type FunctionalWasmInitBinding = FunctionalWasmHostValue | FunctionalWasmHostOperation;
-
-export interface FunctionalWasmInit {
-  readonly [capability: string]: Readonly<Record<string, FunctionalWasmInitBinding>>;
+  readonly wasmExports?: readonly FunctionalWasmExportDeclaration[];
 }
 
 export function normalizeFunctionalHostCapabilities(
@@ -125,6 +151,16 @@ export function normalizeFunctionalHostCapabilities(
           field.type,
           `capability ${JSON.stringify(declaration.name)} value ${JSON.stringify(field.name)}`,
         );
+        if (
+          field.ownership !== undefined && field.ownership !== "frozen-shareable" &&
+          field.ownership !== "ownership-transfer"
+        ) {
+          throw new Error(
+            `functional host value ${
+              JSON.stringify(`${declaration.name}.${field.name}`)
+            } has unsupported ownership ${JSON.stringify(field.ownership)}`,
+          );
+        }
         return Object.freeze({ ...field, type: Object.freeze({ ...field.type }) });
       }
       if (field.kind !== "operation") {
@@ -150,6 +186,27 @@ export function normalizeFunctionalHostCapabilities(
           `functional host operation ${
             JSON.stringify(`${declaration.name}.${field.name}`)
           } has unsupported execution ${JSON.stringify(field.execution)}`,
+        );
+      }
+      if (
+        field.parameterOwnership !== undefined &&
+        field.parameterOwnership !== "bounded-borrow" &&
+        field.parameterOwnership !== "ownership-transfer"
+      ) {
+        throw new Error(
+          `functional host operation ${
+            JSON.stringify(`${declaration.name}.${field.name}`)
+          } has unsupported parameter ownership ${JSON.stringify(field.parameterOwnership)}`,
+        );
+      }
+      if (
+        field.resultOwnership !== undefined && field.resultOwnership !== "frozen-shareable" &&
+        field.resultOwnership !== "ownership-transfer" && field.resultOwnership !== "unique"
+      ) {
+        throw new Error(
+          `functional host operation ${
+            JSON.stringify(`${declaration.name}.${field.name}`)
+          } has unsupported result ownership ${JSON.stringify(field.resultOwnership)}`,
         );
       }
       requireHostType(

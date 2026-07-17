@@ -51,11 +51,15 @@ export function diagnosticFromSemanticState(
     case LazuliSemanticCompilerErrorCode.DuplicateDefinition: {
       const span = definitionSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
+      const previous = previousDefinitionSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
         code: "L2002",
         message: `duplicate top-level definition ${symbolName}`,
         span,
+        ...(previous === undefined
+          ? {}
+          : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
     case LazuliSemanticCompilerErrorCode.MissingMain:
@@ -71,31 +75,43 @@ export function diagnosticFromSemanticState(
     case LazuliSemanticCompilerErrorCode.DuplicateType: {
       const span = typeSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
+      const previous = previousTypeSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
         code: "L2004",
         message: `duplicate algebraic type ${symbolName}`,
         span,
+        ...(previous === undefined
+          ? {}
+          : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
     case LazuliSemanticCompilerErrorCode.DuplicateConstructor: {
       const span = constructorSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
+      const previous = previousConstructorSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
         code: "L2005",
         message: `duplicate constructor ${symbolName}`,
         span,
+        ...(previous === undefined
+          ? {}
+          : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
     case LazuliSemanticCompilerErrorCode.DefinitionConstructorCollision: {
       const span = topLevelSymbolSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
+      const previous = previousTopLevelSymbolSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
         code: "L2006",
         message: `top-level function and constructor share the name ${symbolName}`,
         span,
+        ...(previous === undefined
+          ? {}
+          : { related: [{ message: "conflicting declaration", span: previous }] }),
       };
     }
     case LazuliSemanticCompilerErrorCode.UnknownCaseConstructor: {
@@ -287,6 +303,23 @@ function definitionSpanAt(
   return undefined;
 }
 
+function previousDefinitionSpan(
+  surface: EncodedLazuliSurface,
+  beforeStartByte: number,
+  symbol: number,
+): LazuliDiagnostic["span"] | undefined {
+  return previousRecordSpan(
+    surface.definitionWords,
+    surface.definitionCount,
+    LAZULI_DEFINITION_WORD_LENGTH,
+    symbol,
+    beforeStartByte,
+    0,
+    2,
+    3,
+  );
+}
+
 function typeSpanAt(
   surface: EncodedLazuliSurface,
   startByte: number,
@@ -304,6 +337,23 @@ function typeSpanAt(
     }
   }
   return undefined;
+}
+
+function previousTypeSpan(
+  surface: EncodedLazuliSurface,
+  beforeStartByte: number,
+  symbol: number,
+): LazuliDiagnostic["span"] | undefined {
+  return previousRecordSpan(
+    surface.typeWords,
+    surface.typeCount,
+    LAZULI_TYPE_WORD_LENGTH,
+    symbol,
+    beforeStartByte,
+    LazuliTypeWord.Symbol,
+    LazuliTypeWord.StartByte,
+    LazuliTypeWord.EndByte,
+  );
 }
 
 function constructorSpanAt(
@@ -325,6 +375,23 @@ function constructorSpanAt(
   return undefined;
 }
 
+function previousConstructorSpan(
+  surface: EncodedLazuliSurface,
+  beforeStartByte: number,
+  symbol: number,
+): LazuliDiagnostic["span"] | undefined {
+  return previousRecordSpan(
+    surface.constructorWords,
+    surface.constructorCount,
+    LAZULI_CONSTRUCTOR_WORD_LENGTH,
+    symbol,
+    beforeStartByte,
+    LazuliConstructorWord.Symbol,
+    LazuliConstructorWord.StartByte,
+    LazuliConstructorWord.EndByte,
+  );
+}
+
 function topLevelSymbolSpanAt(
   surface: EncodedLazuliSurface,
   startByte: number,
@@ -332,6 +399,44 @@ function topLevelSymbolSpanAt(
 ): LazuliDiagnostic["span"] | undefined {
   return definitionSpanAt(surface, startByte, symbol) ??
     constructorSpanAt(surface, startByte, symbol);
+}
+
+function previousTopLevelSymbolSpan(
+  surface: EncodedLazuliSurface,
+  beforeStartByte: number,
+  symbol: number,
+): LazuliDiagnostic["span"] | undefined {
+  const definition = previousDefinitionSpan(surface, beforeStartByte, symbol);
+  const constructor = previousConstructorSpan(surface, beforeStartByte, symbol);
+  if (definition === undefined) return constructor;
+  if (constructor === undefined) return definition;
+  return definition.startByte > constructor.startByte ? definition : constructor;
+}
+
+function previousRecordSpan(
+  words: Uint32Array,
+  count: number,
+  wordLength: number,
+  symbol: number,
+  beforeStartByte: number,
+  symbolWord: number,
+  startWord: number,
+  endWord: number,
+): LazuliDiagnostic["span"] | undefined {
+  let previous: LazuliDiagnostic["span"] | undefined;
+  for (let index = 0; index < count; index++) {
+    const wordOffset = index * wordLength;
+    const startByte = words[wordOffset + startWord];
+    const endByte = words[wordOffset + endWord];
+    if (
+      words[wordOffset + symbolWord] !== symbol || startByte === undefined ||
+      endByte === undefined || startByte >= beforeStartByte
+    ) continue;
+    if (previous === undefined || startByte > previous.startByte) {
+      previous = { startByte, endByte };
+    }
+  }
+  return previous;
 }
 
 function surfaceNodeSpanAt(

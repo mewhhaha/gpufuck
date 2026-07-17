@@ -1,5 +1,5 @@
 import type { EncodedLazuliSurface, LazuliDiagnostic } from "../lazuli/abi.ts";
-import type { GpuLazuliModule } from "../lazuli/compiler_module.ts";
+import { CompiledGpuLazuliModule, type GpuLazuliModule } from "../lazuli/compiler_module.ts";
 import {
   constructorLimitDiagnostic,
   definitionLimitDiagnostic,
@@ -10,6 +10,7 @@ import {
   GpuLazuliSemanticCompiler,
   type LazuliSemanticCompilationLimits,
 } from "../lazuli/gpu_semantic_compiler.ts";
+import { publicTypeMetadata } from "../lazuli/gpu_type_inference_results.ts";
 import {
   type EncodedFunctionalModule,
   FUNCTIONAL_CONSTRUCTOR_BYTE_LENGTH,
@@ -32,6 +33,10 @@ import {
   type FunctionalTypeSchema,
 } from "./abi.ts";
 import { CompilationAdmissionQueue } from "./compilation_admission.ts";
+import {
+  encodeFunctionalCoreArtifact,
+  type FunctionalCompiledCoreArtifact,
+} from "./core_artifact.ts";
 import type { FunctionalEffectCoreModule } from "./effect_core_contract.ts";
 import { GpuFunctionalEffectCoreVerifier } from "./effect_core.ts";
 import { normalizeFunctionalHostCapabilities } from "./host_contract.ts";
@@ -41,6 +46,7 @@ import type {
   FunctionalCompileResult,
   GpuFunctionalModule,
 } from "./compiler_module.ts";
+import { concreteFunctionalType } from "./wasm_value_codec.ts";
 
 export type {
   FunctionalCompilationOptions,
@@ -202,69 +208,12 @@ export class GpuFunctionalCompiler {
     module: EncodedFunctionalModule,
     options: FunctionalCompilationOptions = {},
   ): Promise<FunctionalCompileResult> {
-    const limits = compilationLimits(options);
-    options.signal?.throwIfAborted();
-    validateEncodedModule(module);
-
-    if (module.sourceByteLength > FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH) {
-      return failedLimit(
-        `module spans ${module.sourceByteLength} UTF-8 source bytes; this compiler accepts at most ${FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH}`,
-        FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH,
-        module.sourceByteLength,
-      );
+    const results = await this.compileBatch([module], options);
+    const result = results[0];
+    if (result === undefined) {
+      throw new Error("functional scalar compiler omitted its only result");
     }
-    if (module.nodeCount > this.#maximumNodeCount) {
-      return functionalFailure(nodeLimitDiagnostic(module.nodeCount, this.#maximumNodeCount));
-    }
-    if (module.definitionCount > this.#maximumDefinitionCount) {
-      return functionalFailure(
-        definitionLimitDiagnostic(module.definitionCount, this.#maximumDefinitionCount),
-      );
-    }
-    if (module.typeCount > this.#maximumTypeCount) {
-      return functionalFailure(typeLimitDiagnostic(module.typeCount, this.#maximumTypeCount));
-    }
-    if (module.constructorCount > this.#maximumConstructorCount) {
-      return functionalFailure(
-        constructorLimitDiagnostic(module.constructorCount, this.#maximumConstructorCount),
-      );
-    }
-
-    const estimatedTransientByteLength = COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH +
-      COMPILATION_TRANSIENT_BYTES_PER_INPUT *
-        (module.sourceByteLength + module.nodeCount + module.definitionCount + module.typeCount +
-          module.constructorCount);
-    const semanticSurface = semanticSurfaceFromModule(module);
-
-    return await this.#compilationAdmission.admit(
-      async () => {
-        options.signal?.throwIfAborted();
-        const result = await this.#semanticCompiler.compile(
-          semanticSurface,
-          module.sourceByteLength,
-          limits,
-          options.signal,
-        );
-        try {
-          options.signal?.throwIfAborted();
-        } catch (error) {
-          if (result.ok) result.module.destroy();
-          throw error;
-        }
-        if (!result.ok) {
-          return {
-            ok: false,
-            diagnostics: result.diagnostics.map(functionalDiagnostic) as [
-              FunctionalDiagnostic,
-              ...FunctionalDiagnostic[],
-            ],
-          };
-        }
-        return { ok: true, module: functionalModule(result.module, module) };
-      },
-      estimatedTransientByteLength,
-      options.signal,
-    );
+    return result;
   }
 
   async compileBatch(
@@ -274,7 +223,6 @@ export class GpuFunctionalCompiler {
     const limits = compilationLimits(options);
     options.signal?.throwIfAborted();
     if (modules.length === 0) return [];
-    if (modules.length === 1) return [await this.compileModule(modules[0]!, options)];
 
     const results: (FunctionalCompileResult | undefined)[] = new Array(modules.length);
     const accepted: { readonly resultIndex: number; readonly module: EncodedFunctionalModule }[] =
@@ -371,6 +319,108 @@ export class GpuFunctionalCompiler {
     }
     return completedBatchResults(results);
   }
+
+  async restoreCompiledCore(
+    encodedModule: EncodedFunctionalModule,
+    artifact: FunctionalCompiledCoreArtifact,
+  ): Promise<GpuFunctionalModule> {
+    validateEncodedModule(encodedModule);
+    const coreNodeBytes = encodeFunctionalCoreArtifact(encodedModule, artifact);
+    const surface = semanticSurfaceFromModule(encodedModule);
+    const entryDefinition = findEntryDefinition(encodedModule);
+    const buffers: GPUBuffer[] = [];
+    this.#device.pushErrorScope("validation");
+    this.#device.pushErrorScope("out-of-memory");
+    let allocationCause: unknown;
+    try {
+      const nodeBuffer = createRestoredBuffer(
+        this.#device,
+        "Functional restored Core nodes",
+        coreNodeBytes,
+        FUNCTIONAL_NODE_BYTE_LENGTH,
+      );
+      buffers.push(nodeBuffer);
+      const definitionBuffer = createRestoredBuffer(
+        this.#device,
+        "Functional restored definitions",
+        encodedModule.definitionWords,
+        FUNCTIONAL_DEFINITION_BYTE_LENGTH,
+      );
+      buffers.push(definitionBuffer);
+      const constructorBuffer = createRestoredBuffer(
+        this.#device,
+        "Functional restored constructors",
+        encodedModule.constructorWords,
+        FUNCTIONAL_CONSTRUCTOR_BYTE_LENGTH,
+      );
+      buffers.push(constructorBuffer);
+    } catch (cause) {
+      allocationCause = cause;
+    }
+    const [outOfMemory, validation] = await Promise.all([
+      this.#device.popErrorScope(),
+      this.#device.popErrorScope(),
+    ]);
+    if (validation !== null || outOfMemory !== null || allocationCause !== undefined) {
+      for (const buffer of buffers) buffer.destroy();
+      const evidence = validation?.message ?? outOfMemory?.message ?? String(allocationCause);
+      throw new Error(
+        `could not restore functional compiled Core with ${encodedModule.nodeCount} nodes, ${encodedModule.definitionCount} definitions, and ${encodedModule.constructorCount} constructors: ${evidence}`,
+        allocationCause === undefined ? undefined : { cause: allocationCause },
+      );
+    }
+    const [nodeBuffer, definitionBuffer, constructorBuffer] = buffers;
+    if (
+      nodeBuffer === undefined || definitionBuffer === undefined || constructorBuffer === undefined
+    ) {
+      for (const buffer of buffers) buffer.destroy();
+      throw new Error("functional compiled Core restoration omitted a module buffer");
+    }
+    const lazuliModule = new CompiledGpuLazuliModule(
+      this.#device,
+      nodeBuffer,
+      definitionBuffer,
+      constructorBuffer,
+      surface,
+      entryDefinition,
+      artifact.entryType,
+      publicTypeMetadata(surface).typeDeclarations,
+      coreNodeBytes.slice(0, encodedModule.nodeCount * FUNCTIONAL_NODE_BYTE_LENGTH),
+    );
+    return functionalModule(lazuliModule, encodedModule);
+  }
+}
+
+function createRestoredBuffer(
+  device: GPUDevice,
+  label: string,
+  source: ArrayBuffer | Uint32Array,
+  minimumByteLength: number,
+): GPUBuffer {
+  const sourceBytes = source instanceof Uint32Array
+    ? new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    : new Uint8Array(source);
+  const buffer = device.createBuffer({
+    label,
+    size: Math.max(minimumByteLength, sourceBytes.byteLength),
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+    mappedAtCreation: true,
+  });
+  new Uint8Array(buffer.getMappedRange()).set(sourceBytes);
+  buffer.unmap();
+  return buffer;
+}
+
+function findEntryDefinition(module: EncodedFunctionalModule): number {
+  for (let definitionIndex = 0; definitionIndex < module.definitionCount; definitionIndex++) {
+    const symbol = module.definitionWords[
+      definitionIndex * FUNCTIONAL_DEFINITION_WORD_LENGTH + FunctionalDefinitionWord.Symbol
+    ];
+    if (symbol === module.entrySymbol) return definitionIndex;
+  }
+  throw new Error(
+    `functional compiled Core entry symbol ${module.entrySymbol} has no definition among ${module.definitionCount} definitions`,
+  );
 }
 
 function completedBatchResults(
@@ -393,10 +443,66 @@ function functionalModule(
         definitionIndex * FUNCTIONAL_DEFINITION_WORD_LENGTH + FunctionalDefinitionWord.RootNode
       ]!,
   );
+  const definitionNames = Array.from(
+    { length: encodedModule.definitionCount },
+    (_, definitionIndex) => {
+      const symbol = encodedModule.definitionWords[
+        definitionIndex * FUNCTIONAL_DEFINITION_WORD_LENGTH + FunctionalDefinitionWord.Symbol
+      ];
+      const name = symbol === undefined ? undefined : encodedModule.symbolNames[symbol];
+      if (name === undefined) {
+        throw new Error(
+          `functional definition ${definitionIndex} references missing symbol ${symbol}`,
+        );
+      }
+      return name;
+    },
+  );
+  const wasmExports = (encodedModule.wasmExports ?? []).map((exported) => {
+    const symbol = encodedModule.symbolNames.indexOf(exported.definition);
+    if (symbol < 0) {
+      throw new Error(
+        `functional WASM export ${JSON.stringify(exported.name)} references unknown symbol ${
+          JSON.stringify(exported.definition)
+        }`,
+      );
+    }
+    let definitionIndex: number | undefined;
+    for (let index = 0; index < encodedModule.definitionCount; index++) {
+      const definitionSymbol = encodedModule.definitionWords[
+        index * FUNCTIONAL_DEFINITION_WORD_LENGTH + FunctionalDefinitionWord.Symbol
+      ];
+      if (definitionSymbol === symbol) {
+        definitionIndex = index;
+        break;
+      }
+    }
+    if (definitionIndex === undefined) {
+      throw new Error(
+        `functional WASM export ${JSON.stringify(exported.name)} references non-definition ${
+          JSON.stringify(exported.definition)
+        }`,
+      );
+    }
+    const annotation = encodedModule.definitionTypes[definitionIndex]?.annotation;
+    if (annotation === null || annotation === undefined) {
+      throw new Error(
+        `functional WASM export ${JSON.stringify(exported.name)} requires a concrete annotation`,
+      );
+    }
+    return Object.freeze({
+      name: exported.name,
+      definitionIndex,
+      type: concreteFunctionalType(annotation),
+    });
+  });
   return {
     ...module,
+    definitionNames: Object.freeze(definitionNames),
     definitionRoots: Object.freeze(definitionRoots),
     hostCapabilities: normalizeFunctionalHostCapabilities(encodedModule.hostCapabilities),
+    wasmExports: Object.freeze(wasmExports),
+    sources: Object.freeze([...(encodedModule.sources ?? [])]),
     evaluationProfile: encodedModule.evaluationProfile,
     entryType: module.mainType,
     entryEffects: Object.freeze([]),
@@ -494,6 +600,10 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
   }
   validatePrimitiveCapabilities(module.primitiveCapabilities);
   normalizeFunctionalHostCapabilities(module.hostCapabilities);
+  if (module.wasmExports !== undefined && !Array.isArray(module.wasmExports)) {
+    throw new Error("functional module WASM exports must be an array");
+  }
+  validateFunctionalSources(module.sources, module.sourceByteLength);
   validateRecordTable("node", module.nodeWords, module.nodeCount, FUNCTIONAL_NODE_WORD_LENGTH);
   validateRecordTable(
     "definition",
@@ -530,6 +640,39 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
     throw new Error(
       `functional module has ${module.typeDeclarations.length} type declarations for ${module.typeCount} type records`,
     );
+  }
+}
+
+function validateFunctionalSources(
+  sources: EncodedFunctionalModule["sources"],
+  sourceByteLength: number,
+): void {
+  if (sources === undefined) return;
+  if (!Array.isArray(sources)) throw new TypeError("functional module sources must be an array");
+  let previousEndByte = 0;
+  for (const [index, source] of sources.entries()) {
+    if (source === null || typeof source !== "object") {
+      throw new TypeError(
+        `functional module source ${index} must be an object; received ${JSON.stringify(source)}`,
+      );
+    }
+    if (typeof source.module !== "string" || source.module.length === 0) {
+      throw new TypeError(
+        `functional module source ${index} has invalid module ${JSON.stringify(source.module)}`,
+      );
+    }
+    if (
+      !Number.isSafeInteger(source.startByte) || !Number.isSafeInteger(source.endByte) ||
+      source.startByte < previousEndByte || source.endByte < source.startByte ||
+      source.endByte > sourceByteLength
+    ) {
+      throw new RangeError(
+        `functional module source ${
+          JSON.stringify(source.module)
+        } has byte range ${source.startByte}..${source.endByte}; expected an ordered range within ${previousEndByte}..${sourceByteLength}`,
+      );
+    }
+    previousEndByte = source.endByte;
   }
 }
 
@@ -665,5 +808,11 @@ function functionalDiagnostic(diagnostic: LazuliDiagnostic): FunctionalDiagnosti
     code: `F${diagnostic.code.slice(1)}` as FunctionalDiagnosticCode,
     message: diagnostic.message,
     span: diagnostic.span,
+    ...(diagnostic.related === undefined ? {} : {
+      related: diagnostic.related.map((related) => ({
+        message: related.message,
+        span: related.span,
+      })),
+    }),
   };
 }

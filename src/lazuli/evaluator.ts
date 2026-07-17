@@ -37,12 +37,15 @@ const FAULT_DIVIDE_BY_ZERO = 7;
 const FAULT_NON_EXHAUSTIVE_CASE = 8;
 const FAULT_RESULT_TOO_LARGE = 9;
 const FAULT_CYCLIC_RESULT = 10;
+const FAULT_INVALID_NUMERIC_CONVERSION = 11;
 
 const VALUE_INTEGER = 1;
 const VALUE_BOOLEAN = 2;
 const VALUE_CLOSURE = 3;
 const VALUE_CONSTRUCTOR_PARTIAL = 4;
 const VALUE_CONSTRUCTOR = 5;
+const VALUE_SIGNED_INTEGER_64 = 6;
+const VALUE_FLOAT_32 = 7;
 
 const EXPECT_INTEGER = 1;
 const EXPECT_BOOLEAN = 2;
@@ -128,6 +131,8 @@ export interface LazuliDeepBatchEvaluationOptions extends LazuliBatchEvaluationO
 
 export type LazuliInputValue =
   | { readonly kind: "integer"; readonly value: number }
+  | { readonly kind: "signed-integer-64"; readonly value: bigint }
+  | { readonly kind: "float-32"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
   | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "unit" }
@@ -141,6 +146,8 @@ export type LazuliInputValue =
 
 export type LazuliValue =
   | { readonly kind: "integer"; readonly value: number }
+  | { readonly kind: "signed-integer-64"; readonly value: bigint }
+  | { readonly kind: "float-32"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
   | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "unit" }
@@ -150,6 +157,8 @@ export type LazuliValue =
 
 export type LazuliDeepValue =
   | { readonly kind: "integer"; readonly value: number }
+  | { readonly kind: "signed-integer-64"; readonly value: bigint }
+  | { readonly kind: "float-32"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
   | { readonly kind: "closure" }
   | { readonly kind: "text"; readonly value: string }
@@ -235,6 +244,12 @@ export type LazuliRuntimeFault =
   | {
     readonly kind: "cyclic-result";
     readonly code: "L3011";
+    readonly message: string;
+    readonly sourceByteOffset: number | null;
+  }
+  | {
+    readonly kind: "invalid-numeric-conversion";
+    readonly code: "L3012";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   };
@@ -647,6 +662,31 @@ function validateInputValue(
       }
       continue;
     }
+    if (expectedType.kind === "signed-integer-64") {
+      if (taggedValue.kind !== "signed-integer-64") return typeMismatch(path, expectedType, value);
+      const integerValue = (value as { readonly value?: unknown }).value;
+      if (
+        typeof integerValue !== "bigint" || integerValue < -0x8000000000000000n ||
+        integerValue > 0x7fffffffffffffffn
+      ) {
+        return badInputFault(
+          `${inputPath(path)}.value must be a signed i64; received ${String(integerValue)}`,
+          path,
+        );
+      }
+      continue;
+    }
+    if (expectedType.kind === "float-32") {
+      if (taggedValue.kind !== "float-32") return typeMismatch(path, expectedType, value);
+      const floatValue = (value as { readonly value?: unknown }).value;
+      if (typeof floatValue !== "number") {
+        return badInputFault(
+          `${inputPath(path)}.value must be an f32; received ${String(floatValue)}`,
+          path,
+        );
+      }
+      continue;
+    }
     if (expectedType.kind === "boolean") {
       if (taggedValue.kind !== "boolean") return typeMismatch(path, expectedType, value);
       const booleanValue = (value as { readonly value?: unknown }).value;
@@ -854,6 +894,38 @@ function encodeInputValue(
       }
       words[wordOffset] = VALUE_INTEGER;
       words[wordOffset + 1] = integerValue >>> 0;
+      words[wordOffset + 2] = LAZULI_NO_INDEX;
+      words[wordOffset + 3] = 0;
+      continue;
+    }
+    if (taggedValue.kind === "signed-integer-64") {
+      const integerValue = (value as { readonly value?: unknown }).value;
+      if (
+        typeof integerValue !== "bigint" || integerValue < -0x8000000000000000n ||
+        integerValue > 0x7fffffffffffffffn
+      ) {
+        return badInputFault(
+          `${path}.value must be a signed i64; received ${String(integerValue)}`,
+          entry.path,
+        );
+      }
+      const bits = BigInt.asUintN(64, integerValue);
+      words[wordOffset] = VALUE_SIGNED_INTEGER_64;
+      words[wordOffset + 1] = Number(bits & 0xffffffffn);
+      words[wordOffset + 2] = Number(bits >> 32n);
+      words[wordOffset + 3] = 0;
+      continue;
+    }
+    if (taggedValue.kind === "float-32") {
+      const floatValue = (value as { readonly value?: unknown }).value;
+      if (typeof floatValue !== "number") {
+        return badInputFault(
+          `${path}.value must be an f32; received ${String(floatValue)}`,
+          entry.path,
+        );
+      }
+      words[wordOffset] = VALUE_FLOAT_32;
+      words[wordOffset + 1] = float32Bits(floatValue);
       words[wordOffset + 2] = LAZULI_NO_INDEX;
       words[wordOffset + 3] = 0;
       continue;
@@ -1205,6 +1277,10 @@ function actualValueName(tag: number): string {
   switch (tag) {
     case VALUE_INTEGER:
       return "integer";
+    case VALUE_SIGNED_INTEGER_64:
+      return "signed i64";
+    case VALUE_FLOAT_32:
+      return "f32";
     case VALUE_BOOLEAN:
       return "boolean";
     case VALUE_CLOSURE:
@@ -1306,6 +1382,14 @@ function decodeFault(
         message: `deep result contains a constructor cycle through heap value ${state.faultDetail}`,
         sourceByteOffset,
       };
+    case FAULT_INVALID_NUMERIC_CONVERSION:
+      return {
+        kind: "invalid-numeric-conversion",
+        code: "L3012",
+        message:
+          `numeric conversion ${state.faultDetail} received NaN, infinity, or an out-of-range value`,
+        sourceByteOffset,
+      };
     default:
       throw new Error(`GPU Lazuli evaluator returned unknown fault code ${state.faultCode}`);
   }
@@ -1333,6 +1417,19 @@ function decodeDeepValue(
       case VALUE_INTEGER:
         if (fieldCount !== 0) throw new Error(`deep integer ${nodeIndex} has ${fieldCount} fields`);
         value = { kind: "integer", value: payload | 0 };
+        break;
+      case VALUE_SIGNED_INTEGER_64:
+        if (view.getUint32(byteOffset + 12, true) !== 0) {
+          throw new Error(`deep signed i64 ${nodeIndex} has child records`);
+        }
+        value = {
+          kind: "signed-integer-64",
+          value: BigInt.asIntN(64, BigInt(payload) | BigInt(fieldCount) << 32n),
+        };
+        break;
+      case VALUE_FLOAT_32:
+        if (fieldCount !== 0) throw new Error(`deep f32 ${nodeIndex} has ${fieldCount} fields`);
+        value = { kind: "float-32", value: float32FromBits(payload) };
         break;
       case VALUE_BOOLEAN:
         if (payload > 1 || fieldCount !== 0) {
@@ -1458,6 +1555,8 @@ function decodeValue(
   switch (valueTag) {
     case VALUE_INTEGER:
       return { kind: "integer", value: valuePayload | 0 };
+    case VALUE_FLOAT_32:
+      return { kind: "float-32", value: float32FromBits(valuePayload) };
     case VALUE_BOOLEAN:
       if (valuePayload > 1) {
         throw new Error(`GPU Lazuli evaluator returned invalid Boolean payload ${valuePayload}`);
@@ -1485,6 +1584,20 @@ function decodeValue(
     default:
       throw new Error(`GPU Lazuli evaluator returned unknown value tag ${valueTag}`);
   }
+}
+
+function float32Bits(value: number): number {
+  const bytes = new ArrayBuffer(4);
+  const view = new DataView(bytes);
+  view.setFloat32(0, value, true);
+  return view.getUint32(0, true);
+}
+
+function float32FromBits(bits: number): number {
+  const bytes = new ArrayBuffer(4);
+  const view = new DataView(bytes);
+  view.setUint32(0, bits, true);
+  return view.getFloat32(0, true);
 }
 
 export class GpuLazuliEvaluator {

@@ -110,6 +110,7 @@ export const LazuliUnaryOperator = {
   NegateSignedInteger64: 2,
   NegateFloat32: 3,
   NegateFloat64: 4,
+  SquareRootFloat32: 5,
 } as const;
 
 export type LazuliUnaryOperator = (typeof LazuliUnaryOperator)[keyof typeof LazuliUnaryOperator];
@@ -155,6 +156,18 @@ export const LazuliBinaryOperator = {
   SubtractFloat64: 38,
   MultiplyFloat64: 39,
   DivideFloat64: 40,
+  Remainder: 41,
+  BitwiseAnd: 42,
+  BitwiseOr: 43,
+  BitwiseXor: 44,
+  ShiftLeft: 45,
+  ShiftRightUnsigned: 46,
+  RemainderSignedInteger64: 47,
+  BitwiseAndSignedInteger64: 48,
+  BitwiseOrSignedInteger64: 49,
+  BitwiseXorSignedInteger64: 50,
+  ShiftLeftSignedInteger64: 51,
+  ShiftRightUnsignedSignedInteger64: 52,
 } as const;
 
 export type LazuliBinaryOperator = (typeof LazuliBinaryOperator)[keyof typeof LazuliBinaryOperator];
@@ -172,6 +185,8 @@ export const LazuliNumericConversion = {
   Float64ToSignedInteger32: 10,
   Float64ToSignedInteger64: 11,
   Float64ToFloat32: 12,
+  ReinterpretFloat32AsSignedInteger32: 13,
+  ReinterpretSignedInteger32AsFloat32: 14,
 } as const;
 
 export type LazuliNumericConversion =
@@ -285,6 +300,10 @@ export interface LazuliDiagnostic {
   readonly code: LazuliDiagnosticCode;
   readonly message: string;
   readonly span: LazuliSpan;
+  readonly related?: readonly {
+    readonly message: string;
+    readonly span: LazuliSpan;
+  }[];
 }
 
 export interface EncodedLazuliSurface {

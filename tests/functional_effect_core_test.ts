@@ -8,6 +8,7 @@ import {
   FunctionalEvaluationProfile,
   type FunctionalHostCapabilityDeclaration,
   type FunctionalSurfaceDefinition,
+  FunctionalWasmRuntimeError,
   GpuFunctionalCompiler,
   requestWebGpuDevice,
   runFunctionalWasmModule,
@@ -453,7 +454,16 @@ Deno.test("Effect Core host calls accept recursively computed arguments and prop
             },
           },
         }),
-      /host boom/,
+      (error) => {
+        ok(error instanceof FunctionalWasmRuntimeError);
+        equal(error.code, "F3101");
+        equal(error.kind, "host-operation");
+        equal(error.capability, "Console");
+        equal(error.operation, "record");
+        match(error.message, /host boom/);
+        ok(error.cause instanceof Error);
+        return true;
+      },
     );
   } finally {
     compilation.module.destroy();

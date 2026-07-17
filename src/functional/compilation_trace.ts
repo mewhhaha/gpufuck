@@ -14,6 +14,7 @@ import {
   FunctionalNodeWord,
   type FunctionalType,
   type FunctionalTypeSchema,
+  FunctionalUnaryOperator,
 } from "./abi.ts";
 import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler.ts";
 import type { FunctionalEvaluationResult } from "./evaluator.ts";
@@ -147,6 +148,8 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
       })`;
     case "apply":
       return `${indent}(apply\n${nested(expression.callee)}\n${nested(expression.argument)})`;
+    case "unary":
+      return `${indent}(${unaryOperatorName(expression.operator)}\n${nested(expression.value)})`;
     case "binary":
       return `${indent}(${binaryOperatorName(expression.operator)}\n${nested(expression.left)}\n${
         nested(expression.right)
@@ -373,6 +376,13 @@ function coreTagName(tag: number): string {
 
 function binaryOperatorName(operator: number): string {
   for (const [name, value] of Object.entries(FunctionalBinaryOperator)) {
+    if (value === operator) return name;
+  }
+  return `operator${operator}`;
+}
+
+function unaryOperatorName(operator: number): string {
+  for (const [name, value] of Object.entries(FunctionalUnaryOperator)) {
     if (value === operator) return name;
   }
   return `operator${operator}`;
