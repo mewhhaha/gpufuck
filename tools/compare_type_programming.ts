@@ -55,7 +55,7 @@ try {
         reflection: zigReflection,
       },
       comparison:
-        "The GPU initialization probe executes the matrix program once and includes lazy shader and pipeline initialization. GPU warm timings include Type Core validation, lowering, GPU semantic compilation, execution, and readback; GPU batches submit programs concurrently. Zig first timings use an empty cache and include process startup, parsing, semantic analysis, code generation, linking, and the test run; Zig batches run warm-cache commands sequentially. Compare these as pipeline and throughput measurements, not equivalent compiler phases.",
+        "The GPU initialization probe executes the matrix program once and includes lazy shader and pipeline initialization. GPU warm timings include Type Core validation, lowering, GPU semantic compilation, execution, and readback; GPU batches pack compilation and evaluation lanes into shared submissions. Zig first timings use an empty cache and include process startup, parsing, semantic analysis, code generation, linking, and the test run; Zig batches run warm-cache commands sequentially. Compare these as pipeline and throughput measurements, not equivalent compiler phases.",
     },
     null,
     2,
@@ -75,12 +75,15 @@ async function measureGpuProgram(
     warmMilliseconds.push(performance.now() - start);
   }
   const batchStart = performance.now();
-  await Promise.all(Array.from({ length: BATCH_PROGRAM_COUNT }, async (_, programIndex) => {
+  const results = await executor.executeBatch(
+    Array.from({ length: BATCH_PROGRAM_COUNT }, () => program),
+  );
+  for (const [programIndex, result] of results.entries()) {
     requireSuccessfulTypeCore(
-      await executor.execute(program),
-      `concurrent GPU batch program ${programIndex}`,
+      result,
+      `packed GPU batch program ${programIndex}`,
     );
-  }));
+  }
   return steadyStateTimingSummary(warmMilliseconds, performance.now() - batchStart);
 }
 

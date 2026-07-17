@@ -1852,6 +1852,28 @@ Deno.test("reports zero allocation for an immediate scalar entry", async () => {
   equal(execution.stats.allocatedBytes, 0);
 });
 
+Deno.test("reuses immutable WebAssembly artifacts across fresh executions", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(surface.integer(42)),
+  );
+  if (!compilation.ok) throw new Error("cached WebAssembly module did not compile");
+  try {
+    const firstBytes = await compileFunctionalModuleToWasm(compilation.module);
+    firstBytes[0] = 0;
+    const secondBytes = await compileFunctionalModuleToWasm(compilation.module);
+    equal(WebAssembly.validate(secondBytes), true);
+
+    const firstExecution = await runFunctionalWasmModule(compilation.module);
+    firstExecution.bytes[0] = 0;
+    const secondExecution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(secondExecution.value, { kind: "integer", value: 42 });
+    equal(WebAssembly.validate(secondExecution.bytes), true);
+    ok(firstExecution.instance !== secondExecution.instance);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("traps a recursively forced thunk as a blackhole", async () => {
   const module = buildFunctionalSurfaceModule(
     [

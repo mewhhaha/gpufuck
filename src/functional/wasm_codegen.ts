@@ -61,6 +61,11 @@ const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
 const BASE_WASM_FUNCTION_TYPE_COUNT = 5;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
+const wasmBytesByModule = new WeakMap<
+  GpuFunctionalModule,
+  Promise<Uint8Array<ArrayBuffer>>
+>();
+const executableWasmByModule = new WeakMap<GpuFunctionalModule, Promise<WebAssembly.Module>>();
 
 type ValueSource =
   | { readonly kind: "i64-local"; readonly index: number }
@@ -146,10 +151,43 @@ export class FunctionalWasmRuntimeError extends Error {
 export async function compileFunctionalModuleToWasm(
   module: GpuFunctionalModule,
 ): Promise<Uint8Array<ArrayBuffer>> {
+  return (await cachedFunctionalWasmBytes(module)).slice();
+}
+
+async function cachedFunctionalWasmBytes(
+  module: GpuFunctionalModule,
+): Promise<Uint8Array<ArrayBuffer>> {
   functionalWasmEntry(module);
   const nodes = await module.readCoreNodes();
-  const compactModule = new FunctionalWasmCompiler(module, nodes, true).compileCompactScalar();
-  return compactModule ?? new FunctionalWasmCompiler(module, nodes, false).compile();
+  const cached = wasmBytesByModule.get(module);
+  if (cached !== undefined) return await cached;
+  const compilation = Promise.resolve().then(() => {
+    const compactModule = new FunctionalWasmCompiler(module, nodes, true).compileCompactScalar();
+    return compactModule ?? new FunctionalWasmCompiler(module, nodes, false).compile();
+  });
+  wasmBytesByModule.set(module, compilation);
+  try {
+    return await compilation;
+  } catch (error) {
+    if (wasmBytesByModule.get(module) === compilation) wasmBytesByModule.delete(module);
+    throw error;
+  }
+}
+
+async function cachedExecutableWasm(module: GpuFunctionalModule): Promise<WebAssembly.Module> {
+  await module.readCoreNodes();
+  const cached = executableWasmByModule.get(module);
+  if (cached !== undefined) return await cached;
+  const compilation = cachedFunctionalWasmBytes(module).then((bytes) =>
+    new WebAssembly.Module(bytes)
+  );
+  executableWasmByModule.set(module, compilation);
+  try {
+    return await compilation;
+  } catch (error) {
+    if (executableWasmByModule.get(module) === compilation) executableWasmByModule.delete(module);
+    throw error;
+  }
 }
 
 export async function runFunctionalWasmModule(
@@ -157,17 +195,20 @@ export async function runFunctionalWasmModule(
   options: FunctionalWasmRunOptions = {},
 ): Promise<FunctionalWasmExecution> {
   const entry = functionalWasmEntry(module);
-  const bytes = await compileFunctionalModuleToWasm(module);
+  const [bytes, executable] = await Promise.all([
+    cachedFunctionalWasmBytes(module),
+    cachedExecutableWasm(module),
+  ]);
   const host = functionalWasmImports(module, options.init);
-  const instantiated = await WebAssembly.instantiate(bytes, host.imports);
-  host.bindInstance(instantiated.instance);
-  const exportedMain = instantiated.instance.exports.main;
+  const instance = new WebAssembly.Instance(executable, host.imports);
+  host.bindInstance(instance);
+  const exportedMain = instance.exports.main;
   if (typeof exportedMain !== "function") {
     throw new Error(
       `functional WASM entry d${module.entryDefinition} did not export a callable main function`,
     );
   }
-  const heapTop = instantiated.instance.exports.heapTop;
+  const heapTop = instance.exports.heapTop;
   if (!(heapTop instanceof WebAssembly.Global)) {
     throw new Error(
       `functional WASM entry d${module.entryDefinition} did not export its allocator heap top`,
@@ -175,7 +216,7 @@ export async function runFunctionalWasmModule(
   }
   let argument: bigint | undefined;
   if (entry.parameter !== undefined) {
-    const initialize = instantiated.instance.exports.initialize;
+    const initialize = instance.exports.initialize;
     if (typeof initialize !== "function") {
       throw new Error("functional WASM input module omitted its initialize export");
     }
@@ -188,7 +229,7 @@ export async function runFunctionalWasmModule(
       );
     }
     argument = encodeFunctionalWasmValue(
-      instantiated.instance,
+      instance,
       module,
       entry.parameter,
       options.argument,
@@ -201,26 +242,26 @@ export async function runFunctionalWasmModule(
   try {
     result = (argument === undefined ? exportedMain() : exportedMain(argument)) as number | bigint;
   } catch (cause) {
-    const runtimeFault = instantiated.instance.exports.runtimeFault;
+    const runtimeFault = instance.exports.runtimeFault;
     if (runtimeFault instanceof WebAssembly.Global && runtimeFault.value === 1) {
       throw new FunctionalWasmRuntimeError(module.entryDefinition, cause);
     }
     throw cause;
   }
   const value = decodeFunctionalWasmValue(
-    instantiated.instance,
+    instance,
     module,
     entry.result,
     result,
     options.maximumResultNodes ?? 2_047,
   );
-  const thunkEvaluations = instantiated.instance.exports.thunkEvaluations;
+  const thunkEvaluations = instance.exports.thunkEvaluations;
   if (!(thunkEvaluations instanceof WebAssembly.Global)) {
     throw new Error(
       `functional WASM entry d${module.entryDefinition} did not export thunk evaluation stats`,
     );
   }
-  const specializedCallSites = instantiated.instance.exports.specializedCallSites;
+  const specializedCallSites = instance.exports.specializedCallSites;
   if (!(specializedCallSites instanceof WebAssembly.Global)) {
     throw new Error(
       `functional WASM entry d${module.entryDefinition} did not export lambda-set specialization stats`,
@@ -233,8 +274,8 @@ export async function runFunctionalWasmModule(
     );
   }
   return {
-    bytes,
-    instance: instantiated.instance,
+    bytes: bytes.slice(),
+    instance,
     value,
     stats: {
       thunkEvaluations: Number(thunkEvaluations.value),

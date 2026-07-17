@@ -161,3 +161,12 @@ Deno.bench("execute Type Core: kinded Vector", async () => {
   const result = await typeCore.execute(typeCoreProgram);
   if (!result.ok) throw new Error(`Type Core benchmark failed during ${result.stage}`);
 });
+
+Deno.bench("execute Type Core: packed batch of 32 kinded Vectors", async () => {
+  const results = await typeCore.executeBatch(
+    Array.from({ length: 32 }, () => typeCoreProgram),
+  );
+  for (const result of results) {
+    if (!result.ok) throw new Error(`Type Core batch benchmark failed during ${result.stage}`);
+  }
+});

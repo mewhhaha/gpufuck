@@ -136,6 +136,12 @@ path. Use `compileFunctionalModuleToWasm()` when you need to persist, cache, shi
 the bytes yourself. If the program needs host values or operations, continue with
 [Host capabilities and `Init`](#host-capabilities-and-init).
 
+Emission is memoized for each live `GpuFunctionalModule`. Every public byte array is still an
+independent copy, so callers may transfer or mutate it without corrupting later emissions.
+`runFunctionalWasmModule()` also reuses the engine-compiled `WebAssembly.Module`, while creating a
+fresh instance for every execution so globals, thunks, and the allocation arena never leak between
+runs.
+
 Expected compile errors are returned as `FunctionalCompileResult` diagnostics with frontend-neutral
 `F` codes and UTF-8 byte spans. WebGPU failures and violated host invariants throw. A successful
 `GpuFunctionalModule` owns GPU buffers and must be destroyed; emitted WASM bytes remain valid after
@@ -299,6 +305,74 @@ fuel, dispatch-quantum, and cancellation bounds.
 
 See [Deliberate limits](#deliberate-limits) for exact structural and runtime bounds.
 
+### Numeric and structured WASM entries
+
+The surface has distinct operators for each numeric representation; it never guesses a conversion.
+For example, this entry accepts an `i64` and returns `(i64, f64)`:
+
+```ts
+const i64 = { kind: "signed-integer-64" } as const;
+const module = buildFunctionalSurfaceModule(
+  [{
+    name: "main",
+    parameters: ["input"],
+    annotation: {
+      kind: "function",
+      parameter: i64,
+      result: { kind: "tuple", values: [i64, { kind: "float-64" }] },
+    },
+    body: surface.apply(
+      surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+      surface.binary(
+        FunctionalBinaryOperator.AddSignedInteger64,
+        surface.name("input"),
+        surface.signedInteger64(1n),
+      ),
+      surface.convert(
+        FunctionalNumericConversion.SignedInteger64ToFloat64,
+        surface.name("input"),
+      ),
+    ),
+  }],
+  [],
+  "main",
+  0,
+);
+
+const compilation = await compiler.compileModule(module);
+if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+try {
+  const execution = await runFunctionalWasmModule(compilation.module, {
+    argument: { kind: "signed-integer-64", value: 9_007_199_254_740_992n },
+  });
+  console.log(execution.value);
+} finally {
+  compilation.module.destroy();
+}
+```
+
+`runFunctionalWasmModule()` initializes the runtime arena, encodes the argument, calls `main`,
+forces structured fields as they are decoded, and stops after `maximumResultNodes` values. Indexed
+constructors are decoded against their declared result refinement, so a field such as `Vector n`
+uses the `n` selected by the actual constructor rather than the outer declaration parameter.
+
+Consumers that instantiate emitted bytes themselves can use `FunctionalWasmValueAbi` instead of
+depending on private code-generator details. ABI v1 uses eight-byte values and aligned objects with
+this public header:
+
+| Byte offset | Width | Meaning                                              |
+| ----------- | ----- | ---------------------------------------------------- |
+| 0           | 4     | Object kind: closure, constructor, thunk, or numeric |
+| 4           | 4     | Constructor index, thunk state, or numeric kind      |
+| 8           | 4     | Number of following eight-byte values                |
+| 12          | 4     | Reserved                                             |
+| 16          | ...   | Contiguous values                                    |
+
+Call the exported `initialize()` before allocating an entry argument. `forceValue(i64) -> i64`
+forces a possibly lazy field. Scalar entry parameters and results use native WASM values; structured
+values use the shared `i64` value representation. Higher-order values are deliberately excluded from
+this boundary.
+
 ### Link separately prepared modules
 
 `createFunctionalModuleArtifact()` validates one frontend module's definitions, nominal types, typed
@@ -318,6 +392,11 @@ annotated boundary definitions, so the GPU checks the importing module's declare
 the exported implementation. `linked.sources` maps aggregate UTF-8 byte offsets back to the
 originating module. This is link-before-GPU whole-program compilation; independently emitted WASM
 object files and dynamic WASM linking are not part of this artifact format.
+
+Nominal types referenced by an import are resolved from its source module. An importing module may
+refer to `Box` when that name is unambiguous or use `library::Box` explicitly. Linked constructor
+names are likewise qualified in decoded WASM values, which prevents unrelated modules from silently
+sharing a nominal type.
 
 ## Learn from the included frontends
 
@@ -431,6 +510,19 @@ const result = await types.execute({
 });
 device.destroy();
 ```
+
+Use `executeBatch()` for independent compile-time programs. It preserves input order and packs both
+semantic compilation and evaluation into shared GPU submissions while retaining lane-local fuel,
+faults, and decoded values:
+
+```ts
+const results = await types.executeBatch(typePrograms);
+```
+
+On the benchmark machine, the 32-program matrix workload completes in about 44.3 ms total, or 1.39
+ms per program, while one scalar execution takes about 36.1 ms. The larger reflection workload
+completes in 87.1 ms, or 2.72 ms per program. Batching improves throughput rather than the latency
+of a single dependent type computation.
 
 Capability discovery is deliberately separate from deterministic type execution.
 `TypeCoreCapabilityResolver` indexes declarative rules by predicate, matches kinded structural
@@ -849,7 +941,8 @@ deno task bench:functional-wasm
 The benchmark emits and runs a 1,000-iteration higher-order loop, its direct first-order form, an
 uncurried tail worker, and a hand-written structured-control-flow WASM loop. The last pair
 determines whether another CFG/SSA IR would currently buy runtime performance rather than merely add
-a compiler stage.
+a compiler stage. It separately reports cached emission, fresh-instance execution, and calls on one
+warm instance so setup cost is not mistaken for generated-code cost.
 
 ## Packed ABI reference
 

@@ -117,6 +117,21 @@ Deno.test("executes kinded type functions on the bounded GPU core", async () => 
   ok(result.stats.steps > 0);
 });
 
+Deno.test("executes packed Type Core programs in input order", async () => {
+  const programs = [40, 41, 42].map((length): TypeCoreProgram => ({
+    typeConstructors: [{ name: "Vector", parameterKinds: ["type", "integer"] }],
+    functions: [],
+    entry: vectorTypeExpression(length),
+  }));
+
+  const results = await typeCoreExecutor().executeBatch(programs);
+
+  deepStrictEqual(
+    results.map((result) => result.ok ? result.value : result.stage),
+    [vectorType(40), vectorType(41), vectorType(42)],
+  );
+});
+
 Deno.test("preserves Type Core results and semantic step counts across dispatch quanta", async () => {
   const program: TypeCoreProgram = {
     typeConstructors: [{ name: "Vector", parameterKinds: ["type", "integer"] }],

@@ -5,6 +5,7 @@ import {
   type FunctionalSurfaceDefinition,
   GpuFunctionalCompiler,
   requestWebGpuDevice,
+  runFunctionalWasmModule,
   surface,
 } from "../functional.ts";
 import {
@@ -192,6 +193,15 @@ const higherOrderWasm = new WebAssembly.Module(higherOrderBytes);
 const directWasm = new WebAssembly.Module(directBytes);
 const tailWorkerWasm = new WebAssembly.Module(tailWorkerBytes);
 const controlFlowWasm = new WebAssembly.Module(controlFlowBaseline());
+const tailWorkerWarmInstance = new WebAssembly.Instance(tailWorkerWasm);
+const tailWorkerWarmMain = tailWorkerWarmInstance.exports.main;
+if (typeof tailWorkerWarmMain !== "function") throw new Error("tail-worker benchmark omitted main");
+const cachedRunnerWarmup = await runFunctionalWasmModule(tailWorkerCompilation.module);
+if (
+  cachedRunnerWarmup.value.kind !== "integer" || cachedRunnerWarmup.value.value !== EXPECTED_RESULT
+) {
+  throw new Error("cached runner warmup returned the wrong value");
+}
 
 globalThis.addEventListener("unload", () => {
   higherOrderCompilation.module.destroy();
@@ -217,17 +227,17 @@ Deno.bench("compile and emit WebAssembly: higher-order loop", async () => {
   }
 });
 
-Deno.bench("emit WebAssembly: lambda-set specialized higher-order loop", async () => {
+Deno.bench("reuse emitted WebAssembly: lambda-set specialized higher-order loop", async () => {
   const bytes = await compileFunctionalModuleToWasm(higherOrderCompilation.module);
   if (!WebAssembly.validate(bytes)) throw new Error("higher-order benchmark emitted invalid WASM");
 });
 
-Deno.bench("emit WebAssembly: direct loop", async () => {
+Deno.bench("reuse emitted WebAssembly: direct loop", async () => {
   const bytes = await compileFunctionalModuleToWasm(directCompilation.module);
   if (!WebAssembly.validate(bytes)) throw new Error("direct benchmark emitted invalid WASM");
 });
 
-Deno.bench("emit WebAssembly: uncurried numeric tail worker", async () => {
+Deno.bench("reuse emitted WebAssembly: uncurried numeric tail worker", async () => {
   const bytes = await compileFunctionalModuleToWasm(tailWorkerCompilation.module);
   if (!WebAssembly.validate(bytes)) throw new Error("tail-worker benchmark emitted invalid WASM");
 });
@@ -246,6 +256,20 @@ Deno.bench("run WebAssembly: uncurried numeric tail worker", () => {
 
 Deno.bench("run WebAssembly: hand-written control-flow loop", () => {
   runBenchmarkModule(controlFlowWasm, "control-flow");
+});
+
+Deno.bench("run WebAssembly: cached artifact with fresh instance", async () => {
+  const execution = await runFunctionalWasmModule(tailWorkerCompilation.module);
+  if (execution.value.kind !== "integer" || execution.value.value !== EXPECTED_RESULT) {
+    throw new Error("cached runner benchmark returned the wrong value");
+  }
+});
+
+Deno.bench("run WebAssembly: warm uncurried numeric tail worker", () => {
+  const result = tailWorkerWarmMain();
+  if (result !== EXPECTED_RESULT) {
+    throw new Error(`warm tail-worker benchmark returned ${result}; expected ${EXPECTED_RESULT}`);
+  }
 });
 
 function runBenchmarkModule(module: WebAssembly.Module, context: string): void {
