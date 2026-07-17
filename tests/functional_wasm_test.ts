@@ -1050,6 +1050,197 @@ Deno.test("emits multiple annotated definitions as persistent WebAssembly callab
     equal(increment((41n << 3n) | 1n), 42);
     equal(add((20n << 3n) | 1n, (22n << 3n) | 1n), 42);
     equal(answer(), 42);
+    deepStrictEqual(
+      WebAssembly.Module.exports(new WebAssembly.Module(bytes)),
+      [
+        { name: "main", kind: "function" },
+        { name: "duck_increment", kind: "function" },
+        { name: "duck_add", kind: "function" },
+        { name: "duck_answer", kind: "function" },
+      ],
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("direct scalar exports fuse tail loops that capture their runtime argument", async () => {
+  const integer = { kind: "integer" } as const;
+  const encoded = buildFunctionalSurfaceModule(
+    [
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.integer(0),
+      },
+      {
+        name: "run",
+        parameters: ["increment"],
+        annotation: { kind: "function", parameter: integer, result: integer },
+        body: {
+          kind: "let-rec",
+          name: "count",
+          value: surface.lambda(
+            "value",
+            surface.lambda("remaining", {
+              kind: "if",
+              condition: surface.equal(
+                surface.name("remaining"),
+                surface.integer(0),
+              ),
+              consequent: surface.name("value"),
+              alternate: surface.apply(
+                surface.name("count"),
+                surface.binary(
+                  FunctionalBinaryOperator.Add,
+                  surface.name("value"),
+                  surface.name("increment"),
+                ),
+                surface.binary(
+                  FunctionalBinaryOperator.Subtract,
+                  surface.name("remaining"),
+                  surface.integer(1),
+                ),
+              ),
+            }),
+          ),
+          body: surface.apply(
+            surface.name("count"),
+            surface.integer(0),
+            surface.integer(512),
+          ),
+        },
+      },
+    ],
+    [],
+    "main",
+    0,
+    {
+      evaluationProfile: FunctionalEvaluationProfile.StrictEager,
+      wasmExports: [{ name: "run", definition: "run" }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("direct scalar export module did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const instantiated = await WebAssembly.instantiate(bytes);
+    const run = instantiated.instance.exports.run;
+    ok(typeof run === "function");
+    equal(run((1n << 3n) | 1n), 512);
+    equal(run((17n << 3n) | 1n), 8_704);
+    deepStrictEqual(
+      WebAssembly.Module.exports(new WebAssembly.Module(bytes)),
+      [
+        { name: "main", kind: "function" },
+        { name: "run", kind: "function" },
+      ],
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("direct scalar exports bypass initialization required by an aggregate entry", async () => {
+  const integer = { kind: "integer" } as const;
+  const integerFunction = {
+    kind: "function",
+    parameter: integer,
+    result: integer,
+  } as const;
+  const encoded = buildFunctionalSurfaceModule(
+    [
+      {
+        name: "run",
+        parameters: ["value"],
+        annotation: integerFunction,
+        body: surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("value"),
+          surface.integer(1),
+        ),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: {
+          kind: "tuple",
+          values: [integer, integer],
+        },
+        body: surface.apply(
+          surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+          surface.integer(0),
+          surface.integer(0),
+        ),
+      },
+    ],
+    [],
+    "main",
+    0,
+    {
+      evaluationProfile: FunctionalEvaluationProfile.StrictEager,
+      wasmExports: [{ name: "run", definition: "run" }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("aggregate entry export module did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const instantiated = await WebAssembly.instantiate(bytes);
+    const run = instantiated.instance.exports.run;
+    const heapTop = instantiated.instance.exports.heapTop;
+    ok(typeof run === "function");
+    ok(heapTop instanceof WebAssembly.Global);
+    const heapBeforeCall = heapTop.value;
+    equal(run((41n << 3n) | 1n), 42);
+    equal(heapTop.value, heapBeforeCall);
+    ok(
+      WebAssembly.Module.exports(new WebAssembly.Module(bytes)).some((entry) =>
+        entry.kind === "memory"
+      ),
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("lazy callable exports retain the general WebAssembly runtime", async () => {
+  const integer = { kind: "integer" } as const;
+  const encoded = buildFunctionalSurfaceModule(
+    [
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.integer(0),
+      },
+      {
+        name: "identity",
+        parameters: ["value"],
+        annotation: { kind: "function", parameter: integer, result: integer },
+        body: surface.name("value"),
+      },
+    ],
+    [],
+    "main",
+    0,
+    {
+      evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
+      wasmExports: [{ name: "identity", definition: "identity" }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("lazy callable export module did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const instantiated = await WebAssembly.instantiate(bytes);
+    const identity = instantiated.instance.exports.identity;
+    ok(typeof identity === "function");
+    equal(identity((42n << 3n) | 1n), 42);
+    const exports = WebAssembly.Module.exports(new WebAssembly.Module(bytes));
+    ok(exports.some((entry) => entry.name === "initialize"));
+    ok(exports.some((entry) => entry.kind === "memory"));
   } finally {
     compilation.module.destroy();
   }

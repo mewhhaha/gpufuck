@@ -134,6 +134,44 @@ export class FunctionalWasmFunctionAnalysis {
       !this.#containsSelfReference(functionShape.bodyNode, functionShape, 0, "unsaturated");
   }
 
+  hasOnlyTailSelfReferences(functionShape: FunctionalFunctionShape): boolean {
+    return functionShape.parameterCount >= 1 &&
+      !this.#containsNonTailSelfReference(functionShape.bodyNode, functionShape, 0);
+  }
+
+  #containsNonTailSelfReference(
+    nodeIndex: number,
+    functionShape: FunctionalFunctionShape,
+    binderDepth: number,
+  ): boolean {
+    if (this.tailArguments(nodeIndex, functionShape, binderDepth) !== undefined) {
+      return false;
+    }
+    const node = this.#node(nodeIndex);
+    if (node.tag !== FunctionalCoreTag.If) {
+      return this.#containsSelfReference(
+        nodeIndex,
+        functionShape,
+        binderDepth,
+        "any",
+      );
+    }
+    return this.#containsSelfReference(
+      node.child0,
+      functionShape,
+      binderDepth,
+      "any",
+    ) || this.#containsNonTailSelfReference(
+      node.child1,
+      functionShape,
+      binderDepth,
+    ) || this.#containsNonTailSelfReference(
+      node.child2,
+      functionShape,
+      binderDepth,
+    );
+  }
+
   #registerFunction(outerLambdaNode: number): FunctionalFunctionShape | undefined {
     const lambdaNodes: number[] = [];
     let bodyNode = outerLambdaNode;

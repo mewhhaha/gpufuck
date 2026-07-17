@@ -899,6 +899,7 @@ class FunctionalWasmCompiler {
   readonly #lambdaSlots: (number | undefined)[];
   readonly #recursiveLambdaOwners = new Map<number, number>();
   readonly #uncurriedWorkers = new Map<string, UncurriedWorker>();
+  readonly #nativeIntegerFunctionNodes = new Set<number>();
   readonly #staticEnvironmentIds = new WeakMap<object, number>();
   readonly #additionalFunctionTypes: WasmFunctionType[] = [];
   readonly #additionalFunctionTypeIndices = new Map<string, number>();
@@ -917,6 +918,7 @@ class FunctionalWasmCompiler {
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
   #specializedCallSiteCount = 0;
   #nextStaticEnvironmentId = 0;
+  #nativeScalarWorkerDepth = 0;
   #requestedAllocator = false;
   #requestedThunkForce = false;
 
@@ -1048,6 +1050,10 @@ class FunctionalWasmCompiler {
     };
   }
 
+  scalarSpecializationEnabled(): boolean {
+    return this.#compactScalar || this.#nativeScalarWorkerDepth > 0;
+  }
+
   compileCompactScalar(): Uint8Array<ArrayBuffer> | undefined {
     const scalarResult = functionalHostScalarType(this.#entry.result);
     if (
@@ -1055,7 +1061,6 @@ class FunctionalWasmCompiler {
       this.#module.evaluationProfile !==
         FunctionalEvaluationProfile.StrictEager ||
       this.#module.entryEffects.length !== 0 ||
-      this.#module.wasmExports.length !== 0 ||
       this.#hostFields.length !== 0 ||
       this.#entry.takesInit ||
       this.#entry.parameter !== undefined ||
@@ -1095,16 +1100,30 @@ class FunctionalWasmCompiler {
       entryInstructions,
       "compact scalar entry",
     );
+    const callableFunctions: WasmFunctionBody[] = [];
+    for (const exported of this.#module.wasmExports) {
+      const { parameters, result } = this.wasmExportSignature(exported);
+      const callable = this.compileDirectIntegerWasmExport(
+        exported,
+        parameters,
+        result,
+      );
+      if (callable === undefined) return undefined;
+      callableFunctions.push(callable);
+    }
+    const indirectFunctions = this.#indirectFunctions.map((body, slot) => {
+      if (body === undefined) {
+        throw new Error(
+          `functional WASM compact function slot ${slot} was not emitted`,
+        );
+      }
+      return body;
+    });
+    const entryFunctionIndex = indirectFunctions.length;
     const emittedFunctions = [
-      ...this.#indirectFunctions.map((body, slot) => {
-        if (body === undefined) {
-          throw new Error(
-            `functional WASM compact function slot ${slot} was not emitted`,
-          );
-        }
-        return body;
-      }),
+      ...indirectFunctions,
       entryBody,
+      ...callableFunctions,
     ];
     const requiresRuntime = this.#requestedAllocator ||
       this.#requestedThunkForce ||
@@ -1113,12 +1132,16 @@ class FunctionalWasmCompiler {
 
     return encodeCompactScalarWasmModule(
       emittedFunctions,
-      emittedFunctions.length - 1,
+      entryFunctionIndex,
       this.#additionalFunctionTypes,
       {
         includesRuntimeFaults: this.#compactRuntimeGlobals.runtimeFault !== undefined,
         instrumentedFuel: this.#instrumentedFuel,
       },
+      this.#module.wasmExports.map((exported, index) => ({
+        name: exported.name,
+        functionIndex: entryFunctionIndex + 1 + index,
+      })),
     );
   }
 
@@ -1132,6 +1155,9 @@ class FunctionalWasmCompiler {
     this.emitEntryCall(entryInstructions);
     const scalarResult = functionalHostScalarType(this.#entry.result);
     this.emitPublicResult(entryInstructions, this.#entry.result);
+    const callableFunctions = this.#module.wasmExports.map((exported) =>
+      this.compileWasmExport(exported)
+    );
     const indirectFunctions = this.#indirectFunctions.map((body, slot) => {
       if (body === undefined) {
         throw new Error(
@@ -1156,9 +1182,6 @@ class FunctionalWasmCompiler {
     const freeType = this.functionTypeIndex(
       [WasmValueType.I32, WasmValueType.I32],
       [],
-    );
-    const callableFunctions = this.#module.wasmExports.map((exported) =>
-      this.compileWasmExport(exported)
     );
     const functions = [
       allocateFunction(),
@@ -1210,6 +1233,15 @@ class FunctionalWasmCompiler {
   }
 
   compileWasmExport(exported: FunctionalWasmExport): WasmFunctionBody {
+    const { parameters, result } = this.wasmExportSignature(exported);
+    return this.compileDirectIntegerWasmExport(exported, parameters, result) ??
+      this.compileGeneralWasmExport(exported, parameters, result);
+  }
+
+  wasmExportSignature(exported: FunctionalWasmExport): {
+    readonly parameters: readonly FunctionalType[];
+    readonly result: FunctionalType;
+  } {
     const parameters: FunctionalType[] = [];
     let result = exported.type;
     while (result.kind === "function") {
@@ -1228,6 +1260,93 @@ class FunctionalWasmCompiler {
       result,
       `export ${exported.name} result`,
     );
+    return { parameters, result };
+  }
+
+  compileDirectIntegerWasmExport(
+    exported: FunctionalWasmExport,
+    parameters: readonly FunctionalType[],
+    result: FunctionalType,
+  ): WasmFunctionBody | undefined {
+    if (
+      this.#module.evaluationProfile !== FunctionalEvaluationProfile.StrictEager ||
+      this.#module.entryEffects.length !== 0 ||
+      this.#hostFields.length !== 0 ||
+      this.#hasLazyEvaluationBoundary ||
+      result.kind !== "integer" ||
+      parameters.some((parameter) => parameter.kind !== "integer")
+    ) return undefined;
+
+    const rootNode = this.#module.definitionRoots[exported.definitionIndex];
+    if (rootNode === undefined) {
+      throw new Error(
+        `functional WASM export ${
+          JSON.stringify(exported.name)
+        } definition d${exported.definitionIndex} exceeds ${this.#module.definitionCount} definitions`,
+      );
+    }
+    if (parameters.length === 0) {
+      const instructions = new WasmInstructions(0);
+      this.compileIntegerExpression(instructions, rootNode, []);
+      const callable = functionBody(
+        this.functionTypeIndex([], [WasmValueType.I32]),
+        instructions,
+        `direct scalar export ${exported.name}`,
+      );
+      return callable.usesMemory || callable.usesIndirectCalls ? undefined : callable;
+    }
+
+    const functionShape = this.#functionAnalysis.function(rootNode);
+    if (
+      functionShape === undefined ||
+      functionShape.parameterCount !== parameters.length
+    ) return undefined;
+
+    if (this.uncurriedWorkerHasEnvironmentParameter(functionShape, undefined)) {
+      return undefined;
+    }
+    this.#nativeIntegerFunctionNodes.add(functionShape.outerLambdaNode);
+    const worker = this.uncurriedWorker(functionShape, undefined, "integer");
+    const workerBody = this.#indirectFunctions[worker.slot];
+    if (workerBody === undefined) {
+      throw new Error(
+        `functional WASM direct export ${
+          JSON.stringify(exported.name)
+        } omitted worker slot ${worker.slot}`,
+      );
+    }
+    if (workerBody.usesMemory || workerBody.usesIndirectCalls) {
+      this.#nativeIntegerFunctionNodes.delete(functionShape.outerLambdaNode);
+      return undefined;
+    }
+
+    const instructions = new WasmInstructions(parameters.length);
+    const arguments_: number[] = [];
+    for (let parameter = 0; parameter < parameters.length; parameter += 1) {
+      instructions.localGet(parameter);
+      this.emitDecodeInteger(instructions);
+      const argument = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(argument);
+      arguments_.push(argument);
+    }
+    for (const argument of arguments_) instructions.localGet(argument);
+    instructions.call(this.indirectFunctionOffset() + worker.slot);
+    this.#specializedCallSiteCount += 1;
+    return functionBody(
+      this.functionTypeIndex(
+        parameters.map(() => WasmValueType.I64),
+        [WasmValueType.I32],
+      ),
+      instructions,
+      `direct scalar export ${exported.name}`,
+    );
+  }
+
+  compileGeneralWasmExport(
+    exported: FunctionalWasmExport,
+    parameters: readonly FunctionalType[],
+    result: FunctionalType,
+  ): WasmFunctionBody {
     const instructions = new WasmInstructions(parameters.length);
     this.emitGlobalInitialization(instructions);
     this.emitGlobalReference(instructions, exported.definitionIndex);
@@ -1926,7 +2045,7 @@ class FunctionalWasmCompiler {
       if (localBase.kind === "i32-pointer") instructions.localGet(localBase.index);
       else instructions.i32Const(0);
     } else if (
-      this.#compactScalar &&
+      this.scalarSpecializationEnabled() &&
       base.tag === FunctionalCoreTag.Global &&
       this.#module.definitionRoots[base.payload] ===
         application.functionShape.outerLambdaNode
@@ -1983,7 +2102,13 @@ class FunctionalWasmCompiler {
       }
       environmentKey = `static-${environmentId}`;
     }
-    const workerKey = `${functionShape.outerLambdaNode}:${resultKind}:${environmentKey}`;
+    const parameterAbi = this.#nativeIntegerFunctionNodes.has(
+        functionShape.outerLambdaNode,
+      )
+      ? "declared-integer"
+      : "inferred";
+    const workerKey =
+      `${functionShape.outerLambdaNode}:${resultKind}:${environmentKey}:${parameterAbi}`;
     const existing = this.#uncurriedWorkers.get(workerKey);
     if (existing !== undefined) return existing;
 
@@ -2023,29 +2148,34 @@ class FunctionalWasmCompiler {
       hasEnvironmentParameter ? 0 : undefined,
     );
 
-    const tailLoop = this.#functionAnalysis.loop(functionShape.innerLambdaNode);
-    if (tailLoop === undefined) {
-      const numericFold = this.#compactScalar &&
-          this.isUnboxedNumericParameter(functionShape, 0)
-        ? this.#functionAnalysis.numericFold(functionShape.innerLambdaNode)
-        : undefined;
-      if (numericFold === undefined) {
-        if (resultKind === "integer") {
-          this.compileIntegerExpression(instructions, functionShape.bodyNode, bodyEnvironment);
+    if (resultKind === "integer") this.#nativeScalarWorkerDepth += 1;
+    try {
+      const tailLoop = this.#functionAnalysis.loop(functionShape.innerLambdaNode);
+      if (tailLoop === undefined) {
+        const numericFold = this.scalarSpecializationEnabled() &&
+            this.isUnboxedNumericParameter(functionShape, 0)
+          ? this.#functionAnalysis.numericFold(functionShape.innerLambdaNode)
+          : undefined;
+        if (numericFold === undefined) {
+          if (resultKind === "integer") {
+            this.compileIntegerExpression(instructions, functionShape.bodyNode, bodyEnvironment);
+          } else {
+            this.compileExpression(instructions, functionShape.bodyNode, bodyEnvironment);
+          }
         } else {
-          this.compileExpression(instructions, functionShape.bodyNode, bodyEnvironment);
+          this.compileNumericFoldLoop(instructions, bodyEnvironment, numericFold, resultKind);
         }
       } else {
-        this.compileNumericFoldLoop(instructions, bodyEnvironment, numericFold, resultKind);
+        this.compileTailLoop(
+          instructions,
+          functionShape.bodyNode,
+          bodyEnvironment,
+          tailLoop,
+          resultKind,
+        );
       }
-    } else {
-      this.compileTailLoop(
-        instructions,
-        functionShape.bodyNode,
-        bodyEnvironment,
-        tailLoop,
-        resultKind,
-      );
+    } finally {
+      if (resultKind === "integer") this.#nativeScalarWorkerDepth -= 1;
     }
     const resultTypes = [
       resultKind === "integer" ? WasmValueType.I32 : WasmValueType.I64,
@@ -2130,7 +2260,7 @@ class FunctionalWasmCompiler {
   }
 
   canUseNativeIntegerWorker(application: UncurriedApplication): boolean {
-    return this.#compactScalar && application.functionShape.strictParameters.every(
+    return this.scalarSpecializationEnabled() && application.functionShape.strictParameters.every(
       (_, parameter) => this.isUnboxedNumericParameter(application.functionShape, parameter),
     );
   }
@@ -2242,7 +2372,8 @@ class FunctionalWasmCompiler {
     return this.#module.entryEffects.length === 0 &&
       (profileMakesParameterStrict ||
         functionShape.strictParameters[parameter] === true) &&
-      functionShape.numericParameters[parameter] === true;
+      (functionShape.numericParameters[parameter] === true ||
+        this.#nativeIntegerFunctionNodes.has(functionShape.outerLambdaNode));
   }
 
   compileVirtualLambdaApplication(
@@ -2263,7 +2394,7 @@ class FunctionalWasmCompiler {
       .some((depth) => depth >= 1);
     const canInline = this.#remainingSpecializedInlineSites > 0 &&
       !this.#activeSpecializedLambdas.has(callee.node) &&
-      (this.#compactScalar || virtualArgument !== undefined || hasCaptures);
+      (this.scalarSpecializationEnabled() || virtualArgument !== undefined || hasCaptures);
     const functionShape = this.#functionAnalysis.function(callee.node);
     const unboxedNumericArgument = canInline &&
       functionShape?.parameterCount === 1 &&
@@ -2375,7 +2506,7 @@ class FunctionalWasmCompiler {
       ]);
       return;
     }
-    const virtualConstructor = this.#compactScalar
+    const virtualConstructor = this.scalarSpecializationEnabled()
       ? this.virtualConstructor(node.child0, environment)
       : undefined;
     if (virtualConstructor !== undefined) {
@@ -2429,25 +2560,31 @@ class FunctionalWasmCompiler {
       firstOuterCaptureByteOffset,
     );
     const functionShape = this.#functionAnalysis.function(node.child0);
+    const inlineAtSoleCall = this.#captureAnalysis.localReferenceCount(
+      node.child1,
+      0,
+    ) === 1;
+    const canFuseRuntimeCaptures = inlineAtSoleCall &&
+      functionShape !== undefined &&
+      this.#functionAnalysis.hasOnlyTailSelfReferences(functionShape);
     if (
-      this.#compactScalar &&
+      this.scalarSpecializationEnabled() &&
       functionShape !== undefined &&
       this.#functionAnalysis.hasOnlySaturatedSelfReferences(functionShape) &&
       captured.captureSources.every((source) =>
         source.kind === "i32-integer-constant" ||
         source.kind === "i32-boolean-constant" ||
         source.kind === "virtual-lambda" ||
-        source.kind === "virtual-constructor"
+        source.kind === "virtual-constructor" ||
+        (canFuseRuntimeCaptures &&
+          (source.kind === "i32-integer" || source.kind === "i32-boolean"))
       )
     ) {
       const bodyEnvironment: FunctionalEnvironment = [{
         kind: "static-recursive-function",
         node: node.child0,
         environment,
-        inlineAtSoleCall: this.#captureAnalysis.localReferenceCount(
-          node.child1,
-          0,
-        ) === 1,
+        inlineAtSoleCall,
       }, ...environment];
       if (resultKind === "integer") {
         this.compileIntegerExpression(instructions, node.child1, bodyEnvironment);
@@ -2689,7 +2826,7 @@ class FunctionalWasmCompiler {
           );
           return;
         }
-        const virtualConstructor = this.#compactScalar
+        const virtualConstructor = this.scalarSpecializationEnabled()
           ? this.virtualConstructor(node.child0, environment)
           : undefined;
         if (virtualConstructor !== undefined) {
@@ -2753,7 +2890,7 @@ class FunctionalWasmCompiler {
         return;
       }
       case FunctionalCoreTag.Case: {
-        const constructor = this.#compactScalar
+        const constructor = this.scalarSpecializationEnabled()
           ? this.virtualConstructor(node.child0, environment)
           : undefined;
         if (constructor !== undefined) {
@@ -3280,7 +3417,7 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
-    const virtualConstructor = this.#compactScalar
+    const virtualConstructor = this.scalarSpecializationEnabled()
       ? this.virtualConstructor(node.child0, environment)
       : undefined;
     if (virtualConstructor !== undefined) {

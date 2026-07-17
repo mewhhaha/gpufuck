@@ -297,6 +297,10 @@ export function encodeCompactScalarWasmModule(
     readonly includesRuntimeFaults: boolean;
     readonly instrumentedFuel: boolean;
   },
+  functionExports: readonly {
+    readonly name: string;
+    readonly functionIndex: number;
+  }[] = [],
 ): Uint8Array<ArrayBuffer> {
   const allFunctionTypes = wasmFunctionTypes(additionalFunctionTypes);
   const usedTypeIndices = [...new Set(functions.map((body) => body.typeIndex))];
@@ -349,6 +353,11 @@ export function encodeCompactScalarWasmModule(
       7,
       vector([
         [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
+        ...functionExports.map((exported) => [
+          ...name(exported.name),
+          0x00,
+          ...encodeUnsigned(exported.functionIndex),
+        ]),
         ...(runtimeFaultGlobal === undefined || runtimeFaultNodeGlobal === undefined ? [] : [
           [
             ...name("runtimeFault"),
