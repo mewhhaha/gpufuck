@@ -519,10 +519,15 @@ faults, and decoded values:
 const results = await types.executeBatch(typePrograms);
 ```
 
-On the benchmark machine, the 32-program matrix workload completes in about 44.3 ms total, or 1.39
-ms per program, while one scalar execution takes about 36.1 ms. The larger reflection workload
-completes in 87.1 ms, or 2.72 ms per program. Batching improves throughput rather than the latency
-of a single dependent type computation.
+Repeated references to the same immutable `TypeCoreProgram` are coalesced within one batch and
+decoded independently at every result position. Structurally equal but separately allocated program
+objects remain distinct lanes.
+
+On the benchmark machine, 32 distinct matrix programs complete in about 45.2 ms total, or 1.41 ms
+per program, while one scalar execution takes about 36.3 ms. The larger reflection workload
+completes in 92.5 ms, or 2.89 ms per program. Repeating one matrix program object 32 times takes
+37.7 ms total because only one lane is evaluated. Batching improves throughput rather than the
+latency of a single dependent type computation.
 
 Capability discovery is deliberately separate from deterministic type execution.
 `TypeCoreCapabilityResolver` indexes declarative rules by predicate, matches kinded structural

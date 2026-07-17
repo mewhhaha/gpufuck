@@ -19,6 +19,11 @@ interface SteadyStateTimingSummary {
   readonly batchMillisecondsPerProgram: number;
 }
 
+interface GpuTimingSummary extends SteadyStateTimingSummary {
+  readonly repeatedBatchMilliseconds: number;
+  readonly repeatedBatchMillisecondsPerProgram: number;
+}
+
 const deviceStart = performance.now();
 const device = await requestWebGpuDevice();
 const deviceInitializationMilliseconds = performance.now() - deviceStart;
@@ -55,7 +60,7 @@ try {
         reflection: zigReflection,
       },
       comparison:
-        "The GPU initialization probe executes the matrix program once and includes lazy shader and pipeline initialization. GPU warm timings include Type Core validation, lowering, GPU semantic compilation, execution, and readback; GPU batches pack compilation and evaluation lanes into shared submissions. Zig first timings use an empty cache and include process startup, parsing, semantic analysis, code generation, linking, and the test run; Zig batches run warm-cache commands sequentially. Compare these as pipeline and throughput measurements, not equivalent compiler phases.",
+        "The GPU initialization probe executes the matrix program once and includes lazy shader and pipeline initialization. GPU warm timings include Type Core validation, lowering, GPU semantic compilation, execution, and readback. GPU batch timings use distinct program objects and pack their lanes into shared submissions; repeated batch timings reuse one program object and coalesce it to one deterministic computation. Zig first timings use an empty cache and include process startup, parsing, semantic analysis, code generation, linking, and the test run; Zig batches run warm-cache commands sequentially. Compare these as pipeline and throughput measurements, not equivalent compiler phases.",
     },
     null,
     2,
@@ -67,24 +72,37 @@ try {
 async function measureGpuProgram(
   executor: GpuTypeCoreExecutor,
   program: TypeCoreProgram,
-): Promise<SteadyStateTimingSummary> {
+): Promise<GpuTimingSummary> {
   const warmMilliseconds: number[] = [];
   for (let sample = 0; sample < WARM_SAMPLE_COUNT; sample++) {
     const start = performance.now();
     requireSuccessfulTypeCore(await executor.execute(program), `warm GPU sample ${sample}`);
     warmMilliseconds.push(performance.now() - start);
   }
-  const batchStart = performance.now();
-  const results = await executor.executeBatch(
+  const repeatedBatchStart = performance.now();
+  const repeatedResults = await executor.executeBatch(
     Array.from({ length: BATCH_PROGRAM_COUNT }, () => program),
   );
-  for (const [programIndex, result] of results.entries()) {
+  const repeatedBatchMilliseconds = performance.now() - repeatedBatchStart;
+  for (const [programIndex, result] of repeatedResults.entries()) {
     requireSuccessfulTypeCore(
       result,
-      `packed GPU batch program ${programIndex}`,
+      `repeated GPU batch program ${programIndex}`,
     );
   }
-  return steadyStateTimingSummary(warmMilliseconds, performance.now() - batchStart);
+
+  const batchStart = performance.now();
+  const results = await executor.executeBatch(
+    Array.from({ length: BATCH_PROGRAM_COUNT }, () => structuredClone(program)),
+  );
+  for (const [programIndex, result] of results.entries()) {
+    requireSuccessfulTypeCore(result, `distinct GPU batch program ${programIndex}`);
+  }
+  return {
+    ...steadyStateTimingSummary(warmMilliseconds, performance.now() - batchStart),
+    repeatedBatchMilliseconds,
+    repeatedBatchMillisecondsPerProgram: repeatedBatchMilliseconds / BATCH_PROGRAM_COUNT,
+  };
 }
 
 async function measureZigSource(

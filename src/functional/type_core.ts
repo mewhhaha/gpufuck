@@ -88,7 +88,22 @@ export class GpuTypeCoreExecutor {
     if (programs.length === 0) return [];
     if (programs.length === 1) return [await this.execute(programs[0]!, options)];
 
-    const lowered = programs.map((program) =>
+    const uniquePrograms: {
+      readonly program: TypeCoreProgram;
+      readonly resultIndices: number[];
+    }[] = [];
+    const uniqueProgramIndices = new Map<TypeCoreProgram, number>();
+    for (const [resultIndex, program] of programs.entries()) {
+      const uniqueProgramIndex = uniqueProgramIndices.get(program);
+      if (uniqueProgramIndex === undefined) {
+        uniqueProgramIndices.set(program, uniquePrograms.length);
+        uniquePrograms.push({ program, resultIndices: [resultIndex] });
+        continue;
+      }
+      uniquePrograms[uniqueProgramIndex]!.resultIndices.push(resultIndex);
+    }
+
+    const lowered = uniquePrograms.map(({ program }) =>
       lowerTypeCoreProgram(validateTypeCoreProgram(program))
     );
     const compilations = await this.compiler.compileBatch(
@@ -114,19 +129,28 @@ export class GpuTypeCoreExecutor {
 
     const results: (TypeCoreExecutionResult | undefined)[] = new Array(programs.length);
     const successful: {
-      readonly resultIndex: number;
+      readonly uniqueProgramIndex: number;
       readonly module: GpuFunctionalModule;
     }[] = [];
-    for (const [resultIndex, compilation] of compilations.entries()) {
+    for (const [uniqueProgramIndex, compilation] of compilations.entries()) {
       if (compilation === undefined) {
         for (const result of compilations) {
           if (result?.ok) result.module.destroy();
         }
-        throw new Error(`Type Core batch compiler omitted result ${resultIndex}`);
+        throw new Error(`Type Core batch compiler omitted result ${uniqueProgramIndex}`);
       }
       if (compilation.ok) {
-        successful.push({ resultIndex, module: compilation.module });
-      } else {
+        successful.push({ uniqueProgramIndex, module: compilation.module });
+        continue;
+      }
+      const uniqueProgram = uniquePrograms[uniqueProgramIndex];
+      if (uniqueProgram === undefined) {
+        for (const result of compilations) {
+          if (result.ok) result.module.destroy();
+        }
+        throw new Error(`Type Core batch omitted program ${uniqueProgramIndex}`);
+      }
+      for (const resultIndex of uniqueProgram.resultIndices) {
         results[resultIndex] = {
           ok: false,
           stage: "compile",
@@ -164,28 +188,33 @@ export class GpuTypeCoreExecutor {
         if (evaluation === undefined) {
           throw new Error(`Type Core batch evaluator omitted result ${successfulIndex}`);
         }
+        const uniqueProgram = uniquePrograms[entry.uniqueProgramIndex];
+        const program = lowered[entry.uniqueProgramIndex];
+        if (uniqueProgram === undefined || program === undefined) {
+          throw new Error(`Type Core batch lowering omitted program ${entry.uniqueProgramIndex}`);
+        }
         if (!evaluation.ok) {
-          results[entry.resultIndex] = {
-            ok: false,
-            stage: "execute",
-            fault: evaluation.fault,
-            stats: evaluation.stats,
-          };
+          for (const resultIndex of uniqueProgram.resultIndices) {
+            results[resultIndex] = {
+              ok: false,
+              stage: "execute",
+              fault: evaluation.fault,
+              stats: evaluation.stats,
+            };
+          }
           continue;
         }
-        const program = lowered[entry.resultIndex];
-        if (program === undefined) {
-          throw new Error(`Type Core batch lowering omitted program ${entry.resultIndex}`);
+        for (const resultIndex of uniqueProgram.resultIndices) {
+          results[resultIndex] = {
+            ok: true,
+            value: decodeTypeCoreValue(
+              evaluation.value,
+              program.symbolValues,
+              program.entryKind,
+            ),
+            stats: evaluation.stats,
+          };
         }
-        results[entry.resultIndex] = {
-          ok: true,
-          value: decodeTypeCoreValue(
-            evaluation.value,
-            program.symbolValues,
-            program.entryKind,
-          ),
-          stats: evaluation.stats,
-        };
       }
       return results.map((result, resultIndex) => {
         if (result === undefined) throw new Error(`Type Core batch omitted result ${resultIndex}`);
