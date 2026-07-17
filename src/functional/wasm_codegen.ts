@@ -783,6 +783,9 @@ class FunctionalWasmCompiler {
       node = this.node(baseNode);
     }
     if (reverseArguments.length === 0) return undefined;
+    if (reverseArguments.some((argument) => this.virtualLambda(argument.node, environment))) {
+      return undefined;
+    }
     const virtualBase = this.virtualLambda(baseNode, environment);
     if (virtualBase !== undefined && node.tag !== FunctionalCoreTag.Global) return undefined;
 
@@ -944,12 +947,27 @@ class FunctionalWasmCompiler {
     );
     const canInline = this.#remainingSpecializedInlineSites > 0 &&
       !this.#activeSpecializedLambdas.has(callee.node) &&
-      (virtualArgument !== undefined || hasCaptures);
+      (this.#compactScalar || virtualArgument !== undefined || hasCaptures);
+    const functionShape = this.#functionAnalysis.function(callee.node);
+    const unboxedNumericArgument = canInline && functionShape?.parameterCount === 1 &&
+      this.isUnboxedNumericParameter(functionShape, 0);
 
     let argument: FunctionalBinding;
     if (virtualArgument !== undefined) {
       argument = virtualArgument;
+    } else if (unboxedNumericArgument) {
+      const constantArgument = this.constantIntegerExpression(argumentNode, environment);
+      if (constantArgument !== undefined) {
+        argument = { kind: "i32-integer-constant", literal: constantArgument };
+      } else {
+        this.compileIntegerExpression(instructions, argumentNode, environment);
+        const argumentLocal = instructions.addLocal(WasmValueType.I32);
+        instructions.localSet(argumentLocal);
+        argument = { kind: "i32-integer", index: argumentLocal };
+      }
     } else {
+      const argumentIsEager = argumentEvaluation === FunctionalEvaluationMode.StrictEager ||
+        this.immediatelyForcesLocal(lambda.child0, 0);
       this.compileApplicationArgument(
         instructions,
         { node: argumentNode, evaluationMode: argumentEvaluation },
@@ -958,7 +976,10 @@ class FunctionalWasmCompiler {
       );
       const argumentLocal = instructions.addLocal(WasmValueType.I64);
       instructions.localSet(argumentLocal);
-      argument = { kind: "i64-local", index: argumentLocal };
+      argument = {
+        kind: argumentIsEager ? "i64-value" : "i64-local",
+        index: argumentLocal,
+      };
     }
 
     if (canInline) {

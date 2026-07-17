@@ -67,6 +67,7 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
   readonly typeDeclarations: readonly LazuliTypeDeclaration[];
 
   readonly #device: GPUDevice;
+  #coreNodes: readonly LazuliCoreNode[] | undefined;
   #destroyed = false;
 
   constructor(
@@ -99,8 +100,12 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
     if (this.#destroyed) {
       throw new Error("cannot read a destroyed GPU Lazuli module");
     }
+    if (this.#coreNodes !== undefined) {
+      return this.#coreNodes;
+    }
     if (this.nodeCount === 0) {
-      return [];
+      this.#coreNodes = Object.freeze([]);
+      return this.#coreNodes;
     }
 
     const byteLength = this.nodeCount * LAZULI_NODE_BYTE_LENGTH;
@@ -156,7 +161,8 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
           evaluationMode: decodeEvaluationMode(words.getUint32(byteOffset + 28, true), nodeIndex),
         });
       }
-      return nodes;
+      this.#coreNodes = deepFreeze(nodes);
+      return this.#coreNodes;
     } finally {
       if (mapped) {
         readbackBuffer?.unmap();

@@ -742,6 +742,40 @@ Deno.test("specializes let-bound higher-order functions without allocating closu
   ok(execution.stats.specializedCallSites >= 1);
 });
 
+Deno.test("strict higher-order scalar calls omit closures and the lazy runtime", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "applyOnce",
+    value: surface.lambda(
+      "function",
+      surface.apply(surface.name("function"), surface.integer(41)),
+    ),
+    body: {
+      kind: "let",
+      name: "increment",
+      value: surface.lambda(
+        "value",
+        surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("value"),
+          surface.integer(1),
+        ),
+      ),
+      body: surface.apply(surface.name("applyOnce"), surface.name("increment")),
+    },
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.thunkEvaluations, 0);
+  equal(execution.stats.allocatedBytes, 0);
+  equal(
+    WebAssembly.Module.exports(new WebAssembly.Module(execution.bytes)).some((entry) =>
+      entry.kind === "memory"
+    ),
+    false,
+  );
+});
+
 Deno.test("dispatches branch-selected lambda sets with their own captures", async () => {
   const chooseFunction = (condition: boolean): FunctionalSurfaceExpression => ({
     kind: "let",
