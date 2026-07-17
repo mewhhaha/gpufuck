@@ -187,7 +187,6 @@ export function encodeWasmModule(
   indirectFunctionIndices: readonly number[],
   entryFunctionIndex: number,
   heapStart: number,
-  specializedCallSiteCount: number,
   additionalFunctionTypes: readonly WasmFunctionType[],
   valueForceFunctionIndex?: number,
   initializeFunctionIndex?: number,
@@ -218,7 +217,6 @@ export function encodeWasmModule(
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
         [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
-        [0x7f, 0x00, 0x41, ...encodeSigned(BigInt(specializedCallSiteCount)), 0x0b],
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
         [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
         ...(instrumentedFuel
@@ -253,14 +251,13 @@ export function encodeWasmModule(
         [...name("memory"), 0x02, 0x00],
         [...name("thunkEvaluations"), 0x03, 0x01],
         [...name("runtimeFault"), 0x03, 0x02],
-        [...name("runtimeFaultNode"), 0x03, 0x06],
+        [...name("runtimeFaultNode"), 0x03, 0x05],
         [...name("heapTop"), 0x03, 0x00],
-        [...name("freeListHead"), 0x03, 0x05],
-        [...name("specializedCallSites"), 0x03, 0x04],
+        [...name("freeListHead"), 0x03, 0x04],
         ...(instrumentedFuel
           ? [
-            [...name("comptimeFuel"), 0x03, 0x07],
-            [...name("comptimeSteps"), 0x03, 0x08],
+            [...name("comptimeFuel"), 0x03, 0x06],
+            [...name("comptimeSteps"), 0x03, 0x07],
           ]
           : []),
       ]),
@@ -295,50 +292,87 @@ export function encodeWasmModule(
 export function encodeCompactScalarWasmModule(
   functions: readonly WasmFunctionBody[],
   entryFunctionIndex: number,
-  specializedCallSiteCount: number,
   additionalFunctionTypes: readonly WasmFunctionType[],
-  instrumentedFuel = false,
+  options: {
+    readonly includesRuntimeFaults: boolean;
+    readonly instrumentedFuel: boolean;
+  },
 ): Uint8Array<ArrayBuffer> {
-  const sections = [
-    section(1, vector(wasmFunctionTypes(additionalFunctionTypes))),
-    section(3, vector(functions.map((body) => encodeUnsigned(body.typeIndex)))),
-    section(
-      6,
-      vector([
-        [0x7f, 0x00, 0x41, 0x00, 0x0b],
-        [0x7f, 0x00, 0x41, 0x00, 0x0b],
+  const allFunctionTypes = wasmFunctionTypes(additionalFunctionTypes);
+  const usedTypeIndices = [...new Set(functions.map((body) => body.typeIndex))];
+  const compactTypeIndices = new Map(
+    usedTypeIndices.map((typeIndex, compactIndex) => [typeIndex, compactIndex]),
+  );
+  const usedFunctionTypes = usedTypeIndices.map((typeIndex) => {
+    const type = allFunctionTypes[typeIndex];
+    if (type === undefined) {
+      throw new Error(
+        `compact WebAssembly function type ${typeIndex} exceeds ${allFunctionTypes.length} types`,
+      );
+    }
+    return type;
+  });
+  const runtimeFaultGlobal = options.includesRuntimeFaults ? 0 : undefined;
+  const runtimeFaultNodeGlobal = options.includesRuntimeFaults ? 1 : undefined;
+  const fuelGlobal = options.instrumentedFuel ? options.includesRuntimeFaults ? 2 : 0 : undefined;
+  const stepsGlobal = fuelGlobal === undefined ? undefined : fuelGlobal + 1;
+  const globals = [
+    ...(options.includesRuntimeFaults
+      ? [
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [
-          0x7f,
-          0x00,
-          0x41,
-          ...encodeSigned(BigInt(specializedCallSiteCount)),
-          0x0b,
-        ],
         [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
-        ...(instrumentedFuel
-          ? [
-            [0x7f, 0x01, 0x41, 0x00, 0x0b],
-            [0x7f, 0x01, 0x41, 0x00, 0x0b],
-          ]
-          : []),
-      ]),
+      ]
+      : []),
+    ...(options.instrumentedFuel
+      ? [
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+      ]
+      : []),
+  ];
+  const sections = [
+    section(1, vector(usedFunctionTypes)),
+    section(
+      3,
+      vector(functions.map((body) => {
+        const typeIndex = compactTypeIndices.get(body.typeIndex);
+        if (typeIndex === undefined) {
+          throw new Error(
+            `compact WebAssembly omitted function type ${body.typeIndex}`,
+          );
+        }
+        return encodeUnsigned(typeIndex);
+      })),
     ),
+    ...(globals.length === 0 ? [] : [section(6, vector(globals))]),
     section(
       7,
       vector([
         [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
-        [...name("thunkEvaluations"), 0x03, 0x01],
-        [...name("runtimeFault"), 0x03, 0x02],
-        [...name("runtimeFaultNode"), 0x03, 0x04],
-        [...name("heapTop"), 0x03, 0x00],
-        [...name("specializedCallSites"), 0x03, 0x03],
-        ...(instrumentedFuel
-          ? [
-            [...name("comptimeFuel"), 0x03, 0x05],
-            [...name("comptimeSteps"), 0x03, 0x06],
-          ]
-          : []),
+        ...(runtimeFaultGlobal === undefined || runtimeFaultNodeGlobal === undefined ? [] : [
+          [
+            ...name("runtimeFault"),
+            0x03,
+            ...encodeUnsigned(runtimeFaultGlobal),
+          ],
+          [
+            ...name("runtimeFaultNode"),
+            0x03,
+            ...encodeUnsigned(runtimeFaultNodeGlobal),
+          ],
+        ]),
+        ...(fuelGlobal === undefined || stepsGlobal === undefined ? [] : [
+          [
+            ...name("comptimeFuel"),
+            0x03,
+            ...encodeUnsigned(fuelGlobal),
+          ],
+          [
+            ...name("comptimeSteps"),
+            0x03,
+            ...encodeUnsigned(stepsGlobal),
+          ],
+        ]),
       ]),
     ),
     section(10, vector(functions.map(encodeFunctionBody))),

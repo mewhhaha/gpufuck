@@ -404,13 +404,13 @@ this public header:
 | 12          | 4     | Reserved                                               |
 | 16          | ...   | Contiguous values or bytes                             |
 
-Call the exported `initialize()` before allocating an entry argument. `forceValue(i64) -> i64`
-forces a possibly lazy field. Scalar entry parameters and results use native WASM values; structured
-values use the shared `i64` value representation. Higher-order values are deliberately excluded from
-this boundary.
+Arena-backed modules export `initialize()` for argument allocation and `forceValue(i64) -> i64` for
+possibly lazy fields. Scalar entry parameters and results use native WASM values; structured values
+use the shared `i64` value representation. Higher-order values are deliberately excluded from this
+boundary.
 
 `FunctionalHostTypes` adds UTF-8 text, bytes, typed arrays, typed slices, and nominal resource
-handles to that boundary. Generated modules export `allocate`, `free`, `heapTop`, and
+handles to that boundary. Arena-backed modules export `allocate`, `free`, `heapTop`, and
 `freeListHead`; transferred arguments are released into a reusable free list, while
 `markFunctionalWasmScratch()` and `resetFunctionalWasmScratch()` provide explicit region cleanup.
 Host fields can declare bounded-borrow, frozen-shareable, ownership-transfer, and unique contracts.
@@ -1183,12 +1183,15 @@ temporary region and stack buffers.
 
 Strict, effect-free scalar entries use a compact WASM path when every reachable value can remain an
 unboxed scalar. Those modules omit linear memory, function tables, allocation, thunk forcing, and
-indirect calls while retaining the same `main` and statistics interface. Other entries use an
-aligned, growing linear-memory arena for closures, constructors, and thunks. A thunk stores its
-specialized code slot, captures, state, and cached value. The exported `thunkEvaluations` counter
-increments only on the unevaluated slow path, so `runFunctionalWasmModule()` reports observable
-sharing without counting cached forces. Its `allocatedBytes` statistic reports linear-memory growth
-during initialization and execution.
+indirect calls. They also omit zero-valued heap and thunk counters, unused fault globals, and unused
+function signatures. Captureless strict workers omit their environment parameter, scalar integer
+workers use native `i32` parameters and results, and a strict recursive worker with one saturated
+use is fused into its caller. `runFunctionalWasmModule()` still reports zero allocation and thunk
+evaluation through the common statistics interface. Other entries use an aligned, growing
+linear-memory arena for closures, constructors, and thunks. A thunk stores its specialized code
+slot, captures, state, and cached value. The exported `thunkEvaluations` counter increments only on
+the unevaluated slow path, so the runner reports observable sharing without counting cached forces.
+Its `allocatedBytes` statistic reports linear-memory growth during initialization and execution.
 
 ### Lambda-set specialization
 
@@ -1204,8 +1207,9 @@ This pass does not alter semantic function types or the frontend ABI. Incomplete
 constructors, host operations, sets wider than 64 lambdas, and specialization beyond 512 inline
 sites retain the ordinary closure representation and `call_indirect` path. Those limits bound code
 growth without changing program behavior. `FunctionalWasmStats.specializedCallSites` reports the
-number of emitted direct lambda candidates; it is static for one emitted module, unlike the dynamic
-thunk and allocation counters.
+number of emitted direct lambda candidates. The runner keeps this compiler statistic beside its
+cached module instead of exporting it in production WASM; unlike the dynamic thunk and allocation
+counters, it is static for one emitted module.
 
 ```sh
 deno task bench:functional-comptime

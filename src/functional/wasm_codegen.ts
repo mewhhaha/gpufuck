@@ -79,9 +79,9 @@ const BASE_WASM_FUNCTION_TYPE_COUNT = 5;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
 const MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS = 64;
-const wasmBytesByModule = new WeakMap<
+const wasmArtifactsByModule = new WeakMap<
   GpuFunctionalModule,
-  Promise<Uint8Array<ArrayBuffer>>
+  Promise<FunctionalWasmArtifact>
 >();
 const executableWasmByModule = new WeakMap<
   GpuFunctionalModule,
@@ -89,12 +89,12 @@ const executableWasmByModule = new WeakMap<
 >();
 const instrumentedWasmByModule = new WeakMap<
   GpuFunctionalModule,
-  Promise<{ readonly bytes: Uint8Array<ArrayBuffer>; readonly executable: WebAssembly.Module }>
+  Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }>
 >();
 const resolvedCoreFingerprintByModule = new WeakMap<GpuFunctionalModule, Promise<string>>();
 const instrumentedWasmByResolvedCore = new Map<
   string,
-  Promise<{ readonly bytes: Uint8Array<ArrayBuffer>; readonly executable: WebAssembly.Module }>
+  Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }>
 >();
 
 type ValueSource =
@@ -113,7 +113,25 @@ interface VirtualLambda {
   readonly environment: FunctionalEnvironment;
 }
 
-type FunctionalBinding = ValueSource | VirtualLambda;
+interface VirtualConstructor {
+  readonly kind: "virtual-constructor";
+  readonly constructorIndex: number;
+  readonly arguments: readonly FunctionalCallArgument[];
+  readonly environment: FunctionalEnvironment;
+}
+
+interface StaticRecursiveFunction {
+  readonly kind: "static-recursive-function";
+  readonly node: number;
+  readonly environment: FunctionalEnvironment;
+  readonly inlineAtSoleCall: boolean;
+}
+
+type FunctionalBinding =
+  | ValueSource
+  | VirtualLambda
+  | VirtualConstructor
+  | StaticRecursiveFunction;
 
 // A missing source preserves de Bruijn depth for a binding that this closure does not capture.
 type FunctionalEnvironment = readonly (FunctionalBinding | undefined)[];
@@ -131,6 +149,13 @@ interface FunctionalWasmEntry {
   readonly result: FunctionalType;
 }
 
+interface CompactRuntimeGlobals {
+  readonly runtimeFault?: number;
+  readonly runtimeFaultNode?: number;
+  readonly fuel?: number;
+  readonly steps?: number;
+}
+
 interface ConstructorApplication {
   readonly constructorIndex: number;
   readonly arguments: readonly FunctionalCallArgument[];
@@ -140,6 +165,13 @@ interface UncurriedApplication {
   readonly baseNode: number;
   readonly arguments: readonly FunctionalCallArgument[];
   readonly functionShape: FunctionalFunctionShape;
+  readonly staticEnvironment?: FunctionalEnvironment;
+  readonly inlineAtSoleCall: boolean;
+}
+
+interface UncurriedWorker {
+  readonly slot: number;
+  readonly hasEnvironmentParameter: boolean;
 }
 
 export type { FunctionalWasmValue } from "./wasm_value_codec.ts";
@@ -155,6 +187,11 @@ export interface FunctionalWasmExecution {
   readonly instance: WebAssembly.Instance;
   readonly value: FunctionalWasmValue;
   readonly stats: FunctionalWasmStats;
+}
+
+interface FunctionalWasmArtifact {
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly specializedCallSites: number;
 }
 
 export interface FunctionalBoundedWasmExecution extends FunctionalWasmExecution {
@@ -231,28 +268,30 @@ export class FunctionalWasmRuntimeError extends Error {
 export async function compileFunctionalModuleToWasm(
   module: GpuFunctionalModule,
 ): Promise<Uint8Array<ArrayBuffer>> {
-  return (await cachedFunctionalWasmBytes(module)).slice();
+  return (await cachedFunctionalWasmArtifact(module)).bytes.slice();
 }
 
-async function cachedFunctionalWasmBytes(
+async function cachedFunctionalWasmArtifact(
   module: GpuFunctionalModule,
-): Promise<Uint8Array<ArrayBuffer>> {
+): Promise<FunctionalWasmArtifact> {
   functionalWasmEntry(module);
-  const cached = wasmBytesByModule.get(module);
+  const cached = wasmArtifactsByModule.get(module);
   if (cached !== undefined) return await cached;
   const nodes = await module.readCoreNodes();
   const compilation = Promise.resolve().then(() => {
-    const compactModule = new FunctionalWasmCompiler(module, nodes, true)
-      .compileCompactScalar();
-    return compactModule ??
-      new FunctionalWasmCompiler(module, nodes, false).compile();
+    const compactCompiler = new FunctionalWasmCompiler(module, nodes, true);
+    const compactBytes = compactCompiler.compileCompactScalar();
+    if (compactBytes !== undefined) return compactCompiler.artifact(compactBytes);
+
+    const compiler = new FunctionalWasmCompiler(module, nodes, false);
+    return compiler.artifact(compiler.compile());
   });
-  wasmBytesByModule.set(module, compilation);
+  wasmArtifactsByModule.set(module, compilation);
   try {
     return await compilation;
   } catch (error) {
-    if (wasmBytesByModule.get(module) === compilation) {
-      wasmBytesByModule.delete(module);
+    if (wasmArtifactsByModule.get(module) === compilation) {
+      wasmArtifactsByModule.delete(module);
     }
     throw error;
   }
@@ -263,8 +302,8 @@ async function cachedExecutableWasm(
 ): Promise<WebAssembly.Module> {
   const cached = executableWasmByModule.get(module);
   if (cached !== undefined) return await cached;
-  const compilation = cachedFunctionalWasmBytes(module).then((bytes) =>
-    new WebAssembly.Module(bytes)
+  const compilation = cachedFunctionalWasmArtifact(module).then((artifact) =>
+    new WebAssembly.Module(artifact.bytes)
   );
   executableWasmByModule.set(module, compilation);
   try {
@@ -280,7 +319,7 @@ async function cachedExecutableWasm(
 async function fuelInstrumentedWasm(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
-): Promise<{ readonly bytes: Uint8Array<ArrayBuffer>; readonly executable: WebAssembly.Module }> {
+): Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }> {
   const cached = instrumentedWasmByModule.get(module);
   if (cached !== undefined) return await cached;
   const compilation = sharedFuelInstrumentedWasm(module, nodes);
@@ -298,7 +337,7 @@ async function fuelInstrumentedWasm(
 async function sharedFuelInstrumentedWasm(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
-): Promise<{ readonly bytes: Uint8Array<ArrayBuffer>; readonly executable: WebAssembly.Module }> {
+): Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }> {
   const fingerprint = await resolvedCoreFingerprint(module, nodes);
   const cached = instrumentedWasmByResolvedCore.get(fingerprint);
   if (cached !== undefined) {
@@ -307,10 +346,16 @@ async function sharedFuelInstrumentedWasm(
     return await cached;
   }
   const compilation = Promise.resolve().then(() => {
-    const compactModule = new FunctionalWasmCompiler(module, nodes, true, true)
-      .compileCompactScalar();
-    const bytes = compactModule ?? new FunctionalWasmCompiler(module, nodes, false, true).compile();
-    return { bytes, executable: new WebAssembly.Module(bytes) };
+    const compactCompiler = new FunctionalWasmCompiler(module, nodes, true, true);
+    const compactBytes = compactCompiler.compileCompactScalar();
+    let artifact: FunctionalWasmArtifact;
+    if (compactBytes !== undefined) {
+      artifact = compactCompiler.artifact(compactBytes);
+    } else {
+      const compiler = new FunctionalWasmCompiler(module, nodes, false, true);
+      artifact = compiler.artifact(compiler.compile());
+    }
+    return { ...artifact, executable: new WebAssembly.Module(artifact.bytes) };
   });
   instrumentedWasmByResolvedCore.set(fingerprint, compilation);
   evictOldestResolvedCoreArtifacts();
@@ -428,9 +473,10 @@ async function runFunctionalWasmAttempt(
   const instrumented = maximumSteps === undefined
     ? undefined
     : await fuelInstrumentedWasm(module, nodes);
-  const [bytes, executable] = instrumented === undefined
-    ? await Promise.all([cachedFunctionalWasmBytes(module), cachedExecutableWasm(module)])
-    : [instrumented.bytes, instrumented.executable] as const;
+  const [artifact, executable] = instrumented === undefined
+    ? await Promise.all([cachedFunctionalWasmArtifact(module), cachedExecutableWasm(module)])
+    : [instrumented, instrumented.executable] as const;
+  const { bytes } = artifact;
   const host = functionalWasmImports(module, options.init);
   const instance = new WebAssembly.Instance(executable, host.imports);
   host.bindInstance(instance);
@@ -453,9 +499,9 @@ async function runFunctionalWasmAttempt(
     );
   }
   const heapTop = instance.exports.heapTop;
-  if (!(heapTop instanceof WebAssembly.Global)) {
+  if (heapTop !== undefined && !(heapTop instanceof WebAssembly.Global)) {
     throw new Error(
-      `functional WASM entry d${module.entryDefinition} did not export its allocator heap top`,
+      `functional WASM entry d${module.entryDefinition} exported a non-global allocator heap top`,
     );
   }
   let argument: bigint | undefined;
@@ -521,7 +567,7 @@ async function runFunctionalWasmAttempt(
     });
   }
   try {
-    const heapBase = Number(heapTop.value) >>> 0;
+    const heapBase = heapTop instanceof WebAssembly.Global ? Number(heapTop.value) >>> 0 : 0;
     let result: number | bigint;
     try {
       result = (argument === undefined ? exportedMain() : exportedMain(argument)) as
@@ -552,18 +598,15 @@ async function runFunctionalWasmAttempt(
       throwFunctionalWasmTrap(module, nodes, instance, cause);
     }
     const thunkEvaluations = instance.exports.thunkEvaluations;
-    if (!(thunkEvaluations instanceof WebAssembly.Global)) {
+    if (
+      thunkEvaluations !== undefined &&
+      !(thunkEvaluations instanceof WebAssembly.Global)
+    ) {
       throw new Error(
-        `functional WASM entry d${module.entryDefinition} did not export thunk evaluation stats`,
+        `functional WASM entry d${module.entryDefinition} exported non-global thunk evaluation stats`,
       );
     }
-    const specializedCallSites = instance.exports.specializedCallSites;
-    if (!(specializedCallSites instanceof WebAssembly.Global)) {
-      throw new Error(
-        `functional WASM entry d${module.entryDefinition} did not export lambda-set specialization stats`,
-      );
-    }
-    const finalHeapTop = Number(heapTop.value) >>> 0;
+    const finalHeapTop = heapTop instanceof WebAssembly.Global ? Number(heapTop.value) >>> 0 : 0;
     if (finalHeapTop < heapBase) {
       throw new Error(
         `functional WASM entry d${module.entryDefinition} wrapped its allocator heap top from ${heapBase} to ${finalHeapTop}`,
@@ -574,9 +617,11 @@ async function runFunctionalWasmAttempt(
       instance,
       value,
       stats: {
-        thunkEvaluations: Number(thunkEvaluations.value),
+        thunkEvaluations: thunkEvaluations instanceof WebAssembly.Global
+          ? Number(thunkEvaluations.value)
+          : 0,
         allocatedBytes: finalHeapTop - heapBase,
-        specializedCallSites: Number(specializedCallSites.value),
+        specializedCallSites: artifact.specializedCallSites,
       },
       ...(comptimeSteps instanceof WebAssembly.Global
         ? { semanticSteps: Number(comptimeSteps.value) }
@@ -853,7 +898,8 @@ class FunctionalWasmCompiler {
   readonly #indirectFunctions: (WasmFunctionBody | undefined)[] = [];
   readonly #lambdaSlots: (number | undefined)[];
   readonly #recursiveLambdaOwners = new Map<number, number>();
-  readonly #uncurriedWorkerSlots = new Map<number, number>();
+  readonly #uncurriedWorkers = new Map<string, UncurriedWorker>();
+  readonly #staticEnvironmentIds = new WeakMap<object, number>();
   readonly #additionalFunctionTypes: WasmFunctionType[] = [];
   readonly #additionalFunctionTypeIndices = new Map<string, number>();
   readonly #constructorClosureSlots: (number | undefined)[][];
@@ -863,11 +909,14 @@ class FunctionalWasmCompiler {
   readonly #hostFields: readonly HostField[];
   readonly #functionImports: readonly WasmFunctionImport[];
   readonly #activeSpecializedLambdas = new Set<number>();
+  readonly #activeFusedWorkers = new Set<number>();
   readonly #compactScalar: boolean;
   readonly #hasLazyEvaluationBoundary: boolean;
   readonly #instrumentedFuel: boolean;
+  readonly #compactRuntimeGlobals: CompactRuntimeGlobals;
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
   #specializedCallSiteCount = 0;
+  #nextStaticEnvironmentId = 0;
   #requestedAllocator = false;
   #requestedThunkForce = false;
 
@@ -881,6 +930,10 @@ class FunctionalWasmCompiler {
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
     this.#instrumentedFuel = instrumentedFuel;
+    this.#compactRuntimeGlobals = compactRuntimeGlobals(
+      nodes,
+      instrumentedFuel,
+    );
     this.#hasLazyEvaluationBoundary = nodes.some((node) =>
       (node.tag === FunctionalCoreTag.Apply ||
         node.tag === FunctionalCoreTag.Let) &&
@@ -988,6 +1041,13 @@ class FunctionalWasmCompiler {
       );
   }
 
+  artifact(bytes: Uint8Array<ArrayBuffer>): FunctionalWasmArtifact {
+    return {
+      bytes,
+      specializedCallSites: this.#specializedCallSiteCount,
+    };
+  }
+
   compileCompactScalar(): Uint8Array<ArrayBuffer> | undefined {
     const scalarResult = functionalHostScalarType(this.#entry.result);
     if (
@@ -1054,9 +1114,11 @@ class FunctionalWasmCompiler {
     return encodeCompactScalarWasmModule(
       emittedFunctions,
       emittedFunctions.length - 1,
-      this.#specializedCallSiteCount,
       this.#additionalFunctionTypes,
-      this.#instrumentedFuel,
+      {
+        includesRuntimeFaults: this.#compactRuntimeGlobals.runtimeFault !== undefined,
+        instrumentedFuel: this.#instrumentedFuel,
+      },
     );
   }
 
@@ -1134,7 +1196,6 @@ class FunctionalWasmCompiler {
       indirectFunctionIndices,
       entryFunctionIndex,
       this.heapStart(),
-      this.#specializedCallSiteCount,
       this.#additionalFunctionTypes,
       this.#functionImports.length + 3 + indirectFunctions.length,
       this.#functionImports.length + 4 + indirectFunctions.length,
@@ -1356,13 +1417,16 @@ class FunctionalWasmCompiler {
 
   emitFuelCharge(instructions: WasmInstructions, nodeIndex: number): void {
     if (!this.#instrumentedFuel) return;
-    const fuelGlobal = this.#compactScalar ? 5 : 7;
-    const stepsGlobal = fuelGlobal + 1;
-    const runtimeFaultNodeGlobal = this.#compactScalar ? 4 : 6;
+    const fuelGlobal = this.#compactScalar ? this.requireCompactGlobal("fuel") : 6;
+    const stepsGlobal = this.#compactScalar ? this.requireCompactGlobal("steps") : 7;
+    const runtimeFaultGlobal = this.#compactScalar ? this.requireCompactGlobal("runtimeFault") : 2;
+    const runtimeFaultNodeGlobal = this.#compactScalar
+      ? this.requireCompactGlobal("runtimeFaultNode")
+      : 5;
     instructions.globalGet(fuelGlobal);
     instructions.emit(0x45, 0x04, 0x40);
     instructions.i32Const(WASM_FAULT_OUT_OF_FUEL);
-    instructions.globalSet(2);
+    instructions.globalSet(runtimeFaultGlobal);
     instructions.i32Const(nodeIndex);
     instructions.globalSet(runtimeFaultNodeGlobal);
     instructions.emit(0x00, 0x0b);
@@ -1715,10 +1779,18 @@ class FunctionalWasmCompiler {
     ) {
       return undefined;
     }
+    const recursiveFunction = node.tag === FunctionalCoreTag.Local
+      ? environment[node.payload]
+      : undefined;
     return {
       baseNode,
       arguments: Object.freeze(reverseArguments.reverse()),
       functionShape,
+      inlineAtSoleCall: recursiveFunction?.kind === "static-recursive-function" &&
+        recursiveFunction.inlineAtSoleCall,
+      ...(recursiveFunction?.kind === "static-recursive-function"
+        ? { staticEnvironment: recursiveFunction.environment }
+        : {}),
     };
   }
 
@@ -1727,12 +1799,132 @@ class FunctionalWasmCompiler {
     application: UncurriedApplication,
     environment: FunctionalEnvironment,
   ): void {
+    if (
+      this.compileFusedUncurriedApplication(
+        instructions,
+        application,
+        environment,
+        "value",
+      )
+    ) return;
+
+    const worker = this.uncurriedWorker(
+      application.functionShape,
+      application.staticEnvironment,
+      "value",
+    );
+    if (worker.hasEnvironmentParameter) {
+      this.emitUncurriedEnvironmentArgument(instructions, application, environment);
+    }
+    const argumentLocals = this.compileUncurriedArguments(
+      instructions,
+      application,
+      environment,
+    );
+    for (const argument of argumentLocals) instructions.localGet(argument);
+    this.#specializedCallSiteCount += 1;
+    instructions.call(this.indirectFunctionOffset() + worker.slot);
+  }
+
+  compileNativeIntegerUncurriedApplication(
+    instructions: WasmInstructions,
+    application: UncurriedApplication,
+    environment: FunctionalEnvironment,
+  ): void {
+    if (
+      this.compileFusedUncurriedApplication(
+        instructions,
+        application,
+        environment,
+        "integer",
+      )
+    ) return;
+
+    const worker = this.uncurriedWorker(
+      application.functionShape,
+      application.staticEnvironment,
+      "integer",
+    );
+    if (worker.hasEnvironmentParameter) {
+      this.emitUncurriedEnvironmentArgument(instructions, application, environment);
+    }
+    const argumentLocals = this.compileUncurriedArguments(
+      instructions,
+      application,
+      environment,
+    );
+    for (const argument of argumentLocals) instructions.localGet(argument);
+    this.#specializedCallSiteCount += 1;
+    instructions.call(this.indirectFunctionOffset() + worker.slot);
+  }
+
+  compileFusedUncurriedApplication(
+    instructions: WasmInstructions,
+    application: UncurriedApplication,
+    environment: FunctionalEnvironment,
+    resultKind: "value" | "integer",
+  ): boolean {
+    const tailLoop = this.#functionAnalysis.loop(
+      application.functionShape.innerLambdaNode,
+    );
+    if (
+      application.inlineAtSoleCall &&
+      tailLoop !== undefined &&
+      !this.#activeFusedWorkers.has(application.functionShape.outerLambdaNode) &&
+      !this.uncurriedWorkerHasEnvironmentParameter(
+        application.functionShape,
+        application.staticEnvironment,
+      )
+    ) {
+      const argumentLocals = this.compileUncurriedArguments(
+        instructions,
+        application,
+        environment,
+      );
+      const parameterBindings = argumentLocals.map((index, parameter) =>
+        this.isUnboxedNumericParameter(application.functionShape, parameter)
+          ? { kind: "i32-integer" as const, index }
+          : { kind: "i64-local" as const, index }
+      );
+      const bodyEnvironment = this.uncurriedBodyEnvironment(
+        application.functionShape,
+        parameterBindings,
+        application.staticEnvironment,
+        undefined,
+      );
+      this.#specializedCallSiteCount += 1;
+      this.#activeFusedWorkers.add(application.functionShape.outerLambdaNode);
+      try {
+        this.compileTailLoop(
+          instructions,
+          application.functionShape.bodyNode,
+          bodyEnvironment,
+          tailLoop,
+          resultKind,
+        );
+      } finally {
+        this.#activeFusedWorkers.delete(application.functionShape.outerLambdaNode);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  emitUncurriedEnvironmentArgument(
+    instructions: WasmInstructions,
+    application: UncurriedApplication,
+    environment: FunctionalEnvironment,
+  ): void {
     const base = this.node(application.baseNode);
     const localBase = base.tag === FunctionalCoreTag.Local
       ? this.localSource(environment, base.payload, application.baseNode)
       : undefined;
-    if (localBase?.kind === "i32-pointer") {
-      instructions.localGet(localBase.index);
+    if (
+      localBase?.kind === "i32-pointer" ||
+      localBase?.kind === "static-recursive-function"
+    ) {
+      if (localBase.kind === "i32-pointer") instructions.localGet(localBase.index);
+      else instructions.i32Const(0);
     } else if (
       this.#compactScalar &&
       base.tag === FunctionalCoreTag.Global &&
@@ -1744,9 +1936,13 @@ class FunctionalWasmCompiler {
       this.compileExpression(instructions, application.baseNode, environment);
       instructions.emit(0xa7);
     }
-    const closure = instructions.addLocal(WasmValueType.I32);
-    instructions.localSet(closure);
+  }
 
+  compileUncurriedArguments(
+    instructions: WasmInstructions,
+    application: UncurriedApplication,
+    environment: FunctionalEnvironment,
+  ): readonly number[] {
     const argumentLocals: number[] = [];
     for (const [parameter, argument] of application.arguments.entries()) {
       const unboxed = this.isUnboxedNumericParameter(
@@ -1769,26 +1965,37 @@ class FunctionalWasmCompiler {
       instructions.localSet(argumentLocal);
       argumentLocals.push(argumentLocal);
     }
-
-    instructions.localGet(closure);
-    for (const argument of argumentLocals) instructions.localGet(argument);
-    this.#specializedCallSiteCount += 1;
-    instructions.call(
-      this.indirectFunctionOffset() +
-        this.uncurriedWorkerSlot(application.functionShape),
-    );
+    return argumentLocals;
   }
 
-  uncurriedWorkerSlot(functionShape: FunctionalFunctionShape): number {
-    const existing = this.#uncurriedWorkerSlots.get(
-      functionShape.outerLambdaNode,
-    );
+  uncurriedWorker(
+    functionShape: FunctionalFunctionShape,
+    staticEnvironment: FunctionalEnvironment | undefined,
+    resultKind: "value" | "integer",
+  ): UncurriedWorker {
+    let environmentKey = "runtime";
+    if (staticEnvironment !== undefined) {
+      let environmentId = this.#staticEnvironmentIds.get(staticEnvironment);
+      if (environmentId === undefined) {
+        environmentId = this.#nextStaticEnvironmentId;
+        this.#nextStaticEnvironmentId += 1;
+        this.#staticEnvironmentIds.set(staticEnvironment, environmentId);
+      }
+      environmentKey = `static-${environmentId}`;
+    }
+    const workerKey = `${functionShape.outerLambdaNode}:${resultKind}:${environmentKey}`;
+    const existing = this.#uncurriedWorkers.get(workerKey);
     if (existing !== undefined) return existing;
 
+    const hasEnvironmentParameter = this.uncurriedWorkerHasEnvironmentParameter(
+      functionShape,
+      staticEnvironment,
+    );
     const slot = this.reserveIndirectFunction();
-    this.#uncurriedWorkerSlots.set(functionShape.outerLambdaNode, slot);
+    const worker = { slot, hasEnvironmentParameter };
+    this.#uncurriedWorkers.set(workerKey, worker);
     const parameterTypes = [
-      WasmValueType.I32,
+      ...(hasEnvironmentParameter ? [WasmValueType.I32] : []),
       ...functionShape.strictParameters.map((_, parameter) =>
         this.isUnboxedNumericParameter(functionShape, parameter)
           ? WasmValueType.I32
@@ -1796,48 +2003,25 @@ class FunctionalWasmCompiler {
       ),
     ];
     const instructions = new WasmInstructions(parameterTypes.length);
-    const bodyEnvironment: (FunctionalBinding | undefined)[] = [];
+    const parameterBindings: FunctionalBinding[] = [];
+    const parameterOffset = hasEnvironmentParameter ? 1 : 0;
     for (
       let parameter = 0;
       parameter < functionShape.parameterCount;
       parameter += 1
     ) {
-      const depth = functionShape.parameterCount - parameter - 1;
-      bodyEnvironment[depth] = this.isUnboxedNumericParameter(functionShape, parameter)
-        ? { kind: "i32-integer", index: parameter + 1 }
-        : { kind: "i64-local", index: parameter + 1 };
-    }
-
-    const outerLambda = this.node(functionShape.outerLambdaNode);
-    if (outerLambda.tag !== FunctionalCoreTag.Lambda) {
-      throw new Error(
-        `functional WASM uncurried worker origin ${functionShape.outerLambdaNode} has core tag ${outerLambda.tag}`,
+      parameterBindings.push(
+        this.isUnboxedNumericParameter(functionShape, parameter)
+          ? { kind: "i32-integer", index: parameter + parameterOffset }
+          : { kind: "i64-local", index: parameter + parameterOffset },
       );
     }
-    const recursive = this.#recursiveLambdaOwners.has(
-      functionShape.outerLambdaNode,
+    const bodyEnvironment = this.uncurriedBodyEnvironment(
+      functionShape,
+      parameterBindings,
+      staticEnvironment,
+      hasEnvironmentParameter ? 0 : undefined,
     );
-    const outerFreeDepths = this.#captureAnalysis.freeLocalDepths(
-      outerLambda.child0,
-    );
-    const capturesSelf = recursive && outerFreeDepths.includes(1);
-    const captureBinderDepth = recursive ? 2 : 1;
-    const firstCaptureByteOffset = OBJECT_HEADER_BYTE_LENGTH +
-      (capturesSelf ? VALUE_BYTE_LENGTH : 0);
-    if (recursive) {
-      bodyEnvironment[functionShape.parameterCount] = {
-        kind: "i32-pointer",
-        index: 0,
-      };
-    }
-    const capturedDepths = outerFreeDepths.filter((depth) => depth >= captureBinderDepth);
-    for (const [captureIndex, freeDepth] of capturedDepths.entries()) {
-      const bodyDepth = freeDepth + functionShape.parameterCount - 1;
-      bodyEnvironment[bodyDepth] = {
-        kind: "capture",
-        byteOffset: firstCaptureByteOffset + captureIndex * VALUE_BYTE_LENGTH,
-      };
-    }
 
     const tailLoop = this.#functionAnalysis.loop(functionShape.innerLambdaNode);
     if (tailLoop === undefined) {
@@ -1846,13 +2030,13 @@ class FunctionalWasmCompiler {
         ? this.#functionAnalysis.numericFold(functionShape.innerLambdaNode)
         : undefined;
       if (numericFold === undefined) {
-        this.compileExpression(
-          instructions,
-          functionShape.bodyNode,
-          bodyEnvironment,
-        );
+        if (resultKind === "integer") {
+          this.compileIntegerExpression(instructions, functionShape.bodyNode, bodyEnvironment);
+        } else {
+          this.compileExpression(instructions, functionShape.bodyNode, bodyEnvironment);
+        }
       } else {
-        this.compileNumericFoldLoop(instructions, bodyEnvironment, numericFold);
+        this.compileNumericFoldLoop(instructions, bodyEnvironment, numericFold, resultKind);
       }
     } else {
       this.compileTailLoop(
@@ -1860,37 +2044,102 @@ class FunctionalWasmCompiler {
         functionShape.bodyNode,
         bodyEnvironment,
         tailLoop,
+        resultKind,
       );
     }
-    const resultTypes = [WasmValueType.I64];
-    const functionTypeKey = `${parameterTypes.join(",")}->${resultTypes.join(",")}`;
-    let functionTypeIndex = this.#additionalFunctionTypeIndices.get(
-      functionTypeKey,
-    );
-    if (functionTypeIndex === undefined) {
-      functionTypeIndex = BASE_WASM_FUNCTION_TYPE_COUNT +
-        this.#additionalFunctionTypes.length;
-      this.#additionalFunctionTypes.push({
-        parameters: [...parameterTypes],
-        results: resultTypes,
-      });
-      this.#additionalFunctionTypeIndices.set(
-        functionTypeKey,
-        functionTypeIndex,
-      );
-    }
+    const resultTypes = [
+      resultKind === "integer" ? WasmValueType.I32 : WasmValueType.I64,
+    ];
     this.#indirectFunctions[slot] = functionBody(
-      functionTypeIndex,
+      this.functionTypeIndex(parameterTypes, resultTypes),
       instructions,
       `uncurried worker for lambda core node ${functionShape.outerLambdaNode}`,
     );
-    return slot;
+    return worker;
+  }
+
+  uncurriedWorkerHasEnvironmentParameter(
+    functionShape: FunctionalFunctionShape,
+    staticEnvironment: FunctionalEnvironment | undefined,
+  ): boolean {
+    const outerLambda = this.node(functionShape.outerLambdaNode);
+    if (outerLambda.tag !== FunctionalCoreTag.Lambda) {
+      throw new Error(
+        `functional WASM uncurried worker origin ${functionShape.outerLambdaNode} has core tag ${outerLambda.tag}`,
+      );
+    }
+    const recursive = this.#recursiveLambdaOwners.has(functionShape.outerLambdaNode);
+    const captureBinderDepth = recursive ? 2 : 1;
+    return this.#captureAnalysis.freeLocalDepths(outerLambda.child0)
+      .filter((depth) => depth >= captureBinderDepth)
+      .some((depth) => staticEnvironment?.[depth - captureBinderDepth] === undefined);
+  }
+
+  uncurriedBodyEnvironment(
+    functionShape: FunctionalFunctionShape,
+    parameterBindings: readonly FunctionalBinding[],
+    staticEnvironment: FunctionalEnvironment | undefined,
+    environmentParameter: number | undefined,
+  ): FunctionalEnvironment {
+    const outerLambda = this.node(functionShape.outerLambdaNode);
+    if (outerLambda.tag !== FunctionalCoreTag.Lambda) {
+      throw new Error(
+        `functional WASM uncurried worker origin ${functionShape.outerLambdaNode} has core tag ${outerLambda.tag}`,
+      );
+    }
+    const bodyEnvironment: (FunctionalBinding | undefined)[] = [];
+    for (const [parameter, binding] of parameterBindings.entries()) {
+      bodyEnvironment[functionShape.parameterCount - parameter - 1] = binding;
+    }
+
+    const recursive = this.#recursiveLambdaOwners.has(functionShape.outerLambdaNode);
+    const outerFreeDepths = this.#captureAnalysis.freeLocalDepths(outerLambda.child0);
+    const capturesSelf = recursive && outerFreeDepths.includes(1);
+    const captureBinderDepth = recursive ? 2 : 1;
+    const firstCaptureByteOffset = OBJECT_HEADER_BYTE_LENGTH +
+      (capturesSelf ? VALUE_BYTE_LENGTH : 0);
+    if (recursive) {
+      bodyEnvironment[functionShape.parameterCount] = environmentParameter === undefined
+        ? {
+          kind: "static-recursive-function",
+          node: functionShape.outerLambdaNode,
+          environment: staticEnvironment ?? [],
+          inlineAtSoleCall: false,
+        }
+        : { kind: "i32-pointer", index: environmentParameter };
+    }
+    const capturedDepths = outerFreeDepths.filter((depth) => depth >= captureBinderDepth);
+    for (const [captureIndex, freeDepth] of capturedDepths.entries()) {
+      const bodyDepth = freeDepth + functionShape.parameterCount - 1;
+      const staticCapture = staticEnvironment?.[freeDepth - captureBinderDepth];
+      if (staticCapture !== undefined) {
+        bodyEnvironment[bodyDepth] = staticCapture;
+        continue;
+      }
+      if (environmentParameter === undefined) {
+        throw new Error(
+          `functional WASM captureless worker ${functionShape.outerLambdaNode} omitted outer local depth ${freeDepth}`,
+        );
+      }
+      bodyEnvironment[bodyDepth] = {
+        kind: "capture",
+        byteOffset: firstCaptureByteOffset + captureIndex * VALUE_BYTE_LENGTH,
+      };
+    }
+    return bodyEnvironment;
+  }
+
+  canUseNativeIntegerWorker(application: UncurriedApplication): boolean {
+    return this.#compactScalar && application.functionShape.strictParameters.every(
+      (_, parameter) => this.isUnboxedNumericParameter(application.functionShape, parameter),
+    );
   }
 
   compileNumericFoldLoop(
     instructions: WasmInstructions,
     environment: FunctionalEnvironment,
     fold: FunctionalNumericFold,
+    resultKind: "value" | "integer" = "value",
   ): void {
     const parameterSource = environment[0];
     if (parameterSource?.kind !== "i32-integer") {
@@ -1904,7 +2153,12 @@ class FunctionalWasmCompiler {
     );
     instructions.localSet(accumulator);
 
-    instructions.emit(0x02, WasmValueType.I64, 0x03, 0x40);
+    instructions.emit(
+      0x02,
+      resultKind === "integer" ? WasmValueType.I32 : WasmValueType.I64,
+      0x03,
+      0x40,
+    );
     this.compileBooleanExpression(
       instructions,
       fold.conditionNode,
@@ -1918,6 +2172,7 @@ class FunctionalWasmCompiler {
       parameterSource.index,
       accumulator,
       fold.recurseWhenTrue,
+      resultKind,
     );
     instructions.emit(0x05);
     this.compileNumericFoldBranch(
@@ -1927,6 +2182,7 @@ class FunctionalWasmCompiler {
       parameterSource.index,
       accumulator,
       !fold.recurseWhenTrue,
+      resultKind,
     );
     instructions.emit(0x0b, 0x0b, 0x00, 0x0b);
   }
@@ -1938,6 +2194,7 @@ class FunctionalWasmCompiler {
     parameter: number,
     accumulator: number,
     recursive: boolean,
+    resultKind: "value" | "integer",
   ): void {
     if (!recursive) {
       instructions.localGet(accumulator);
@@ -1945,7 +2202,7 @@ class FunctionalWasmCompiler {
       instructions.emit(
         fold.operator === FunctionalBinaryOperator.Add ? 0x6a : 0x6c,
       );
-      this.emitEncodeInteger(instructions);
+      if (resultKind === "value") this.emitEncodeInteger(instructions);
       instructions.branch(2);
       return;
     }
@@ -2118,6 +2375,16 @@ class FunctionalWasmCompiler {
       ]);
       return;
     }
+    const virtualConstructor = this.#compactScalar
+      ? this.virtualConstructor(node.child0, environment)
+      : undefined;
+    if (virtualConstructor !== undefined) {
+      this.compileExpression(instructions, node.child1, [
+        virtualConstructor,
+        ...environment,
+      ]);
+      return;
+    }
     const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
       this.expressionIsWhnf(node.child0) ||
       this.immediatelyForcesLocal(node.child1, 0);
@@ -2143,6 +2410,7 @@ class FunctionalWasmCompiler {
     node: FunctionalCoreNode,
     environment: FunctionalEnvironment,
     nodeIndex: number,
+    resultKind: "value" | "integer" = "value",
   ): void {
     const lambda = this.node(node.child0);
     if (lambda.tag !== FunctionalCoreTag.Lambda) {
@@ -2163,18 +2431,29 @@ class FunctionalWasmCompiler {
     const functionShape = this.#functionAnalysis.function(node.child0);
     if (
       this.#compactScalar &&
-      captured.captureSources.length === 0 &&
       functionShape !== undefined &&
-      this.#functionAnalysis.hasOnlySaturatedSelfReferences(functionShape)
+      this.#functionAnalysis.hasOnlySaturatedSelfReferences(functionShape) &&
+      captured.captureSources.every((source) =>
+        source.kind === "i32-integer-constant" ||
+        source.kind === "i32-boolean-constant" ||
+        source.kind === "virtual-lambda" ||
+        source.kind === "virtual-constructor"
+      )
     ) {
-      instructions.i32Const(0);
-      const closure = instructions.addLocal(WasmValueType.I32);
-      instructions.localSet(closure);
-      this.compileExpression(
-        instructions,
-        node.child1,
-        [{ kind: "i32-pointer", index: closure }, ...environment],
-      );
+      const bodyEnvironment: FunctionalEnvironment = [{
+        kind: "static-recursive-function",
+        node: node.child0,
+        environment,
+        inlineAtSoleCall: this.#captureAnalysis.localReferenceCount(
+          node.child1,
+          0,
+        ) === 1,
+      }, ...environment];
+      if (resultKind === "integer") {
+        this.compileIntegerExpression(instructions, node.child1, bodyEnvironment);
+      } else {
+        this.compileExpression(instructions, node.child1, bodyEnvironment);
+      }
       return;
     }
     const slot = this.lambdaSlot(node.child0);
@@ -2197,11 +2476,15 @@ class FunctionalWasmCompiler {
         firstOuterCaptureByteOffset + index * VALUE_BYTE_LENGTH,
       );
     }
-    this.compileExpression(
-      instructions,
-      node.child1,
-      [{ kind: "i32-pointer", index: pointer }, ...environment],
-    );
+    const bodyEnvironment: FunctionalEnvironment = [
+      { kind: "i32-pointer", index: pointer },
+      ...environment,
+    ];
+    if (resultKind === "integer") {
+      this.compileIntegerExpression(instructions, node.child1, bodyEnvironment);
+    } else {
+      this.compileExpression(instructions, node.child1, bodyEnvironment);
+    }
   }
 
   compileIf(
@@ -2379,6 +2662,23 @@ class FunctionalWasmCompiler {
         this.compileIntegerExpression(instructions, node.child2, environment);
         instructions.emit(0x0b);
         return;
+      case FunctionalCoreTag.Apply: {
+        const application = this.uncurriedApplication(nodeIndex, environment);
+        if (application !== undefined && this.canUseNativeIntegerWorker(application)) {
+          this.compileNativeIntegerUncurriedApplication(
+            instructions,
+            application,
+            environment,
+          );
+          return;
+        }
+        this.compileExpression(instructions, nodeIndex, environment);
+        this.emitDecodeInteger(instructions);
+        return;
+      }
+      case FunctionalCoreTag.LetRec:
+        this.compileLetRec(instructions, node, environment, nodeIndex, "integer");
+        return;
       case FunctionalCoreTag.Let: {
         const virtualValue = this.virtualLambda(node.child0, environment);
         if (virtualValue !== undefined) {
@@ -2386,6 +2686,17 @@ class FunctionalWasmCompiler {
             instructions,
             node.child1,
             [virtualValue, ...environment],
+          );
+          return;
+        }
+        const virtualConstructor = this.#compactScalar
+          ? this.virtualConstructor(node.child0, environment)
+          : undefined;
+        if (virtualConstructor !== undefined) {
+          this.compileIntegerExpression(
+            instructions,
+            node.child1,
+            [virtualConstructor, ...environment],
           );
           return;
         }
@@ -2406,7 +2717,14 @@ class FunctionalWasmCompiler {
           );
           return;
         }
-        if (eager && this.canCompileIntegerExpression(node.child0)) {
+        const uncurriedValue = eager
+          ? this.uncurriedApplication(node.child0, environment)
+          : undefined;
+        if (
+          eager &&
+          (this.canCompileIntegerExpression(node.child0) ||
+            (uncurriedValue !== undefined && this.canUseNativeIntegerWorker(uncurriedValue)))
+        ) {
           this.compileIntegerExpression(instructions, node.child0, environment);
           const value = instructions.addLocal(WasmValueType.I32);
           instructions.localSet(value);
@@ -2432,6 +2750,25 @@ class FunctionalWasmCompiler {
             ...environment,
           ],
         );
+        return;
+      }
+      case FunctionalCoreTag.Case: {
+        const constructor = this.#compactScalar
+          ? this.virtualConstructor(node.child0, environment)
+          : undefined;
+        if (constructor !== undefined) {
+          this.compileKnownCaseArm(
+            instructions,
+            node.child1,
+            constructor,
+            environment,
+            nodeIndex,
+            "integer",
+          );
+          return;
+        }
+        this.compileExpression(instructions, nodeIndex, environment);
+        this.emitDecodeInteger(instructions);
         return;
       }
       default:
@@ -2793,9 +3130,13 @@ class FunctionalWasmCompiler {
     else instructions.f64Const(upper);
     instructions.emit(source === "float-32" ? 0x60 : 0x66, 0x72, 0x04, 0x40);
     instructions.i32Const(WASM_FAULT_INVALID_NUMERIC_CONVERSION);
-    instructions.globalSet(2);
+    instructions.globalSet(
+      this.#compactScalar ? this.requireCompactGlobal("runtimeFault") : 2,
+    );
     instructions.i32Const(nodeIndex);
-    instructions.globalSet(this.#compactScalar ? 4 : 6);
+    instructions.globalSet(
+      this.#compactScalar ? this.requireCompactGlobal("runtimeFaultNode") : 5,
+    );
     instructions.emit(0x00, 0x0b);
     instructions.localGet(value);
   }
@@ -2873,9 +3214,13 @@ class FunctionalWasmCompiler {
     instructions.localGet(divisor);
     instructions.emit(divisorType === "i32" ? 0x45 : 0x50, 0x04, 0x40);
     instructions.i32Const(WASM_FAULT_DIVIDE_BY_ZERO);
-    instructions.globalSet(2);
+    instructions.globalSet(
+      this.#compactScalar ? this.requireCompactGlobal("runtimeFault") : 2,
+    );
     instructions.i32Const(nodeIndex);
-    instructions.globalSet(this.#compactScalar ? 4 : 6);
+    instructions.globalSet(
+      this.#compactScalar ? this.requireCompactGlobal("runtimeFaultNode") : 5,
+    );
     instructions.emit(0x00, 0x0b);
   }
 
@@ -2935,6 +3280,19 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
+    const virtualConstructor = this.#compactScalar
+      ? this.virtualConstructor(node.child0, environment)
+      : undefined;
+    if (virtualConstructor !== undefined) {
+      this.compileKnownCaseArm(
+        instructions,
+        node.child1,
+        virtualConstructor,
+        environment,
+        nodeIndex,
+      );
+      return;
+    }
     this.compileExpression(instructions, node.child0, environment);
     instructions.emit(0xa7);
     const constructor = instructions.addLocal(WasmValueType.I32);
@@ -2946,6 +3304,103 @@ class FunctionalWasmCompiler {
       environment,
       nodeIndex,
     );
+  }
+
+  compileKnownCaseArm(
+    instructions: WasmInstructions,
+    firstArmIndex: number,
+    constructor: VirtualConstructor,
+    environment: FunctionalEnvironment,
+    caseNodeIndex: number,
+    resultKind: "value" | "integer" = "value",
+  ): void {
+    const arity = this.#module.constructorArities[constructor.constructorIndex];
+    if (arity === undefined || constructor.arguments.length !== arity) {
+      throw new Error(
+        `functional WASM known constructor ${constructor.constructorIndex} at core node ${caseNodeIndex} has ${constructor.arguments.length} fields; expected ${
+          String(arity)
+        }`,
+      );
+    }
+    const fields = constructor.arguments.map((argument) =>
+      this.compileExpressionBinding(
+        instructions,
+        argument,
+        constructor.environment,
+      )
+    );
+    let armIndex = firstArmIndex;
+    while (armIndex !== FUNCTIONAL_NO_INDEX) {
+      const arm = this.node(armIndex);
+      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+        throw new Error(
+          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
+        );
+      }
+      if (arm.payload === constructor.constructorIndex) {
+        let bodyNode = arm.child0;
+        let armEnvironment = [...environment];
+        for (let bindingIndex = 0; bindingIndex < arity; bindingIndex += 1) {
+          const binding = this.node(bodyNode);
+          if (binding.tag !== FunctionalCoreTag.PatternBind) {
+            throw new Error(
+              `functional WASM case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
+            );
+          }
+          const field = fields[arity - bindingIndex - 1];
+          if (field === undefined) {
+            throw new Error(
+              `functional WASM known constructor ${constructor.constructorIndex} omitted field ${
+                arity - bindingIndex - 1
+              }`,
+            );
+          }
+          armEnvironment = [field, ...armEnvironment];
+          bodyNode = binding.child0;
+        }
+        if (resultKind === "integer") {
+          this.compileIntegerExpression(instructions, bodyNode, armEnvironment);
+        } else {
+          this.compileExpression(instructions, bodyNode, armEnvironment);
+        }
+        return;
+      }
+      armIndex = arm.child1;
+    }
+    throw new Error(
+      `functional WASM case at core node ${caseNodeIndex} has no arm for known constructor ${constructor.constructorIndex}`,
+    );
+  }
+
+  compileExpressionBinding(
+    instructions: WasmInstructions,
+    expression: FunctionalCallArgument,
+    environment: FunctionalEnvironment,
+  ): FunctionalBinding {
+    const virtualLambda = this.virtualLambda(expression.node, environment);
+    if (virtualLambda !== undefined) return virtualLambda;
+    const virtualConstructor = this.virtualConstructor(
+      expression.node,
+      environment,
+    );
+    if (virtualConstructor !== undefined) return virtualConstructor;
+    const integer = this.constantIntegerExpression(expression.node, environment);
+    if (integer !== undefined) {
+      return { kind: "i32-integer-constant", literal: integer };
+    }
+    const boolean = this.constantBooleanExpression(expression.node, environment);
+    if (boolean !== undefined) {
+      return { kind: "i32-boolean-constant", literal: boolean };
+    }
+    this.compileApplicationArgument(
+      instructions,
+      expression,
+      environment,
+      true,
+    );
+    const value = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(value);
+    return { kind: "i64-value", index: value };
   }
 
   compileCaseArm(
@@ -3155,6 +3610,100 @@ class FunctionalWasmCompiler {
       constructorIndex: callee.payload,
       arguments: Object.freeze(reverseArguments.reverse()),
     };
+  }
+
+  virtualConstructor(
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+    remainingDepth = 64,
+  ): VirtualConstructor | undefined {
+    if (remainingDepth === 0) return undefined;
+    const node = this.node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Local) {
+      const binding = environment[node.payload];
+      return binding?.kind === "virtual-constructor" ? binding : undefined;
+    }
+    const application = this.constructorApplication(nodeIndex);
+    if (application !== undefined) {
+      const arity = this.#module.constructorArities[application.constructorIndex];
+      if (arity === undefined || application.arguments.length !== arity) {
+        return undefined;
+      }
+      if (
+        application.arguments.some((argument) =>
+          this.staticBinding(
+            argument.node,
+            environment,
+            remainingDepth - 1,
+          ) === undefined
+        )
+      ) return undefined;
+      return {
+        kind: "virtual-constructor",
+        constructorIndex: application.constructorIndex,
+        arguments: application.arguments,
+        environment,
+      };
+    }
+    if (node.tag === FunctionalCoreTag.Let) {
+      const binding = this.staticBinding(
+        node.child0,
+        environment,
+        remainingDepth - 1,
+      );
+      return binding === undefined ? undefined : this.virtualConstructor(
+        node.child1,
+        [binding, ...environment],
+        remainingDepth - 1,
+      );
+    }
+    if (node.tag === FunctionalCoreTag.Apply) {
+      const callee = this.virtualLambda(node.child0, environment);
+      if (callee === undefined) return undefined;
+      const lambda = this.node(callee.node);
+      if (lambda.tag !== FunctionalCoreTag.Lambda) return undefined;
+      const argument = this.staticBinding(
+        node.child1,
+        environment,
+        remainingDepth - 1,
+      );
+      return argument === undefined ? undefined : this.virtualConstructor(
+        lambda.child0,
+        [argument, ...callee.environment],
+        remainingDepth - 1,
+      );
+    }
+    if (node.tag === FunctionalCoreTag.If) {
+      const condition = this.constantBooleanExpression(node.child0, environment);
+      if (condition === undefined) return undefined;
+      return this.virtualConstructor(
+        condition ? node.child1 : node.child2,
+        environment,
+        remainingDepth - 1,
+      );
+    }
+    return undefined;
+  }
+
+  staticBinding(
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+    remainingDepth: number,
+  ): FunctionalBinding | undefined {
+    const lambda = this.virtualLambda(nodeIndex, environment);
+    if (lambda !== undefined) return lambda;
+    const constructor = this.virtualConstructor(
+      nodeIndex,
+      environment,
+      remainingDepth,
+    );
+    if (constructor !== undefined) return constructor;
+    const integer = this.constantIntegerExpression(nodeIndex, environment);
+    if (integer !== undefined) {
+      return { kind: "i32-integer-constant", literal: integer };
+    }
+    const boolean = this.constantBooleanExpression(nodeIndex, environment);
+    return boolean === undefined ? undefined : { kind: "i32-boolean-constant", literal: boolean };
   }
 
   emitThunkObject(
@@ -3553,6 +4102,26 @@ class FunctionalWasmCompiler {
         );
         return;
       }
+      case "virtual-constructor": {
+        const fields: FunctionalBinding[] = [];
+        for (const argument of source.arguments) {
+          fields.push(this.compileExpressionBinding(
+            instructions,
+            argument,
+            source.environment,
+          ));
+        }
+        this.emitConstructor(
+          instructions,
+          source.constructorIndex,
+          fields,
+        );
+        return;
+      }
+      case "static-recursive-function":
+        throw new Error(
+          `functional WASM recursive lambda ${source.node} escaped its statically saturated call sites`,
+        );
     }
   }
 
@@ -3829,20 +4398,21 @@ class FunctionalWasmCompiler {
     if (tailLoop === undefined) {
       this.compileExpression(bodyInstructions, lambda.child0, bodyEnvironment);
     } else {
-      if (tailLoop.recursiveLocal) {
-        const self = bodyEnvironment[tailLoop.parameterCount];
-        if (self === undefined) {
-          throw new Error(
-            `functional WASM curried tail worker ${lambdaNode} omitted recursive depth ${tailLoop.parameterCount}`,
-          );
+      const worker = this.uncurriedWorker(tailLoop, undefined, "value");
+      if (worker.hasEnvironmentParameter) {
+        if (tailLoop.recursiveLocal) {
+          const self = bodyEnvironment[tailLoop.parameterCount];
+          if (self === undefined) {
+            throw new Error(
+              `functional WASM curried tail worker ${lambdaNode} omitted recursive depth ${tailLoop.parameterCount}`,
+            );
+          }
+          this.emitBinding(bodyInstructions, self);
+          bodyInstructions.emit(0xa7);
+        } else {
+          bodyInstructions.i32Const(0);
         }
-        this.emitBinding(bodyInstructions, self);
-        bodyInstructions.emit(0xa7);
-      } else {
-        bodyInstructions.i32Const(0);
       }
-      const closure = bodyInstructions.addLocal(WasmValueType.I32);
-      bodyInstructions.localSet(closure);
       const argumentLocals: number[] = [];
       for (
         let parameter = 0;
@@ -3871,12 +4441,11 @@ class FunctionalWasmCompiler {
         bodyInstructions.localSet(argument);
         argumentLocals.push(argument);
       }
-      bodyInstructions.localGet(closure);
       for (const argument of argumentLocals) {
         bodyInstructions.localGet(argument);
       }
       bodyInstructions.call(
-        this.indirectFunctionOffset() + this.uncurriedWorkerSlot(tailLoop),
+        this.indirectFunctionOffset() + worker.slot,
       );
     }
     this.#indirectFunctions[slot] = functionBody(
@@ -3894,6 +4463,7 @@ class FunctionalWasmCompiler {
     bodyNode: number,
     environment: FunctionalEnvironment,
     loop: FunctionalFunctionShape,
+    resultKind: "value" | "integer" = "value",
   ): void {
     const parameterLocals: (number | undefined)[] = [];
     const loopEnvironment = [...environment];
@@ -3906,13 +4476,22 @@ class FunctionalWasmCompiler {
       }
       const unboxed = this.isUnboxedNumericParameter(loop, parameter);
       if (unboxed && source.kind === "i32-integer") {
-        instructions.localGet(source.index);
-      } else {
-        this.emitBinding(instructions, source);
-        if (unboxed) {
-          this.emitForceValue(instructions);
-          this.emitDecodeInteger(instructions);
-        }
+        loopEnvironment[depth] = source;
+        parameterLocals.push(source.index);
+        continue;
+      }
+      if (
+        !unboxed &&
+        (source.kind === "i64-local" || source.kind === "i64-value")
+      ) {
+        loopEnvironment[depth] = { kind: "i64-local", index: source.index };
+        parameterLocals.push(source.index);
+        continue;
+      }
+      this.emitBinding(instructions, source);
+      if (unboxed) {
+        this.emitForceValue(instructions);
+        this.emitDecodeInteger(instructions);
       }
       const local = instructions.addLocal(
         unboxed ? WasmValueType.I32 : WasmValueType.I64,
@@ -3924,7 +4503,12 @@ class FunctionalWasmCompiler {
       parameterLocals.push(local);
     }
 
-    instructions.emit(0x02, WasmValueType.I64, 0x03, 0x40);
+    instructions.emit(
+      0x02,
+      resultKind === "integer" ? WasmValueType.I32 : WasmValueType.I64,
+      0x03,
+      0x40,
+    );
     this.compileTailPosition(
       instructions,
       bodyNode,
@@ -3934,6 +4518,7 @@ class FunctionalWasmCompiler {
       0,
       0,
       1,
+      resultKind,
     );
     instructions.emit(0x0b, 0x00, 0x0b);
   }
@@ -3947,6 +4532,7 @@ class FunctionalWasmCompiler {
     binderDepth: number,
     loopBranchDepth: number,
     resultBranchDepth: number,
+    resultKind: "value" | "integer",
   ): void {
     const tailArguments = this.#functionAnalysis.tailArguments(
       nodeIndex,
@@ -3954,12 +4540,10 @@ class FunctionalWasmCompiler {
       binderDepth,
     );
     if (tailArguments !== undefined) {
-      const argumentLocals: (number | undefined)[] = [];
+      const targetLocals: number[] = [];
       for (const [parameter, argumentExpression] of tailArguments.entries()) {
-        if (parameterLocals[parameter] === undefined) {
-          argumentLocals.push(undefined);
-          continue;
-        }
+        const target = parameterLocals[parameter];
+        if (target === undefined) continue;
         const unboxed = this.isUnboxedNumericParameter(loop, parameter);
         if (unboxed) {
           this.compileIntegerExpression(
@@ -3993,16 +4577,9 @@ class FunctionalWasmCompiler {
             environment,
           );
         }
-        const argument = instructions.addLocal(
-          unboxed ? WasmValueType.I32 : WasmValueType.I64,
-        );
-        instructions.localSet(argument);
-        argumentLocals.push(argument);
+        targetLocals.push(target);
       }
-      for (const [parameter, argument] of argumentLocals.entries()) {
-        const target = parameterLocals[parameter];
-        if (argument === undefined || target === undefined) continue;
-        instructions.localGet(argument);
+      for (const target of targetLocals.reverse()) {
         instructions.localSet(target);
       }
       instructions.branch(loopBranchDepth);
@@ -4022,6 +4599,7 @@ class FunctionalWasmCompiler {
         binderDepth,
         loopBranchDepth + 1,
         resultBranchDepth + 1,
+        resultKind,
       );
       instructions.emit(0x05);
       this.compileTailPosition(
@@ -4033,12 +4611,17 @@ class FunctionalWasmCompiler {
         binderDepth,
         loopBranchDepth + 1,
         resultBranchDepth + 1,
+        resultKind,
       );
       instructions.emit(0x0b);
       return;
     }
 
-    this.compileExpression(instructions, nodeIndex, environment);
+    if (resultKind === "integer") {
+      this.compileIntegerExpression(instructions, nodeIndex, environment);
+    } else {
+      this.compileExpression(instructions, nodeIndex, environment);
+    }
     instructions.branch(resultBranchDepth);
   }
 
@@ -4102,6 +4685,14 @@ class FunctionalWasmCompiler {
     return this.#functionImports.length + (this.#compactScalar ? 0 : 3);
   }
 
+  requireCompactGlobal(name: keyof CompactRuntimeGlobals): number {
+    const index = this.#compactRuntimeGlobals[name];
+    if (index === undefined) {
+      throw new Error(`functional WASM compact module omitted required ${name} global`);
+    }
+    return index;
+  }
+
   node(index: number): FunctionalCoreNode {
     const node = this.#nodes[index];
     if (node === undefined) {
@@ -4111,6 +4702,35 @@ class FunctionalWasmCompiler {
     }
     return node;
   }
+}
+
+function compactRuntimeGlobals(
+  nodes: readonly FunctionalCoreNode[],
+  instrumentedFuel: boolean,
+): CompactRuntimeGlobals {
+  let nextIndex = 0;
+  const mayFault = instrumentedFuel || nodes.some((node) => {
+    if (node.tag === FunctionalCoreTag.Binary) {
+      return node.payload === FunctionalBinaryOperator.Divide ||
+        node.payload === FunctionalBinaryOperator.DivideSignedInteger64 ||
+        node.payload === FunctionalBinaryOperator.Remainder ||
+        node.payload === FunctionalBinaryOperator.RemainderSignedInteger64;
+    }
+    if (node.tag !== FunctionalCoreTag.NumericConvert) return false;
+    const conversion = numericConversion(node.payload);
+    return (conversion.source === "float-32" || conversion.source === "float-64") &&
+      (conversion.result === "integer" || conversion.result === "signed-integer-64");
+  });
+  const runtimeFault = mayFault ? nextIndex++ : undefined;
+  const runtimeFaultNode = mayFault ? nextIndex++ : undefined;
+  const fuel = instrumentedFuel ? nextIndex++ : undefined;
+  const steps = instrumentedFuel ? nextIndex : undefined;
+  return {
+    ...(runtimeFault === undefined ? {} : { runtimeFault }),
+    ...(runtimeFaultNode === undefined ? {} : { runtimeFaultNode }),
+    ...(fuel === undefined ? {} : { fuel }),
+    ...(steps === undefined ? {} : { steps }),
+  };
 }
 
 function isComparisonOperator(operator: number): boolean {
@@ -4749,7 +5369,7 @@ function allocateFunction(): WasmFunctionBody {
   instructions.i32Const(8);
   instructions.localSet(0);
   instructions.emit(0x0b);
-  instructions.globalGet(5);
+  instructions.globalGet(4);
   instructions.localSet(currentFree);
   instructions.emit(0x02, 0x40, 0x03, 0x40);
   instructions.localGet(currentFree);
@@ -4765,7 +5385,7 @@ function allocateFunction(): WasmFunctionBody {
   instructions.localGet(previousFree);
   instructions.emit(0x45, 0x04, 0x40);
   instructions.localGet(nextFree);
-  instructions.globalSet(5);
+  instructions.globalSet(4);
   instructions.emit(0x05);
   instructions.localGet(previousFree);
   instructions.localGet(nextFree);
@@ -4799,7 +5419,7 @@ function allocateFunction(): WasmFunctionBody {
   instructions.i32Const(WASM_FAULT_OUT_OF_MEMORY);
   instructions.globalSet(2);
   instructions.i32Const(-1);
-  instructions.globalSet(6);
+  instructions.globalSet(5);
   instructions.emit(0x00, 0x0b);
   instructions.localGet(requiredPages);
   instructions.i32Const(16);
@@ -4824,10 +5444,10 @@ function freeFunction(typeIndex: number): WasmFunctionBody {
   instructions.localGet(1);
   instructions.i32Store(0);
   instructions.localGet(0);
-  instructions.globalGet(5);
+  instructions.globalGet(4);
   instructions.i32Store(4);
   instructions.localGet(0);
-  instructions.globalSet(5);
+  instructions.globalSet(4);
   return functionBody(typeIndex, instructions, "free-list release");
 }
 
@@ -4848,7 +5468,7 @@ function forceThunkFunction(): WasmFunctionBody {
   instructions.i32Const(WASM_FAULT_BLACKHOLE);
   instructions.globalSet(2);
   instructions.i32Const(-1);
-  instructions.globalSet(6);
+  instructions.globalSet(5);
   instructions.emit(0x00, 0x0b);
   instructions.localGet(0);
   instructions.i32Const(THUNK_EVALUATING);

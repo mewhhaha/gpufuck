@@ -313,5 +313,8 @@ function controlFlowBaseline(): Uint8Array<ArrayBuffer> {
     usesMemory: false,
     usesIndirectCalls: false,
   };
-  return encodeCompactScalarWasmModule([body], 0, 0, []);
+  return encodeCompactScalarWasmModule([body], 0, [], {
+    includesRuntimeFaults: false,
+    instrumentedFuel: false,
+  });
 }

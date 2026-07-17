@@ -76,6 +76,49 @@ export class FunctionalWasmCaptureAnalysis {
     return result;
   }
 
+  localReferenceCount(nodeIndex: number, localDepth: number): number {
+    const node = this.#node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Local) {
+      return node.payload === localDepth ? 1 : 0;
+    }
+    switch (node.tag) {
+      case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.SignedInteger64:
+      case FunctionalCoreTag.Float32:
+      case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.Boolean:
+      case FunctionalCoreTag.Global:
+      case FunctionalCoreTag.Constructor:
+        return 0;
+      case FunctionalCoreTag.Unary:
+      case FunctionalCoreTag.NumericConvert:
+        return this.localReferenceCount(node.child0, localDepth);
+      case FunctionalCoreTag.Apply:
+      case FunctionalCoreTag.Binary:
+        return this.localReferenceCount(node.child0, localDepth) +
+          this.localReferenceCount(node.child1, localDepth);
+      case FunctionalCoreTag.If:
+        return this.localReferenceCount(node.child0, localDepth) +
+          this.localReferenceCount(node.child1, localDepth) +
+          this.localReferenceCount(node.child2, localDepth);
+      case FunctionalCoreTag.Lambda:
+      case FunctionalCoreTag.PatternBind:
+        return this.localReferenceCount(node.child0, localDepth + 1);
+      case FunctionalCoreTag.Let:
+        return this.localReferenceCount(node.child0, localDepth) +
+          this.localReferenceCount(node.child1, localDepth + 1);
+      case FunctionalCoreTag.LetRec:
+        return this.localReferenceCount(node.child0, localDepth + 1) +
+          this.localReferenceCount(node.child1, localDepth + 1);
+      case FunctionalCoreTag.Case:
+      case FunctionalCoreTag.CaseArm:
+        return this.localReferenceCount(node.child0, localDepth) +
+          (node.child1 === FUNCTIONAL_NO_INDEX
+            ? 0
+            : this.localReferenceCount(node.child1, localDepth));
+    }
+  }
+
   #node(index: number): FunctionalCoreNode {
     const node = this.#nodes[index];
     if (node === undefined) {

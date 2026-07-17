@@ -2186,6 +2186,12 @@ Deno.test("saturated numeric tail recursion uses an uncurried constant-space wor
   equal(execution.stats.thunkEvaluations, 1);
   equal(execution.stats.allocatedBytes, 48);
   equal(execution.stats.specializedCallSites, 1);
+  equal(
+    WebAssembly.Module.exports(new WebAssembly.Module(execution.bytes)).some((entry) =>
+      entry.name === "specializedCallSites"
+    ),
+    false,
+  );
 });
 
 Deno.test("strict scalar tail loops omit the lazy WebAssembly runtime", async () => {
@@ -2232,6 +2238,127 @@ Deno.test("strict scalar tail loops omit the lazy WebAssembly runtime", async ()
     false,
   );
   equal((execution.instance.exports.main as () => number)(), 4_138);
+});
+
+Deno.test("strict recursive workers embed fields from known constructor values", async () => {
+  const configuration = surface.apply(
+    surface.apply(
+      surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+      surface.integer(1),
+    ),
+    surface.integer(4_096),
+  );
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "configuration",
+    value: configuration,
+    body: {
+      kind: "case",
+      value: surface.name("configuration"),
+      arms: [{
+        constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        binders: ["increment", "rounds"],
+        body: {
+          kind: "let-rec",
+          name: "count",
+          value: surface.lambda(
+            "value",
+            surface.lambda("remaining", {
+              kind: "if",
+              condition: surface.equal(
+                surface.name("remaining"),
+                surface.integer(0),
+              ),
+              consequent: surface.name("value"),
+              alternate: surface.apply(
+                surface.apply(
+                  surface.name("count"),
+                  surface.binary(
+                    FunctionalBinaryOperator.Add,
+                    surface.name("value"),
+                    surface.name("increment"),
+                  ),
+                ),
+                surface.binary(
+                  FunctionalBinaryOperator.Subtract,
+                  surface.name("remaining"),
+                  surface.integer(1),
+                ),
+              ),
+            }),
+          ),
+          body: surface.apply(
+            surface.apply(surface.name("count"), surface.integer(42)),
+            surface.name("rounds"),
+          ),
+        },
+      }],
+    },
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 4_138 });
+  deepStrictEqual(
+    WebAssembly.Module.exports(new WebAssembly.Module(execution.bytes)),
+    [{ name: "main", kind: "function" }],
+  );
+  equal(execution.stats.allocatedBytes, 0);
+  equal(execution.stats.thunkEvaluations, 0);
+  equal(execution.stats.specializedCallSites, 1);
+});
+
+Deno.test("reused recursive workers preserve each static capture environment", async () => {
+  const countedTwice = surface.lambda("increment", {
+    kind: "let-rec",
+    name: "count",
+    value: surface.lambda(
+      "value",
+      surface.lambda("remaining", {
+        kind: "if",
+        condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+        consequent: surface.name("value"),
+        alternate: surface.apply(
+          surface.apply(
+            surface.name("count"),
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("value"),
+              surface.name("increment"),
+            ),
+          ),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("remaining"),
+            surface.integer(1),
+          ),
+        ),
+      }),
+    ),
+    body: surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.apply(
+        surface.apply(surface.name("count"), surface.integer(0)),
+        surface.integer(2),
+      ),
+      surface.apply(
+        surface.apply(surface.name("count"), surface.integer(0)),
+        surface.integer(2),
+      ),
+    ),
+  });
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "countedTwice",
+    value: countedTwice,
+    body: surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.apply(surface.name("countedTwice"), surface.integer(1)),
+      surface.apply(surface.name("countedTwice"), surface.integer(2)),
+    ),
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 12 });
+  equal(execution.stats.allocatedBytes, 0);
+  equal(execution.stats.thunkEvaluations, 0);
 });
 
 Deno.test("strict numeric recursive folds run in constant space", async () => {
