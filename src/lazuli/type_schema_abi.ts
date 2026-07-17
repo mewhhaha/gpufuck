@@ -64,6 +64,9 @@ export const LazuliTypeSchemaTag = {
   Named: 6,
   Function: 7,
   Forall: 8,
+  SignedInteger64: 9,
+  Float32: 10,
+  Float64: 11,
 } as const;
 
 export type LazuliTypeSchemaTag = (typeof LazuliTypeSchemaTag)[keyof typeof LazuliTypeSchemaTag];
@@ -220,6 +223,9 @@ function validateHigherRankDefinitionSchema(schema: LazuliTypeSchema, context: s
   ): void => {
     switch (current.kind) {
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
       case "parameter":
@@ -287,6 +293,9 @@ function containsForall(schema: LazuliTypeSchema): boolean {
     case "function":
       return containsForall(schema.parameter) || containsForall(schema.result);
     case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
     case "boolean":
     case "unit":
     case "parameter":
@@ -455,6 +464,18 @@ function decodeLazuliTypeRecords(
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "integer" });
+        case LazuliTypeSchemaTag.SignedInteger64:
+          noSymbol();
+          noChildren();
+          return Object.freeze({ kind: "signed-integer-64" });
+        case LazuliTypeSchemaTag.Float32:
+          noSymbol();
+          noChildren();
+          return Object.freeze({ kind: "float-32" });
+        case LazuliTypeSchemaTag.Float64:
+          noSymbol();
+          noChildren();
+          return Object.freeze({ kind: "float-64" });
         case LazuliTypeSchemaTag.Boolean:
           noSymbol();
           noChildren();
@@ -622,6 +643,12 @@ class TypeSchemaEncoder {
     switch (type.kind) {
       case "integer":
         return write(LazuliTypeSchemaTag.Integer);
+      case "signed-integer-64":
+        return write(LazuliTypeSchemaTag.SignedInteger64);
+      case "float-32":
+        return write(LazuliTypeSchemaTag.Float32);
+      case "float-64":
+        return write(LazuliTypeSchemaTag.Float64);
       case "boolean":
         return write(LazuliTypeSchemaTag.Boolean);
       case "unit":

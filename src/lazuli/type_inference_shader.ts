@@ -7,7 +7,6 @@ import {
   LAZULI_NO_INDEX,
   LAZULI_NODE_WORD_LENGTH,
   LAZULI_TYPE_WORD_LENGTH,
-  LazuliBinaryOperator,
   LazuliCoreTag,
 } from "./abi.ts";
 import {
@@ -35,6 +34,9 @@ export const LazuliInferenceSchemaTag = {
   Named: 6,
   Function: 7,
   Forall: 8,
+  SignedInteger64: 9,
+  Float32: 10,
+  Float64: 11,
 } as const;
 
 /**
@@ -80,6 +82,9 @@ export const LazuliInferenceInternalTypeKind = {
   List: 10,
   NamedGeneric: 11,
   Forall: 12,
+  SignedInteger64: 13,
+  Float32: 14,
+  Float64: 15,
 } as const;
 
 export const LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH = 3;
@@ -124,6 +129,9 @@ export const LazuliInferenceOutputTag = {
   Tuple: 5,
   Named: 6,
   Function: 7,
+  SignedInteger64: 9,
+  Float32: 10,
+  Float64: 11,
 } as const;
 
 export const LazuliInferenceStatus = {
@@ -684,6 +692,9 @@ const SCHEMA_TUPLE: u32 = 5u;
 const SCHEMA_NAMED: u32 = 6u;
 const SCHEMA_FUNCTION: u32 = 7u;
 const SCHEMA_FORALL: u32 = 8u;
+const SCHEMA_SIGNED_INTEGER_64: u32 = 9u;
+const SCHEMA_FLOAT_32: u32 = 10u;
+const SCHEMA_FLOAT_64: u32 = 11u;
 
 const TYPE_VARIABLE: u32 = 1u;
 const TYPE_GENERIC: u32 = 2u;
@@ -697,6 +708,9 @@ const TYPE_FUNCTION: u32 = 9u;
 const TYPE_LIST: u32 = 10u;
 const TYPE_NAMED_GENERIC: u32 = 11u;
 const TYPE_FORALL: u32 = 12u;
+const TYPE_SIGNED_INTEGER_64: u32 = 13u;
+const TYPE_FLOAT_32: u32 = 14u;
+const TYPE_FLOAT_64: u32 = 15u;
 const TYPE_RECORD_WORDS: u32 = 5u;
 const ENVIRONMENT_WORDS: u32 = 3u;
 const FRAME_WORDS: u32 = 12u;
@@ -751,6 +765,10 @@ const TAG_LOCAL: u32 = ${LazuliCoreTag.Local}u;
 const TAG_GLOBAL: u32 = ${LazuliCoreTag.Global}u;
 const TAG_CONSTRUCTOR: u32 = ${LazuliCoreTag.Constructor}u;
 const TAG_LET_REC: u32 = ${LazuliCoreTag.LetRec}u;
+const TAG_SIGNED_INTEGER_64: u32 = ${LazuliCoreTag.SignedInteger64}u;
+const TAG_FLOAT_32: u32 = ${LazuliCoreTag.Float32}u;
+const TAG_FLOAT_64: u32 = ${LazuliCoreTag.Float64}u;
+const TAG_NUMERIC_CONVERT: u32 = ${LazuliCoreTag.NumericConvert}u;
 
 const OUTPUT_INTEGER: u32 = 1u;
 const OUTPUT_BOOLEAN: u32 = 2u;
@@ -758,6 +776,48 @@ const OUTPUT_UNIT: u32 = 3u;
 const OUTPUT_TUPLE: u32 = 5u;
 const OUTPUT_NAMED: u32 = 6u;
 const OUTPUT_FUNCTION: u32 = 7u;
+const OUTPUT_SIGNED_INTEGER_64: u32 = 9u;
+const OUTPUT_FLOAT_32: u32 = 10u;
+const OUTPUT_FLOAT_64: u32 = 11u;
+
+fn primitive_type_index_for_schema(tag: u32) -> u32 {
+  if tag == SCHEMA_INTEGER { return 0u; }
+  if tag == SCHEMA_BOOLEAN { return 1u; }
+  if tag == SCHEMA_UNIT { return 2u; }
+  if tag == SCHEMA_SIGNED_INTEGER_64 { return 3u; }
+  if tag == SCHEMA_FLOAT_32 { return 4u; }
+  if tag == SCHEMA_FLOAT_64 { return 5u; }
+  return NO_INDEX;
+}
+
+fn numeric_type_index_for_operator(operation: u32) -> u32 {
+  if operation <= 10u { return 0u; }
+  if operation <= 20u { return 3u; }
+  if operation <= 30u { return 4u; }
+  return 5u;
+}
+
+fn numeric_operator_is_comparison(operation: u32) -> bool {
+  return (operation - 1u) % 10u < 6u;
+}
+
+fn numeric_conversion_source(conversion: u32) -> u32 {
+  switch conversion {
+    case 1u, 3u, 4u: { return 0u; }
+    case 2u, 5u, 6u: { return 3u; }
+    case 7u, 8u, 9u: { return 4u; }
+    default: { return 5u; }
+  }
+}
+
+fn numeric_conversion_result(conversion: u32) -> u32 {
+  switch conversion {
+    case 2u, 7u, 10u: { return 0u; }
+    case 1u, 8u, 11u: { return 3u; }
+    case 3u, 5u, 12u: { return 4u; }
+    default: { return 5u; }
+  }
+}
 
 fn range_is_valid(base: u32, count: u32, length: u32) -> bool {
   return base <= length && count <= length - base;
@@ -1219,7 +1279,9 @@ fn unify_transition(frame: u32) {
     report_type_mismatch(left, right, frame_get(frame, 3u), frame_get(frame, 4u));
     return;
   }
-  if left_kind == TYPE_INTEGER || left_kind == TYPE_BOOLEAN || left_kind == TYPE_UNIT {
+  if left_kind == TYPE_INTEGER || left_kind == TYPE_BOOLEAN || left_kind == TYPE_UNIT ||
+    left_kind == TYPE_SIGNED_INTEGER_64 || left_kind == TYPE_FLOAT_32 ||
+    left_kind == TYPE_FLOAT_64 {
     pop_work_frame();
     return;
   }
@@ -1706,7 +1768,9 @@ fn pattern_match_transition(frame: u32) {
     pattern_mismatch();
     return;
   }
-  if left_kind == TYPE_INTEGER || left_kind == TYPE_BOOLEAN || left_kind == TYPE_UNIT {
+  if left_kind == TYPE_INTEGER || left_kind == TYPE_BOOLEAN || left_kind == TYPE_UNIT ||
+    left_kind == TYPE_SIGNED_INTEGER_64 || left_kind == TYPE_FLOAT_32 ||
+    left_kind == TYPE_FLOAT_64 {
     pop_work_frame();
     return;
   }
@@ -2110,9 +2174,9 @@ fn schema_visit_transition(frame: u32) {
       child_frame, child, list, 1u, frame_get(frame, 8u), frame_get(frame, 9u));
     return;
   }
-  if node.tag == SCHEMA_INTEGER || node.tag == SCHEMA_BOOLEAN || node.tag == SCHEMA_UNIT {
-    attach_schema_type(
-      parent, field, node.tag - SCHEMA_INTEGER, frame_get(frame, 9u));
+  let primitive_type = primitive_type_index_for_schema(node.tag);
+  if primitive_type != NO_INDEX {
+    attach_schema_type(parent, field, primitive_type, frame_get(frame, 9u));
     pop_work_frame(); return;
   }
   if node.tag == SCHEMA_PARAMETER {
@@ -2496,6 +2560,9 @@ fn expression_transition() {
   if stage == 0u {
     if node.tag == TAG_INTEGER { complete_expression(0u); return; }
     if node.tag == TAG_BOOLEAN { complete_expression(1u); return; }
+    if node.tag == TAG_SIGNED_INTEGER_64 { complete_expression(3u); return; }
+    if node.tag == TAG_FLOAT_32 { complete_expression(4u); return; }
+    if node.tag == TAG_FLOAT_64 { complete_expression(5u); return; }
     if node.tag == TAG_LOCAL {
       if start_local_lookup(node.payload, environment, node_index) { frame_set(frame, 1u, 90u); }
       return;
@@ -2574,7 +2641,7 @@ fn expression_transition() {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 50u);
       if push_expression(node.child0, environment) {
-        frame_set(state.frame_top - 1u, 11u, 0u);
+        frame_set(state.frame_top - 1u, 11u, select(0u, node.payload + 1u, node.payload > 1u));
       }
       return;
     }
@@ -2582,7 +2649,15 @@ fn expression_transition() {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 60u);
       if push_expression(node.child0, environment) {
-        frame_set(state.frame_top - 1u, 11u, 0u);
+        frame_set(state.frame_top - 1u, 11u, numeric_type_index_for_operator(node.payload));
+      }
+      return;
+    }
+    if node.tag == TAG_NUMERIC_CONVERT {
+      if !require_frame_slots(1u) { return; }
+      frame_set(frame, 1u, 64u);
+      if push_expression(node.child0, environment) {
+        frame_set(state.frame_top - 1u, 11u, numeric_conversion_source(node.payload));
       }
       return;
     }
@@ -2861,15 +2936,20 @@ fn expression_transition() {
   if stage == 43u { complete_expression(frame_get(frame, 4u)); return; }
 
   if stage == 50u {
-    if start_unify(0u, state.returned_type, node.start_byte, node.end_byte) {
+    let operand_type = select(0u, node.payload + 1u, node.payload > 1u);
+    if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 51u);
     }
     return;
   }
-  if stage == 51u { complete_expression(0u); return; }
+  if stage == 51u {
+    complete_expression(select(0u, node.payload + 1u, node.payload > 1u));
+    return;
+  }
 
   if stage == 60u {
-    if start_unify(0u, state.returned_type, node.start_byte, node.end_byte) {
+    let operand_type = numeric_type_index_for_operator(node.payload);
+    if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 62u);
     }
     return;
@@ -2878,18 +2958,33 @@ fn expression_transition() {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 61u);
     if push_expression(node.child1, environment) {
-      frame_set(state.frame_top - 1u, 11u, 0u);
+      frame_set(state.frame_top - 1u, 11u, numeric_type_index_for_operator(node.payload));
     }
     return;
   }
   if stage == 61u {
-    if start_unify(0u, state.returned_type, node.start_byte, node.end_byte) {
+    let operand_type = numeric_type_index_for_operator(node.payload);
+    if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 63u);
     }
     return;
   }
   if stage == 63u {
-    complete_expression(select(0u, 1u, node.payload <= ${LazuliBinaryOperator.GreaterEqual}u));
+    complete_expression(select(
+      numeric_type_index_for_operator(node.payload), 1u,
+      numeric_operator_is_comparison(node.payload)));
+    return;
+  }
+  if stage == 64u {
+    if start_unify(
+      numeric_conversion_source(node.payload), state.returned_type,
+      node.start_byte, node.end_byte) {
+      frame_set(frame, 1u, 65u);
+    }
+    return;
+  }
+  if stage == 65u {
+    complete_expression(numeric_conversion_result(node.payload));
     return;
   }
 
@@ -3300,7 +3395,8 @@ fn optional_child_is_valid(parent_index: u32, child_index: u32) -> bool {
 fn node_shape_is_valid(node_index: u32) -> bool {
   let node = core_node(node_index);
   if node.start_byte > node.end_byte || node.evaluation_mode > 1u { return false; }
-  if node.tag == TAG_INTEGER || node.tag == TAG_BOOLEAN || node.tag == TAG_LOCAL ||
+  if node.tag == TAG_INTEGER || node.tag == TAG_BOOLEAN || node.tag == TAG_FLOAT_32 ||
+    node.tag == TAG_LOCAL ||
     node.tag == TAG_GLOBAL || node.tag == TAG_CONSTRUCTOR {
     return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
       node.evaluation_mode == 0u &&
@@ -3308,23 +3404,28 @@ fn node_shape_is_valid(node_index: u32) -> bool {
       (node.tag != TAG_GLOBAL || node.payload < state.definition_count) &&
       (node.tag != TAG_CONSTRUCTOR || node.payload < state.constructor_count);
   }
+  if node.tag == TAG_SIGNED_INTEGER_64 || node.tag == TAG_FLOAT_64 {
+    return node.child1 == NO_INDEX && node.child2 == NO_INDEX && node.evaluation_mode == 0u;
+  }
   if node.tag == TAG_LET || node.tag == TAG_LET_REC || node.tag == TAG_APPLY ||
     node.tag == TAG_BINARY {
     return required_child_is_valid(node_index, node.child0) &&
       required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
       (node.evaluation_mode == 0u || node.tag == TAG_LET || node.tag == TAG_APPLY) &&
       (node.tag != TAG_LET_REC || core_node(node.child0).tag == TAG_LAMBDA) &&
-      (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 10u));
+      (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 40u));
   }
   if node.tag == TAG_IF {
     return required_child_is_valid(node_index, node.child0) &&
       required_child_is_valid(node_index, node.child1) &&
       required_child_is_valid(node_index, node.child2) && node.evaluation_mode == 0u;
   }
-  if node.tag == TAG_LAMBDA || node.tag == TAG_UNARY || node.tag == TAG_PATTERN_BIND {
+  if node.tag == TAG_LAMBDA || node.tag == TAG_UNARY ||
+    node.tag == TAG_NUMERIC_CONVERT || node.tag == TAG_PATTERN_BIND {
     return required_child_is_valid(node_index, node.child0) && node.child1 == NO_INDEX &&
       node.child2 == NO_INDEX && node.evaluation_mode == 0u &&
-      (node.tag != TAG_UNARY || node.payload == 1u);
+      (node.tag != TAG_UNARY || (node.payload >= 1u && node.payload <= 4u)) &&
+      (node.tag != TAG_NUMERIC_CONVERT || (node.payload >= 1u && node.payload <= 12u));
   }
   if node.tag == TAG_CASE {
     return required_child_is_valid(node_index, node.child0) &&
@@ -3609,7 +3710,8 @@ fn validation_transition() {
         state.work_aux = 2u;
       } else if schema.tag == SCHEMA_FORALL {
         state.work_aux = 1u;
-      } else if schema.tag >= SCHEMA_INTEGER && schema.tag <= SCHEMA_PARAMETER {
+      } else if (schema.tag >= SCHEMA_INTEGER && schema.tag <= SCHEMA_PARAMETER) ||
+        (schema.tag >= SCHEMA_SIGNED_INTEGER_64 && schema.tag <= SCHEMA_FLOAT_64) {
         state.work_aux = 0u;
       } else {
         report_metadata_diagnostic(
@@ -3772,11 +3874,14 @@ fn validation_transition() {
       state.type_top = 0u; state.cursor0 = 0u; state.substage = 1u;
       return;
     }
-    if state.substage <= 3u {
+    if state.substage <= 6u {
       if !require_type_slots(1u) { return; }
       var kind = TYPE_INTEGER;
       if state.substage == 2u { kind = TYPE_BOOLEAN; }
       else if state.substage == 3u { kind = TYPE_UNIT; }
+      else if state.substage == 4u { kind = TYPE_SIGNED_INTEGER_64; }
+      else if state.substage == 5u { kind = TYPE_FLOAT_32; }
+      else if state.substage == 6u { kind = TYPE_FLOAT_64; }
       let expected = state.substage - 1u;
       if allocate_type(kind, NO_INDEX, NO_INDEX, NO_INDEX) != expected {
         invalid_input(ERROR_INVALID_SURFACE, expected);
@@ -4075,10 +4180,14 @@ fn serialize_main_type() {
     let output_index = frame_get(frame, 1u);
     let kind = type_get(source, 0u);
     frame_set(frame, 0u, source);
-    if kind == TYPE_INTEGER || kind == TYPE_BOOLEAN || kind == TYPE_UNIT {
+    if kind == TYPE_INTEGER || kind == TYPE_BOOLEAN || kind == TYPE_UNIT ||
+      kind == TYPE_SIGNED_INTEGER_64 || kind == TYPE_FLOAT_32 || kind == TYPE_FLOAT_64 {
       var tag = OUTPUT_INTEGER;
       if kind == TYPE_BOOLEAN { tag = OUTPUT_BOOLEAN; }
       else if kind == TYPE_UNIT { tag = OUTPUT_UNIT; }
+      else if kind == TYPE_SIGNED_INTEGER_64 { tag = OUTPUT_SIGNED_INTEGER_64; }
+      else if kind == TYPE_FLOAT_32 { tag = OUTPUT_FLOAT_32; }
+      else if kind == TYPE_FLOAT_64 { tag = OUTPUT_FLOAT_64; }
       write_output(output_index, tag, NO_INDEX, NO_INDEX);
       pop_work_frame();
       return;

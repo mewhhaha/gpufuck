@@ -10,11 +10,14 @@ import {
   FunctionalBinaryOperator,
   FunctionalEvaluationMode,
   FunctionalEvaluationProfile,
+  FunctionalNumericConversion,
   type FunctionalSurfaceExpression,
+  type FunctionalTypeSchema,
   type FunctionalWasmExecution,
   FunctionalWasmRuntimeError,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
+  linkFunctionalModules,
   requestWebGpuDevice,
   runFunctionalWasmModule,
   surface,
@@ -140,6 +143,607 @@ Deno.test("decodes scalar WebAssembly results with wrapping integer division", a
     } finally {
       compilation.module.destroy();
     }
+  }
+});
+
+Deno.test("GPU typechecks and WebAssembly executes i64, f32, f64, and numeric conversions", async () => {
+  const cases = [
+    {
+      expression: surface.binary(
+        FunctionalBinaryOperator.AddSignedInteger64,
+        surface.signedInteger64(9_007_199_254_740_992n),
+        surface.signedInteger64(17n),
+      ),
+      expected: { kind: "signed-integer-64", value: 9_007_199_254_741_009n } as const,
+    },
+    {
+      expression: surface.binary(
+        FunctionalBinaryOperator.MultiplyFloat32,
+        surface.float32(1.5),
+        surface.float32(4),
+      ),
+      expected: { kind: "float-32", value: 6 } as const,
+    },
+    {
+      expression: surface.binary(
+        FunctionalBinaryOperator.DivideFloat64,
+        surface.float64(22),
+        surface.float64(7),
+      ),
+      expected: { kind: "float-64", value: 22 / 7 } as const,
+    },
+    {
+      expression: surface.convert(
+        FunctionalNumericConversion.SignedInteger64ToFloat64,
+        surface.signedInteger64(42n),
+      ),
+      expected: { kind: "float-64", value: 42 } as const,
+    },
+  ];
+  for (const testCase of cases) {
+    const encoded = buildFunctionalSurfaceModule(
+      [{ name: "main", parameters: [], annotation: null, body: testCase.expression }],
+      [],
+      "main",
+      0,
+    );
+    const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+    if (!compilation.ok) {
+      throw new Error(`numeric module did not compile: ${JSON.stringify(compilation.diagnostics)}`);
+    }
+    try {
+      const execution = await runFunctionalWasmModule(compilation.module);
+      deepStrictEqual(execution.value, testCase.expected);
+    } finally {
+      compilation.module.destroy();
+    }
+  }
+});
+
+Deno.test("executes every explicit numeric conversion", async () => {
+  const cases = [
+    [
+      FunctionalNumericConversion.SignedInteger32ToSignedInteger64,
+      surface.integer(-42),
+      { kind: "signed-integer-64", value: -42n },
+    ],
+    [
+      FunctionalNumericConversion.SignedInteger64ToSignedInteger32,
+      surface.signedInteger64(-42n),
+      { kind: "integer", value: -42 },
+    ],
+    [
+      FunctionalNumericConversion.SignedInteger32ToFloat32,
+      surface.integer(-42),
+      { kind: "float-32", value: -42 },
+    ],
+    [
+      FunctionalNumericConversion.SignedInteger32ToFloat64,
+      surface.integer(-42),
+      { kind: "float-64", value: -42 },
+    ],
+    [
+      FunctionalNumericConversion.SignedInteger64ToFloat32,
+      surface.signedInteger64(42n),
+      { kind: "float-32", value: 42 },
+    ],
+    [
+      FunctionalNumericConversion.SignedInteger64ToFloat64,
+      surface.signedInteger64(42n),
+      { kind: "float-64", value: 42 },
+    ],
+    [
+      FunctionalNumericConversion.Float32ToSignedInteger32,
+      surface.float32(42.75),
+      { kind: "integer", value: 42 },
+    ],
+    [
+      FunctionalNumericConversion.Float32ToSignedInteger64,
+      surface.float32(42.75),
+      { kind: "signed-integer-64", value: 42n },
+    ],
+    [
+      FunctionalNumericConversion.Float32ToFloat64,
+      surface.float32(1.5),
+      { kind: "float-64", value: 1.5 },
+    ],
+    [
+      FunctionalNumericConversion.Float64ToSignedInteger32,
+      surface.float64(42.75),
+      { kind: "integer", value: 42 },
+    ],
+    [
+      FunctionalNumericConversion.Float64ToSignedInteger64,
+      surface.float64(42.75),
+      { kind: "signed-integer-64", value: 42n },
+    ],
+    [
+      FunctionalNumericConversion.Float64ToFloat32,
+      surface.float64(1.1),
+      { kind: "float-32", value: Math.fround(1.1) },
+    ],
+  ] as const;
+  for (const [conversion, input, expected] of cases) {
+    const encoded = buildFunctionalSurfaceModule(
+      [{
+        name: "main",
+        parameters: [],
+        annotation: null,
+        body: surface.convert(conversion, input),
+      }],
+      [],
+      "main",
+      0,
+    );
+    const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+    if (!compilation.ok) throw new Error(`numeric conversion ${conversion} did not compile`);
+    try {
+      const execution = await runFunctionalWasmModule(compilation.module);
+      deepStrictEqual(execution.value, expected);
+    } finally {
+      compilation.module.destroy();
+    }
+  }
+});
+
+Deno.test("wide numeric primitives cross functions and structured WebAssembly values", async () => {
+  const i64 = { kind: "signed-integer-64" } as const;
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: { kind: "function", parameter: i64, result: i64 },
+      body: surface.binary(
+        FunctionalBinaryOperator.AddSignedInteger64,
+        surface.name("value"),
+        surface.signedInteger64(1n),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("wide numeric function did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      argument: { kind: "signed-integer-64", value: 9_007_199_254_740_992n },
+    });
+    deepStrictEqual(execution.value, {
+      kind: "signed-integer-64",
+      value: 9_007_199_254_740_993n,
+    });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("returns structured tuples through the stable WebAssembly aggregate ABI", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.apply(
+        surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+        surface.integer(20),
+        surface.boolean(true),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("structured tuple module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, {
+      kind: "tuple",
+      values: [{ kind: "integer", value: 20 }, { kind: "boolean", value: true }],
+    });
+    await rejects(
+      () => runFunctionalWasmModule(compilation.module, { maximumResultNodes: 2 }),
+      /result exceeded maximumResultNodes 2/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("accepts structured values through the stable WebAssembly aggregate ABI", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: {
+        kind: "function",
+        parameter: {
+          kind: "tuple",
+          values: [{ kind: "integer" }, { kind: "boolean" }],
+        },
+        result: { kind: "integer" },
+      },
+      body: {
+        kind: "case",
+        value: surface.name("value"),
+        arms: [{
+          constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+          binders: ["first", "second"],
+          body: surface.name("first"),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("structured input module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      argument: {
+        kind: "tuple",
+        values: [{ kind: "integer", value: 42 }, { kind: "boolean", value: true }],
+      },
+    });
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("decodes indexed constructor fields using the selected result refinement", async () => {
+  const zero: FunctionalTypeSchema = { kind: "named", name: "Zero", arguments: [] };
+  const vector = (length: FunctionalTypeSchema): FunctionalTypeSchema => ({
+    kind: "named",
+    name: "Vector",
+    arguments: [length],
+  });
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.apply(
+        surface.name("Cons"),
+        surface.integer(42),
+        surface.name("Nil"),
+      ),
+    }],
+    [
+      { name: "Zero", parameters: [], constructors: [] },
+      { name: "Next", parameters: ["value"], constructors: [] },
+      {
+        name: "Vector",
+        parameters: ["length"],
+        constructors: [
+          { name: "Nil", fields: [], result: vector(zero) },
+          {
+            name: "Cons",
+            fields: [
+              { name: "head", type: { kind: "integer" } },
+              {
+                name: "tail",
+                type: vector({ kind: "parameter", name: "length" }),
+              },
+            ],
+            result: vector({
+              kind: "named",
+              name: "Next",
+              arguments: [{ kind: "parameter", name: "length" }],
+            }),
+          },
+        ],
+      },
+    ],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("indexed structured result module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, {
+      kind: "constructor",
+      name: "Cons",
+      fields: [
+        { kind: "integer", value: 42 },
+        { kind: "constructor", name: "Nil", fields: [] },
+      ],
+    });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("passes aggregate host capabilities through the shared WebAssembly value ABI", async () => {
+  const boxType = {
+    name: "Box",
+    parameters: [],
+    constructors: [{
+      name: "Box",
+      fields: [{ name: "value", type: { kind: "integer" } as const }],
+    }],
+  } as const;
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["box"],
+          body: surface.name("box"),
+        }],
+      },
+    }],
+    [boxType],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{
+          kind: "value",
+          name: "box",
+          type: { kind: "named", name: "Box", arguments: [] },
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("aggregate host capability module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      init: {
+        Environment: {
+          box: { kind: "constructor", name: "Box", fields: [{ kind: "integer", value: 42 }] },
+        },
+      },
+    });
+    deepStrictEqual(execution.value, {
+      kind: "constructor",
+      name: "Box",
+      fields: [{ kind: "integer", value: 42 }],
+    });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("calls aggregate host operations through the shared WebAssembly value ABI", async () => {
+  const boxType = { kind: "named", name: "Box", arguments: [] } as const;
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["increment"],
+          body: surface.apply(
+            surface.name("increment"),
+            surface.apply(surface.name("Box"), surface.integer(41)),
+          ),
+        }],
+      },
+    }],
+    [{
+      name: "Box",
+      parameters: [],
+      constructors: [{
+        name: "Box",
+        fields: [{ name: "value", type: { kind: "integer" } }],
+      }],
+    }],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{
+          kind: "operation",
+          name: "increment",
+          purity: "pure",
+          parameter: boxType,
+          result: boxType,
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("aggregate host operation module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      init: {
+        Environment: {
+          increment: (argument) => {
+            if (argument.kind !== "constructor") throw new Error("expected Box argument");
+            return { kind: "constructor", name: "Box", fields: [{ kind: "integer", value: 42 }] };
+          },
+        },
+      },
+    });
+    deepStrictEqual(execution.value, {
+      kind: "constructor",
+      name: "Box",
+      fields: [{ kind: "integer", value: 42 }],
+    });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("retains suspending host operations at the Effect Core boundary", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["read"],
+          body: surface.integer(42),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{
+          kind: "operation",
+          name: "read",
+          purity: "effectful",
+          execution: "suspending",
+          parameter: { kind: "unit" },
+          result: { kind: "integer" },
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("suspending host operation module did not compile");
+  try {
+    await rejects(
+      () => compileFunctionalModuleToWasm(compilation.module),
+      /Environment\.read.*suspending.*direct WASM ABI is synchronous.*Effect Core suspension boundary/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("links typed imports and exports from separately prepared functional modules", async () => {
+  const integerFunction = {
+    kind: "function",
+    parameter: { kind: "integer" },
+    result: { kind: "integer" },
+  } as const;
+  const linked = linkFunctionalModules([
+    {
+      name: "math",
+      definitions: [{
+        name: "double",
+        parameters: ["value"],
+        annotation: null,
+        body: surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("value"),
+          surface.name("value"),
+        ),
+      }],
+      typeDeclarations: [],
+      imports: [],
+      exports: [{ name: "double", definition: "double", type: integerFunction }],
+      sourceByteLength: 10,
+      options: {},
+    },
+    {
+      name: "application",
+      definitions: [{
+        name: "main",
+        parameters: [],
+        annotation: null,
+        body: surface.apply(surface.name("twice"), surface.integer(21)),
+      }],
+      typeDeclarations: [],
+      imports: [{
+        name: "twice",
+        fromModule: "math",
+        exportName: "double",
+        type: integerFunction,
+      }],
+      exports: [{ name: "main", definition: "main", type: { kind: "integer" } }],
+      sourceByteLength: 20,
+      options: {},
+    },
+  ], { module: "application", exportName: "main" });
+  deepStrictEqual(linked.sources, [
+    { module: "math", startByte: 0, endByte: 10 },
+    { module: "application", startByte: 10, endByte: 30 },
+  ]);
+  const compilation = await functionalWasmRuntime().compiler.compileModule(linked.module);
+  if (!compilation.ok) {
+    throw new Error(
+      `linked functional modules did not compile: ${JSON.stringify(compilation.diagnostics)}`,
+    );
+  }
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("links nominal values through typed module boundaries", async () => {
+  const boxType = { kind: "named", name: "Box", arguments: [] } as const;
+  const linked = linkFunctionalModules([
+    {
+      name: "library",
+      definitions: [{
+        name: "boxed",
+        parameters: [],
+        annotation: null,
+        body: surface.apply(surface.name("Box"), surface.integer(42)),
+      }],
+      typeDeclarations: [{
+        name: "Box",
+        parameters: [],
+        constructors: [{
+          name: "Box",
+          fields: [{ name: "value", type: { kind: "integer" } }],
+        }],
+      }],
+      imports: [],
+      exports: [{ name: "boxed", definition: "boxed", type: boxType }],
+      sourceByteLength: 0,
+      options: {},
+    },
+    {
+      name: "application",
+      definitions: [{
+        name: "main",
+        parameters: [],
+        annotation: null,
+        body: surface.name("box"),
+      }],
+      typeDeclarations: [],
+      imports: [{
+        name: "box",
+        fromModule: "library",
+        exportName: "boxed",
+        type: boxType,
+      }],
+      exports: [{ name: "main", definition: "main", type: boxType }],
+      sourceByteLength: 0,
+      options: {},
+    },
+  ], { module: "application", exportName: "main" });
+  const compilation = await functionalWasmRuntime().compiler.compileModule(linked.module);
+  if (!compilation.ok) throw new Error("nominal linked module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, {
+      kind: "constructor",
+      name: "library::Box",
+      fields: [{ kind: "integer", value: 42 }],
+    });
+  } finally {
+    compilation.module.destroy();
   }
 });
 

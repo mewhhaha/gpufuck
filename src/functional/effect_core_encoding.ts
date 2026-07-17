@@ -14,12 +14,11 @@ import {
   FUNCTIONAL_EFFECT_CORE_PURE,
   FunctionalEffectCoreOperationKind,
   FunctionalEffectCoreOperationWord,
-  FunctionalEffectCoreScalarType,
   FunctionalEffectCoreTag,
 } from "./effect_core_shader.ts";
 import {
   type FunctionalHostCapabilityDeclaration,
-  type FunctionalHostScalarType,
+  type FunctionalHostType,
   normalizeFunctionalHostCapabilities,
 } from "./host_contract.ts";
 
@@ -28,8 +27,8 @@ const MAXIMUM_EFFECT_CORE_OPERATIONS = 32;
 export interface PreparedOperation {
   readonly key: string;
   readonly kind: "local" | "host";
-  readonly parameter: FunctionalHostScalarType;
-  readonly result: FunctionalHostScalarType;
+  readonly parameter: FunctionalHostType;
+  readonly result: FunctionalHostType;
   readonly effectBit: number | null;
   readonly host?: {
     readonly binder: string;
@@ -45,6 +44,7 @@ export interface PreparedEffectCore {
   readonly expressions: readonly FunctionalEffectCoreExpression[];
   readonly rootNode: number;
   readonly effectNames: readonly string[];
+  readonly types: readonly FunctionalHostType[];
 }
 
 export function prepareFunctionalEffectCore(
@@ -57,6 +57,7 @@ export function prepareFunctionalEffectCore(
     );
   }
   const hostCapabilities = normalizeFunctionalHostCapabilities(module.hostCapabilities);
+  const types = new EffectCoreTypeTable();
   const operations: PreparedOperation[] = [];
   const localOperations = new Map<string, number>();
   const hostOperations = new Map<string, number>();
@@ -69,8 +70,8 @@ export function prepareFunctionalEffectCore(
     if (localOperations.has(key)) {
       throw new Error(`Functional Effect Core repeats local operation ${JSON.stringify(key)}`);
     }
-    const parameter = requireScalarSchema(operation.parameter, `${key} parameter`);
-    const result = requireScalarSchema(operation.result, `${key} result`);
+    const parameter = requireEffectType(operation.parameter, `${key} parameter`);
+    const result = requireEffectType(operation.result, `${key} result`);
     const effectBit = reserveEffectBit(effectNames, key);
     localOperations.set(key, operations.length);
     operations.push({ key, kind: "local", parameter, result, effectBit });
@@ -98,8 +99,8 @@ export function prepareFunctionalEffectCore(
       operations.push({
         key,
         kind: "host",
-        parameter: field.parameter,
-        result: field.result,
+        parameter: requireEffectType(field.parameter, `${key} parameter`),
+        result: requireEffectType(field.result, `${key} result`),
         effectBit,
         host: { binder },
       });
@@ -111,10 +112,10 @@ export function prepareFunctionalEffectCore(
   );
   for (const [index, operation] of operations.entries()) {
     const base = index * FUNCTIONAL_EFFECT_CORE_OPERATION_WORD_LENGTH;
-    operationWords[base + FunctionalEffectCoreOperationWord.ParameterType] = scalarTypeTag(
+    operationWords[base + FunctionalEffectCoreOperationWord.ParameterType] = types.id(
       operation.parameter,
     );
-    operationWords[base + FunctionalEffectCoreOperationWord.ResultType] = scalarTypeTag(
+    operationWords[base + FunctionalEffectCoreOperationWord.ResultType] = types.id(
       operation.result,
     );
     operationWords[base + FunctionalEffectCoreOperationWord.EffectBit] = operation.effectBit ??
@@ -169,7 +170,7 @@ export function prepareFunctionalEffectCore(
     switch (expression.kind) {
       case "return":
         words[base] = FunctionalEffectCoreTag.Return;
-        words[base + 4] = scalarTypeTag(expression.valueType);
+        words[base + 4] = types.id(expression.valueType);
         break;
       case "host-call": {
         const operation = requiredOperation(
@@ -179,7 +180,7 @@ export function prepareFunctionalEffectCore(
         );
         words[base] = FunctionalEffectCoreTag.HostCall;
         words[base + 1] = operation;
-        words[base + 4] = scalarTypeTag(expression.argumentType);
+        words[base + 4] = types.id(expression.argumentType);
         break;
       }
       case "perform": {
@@ -190,7 +191,7 @@ export function prepareFunctionalEffectCore(
         );
         words[base] = FunctionalEffectCoreTag.Perform;
         words[base + 1] = operation;
-        words[base + 4] = scalarTypeTag(expression.argumentType);
+        words[base + 4] = types.id(expression.argumentType);
         break;
       }
       case "bind":
@@ -203,7 +204,7 @@ export function prepareFunctionalEffectCore(
         words[base] = FunctionalEffectCoreTag.Branch;
         words[base + 2] = emit(expression.consequent);
         words[base + 3] = emit(expression.alternate);
-        words[base + 4] = scalarTypeTag(expression.conditionType);
+        words[base + 4] = types.id(expression.conditionType);
         break;
       case "handle": {
         const operation = requiredOperation(
@@ -235,6 +236,7 @@ export function prepareFunctionalEffectCore(
     expressions: Object.freeze(expressions),
     rootNode,
     effectNames: Object.freeze(effectNames),
+    types: types.values,
   };
 }
 
@@ -245,11 +247,13 @@ export function expressionSpan(
   return expression?.span ?? { startByte: 0, endByte: sourceByteLength };
 }
 
-export function scalarTypeFromTag(tag: number): FunctionalHostScalarType {
-  if (tag === FunctionalEffectCoreScalarType.Integer) return { kind: "integer" };
-  if (tag === FunctionalEffectCoreScalarType.Boolean) return { kind: "boolean" };
-  if (tag === FunctionalEffectCoreScalarType.Unit) return { kind: "unit" };
-  throw new Error(`GPU Functional Effect Core verifier returned unknown scalar type ${tag}`);
+export function scalarTypeFromTag(
+  prepared: PreparedEffectCore,
+  tag: number,
+): FunctionalHostType {
+  const type = prepared.types[tag - 1];
+  if (type !== undefined) return type;
+  throw new Error(`GPU Functional Effect Core verifier returned unknown type ${tag}`);
 }
 
 export function operationKey(owner: string, operation: string): string {
@@ -258,23 +262,64 @@ export function operationKey(owner: string, operation: string): string {
   return `${owner}.${operation}`;
 }
 
-function scalarTypeTag(type: FunctionalHostScalarType): number {
-  if (type.kind === "integer") return FunctionalEffectCoreScalarType.Integer;
-  if (type.kind === "boolean") return FunctionalEffectCoreScalarType.Boolean;
-  if (type.kind === "unit") return FunctionalEffectCoreScalarType.Unit;
-  throw new Error(`Functional Effect Core has unsupported scalar type ${JSON.stringify(type)}`);
-}
-
-function requireScalarSchema(
+function requireEffectType(
   schema: FunctionalTypeSchema,
   location: string,
-): FunctionalHostScalarType {
-  if (schema.kind === "integer" || schema.kind === "boolean" || schema.kind === "unit") {
-    return schema;
+): FunctionalHostType {
+  typeKey(schema, location);
+  return schema;
+}
+
+class EffectCoreTypeTable {
+  readonly #ids = new Map<string, number>();
+  readonly #values: FunctionalHostType[] = [];
+
+  constructor() {
+    this.id({ kind: "integer" });
+    this.id({ kind: "boolean" });
+    this.id({ kind: "unit" });
   }
-  throw new Error(
-    `Functional Effect Core ${location} must be integer, boolean, or unit; received ${schema.kind}`,
-  );
+
+  get values(): readonly FunctionalHostType[] {
+    return Object.freeze([...this.#values]);
+  }
+
+  id(type: FunctionalHostType): number {
+    const key = typeKey(type, "type table");
+    const existing = this.#ids.get(key);
+    if (existing !== undefined) return existing;
+    const id = this.#values.length + 1;
+    this.#ids.set(key, id);
+    this.#values.push(type);
+    return id;
+  }
+}
+
+function typeKey(type: FunctionalTypeSchema, location: string, depth = 0): string {
+  if (depth > 64) throw new RangeError(`Functional Effect Core ${location} exceeds type depth 64`);
+  switch (type.kind) {
+    case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+    case "boolean":
+    case "unit":
+      return type.kind;
+    case "tuple":
+      return `tuple(${typeKey(type.values[0], location, depth + 1)},${
+        typeKey(type.values[1], location, depth + 1)
+      })`;
+    case "named":
+      return `named(${JSON.stringify(type.name)}:${
+        type.arguments.map((argument) => typeKey(argument, location, depth + 1)).join(",")
+      })`;
+    case "parameter":
+    case "function":
+    case "forall":
+      throw new TypeError(
+        `Functional Effect Core ${location} must be a concrete first-order type; received ${type.kind}`,
+      );
+  }
 }
 
 function reserveEffectBit(effectNames: string[], name: string): number {

@@ -1,4 +1,4 @@
-import { FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, FunctionalBinaryOperator } from "./abi.ts";
+import { FunctionalEvaluationProfile } from "./abi.ts";
 import type {
   FunctionalEffectCoreExpression,
   LoweredFunctionalEffectCoreModule,
@@ -11,7 +11,7 @@ import {
 import {
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
-  type FunctionalHostScalarType,
+  type FunctionalHostType,
 } from "./host_contract.ts";
 import {
   type FunctionalSurfaceDefinition,
@@ -20,7 +20,7 @@ import {
 } from "./surface_builder.ts";
 
 interface VerifiedEffectCoreShape {
-  readonly type: FunctionalHostScalarType;
+  readonly type: FunctionalHostType;
   readonly effects: readonly string[];
 }
 
@@ -105,7 +105,7 @@ class EffectCoreLowering {
         }
         const call = surface.apply(surface.name(operation.host.binder), expression.argument);
         if (operation.effectBit === null) return surface.apply(continuation, call);
-        return this.strictContinue(call, operation.result, continuation);
+        return this.strictContinue(call, continuation);
       }
       case "perform": {
         const key = operationKey(expression.effect, expression.operation);
@@ -115,7 +115,6 @@ class EffectCoreLowering {
         }
         return this.strictContinue(
           surface.apply(surface.name(handler.definition), expression.argument),
-          handler.operation.result,
           continuation,
         );
       }
@@ -154,40 +153,17 @@ class EffectCoreLowering {
 
   private strictContinue(
     call: FunctionalSurfaceExpression,
-    type: FunctionalHostScalarType,
     continuation: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression {
     const name = `$FunctionalEffectValue${this.#temporaryIndex}`;
     this.#temporaryIndex += 1;
-    const value = surface.name(name);
-    let body: FunctionalSurfaceExpression;
-    if (type.kind === "integer") {
-      const resumed = surface.apply(continuation, value);
-      body = {
-        kind: "if",
-        condition: surface.binary(FunctionalBinaryOperator.Equal, value, value),
-        consequent: resumed,
-        alternate: resumed,
-      };
-    } else if (type.kind === "boolean") {
-      body = {
-        kind: "if",
-        condition: value,
-        consequent: surface.apply(continuation, surface.boolean(true)),
-        alternate: surface.apply(continuation, surface.boolean(false)),
-      };
-    } else {
-      body = {
-        kind: "case",
-        value,
-        arms: [{
-          constructor: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
-          binders: [],
-          body: surface.apply(continuation, surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME)),
-        }],
-      };
-    }
-    return { kind: "let", name, value: call, body };
+    return {
+      kind: "let",
+      name,
+      value: call,
+      body: surface.apply(continuation, surface.name(name)),
+      valueEvaluation: FunctionalEvaluationProfile.StrictEager,
+    };
   }
 
   private localOperation(effect: string, name: string): PreparedOperation {

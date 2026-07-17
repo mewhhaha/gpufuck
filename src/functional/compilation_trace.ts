@@ -121,6 +121,12 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
   switch (expression.kind) {
     case "integer":
       return `${indent}${expression.value}`;
+    case "signed-integer-64":
+      return `${indent}${expression.value}i64`;
+    case "float-32":
+      return `${indent}${expression.value}f32`;
+    case "float-64":
+      return `${indent}${expression.value}f64`;
     case "boolean":
       return `${indent}${expression.value}`;
     case "name":
@@ -145,6 +151,8 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
       return `${indent}(${binaryOperatorName(expression.operator)}\n${nested(expression.left)}\n${
         nested(expression.right)
       })`;
+    case "numeric-convert":
+      return `${indent}(convert${expression.conversion}\n${nested(expression.value)})`;
     case "case": {
       const arms = expression.arms.map((arm) =>
         `${"  ".repeat(depth + 1)}(${arm.constructor} ${arm.binders.join(" ")} ->\n${
@@ -374,6 +382,12 @@ function formatType(type: FunctionalTypeSchema | FunctionalType): string {
   switch (type.kind) {
     case "integer":
       return "i32";
+    case "signed-integer-64":
+      return "i64";
+    case "float-32":
+      return "f32";
+    case "float-64":
+      return "f64";
     case "boolean":
       return "bool";
     case "unit":

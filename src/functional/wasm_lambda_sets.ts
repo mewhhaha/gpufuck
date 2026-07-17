@@ -112,6 +112,9 @@ export class FunctionalLambdaSetAnalysis {
     const node = this.#node(nodeIndex);
     switch (node.tag) {
       case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.SignedInteger64:
+      case FunctionalCoreTag.Float32:
+      case FunctionalCoreTag.Float64:
       case FunctionalCoreTag.Boolean:
         return;
       case FunctionalCoreTag.Local: {
@@ -172,6 +175,7 @@ export class FunctionalLambdaSetAnalysis {
         this.#addEdge(this.#nodeVariable(node.child2), this.#nodeVariable(nodeIndex));
         return;
       case FunctionalCoreTag.Unary:
+      case FunctionalCoreTag.NumericConvert:
         this.#visitExpression(node.child0, environment);
         return;
       case FunctionalCoreTag.Binary:

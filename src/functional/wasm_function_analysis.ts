@@ -104,6 +104,9 @@ export class FunctionalWasmFunctionAnalysis {
     const node = this.#node(nodeIndex);
     switch (node.tag) {
       case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.SignedInteger64:
+      case FunctionalCoreTag.Float32:
+      case FunctionalCoreTag.Float64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Local:
       case FunctionalCoreTag.Global:
@@ -111,6 +114,7 @@ export class FunctionalWasmFunctionAnalysis {
       case FunctionalCoreTag.Constructor:
         return true;
       case FunctionalCoreTag.Unary:
+      case FunctionalCoreTag.NumericConvert:
         return this.canEvaluateEagerly(node.child0);
       case FunctionalCoreTag.Binary:
         return node.payload !== FunctionalBinaryOperator.Divide &&
@@ -256,10 +260,14 @@ export class FunctionalWasmFunctionAnalysis {
     }
     switch (node.tag) {
       case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.SignedInteger64:
+      case FunctionalCoreTag.Float32:
+      case FunctionalCoreTag.Float64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Constructor:
         return false;
       case FunctionalCoreTag.Unary:
+      case FunctionalCoreTag.NumericConvert:
         return this.#containsSelfReference(
           node.child0,
           functionShape,

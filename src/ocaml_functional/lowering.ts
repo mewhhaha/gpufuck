@@ -304,13 +304,10 @@ class OcamlFunctionalLowering {
           }
           value = { kind: "lambda", parameter, body: value, span: expression.span };
         }
-        return {
-          kind: expression.recursive ? "let-rec" : "let",
-          name: expression.name,
-          value,
-          body: this.lowerExpression(expression.body),
-          span: expression.span,
-        };
+        const body = this.lowerExpression(expression.body);
+        return expression.recursive
+          ? { kind: "let-rec", name: expression.name, value, body, span: expression.span }
+          : { kind: "let", name: expression.name, value, body, span: expression.span };
       }
       case "if":
         return {

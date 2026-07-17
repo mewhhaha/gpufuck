@@ -20,6 +20,7 @@ import {
   LazuliDefinitionWord,
   type LazuliDiagnosticCode,
   LazuliEvaluationMode,
+  LazuliNumericConversion,
   type LazuliSourceType,
   type LazuliSpan,
   LazuliSurfaceTag,
@@ -58,6 +59,7 @@ export const FunctionalCoreTag = LazuliCoreTag;
 export const FunctionalUnaryOperator = LazuliUnaryOperator;
 export const FunctionalBinaryOperator = LazuliBinaryOperator;
 export const FunctionalEvaluationMode = LazuliEvaluationMode;
+export const FunctionalNumericConversion = LazuliNumericConversion;
 
 export type FunctionalExpressionTag =
   (typeof FunctionalExpressionTag)[keyof typeof FunctionalExpressionTag];
@@ -68,6 +70,8 @@ export type FunctionalBinaryOperator =
   (typeof FunctionalBinaryOperator)[keyof typeof FunctionalBinaryOperator];
 export type FunctionalEvaluationMode =
   (typeof FunctionalEvaluationMode)[keyof typeof FunctionalEvaluationMode];
+export type FunctionalNumericConversion =
+  (typeof FunctionalNumericConversion)[keyof typeof FunctionalNumericConversion];
 
 export const FunctionalEvaluationProfile = {
   LazyCallByNeed: "lazy-call-by-need-v1",
@@ -87,6 +91,9 @@ export type FunctionalTypecheckingProfile =
 
 export const FunctionalPrimitiveCapability = {
   SignedInteger32: "signed-integer-i32",
+  SignedInteger64: "signed-integer-i64",
+  Float32: "float-f32",
+  Float64: "float-f64",
   Boolean: "boolean",
   Unit: "unit",
   Pair: "pair",
@@ -101,6 +108,9 @@ export const FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES: readonly FunctionalPrimi
   Object.freeze(
     [
       FunctionalPrimitiveCapability.SignedInteger32,
+      FunctionalPrimitiveCapability.SignedInteger64,
+      FunctionalPrimitiveCapability.Float32,
+      FunctionalPrimitiveCapability.Float64,
       FunctionalPrimitiveCapability.Boolean,
       FunctionalPrimitiveCapability.Unit,
       FunctionalPrimitiveCapability.Pair,

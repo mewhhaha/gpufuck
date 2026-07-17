@@ -7,6 +7,12 @@ import {
   requestWebGpuDevice,
   surface,
 } from "../functional.ts";
+import {
+  encodeCompactScalarWasmModule,
+  type WasmFunctionBody,
+  WasmInstructions,
+  WasmValueType,
+} from "../src/functional/wasm_binary.ts";
 
 const ITERATION_COUNT = 1_000;
 const EXPECTED_RESULT = 42 * ITERATION_COUNT;
@@ -185,6 +191,7 @@ const tailWorkerBytes = await compileFunctionalModuleToWasm(tailWorkerCompilatio
 const higherOrderWasm = new WebAssembly.Module(higherOrderBytes);
 const directWasm = new WebAssembly.Module(directBytes);
 const tailWorkerWasm = new WebAssembly.Module(tailWorkerBytes);
+const controlFlowWasm = new WebAssembly.Module(controlFlowBaseline());
 
 globalThis.addEventListener("unload", () => {
   higherOrderCompilation.module.destroy();
@@ -237,6 +244,10 @@ Deno.bench("run WebAssembly: uncurried numeric tail worker", () => {
   runBenchmarkModule(tailWorkerWasm, "tail-worker");
 });
 
+Deno.bench("run WebAssembly: hand-written control-flow loop", () => {
+  runBenchmarkModule(controlFlowWasm, "control-flow");
+});
+
 function runBenchmarkModule(module: WebAssembly.Module, context: string): void {
   const instance = new WebAssembly.Instance(module);
   const main = instance.exports.main;
@@ -245,4 +256,38 @@ function runBenchmarkModule(module: WebAssembly.Module, context: string): void {
   if (result !== EXPECTED_RESULT) {
     throw new Error(`${context} benchmark returned ${result}; expected ${EXPECTED_RESULT}`);
   }
+}
+
+function controlFlowBaseline(): Uint8Array<ArrayBuffer> {
+  const instructions = new WasmInstructions(0);
+  const remaining = instructions.addLocal(WasmValueType.I32);
+  const total = instructions.addLocal(WasmValueType.I32);
+  instructions.i32Const(ITERATION_COUNT);
+  instructions.localSet(remaining);
+  instructions.i32Const(0);
+  instructions.localSet(total);
+  instructions.emit(0x02, WasmValueType.I32, 0x03, 0x40);
+  instructions.localGet(remaining);
+  instructions.emit(0x45, 0x04, 0x40);
+  instructions.localGet(total);
+  instructions.branch(2);
+  instructions.emit(0x0b);
+  instructions.localGet(total);
+  instructions.i32Const(42);
+  instructions.emit(0x6a);
+  instructions.localSet(total);
+  instructions.localGet(remaining);
+  instructions.i32Const(1);
+  instructions.emit(0x6b);
+  instructions.localSet(remaining);
+  instructions.branch(0);
+  instructions.emit(0x0b, 0x00, 0x0b);
+  const body: WasmFunctionBody = {
+    typeIndex: 3,
+    localTypes: instructions.localTypes,
+    instructions: instructions.bytes,
+    usesMemory: false,
+    usesIndirectCalls: false,
+  };
+  return encodeCompactScalarWasmModule([body], 0, 0, []);
 }

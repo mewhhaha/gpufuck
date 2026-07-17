@@ -18,6 +18,9 @@ export class FunctionalWasmCaptureAnalysis {
     let depths: readonly number[];
     switch (node.tag) {
       case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.SignedInteger64:
+      case FunctionalCoreTag.Float32:
+      case FunctionalCoreTag.Float64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Global:
       case FunctionalCoreTag.Constructor:
@@ -38,6 +41,7 @@ export class FunctionalWasmCaptureAnalysis {
         );
         break;
       case FunctionalCoreTag.Unary:
+      case FunctionalCoreTag.NumericConvert:
         depths = this.freeLocalDepths(node.child0);
         break;
       case FunctionalCoreTag.Let:

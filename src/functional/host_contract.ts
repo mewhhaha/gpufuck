@@ -1,25 +1,31 @@
 import type { FunctionalEvaluationProfile, FunctionalTypeSchema } from "./abi.ts";
 
+export type FunctionalHostType = FunctionalTypeSchema;
+
 export const FUNCTIONAL_INIT_TYPE_NAME = "$FunctionalInitType";
 export const FUNCTIONAL_INIT_CONSTRUCTOR_NAME = "$FunctionalInit";
 
 export type FunctionalHostScalarType =
   | { readonly kind: "integer" }
+  | { readonly kind: "signed-integer-64" }
+  | { readonly kind: "float-32" }
+  | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" };
 
 export interface FunctionalHostValueDeclaration {
   readonly kind: "value";
   readonly name: string;
-  readonly type: FunctionalHostScalarType;
+  readonly type: FunctionalHostType;
 }
 
 export interface FunctionalHostOperationDeclaration {
   readonly kind: "operation";
   readonly name: string;
   readonly purity: "pure" | "effectful";
-  readonly parameter: FunctionalHostScalarType;
-  readonly result: FunctionalHostScalarType;
+  readonly execution?: "synchronous" | "suspending";
+  readonly parameter: FunctionalHostType;
+  readonly result: FunctionalHostType;
 }
 
 export type FunctionalHostFieldDeclaration =
@@ -42,8 +48,20 @@ export type FunctionalWasmHostOperation = (
 
 export type FunctionalWasmHostValue =
   | { readonly kind: "integer"; readonly value: number }
+  | { readonly kind: "signed-integer-64"; readonly value: bigint }
+  | { readonly kind: "float-32"; readonly value: number }
+  | { readonly kind: "float-64"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
-  | { readonly kind: "unit" };
+  | { readonly kind: "unit" }
+  | {
+    readonly kind: "tuple";
+    readonly values: readonly [FunctionalWasmHostValue, FunctionalWasmHostValue];
+  }
+  | {
+    readonly kind: "constructor";
+    readonly name: string;
+    readonly fields: readonly FunctionalWasmHostValue[];
+  };
 
 export type FunctionalWasmInitBinding = FunctionalWasmHostValue | FunctionalWasmHostOperation;
 
@@ -103,7 +121,7 @@ export function normalizeFunctionalHostCapabilities(
       }
       fieldNames.add(field.name);
       if (field.kind === "value") {
-        requireScalarType(
+        requireHostType(
           field.type,
           `capability ${JSON.stringify(declaration.name)} value ${JSON.stringify(field.name)}`,
         );
@@ -124,16 +142,27 @@ export function normalizeFunctionalHostCapabilities(
           } has unsupported purity ${JSON.stringify(field.purity)}`,
         );
       }
-      requireScalarType(
+      if (
+        field.execution !== undefined && field.execution !== "synchronous" &&
+        field.execution !== "suspending"
+      ) {
+        throw new Error(
+          `functional host operation ${
+            JSON.stringify(`${declaration.name}.${field.name}`)
+          } has unsupported execution ${JSON.stringify(field.execution)}`,
+        );
+      }
+      requireHostType(
         field.parameter,
         `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} parameter`,
       );
-      requireScalarType(
+      requireHostType(
         field.result,
         `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} result`,
       );
       return Object.freeze({
         ...field,
+        execution: field.execution ?? "synchronous",
         parameter: Object.freeze({ ...field.parameter }),
         result: Object.freeze({ ...field.result }),
       });
@@ -161,10 +190,24 @@ function requireName(name: string, location: string): void {
   }
 }
 
-function requireScalarType(type: FunctionalHostScalarType, location: string): void {
-  if (type?.kind === "integer" || type?.kind === "boolean" || type?.kind === "unit") return;
+function requireHostType(type: FunctionalHostType, location: string, depth = 0): void {
+  if (depth > 64) throw new RangeError(`functional host ${location} exceeds type depth 64`);
+  if (
+    type?.kind === "integer" || type?.kind === "signed-integer-64" ||
+    type?.kind === "float-32" || type?.kind === "float-64" ||
+    type?.kind === "boolean" || type?.kind === "unit"
+  ) return;
+  if (type?.kind === "tuple") {
+    requireHostType(type.values[0], location, depth + 1);
+    requireHostType(type.values[1], location, depth + 1);
+    return;
+  }
+  if (type?.kind === "named") {
+    for (const argument of type.arguments) requireHostType(argument, location, depth + 1);
+    return;
+  }
   throw new Error(
-    `functional host ${location} must be integer, boolean, or unit; received ${
+    `functional host ${location} must be a concrete first-order type; received ${
       JSON.stringify(type)
     }`,
   );

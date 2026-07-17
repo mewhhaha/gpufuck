@@ -5,7 +5,6 @@ import {
   LAZULI_NO_INDEX,
   LAZULI_NODE_WORD_LENGTH,
   LAZULI_TYPE_WORD_LENGTH,
-  LazuliBinaryOperator,
   LazuliConstructorWord,
   LazuliDefinitionWord,
   type LazuliDiagnostic,
@@ -60,6 +59,18 @@ interface UnitType {
   readonly kind: "unit";
 }
 
+interface SignedInteger64Type {
+  readonly kind: "signed-integer-64";
+}
+
+interface Float32Type {
+  readonly kind: "float-32";
+}
+
+interface Float64Type {
+  readonly kind: "float-64";
+}
+
 interface TupleType {
   readonly kind: "tuple";
   readonly values: readonly [InferenceType, InferenceType];
@@ -83,6 +94,9 @@ type InferenceType =
   | IntegerType
   | BooleanType
   | UnitType
+  | SignedInteger64Type
+  | Float32Type
+  | Float64Type
   | TupleType
   | NamedType
   | FunctionType;
@@ -124,6 +138,67 @@ type TypeEnvironment = ReadonlyMap<number, TypeScheme>;
 const INTEGER: IntegerType = Object.freeze({ kind: "integer" });
 const BOOLEAN: BooleanType = Object.freeze({ kind: "boolean" });
 const UNIT: UnitType = Object.freeze({ kind: "unit" });
+const SIGNED_INTEGER_64: SignedInteger64Type = Object.freeze({ kind: "signed-integer-64" });
+const FLOAT_32: Float32Type = Object.freeze({ kind: "float-32" });
+const FLOAT_64: Float64Type = Object.freeze({ kind: "float-64" });
+
+function numericTypeForUnaryOperator(operator: number): InferenceType {
+  switch (operator) {
+    case 1:
+      return INTEGER;
+    case 2:
+      return SIGNED_INTEGER_64;
+    case 3:
+      return FLOAT_32;
+    case 4:
+      return FLOAT_64;
+    default:
+      throw new Error(`Unsupported Lazuli unary operator ${operator}.`);
+  }
+}
+
+function numericTypeForBinaryOperator(operator: number): InferenceType {
+  if (operator >= 1 && operator <= 10) return INTEGER;
+  if (operator <= 20) return SIGNED_INTEGER_64;
+  if (operator <= 30) return FLOAT_32;
+  if (operator <= 40) return FLOAT_64;
+  throw new Error(`Unsupported Lazuli binary operator ${operator}.`);
+}
+
+function binaryOperatorIsComparison(operator: number): boolean {
+  return (operator - 1) % 10 < 6;
+}
+
+function numericConversionTypes(operator: number): readonly [InferenceType, InferenceType] {
+  switch (operator) {
+    case 1:
+      return [INTEGER, SIGNED_INTEGER_64];
+    case 2:
+      return [SIGNED_INTEGER_64, INTEGER];
+    case 3:
+      return [INTEGER, FLOAT_32];
+    case 4:
+      return [INTEGER, FLOAT_64];
+    case 5:
+      return [SIGNED_INTEGER_64, FLOAT_32];
+    case 6:
+      return [SIGNED_INTEGER_64, FLOAT_64];
+    case 7:
+      return [FLOAT_32, INTEGER];
+    case 8:
+      return [FLOAT_32, SIGNED_INTEGER_64];
+    case 9:
+      return [FLOAT_32, FLOAT_64];
+    case 10:
+      return [FLOAT_64, INTEGER];
+    case 11:
+      return [FLOAT_64, SIGNED_INTEGER_64];
+    case 12:
+      return [FLOAT_64, FLOAT_32];
+    default:
+      throw new Error(`Unsupported Lazuli numeric conversion ${operator}.`);
+  }
+}
 
 class InferenceDiagnostic extends Error {
   constructor(readonly diagnostic: LazuliDiagnostic) {
@@ -538,6 +613,9 @@ class InferenceContext {
       const payload = this.nodeWord(nodeIndex, LazuliSurfaceWord.Payload);
       switch (tag) {
         case LazuliSurfaceTag.Integer:
+        case LazuliSurfaceTag.SignedInteger64:
+        case LazuliSurfaceTag.Float32:
+        case LazuliSurfaceTag.Float64:
         case LazuliSurfaceTag.Boolean:
           return;
         case LazuliSurfaceTag.Name: {
@@ -579,6 +657,7 @@ class InferenceContext {
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), boundSymbols);
           return;
         case LazuliSurfaceTag.Unary:
+        case LazuliSurfaceTag.NumericConvert:
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
           return;
         case LazuliSurfaceTag.Case: {
@@ -660,6 +739,12 @@ class InferenceContext {
     switch (tag) {
       case LazuliSurfaceTag.Integer:
         return INTEGER;
+      case LazuliSurfaceTag.SignedInteger64:
+        return SIGNED_INTEGER_64;
+      case LazuliSurfaceTag.Float32:
+        return FLOAT_32;
+      case LazuliSurfaceTag.Float64:
+        return FLOAT_64;
       case LazuliSurfaceTag.Boolean:
         return BOOLEAN;
       case LazuliSurfaceTag.Name: {
@@ -762,28 +847,40 @@ class InferenceContext {
         return result;
       }
       case LazuliSurfaceTag.Unary: {
+        const operandType = numericTypeForUnaryOperator(payload);
         const body = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
           environment,
-          INTEGER,
+          operandType,
         );
-        this.unify(INTEGER, body, span);
-        return INTEGER;
+        this.unify(operandType, body, span);
+        return operandType;
       }
       case LazuliSurfaceTag.Binary: {
+        const operandType = numericTypeForBinaryOperator(payload);
         const left = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
           environment,
-          INTEGER,
+          operandType,
         );
         const right = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
           environment,
-          INTEGER,
+          operandType,
         );
-        this.unify(INTEGER, left, span);
-        this.unify(INTEGER, right, span);
-        return payload <= LazuliBinaryOperator.GreaterEqual ? BOOLEAN : INTEGER;
+        this.unify(operandType, left, span);
+        this.unify(operandType, right, span);
+        return binaryOperatorIsComparison(payload) ? BOOLEAN : operandType;
+      }
+      case LazuliSurfaceTag.NumericConvert: {
+        const [source, result] = numericConversionTypes(payload);
+        const value = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          environment,
+          source,
+        );
+        this.unify(source, value, span);
+        return result;
       }
       case LazuliSurfaceTag.Case:
         return this.inferCase(nodeIndex, environment, expected);
@@ -1205,6 +1302,9 @@ class InferenceContext {
     }
     switch (pruned.kind) {
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return pruned;
@@ -1304,6 +1404,9 @@ class InferenceContext {
           this.firstInferenceVariable(pruned.result);
       case "rigid":
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return null;
@@ -1326,6 +1429,9 @@ class InferenceContext {
     if (left.kind !== right.kind) return false;
     switch (left.kind) {
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return true;
@@ -1377,6 +1483,9 @@ class InferenceContext {
       case "variable":
       case "rigid":
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return false;
@@ -1489,6 +1598,9 @@ class InferenceContext {
       case "variable":
       case "rigid":
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return false;
@@ -1511,6 +1623,12 @@ class InferenceContext {
     switch (schema.kind) {
       case "integer":
         return INTEGER;
+      case "signed-integer-64":
+        return SIGNED_INTEGER_64;
+      case "float-32":
+        return FLOAT_32;
+      case "float-64":
+        return FLOAT_64;
       case "boolean":
         return BOOLEAN;
       case "unit":
@@ -1581,6 +1699,9 @@ class InferenceContext {
   private copySchema(schema: LazuliTypeSchema): LazuliTypeSchema {
     switch (schema.kind) {
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return Object.freeze({ kind: schema.kind });
@@ -1619,6 +1740,9 @@ class InferenceContext {
     const pruned = this.prune(type);
     switch (pruned.kind) {
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return Object.freeze({ kind: pruned.kind });
@@ -1663,6 +1787,9 @@ class InferenceContext {
         return this.containsTypeParameter(pruned.parameter) ||
           this.containsTypeParameter(pruned.result);
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return false;
@@ -1676,6 +1803,12 @@ class InferenceContext {
       switch (pruned.kind) {
         case "integer":
           return "Int";
+        case "signed-integer-64":
+          return "I64";
+        case "float-32":
+          return "F32";
+        case "float-64":
+          return "F64";
         case "boolean":
           return "Bool";
         case "unit":

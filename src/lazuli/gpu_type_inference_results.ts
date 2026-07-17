@@ -482,6 +482,9 @@ export function publicTypeMetadata(surface: EncodedLazuliSurface): Pick<
   const copySchema = (schema: LazuliTypeSchema): LazuliTypeSchema => {
     switch (schema.kind) {
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return Object.freeze({ kind: schema.kind });

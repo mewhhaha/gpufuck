@@ -11,6 +11,7 @@ import {
   FunctionalEvaluationProfile,
   FunctionalExpressionTag,
   FunctionalNodeWord,
+  type FunctionalNumericConversion,
   type FunctionalSourceType,
   type FunctionalSpan,
   FunctionalTypecheckingProfile,
@@ -26,6 +27,9 @@ import {
 
 export type FunctionalSurfaceExpression =
   | { readonly kind: "integer"; readonly value: number; readonly span?: FunctionalSpan }
+  | { readonly kind: "signed-integer-64"; readonly value: bigint; readonly span?: FunctionalSpan }
+  | { readonly kind: "float-32"; readonly value: number; readonly span?: FunctionalSpan }
+  | { readonly kind: "float-64"; readonly value: number; readonly span?: FunctionalSpan }
   | { readonly kind: "boolean"; readonly value: boolean; readonly span?: FunctionalSpan }
   | { readonly kind: "name"; readonly name: string; readonly span?: FunctionalSpan }
   | {
@@ -68,6 +72,12 @@ export type FunctionalSurfaceExpression =
     readonly operator: FunctionalBinaryOperator;
     readonly left: FunctionalSurfaceExpression;
     readonly right: FunctionalSurfaceExpression;
+    readonly span?: FunctionalSpan;
+  }
+  | {
+    readonly kind: "numeric-convert";
+    readonly conversion: FunctionalNumericConversion;
+    readonly value: FunctionalSurfaceExpression;
     readonly span?: FunctionalSpan;
   }
   | {
@@ -240,6 +250,9 @@ function schemaContainsForall(schema: FunctionalTypeSchema): boolean {
     case "function":
       return schemaContainsForall(schema.parameter) || schemaContainsForall(schema.result);
     case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
     case "boolean":
     case "unit":
     case "parameter":
@@ -342,6 +355,45 @@ class SurfaceExpressionEncoder {
           parent,
           expression.span,
         );
+      case "signed-integer-64": {
+        if (expression.value < -0x8000000000000000n || expression.value > 0x7fffffffffffffffn) {
+          throw new RangeError(
+            `functional signed i64 literal must be within [-2^63, 2^63 - 1]; received ${expression.value}`,
+          );
+        }
+        const bits = BigInt.asUintN(64, expression.value);
+        const node = this.emitNode(
+          FunctionalExpressionTag.SignedInteger64,
+          Number(bits & 0xffffffffn),
+          [],
+          parent,
+          expression.span,
+        );
+        this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child0] = Number(
+          bits >> 32n,
+        );
+        return node;
+      }
+      case "float-32":
+        return this.emitNode(
+          FunctionalExpressionTag.Float32,
+          float32Bits(expression.value),
+          [],
+          parent,
+          expression.span,
+        );
+      case "float-64": {
+        const [low, high] = float64Bits(expression.value);
+        const node = this.emitNode(
+          FunctionalExpressionTag.Float64,
+          low,
+          [],
+          parent,
+          expression.span,
+        );
+        this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child0] = high;
+        return node;
+      }
       case "boolean":
         return this.emitNode(
           FunctionalExpressionTag.Boolean,
@@ -434,6 +486,17 @@ class SurfaceExpressionEncoder {
         const left = this.emit(expression.left, node);
         const right = this.emit(expression.right, node);
         this.setChildren(node, [left, right]);
+        return node;
+      }
+      case "numeric-convert": {
+        const node = this.reserveNode(
+          FunctionalExpressionTag.NumericConvert,
+          expression.conversion,
+          parent,
+          expression.span,
+        );
+        const value = this.emit(expression.value, node);
+        this.setChildren(node, [value]);
         return node;
       }
       case "case": {
@@ -582,6 +645,9 @@ function sourceType(
   const sourceSpan = span ?? { startByte: 0, endByte: 0 };
   switch (schema.kind) {
     case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
     case "boolean":
     case "unit":
     case "parameter":
@@ -626,6 +692,9 @@ function parentSpan(words: readonly number[], parent: number): FunctionalSpan | 
 
 export const surface: Readonly<{
   integer(value: number): FunctionalSurfaceExpression;
+  signedInteger64(value: bigint): FunctionalSurfaceExpression;
+  float32(value: number): FunctionalSurfaceExpression;
+  float64(value: number): FunctionalSurfaceExpression;
   boolean(value: boolean): FunctionalSurfaceExpression;
   name(name: string): FunctionalSurfaceExpression;
   lambda(parameter: string, body: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
@@ -638,6 +707,10 @@ export const surface: Readonly<{
     left: FunctionalSurfaceExpression,
     right: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression;
+  convert(
+    conversion: FunctionalNumericConversion,
+    value: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
   equal(
     left: FunctionalSurfaceExpression,
     right: FunctionalSurfaceExpression,
@@ -645,6 +718,15 @@ export const surface: Readonly<{
 }> = {
   integer(value: number): FunctionalSurfaceExpression {
     return { kind: "integer", value };
+  },
+  signedInteger64(value: bigint): FunctionalSurfaceExpression {
+    return { kind: "signed-integer-64", value };
+  },
+  float32(value: number): FunctionalSurfaceExpression {
+    return { kind: "float-32", value };
+  },
+  float64(value: number): FunctionalSurfaceExpression {
+    return { kind: "float-64", value };
   },
   boolean(value: boolean): FunctionalSurfaceExpression {
     return { kind: "boolean", value };
@@ -673,6 +755,12 @@ export const surface: Readonly<{
   ): FunctionalSurfaceExpression {
     return { kind: "binary", operator, left, right };
   },
+  convert(
+    conversion: FunctionalNumericConversion,
+    value: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression {
+    return { kind: "numeric-convert", conversion, value };
+  },
   equal(
     left: FunctionalSurfaceExpression,
     right: FunctionalSurfaceExpression,
@@ -680,3 +768,17 @@ export const surface: Readonly<{
     return { kind: "binary", operator: FunctionalBinaryOperator.Equal, left, right };
   },
 };
+
+function float32Bits(value: number): number {
+  const bytes = new ArrayBuffer(4);
+  const view = new DataView(bytes);
+  view.setFloat32(0, value, true);
+  return view.getUint32(0, true);
+}
+
+function float64Bits(value: number): readonly [number, number] {
+  const bytes = new ArrayBuffer(8);
+  const view = new DataView(bytes);
+  view.setFloat64(0, value, true);
+  return [view.getUint32(0, true), view.getUint32(4, true)];
+}

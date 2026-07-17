@@ -3,6 +3,7 @@ import type { FunctionalEffectOperation, FunctionalEffectType } from "./effect_c
 import type {
   FunctionalHostCapabilityDeclaration,
   FunctionalHostScalarType,
+  FunctionalHostType,
 } from "./host_contract.ts";
 import type {
   FunctionalSurfaceDefinition,
@@ -14,7 +15,7 @@ export type FunctionalEffectCoreExpression =
   | {
     readonly kind: "return";
     readonly value: FunctionalSurfaceExpression;
-    readonly valueType: FunctionalHostScalarType;
+    readonly valueType: FunctionalHostType;
     readonly span?: FunctionalSpan;
   }
   | {
@@ -22,7 +23,7 @@ export type FunctionalEffectCoreExpression =
     readonly capability: string;
     readonly operation: string;
     readonly argument: FunctionalSurfaceExpression;
-    readonly argumentType: FunctionalHostScalarType;
+    readonly argumentType: FunctionalHostType;
     readonly span?: FunctionalSpan;
   }
   | {
@@ -30,7 +31,7 @@ export type FunctionalEffectCoreExpression =
     readonly effect: string;
     readonly operation: string;
     readonly argument: FunctionalSurfaceExpression;
-    readonly argumentType: FunctionalHostScalarType;
+    readonly argumentType: FunctionalHostType;
     readonly span?: FunctionalSpan;
   }
   | {

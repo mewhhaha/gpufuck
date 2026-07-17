@@ -216,6 +216,64 @@ Deno.test("Effect Core handlers discharge local operations before the executable
   }
 });
 
+Deno.test("Effect Core verifies aggregate operation values and returns them through WebAssembly", async () => {
+  const boxType = { kind: "named", name: "Box", arguments: [] } as const;
+  const module: FunctionalEffectCoreModule = {
+    definitions: [],
+    typeDeclarations: [{
+      name: "Box",
+      parameters: [],
+      constructors: [{
+        name: "Box",
+        fields: [{ name: "value", type: { kind: "integer" } }],
+      }],
+    }],
+    operations: [{
+      effect: "Reader",
+      name: "readBox",
+      parameter: { kind: "unit" },
+      result: boxType,
+    }],
+    hostCapabilities: [],
+    expression: {
+      kind: "handle",
+      effect: "Reader",
+      operation: "readBox",
+      implementation: surface.lambda(
+        "request",
+        surface.apply(surface.name("Box"), surface.integer(42)),
+      ),
+      computation: {
+        kind: "bind",
+        name: "answer",
+        computation: {
+          kind: "perform",
+          effect: "Reader",
+          operation: "readBox",
+          argument: surface.name("$Unit"),
+          argumentType: { kind: "unit" },
+        },
+        body: { kind: "return", value: surface.name("answer"), valueType: boxType },
+      },
+    },
+    entryName: "main",
+    sourceByteLength: 0,
+  };
+  const compilation = await effectCoreRuntime().compiler.compileEffectModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("aggregate Effect Core module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, {
+      kind: "constructor",
+      name: "Box",
+      fields: [{ kind: "integer", value: 42 }],
+    });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("GPU Effect Core rejects a computation record reused by two parents", async () => {
   const shared = {
     kind: "return",

@@ -141,8 +141,8 @@ fn result_effects(node: u32) -> u32 {
   return results[node * 2u + 1u];
 }
 
-fn scalar_type_valid(value: u32) -> bool {
-  return value == TYPE_INTEGER || value == TYPE_BOOLEAN || value == TYPE_UNIT;
+fn effect_type_valid(value: u32) -> bool {
+  return value != 0u && value != NO_INDEX;
 }
 
 fn fail(code: u32, node: u32) {
@@ -177,7 +177,7 @@ fn infer_transition() {
   var inferred_effects = 0u;
 
   if tag == TAG_RETURN {
-    if !scalar_type_valid(annotated_type) || child0 != NO_INDEX || child1 != NO_INDEX {
+    if !effect_type_valid(annotated_type) || child0 != NO_INDEX || child1 != NO_INDEX {
       fail(DIAGNOSTIC_INVALID_NODE, node);
       return;
     }

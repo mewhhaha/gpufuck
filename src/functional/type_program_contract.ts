@@ -11,6 +11,9 @@ export type FunctionalTypeKind =
 
 export type FunctionalTypeExpression =
   | { readonly kind: "integer" }
+  | { readonly kind: "signed-integer-64" }
+  | { readonly kind: "float-32" }
+  | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" }
   | { readonly kind: "reference"; readonly name: string }

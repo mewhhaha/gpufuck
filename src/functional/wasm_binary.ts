@@ -1,6 +1,8 @@
 export const WasmValueType = {
   I32: 0x7f,
   I64: 0x7e,
+  F32: 0x7d,
+  F64: 0x7c,
 } as const;
 
 export interface WasmFunctionBody {
@@ -108,6 +110,20 @@ export class WasmInstructions {
     this.signed64(value);
   }
 
+  f32Const(value: number): void {
+    const bytes = new ArrayBuffer(4);
+    const view = new DataView(bytes);
+    view.setFloat32(0, value, true);
+    this.emit(0x43, ...new Uint8Array(bytes));
+  }
+
+  f64Const(value: number): void {
+    const bytes = new ArrayBuffer(8);
+    const view = new DataView(bytes);
+    view.setFloat64(0, value, true);
+    this.emit(0x44, ...new Uint8Array(bytes));
+  }
+
   i32Load(offset: number, alignment = 2): void {
     this.usesMemory = true;
     this.emit(0x28);
@@ -118,6 +134,20 @@ export class WasmInstructions {
   i64Load(offset: number, alignment = 3): void {
     this.usesMemory = true;
     this.emit(0x29);
+    this.unsigned(alignment);
+    this.unsigned(offset);
+  }
+
+  f32Load(offset: number, alignment = 2): void {
+    this.usesMemory = true;
+    this.emit(0x2a);
+    this.unsigned(alignment);
+    this.unsigned(offset);
+  }
+
+  f64Load(offset: number, alignment = 3): void {
+    this.usesMemory = true;
+    this.emit(0x2b);
     this.unsigned(alignment);
     this.unsigned(offset);
   }
@@ -135,6 +165,20 @@ export class WasmInstructions {
     this.unsigned(alignment);
     this.unsigned(offset);
   }
+
+  f32Store(offset: number, alignment = 2): void {
+    this.usesMemory = true;
+    this.emit(0x38);
+    this.unsigned(alignment);
+    this.unsigned(offset);
+  }
+
+  f64Store(offset: number, alignment = 3): void {
+    this.usesMemory = true;
+    this.emit(0x39);
+    this.unsigned(alignment);
+    this.unsigned(offset);
+  }
 }
 
 export function encodeWasmModule(
@@ -145,6 +189,8 @@ export function encodeWasmModule(
   heapStart: number,
   specializedCallSiteCount: number,
   additionalFunctionTypes: readonly WasmFunctionType[],
+  valueForceFunctionIndex?: number,
+  initializeFunctionIndex?: number,
 ): Uint8Array<ArrayBuffer> {
   const types = wasmFunctionTypes(additionalFunctionTypes);
   const sections = [
@@ -175,6 +221,12 @@ export function encodeWasmModule(
       7,
       vector([
         [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
+        ...(valueForceFunctionIndex === undefined
+          ? []
+          : [[...name("forceValue"), 0x00, ...encodeUnsigned(valueForceFunctionIndex)]]),
+        ...(initializeFunctionIndex === undefined
+          ? []
+          : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
         [...name("memory"), 0x02, 0x00],
         [...name("thunkEvaluations"), 0x03, 0x01],
         [...name("runtimeFault"), 0x03, 0x02],

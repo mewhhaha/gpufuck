@@ -5,6 +5,7 @@ import {
   FunctionalCoreTag,
   FunctionalEvaluationMode,
   FunctionalEvaluationProfile,
+  FunctionalNumericConversion,
   type FunctionalType,
   FunctionalUnaryOperator,
 } from "./abi.ts";
@@ -12,9 +13,9 @@ import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.
 import {
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
-  type FunctionalHostCapabilityDeclaration,
   type FunctionalHostFieldDeclaration,
   type FunctionalHostScalarType,
+  type FunctionalHostType,
   type FunctionalWasmHostValue,
   type FunctionalWasmInit,
   type FunctionalWasmInitBinding,
@@ -28,6 +29,15 @@ import {
   WasmInstructions,
   WasmValueType,
 } from "./wasm_binary.ts";
+import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
+import {
+  concreteFunctionalType,
+  decodeFunctionalWasmValue,
+  describeFunctionalType,
+  encodeFunctionalWasmValue,
+  type FunctionalWasmValue,
+  requireFirstOrderFunctionalWasmType,
+} from "./wasm_value_codec.ts";
 import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import { FunctionalLambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 import {
@@ -38,15 +48,16 @@ import {
 } from "./wasm_function_analysis.ts";
 
 const HOST_IMPORT_MODULE_PREFIX = "functional_init:";
-const CLOSURE_OBJECT_KIND = 1;
-const CONSTRUCTOR_OBJECT_KIND = 2;
-const THUNK_OBJECT_KIND = 3;
+const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
+const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
+const THUNK_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.thunk;
+const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
 const THUNK_UNEVALUATED = 0;
 const THUNK_EVALUATING = 1;
 const THUNK_EVALUATED = 2;
-const OBJECT_HEADER_BYTE_LENGTH = 16;
+const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
 const THUNK_HEADER_BYTE_LENGTH = 24;
-const VALUE_BYTE_LENGTH = 8;
+const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
 const BASE_WASM_FUNCTION_TYPE_COUNT = 5;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
@@ -81,7 +92,8 @@ interface HostField {
 
 interface FunctionalWasmEntry {
   readonly takesInit: boolean;
-  readonly result: FunctionalHostScalarType;
+  readonly parameter?: FunctionalType;
+  readonly result: FunctionalType;
 }
 
 interface ConstructorApplication {
@@ -95,7 +107,7 @@ interface UncurriedApplication {
   readonly functionShape: FunctionalFunctionShape;
 }
 
-export type FunctionalWasmValue = FunctionalWasmHostValue;
+export type { FunctionalWasmValue } from "./wasm_value_codec.ts";
 
 export interface FunctionalWasmStats {
   readonly thunkEvaluations: number;
@@ -112,6 +124,8 @@ export interface FunctionalWasmExecution {
 
 export interface FunctionalWasmRunOptions {
   readonly init?: FunctionalWasmInit;
+  readonly argument?: FunctionalWasmValue;
+  readonly maximumResultNodes?: number;
 }
 
 export class FunctionalWasmRuntimeError extends Error {
@@ -144,8 +158,9 @@ export async function runFunctionalWasmModule(
 ): Promise<FunctionalWasmExecution> {
   const entry = functionalWasmEntry(module);
   const bytes = await compileFunctionalModuleToWasm(module);
-  const imports = functionalWasmImports(module.hostCapabilities, options.init);
-  const instantiated = await WebAssembly.instantiate(bytes, imports);
+  const host = functionalWasmImports(module, options.init);
+  const instantiated = await WebAssembly.instantiate(bytes, host.imports);
+  host.bindInstance(instantiated.instance);
   const exportedMain = instantiated.instance.exports.main;
   if (typeof exportedMain !== "function") {
     throw new Error(
@@ -158,10 +173,33 @@ export async function runFunctionalWasmModule(
       `functional WASM entry d${module.entryDefinition} did not export its allocator heap top`,
     );
   }
+  let argument: bigint | undefined;
+  if (entry.parameter !== undefined) {
+    const initialize = instantiated.instance.exports.initialize;
+    if (typeof initialize !== "function") {
+      throw new Error("functional WASM input module omitted its initialize export");
+    }
+    initialize();
+    if (options.argument === undefined) {
+      throw new TypeError(
+        `functional WASM entry requires ${
+          describeFunctionalType(entry.parameter)
+        } argument; received undefined`,
+      );
+    }
+    argument = encodeFunctionalWasmValue(
+      instantiated.instance,
+      module,
+      entry.parameter,
+      options.argument,
+    );
+  } else if (options.argument !== undefined) {
+    throw new TypeError("functional WASM entry does not accept an argument");
+  }
   const heapBase = Number(heapTop.value) >>> 0;
-  let result: number;
+  let result: number | bigint;
   try {
-    result = exportedMain() as number;
+    result = (argument === undefined ? exportedMain() : exportedMain(argument)) as number | bigint;
   } catch (cause) {
     const runtimeFault = instantiated.instance.exports.runtimeFault;
     if (runtimeFault instanceof WebAssembly.Global && runtimeFault.value === 1) {
@@ -169,11 +207,13 @@ export async function runFunctionalWasmModule(
     }
     throw cause;
   }
-  const value: FunctionalWasmValue = entry.result.kind === "integer"
-    ? { kind: "integer", value: result }
-    : entry.result.kind === "boolean"
-    ? { kind: "boolean", value: result !== 0 }
-    : { kind: "unit" };
+  const value = decodeFunctionalWasmValue(
+    instantiated.instance,
+    module,
+    entry.result,
+    result,
+    options.maximumResultNodes ?? 2_047,
+  );
   const thunkEvaluations = instantiated.instance.exports.thunkEvaluations;
   if (!(thunkEvaluations instanceof WebAssembly.Global)) {
     throw new Error(
@@ -256,11 +296,41 @@ class FunctionalWasmCompiler {
     const functionImports: WasmFunctionImport[] = [];
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
+        if (declaration.kind === "operation" && declaration.execution === "suspending") {
+          throw new TypeError(
+            `functional WASM host operation ${
+              JSON.stringify(`${capability.name}.${declaration.name}`)
+            } is suspending; the direct WASM ABI is synchronous, so retain this operation at the Effect Core suspension boundary`,
+          );
+        }
+        if (declaration.kind === "value") {
+          requireFirstOrderFunctionalWasmType(
+            module,
+            concreteFunctionalType(declaration.type),
+            `host value ${JSON.stringify(`${capability.name}.${declaration.name}`)}`,
+          );
+        } else {
+          requireFirstOrderFunctionalWasmType(
+            module,
+            concreteFunctionalType(declaration.parameter),
+            `host operation ${JSON.stringify(`${capability.name}.${declaration.name}`)} parameter`,
+          );
+          requireFirstOrderFunctionalWasmType(
+            module,
+            concreteFunctionalType(declaration.result),
+            `host operation ${JSON.stringify(`${capability.name}.${declaration.name}`)} result`,
+          );
+        }
         const importIndex = functionImports.length;
         functionImports.push({
           module: hostImportModule(capability.name),
           name: declaration.name,
-          typeIndex: declaration.kind === "value" ? 3 : 0,
+          typeIndex: declaration.kind === "value"
+            ? this.functionTypeIndex([], [wasmValueType(declaration.type)])
+            : this.functionTypeIndex(
+              [wasmValueType(declaration.parameter)],
+              [wasmValueType(declaration.result)],
+            ),
         });
         hostFields.push({
           capability: capability.name,
@@ -311,13 +381,15 @@ class FunctionalWasmCompiler {
   }
 
   compileCompactScalar(): Uint8Array<ArrayBuffer> | undefined {
+    const scalarResult = functionalHostScalarType(this.#entry.result);
     if (
       !this.#compactScalar ||
       this.#module.evaluationProfile !== FunctionalEvaluationProfile.StrictEager ||
       this.#module.entryEffects.length !== 0 ||
       this.#hostFields.length !== 0 ||
       this.#entry.takesInit ||
-      this.#entry.result.kind === "unit"
+      this.#entry.parameter !== undefined ||
+      scalarResult === undefined || scalarResult.kind === "unit"
     ) return undefined;
 
     const entryRoot = this.#module.definitionRoots[this.#module.entryDefinition];
@@ -326,14 +398,31 @@ class FunctionalWasmCompiler {
         `functional WASM entry d${this.#module.entryDefinition} exceeds ${this.#module.definitionCount} definitions`,
       );
     }
-    const entryInstructions = new WasmInstructions(0);
+    const entryInstructions = new WasmInstructions(this.#entry.parameter === undefined ? 0 : 1);
     if (this.#entry.result.kind === "integer") {
       this.compileIntegerExpression(entryInstructions, entryRoot, []);
     } else {
-      this.compileBooleanExpression(entryInstructions, entryRoot, []);
+      if (this.#entry.result.kind === "boolean") {
+        this.compileBooleanExpression(entryInstructions, entryRoot, []);
+      } else if (this.#entry.result.kind === "signed-integer-64") {
+        this.compileSignedInteger64Expression(entryInstructions, entryRoot, []);
+      } else if (this.#entry.result.kind === "float-32") {
+        this.compileFloat32Expression(entryInstructions, entryRoot, []);
+      } else if (this.#entry.result.kind === "float-64") {
+        this.compileFloat64Expression(entryInstructions, entryRoot, []);
+      } else {
+        this.compileBooleanExpression(entryInstructions, entryRoot, []);
+      }
     }
 
-    const entryBody = functionBody(3, entryInstructions, "compact scalar entry");
+    const entryBody = functionBody(
+      this.functionTypeIndex(
+        this.#entry.parameter === undefined ? [] : [WasmValueType.I64],
+        [wasmValueType(scalarResult)],
+      ),
+      entryInstructions,
+      "compact scalar entry",
+    );
     const emittedFunctions = [
       ...this.#indirectFunctions.map((body, slot) => {
         if (body === undefined) {
@@ -358,15 +447,22 @@ class FunctionalWasmCompiler {
   compile(): Uint8Array<ArrayBuffer> {
     this.compileHostOperationClosures();
     this.compileGlobalThunks();
-    const entryInstructions = new WasmInstructions(0);
+    const entryInstructions = new WasmInstructions(this.#entry.parameter === undefined ? 0 : 1);
     this.emitGlobalInitialization(entryInstructions);
     this.emitEntryCall(entryInstructions);
+    const scalarResult = functionalHostScalarType(this.#entry.result);
     if (this.#entry.result.kind === "unit") {
       entryInstructions.emit(0x1a);
       entryInstructions.i32Const(0);
-    } else {
+    } else if (this.#entry.result.kind === "integer" || this.#entry.result.kind === "boolean") {
       entryInstructions.i64Const(3n);
       entryInstructions.emit(0x87, 0xa7);
+    } else if (this.#entry.result.kind === "signed-integer-64") {
+      this.emitUnboxSignedInteger64(entryInstructions);
+    } else if (this.#entry.result.kind === "float-32") {
+      this.emitUnboxFloat32(entryInstructions);
+    } else if (this.#entry.result.kind === "float-64") {
+      this.emitUnboxFloat64(entryInstructions);
     }
     const indirectFunctions = this.#indirectFunctions.map((body, slot) => {
       if (body === undefined) {
@@ -374,11 +470,31 @@ class FunctionalWasmCompiler {
       }
       return body;
     });
+    const forceValueInstructions = new WasmInstructions(1);
+    forceValueInstructions.localGet(0);
+    this.emitForceValue(forceValueInstructions);
+    const forceValueType = this.functionTypeIndex([WasmValueType.I64], [WasmValueType.I64]);
+    const entryResultType = scalarResult === undefined
+      ? WasmValueType.I64
+      : wasmValueType(scalarResult);
+    const initializeInstructions = new WasmInstructions(0);
+    this.emitGlobalInitialization(initializeInstructions);
+    initializeInstructions.i32Const(0);
+    const initializeType = this.functionTypeIndex([], [WasmValueType.I32]);
     const functions = [
       allocateFunction(),
       forceThunkFunction(),
       ...indirectFunctions,
-      functionBody(3, entryInstructions, "entry wrapper"),
+      functionBody(forceValueType, forceValueInstructions, "public value force"),
+      functionBody(initializeType, initializeInstructions, "public runtime initialization"),
+      functionBody(
+        this.functionTypeIndex(
+          this.#entry.parameter === undefined ? [] : [WasmValueType.I64],
+          [entryResultType],
+        ),
+        entryInstructions,
+        "entry wrapper",
+      ),
     ];
     const indirectFunctionIndices = indirectFunctions.map((_, slot) =>
       this.indirectFunctionOffset() + slot
@@ -391,6 +507,8 @@ class FunctionalWasmCompiler {
       this.heapStart(),
       this.#specializedCallSiteCount,
       this.#additionalFunctionTypes,
+      this.#functionImports.length + 2 + indirectFunctions.length,
+      this.#functionImports.length + 3 + indirectFunctions.length,
     );
   }
 
@@ -413,6 +531,17 @@ class FunctionalWasmCompiler {
 
   emitEntryCall(instructions: WasmInstructions): void {
     this.emitGlobalReference(instructions, this.#module.entryDefinition);
+    if (this.#entry.parameter !== undefined) {
+      instructions.emit(0xa7);
+      const closure = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(closure);
+      instructions.localGet(closure);
+      instructions.localGet(0);
+      instructions.localGet(closure);
+      instructions.i32Load(4);
+      instructions.callIndirect(2);
+      return;
+    }
     if (!this.#entry.takesInit) return;
     instructions.emit(0xa7);
     const closure = instructions.addLocal(WasmValueType.I32);
@@ -515,6 +644,18 @@ class FunctionalWasmCompiler {
       case FunctionalCoreTag.Integer:
         instructions.i64Const((BigInt(node.payload | 0) << 3n) | 1n);
         return;
+      case FunctionalCoreTag.SignedInteger64:
+        this.compileSignedInteger64Expression(instructions, nodeIndex, environment);
+        this.emitBoxSignedInteger64(instructions);
+        return;
+      case FunctionalCoreTag.Float32:
+        this.compileFloat32Expression(instructions, nodeIndex, environment);
+        this.emitBoxFloat32(instructions);
+        return;
+      case FunctionalCoreTag.Float64:
+        this.compileFloat64Expression(instructions, nodeIndex, environment);
+        this.emitBoxFloat64(instructions);
+        return;
       case FunctionalCoreTag.Boolean:
         instructions.i64Const((BigInt(node.payload) << 3n) | 2n);
         return;
@@ -558,6 +699,9 @@ class FunctionalWasmCompiler {
         return;
       case FunctionalCoreTag.Binary:
         this.compileBinary(instructions, node, environment, nodeIndex);
+        return;
+      case FunctionalCoreTag.NumericConvert:
+        this.compileNumericConversionExpression(instructions, node, environment);
         return;
       case FunctionalCoreTag.Case:
         this.compileCase(instructions, node, environment, nodeIndex);
@@ -1205,15 +1349,35 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
-    if (node.payload !== FunctionalUnaryOperator.Negate) {
-      throw new Error(
-        `functional WASM unary operator ${node.payload} at core node ${nodeIndex} is unsupported`,
-      );
+    if (node.payload === FunctionalUnaryOperator.Negate) {
+      this.compileIntegerExpression(instructions, node.child0, environment);
+      instructions.i32Const(-1);
+      instructions.emit(0x6c);
+      this.emitEncodeInteger(instructions);
+      return;
     }
-    this.compileIntegerExpression(instructions, node.child0, environment);
-    instructions.i32Const(-1);
-    instructions.emit(0x6c);
-    this.emitEncodeInteger(instructions);
+    if (node.payload === FunctionalUnaryOperator.NegateSignedInteger64) {
+      instructions.i64Const(0n);
+      this.compileSignedInteger64Expression(instructions, node.child0, environment);
+      instructions.emit(0x7d);
+      this.emitBoxSignedInteger64(instructions);
+      return;
+    }
+    if (node.payload === FunctionalUnaryOperator.NegateFloat32) {
+      this.compileFloat32Expression(instructions, node.child0, environment);
+      instructions.emit(0x8c);
+      this.emitBoxFloat32(instructions);
+      return;
+    }
+    if (node.payload === FunctionalUnaryOperator.NegateFloat64) {
+      this.compileFloat64Expression(instructions, node.child0, environment);
+      instructions.emit(0x9a);
+      this.emitBoxFloat64(instructions);
+      return;
+    }
+    throw new Error(
+      `functional WASM unary operator ${node.payload} at core node ${nodeIndex} is unsupported`,
+    );
   }
 
   compileIntegerExpression(
@@ -1279,6 +1443,9 @@ class FunctionalWasmCompiler {
         }
         return;
       }
+      case FunctionalCoreTag.NumericConvert:
+        this.compileNumericConversion(instructions, node, environment, "integer");
+        return;
       case FunctionalCoreTag.If:
         this.compileBooleanExpression(instructions, node.child0, environment);
         instructions.emit(0x04, WasmValueType.I32);
@@ -1371,9 +1538,7 @@ class FunctionalWasmCompiler {
       }
       case FunctionalCoreTag.Binary:
         if (!isComparisonOperator(node.payload)) break;
-        this.compileIntegerExpression(instructions, node.child0, environment);
-        this.compileIntegerExpression(instructions, node.child1, environment);
-        this.emitComparison(instructions, node.payload, nodeIndex);
+        this.compileComparisonOperands(instructions, node, environment, nodeIndex);
         return;
       case FunctionalCoreTag.If:
         this.compileBooleanExpression(instructions, node.child0, environment);
@@ -1427,12 +1592,223 @@ class FunctionalWasmCompiler {
     this.emitDecodeBoolean(instructions);
   }
 
+  compileSignedInteger64Expression(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.SignedInteger64:
+        instructions.i64Const(wideLiteralBits(node));
+        return;
+      case FunctionalCoreTag.Unary:
+        if (node.payload !== FunctionalUnaryOperator.NegateSignedInteger64) break;
+        instructions.i64Const(0n);
+        this.compileSignedInteger64Expression(instructions, node.child0, environment);
+        instructions.emit(0x7d);
+        return;
+      case FunctionalCoreTag.Binary:
+        if (numericOperatorGroup(node.payload) !== "signed-integer-64") break;
+        this.compileSignedInteger64Expression(instructions, node.child0, environment);
+        this.compileSignedInteger64Expression(instructions, node.child1, environment);
+        this.emitNumericBinary(instructions, node.payload, nodeIndex);
+        return;
+      case FunctionalCoreTag.NumericConvert:
+        this.compileNumericConversion(instructions, node, environment, "signed-integer-64");
+        return;
+      case FunctionalCoreTag.If:
+        this.compileBooleanExpression(instructions, node.child0, environment);
+        instructions.emit(0x04, WasmValueType.I64);
+        this.compileSignedInteger64Expression(instructions, node.child1, environment);
+        instructions.emit(0x05);
+        this.compileSignedInteger64Expression(instructions, node.child2, environment);
+        instructions.emit(0x0b);
+        return;
+    }
+    this.compileExpression(instructions, nodeIndex, environment);
+    this.emitUnboxSignedInteger64(instructions);
+  }
+
+  compileFloat32Expression(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Float32:
+        instructions.f32Const(float32FromBits(node.payload));
+        return;
+      case FunctionalCoreTag.Unary:
+        if (node.payload !== FunctionalUnaryOperator.NegateFloat32) break;
+        this.compileFloat32Expression(instructions, node.child0, environment);
+        instructions.emit(0x8c);
+        return;
+      case FunctionalCoreTag.Binary:
+        if (numericOperatorGroup(node.payload) !== "float-32") break;
+        this.compileFloat32Expression(instructions, node.child0, environment);
+        this.compileFloat32Expression(instructions, node.child1, environment);
+        this.emitNumericBinary(instructions, node.payload, nodeIndex);
+        return;
+      case FunctionalCoreTag.NumericConvert:
+        this.compileNumericConversion(instructions, node, environment, "float-32");
+        return;
+      case FunctionalCoreTag.If:
+        this.compileBooleanExpression(instructions, node.child0, environment);
+        instructions.emit(0x04, WasmValueType.F32);
+        this.compileFloat32Expression(instructions, node.child1, environment);
+        instructions.emit(0x05);
+        this.compileFloat32Expression(instructions, node.child2, environment);
+        instructions.emit(0x0b);
+        return;
+    }
+    this.compileExpression(instructions, nodeIndex, environment);
+    this.emitUnboxFloat32(instructions);
+  }
+
+  compileFloat64Expression(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Float64:
+        instructions.f64Const(float64FromBits(wideLiteralBits(node)));
+        return;
+      case FunctionalCoreTag.Unary:
+        if (node.payload !== FunctionalUnaryOperator.NegateFloat64) break;
+        this.compileFloat64Expression(instructions, node.child0, environment);
+        instructions.emit(0x9a);
+        return;
+      case FunctionalCoreTag.Binary:
+        if (numericOperatorGroup(node.payload) !== "float-64") break;
+        this.compileFloat64Expression(instructions, node.child0, environment);
+        this.compileFloat64Expression(instructions, node.child1, environment);
+        this.emitNumericBinary(instructions, node.payload, nodeIndex);
+        return;
+      case FunctionalCoreTag.NumericConvert:
+        this.compileNumericConversion(instructions, node, environment, "float-64");
+        return;
+      case FunctionalCoreTag.If:
+        this.compileBooleanExpression(instructions, node.child0, environment);
+        instructions.emit(0x04, WasmValueType.F64);
+        this.compileFloat64Expression(instructions, node.child1, environment);
+        instructions.emit(0x05);
+        this.compileFloat64Expression(instructions, node.child2, environment);
+        instructions.emit(0x0b);
+        return;
+    }
+    this.compileExpression(instructions, nodeIndex, environment);
+    this.emitUnboxFloat64(instructions);
+  }
+
+  compileComparisonOperands(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    environment: FunctionalEnvironment,
+    nodeIndex: number,
+  ): void {
+    const group = numericOperatorGroup(node.payload);
+    if (group === "integer") {
+      this.compileIntegerExpression(instructions, node.child0, environment);
+      this.compileIntegerExpression(instructions, node.child1, environment);
+    } else if (group === "signed-integer-64") {
+      this.compileSignedInteger64Expression(instructions, node.child0, environment);
+      this.compileSignedInteger64Expression(instructions, node.child1, environment);
+    } else if (group === "float-32") {
+      this.compileFloat32Expression(instructions, node.child0, environment);
+      this.compileFloat32Expression(instructions, node.child1, environment);
+    } else {
+      this.compileFloat64Expression(instructions, node.child0, environment);
+      this.compileFloat64Expression(instructions, node.child1, environment);
+    }
+    this.emitNumericBinary(instructions, node.payload, nodeIndex);
+  }
+
+  compileNumericConversion(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    environment: FunctionalEnvironment,
+    expectedResult: NumericPrimitiveKind,
+  ): void {
+    const conversion = numericConversion(node.payload);
+    if (conversion.result !== expectedResult) {
+      throw new Error(
+        `functional WASM numeric conversion ${node.payload} produces ${conversion.result}; expected ${expectedResult}`,
+      );
+    }
+    if (conversion.source === "integer") {
+      this.compileIntegerExpression(instructions, node.child0, environment);
+    } else if (conversion.source === "signed-integer-64") {
+      this.compileSignedInteger64Expression(instructions, node.child0, environment);
+    } else if (conversion.source === "float-32") {
+      this.compileFloat32Expression(instructions, node.child0, environment);
+    } else {
+      this.compileFloat64Expression(instructions, node.child0, environment);
+    }
+    instructions.emit(conversion.opcode);
+  }
+
+  compileNumericConversionExpression(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    environment: FunctionalEnvironment,
+  ): void {
+    const result = numericConversion(node.payload).result;
+    if (result === "integer") {
+      this.compileNumericConversion(instructions, node, environment, result);
+      this.emitEncodeInteger(instructions);
+      return;
+    }
+    if (result === "signed-integer-64") {
+      this.compileNumericConversion(instructions, node, environment, result);
+      this.emitBoxSignedInteger64(instructions);
+      return;
+    }
+    if (result === "float-32") {
+      this.compileNumericConversion(instructions, node, environment, result);
+      this.emitBoxFloat32(instructions);
+      return;
+    }
+    this.compileNumericConversion(instructions, node, environment, result);
+    this.emitBoxFloat64(instructions);
+  }
+
+  emitNumericBinary(
+    instructions: WasmInstructions,
+    operator: number,
+    nodeIndex: number,
+  ): void {
+    const opcode = numericBinaryOpcode(operator);
+    if (opcode === undefined) {
+      throw new Error(
+        `functional WASM numeric operator ${operator} at core node ${nodeIndex} is unsupported`,
+      );
+    }
+    instructions.emit(opcode);
+  }
+
   compileBinary(
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
     environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
+    if (node.payload > FunctionalBinaryOperator.Divide) {
+      this.compileComparisonOperands(instructions, node, environment, nodeIndex);
+      if (isComparisonOperator(node.payload)) {
+        this.emitEncodeBoolean(instructions);
+        return;
+      }
+      const group = numericOperatorGroup(node.payload);
+      if (group === "signed-integer-64") this.emitBoxSignedInteger64(instructions);
+      else if (group === "float-32") this.emitBoxFloat32(instructions);
+      else if (group === "float-64") this.emitBoxFloat64(instructions);
+      else throw new Error(`functional WASM operator ${node.payload} has invalid numeric group`);
+      return;
+    }
     switch (node.payload) {
       case FunctionalBinaryOperator.Equal:
       case FunctionalBinaryOperator.NotEqual:
@@ -1742,6 +2118,9 @@ class FunctionalWasmCompiler {
   expressionIsWhnf(nodeIndex: number): boolean {
     switch (this.node(nodeIndex).tag) {
       case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.SignedInteger64:
+      case FunctionalCoreTag.Float32:
+      case FunctionalCoreTag.Float64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Lambda:
       case FunctionalCoreTag.Constructor:
@@ -1893,6 +2272,7 @@ class FunctionalWasmCompiler {
       case FunctionalCoreTag.Local:
         return node.payload === localDepth;
       case FunctionalCoreTag.Unary:
+      case FunctionalCoreTag.NumericConvert:
       case FunctionalCoreTag.Case:
       case FunctionalCoreTag.If:
         return this.immediatelyForcesLocal(node.child0, localDepth);
@@ -2060,11 +2440,24 @@ class FunctionalWasmCompiler {
 
   emitHostArgument(
     instructions: WasmInstructions,
-    type: FunctionalHostScalarType,
+    type: FunctionalHostType,
   ): void {
+    if (type.kind === "tuple" || type.kind === "named") return;
     if (type.kind === "unit") {
       instructions.emit(0x1a);
       instructions.i32Const(0);
+      return;
+    }
+    if (type.kind === "signed-integer-64") {
+      this.emitUnboxSignedInteger64(instructions);
+      return;
+    }
+    if (type.kind === "float-32") {
+      this.emitUnboxFloat32(instructions);
+      return;
+    }
+    if (type.kind === "float-64") {
+      this.emitUnboxFloat64(instructions);
       return;
     }
     this.emitDecodeInteger(instructions);
@@ -2072,10 +2465,23 @@ class FunctionalWasmCompiler {
 
   emitHostResult(
     instructions: WasmInstructions,
-    type: FunctionalHostScalarType,
+    type: FunctionalHostType,
   ): void {
+    if (type.kind === "tuple" || type.kind === "named") return;
     if (type.kind === "integer") {
       this.emitEncodeInteger(instructions);
+      return;
+    }
+    if (type.kind === "signed-integer-64") {
+      this.emitBoxSignedInteger64(instructions);
+      return;
+    }
+    if (type.kind === "float-32") {
+      this.emitBoxFloat32(instructions);
+      return;
+    }
+    if (type.kind === "float-64") {
+      this.emitBoxFloat64(instructions);
       return;
     }
     if (type.kind === "boolean") {
@@ -2115,6 +2521,69 @@ class FunctionalWasmCompiler {
     instructions.emit(0x86);
     instructions.i64Const(2n);
     instructions.emit(0x84);
+  }
+
+  emitBoxSignedInteger64(instructions: WasmInstructions): void {
+    const value = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(value);
+    const pointer = this.allocateObject(
+      instructions,
+      NUMERIC_OBJECT_KIND,
+      FunctionalWasmValueAbi.numericKinds.signedInteger64,
+      1,
+    );
+    instructions.localGet(pointer);
+    instructions.localGet(value);
+    instructions.i64Store(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.localGet(pointer);
+    instructions.emit(0xad);
+  }
+
+  emitBoxFloat32(instructions: WasmInstructions): void {
+    const value = instructions.addLocal(WasmValueType.F32);
+    instructions.localSet(value);
+    const pointer = this.allocateObject(
+      instructions,
+      NUMERIC_OBJECT_KIND,
+      FunctionalWasmValueAbi.numericKinds.float32,
+      1,
+    );
+    instructions.localGet(pointer);
+    instructions.localGet(value);
+    instructions.f32Store(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.localGet(pointer);
+    instructions.emit(0xad);
+  }
+
+  emitBoxFloat64(instructions: WasmInstructions): void {
+    const value = instructions.addLocal(WasmValueType.F64);
+    instructions.localSet(value);
+    const pointer = this.allocateObject(
+      instructions,
+      NUMERIC_OBJECT_KIND,
+      FunctionalWasmValueAbi.numericKinds.float64,
+      1,
+    );
+    instructions.localGet(pointer);
+    instructions.localGet(value);
+    instructions.f64Store(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.localGet(pointer);
+    instructions.emit(0xad);
+  }
+
+  emitUnboxSignedInteger64(instructions: WasmInstructions): void {
+    instructions.emit(0xa7);
+    instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH);
+  }
+
+  emitUnboxFloat32(instructions: WasmInstructions): void {
+    instructions.emit(0xa7);
+    instructions.f32Load(OBJECT_HEADER_BYTE_LENGTH);
+  }
+
+  emitUnboxFloat64(instructions: WasmInstructions): void {
+    instructions.emit(0xa7);
+    instructions.f64Load(OBJECT_HEADER_BYTE_LENGTH);
   }
 
   emitLambdaSetCall(
@@ -2399,6 +2868,16 @@ class FunctionalWasmCompiler {
     return slot;
   }
 
+  functionTypeIndex(parameters: readonly number[], results: readonly number[]): number {
+    const key = `${parameters.join(",")}->${results.join(",")}`;
+    const existing = this.#additionalFunctionTypeIndices.get(key);
+    if (existing !== undefined) return existing;
+    const index = BASE_WASM_FUNCTION_TYPE_COUNT + this.#additionalFunctionTypes.length;
+    this.#additionalFunctionTypes.push({ parameters: [...parameters], results: [...results] });
+    this.#additionalFunctionTypeIndices.set(key, index);
+    return index;
+  }
+
   allocateFunctionIndex(): number {
     this.#requestedAllocator = true;
     return this.#functionImports.length;
@@ -2425,41 +2904,146 @@ class FunctionalWasmCompiler {
 }
 
 function isComparisonOperator(operator: number): boolean {
-  return operator === FunctionalBinaryOperator.Equal ||
-    operator === FunctionalBinaryOperator.NotEqual ||
-    operator === FunctionalBinaryOperator.Less ||
-    operator === FunctionalBinaryOperator.LessEqual ||
-    operator === FunctionalBinaryOperator.Greater ||
-    operator === FunctionalBinaryOperator.GreaterEqual;
+  return operator >= 1 && operator <= 40 && (operator - 1) % 10 < 6;
+}
+
+type NumericPrimitiveKind = "integer" | "signed-integer-64" | "float-32" | "float-64";
+
+function numericOperatorGroup(operator: number): NumericPrimitiveKind {
+  if (operator >= 1 && operator <= 10) return "integer";
+  if (operator <= 20) return "signed-integer-64";
+  if (operator <= 30) return "float-32";
+  if (operator <= 40) return "float-64";
+  throw new RangeError(`functional numeric operator must be within [1, 40]; received ${operator}`);
+}
+
+function numericBinaryOpcode(operator: number): number | undefined {
+  const position = (operator - 1) % 10;
+  const group = numericOperatorGroup(operator);
+  const opcodes = group === "integer"
+    ? [0x46, 0x47, 0x48, 0x4c, 0x4a, 0x4e, 0x6a, 0x6b, 0x6c, undefined]
+    : group === "signed-integer-64"
+    ? [0x51, 0x52, 0x53, 0x57, 0x55, 0x59, 0x7c, 0x7d, 0x7e, 0x7f]
+    : group === "float-32"
+    ? [0x5b, 0x5c, 0x5d, 0x5f, 0x5e, 0x60, 0x92, 0x93, 0x94, 0x95]
+    : [0x61, 0x62, 0x63, 0x65, 0x64, 0x66, 0xa0, 0xa1, 0xa2, 0xa3];
+  return opcodes[position];
+}
+
+function numericConversion(
+  conversion: number,
+): {
+  readonly source: NumericPrimitiveKind;
+  readonly result: NumericPrimitiveKind;
+  readonly opcode: number;
+} {
+  switch (conversion) {
+    case FunctionalNumericConversion.SignedInteger32ToSignedInteger64:
+      return { source: "integer", result: "signed-integer-64", opcode: 0xac };
+    case FunctionalNumericConversion.SignedInteger64ToSignedInteger32:
+      return { source: "signed-integer-64", result: "integer", opcode: 0xa7 };
+    case FunctionalNumericConversion.SignedInteger32ToFloat32:
+      return { source: "integer", result: "float-32", opcode: 0xb2 };
+    case FunctionalNumericConversion.SignedInteger32ToFloat64:
+      return { source: "integer", result: "float-64", opcode: 0xb7 };
+    case FunctionalNumericConversion.SignedInteger64ToFloat32:
+      return { source: "signed-integer-64", result: "float-32", opcode: 0xb4 };
+    case FunctionalNumericConversion.SignedInteger64ToFloat64:
+      return { source: "signed-integer-64", result: "float-64", opcode: 0xb9 };
+    case FunctionalNumericConversion.Float32ToSignedInteger32:
+      return { source: "float-32", result: "integer", opcode: 0xa8 };
+    case FunctionalNumericConversion.Float32ToSignedInteger64:
+      return { source: "float-32", result: "signed-integer-64", opcode: 0xae };
+    case FunctionalNumericConversion.Float32ToFloat64:
+      return { source: "float-32", result: "float-64", opcode: 0xbb };
+    case FunctionalNumericConversion.Float64ToSignedInteger32:
+      return { source: "float-64", result: "integer", opcode: 0xaa };
+    case FunctionalNumericConversion.Float64ToSignedInteger64:
+      return { source: "float-64", result: "signed-integer-64", opcode: 0xb0 };
+    case FunctionalNumericConversion.Float64ToFloat32:
+      return { source: "float-64", result: "float-32", opcode: 0xb6 };
+    default:
+      throw new RangeError(
+        `functional numeric conversion must be within [1, 12]; received ${conversion}`,
+      );
+  }
+}
+
+function wideLiteralBits(node: FunctionalCoreNode): bigint {
+  return BigInt.asIntN(64, BigInt(node.payload) | BigInt(node.child0) << 32n);
+}
+
+function float32FromBits(bits: number): number {
+  const bytes = new ArrayBuffer(4);
+  const view = new DataView(bytes);
+  view.setUint32(0, bits, true);
+  return view.getFloat32(0, true);
+}
+
+function float64FromBits(bits: bigint): number {
+  const bytes = new ArrayBuffer(8);
+  const view = new DataView(bytes);
+  view.setBigUint64(0, BigInt.asUintN(64, bits), true);
+  return view.getFloat64(0, true);
+}
+
+function wasmValueType(type: FunctionalHostType): number {
+  switch (type.kind) {
+    case "integer":
+    case "boolean":
+    case "unit":
+      return WasmValueType.I32;
+    case "signed-integer-64":
+      return WasmValueType.I64;
+    case "float-32":
+      return WasmValueType.F32;
+    case "float-64":
+      return WasmValueType.F64;
+    case "tuple":
+    case "named":
+      return WasmValueType.I64;
+    case "parameter":
+    case "function":
+    case "forall":
+      throw new TypeError(`functional WASM host type ${type.kind} is not concrete first-order`);
+  }
 }
 
 function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasmEntry {
-  const scalarResult = functionalHostScalarType(module.entryType);
-  if (scalarResult !== undefined) {
+  if (module.entryType.kind !== "function") {
     if (module.hostCapabilities.length !== 0) {
       throw new TypeError(
         `functional WASM entry d${module.entryDefinition} declares ${module.hostCapabilities.length} host capabilities but does not accept ${FUNCTIONAL_INIT_TYPE_NAME}`,
       );
     }
-    return { takesInit: false, result: scalarResult };
-  }
-  if (module.entryType.kind !== "function") {
-    throw unsupportedWasmEntryType(module, module.entryType);
+    requireFirstOrderFunctionalWasmType(module, module.entryType, "entry result");
+    return { takesInit: false, result: module.entryType };
   }
   const parameter = module.entryType.parameter;
-  const result = functionalHostScalarType(module.entryType.result);
-  if (
-    parameter.kind !== "named" || parameter.name !== FUNCTIONAL_INIT_TYPE_NAME ||
-    parameter.arguments.length !== 0 || result === undefined
-  ) {
+  const takesInit = parameter.kind === "named" && parameter.name === FUNCTIONAL_INIT_TYPE_NAME &&
+    parameter.arguments.length === 0;
+  if (module.entryType.result.kind === "function") {
     throw unsupportedWasmEntryType(module, module.entryType);
   }
-  if (module.hostCapabilities.length === 0) {
+  if (takesInit) {
+    if (module.hostCapabilities.length === 0) {
+      throw new TypeError(
+        `functional WASM entry d${module.entryDefinition} accepts ${FUNCTIONAL_INIT_TYPE_NAME} but declares no host capabilities`,
+      );
+    }
+    requireFirstOrderFunctionalWasmType(module, module.entryType.result, "entry result");
+    return { takesInit: true, result: module.entryType.result };
+  }
+  if (module.hostCapabilities.length !== 0) {
     throw new TypeError(
-      `functional WASM entry d${module.entryDefinition} accepts ${FUNCTIONAL_INIT_TYPE_NAME} but declares no host capabilities`,
+      `functional WASM entry d${module.entryDefinition} declares host capabilities but accepts ${
+        describeFunctionalType(parameter)
+      } instead of ${FUNCTIONAL_INIT_TYPE_NAME}`,
     );
   }
-  return { takesInit: true, result };
+  requireFirstOrderFunctionalWasmType(module, parameter, "entry argument");
+  requireFirstOrderFunctionalWasmType(module, module.entryType.result, "entry result");
+  return { takesInit: false, parameter, result: module.entryType.result };
 }
 
 function unsupportedWasmEntryType(
@@ -2470,39 +3054,42 @@ function unsupportedWasmEntryType(
     `functional WASM entry d${module.entryDefinition} has unsupported type ${
       describeFunctionalType(type)
     }; ` +
-      `expected a scalar result or ${FUNCTIONAL_INIT_TYPE_NAME} -> scalar result`,
+      `expected a first-order result or ${FUNCTIONAL_INIT_TYPE_NAME} -> first-order result`,
   );
 }
 
 function functionalHostScalarType(type: FunctionalType): FunctionalHostScalarType | undefined {
-  if (type.kind === "integer" || type.kind === "boolean" || type.kind === "unit") return type;
+  if (
+    type.kind === "integer" || type.kind === "signed-integer-64" ||
+    type.kind === "float-32" || type.kind === "float-64" ||
+    type.kind === "boolean" || type.kind === "unit"
+  ) return type;
   return undefined;
 }
 
-function describeFunctionalType(type: FunctionalType): string {
-  switch (type.kind) {
-    case "integer":
-      return "integer";
-    case "boolean":
-      return "boolean";
-    case "unit":
-      return "unit";
-    case "named":
-      return type.arguments.length === 0
-        ? type.name
-        : `${type.name}(${type.arguments.map(describeFunctionalType).join(", ")})`;
-    case "tuple":
-      return `(${type.values.map(describeFunctionalType).join(", ")})`;
-    case "function":
-      return `${describeFunctionalType(type.parameter)} -> ${describeFunctionalType(type.result)}`;
-  }
-}
-
 function functionalWasmImports(
-  capabilities: readonly FunctionalHostCapabilityDeclaration[],
+  module: GpuFunctionalModule,
   init: FunctionalWasmInit | undefined,
-): Record<string, Record<string, CallableFunction>> {
-  if (capabilities.length === 0) return {};
+): {
+  readonly imports: Record<string, Record<string, CallableFunction>>;
+  bindInstance(instance: WebAssembly.Instance): void;
+} {
+  const capabilities = module.hostCapabilities;
+  let instance: WebAssembly.Instance | undefined;
+  const requireInstance = (): WebAssembly.Instance => {
+    if (instance === undefined) {
+      throw new Error("functional WASM host capability ran before module instantiation completed");
+    }
+    return instance;
+  };
+  const bridge = (imports: Record<string, Record<string, CallableFunction>>) => ({
+    imports,
+    bindInstance(value: WebAssembly.Instance): void {
+      if (instance !== undefined) throw new Error("functional WASM host bridge was bound twice");
+      instance = value;
+    },
+  });
+  if (capabilities.length === 0) return bridge({});
   if (init === undefined || init === null || typeof init !== "object") {
     throw new TypeError(
       `functional WASM module requires init capabilities ${
@@ -2535,8 +3122,17 @@ function functionalWasmImports(
             } expected ${declaration.type.kind}; received ${describeHostBinding(binding)}`,
           );
         }
-        const value = hostValueAsNumber(binding, declaration.type, key);
-        capabilityImports[declaration.name] = () => value;
+        capabilityImports[declaration.name] = () => {
+          if (declaration.type.kind === "tuple" || declaration.type.kind === "named") {
+            return encodeFunctionalWasmValue(
+              requireInstance(),
+              module,
+              concreteFunctionalType(declaration.type),
+              binding,
+            );
+          }
+          return hostValueAsNumber(binding, declaration.type, key);
+        };
         continue;
       }
       if (typeof binding !== "function") {
@@ -2546,30 +3142,62 @@ function functionalWasmImports(
           }`,
         );
       }
-      capabilityImports[declaration.name] = (argument: number) => {
-        const hostArgument = hostValueFromNumber(argument, declaration.parameter);
+      capabilityImports[declaration.name] = (argument: number | bigint) => {
+        const hostArgument = declaration.parameter.kind === "tuple" ||
+            declaration.parameter.kind === "named"
+          ? decodeFunctionalWasmValue(
+            requireInstance(),
+            module,
+            concreteFunctionalType(declaration.parameter),
+            argument,
+            2_047,
+          )
+          : hostValueFromNative(argument, declaration.parameter);
         const result = binding(hostArgument);
+        if (declaration.result.kind === "tuple" || declaration.result.kind === "named") {
+          return encodeFunctionalWasmValue(
+            requireInstance(),
+            module,
+            concreteFunctionalType(declaration.result),
+            result,
+          );
+        }
         return hostValueAsNumber(result, declaration.result, key);
       };
     }
   }
-  return imports;
+  return bridge(imports);
 }
 
-function hostValueFromNumber(
-  value: number,
-  type: FunctionalHostScalarType,
+function hostValueFromNative(
+  value: number | bigint,
+  type: FunctionalHostType,
 ): FunctionalWasmHostValue {
-  if (type.kind === "integer") return { kind: "integer", value: value | 0 };
-  if (type.kind === "boolean") return { kind: "boolean", value: value !== 0 };
+  if (type.kind === "tuple" || type.kind === "named") {
+    throw new TypeError("functional WASM aggregate host values require an instantiated module");
+  }
+  if (type.kind === "integer") return { kind: "integer", value: Number(value) | 0 };
+  if (type.kind === "signed-integer-64") {
+    return { kind: "signed-integer-64", value: BigInt(value) };
+  }
+  if (type.kind === "float-32") return { kind: "float-32", value: Number(value) };
+  if (type.kind === "float-64") return { kind: "float-64", value: Number(value) };
+  if (type.kind === "boolean") return { kind: "boolean", value: value !== 0 && value !== 0n };
   return { kind: "unit" };
 }
 
 function hostValueAsNumber(
   value: FunctionalWasmInitBinding,
-  expectedType: FunctionalHostScalarType,
+  expectedType: FunctionalHostType,
   field: string,
-): number {
+): number | bigint {
+  if (expectedType.kind === "tuple" || expectedType.kind === "named") {
+    throw new TypeError(
+      `functional WASM aggregate host field ${
+        JSON.stringify(field)
+      } requires an instantiated module`,
+    );
+  }
   if (value === null || typeof value !== "object" || typeof value === "function") {
     throw new TypeError(
       `functional WASM host field ${
@@ -2586,6 +3214,18 @@ function hostValueAsNumber(
   }
   if (value.kind === "unit") return 0;
   if (value.kind === "boolean") return value.value ? 1 : 0;
+  if (value.kind === "signed-integer-64") {
+    if (value.value < -0x8000000000000000n || value.value > 0x7fffffffffffffffn) {
+      throw new RangeError(
+        `functional WASM host field ${
+          JSON.stringify(field)
+        } returned ${value.value}; expected signed i64`,
+      );
+    }
+    return value.value;
+  }
+  if (value.kind === "float-32") return Math.fround(value.value);
+  if (value.kind === "float-64") return value.value;
   if (
     !Number.isSafeInteger(value.value) || value.value < -2_147_483_648 ||
     value.value > 2_147_483_647

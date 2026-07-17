@@ -104,6 +104,9 @@ export class FunctionalTypeNormalizer {
     consumeTransition(state);
     switch (expression.kind) {
       case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
       case "boolean":
       case "unit":
         return Object.freeze({ kind: "schema", schema: Object.freeze({ kind: expression.kind }) });
@@ -342,6 +345,9 @@ function inferExpressionKind(
   requireDepth(depth);
   switch (expression.kind) {
     case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
     case "boolean":
     case "unit":
       return TYPE_KIND;
@@ -501,6 +507,10 @@ function schemaTypeCoreType(schema: FunctionalTypeSchema): TypeCoreType {
     case "boolean":
     case "unit":
       return { kind: schema.kind };
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+      return { kind: "named", name: schema.kind, arguments: [] };
     case "parameter":
       throw new Error(
         `Functional associated type input contains unresolved parameter ${
@@ -574,6 +584,15 @@ function functionalSchemaAtDepth(
               JSON.stringify(type.name)
             } exceeds the maximum width of ${MAXIMUM_WIDTH}; received ${type.arguments.length} arguments`,
           );
+        }
+        if (type.arguments.length === 0 && type.name === "signed-integer-64") {
+          return Object.freeze({ kind: "signed-integer-64" });
+        }
+        if (type.arguments.length === 0 && type.name === "float-32") {
+          return Object.freeze({ kind: "float-32" });
+        }
+        if (type.arguments.length === 0 && type.name === "float-64") {
+          return Object.freeze({ kind: "float-64" });
         }
         return Object.freeze({
           kind: "named",

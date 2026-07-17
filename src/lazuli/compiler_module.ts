@@ -210,6 +210,10 @@ function deepFreeze<Value>(value: Value): Value {
 function decodeCoreTag(tag: number, nodeIndex: number): KnownLazuliCoreTag {
   switch (tag) {
     case LazuliCoreTag.Integer:
+    case LazuliCoreTag.SignedInteger64:
+    case LazuliCoreTag.Float32:
+    case LazuliCoreTag.Float64:
+    case LazuliCoreTag.NumericConvert:
     case LazuliCoreTag.Boolean:
     case LazuliCoreTag.Let:
     case LazuliCoreTag.If:

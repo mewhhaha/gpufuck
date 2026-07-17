@@ -116,6 +116,30 @@ Deno.test("normalizes associated family outputs selected by capability evidence"
   deepStrictEqual(normalized.schema, { kind: "integer" });
 });
 
+Deno.test("preserves wide numeric primitives through capability resolution", () => {
+  const signedInteger64 = {
+    kind: "type",
+    type: { kind: "named", name: "signed-integer-64", arguments: [] },
+  } as const;
+  const normalizer = new FunctionalTypeNormalizer(higherKindedProgram(), [{
+    id: "wide-identity",
+    predicate: "identity",
+    inputs: [signedInteger64],
+    outputs: [signedInteger64],
+    premises: [],
+    witness: { kind: "erased-proof" },
+  }]);
+
+  const normalized = normalizer.normalize({
+    kind: "associated",
+    predicate: "identity",
+    inputs: [{ kind: "signed-integer-64" }],
+    output: 0,
+  });
+
+  deepStrictEqual(normalized.schema, { kind: "signed-integer-64" });
+});
+
 Deno.test("bounds recursive higher-kinded type execution by transitions", () => {
   const recursive: FunctionalTypeProgram = {
     constructors: [],

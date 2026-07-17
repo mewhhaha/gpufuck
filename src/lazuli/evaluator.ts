@@ -402,6 +402,12 @@ function describeLazuliType(type: LazuliType): string {
   switch (type.kind) {
     case "integer":
       return "Integer";
+    case "signed-integer-64":
+      return "SignedInteger64";
+    case "float-32":
+      return "Float32";
+    case "float-64":
+      return "Float64";
     case "boolean":
       return "Boolean";
     case "unit":
@@ -447,6 +453,9 @@ function instantiateTypeSchema(
 ): LazuliType | undefined {
   switch (schema.kind) {
     case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
     case "boolean":
     case "unit":
       return schema;
@@ -481,6 +490,9 @@ function sameLazuliType(left: LazuliType, right: LazuliType): boolean {
   if (left.kind !== right.kind) return false;
   switch (left.kind) {
     case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
     case "boolean":
     case "unit":
       return true;
@@ -511,6 +523,9 @@ function matchConstructorResultSchema(
 ): boolean {
   switch (schema.kind) {
     case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
     case "boolean":
     case "unit":
       return schema.kind === type.kind;
@@ -666,6 +681,8 @@ function validateInputValue(
     if (expectedType.kind === "function") {
       return typeMismatch(path, expectedType, value);
     }
+
+    if (expectedType.kind !== "named") return typeMismatch(path, expectedType, value);
 
     if (enableCollectionSyntax && expectedType.name === "Text" && taggedValue.kind === "text") {
       const textValue = (value as { readonly value?: unknown }).value;

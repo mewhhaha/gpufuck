@@ -38,6 +38,7 @@ export {
   FunctionalEvaluationProfile,
   FunctionalExpressionTag,
   FunctionalNodeWord,
+  FunctionalNumericConversion,
   FunctionalPrimitiveCapability,
   type FunctionalSourceType,
   type FunctionalSpan,
@@ -69,12 +70,18 @@ export {
   runFunctionalWasmModule,
 } from "./src/functional/wasm_codegen.ts";
 export {
+  FUNCTIONAL_WASM_VALUE_ABI_VERSION,
+  FunctionalWasmValueAbi,
+  type FunctionalWasmValueAbiLayout,
+} from "./src/functional/wasm_abi.ts";
+export {
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
   type FunctionalHostCapabilityDeclaration,
   type FunctionalHostFieldDeclaration,
   type FunctionalHostOperationDeclaration,
   type FunctionalHostScalarType,
+  type FunctionalHostType,
   type FunctionalHostValueDeclaration,
   type FunctionalSurfaceModuleOptions,
   type FunctionalWasmHostOperation,
@@ -90,6 +97,15 @@ export {
   type FunctionalSurfaceTypeDeclaration,
   surface,
 } from "./src/functional/surface_builder.ts";
+export {
+  createFunctionalModuleArtifact,
+  type FunctionalLinkedSource,
+  type FunctionalModuleArtifact,
+  type FunctionalModuleExport,
+  type FunctionalModuleImport,
+  type LinkedFunctionalModule,
+  linkFunctionalModules,
+} from "./src/functional/module_linker.ts";
 export {
   type FunctionalBatchEvaluationOptions,
   type FunctionalDeepBatchEvaluationOptions,

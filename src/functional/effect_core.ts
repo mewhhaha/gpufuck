@@ -18,7 +18,7 @@ import {
   FunctionalEffectCoreStateWord,
   FunctionalEffectCoreStatus,
 } from "./effect_core_shader.ts";
-import type { FunctionalHostScalarType } from "./host_contract.ts";
+import type { FunctionalHostType } from "./host_contract.ts";
 
 const EFFECT_CORE_RESULT_WORD_LENGTH = 2;
 const EFFECT_CORE_STATE_BYTE_LENGTH = FUNCTIONAL_EFFECT_CORE_STATE_WORD_LENGTH * 4;
@@ -39,7 +39,7 @@ export interface FunctionalEffectCoreVerificationOptions {
 export type FunctionalEffectCoreVerification =
   | {
     readonly ok: true;
-    readonly type: FunctionalHostScalarType;
+    readonly type: FunctionalHostType;
     readonly effects: readonly string[];
     readonly transitions: number;
     readonly dispatches: number;
@@ -291,11 +291,14 @@ export class GpuFunctionalEffectCoreVerifier {
         options.signal?.throwIfAborted();
         if (status === FunctionalEffectCoreStatus.Pending) continue;
         if (status === FunctionalEffectCoreStatus.Complete) {
-          const type = scalarTypeFromTag(requiredWord(
-            snapshot,
-            FunctionalEffectCoreStateWord.RootType,
-            "root type",
-          ));
+          const type = scalarTypeFromTag(
+            prepared,
+            requiredWord(
+              snapshot,
+              FunctionalEffectCoreStateWord.RootType,
+              "root type",
+            ),
+          );
           const effectMask = requiredWord(
             snapshot,
             FunctionalEffectCoreStateWord.RootEffects,

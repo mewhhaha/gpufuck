@@ -2,6 +2,7 @@ import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
 
 import {
   FunctionalTypecheckingProfile,
+  type FunctionalWasmValue,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
@@ -312,13 +313,13 @@ Deno.test("renders 1SubML source and both functional IR stages side by side", as
 
 async function runExample(
   path: string,
-): Promise<{ readonly kind: string; readonly value?: number | boolean }> {
+): Promise<FunctionalWasmValue> {
   return await runSource(await Deno.readTextFile(path));
 }
 
 async function runSource(
   source: string,
-): Promise<{ readonly kind: string; readonly value?: number | boolean }> {
+): Promise<FunctionalWasmValue> {
   const lowered = requireLowered(source);
   const compilation = await onesubmlRuntime().compiler.compileModule(lowered.module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);

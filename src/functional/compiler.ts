@@ -559,6 +559,9 @@ function schemaContainsForall(schema: FunctionalTypeSchema): boolean {
     case "function":
       return schemaContainsForall(schema.parameter) || schemaContainsForall(schema.result);
     case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
     case "boolean":
     case "unit":
     case "parameter":

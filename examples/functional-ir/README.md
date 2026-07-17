@@ -12,6 +12,8 @@ These examples target the language-neutral APIs directly.
   bounded GPU Effect Core verifier, then runs the compiler-generated sequence through WASM.
 - [`host_init.ts`](host_init.ts) declares an effectful `Console.write` capability, GPU-typechecks an
   `Init -> Int` entry, imports the host operation into WASM, and forces it before returning 42.
+- [`numeric_values.ts`](numeric_values.ts) typechecks native `i64` arithmetic and conversion to
+  `f64`, then crosses the structured WASM boundary with an `i64 -> (i64, f64)` entry.
 
 Run them from the repository root:
 
@@ -20,4 +22,5 @@ deno run examples/functional-ir/type_program.ts
 deno run --allow-read examples/functional-ir/effects.ts
 deno run --allow-read examples/functional-ir/effect_core.ts
 deno run --allow-read examples/functional-ir/host_init.ts
+deno run --allow-read examples/functional-ir/numeric_values.ts
 ```

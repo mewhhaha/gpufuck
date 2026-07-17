@@ -66,6 +66,10 @@ export const LazuliSurfaceTag = {
   LetRec: 16,
   StrictLet: 17,
   StrictApply: 18,
+  SignedInteger64: 19,
+  Float32: 20,
+  Float64: 21,
+  NumericConvert: 22,
 } as const;
 
 export type LazuliSurfaceTag = (typeof LazuliSurfaceTag)[keyof typeof LazuliSurfaceTag];
@@ -86,6 +90,10 @@ export const LazuliCoreTag = {
   Global: 14,
   Constructor: 15,
   LetRec: LazuliSurfaceTag.LetRec,
+  SignedInteger64: LazuliSurfaceTag.SignedInteger64,
+  Float32: LazuliSurfaceTag.Float32,
+  Float64: LazuliSurfaceTag.Float64,
+  NumericConvert: LazuliSurfaceTag.NumericConvert,
 } as const;
 
 export type LazuliCoreTag = (typeof LazuliCoreTag)[keyof typeof LazuliCoreTag];
@@ -99,6 +107,9 @@ export type LazuliEvaluationMode = (typeof LazuliEvaluationMode)[keyof typeof La
 
 export const LazuliUnaryOperator = {
   Negate: 1,
+  NegateSignedInteger64: 2,
+  NegateFloat32: 3,
+  NegateFloat64: 4,
 } as const;
 
 export type LazuliUnaryOperator = (typeof LazuliUnaryOperator)[keyof typeof LazuliUnaryOperator];
@@ -114,9 +125,57 @@ export const LazuliBinaryOperator = {
   Subtract: 8,
   Multiply: 9,
   Divide: 10,
+  EqualSignedInteger64: 11,
+  NotEqualSignedInteger64: 12,
+  LessSignedInteger64: 13,
+  LessEqualSignedInteger64: 14,
+  GreaterSignedInteger64: 15,
+  GreaterEqualSignedInteger64: 16,
+  AddSignedInteger64: 17,
+  SubtractSignedInteger64: 18,
+  MultiplySignedInteger64: 19,
+  DivideSignedInteger64: 20,
+  EqualFloat32: 21,
+  NotEqualFloat32: 22,
+  LessFloat32: 23,
+  LessEqualFloat32: 24,
+  GreaterFloat32: 25,
+  GreaterEqualFloat32: 26,
+  AddFloat32: 27,
+  SubtractFloat32: 28,
+  MultiplyFloat32: 29,
+  DivideFloat32: 30,
+  EqualFloat64: 31,
+  NotEqualFloat64: 32,
+  LessFloat64: 33,
+  LessEqualFloat64: 34,
+  GreaterFloat64: 35,
+  GreaterEqualFloat64: 36,
+  AddFloat64: 37,
+  SubtractFloat64: 38,
+  MultiplyFloat64: 39,
+  DivideFloat64: 40,
 } as const;
 
 export type LazuliBinaryOperator = (typeof LazuliBinaryOperator)[keyof typeof LazuliBinaryOperator];
+
+export const LazuliNumericConversion = {
+  SignedInteger32ToSignedInteger64: 1,
+  SignedInteger64ToSignedInteger32: 2,
+  SignedInteger32ToFloat32: 3,
+  SignedInteger32ToFloat64: 4,
+  SignedInteger64ToFloat32: 5,
+  SignedInteger64ToFloat64: 6,
+  Float32ToSignedInteger32: 7,
+  Float32ToSignedInteger64: 8,
+  Float32ToFloat64: 9,
+  Float64ToSignedInteger32: 10,
+  Float64ToSignedInteger64: 11,
+  Float64ToFloat32: 12,
+} as const;
+
+export type LazuliNumericConversion =
+  (typeof LazuliNumericConversion)[keyof typeof LazuliNumericConversion];
 
 export interface LazuliSpan {
   readonly startByte: number;
@@ -144,6 +203,9 @@ export type LazuliDiagnosticCode =
 
 export type LazuliType =
   | { readonly kind: "integer" }
+  | { readonly kind: "signed-integer-64" }
+  | { readonly kind: "float-32" }
+  | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" }
   | { readonly kind: "tuple"; readonly values: readonly [LazuliType, LazuliType] }
@@ -156,6 +218,9 @@ export type LazuliType =
 
 export type LazuliTypeSchema =
   | { readonly kind: "integer" }
+  | { readonly kind: "signed-integer-64" }
+  | { readonly kind: "float-32" }
+  | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" }
   | { readonly kind: "parameter"; readonly name: string }

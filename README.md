@@ -5,12 +5,12 @@ language-specific desugaring; the library resolves names, infers and checks type
 the program to a numeric core, and emits an ordinary WebAssembly module. The resulting WASM runs
 without a GPU or this library.
 
-The portable surface supports strict eager and lazy call-by-need evaluation with signed `i32`,
-Boolean, unit, tuples, higher-order functions, immutable bindings, recursion, algebraic data,
-pattern matching, Hindley–Milner inference, indexed constructor results, and explicitly annotated
-predicative rank-N parameters. Each frontend chooses the module default and may override individual
-bindings or arguments. Read [Current constraints](#current-constraints-for-a-frontend) before
-choosing a public entry type.
+The portable surface supports strict eager and lazy call-by-need evaluation with signed `i32` and
+`i64`, IEEE-754 `f32` and `f64`, Boolean, unit, tuples, higher-order functions, immutable bindings,
+recursion, algebraic data, pattern matching, Hindley–Milner inference, indexed constructor results,
+and explicitly annotated predicative rank-N parameters. Each frontend chooses the module default and
+may override individual bindings or arguments. Read
+[Current constraints](#current-constraints-for-a-frontend) before choosing a public entry type.
 
 ```text
 source → your parser/AST → portable functional module → GPU resolution and typechecking
@@ -217,7 +217,7 @@ value is not part of the current surface.
 | Pattern match             | `case` with flat constructor binders; nest cases for nested patterns |
 | Local binding             | `let`                                                                |
 | Local recursive function  | `let-rec` whose value is a lambda                                    |
-| Module or record          | A generated immutable algebraic type, or frontend erasure            |
+| Module or record          | A generated immutable algebraic type, or a linked module artifact    |
 | Typeclass or trait        | Resolve statically or pass an explicit dictionary value              |
 | Effect                    | Lower to Effect Core or an explicit host capability                  |
 
@@ -284,16 +284,40 @@ fuel, dispatch-quantum, and cancellation bounds.
 
 - Strict eager and lazy call-by-need bindings and applications may be mixed in one module. A
   first-class `Thunk<T>` value and arbitrary `delay`/`force` expressions are not implemented.
-- Direct WASM execution currently exports only scalar `integer`, `boolean`, or `unit` results, with
-  an optional `Init -> scalar` entry. Algebraic values and higher-order functions are supported
-  internally but do not yet have a public structured WASM result ABI.
-- The core integer is wrapping signed `i32`. Numeric classes, overflow policies, floats, and wider
-  integers are frontend work until corresponding primitive profiles exist.
-- Mutation, ownership, exceptions, async suspension, layout, FFI, and garbage collection are not
-  implicit backend services. Lower them explicitly or reject them at your frontend boundary.
+- Direct WASM execution accepts and returns concrete first-order values. Scalars use native WASM
+  values; tuples and nominal constructors use the versioned `FunctionalWasmValueAbi` memory layout.
+  Higher-order functions remain internal and cannot cross the public WASM boundary.
+- Primitive numeric profiles include wrapping signed `i32`, signed `i64`, IEEE-754 `f32`, and
+  IEEE-754 `f64`, with typed comparisons, arithmetic, negation, and explicit conversions. A frontend
+  still owns numeric-class defaulting and its source language's overflow policy.
+- The bounded GPU graph evaluator remains an `i32`/Boolean/unit/algebraic-value oracle. Wide numeric
+  programs are typechecked on the GPU and executed by the WASM backend; the evaluator rejects their
+  primitive nodes instead of silently narrowing them.
+- Mutation, ownership, exceptions, async suspension, source layout, FFI, and garbage collection are
+  not implicit backend services. Lower them explicitly or reject them at your frontend boundary.
 - Semantic compilation requires WebGPU. The emitted WASM does not.
 
 See [Deliberate limits](#deliberate-limits) for exact structural and runtime bounds.
+
+### Link separately prepared modules
+
+`createFunctionalModuleArtifact()` validates one frontend module's definitions, nominal types, typed
+imports, and typed exports without introducing source-language module semantics. Link artifacts with
+`linkFunctionalModules()` before GPU compilation:
+
+```ts
+const linked = linkFunctionalModules([libraryArtifact, applicationArtifact], {
+  module: "application",
+  exportName: "main",
+});
+const result = await compiler.compileModule(linked.module);
+```
+
+Every definition, type, and constructor receives a module-qualified core name. Import aliases become
+annotated boundary definitions, so the GPU checks the importing module's declared contract against
+the exported implementation. `linked.sources` maps aggregate UTF-8 byte offsets back to the
+originating module. This is link-before-GPU whole-program compilation; independently emitted WASM
+object files and dynamic WASM linking are not part of this artifact format.
 
 ## Learn from the included frontends
 
@@ -475,10 +499,10 @@ phase and batching differences.
 
 `GpuFunctionalCompiler.compileEffectModule()` accepts a portable Effect Core built from `return`,
 `host-call`, `perform`, `bind`, `branch`, and `handle`. A separate persistent GPU pass validates one
-computation record per transition. Its bottom-up phase checks scalar operation inputs and branch
-results while inferring the operation row; its linear phase requires the root to have no parent and
-every other computation exactly one. Reused or cyclic computation records therefore fail before
-lowering.
+computation record per transition. Its bottom-up phase checks canonical first-order operation types
+and branch results while inferring the operation row; its linear phase requires the root to have no
+parent and every other computation exactly one. Reused or cyclic computation records therefore fail
+before lowering.
 
 Handlers are ordinary `parameter -> result` functions. The shared lowering creates their
 continuations, so user code cannot discard or invoke a resumption twice. Unhandled local operations
@@ -505,8 +529,9 @@ deno run --allow-read examples/functional-ir/effect_core.ts
 `lowerFunctionalEffectProgram()` remains as a small host-only lowering utility. New frontends should
 prefer Effect Core when they need GPU-verified rows, linear sequencing, fuel, or cancellation.
 Handled algebraic effects stay inside the compiled module. Operations that escape to the host use
-the `Init` capability boundary below; suspended async resumptions are not yet part of this
-synchronous protocol.
+the `Init` capability boundary below. A host operation may declare `execution: "suspending"` so a
+frontend can retain an explicit async-resumption boundary; direct WASM emission rejects that
+boundary with its capability name because the current executable protocol is synchronous.
 
 ### Host capabilities and `Init`
 
@@ -519,9 +544,10 @@ every use of a host field without needing host-specific inference rules or core 
 
 `runFunctionalWasmModule(module, { init })` validates the supplied capability and field names before
 instantiation. Immutable values are read once while constructing `Init`. Operations become direct
-WASM imports under `functional_init:<capability>` and receive and return tagged API values. The
-current host ABI supports `integer`, `boolean`, and `unit` fields, is synchronous, and propagates
-host exceptions to the caller.
+WASM imports under `functional_init:<capability>` and receive and return the same values accepted by
+`runFunctionalWasmModule()`. The host ABI supports `i32`, `i64`, `f32`, `f64`, boolean, unit, tuple,
+and nominal constructor fields and operations. It is synchronous and propagates host exceptions to
+the caller.
 
 Purity is a frontend contract recorded on each operation as `pure` or `effectful`; the backend never
 guesses it from a JavaScript implementation. The language decides which operations are effects and
@@ -711,17 +737,18 @@ canonical-schema, positive/negative subsumption, fuel, and dispatch-quantum test
 syntax-specific desugaring, structural schema packing, and WASM byte emission remain host-side;
 semantic resolution, type inference, and core lowering are GPU-side.
 
-The direct WASM backend currently exports scalar `integer`, `boolean`, and `unit` entries, including
-entries shaped as `$FunctionalInitType -> scalar`. Its runtime representation supports higher-order
-closures and algebraic data internally, which is why all checked-in Rust, Haskell, and OCaml
-examples can return their final integer through `main()`. Lazy-profile globals, bindings, function
-arguments, and constructor fields compile to specialized WASM thunks. Each thunk carries a direct
-code-table slot and captured environment; its first force transitions from unevaluated through
-evaluating to a cached value, and recursive forcing traps as a blackhole. Force sites inline the
-evaluated fast path. Closure conversion captures only referenced lexical bindings and forwards
-existing local or global suspensions without wrapping them. Immediately applied lambdas and
-statically saturated constructors lower directly, partial constructors emit only their remaining
-application stages, and repeated nullary constructors share one immutable object.
+The direct WASM backend exports concrete first-order entries, including ordinary
+`argument -> result` functions and entries shaped as `$FunctionalInitType -> result`.
+`runFunctionalWasmModule()` writes structured arguments into the public value ABI and recursively
+decodes structured results within `maximumResultNodes`. Its runtime representation also supports
+higher-order closures internally. Lazy-profile globals, bindings, function arguments, and
+constructor fields compile to specialized WASM thunks. Each thunk carries a direct code-table slot
+and captured environment; its first force transitions from unevaluated through evaluating to a
+cached value, and recursive forcing traps as a blackhole. Force sites inline the evaluated fast
+path. Closure conversion captures only referenced lexical bindings and forwards existing local or
+global suspensions without wrapping them. Immediately applied lambdas and statically saturated
+constructors lower directly, partial constructors emit only their remaining application stages, and
+repeated nullary constructors share one immutable object.
 
 ## Bounded work, latency, and batching
 
@@ -819,9 +846,10 @@ thunk and allocation counters.
 deno task bench:functional-wasm
 ```
 
-The paired benchmark emits and runs a 1,000-iteration higher-order loop beside its direct
-first-order equivalent. It keeps both WASM emission cost and residual abstraction overhead visible
-as the specialization pass evolves.
+The benchmark emits and runs a 1,000-iteration higher-order loop, its direct first-order form, an
+uncurried tail worker, and a hand-written structured-control-flow WASM loop. The last pair
+determines whether another CFG/SSA IR would currently buy runtime performance rather than merely add
+a compiler stage.
 
 ## Packed ABI reference
 
@@ -1057,9 +1085,10 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
 
 ## Deliberate limits
 
-- Effect Core v1 supports synchronous `integer`, `boolean`, and `unit` operation signatures with at
-  most 32 distinct effectful operations per module. Higher-order operation values, open effect-row
-  variables, and suspended asynchronous resumptions remain frontend concerns for now.
+- Effect Core supports concrete first-order scalar, tuple, and nominal operation signatures with at
+  most 32 distinct effectful operations per module. Higher-order operation values and open
+  effect-row variables remain frontend concerns. Suspending host operations are represented at the
+  boundary but require a frontend runtime rather than the synchronous direct WASM runner.
 - Source is capped at 1 MiB, surface trees at 65,536 nodes, semantic depth at 512, and constructor
   arity at 64. Extremely deep concrete syntax can reach the generated parser's stack-safe limit
   sooner and returns `F1003` through the neutral API.
@@ -1079,9 +1108,10 @@ from `deno fmt` so regeneration remains byte-for-byte reproducible with that pub
 - Pattern fields are flat binders; nested destructuring is expressed with a nested `case`.
 - Structured constructor results report only their outer constructor by default; opt-in deep results
   force and serialize fields within `maximumResultNodes`.
-- Direct WASM execution currently requires a scalar entry or an `Init -> scalar` entry. Structured
-  values are lazy internally, but a public structured-result serialization ABI is not implemented
-  yet. Host capability fields are likewise limited to synchronous scalar values and operations.
+- Direct WASM execution accepts one concrete first-order argument and result, or an `Init -> result`
+  entry. `FunctionalWasmValueAbi` v1 defines the shared eight-byte values, sixteen-byte object
+  headers, constructor fields, and boxed wide numerics used by arguments, results, and host
+  capabilities. Cyclic structured results and higher-order boundary values are rejected.
 - Direct WASM execution is synchronous and currently relies on the engine's stack and memory traps;
   fuel, cancellation, and an explicit linear-memory ceiling remain features of the GPU evaluator.
 - A run has bounded fuel, heap, and continuation stack. It has no in-run collector or free list.

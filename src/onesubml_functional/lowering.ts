@@ -508,14 +508,23 @@ class OneSubmlFunctionalLowering {
     const body = this.lowerExpression(expression.body, bodyShapes, globalShapes);
     if (expression.pattern.kind === "name") {
       const name = expression.pattern.name ?? this.temporary("ignored");
-      return {
-        expression: {
-          kind: expression.recursive ? "let-rec" : "let",
+      const binding: FunctionalSurfaceExpression = expression.recursive
+        ? {
+          kind: "let-rec",
           name,
           value: value.expression,
           body: body.expression,
           span: expression.span,
-        },
+        }
+        : {
+          kind: "let",
+          name,
+          value: value.expression,
+          body: body.expression,
+          span: expression.span,
+        };
+      return {
+        expression: binding,
         shape: body.shape,
       };
     }
