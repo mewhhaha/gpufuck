@@ -33,6 +33,7 @@ import { FunctionalLambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 import {
   type FunctionalCallArgument,
   type FunctionalFunctionShape,
+  type FunctionalNumericFold,
   FunctionalWasmFunctionAnalysis,
 } from "./wasm_function_analysis.ts";
 
@@ -47,8 +48,6 @@ const OBJECT_HEADER_BYTE_LENGTH = 16;
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = 8;
 const BASE_WASM_FUNCTION_TYPE_COUNT = 5;
-const COMPACT_ENTRY_INITIALIZED_GLOBAL = 4;
-const COMPACT_ENTRY_RESULT_GLOBAL = 5;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
 
@@ -328,23 +327,11 @@ class FunctionalWasmCompiler {
       );
     }
     const entryInstructions = new WasmInstructions(0);
-    const result = entryInstructions.addLocal(WasmValueType.I32);
-    entryInstructions.globalGet(COMPACT_ENTRY_INITIALIZED_GLOBAL);
-    entryInstructions.emit(0x04, WasmValueType.I32);
-    entryInstructions.globalGet(COMPACT_ENTRY_RESULT_GLOBAL);
-    entryInstructions.emit(0x05);
     if (this.#entry.result.kind === "integer") {
       this.compileIntegerExpression(entryInstructions, entryRoot, []);
     } else {
       this.compileBooleanExpression(entryInstructions, entryRoot, []);
     }
-    entryInstructions.localSet(result);
-    entryInstructions.localGet(result);
-    entryInstructions.globalSet(COMPACT_ENTRY_RESULT_GLOBAL);
-    entryInstructions.i32Const(1);
-    entryInstructions.globalSet(COMPACT_ENTRY_INITIALIZED_GLOBAL);
-    entryInstructions.localGet(result);
-    entryInstructions.emit(0x0b);
 
     const entryBody = functionBody(3, entryInstructions, "compact scalar entry");
     const emittedFunctions = [
@@ -899,7 +886,15 @@ class FunctionalWasmCompiler {
 
     const tailLoop = this.#functionAnalysis.loop(functionShape.innerLambdaNode);
     if (tailLoop === undefined) {
-      this.compileExpression(instructions, functionShape.bodyNode, bodyEnvironment);
+      const numericFold = this.#compactScalar &&
+          this.isUnboxedNumericParameter(functionShape, 0)
+        ? this.#functionAnalysis.numericFold(functionShape.innerLambdaNode)
+        : undefined;
+      if (numericFold === undefined) {
+        this.compileExpression(instructions, functionShape.bodyNode, bodyEnvironment);
+      } else {
+        this.compileNumericFoldLoop(instructions, bodyEnvironment, numericFold);
+      }
     } else {
       this.compileTailLoop(instructions, functionShape.bodyNode, bodyEnvironment, tailLoop);
     }
@@ -917,6 +912,76 @@ class FunctionalWasmCompiler {
       `uncurried worker for lambda core node ${functionShape.outerLambdaNode}`,
     );
     return slot;
+  }
+
+  compileNumericFoldLoop(
+    instructions: WasmInstructions,
+    environment: FunctionalEnvironment,
+    fold: FunctionalNumericFold,
+  ): void {
+    const parameterSource = environment[0];
+    if (parameterSource?.kind !== "i32-integer") {
+      throw new Error(
+        `functional WASM numeric fold ${fold.functionShape.outerLambdaNode} omitted its unboxed parameter`,
+      );
+    }
+    const accumulator = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(fold.operator === FunctionalBinaryOperator.Add ? 0 : 1);
+    instructions.localSet(accumulator);
+
+    instructions.emit(0x02, WasmValueType.I64, 0x03, 0x40);
+    this.compileBooleanExpression(instructions, fold.conditionNode, environment);
+    instructions.emit(0x04, 0x40);
+    this.compileNumericFoldBranch(
+      instructions,
+      environment,
+      fold,
+      parameterSource.index,
+      accumulator,
+      fold.recurseWhenTrue,
+    );
+    instructions.emit(0x05);
+    this.compileNumericFoldBranch(
+      instructions,
+      environment,
+      fold,
+      parameterSource.index,
+      accumulator,
+      !fold.recurseWhenTrue,
+    );
+    instructions.emit(0x0b, 0x0b, 0x00, 0x0b);
+  }
+
+  compileNumericFoldBranch(
+    instructions: WasmInstructions,
+    environment: FunctionalEnvironment,
+    fold: FunctionalNumericFold,
+    parameter: number,
+    accumulator: number,
+    recursive: boolean,
+  ): void {
+    if (!recursive) {
+      instructions.localGet(accumulator);
+      this.compileIntegerExpression(instructions, fold.baseNode, environment);
+      instructions.emit(fold.operator === FunctionalBinaryOperator.Add ? 0x6a : 0x6c);
+      this.emitEncodeInteger(instructions);
+      instructions.branch(2);
+      return;
+    }
+
+    this.compileIntegerExpression(instructions, fold.contributionNode, environment);
+    const contribution = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(contribution);
+    this.compileIntegerExpression(instructions, fold.recursiveArgument.node, environment);
+    const nextParameter = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(nextParameter);
+    instructions.localGet(accumulator);
+    instructions.localGet(contribution);
+    instructions.emit(fold.operator === FunctionalBinaryOperator.Add ? 0x6a : 0x6c);
+    instructions.localSet(accumulator);
+    instructions.localGet(nextParameter);
+    instructions.localSet(parameter);
+    instructions.branch(1);
   }
 
   isUnboxedNumericParameter(functionShape: FunctionalFunctionShape, parameter: number): boolean {

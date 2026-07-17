@@ -231,8 +231,6 @@ export function encodeCompactScalarWasmModule(
           ...encodeSigned(BigInt(specializedCallSiteCount)),
           0x0b,
         ],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
       ]),
     ),
     section(

@@ -7,6 +7,10 @@ import {
 } from "./abi.ts";
 import type { FunctionalCoreNode } from "./compiler_module.ts";
 
+type FunctionalNumericFoldOperator =
+  | typeof FunctionalBinaryOperator.Add
+  | typeof FunctionalBinaryOperator.Multiply;
+
 export interface FunctionalFunctionShape {
   readonly outerLambdaNode: number;
   readonly innerLambdaNode: number;
@@ -23,10 +27,21 @@ export interface FunctionalCallArgument {
   readonly evaluationMode: FunctionalEvaluationModeValue;
 }
 
+export interface FunctionalNumericFold {
+  readonly functionShape: FunctionalFunctionShape;
+  readonly operator: FunctionalNumericFoldOperator;
+  readonly conditionNode: number;
+  readonly baseNode: number;
+  readonly contributionNode: number;
+  readonly recursiveArgument: FunctionalCallArgument;
+  readonly recurseWhenTrue: boolean;
+}
+
 export class FunctionalWasmFunctionAnalysis {
   readonly #nodes: readonly FunctionalCoreNode[];
   readonly #functions = new Map<number, FunctionalFunctionShape>();
   readonly #loops = new Map<number, FunctionalFunctionShape>();
+  readonly #numericFolds = new Map<number, FunctionalNumericFold>();
   readonly #recursiveFunctions = new Map<
     number,
     { readonly local: boolean; readonly definition: number | undefined }
@@ -53,6 +68,10 @@ export class FunctionalWasmFunctionAnalysis {
 
   loop(lambdaNode: number): FunctionalFunctionShape | undefined {
     return this.#loops.get(lambdaNode);
+  }
+
+  numericFold(lambdaNode: number): FunctionalNumericFold | undefined {
+    return this.#numericFolds.get(lambdaNode);
   }
 
   tailArguments(
@@ -108,7 +127,7 @@ export class FunctionalWasmFunctionAnalysis {
 
   hasOnlySaturatedSelfReferences(functionShape: FunctionalFunctionShape): boolean {
     return functionShape.parameterCount >= 1 &&
-      !this.#containsUnsaturatedSelfReference(functionShape.bodyNode, functionShape, 0);
+      !this.#containsSelfReference(functionShape.bodyNode, functionShape, 0, "unsaturated");
   }
 
   #registerFunction(outerLambdaNode: number): FunctionalFunctionShape | undefined {
@@ -151,16 +170,81 @@ export class FunctionalWasmFunctionAnalysis {
       numericParameters: Object.freeze(this.#numericParameters(bodyNode, parameterCount)),
     };
     this.#functions.set(outerLambdaNode, functionShape);
-    if (tailRecursive) this.#loops.set(innermostLambda, functionShape);
+    if (tailRecursive) {
+      this.#loops.set(innermostLambda, functionShape);
+    } else {
+      const numericFold = this.#numericFold(functionShape);
+      if (numericFold !== undefined) this.#numericFolds.set(innermostLambda, numericFold);
+    }
     return functionShape;
   }
 
-  #containsUnsaturatedSelfReference(
+  #numericFold(functionShape: FunctionalFunctionShape): FunctionalNumericFold | undefined {
+    if (functionShape.parameterCount !== 1) return undefined;
+    const body = this.#node(functionShape.bodyNode);
+    if (body.tag !== FunctionalCoreTag.If) return undefined;
+    if (this.#containsSelfReference(body.child0, functionShape, 0, "any")) return undefined;
+
+    const consequent = this.#numericFoldStep(body.child1, functionShape);
+    const alternate = this.#numericFoldStep(body.child2, functionShape);
+    if ((consequent === undefined) === (alternate === undefined)) return undefined;
+    const step = consequent ?? alternate;
+    if (step === undefined) return undefined;
+    const baseNode = consequent === undefined ? body.child1 : body.child2;
+    if (this.#containsSelfReference(baseNode, functionShape, 0, "any")) return undefined;
+    return {
+      functionShape,
+      operator: step.operator,
+      conditionNode: body.child0,
+      baseNode,
+      contributionNode: step.contributionNode,
+      recursiveArgument: step.recursiveArgument,
+      recurseWhenTrue: consequent !== undefined,
+    };
+  }
+
+  #numericFoldStep(
+    nodeIndex: number,
+    functionShape: FunctionalFunctionShape,
+  ):
+    | {
+      readonly operator: FunctionalNumericFoldOperator;
+      readonly contributionNode: number;
+      readonly recursiveArgument: FunctionalCallArgument;
+    }
+    | undefined {
+    const node = this.#node(nodeIndex);
+    if (
+      node.tag !== FunctionalCoreTag.Binary ||
+      (node.payload !== FunctionalBinaryOperator.Add &&
+        node.payload !== FunctionalBinaryOperator.Multiply)
+    ) return undefined;
+
+    const rightRecursiveArguments = this.tailArguments(node.child1, functionShape, 0);
+    if (rightRecursiveArguments === undefined) return undefined;
+    const recursiveArgument = rightRecursiveArguments[0];
+    if (recursiveArgument === undefined) return undefined;
+    if (this.#containsSelfReference(recursiveArgument.node, functionShape, 0, "any")) {
+      return undefined;
+    }
+    const contributionNode = node.child0;
+    if (this.#containsSelfReference(contributionNode, functionShape, 0, "any")) return undefined;
+    return {
+      operator: node.payload,
+      contributionNode,
+      recursiveArgument,
+    };
+  }
+
+  #containsSelfReference(
     nodeIndex: number,
     functionShape: FunctionalFunctionShape,
     binderDepth: number,
+    scope: "any" | "unsaturated",
   ): boolean {
-    if (this.tailArguments(nodeIndex, functionShape, binderDepth) !== undefined) return false;
+    if (this.tailArguments(nodeIndex, functionShape, binderDepth) !== undefined) {
+      return scope === "any";
+    }
     const node = this.#node(nodeIndex);
     if (node.tag === FunctionalCoreTag.Local) {
       return functionShape.recursiveLocal &&
@@ -176,62 +260,73 @@ export class FunctionalWasmFunctionAnalysis {
       case FunctionalCoreTag.Constructor:
         return false;
       case FunctionalCoreTag.Unary:
-        return this.#containsUnsaturatedSelfReference(
+        return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth,
+          scope,
         );
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.Apply:
-        return this.#containsUnsaturatedSelfReference(
+        return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth,
-        ) || this.#containsUnsaturatedSelfReference(
+          scope,
+        ) || this.#containsSelfReference(
           node.child1,
           functionShape,
           binderDepth,
+          scope,
         );
       case FunctionalCoreTag.If:
-        return this.#containsUnsaturatedSelfReference(
+        return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth,
-        ) || this.#containsUnsaturatedSelfReference(
+          scope,
+        ) || this.#containsSelfReference(
           node.child1,
           functionShape,
           binderDepth,
-        ) || this.#containsUnsaturatedSelfReference(
+          scope,
+        ) || this.#containsSelfReference(
           node.child2,
           functionShape,
           binderDepth,
+          scope,
         );
       case FunctionalCoreTag.Lambda:
       case FunctionalCoreTag.PatternBind:
-        return this.#containsUnsaturatedSelfReference(
+        return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth + 1,
+          scope,
         );
       case FunctionalCoreTag.Let:
-        return this.#containsUnsaturatedSelfReference(
+        return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth,
-        ) || this.#containsUnsaturatedSelfReference(
+          scope,
+        ) || this.#containsSelfReference(
           node.child1,
           functionShape,
           binderDepth + 1,
+          scope,
         );
       case FunctionalCoreTag.LetRec:
-        return this.#containsUnsaturatedSelfReference(
+        return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth + 1,
-        ) || this.#containsUnsaturatedSelfReference(
+          scope,
+        ) || this.#containsSelfReference(
           node.child1,
           functionShape,
           binderDepth + 1,
+          scope,
         );
       case FunctionalCoreTag.Case:
       case FunctionalCoreTag.CaseArm:

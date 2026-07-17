@@ -949,6 +949,68 @@ Deno.test("strict scalar tail loops omit the lazy WebAssembly runtime", async ()
   equal((execution.instance.exports.main as () => number)(), 4_138);
 });
 
+Deno.test("strict numeric recursive folds run in constant space", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "sum",
+    value: surface.lambda("remaining", {
+      kind: "if",
+      condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+      consequent: surface.integer(0),
+      alternate: surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.name("remaining"),
+        surface.apply(
+          surface.name("sum"),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("remaining"),
+            surface.integer(1),
+          ),
+        ),
+      ),
+    }),
+    body: surface.apply(surface.name("sum"), surface.integer(100_000)),
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 705_082_704 });
+  equal(execution.stats.thunkEvaluations, 0);
+  equal(execution.stats.allocatedBytes, 0);
+  equal(
+    WebAssembly.Module.exports(new WebAssembly.Module(execution.bytes)).some((entry) =>
+      entry.kind === "memory"
+    ),
+    false,
+  );
+});
+
+Deno.test("strict multiplicative recursive folds preserve integer results", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "factorial",
+    value: surface.lambda("value", {
+      kind: "if",
+      condition: surface.equal(surface.name("value"), surface.integer(0)),
+      consequent: surface.integer(1),
+      alternate: surface.binary(
+        FunctionalBinaryOperator.Multiply,
+        surface.name("value"),
+        surface.apply(
+          surface.name("factorial"),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("value"),
+            surface.integer(1),
+          ),
+        ),
+      ),
+    }),
+    body: surface.apply(surface.name("factorial"), surface.integer(12)),
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 479_001_600 });
+});
+
 Deno.test("known global tail recursion uses one uncurried worker", async () => {
   const module = buildFunctionalSurfaceModule(
     [
