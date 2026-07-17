@@ -34,6 +34,7 @@ export {
   FunctionalDefinitionWord,
   type FunctionalDiagnostic,
   type FunctionalDiagnosticCode,
+  FunctionalEvaluationMode,
   FunctionalEvaluationProfile,
   FunctionalExpressionTag,
   FunctionalNodeWord,

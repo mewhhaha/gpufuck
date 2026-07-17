@@ -1,4 +1,4 @@
-import type { FunctionalTypeSchema } from "./abi.ts";
+import type { FunctionalEvaluationProfile, FunctionalTypeSchema } from "./abi.ts";
 
 export const FUNCTIONAL_INIT_TYPE_NAME = "$FunctionalInitType";
 export const FUNCTIONAL_INIT_CONSTRUCTOR_NAME = "$FunctionalInit";
@@ -33,6 +33,7 @@ export interface FunctionalHostCapabilityDeclaration {
 
 export interface FunctionalSurfaceModuleOptions {
   readonly hostCapabilities?: readonly FunctionalHostCapabilityDeclaration[];
+  readonly evaluationProfile?: FunctionalEvaluationProfile;
 }
 
 export type FunctionalWasmHostOperation = (

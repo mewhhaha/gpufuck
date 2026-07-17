@@ -3,6 +3,7 @@ import {
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
+  FunctionalEvaluationProfile,
   type FunctionalSpan,
   type FunctionalTypeSchema,
 } from "../functional/abi.ts";
@@ -145,6 +146,7 @@ class HaskellFunctionalLowering {
         typeDeclarations,
         "gpuMain",
         this.program.span.endByte,
+        { evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed },
       ),
     };
   }

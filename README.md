@@ -5,11 +5,12 @@ language-specific desugaring; the library resolves names, infers and checks type
 the program to a numeric core, and emits an ordinary WebAssembly module. The resulting WASM runs
 without a GPU or this library.
 
-The current semantic profile is lazy call-by-need with signed `i32`, Boolean, unit, tuples,
-higher-order functions, immutable bindings, recursion, algebraic data, pattern matching,
-Hindley–Milner inference, indexed constructor results, and explicitly annotated predicative rank-N
-parameters. Read [Current constraints](#current-constraints-for-a-frontend) before targeting a
-strict language or choosing a public entry type.
+The portable surface supports strict eager and lazy call-by-need evaluation with signed `i32`,
+Boolean, unit, tuples, higher-order functions, immutable bindings, recursion, algebraic data,
+pattern matching, Hindley–Milner inference, indexed constructor results, and explicitly annotated
+predicative rank-N parameters. Each frontend chooses the module default and may override individual
+bindings or arguments. Read [Current constraints](#current-constraints-for-a-frontend) before
+choosing a public entry type.
 
 ```text
 source → your parser/AST → portable functional module → GPU resolution and typechecking
@@ -75,6 +76,7 @@ import {
   buildFunctionalSurfaceModule,
   compileFunctionalModuleToWasm,
   FunctionalBinaryOperator,
+  FunctionalEvaluationProfile,
   GpuFunctionalCompiler,
   requestWebGpuDevice,
   surface,
@@ -95,6 +97,7 @@ const encodedModule = buildFunctionalSurfaceModule(
   [],
   "main",
   new TextEncoder().encode(source).byteLength,
+  { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
 );
 
 const device = await requestWebGpuDevice();
@@ -145,9 +148,10 @@ Your frontend should perform syntax-specific work and stop at the functional sur
 1. Parse source into your AST and enforce source-language scoping rules that differ from the core.
 2. Desugar language conveniences into unary functions, immutable bindings, applications,
    conditionals, constructors, and cases.
-3. Convert source type declarations and optional annotations into `FunctionalTypeSchema` values.
-4. Call `buildFunctionalSurfaceModule()` or encode the ABI tables directly.
-5. Reuse one `GpuFunctionalCompiler` to compile modules, then emit WASM.
+3. Choose `StrictEager` or `LazyCallByNeed` as the module's default evaluation profile.
+4. Convert source type declarations and optional annotations into `FunctionalTypeSchema` values.
+5. Call `buildFunctionalSurfaceModule()` or encode the ABI tables directly.
+6. Reuse one `GpuFunctionalCompiler` to compile modules, then emit WASM.
 
 The surface builder interns symbols, curries `parameters`, appends the reserved unit and pair types,
 and packs the flat ABI. A small expression lowering typically looks like this:
@@ -192,6 +196,14 @@ function lowerExpression(expression: SourceExpression): FunctionalSurfaceExpress
 Attach `{ startByte, endByte }` spans from the original source to definitions, declarations, and
 expressions. Offsets are UTF-8 bytes, not JavaScript string indices. These spans are the evidence
 reported by GPU diagnostics.
+
+`buildFunctionalSurfaceModule()` defaults to `FunctionalEvaluationProfile.StrictEager`, so a strict
+frontend gets eager local bindings, function arguments, and constructor fields without a separate
+forcing pass. Haskell-like frontends select `LazyCallByNeed`. A mixed frontend can set
+`valueEvaluation` on a `let` expression or `argumentEvaluation` on an `apply` expression; those
+resolved choices are stored in Core and observed identically by the GPU evaluator and WASM backend.
+These fields control evaluation at binding boundaries. A first-class, explicitly typed `Thunk<T>`
+value is not part of the current surface.
 
 ### Source-feature mapping
 
@@ -270,8 +282,8 @@ fuel, dispatch-quantum, and cancellation bounds.
 
 ## Current constraints for a frontend
 
-- Evaluation is currently lazy call-by-need. A strict-language frontend must insert an explicit
-  forcing discipline or restrict itself to code whose behavior is unchanged by laziness.
+- Strict eager and lazy call-by-need bindings and applications may be mixed in one module. A
+  first-class `Thunk<T>` value and arbitrary `delay`/`force` expressions are not implemented.
 - Direct WASM execution currently exports only scalar `integer`, `boolean`, or `unit` results, with
   an optional `Init -> scalar` entry. Algebraic values and higher-order functions are supported
   internally but do not yet have a public structured WASM result ABI.
@@ -332,21 +344,21 @@ functional core rather than requiring syntax-specific shader paths. A frontend m
 and structural packing, but production name resolution, dependency analysis, type inference,
 coverage checking, and core lowering belong to the GPU backend.
 
-Language neutrality also applies to semantics. The current implementation provides lazy
-Hindley–Milner-plus-indexed-types and predicative-rank-N profiles. Explicit annotations may place
-`forall` at recursively nested function-parameter boundaries. Actual schemes are instantiated,
-expected schemes are skolemized, and function parameters are compared contravariantly while results
-are compared covariantly. Impredicative quantifiers remain unsupported. A strict frontend will need
-either an explicit strictness profile or forcing constructs in its lowering; a language with its own
-type system should be able to submit a pretyped module for GPU verification instead of being forced
-through inference. Effects and module systems can be lowered into explicit core values and
-operations rather than becoming parser-specific backend branches.
+Language neutrality also applies to semantics. The current implementation provides strict eager and
+lazy call-by-need evaluation alongside Hindley–Milner-plus-indexed-types and predicative-rank-N
+profiles. Explicit annotations may place `forall` at recursively nested function-parameter
+boundaries. Actual schemes are instantiated, expected schemes are skolemized, and function
+parameters are compared contravariantly while results are compared covariantly. Impredicative
+quantifiers remain unsupported. A language with its own type system should be able to submit a
+pretyped module for GPU verification instead of being forced through inference. Effects and module
+systems can be lowered into explicit core values and operations rather than becoming parser-specific
+backend branches.
 
 The functional API does not assume Lazuli keywords, its Baba parser, or its source diagnostic
-prefix. Likewise, the Brainfuck instruction format is not a backend IR. ABI v5 currently accepts the
-`lazy-call-by-need-v1` evaluation profile with either `hindley-milner-indexed-v1` or
-`predicative-rank-n-indexed-v1` typechecking; profile metadata prevents a rank-1 module from
-silently acquiring first-class polymorphic parameters.
+prefix. Likewise, the Brainfuck instruction format is not a backend IR. ABI v5 accepts
+`strict-eager-v1` and `lazy-call-by-need-v1` evaluation profiles with either
+`hindley-milner-indexed-v1` or `predicative-rank-n-indexed-v1` typechecking; profile metadata
+prevents a rank-1 module from silently acquiring first-class polymorphic parameters.
 
 ## Optional frontend services
 
@@ -471,10 +483,14 @@ lowering.
 Handlers are ordinary `parameter -> result` functions. The shared lowering creates their
 continuations, so user code cannot discard or invoke a resumption twice. Unhandled local operations
 are rejected. Effectful host calls and handled operations lower through a strict, shared
-continuation; pure host calls remain ordinary lazy expressions and may be skipped or memoized by the
-call-by-need core. The resulting surface then goes through the existing GPU name resolver and
+continuation; pure host calls remain ordinary expressions governed by the frontend's chosen
+evaluation modes. The resulting surface then goes through the existing GPU name resolver and
 Hindley–Milner inferencer, which independently checks the actual embedded value expressions against
 the Effect Core annotations.
+
+Effect Core keeps `LazyCallByNeed` as its compatibility default and accepts an optional
+`evaluationProfile` when a frontend wants strict pure calls and bindings. Effectful operations stay
+explicitly sequenced under either profile.
 
 Effect verification and ordinary semantic compilation share the caller's fuel budget.
 `maximumStepsPerDispatch` bounds both stages, cancellation is observed between GPU submissions, and
@@ -518,11 +534,11 @@ operation effectful.
 deno run --allow-read examples/functional-ir/host_init.ts
 ```
 
-The current evaluator is a bounded lazy graph reducer, not an interaction-net implementation. The
-public Type Core and evidence formats keep that implementation choice internal: a future local
-interaction reducer can replace the lowering without making frontend IRs depend on ports, agents, or
-rewrite scheduling. Capability search remains a distinct operation because proof selection may be
-ambiguous even when type normalization must be deterministic.
+The current evaluator is a bounded graph reducer with strict and call-by-need binding modes, not an
+interaction-net implementation. The public Type Core and evidence formats keep that implementation
+choice internal: a future local interaction reducer can replace the lowering without making frontend
+IRs depend on ports, agents, or rewrite scheduling. Capability search remains a distinct operation
+because proof selection may be ambiguous even when type normalization must be deterministic.
 
 ## Reference language: Lazuli
 
@@ -833,7 +849,7 @@ import {
 const encodedModule = {
   abiVersion: FUNCTIONAL_MODULE_ABI_VERSION,
   sourceByteLength: 2,
-  evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
+  evaluationProfile: FunctionalEvaluationProfile.StrictEager,
   typecheckingProfile: FunctionalTypecheckingProfile.HindleyMilnerIndexed,
   primitiveCapabilities: FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
   nodeWords: Uint32Array.of(
@@ -905,10 +921,12 @@ start byte, end byte, payload, three child indices, and parent index; absent edg
 | `Boolean`      | `0` or `1`                 | —                    | —                     | —         |
 | `Name`         | symbol                     | —                    | —                     | —         |
 | `Let`          | bound symbol               | value                | body                  | —         |
+| `StrictLet`    | bound symbol               | value                | body                  | —         |
 | `LetRec`       | bound symbol               | parameter lambda     | body                  | —         |
 | `If`           | `0`                        | condition            | consequent            | alternate |
 | `Lambda`       | parameter symbol           | body                 | —                     | —         |
 | `Apply`        | `0`                        | callee               | argument              | —         |
+| `StrictApply`  | `0`                        | callee               | argument              | —         |
 | `Unary`        | `FunctionalUnaryOperator`  | operand              | —                     | —         |
 | `Binary`       | `FunctionalBinaryOperator` | left                 | right                 | —         |
 | `Case`         | `0`                        | scrutinee            | first arm or no index | —         |
@@ -921,12 +939,18 @@ words: symbol, owner type index, arity, start byte, and end byte. The exported `
 objects are the authoritative offsets, and the structural schema types describe annotations,
 parameters, fields, and optional indexed constructor results.
 
+`Let` and `Apply` encode call-by-need boundaries; `StrictLet` and `StrictApply` encode eager ones.
+Core lowering normalizes each pair to the ordinary `Let` or `Apply` core tag and stores the resolved
+mode in the final core-node word. Backends consume that word directly and do not infer source
+language strictness.
+
 `compileFunctionalModuleToWasm()` consumes only a successfully GPU-resolved module and returns valid
 WASM bytes. `runFunctionalWasmModule()` is the convenience path that validates an optional `init`,
 emits, instantiates, calls `main`, decodes its scalar result, and reports the number of thunks
 actually evaluated together with allocated runtime bytes. Modules without declared host capabilities
-remain import-free and keep the original zero-argument `main()` ABI. The WASM runtime preserves
-unused bindings, arguments, branches, and constructor fields and shares every demanded thunk.
+remain import-free and keep the original zero-argument `main()` ABI. Lazy boundaries preserve unused
+bindings, arguments, and constructor fields and share every demanded thunk; strict boundaries
+evaluate before binding. Unselected conditional branches remain unevaluated in both profiles.
 `GpuFunctionalEvaluator` remains available for differential testing and detailed traces; it accepts
 recursively nested declared constructors and supports weak-head and bounded deep results, batching,
 fuel, heap, stack, and cancellation.

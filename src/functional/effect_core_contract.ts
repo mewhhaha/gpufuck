@@ -1,4 +1,4 @@
-import type { FunctionalSpan } from "./abi.ts";
+import type { FunctionalEvaluationProfile, FunctionalSpan } from "./abi.ts";
 import type { FunctionalEffectOperation, FunctionalEffectType } from "./effect_contract.ts";
 import type {
   FunctionalHostCapabilityDeclaration,
@@ -65,6 +65,7 @@ export interface FunctionalEffectCoreModule {
   readonly expression: FunctionalEffectCoreExpression;
   readonly entryName: string;
   readonly sourceByteLength: number;
+  readonly evaluationProfile?: FunctionalEvaluationProfile;
 }
 
 export interface LoweredFunctionalEffectCoreModule {

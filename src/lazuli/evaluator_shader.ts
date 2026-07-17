@@ -6,6 +6,7 @@ import {
   LAZULI_NODE_WORD_LENGTH,
   LazuliBinaryOperator,
   LazuliCoreTag,
+  LazuliEvaluationMode,
   LazuliUnaryOperator,
 } from "./abi.ts";
 
@@ -18,7 +19,7 @@ struct CoreNode {
   child2: u32,
   source_offset: u32,
   reserved0: u32,
-  reserved1: u32,
+  evaluation_mode: u32,
 }
 
 struct Definition {
@@ -205,6 +206,9 @@ const FRAME_CASE: u32 = 7u;
 const FRAME_REIFY_FIELD: u32 = 8u;
 const FRAME_REIFY_VALUE: u32 = 9u;
 const FRAME_REIFY_END: u32 = 10u;
+const FRAME_STRICT_LET: u32 = 11u;
+const FRAME_STRICT_APPLY_CALLEE: u32 = 12u;
+const FRAME_STRICT_APPLY_ARGUMENT: u32 = 13u;
 
 const EXPECT_INTEGER: u32 = 1u;
 const EXPECT_BOOLEAN: u32 = 2u;
@@ -226,6 +230,9 @@ const TAG_LOCAL: u32 = ${LazuliCoreTag.Local}u;
 const TAG_GLOBAL: u32 = ${LazuliCoreTag.Global}u;
 const TAG_CONSTRUCTOR: u32 = ${LazuliCoreTag.Constructor}u;
 const TAG_LET_REC: u32 = ${LazuliCoreTag.LetRec}u;
+
+const EVALUATION_LAZY: u32 = ${LazuliEvaluationMode.LazyCallByNeed}u;
+const EVALUATION_STRICT: u32 = ${LazuliEvaluationMode.StrictEager}u;
 
 const UNARY_NEGATE: u32 = ${LazuliUnaryOperator.Negate}u;
 const BINARY_EQUAL: u32 = ${LazuliBinaryOperator.Equal}u;
@@ -464,14 +471,15 @@ fn evaluate_node() {
 
   switch node.tag {
     case TAG_INTEGER: {
-      if !children_are_absent(node) {
+      if !children_are_absent(node) || node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(evaluation.expression);
         return;
       }
       return_value(VALUE_INTEGER, node.payload);
     }
     case TAG_BOOLEAN: {
-      if node.payload > 1u || !children_are_absent(node) {
+      if node.payload > 1u || !children_are_absent(node) ||
+          node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(node.payload);
         return;
       }
@@ -479,8 +487,27 @@ fn evaluate_node() {
     }
     case TAG_LET: {
       if !valid_core_child(evaluation.expression, node.child0) ||
-          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX {
+          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX ||
+          node.evaluation_mode > EVALUATION_STRICT {
         fail_bad_module(evaluation.expression);
+        return;
+      }
+
+      if node.evaluation_mode == EVALUATION_STRICT {
+        let frame = ContinuationFrame(
+          FRAME_STRICT_LET,
+          node.child1,
+          evaluation.environment,
+          0u,
+          0u,
+          0u,
+          node.source_offset,
+          0u,
+        );
+        if !push_frame(frame) {
+          return;
+        }
+        evaluate_expression(node.child0, evaluation.environment);
         return;
       }
 
@@ -502,7 +529,8 @@ fn evaluate_node() {
     }
     case TAG_LET_REC: {
       if !valid_core_child(evaluation.expression, node.child0) ||
-          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX {
+          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX ||
+          node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(evaluation.expression);
         return;
       }
@@ -530,7 +558,8 @@ fn evaluate_node() {
     case TAG_IF: {
       if !valid_core_child(evaluation.expression, node.child0) ||
           !valid_core_child(evaluation.expression, node.child1) ||
-          !valid_core_child(evaluation.expression, node.child2) {
+          !valid_core_child(evaluation.expression, node.child2) ||
+          node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(evaluation.expression);
         return;
       }
@@ -551,7 +580,7 @@ fn evaluate_node() {
     }
     case TAG_LAMBDA: {
       if !valid_core_child(evaluation.expression, node.child0) || node.child1 != NO_INDEX ||
-          node.child2 != NO_INDEX {
+          node.child2 != NO_INDEX || node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(evaluation.expression);
         return;
       }
@@ -565,12 +594,17 @@ fn evaluate_node() {
     }
     case TAG_APPLY: {
       if !valid_core_child(evaluation.expression, node.child0) ||
-          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX {
+          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX ||
+          node.evaluation_mode > EVALUATION_STRICT {
         fail_bad_module(evaluation.expression);
         return;
       }
       let frame = ContinuationFrame(
-        FRAME_APPLY,
+        select(
+          FRAME_APPLY,
+          FRAME_STRICT_APPLY_CALLEE,
+          node.evaluation_mode == EVALUATION_STRICT,
+        ),
         node.child1,
         evaluation.environment,
         0u,
@@ -587,7 +621,7 @@ fn evaluate_node() {
     case TAG_UNARY: {
       if node.payload != UNARY_NEGATE ||
           !valid_core_child(evaluation.expression, node.child0) || node.child1 != NO_INDEX ||
-          node.child2 != NO_INDEX {
+          node.child2 != NO_INDEX || node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(node.payload);
         return;
       }
@@ -609,7 +643,8 @@ fn evaluate_node() {
     case TAG_BINARY: {
       if !valid_binary_operator(node.payload) ||
           !valid_core_child(evaluation.expression, node.child0) ||
-          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX {
+          !valid_core_child(evaluation.expression, node.child1) || node.child2 != NO_INDEX ||
+          node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(node.payload);
         return;
       }
@@ -631,7 +666,7 @@ fn evaluate_node() {
     case TAG_CASE: {
       if !valid_core_child(evaluation.expression, node.child0) ||
           !valid_optional_core_child(evaluation.expression, node.child1) ||
-          node.child2 != NO_INDEX {
+          node.child2 != NO_INDEX || node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(evaluation.expression);
         return;
       }
@@ -651,7 +686,7 @@ fn evaluate_node() {
       evaluate_expression(node.child0, evaluation.environment);
     }
     case TAG_LOCAL: {
-      if !children_are_absent(node) {
+      if !children_are_absent(node) || node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(evaluation.expression);
         return;
       }
@@ -685,7 +720,7 @@ fn evaluate_node() {
     case TAG_GLOBAL: {
       if node.payload >= evaluation.definition_count ||
           !region_contains(evaluation.global_base, node.payload, arrayLength(&global_thunks)) ||
-          !children_are_absent(node) {
+          !children_are_absent(node) || node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(node.payload);
         return;
       }
@@ -698,7 +733,8 @@ fn evaluate_node() {
       evaluation.mode = MODE_ENTER_THUNK;
     }
     case TAG_CONSTRUCTOR: {
-      if !valid_constructor(node.payload) || !children_are_absent(node) {
+      if !valid_constructor(node.payload) || !children_are_absent(node) ||
+          node.evaluation_mode != EVALUATION_LAZY {
         fail_bad_module(node.payload);
         return;
       }
@@ -1124,6 +1160,70 @@ fn return_from_expression() {
       heap[heap_storage_index(frame.field0)].state = THUNK_EVALUATED;
       heap[heap_storage_index(frame.field0)].field2 = evaluation.value_tag;
       heap[heap_storage_index(frame.field0)].field3 = evaluation.value_payload;
+    }
+    case FRAME_STRICT_LET: {
+      if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) ||
+          !valid_node(frame.field0) {
+        fail_bad_module(evaluation.value_payload);
+        return;
+      }
+      let value_slot = allocate_heap_slot(HEAP_THUNK, frame.source_offset);
+      if value_slot == NO_INDEX {
+        return;
+      }
+      heap[heap_storage_index(value_slot)].state = THUNK_EVALUATED;
+      heap[heap_storage_index(value_slot)].field2 = evaluation.value_tag;
+      heap[heap_storage_index(value_slot)].field3 = evaluation.value_payload;
+
+      let body_environment = allocate_heap_slot(HEAP_ENVIRONMENT, frame.source_offset);
+      if body_environment == NO_INDEX {
+        return;
+      }
+      heap[heap_storage_index(body_environment)].field0 = frame.field1;
+      heap[heap_storage_index(body_environment)].field1 = value_slot;
+      evaluate_expression(frame.field0, body_environment);
+    }
+    case FRAME_STRICT_APPLY_CALLEE: {
+      if evaluation.value_tag != VALUE_CLOSURE &&
+          evaluation.value_tag != VALUE_CONSTRUCTOR_PARTIAL {
+        fail(FAULT_TYPE_ERROR, frame.source_offset, EXPECT_CALLABLE);
+        return;
+      }
+      if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) ||
+          !valid_node(frame.field0) {
+        fail_bad_module(evaluation.value_payload);
+        return;
+      }
+      let argument_frame = ContinuationFrame(
+        FRAME_STRICT_APPLY_ARGUMENT,
+        evaluation.value_tag,
+        evaluation.value_payload,
+        0u,
+        0u,
+        0u,
+        frame.source_offset,
+        0u,
+      );
+      if !push_frame(argument_frame) {
+        return;
+      }
+      evaluate_expression(frame.field0, frame.field1);
+    }
+    case FRAME_STRICT_APPLY_ARGUMENT: {
+      if !valid_heap_value(evaluation.value_tag, evaluation.value_payload) {
+        fail_bad_module(evaluation.value_payload);
+        return;
+      }
+      let argument_slot = allocate_heap_slot(HEAP_THUNK, frame.source_offset);
+      if argument_slot == NO_INDEX {
+        return;
+      }
+      heap[heap_storage_index(argument_slot)].state = THUNK_EVALUATED;
+      heap[heap_storage_index(argument_slot)].field2 = evaluation.value_tag;
+      heap[heap_storage_index(argument_slot)].field3 = evaluation.value_payload;
+      evaluation.value_tag = frame.field0;
+      evaluation.value_payload = frame.field1;
+      apply_to_thunk(argument_slot, frame.source_offset);
     }
     case FRAME_APPLY: {
       if evaluation.value_tag != VALUE_CLOSURE &&

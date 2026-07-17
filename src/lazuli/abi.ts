@@ -64,6 +64,8 @@ export const LazuliSurfaceTag = {
   CaseArm: 11,
   PatternBind: 12,
   LetRec: 16,
+  StrictLet: 17,
+  StrictApply: 18,
 } as const;
 
 export type LazuliSurfaceTag = (typeof LazuliSurfaceTag)[keyof typeof LazuliSurfaceTag];
@@ -87,6 +89,13 @@ export const LazuliCoreTag = {
 } as const;
 
 export type LazuliCoreTag = (typeof LazuliCoreTag)[keyof typeof LazuliCoreTag];
+
+export const LazuliEvaluationMode = {
+  LazyCallByNeed: 0,
+  StrictEager: 1,
+} as const;
+
+export type LazuliEvaluationMode = (typeof LazuliEvaluationMode)[keyof typeof LazuliEvaluationMode];
 
 export const LazuliUnaryOperator = {
   Negate: 1,

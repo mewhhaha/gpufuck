@@ -39,6 +39,7 @@ export type FunctionalSurfaceExpression =
     readonly name: string;
     readonly value: FunctionalSurfaceExpression;
     readonly body: FunctionalSurfaceExpression;
+    readonly valueEvaluation?: FunctionalEvaluationProfile;
     readonly span?: FunctionalSpan;
   }
   | {
@@ -59,6 +60,7 @@ export type FunctionalSurfaceExpression =
     readonly kind: "apply";
     readonly callee: FunctionalSurfaceExpression;
     readonly argument: FunctionalSurfaceExpression;
+    readonly argumentEvaluation?: FunctionalEvaluationProfile;
     readonly span?: FunctionalSpan;
   }
   | {
@@ -113,6 +115,8 @@ export function buildFunctionalSurfaceModule(
   sourceByteLength: number,
   options: FunctionalSurfaceModuleOptions = {},
 ): EncodedFunctionalModule {
+  const evaluationProfile = options.evaluationProfile ?? FunctionalEvaluationProfile.StrictEager;
+  requireEvaluationProfile(evaluationProfile, "functional surface module");
   const hostCapabilities = normalizeFunctionalHostCapabilities(options.hostCapabilities);
   const usesHigherRankTypes =
     definitions.some((definition) =>
@@ -146,7 +150,7 @@ export function buildFunctionalSurfaceModule(
     for (const constructor of declaration.constructors) symbols.intern(constructor.name);
   }
 
-  const encoder = new SurfaceExpressionEncoder(symbols);
+  const encoder = new SurfaceExpressionEncoder(symbols, evaluationProfile);
   const definitionWords: number[] = [];
   for (const definition of definitions) {
     const rootNode = encoder.emitDefinitionBody(
@@ -187,7 +191,7 @@ export function buildFunctionalSurfaceModule(
   return {
     abiVersion: FUNCTIONAL_MODULE_ABI_VERSION,
     sourceByteLength,
-    evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
+    evaluationProfile,
     typecheckingProfile: usesHigherRankTypes
       ? FunctionalTypecheckingProfile.PredicativeRankNIndexed
       : FunctionalTypecheckingProfile.HindleyMilnerIndexed,
@@ -291,7 +295,10 @@ function primitiveTypeDeclarations(
 class SurfaceExpressionEncoder {
   readonly words: number[] = [];
 
-  constructor(private readonly symbols: SurfaceSymbolTable) {}
+  constructor(
+    private readonly symbols: SurfaceSymbolTable,
+    private readonly defaultEvaluation: FunctionalEvaluationProfile,
+  ) {}
 
   get nodeCount(): number {
     return this.words.length / FUNCTIONAL_NODE_WORD_LENGTH;
@@ -363,8 +370,15 @@ class SurfaceExpressionEncoder {
         return node;
       }
       case "let": {
+        const valueEvaluation = expression.valueEvaluation ?? this.defaultEvaluation;
+        requireEvaluationProfile(
+          valueEvaluation,
+          `functional let ${JSON.stringify(expression.name)}`,
+        );
         const node = this.reserveNode(
-          FunctionalExpressionTag.Let,
+          valueEvaluation === FunctionalEvaluationProfile.StrictEager
+            ? FunctionalExpressionTag.StrictLet
+            : FunctionalExpressionTag.Let,
           this.symbols.intern(expression.name),
           parent,
           expression.span,
@@ -395,7 +409,16 @@ class SurfaceExpressionEncoder {
         return node;
       }
       case "apply": {
-        const node = this.reserveNode(FunctionalExpressionTag.Apply, 0, parent, expression.span);
+        const argumentEvaluation = expression.argumentEvaluation ?? this.defaultEvaluation;
+        requireEvaluationProfile(argumentEvaluation, "functional application argument");
+        const node = this.reserveNode(
+          argumentEvaluation === FunctionalEvaluationProfile.StrictEager
+            ? FunctionalExpressionTag.StrictApply
+            : FunctionalExpressionTag.Apply,
+          0,
+          parent,
+          expression.span,
+        );
         const callee = this.emit(expression.callee, node);
         const argument = this.emit(expression.argument, node);
         this.setChildren(node, [callee, argument]);
@@ -511,6 +534,19 @@ class SurfaceExpressionEncoder {
       this.words[offset + childIndex] = child;
     }
   }
+}
+
+function requireEvaluationProfile(
+  profile: FunctionalEvaluationProfile,
+  location: string,
+): void {
+  if (
+    profile === FunctionalEvaluationProfile.LazyCallByNeed ||
+    profile === FunctionalEvaluationProfile.StrictEager
+  ) return;
+  throw new Error(
+    `${location} has unsupported evaluation profile ${JSON.stringify(profile)}`,
+  );
 }
 
 class SurfaceSymbolTable {

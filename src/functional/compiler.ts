@@ -142,6 +142,9 @@ export class GpuFunctionalCompiler {
   ): Promise<FunctionalCompileResult> {
     const limits = compilationLimits(options);
     options.signal?.throwIfAborted();
+    const evaluationProfile = effectModule.evaluationProfile ??
+      FunctionalEvaluationProfile.LazyCallByNeed;
+    requireFunctionalEvaluationProfile(evaluationProfile, "Functional Effect Core module");
     if (!Number.isSafeInteger(effectModule.sourceByteLength) || effectModule.sourceByteLength < 0) {
       throw new Error(
         `functional effect module has invalid source byte length ${effectModule.sourceByteLength}`,
@@ -175,7 +178,10 @@ export class GpuFunctionalCompiler {
       effect.lowered.typeDeclarations,
       effect.lowered.entryName,
       effect.lowered.sourceByteLength,
-      { hostCapabilities: effect.lowered.hostCapabilities },
+      {
+        hostCapabilities: effect.lowered.hostCapabilities,
+        evaluationProfile,
+      },
     );
     const compilation = await this.compileModule(encoded, {
       maximumSteps: remainingSteps,
@@ -391,6 +397,7 @@ function functionalModule(
     ...module,
     definitionRoots: Object.freeze(definitionRoots),
     hostCapabilities: normalizeFunctionalHostCapabilities(encodedModule.hostCapabilities),
+    evaluationProfile: encodedModule.evaluationProfile,
     entryType: module.mainType,
     entryEffects: Object.freeze([]),
     readCoreNodes: async () => await module.readCoreNodes(),
@@ -451,13 +458,7 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
       `functional module has invalid source byte length ${module.sourceByteLength}`,
     );
   }
-  if (module.evaluationProfile !== FunctionalEvaluationProfile.LazyCallByNeed) {
-    throw new Error(
-      `functional module evaluation profile ${
-        JSON.stringify(module.evaluationProfile)
-      } is unsupported; expected ${JSON.stringify(FunctionalEvaluationProfile.LazyCallByNeed)}`,
-    );
-  }
+  requireFunctionalEvaluationProfile(module.evaluationProfile, "functional module");
   if (
     module.typecheckingProfile !== FunctionalTypecheckingProfile.HindleyMilnerIndexed &&
     module.typecheckingProfile !== FunctionalTypecheckingProfile.PredicativeRankNIndexed
@@ -530,6 +531,21 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
       `functional module has ${module.typeDeclarations.length} type declarations for ${module.typeCount} type records`,
     );
   }
+}
+
+function requireFunctionalEvaluationProfile(
+  profile: FunctionalEvaluationProfile,
+  location: string,
+): void {
+  if (
+    profile === FunctionalEvaluationProfile.LazyCallByNeed ||
+    profile === FunctionalEvaluationProfile.StrictEager
+  ) return;
+  throw new Error(
+    `${location} evaluation profile ${JSON.stringify(profile)} is unsupported; expected ${
+      JSON.stringify(FunctionalEvaluationProfile.LazyCallByNeed)
+    } or ${JSON.stringify(FunctionalEvaluationProfile.StrictEager)}`,
+  );
 }
 
 function schemaContainsForall(schema: FunctionalTypeSchema): boolean {

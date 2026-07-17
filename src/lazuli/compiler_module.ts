@@ -6,6 +6,7 @@ import {
   LazuliCoreTag,
   type LazuliCoreTag as KnownLazuliCoreTag,
   type LazuliDiagnostic,
+  type LazuliEvaluationMode,
   type LazuliType,
   type LazuliTypeDeclaration,
 } from "./abi.ts";
@@ -17,6 +18,7 @@ export interface LazuliCoreNode {
   readonly child1: number;
   readonly child2: number;
   readonly sourceByteOffset: number;
+  readonly evaluationMode: LazuliEvaluationMode;
 }
 
 export interface GpuLazuliModule {
@@ -151,6 +153,7 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
           child1: words.getUint32(byteOffset + 12, true),
           child2: words.getUint32(byteOffset + 16, true),
           sourceByteOffset: words.getUint32(byteOffset + 20, true),
+          evaluationMode: decodeEvaluationMode(words.getUint32(byteOffset + 28, true), nodeIndex),
         });
       }
       return nodes;
@@ -169,6 +172,13 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
     this.definitionBuffer.destroy();
     this.constructorBuffer.destroy();
   }
+}
+
+function decodeEvaluationMode(value: number, nodeIndex: number): LazuliEvaluationMode {
+  if (value === 0 || value === 1) return value;
+  throw new Error(
+    `GPU Lazuli module contains unknown evaluation mode ${value} at node ${nodeIndex}`,
+  );
 }
 
 function deepFreeze<Value>(value: Value): Value {

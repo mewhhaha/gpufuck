@@ -63,6 +63,7 @@
       "src/functional/wasm_binary.ts",
       "src/functional/wasm_capture_analysis.ts",
       "src/functional/wasm_codegen.ts",
+      "src/functional/wasm_function_analysis.ts",
       "src/functional/wasm_lambda_sets.ts",
       "src/lazuli/abi.ts",
       "src/lazuli/compilation_diagnostics.ts",

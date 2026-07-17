@@ -5,6 +5,7 @@ import {
   type FunctionalEffectCoreExpression,
   type FunctionalEffectCoreModule,
   type FunctionalEffectOperation,
+  FunctionalEvaluationProfile,
   type FunctionalHostCapabilityDeclaration,
   type FunctionalSurfaceDefinition,
   GpuFunctionalCompiler,
@@ -83,6 +84,7 @@ Deno.test("pure host calls remain lazy when their bound result is unused", async
   if (!compilation.ok) throw new Error("pure Effect Core module did not compile");
   let calls = 0;
   try {
+    equal(compilation.module.evaluationProfile, FunctionalEvaluationProfile.LazyCallByNeed);
     const execution = await runFunctionalWasmModule(compilation.module, {
       init: {
         Console: {
@@ -95,6 +97,40 @@ Deno.test("pure host calls remain lazy when their bound result is unused", async
     });
     deepStrictEqual(execution.value, { kind: "integer", value: 42 });
     equal(calls, 0);
+    deepStrictEqual(compilation.module.entryEffects, []);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("a strict Effect Core profile evaluates an unused pure host call", async () => {
+  const module: FunctionalEffectCoreModule = {
+    ...effectModule({
+      kind: "bind",
+      name: "unused",
+      computation: hostCall("compute", 99),
+      body: { kind: "return", value: surface.integer(42), valueType: { kind: "integer" } },
+    }, [consoleCapability("pure", "compute")]),
+    evaluationProfile: FunctionalEvaluationProfile.StrictEager,
+  };
+  const compilation = await effectCoreRuntime().compiler.compileEffectModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("strict pure Effect Core module did not compile");
+  let calls = 0;
+  try {
+    equal(compilation.module.evaluationProfile, FunctionalEvaluationProfile.StrictEager);
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      init: {
+        Console: {
+          compute: (argument) => {
+            calls += 1;
+            return argument;
+          },
+        },
+      },
+    });
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+    equal(calls, 1);
     deepStrictEqual(compilation.module.entryEffects, []);
   } finally {
     compilation.module.destroy();

@@ -92,7 +92,7 @@ struct CoreNode {
   child2: u32,
   source_byte_offset: u32,
   source_end_byte: u32,
-  reserved1: u32,
+  evaluation_mode: u32,
 }
 
 struct CompilationState {
@@ -186,6 +186,8 @@ const SURFACE_CASE: u32 = 10u;
 const SURFACE_CASE_ARM: u32 = 11u;
 const SURFACE_PATTERN_BIND: u32 = 12u;
 const SURFACE_LET_REC: u32 = 16u;
+const SURFACE_STRICT_LET: u32 = 17u;
+const SURFACE_STRICT_APPLY: u32 = 18u;
 
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
@@ -287,7 +289,7 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     case SURFACE_NAME: {
       return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
-    case SURFACE_LET: {
+    case SURFACE_LET, SURFACE_STRICT_LET: {
       return required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
@@ -305,7 +307,7 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
       return required_child_is_valid(node_index, node.child0) && node.child1 == NO_INDEX &&
         node.child2 == NO_INDEX;
     }
-    case SURFACE_APPLY: {
+    case SURFACE_APPLY, SURFACE_STRICT_APPLY: {
       return required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
@@ -591,7 +593,11 @@ fn write_lowered_node() {
     surface_node.child2,
     surface_node.start_byte,
     surface_node.end_byte,
-    0u,
+    select(
+      0u,
+      1u,
+      surface_node.tag == SURFACE_STRICT_LET || surface_node.tag == SURFACE_STRICT_APPLY,
+    ),
   );
   state.primary_cursor += 1u;
   if state.primary_cursor == state.node_count {
@@ -610,6 +616,11 @@ fn lower_node() {
   let surface_node = surface_nodes[state.surface_node_base + state.primary_cursor];
   state.core_tag = surface_node.tag;
   state.core_payload = surface_node.payload;
+  if surface_node.tag == SURFACE_STRICT_LET {
+    state.core_tag = SURFACE_LET;
+  } else if surface_node.tag == SURFACE_STRICT_APPLY {
+    state.core_tag = SURFACE_APPLY;
+  }
   if surface_node.tag == SURFACE_NAME {
     state.resolution_node = state.primary_cursor;
     state.resolution_parent = surface_node.parent;
@@ -637,7 +648,8 @@ fn resolve_local_name() {
   }
 
   let parent = surface_nodes[state.surface_node_base + state.resolution_parent];
-  let introduces_let_binding = parent.tag == SURFACE_LET &&
+  let introduces_let_binding = (parent.tag == SURFACE_LET ||
+    parent.tag == SURFACE_STRICT_LET) &&
     parent.child1 == state.resolution_child;
   let introduces_let_rec_binding = parent.tag == SURFACE_LET_REC &&
     (parent.child0 == state.resolution_child || parent.child1 == state.resolution_child);

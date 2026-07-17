@@ -1,6 +1,8 @@
 import type {
   FunctionalCoreTag,
   FunctionalDiagnostic,
+  FunctionalEvaluationMode,
+  FunctionalEvaluationProfile,
   FunctionalType,
   FunctionalTypeDeclaration,
 } from "./abi.ts";
@@ -13,6 +15,7 @@ export interface FunctionalCoreNode {
   readonly child1: number;
   readonly child2: number;
   readonly sourceByteOffset: number;
+  readonly evaluationMode: FunctionalEvaluationMode;
 }
 
 export interface GpuFunctionalModule {
@@ -31,6 +34,7 @@ export interface GpuFunctionalModule {
   readonly entryEffects: readonly string[];
   readonly typeDeclarations: readonly FunctionalTypeDeclaration[];
   readonly hostCapabilities: readonly FunctionalHostCapabilityDeclaration[];
+  readonly evaluationProfile: FunctionalEvaluationProfile;
   readCoreNodes(): Promise<readonly FunctionalCoreNode[]>;
   destroy(): void;
 }

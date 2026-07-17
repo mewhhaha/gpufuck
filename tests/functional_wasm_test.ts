@@ -8,6 +8,8 @@ import {
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
+  FunctionalEvaluationMode,
+  FunctionalEvaluationProfile,
   type FunctionalSurfaceExpression,
   type FunctionalWasmExecution,
   FunctionalWasmRuntimeError,
@@ -387,6 +389,7 @@ Deno.test("leaves unused lets, arguments, branches, and constructor fields uneva
     }],
     "main",
     0,
+    { evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed },
   );
   await assertLazyWasmResult(lazyFieldModule, 42, 1, "lazy constructor field");
 });
@@ -401,6 +404,139 @@ gpuMain = ignore loop
 `);
 
   await assertLazyWasmResult(module, 42, 1, "unused recursive Haskell argument");
+});
+
+Deno.test("strict evaluation faults on an unused function argument", async () => {
+  const divisionByZero = surface.binary(
+    FunctionalBinaryOperator.Divide,
+    surface.integer(1),
+    surface.integer(0),
+  );
+  const module = singleDefinitionModule(
+    surface.apply(surface.lambda("unused", surface.integer(42)), divisionByZero),
+    FunctionalEvaluationProfile.StrictEager,
+  );
+  const { compiler, evaluator } = functionalWasmRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("strict argument module did not compile");
+  try {
+    equal(compilation.module.evaluationProfile, FunctionalEvaluationProfile.StrictEager);
+    const nodes = await compilation.module.readCoreNodes();
+    equal(nodes[0]?.evaluationMode, FunctionalEvaluationMode.StrictEager);
+    const gpuExecution = await evaluator.evaluate(compilation.module);
+    equal(gpuExecution.ok, false);
+    if (gpuExecution.ok) throw new Error("GPU evaluator skipped a strict argument");
+    equal(gpuExecution.fault.kind, "divide-by-zero");
+    await rejects(
+      () => runFunctionalWasmModule(compilation.module),
+      WebAssembly.RuntimeError,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("strict evaluation faults on an unused local binding", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "unused",
+    value: surface.binary(
+      FunctionalBinaryOperator.Divide,
+      surface.integer(1),
+      surface.integer(0),
+    ),
+    body: surface.integer(42),
+  };
+  const module = singleDefinitionModule(
+    expression,
+    FunctionalEvaluationProfile.StrictEager,
+  );
+  const { compiler, evaluator } = functionalWasmRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("strict local binding module did not compile");
+  try {
+    const nodes = await compilation.module.readCoreNodes();
+    equal(nodes[0]?.evaluationMode, FunctionalEvaluationMode.StrictEager);
+    const gpuExecution = await evaluator.evaluate(compilation.module);
+    equal(gpuExecution.ok, false);
+    if (gpuExecution.ok) throw new Error("GPU evaluator skipped a strict local binding");
+    equal(gpuExecution.fault.kind, "divide-by-zero");
+    await rejects(
+      () => runFunctionalWasmModule(compilation.module),
+      WebAssembly.RuntimeError,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("a lazy argument overrides a strict module default", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "apply",
+    callee: surface.lambda("unused", surface.integer(42)),
+    argument: surface.binary(
+      FunctionalBinaryOperator.Divide,
+      surface.integer(1),
+      surface.integer(0),
+    ),
+    argumentEvaluation: FunctionalEvaluationProfile.LazyCallByNeed,
+  };
+  const module = singleDefinitionModule(
+    expression,
+    FunctionalEvaluationProfile.StrictEager,
+  );
+  const { compiler, evaluator } = functionalWasmRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("lazy argument override did not compile");
+  try {
+    const nodes = await compilation.module.readCoreNodes();
+    equal(nodes[0]?.evaluationMode, FunctionalEvaluationMode.LazyCallByNeed);
+    const gpuExecution = await evaluator.evaluate(compilation.module);
+    ok(gpuExecution.ok, gpuExecution.ok ? undefined : gpuExecution.fault.message);
+    if (!gpuExecution.ok) throw new Error("GPU evaluator forced a lazy argument override");
+    deepStrictEqual(gpuExecution.value, { kind: "integer", value: 42 });
+    const wasmExecution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(wasmExecution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("a lazy local binding overrides a strict module default", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "unused",
+    value: surface.binary(
+      FunctionalBinaryOperator.Divide,
+      surface.integer(1),
+      surface.integer(0),
+    ),
+    body: surface.integer(42),
+    valueEvaluation: FunctionalEvaluationProfile.LazyCallByNeed,
+  };
+  const module = singleDefinitionModule(
+    expression,
+    FunctionalEvaluationProfile.StrictEager,
+  );
+  const { compiler, evaluator } = functionalWasmRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("lazy local binding override did not compile");
+  try {
+    const nodes = await compilation.module.readCoreNodes();
+    equal(nodes[0]?.evaluationMode, FunctionalEvaluationMode.LazyCallByNeed);
+    const gpuExecution = await evaluator.evaluate(compilation.module);
+    ok(gpuExecution.ok, gpuExecution.ok ? undefined : gpuExecution.fault.message);
+    if (!gpuExecution.ok) throw new Error("GPU evaluator forced a lazy local binding override");
+    deepStrictEqual(gpuExecution.value, { kind: "integer", value: 42 });
+    const wasmExecution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(wasmExecution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("evaluates a shared thunk once and reuses its cached value", async () => {
@@ -472,6 +608,7 @@ Deno.test("shares a global suspension with a callee instead of wrapping it", asy
     [],
     "main",
     0,
+    { evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed },
   );
 
   await assertLazyWasmResult(module, 84, 2, "shared global suspension");
@@ -628,6 +765,180 @@ Deno.test("omits a let-rec self capture when the function is not recursive", asy
 
   deepStrictEqual(execution.value, { kind: "integer", value: 42 });
   equal(execution.stats.allocatedBytes, 40);
+});
+
+Deno.test("saturated numeric tail recursion uses an uncurried constant-space worker", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "count",
+    value: surface.lambda(
+      "value",
+      surface.lambda("remaining", {
+        kind: "if",
+        condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+        consequent: surface.name("value"),
+        alternate: surface.apply(
+          surface.apply(
+            surface.name("count"),
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("value"),
+              surface.integer(1),
+            ),
+          ),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("remaining"),
+            surface.integer(1),
+          ),
+        ),
+      }),
+    ),
+    body: surface.apply(
+      surface.apply(
+        surface.name("count"),
+        surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.integer(20),
+          surface.integer(22),
+        ),
+      ),
+      surface.integer(4_096),
+    ),
+  }));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 4_138 });
+  equal(execution.stats.thunkEvaluations, 1);
+  equal(execution.stats.allocatedBytes, 48);
+  equal(execution.stats.specializedCallSites, 1);
+});
+
+Deno.test("known global tail recursion uses one uncurried worker", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [
+      {
+        name: "count",
+        parameters: [],
+        annotation: null,
+        body: surface.lambda(
+          "value",
+          surface.lambda("remaining", {
+            kind: "if",
+            condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+            consequent: surface.name("value"),
+            alternate: surface.apply(
+              surface.apply(
+                surface.name("count"),
+                surface.binary(
+                  FunctionalBinaryOperator.Add,
+                  surface.name("value"),
+                  surface.integer(1),
+                ),
+              ),
+              surface.binary(
+                FunctionalBinaryOperator.Subtract,
+                surface.name("remaining"),
+                surface.integer(1),
+              ),
+            ),
+          }),
+        ),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: null,
+        body: surface.apply(
+          surface.apply(surface.name("count"), surface.integer(0)),
+          surface.integer(4_096),
+        ),
+      },
+    ],
+    [],
+    "main",
+    0,
+  );
+  const execution = await runCompiledWasm(module);
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 4_096 });
+  equal(execution.stats.thunkEvaluations, 1);
+  equal(execution.stats.allocatedBytes, 40);
+  equal(execution.stats.specializedCallSites, 1);
+});
+
+Deno.test("tail-call loops leave an unused recursive argument lazy", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "choose",
+    value: surface.lambda(
+      "unused",
+      surface.lambda("remaining", {
+        kind: "if",
+        condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+        consequent: surface.integer(42),
+        alternate: surface.apply(
+          surface.apply(
+            surface.name("choose"),
+            surface.binary(
+              FunctionalBinaryOperator.Divide,
+              surface.integer(1),
+              surface.integer(0),
+            ),
+          ),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("remaining"),
+            surface.integer(1),
+          ),
+        ),
+      }),
+    ),
+    body: surface.apply(
+      surface.apply(surface.name("choose"), surface.integer(0)),
+      surface.integer(1),
+    ),
+  }));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.thunkEvaluations, 1);
+});
+
+Deno.test("allocator grows memory after lazy loop state crosses its cached limit", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "choose",
+    value: surface.lambda(
+      "unused",
+      surface.lambda("remaining", {
+        kind: "if",
+        condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+        consequent: surface.integer(42),
+        alternate: surface.apply(
+          surface.apply(
+            surface.name("choose"),
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("unused"),
+              surface.integer(1),
+            ),
+          ),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("remaining"),
+            surface.integer(1),
+          ),
+        ),
+      }),
+    ),
+    body: surface.apply(
+      surface.apply(surface.name("choose"), surface.integer(0)),
+      surface.integer(2_500),
+    ),
+  }));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.thunkEvaluations, 1);
+  equal(execution.stats.allocatedBytes, 80_048);
 });
 
 Deno.test("immediately applied lambdas allocate no closure", async () => {
@@ -808,12 +1119,16 @@ async function runCompiledWasm(module: EncodedFunctionalModule): Promise<Functio
   }
 }
 
-function singleDefinitionModule(expression: FunctionalSurfaceExpression): EncodedFunctionalModule {
+function singleDefinitionModule(
+  expression: FunctionalSurfaceExpression,
+  evaluationProfile: FunctionalEvaluationProfile = FunctionalEvaluationProfile.LazyCallByNeed,
+): EncodedFunctionalModule {
   return buildFunctionalSurfaceModule(
     [{ name: "main", parameters: [], annotation: null, body: expression }],
     [],
     "main",
     0,
+    { evaluationProfile },
   );
 }
 

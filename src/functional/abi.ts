@@ -19,6 +19,7 @@ import {
   LazuliCoreTag,
   LazuliDefinitionWord,
   type LazuliDiagnosticCode,
+  LazuliEvaluationMode,
   type LazuliSourceType,
   type LazuliSpan,
   LazuliSurfaceTag,
@@ -56,6 +57,7 @@ export const FunctionalExpressionTag = LazuliSurfaceTag;
 export const FunctionalCoreTag = LazuliCoreTag;
 export const FunctionalUnaryOperator = LazuliUnaryOperator;
 export const FunctionalBinaryOperator = LazuliBinaryOperator;
+export const FunctionalEvaluationMode = LazuliEvaluationMode;
 
 export type FunctionalExpressionTag =
   (typeof FunctionalExpressionTag)[keyof typeof FunctionalExpressionTag];
@@ -64,9 +66,12 @@ export type FunctionalUnaryOperator =
   (typeof FunctionalUnaryOperator)[keyof typeof FunctionalUnaryOperator];
 export type FunctionalBinaryOperator =
   (typeof FunctionalBinaryOperator)[keyof typeof FunctionalBinaryOperator];
+export type FunctionalEvaluationMode =
+  (typeof FunctionalEvaluationMode)[keyof typeof FunctionalEvaluationMode];
 
 export const FunctionalEvaluationProfile = {
   LazyCallByNeed: "lazy-call-by-need-v1",
+  StrictEager: "strict-eager-v1",
 } as const;
 
 export type FunctionalEvaluationProfile =

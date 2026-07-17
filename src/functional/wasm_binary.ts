@@ -15,6 +15,11 @@ export interface WasmFunctionImport {
   readonly typeIndex: number;
 }
 
+export interface WasmFunctionType {
+  readonly parameters: readonly number[];
+  readonly results: readonly number[];
+}
+
 export class WasmInstructions {
   readonly bytes: number[] = [];
   readonly localTypes: number[] = [];
@@ -67,6 +72,11 @@ export class WasmInstructions {
     this.unsigned(index);
   }
 
+  branch(depth: number): void {
+    this.emit(0x0c);
+    this.unsigned(depth);
+  }
+
   i32Const(value: number): void {
     this.emit(0x41);
     this.signed32(value);
@@ -109,6 +119,7 @@ export function encodeWasmModule(
   entryFunctionIndex: number,
   heapStart: number,
   specializedCallSiteCount: number,
+  additionalFunctionTypes: readonly WasmFunctionType[],
 ): Uint8Array<ArrayBuffer> {
   const types = [
     functionType([WasmValueType.I32], [WasmValueType.I32]),
@@ -116,6 +127,7 @@ export function encodeWasmModule(
     functionType([WasmValueType.I32, WasmValueType.I64], [WasmValueType.I64]),
     functionType([], [WasmValueType.I32]),
     functionType([WasmValueType.I32], [WasmValueType.I64]),
+    ...additionalFunctionTypes.map((type) => functionType(type.parameters, type.results)),
   ];
   const sections = [
     section(1, vector(types)),
@@ -137,6 +149,7 @@ export function encodeWasmModule(
         [0x7f, 0x01, 0x41, ...encodeSigned(BigInt(heapStart)), 0x0b],
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
         [0x7f, 0x00, 0x41, ...encodeSigned(BigInt(specializedCallSiteCount)), 0x0b],
       ]),
     ),
@@ -148,7 +161,7 @@ export function encodeWasmModule(
         [...name("thunkEvaluations"), 0x03, 0x01],
         [...name("runtimeFault"), 0x03, 0x02],
         [...name("heapTop"), 0x03, 0x00],
-        [...name("specializedCallSites"), 0x03, 0x03],
+        [...name("specializedCallSites"), 0x03, 0x04],
       ]),
     ),
     section(

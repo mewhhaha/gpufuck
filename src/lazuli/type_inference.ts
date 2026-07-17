@@ -546,7 +546,8 @@ class InferenceContext {
           if (dependency !== undefined) dependencies.add(dependency);
           return;
         }
-        case LazuliSurfaceTag.Let: {
+        case LazuliSurfaceTag.Let:
+        case LazuliSurfaceTag.StrictLet: {
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
           visit(
             this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
@@ -572,6 +573,7 @@ class InferenceContext {
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2), boundSymbols);
           return;
         case LazuliSurfaceTag.Apply:
+        case LazuliSurfaceTag.StrictApply:
         case LazuliSurfaceTag.Binary:
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), boundSymbols);
@@ -670,7 +672,8 @@ class InferenceContext {
         }
         return this.instantiateScheme(scheme);
       }
-      case LazuliSurfaceTag.Let: {
+      case LazuliSurfaceTag.Let:
+      case LazuliSurfaceTag.StrictLet: {
         const value = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
           environment,
@@ -744,7 +747,8 @@ class InferenceContext {
         );
         return { kind: "function", parameter, result: body };
       }
-      case LazuliSurfaceTag.Apply: {
+      case LazuliSurfaceTag.Apply:
+      case LazuliSurfaceTag.StrictApply: {
         const callee = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
           environment,

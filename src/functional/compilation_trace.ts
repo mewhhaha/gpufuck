@@ -295,6 +295,7 @@ function surfacePayload(module: EncodedFunctionalModule, tag: number, payload: n
       return `value=${payload === 0 ? "false" : "true"}`;
     case FunctionalExpressionTag.Name:
     case FunctionalExpressionTag.Let:
+    case FunctionalExpressionTag.StrictLet:
     case FunctionalExpressionTag.LetRec:
     case FunctionalExpressionTag.Lambda:
     case FunctionalExpressionTag.CaseArm:
@@ -302,6 +303,8 @@ function surfacePayload(module: EncodedFunctionalModule, tag: number, payload: n
       return `symbol=${symbol(module, payload)}`;
     case FunctionalExpressionTag.Binary:
       return `operator=${binaryOperatorName(payload)}`;
+    case FunctionalExpressionTag.StrictApply:
+      return "evaluation=strict";
     default:
       return "";
   }
@@ -324,17 +327,26 @@ function corePayload(
     case FunctionalCoreTag.Constructor:
       return `constructor=c${node.payload}:${module.constructorNames[node.payload] ?? "?"}`;
     case FunctionalCoreTag.Lambda:
-    case FunctionalCoreTag.Let:
     case FunctionalCoreTag.LetRec:
     case FunctionalCoreTag.PatternBind:
       return `symbol=${symbol(encoded, node.payload)}`;
+    case FunctionalCoreTag.Let:
+      return `symbol=${symbol(encoded, node.payload)} evaluation=${
+        evaluationName(node.evaluationMode)
+      }`;
     case FunctionalCoreTag.CaseArm:
       return `constructor=c${node.payload}:${module.constructorNames[node.payload] ?? "?"}`;
     case FunctionalCoreTag.Binary:
       return `operator=${binaryOperatorName(node.payload)}`;
+    case FunctionalCoreTag.Apply:
+      return `evaluation=${evaluationName(node.evaluationMode)}`;
     default:
       return node.payload === 0 ? "" : `payload=${node.payload}`;
   }
+}
+
+function evaluationName(mode: number): string {
+  return mode === 0 ? "lazy" : "strict";
 }
 
 function surfaceTagName(tag: number): string {

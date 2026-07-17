@@ -1,4 +1,8 @@
-import { type EncodedFunctionalModule, FunctionalBinaryOperator } from "./abi.ts";
+import {
+  type EncodedFunctionalModule,
+  FunctionalBinaryOperator,
+  FunctionalEvaluationProfile,
+} from "./abi.ts";
 import {
   buildFunctionalSurfaceModule,
   type FunctionalSurfaceCaseArm,
@@ -70,6 +74,7 @@ export function lowerTypeCoreProgram(
       typeCoreRuntimeDeclarations(),
       TYPE_CORE_ENTRY_DEFINITION,
       validated.sourceByteLength,
+      { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
     ),
     symbolValues: symbols.values,
     entryKind: validated.entryKind,

@@ -439,7 +439,7 @@ struct CoreNode {
   child2: u32,
   start_byte: u32,
   end_byte: u32,
-  reserved1: u32,
+  evaluation_mode: u32,
 }
 
 struct Definition {
@@ -3299,10 +3299,11 @@ fn optional_child_is_valid(parent_index: u32, child_index: u32) -> bool {
 
 fn node_shape_is_valid(node_index: u32) -> bool {
   let node = core_node(node_index);
-  if node.start_byte > node.end_byte || node.reserved1 != 0u { return false; }
+  if node.start_byte > node.end_byte || node.evaluation_mode > 1u { return false; }
   if node.tag == TAG_INTEGER || node.tag == TAG_BOOLEAN || node.tag == TAG_LOCAL ||
     node.tag == TAG_GLOBAL || node.tag == TAG_CONSTRUCTOR {
     return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
+      node.evaluation_mode == 0u &&
       (node.tag != TAG_BOOLEAN || node.payload <= 1u) &&
       (node.tag != TAG_GLOBAL || node.payload < state.definition_count) &&
       (node.tag != TAG_CONSTRUCTOR || node.payload < state.constructor_count);
@@ -3311,26 +3312,29 @@ fn node_shape_is_valid(node_index: u32) -> bool {
     node.tag == TAG_BINARY {
     return required_child_is_valid(node_index, node.child0) &&
       required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
+      (node.evaluation_mode == 0u || node.tag == TAG_LET || node.tag == TAG_APPLY) &&
       (node.tag != TAG_LET_REC || core_node(node.child0).tag == TAG_LAMBDA) &&
       (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 10u));
   }
   if node.tag == TAG_IF {
     return required_child_is_valid(node_index, node.child0) &&
       required_child_is_valid(node_index, node.child1) &&
-      required_child_is_valid(node_index, node.child2);
+      required_child_is_valid(node_index, node.child2) && node.evaluation_mode == 0u;
   }
   if node.tag == TAG_LAMBDA || node.tag == TAG_UNARY || node.tag == TAG_PATTERN_BIND {
     return required_child_is_valid(node_index, node.child0) && node.child1 == NO_INDEX &&
-      node.child2 == NO_INDEX && (node.tag != TAG_UNARY || node.payload == 1u);
+      node.child2 == NO_INDEX && node.evaluation_mode == 0u &&
+      (node.tag != TAG_UNARY || node.payload == 1u);
   }
   if node.tag == TAG_CASE {
     return required_child_is_valid(node_index, node.child0) &&
-      optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
+      optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
+      node.evaluation_mode == 0u;
   }
   if node.tag == TAG_CASE_ARM {
     return required_child_is_valid(node_index, node.child0) &&
       optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
-      node.payload < state.constructor_count;
+      node.payload < state.constructor_count && node.evaluation_mode == 0u;
   }
   return false;
 }

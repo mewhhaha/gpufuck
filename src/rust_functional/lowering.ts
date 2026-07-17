@@ -3,6 +3,7 @@ import {
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
+  FunctionalEvaluationProfile,
   type FunctionalSpan,
   type FunctionalTypeSchema,
 } from "../functional/abi.ts";
@@ -91,6 +92,7 @@ class RustFunctionalLowering {
         typeDeclarations,
         "gpu_main",
         this.program.span.endByte,
+        { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
       ),
     };
   }
