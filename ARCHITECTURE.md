@@ -675,19 +675,19 @@ sets, and sites beyond the inline budget retain the general closure path without
 Wasm emission. It is deliberately a representation pass rather than a source ownership checker.
 Every closure, constructor function, and thunk that can require storage receives a durable decision:
 
-| Storage class       | Meaning                                                               |
-| ------------------- | --------------------------------------------------------------------- |
-| `static`            | Reachable for the lifetime of one instantiated module                 |
-| `scalar-local`      | Virtual/code-and-local representation with no allocation on that path |
-| `invocation-region` | Immutable graph storage bounded by one logical invocation             |
-| `owned`             | A boundary transfers responsibility for eventual release              |
-| `host-managed`      | The host retains lifetime responsibility and promises safe sharing    |
+| Storage class      | Meaning                                                               |
+| ------------------ | --------------------------------------------------------------------- |
+| `static`           | Reachable for the lifetime of one instantiated module                 |
+| `scalar-local`     | Virtual/code-and-local representation with no allocation on that path |
+| `invocation-arena` | Immutable graph storage bounded by one logical invocation             |
+| `owned`            | A boundary transfers responsibility for eventual release              |
+| `host-managed`     | The host retains lifetime responsibility and promises safe sharing    |
 
-A scalar-local closure can carry `escapeStorage: "invocation-region"`. That distinction is
-important: specialization may keep the common call path allocation-free without claiming that a
-first-class escape is stack-safe. Local recursive closures use invocation storage because their
-environment may contain a self reference. Global thunks remain static because memoized results can
-be reachable from the module's definition table after a call returns.
+A scalar-local closure can carry `escapeStorage: "invocation-arena"`. That distinction is important:
+specialization may keep the common call path allocation-free without claiming that a first-class
+escape is stack-safe. Local recursive closures use invocation storage because their environment may
+contain a self reference. Global thunks remain static because memoized results can be reachable from
+the module's definition table after a call returns.
 
 Code generation consumes the plan and treats a missing decision as an invariant violation with the
 value kind and Core node attached. `planFunctionalModuleStorage()` exposes the same immutable plan
@@ -712,11 +712,23 @@ The frontend must lower a language requiring tracing GC or another lifetime mode
 runtime operations and host contracts. Functional Core does not silently choose one
 memory-management policy for every language.
 
-The standard runner initializes static values before marking the invocation region. When the plan
+The standard runner initializes static values before opening the invocation arena. When the plan
 contains no static thunk, it resets that region after decoding the public result, including failure
-paths and temporary encoded arguments. If a static thunk exists, the plan sets
-`automaticInvocationReset` to false and preserves the heap so memoized pointers remain valid. The
-explicit scratch API remains available to an embedding with stronger reachability knowledge.
+paths and temporary encoded arguments. If a static thunk exists, the plan sets `automaticArenaReset`
+to false and preserves the heap so memoized pointers remain valid. The explicit scratch API remains
+available to an embedding with stronger reachability knowledge.
+
+[`wasm_arena.ts`](src/functional/wasm_arena.ts) owns the runtime lifecycle. Arenas are nested and
+must reset in LIFO order. Opening one snapshots both the bump frontier and owned free-list head,
+then hides pre-existing free blocks so temporary allocation cannot consume storage whose ownership
+predates the arena. Reset discards encoded-value ownership records created above the mark and
+restores both frontiers. The standard runner and the compatibility scratch-mark API use this same
+path.
+
+This supplies invocation and embedding arenas without adding an arena opcode to semantic Core. A
+source language that exposes lexically nested arenas inside one invocation must prove non-escape and
+lower its arena operations through an explicit runtime capability; the generic compiler must not
+infer that source-level lifetime promise from ordinary function types.
 
 ### 10.7 Public value ABI
 

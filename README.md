@@ -345,25 +345,31 @@ for frontend audits and build tooling:
 import { FunctionalStorageClass, planFunctionalModuleStorage } from "@mewhhaha/gpufuck";
 
 const storage = await planFunctionalModuleStorage(compilation.module);
-if (storage.summary.invocationRegionValues > 0) {
+if (storage.summary.invocationArenaValues > 0) {
   console.log("the module uses invocation-lifetime allocation");
 }
 ```
 
 The plan keeps semantic Core independent of a memory policy. Captureless and directly used closures
 prefer scalar-local representation; module definitions and nullary constructors have static
-lifetime; escaping closures, local thunks, and recursive environments use the invocation region. An
+lifetime; escaping closures, local thunks, and recursive environments use the invocation arena. An
 `escapeStorage` records the fallback when a value that is normally virtual becomes first-class.
 Ownership-transfer boundaries are `owned`, while frozen values remain `host-managed`.
-`summary.automaticInvocationReset` reports whether the standard runner can reclaim the invocation
-region after decoding the result. A module with a static memoized thunk keeps its heap because that
-thunk may retain values across calls.
+`summary.automaticArenaReset` reports whether the standard runner can reclaim the invocation region
+after decoding the result. A module with a static memoized thunk keeps its heap because that thunk
+may retain values across calls.
 
 This division is intentional: a frontend proves source moves, borrows, affine use, and destructor
 ordering. Gpufuck validates the chosen host contract, computes captures and escape fallbacks, and
 selects the Wasm representation. Persistent shared graphs still require an explicit frontend/runtime
 strategy such as reference counting or host management; Functional Core does not silently add a
 tracing collector.
+
+Embedders that instantiate emitted Wasm directly can create nested temporary lifetimes with
+`beginFunctionalWasmArena(instance)`. Arena allocation is isolated from owned free-list blocks that
+predate it. `arena.reset()` must run from the innermost arena outward and restores both allocator
+frontiers. The older numeric scratch-mark functions remain as compatibility wrappers over the same
+arena implementation.
 
 ## Wasm boundary
 

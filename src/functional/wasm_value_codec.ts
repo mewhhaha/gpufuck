@@ -41,52 +41,17 @@ const allocationGroups = new WeakMap<
   WebAssembly.Instance,
   Map<number, readonly { readonly pointer: number; readonly byteLength: number }[]>
 >();
-const scratchMarks = new WeakMap<WebAssembly.Instance, Set<number>>();
 
-export function markFunctionalWasmScratch(instance: WebAssembly.Instance): number {
-  const heapTop = instance.exports.heapTop;
-  if (!(heapTop instanceof WebAssembly.Global)) {
-    throw new Error("functional WASM module omitted its heapTop export");
-  }
-  const mark = Number(heapTop.value) >>> 0;
-  let marks = scratchMarks.get(instance);
-  if (marks === undefined) {
-    marks = new Set();
-    scratchMarks.set(instance, marks);
-  }
-  marks.add(mark);
-  return mark;
-}
-
-export function resetFunctionalWasmScratch(
+export function discardEncodedFunctionalWasmValuesFrom(
   instance: WebAssembly.Instance,
   mark: number,
 ): void {
-  const marks = scratchMarks.get(instance);
-  if (!Number.isSafeInteger(mark) || mark < 0 || mark > 0xffffffff || !marks?.has(mark)) {
-    throw new RangeError(`functional WASM scratch mark is not active for this instance: ${mark}`);
-  }
-  const heapTop = instance.exports.heapTop;
-  const freeListHead = instance.exports.freeListHead;
-  if (!(heapTop instanceof WebAssembly.Global) || !(freeListHead instanceof WebAssembly.Global)) {
-    throw new Error("functional WASM module omitted heapTop or freeListHead exports");
-  }
-  const current = Number(heapTop.value) >>> 0;
-  if (mark > current) {
-    throw new RangeError(`functional WASM scratch mark ${mark} exceeds heap top ${current}`);
-  }
-  heapTop.value = mark;
-  freeListHead.value = 0;
   const groups = allocationGroups.get(instance);
-  if (groups !== undefined) {
-    for (const [root, allocations] of groups) {
-      if (allocations.some((allocation) => allocation.pointer >= mark)) {
-        groups.delete(root);
-      }
+  if (groups === undefined) return;
+  for (const [root, allocations] of groups) {
+    if (allocations.some((allocation) => allocation.pointer >= mark)) {
+      groups.delete(root);
     }
-  }
-  for (const activeMark of marks) {
-    if (activeMark >= mark) marks.delete(activeMark);
   }
 }
 

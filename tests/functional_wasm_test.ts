@@ -1,6 +1,7 @@
 import { deepStrictEqual, equal, ok, rejects, throws } from "node:assert/strict";
 
 import {
+  beginFunctionalWasmArena,
   buildFunctionalSurfaceModule,
   compileFunctionalModuleToWasm,
   type EncodedFunctionalModule,
@@ -23,7 +24,9 @@ import {
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   linkFunctionalModules,
+  markFunctionalWasmScratch,
   requestWebGpuDevice,
+  resetFunctionalWasmScratch,
   runFunctionalWasmModule,
   runFunctionalWasmModuleAsync,
   surface,
@@ -526,6 +529,76 @@ Deno.test("round-trips text, bytes, arrays, slices, and resources through WebAss
     } finally {
       compilation.module.destroy();
     }
+  }
+});
+
+Deno.test("nested WebAssembly arenas reset in order without consuming owned free blocks", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: {
+        kind: "function",
+        parameter: { kind: "integer" },
+        result: { kind: "integer" },
+      },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("arena fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const allocate = instance.exports.allocate;
+    const free = instance.exports.free;
+    const heapTop = instance.exports.heapTop;
+    const freeListHead = instance.exports.freeListHead;
+    ok(typeof initialize === "function");
+    ok(typeof allocate === "function");
+    ok(typeof free === "function");
+    ok(heapTop instanceof WebAssembly.Global);
+    ok(freeListHead instanceof WebAssembly.Global);
+    initialize();
+
+    const ownedPointer = allocate(8) as number;
+    free(ownedPointer, 8);
+    equal(Number(freeListHead.value), ownedPointer);
+
+    const outer = beginFunctionalWasmArena(instance);
+    equal(Number(freeListHead.value), 0);
+    const arenaPointer = allocate(8) as number;
+    equal(arenaPointer, outer.mark);
+    const nested = beginFunctionalWasmArena(instance);
+    allocate(16);
+    throws(
+      () => outer.reset(),
+      /cannot reset before its nested arena/,
+    );
+    nested.reset();
+    equal(nested.active, false);
+    equal(Number(heapTop.value), nested.mark);
+    outer.reset();
+    equal(outer.active, false);
+    equal(Number(heapTop.value), outer.mark);
+    equal(Number(freeListHead.value), ownedPointer);
+    throws(() => outer.reset(), /already reset/);
+
+    const reusedPointer = allocate(8) as number;
+    equal(reusedPointer, ownedPointer);
+    free(reusedPointer, 8);
+
+    const scratchMark = markFunctionalWasmScratch(instance);
+    allocate(8);
+    resetFunctionalWasmScratch(instance, scratchMark);
+    equal(Number(heapTop.value), scratchMark);
+    equal(Number(freeListHead.value), ownedPointer);
+  } finally {
+    compilation.module.destroy();
   }
 });
 

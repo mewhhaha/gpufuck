@@ -22,15 +22,14 @@ import {
   invalidFunctionalWasmInit,
   throwFunctionalWasmTrap,
 } from "./wasm_host_boundary.ts";
+import { beginFunctionalWasmArena } from "./wasm_arena.ts";
 import {
   decodeFunctionalWasmValue,
   describeFunctionalType,
   encodeFunctionalWasmValue,
   type FunctionalWasmValue,
   FunctionalWasmValueError,
-  markFunctionalWasmScratch,
   releaseEncodedFunctionalWasmValue,
-  resetFunctionalWasmScratch,
 } from "./wasm_value_codec.ts";
 
 export type { FunctionalWasmValue } from "./wasm_value_codec.ts";
@@ -162,9 +161,9 @@ async function runFunctionalWasmAttempt(
       throwFunctionalWasmTrap(module, nodes, instance, cause);
     }
   }
-  const invocationMark = heapTop instanceof WebAssembly.Global &&
-      artifact.automaticInvocationReset
-    ? markFunctionalWasmScratch(instance)
+  const invocationArena = heapTop instanceof WebAssembly.Global &&
+      artifact.automaticArenaReset
+    ? beginFunctionalWasmArena(instance)
     : undefined;
   let argument: bigint | undefined;
   const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
@@ -292,9 +291,7 @@ async function runFunctionalWasmAttempt(
         releaseEncodedFunctionalWasmValue(instance, argument);
       }
     } finally {
-      if (invocationMark !== undefined) {
-        resetFunctionalWasmScratch(instance, invocationMark);
-      }
+      invocationArena?.reset();
     }
   }
 }

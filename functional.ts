@@ -154,9 +154,11 @@ export {
   type FunctionalWasmValueAbiLayout,
 } from "./src/functional/wasm_abi.ts";
 export {
+  beginFunctionalWasmArena,
+  type FunctionalWasmArena,
   markFunctionalWasmScratch,
   resetFunctionalWasmScratch,
-} from "./src/functional/wasm_value_codec.ts";
+} from "./src/functional/wasm_arena.ts";
 export {
   FUNCTIONAL_ARRAY_TYPE_NAME,
   FUNCTIONAL_BYTES_TYPE_NAME,

@@ -155,13 +155,13 @@ Deno.test("storage planning separates static, scalar-local, and recursive closur
     ok(closures.some((value) => value.storage === FunctionalStorageClass.Static));
     ok(closures.some((value) =>
       value.storage === FunctionalStorageClass.ScalarLocal &&
-      value.escapeStorage === FunctionalStorageClass.InvocationRegion
+      value.escapeStorage === FunctionalStorageClass.InvocationArena
     ));
-    ok(closures.some((value) => value.storage === FunctionalStorageClass.InvocationRegion));
+    ok(closures.some((value) => value.storage === FunctionalStorageClass.InvocationArena));
     ok(plan.summary.staticValues >= 1);
     ok(plan.summary.scalarLocalValues >= 1);
-    ok(plan.summary.invocationRegionValues >= 1);
-    equal(plan.summary.automaticInvocationReset, false);
+    ok(plan.summary.invocationArenaValues >= 1);
+    equal(plan.summary.automaticArenaReset, false);
 
     const execution = await runFunctionalWasmModule(compilation.module);
     deepStrictEqual(execution.value, { kind: "integer", value: 42 });
@@ -228,7 +228,7 @@ Deno.test("storage planning preserves frontend-selected host ownership contracts
       }, {
         path: "Runtime.echo.parameter",
         direction: "module-to-host",
-        storage: FunctionalStorageClass.InvocationRegion,
+        storage: FunctionalStorageClass.InvocationArena,
       }, {
         path: "Runtime.echo.result",
         direction: "host-to-module",

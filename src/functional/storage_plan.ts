@@ -5,7 +5,7 @@ import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 export const FunctionalStorageClass = {
   Static: "static",
   ScalarLocal: "scalar-local",
-  InvocationRegion: "invocation-region",
+  InvocationArena: "invocation-arena",
   Owned: "owned",
   HostManaged: "host-managed",
 } as const;
@@ -34,10 +34,10 @@ export interface FunctionalBoundaryStorageDecision {
 export interface FunctionalStoragePlanSummary {
   readonly staticValues: number;
   readonly scalarLocalValues: number;
-  readonly invocationRegionValues: number;
+  readonly invocationArenaValues: number;
   readonly ownedBoundaries: number;
   readonly hostManagedBoundaries: number;
-  readonly automaticInvocationReset: boolean;
+  readonly automaticArenaReset: boolean;
 }
 
 export interface FunctionalStoragePlan {
@@ -101,7 +101,7 @@ export function createFunctionalStoragePlan(
         record({
           coreNode: nodeIndex,
           valueKind: "closure",
-          storage: FunctionalStorageClass.InvocationRegion,
+          storage: FunctionalStorageClass.InvocationArena,
           capturedLocalCount,
           reason: "a local recursive closure may contain a self reference",
         });
@@ -110,7 +110,7 @@ export function createFunctionalStoragePlan(
           coreNode: nodeIndex,
           valueKind: "closure",
           storage: FunctionalStorageClass.ScalarLocal,
-          escapeStorage: FunctionalStorageClass.InvocationRegion,
+          escapeStorage: FunctionalStorageClass.InvocationArena,
           capturedLocalCount,
           reason: directCallees.has(nodeIndex)
             ? "the lambda is directly applied and can remain virtual"
@@ -132,7 +132,7 @@ export function createFunctionalStoragePlan(
         valueKind: "constructor",
         storage: arity === 0
           ? FunctionalStorageClass.Static
-          : FunctionalStorageClass.InvocationRegion,
+          : FunctionalStorageClass.InvocationArena,
         capturedLocalCount: 0,
         reason: arity === 0
           ? "a nullary constructor uses one module-lifetime value"
@@ -149,7 +149,7 @@ export function createFunctionalStoragePlan(
       record({
         coreNode: node.child0,
         valueKind: "thunk",
-        storage: FunctionalStorageClass.InvocationRegion,
+        storage: FunctionalStorageClass.InvocationArena,
         capturedLocalCount: captureAnalysis.freeLocalDepths(node.child0).length,
         reason: `lazy let at core node ${nodeIndex} memoizes within one invocation`,
       });
@@ -164,7 +164,7 @@ export function createFunctionalStoragePlan(
       record({
         coreNode: node.child1,
         valueKind: "thunk",
-        storage: FunctionalStorageClass.InvocationRegion,
+        storage: FunctionalStorageClass.InvocationArena,
         capturedLocalCount: captureAnalysis.freeLocalDepths(node.child1).length,
         reason:
           `lazy application at core node ${nodeIndex} memoizes its argument within one invocation`,
@@ -189,9 +189,9 @@ export function createFunctionalStoragePlan(
     scalarLocalValues: values.filter((value) =>
       value.storage === FunctionalStorageClass.ScalarLocal
     ).length,
-    invocationRegionValues: values.filter((value) =>
-      value.storage === FunctionalStorageClass.InvocationRegion ||
-      value.escapeStorage === FunctionalStorageClass.InvocationRegion
+    invocationArenaValues: values.filter((value) =>
+      value.storage === FunctionalStorageClass.InvocationArena ||
+      value.escapeStorage === FunctionalStorageClass.InvocationArena
     ).length,
     ownedBoundaries: boundaries.filter((boundary) =>
       boundary.storage === FunctionalStorageClass.Owned
@@ -199,7 +199,7 @@ export function createFunctionalStoragePlan(
     hostManagedBoundaries:
       boundaries.filter((boundary) => boundary.storage === FunctionalStorageClass.HostManaged)
         .length,
-    automaticInvocationReset: !values.some((value) =>
+    automaticArenaReset: !values.some((value) =>
       value.valueKind === "thunk" && value.storage === FunctionalStorageClass.Static
     ),
   });
@@ -236,7 +236,7 @@ function boundaryStorageDecisions(
         direction: "module-to-host",
         storage: transferredParameter
           ? FunctionalStorageClass.Owned
-          : FunctionalStorageClass.InvocationRegion,
+          : FunctionalStorageClass.InvocationArena,
         reason: transferredParameter
           ? "the host operation takes ownership of its argument"
           : "the host operation borrows its argument for the call",

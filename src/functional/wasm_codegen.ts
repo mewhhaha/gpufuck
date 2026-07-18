@@ -166,7 +166,7 @@ interface UncurriedWorker {
 export interface FunctionalWasmArtifact {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly specializedCallSites: number;
-  readonly automaticInvocationReset: boolean;
+  readonly automaticArenaReset: boolean;
 }
 
 export function compileFunctionalWasmArtifact(
@@ -235,7 +235,7 @@ class FunctionalWasmCompiler {
   readonly #hasLazyEvaluationBoundary: boolean;
   readonly #instrumentedFuel: boolean;
   readonly #compactRuntimeGlobals: CompactRuntimeGlobals;
-  readonly #automaticInvocationReset: boolean;
+  readonly #automaticArenaReset: boolean;
   #lambdaSetAnalysis: FunctionalLambdaSetAnalysis | undefined;
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
@@ -257,7 +257,7 @@ class FunctionalWasmCompiler {
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
     this.#instrumentedFuel = instrumentedFuel;
-    this.#automaticInvocationReset = storagePlan.summary.automaticInvocationReset;
+    this.#automaticArenaReset = storagePlan.summary.automaticArenaReset;
     this.#compactRuntimeGlobals = compactRuntimeGlobals(
       nodes,
       instrumentedFuel,
@@ -381,7 +381,7 @@ class FunctionalWasmCompiler {
     return {
       bytes,
       specializedCallSites: this.#specializedCallSiteCount,
-      automaticInvocationReset: this.#automaticInvocationReset,
+      automaticArenaReset: this.#automaticArenaReset,
     };
   }
 

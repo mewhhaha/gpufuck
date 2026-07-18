@@ -85,6 +85,7 @@
       "src/functional/type_program_contract.ts",
       "src/functional/wasm_binary.ts",
       "src/functional/wasm_abi.ts",
+      "src/functional/wasm_arena.ts",
       "src/functional/wasm_artifacts.ts",
       "src/functional/wasm_capture_analysis.ts",
       "src/functional/wasm_codegen.ts",
