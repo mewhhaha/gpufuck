@@ -532,21 +532,43 @@ function hostValueAsNumber(
     );
   }
   if (value.kind === "unit") return 0;
-  if (value.kind === "boolean") return value.value ? 1 : 0;
-  if (value.kind === "signed-integer-64") {
-    if (
-      value.value < -0x8000000000000000n || value.value > 0x7fffffffffffffffn
-    ) {
-      throw new RangeError(
+  if (value.kind === "boolean") {
+    const payload: unknown = value.value;
+    if (typeof payload !== "boolean") {
+      throw new TypeError(
         `functional WASM host field ${
           JSON.stringify(field)
-        } returned ${value.value}; expected signed i64`,
+        } returned ${typeof payload}; expected a boolean payload`,
       );
     }
-    return value.value;
+    return payload ? 1 : 0;
   }
-  if (value.kind === "float-32") return Math.fround(value.value);
-  if (value.kind === "float-64") return value.value;
+  if (value.kind === "signed-integer-64") {
+    const payload: unknown = value.value;
+    if (
+      typeof payload !== "bigint" ||
+      payload < -0x8000000000000000n || payload > 0x7fffffffffffffffn
+    ) {
+      throw new RangeError(
+        `functional WASM host field ${JSON.stringify(field)} returned ${
+          typeof payload === "bigint" ? payload : typeof payload
+        }; expected signed i64`,
+      );
+    }
+    return payload;
+  }
+  if (value.kind === "float-32" || value.kind === "float-64") {
+    const valueKind = value.kind;
+    const payload: unknown = value.value;
+    if (typeof payload !== "number") {
+      throw new TypeError(
+        `functional WASM host field ${
+          JSON.stringify(field)
+        } returned ${typeof payload}; expected a ${valueKind} payload`,
+      );
+    }
+    return valueKind === "float-32" ? Math.fround(payload) : payload;
+  }
   if (
     !Number.isSafeInteger(value.value) || value.value < -2_147_483_648 ||
     value.value > 2_147_483_647

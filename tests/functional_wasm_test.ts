@@ -2955,6 +2955,128 @@ Deno.test("rejects an unexpected entry argument before WebAssembly execution", a
   }
 });
 
+Deno.test("rejects malformed scalar argument payloads without coercion", async () => {
+  const cases: readonly {
+    readonly type: FunctionalType;
+    readonly argument: unknown;
+    readonly message: RegExp;
+  }[] = [{
+    type: { kind: "boolean" },
+    argument: { kind: "boolean", value: 1 },
+    message: /boolean argument payload must be boolean; received number/,
+  }, {
+    type: { kind: "signed-integer-64" },
+    argument: { kind: "signed-integer-64", value: 0x8000000000000000n },
+    message: /i64 argument payload must be a signed i64/,
+  }, {
+    type: { kind: "float-32" },
+    argument: { kind: "float-32", value: "1.5" },
+    message: /f32 argument payload must be a number; received string/,
+  }, {
+    type: { kind: "float-64" },
+    argument: { kind: "float-64", value: null },
+    message: /f64 argument payload must be a number; received object/,
+  }, {
+    type: FunctionalHostTypes.text as FunctionalType,
+    argument: { kind: "text", value: 42 },
+    message: /text argument payload must be a string; received number/,
+  }, {
+    type: FunctionalHostTypes.bytes as FunctionalType,
+    argument: { kind: "bytes", value: [1, 2, 3] },
+    message: /bytes argument payload must be Uint8Array; received \[object Array\]/,
+  }];
+  for (const testCase of cases) {
+    const encoded = buildFunctionalSurfaceModule(
+      [{
+        name: "main",
+        parameters: ["value"],
+        annotation: { kind: "function", parameter: testCase.type, result: testCase.type },
+        body: surface.name("value"),
+      }],
+      [],
+      "main",
+      0,
+    );
+    const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+    if (!compilation.ok) throw new Error("malformed scalar argument fixture did not compile");
+    try {
+      await rejects(
+        () =>
+          runFunctionalWasmModule(compilation.module, {
+            argument: testCase.argument as FunctionalWasmValue,
+          }),
+        (error) => {
+          ok(error instanceof FunctionalWasmBoundaryError);
+          equal(error.path, "argument");
+          ok(testCase.message.test(error.message), error.message);
+          return true;
+        },
+      );
+    } finally {
+      compilation.module.destroy();
+    }
+  }
+});
+
+Deno.test("rejects malformed scalar host results without coercion", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["read"],
+          body: surface.apply(
+            surface.name("read"),
+            surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+          ),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{
+          kind: "operation",
+          name: "read",
+          purity: "effectful",
+          parameter: { kind: "unit" },
+          result: { kind: "float-64" },
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("malformed scalar host result fixture did not compile");
+  try {
+    await rejects(
+      () =>
+        runFunctionalWasmModule(compilation.module, {
+          init: {
+            Environment: {
+              read: () => ({ kind: "float-64", value: "42" } as unknown as FunctionalWasmValue),
+            },
+          },
+        }),
+      (error) => {
+        ok(error instanceof FunctionalWasmRuntimeError);
+        equal(error.kind, "host-operation");
+        ok(error.message.includes("returned string; expected a float-64 payload"));
+        return true;
+      },
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("sequences unit-returning host effects through an explicit demand", async () => {
   const module = buildFunctionalSurfaceModule(
     [{

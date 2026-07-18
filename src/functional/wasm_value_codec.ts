@@ -223,7 +223,13 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== "boolean") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
-        encodedFields.push((BigInt(currentValue.value ? 1 : 0) << 3n) | 2n);
+        const payload: unknown = currentValue.value;
+        if (typeof payload !== "boolean") {
+          throw new TypeError(
+            `functional WASM boolean argument payload must be boolean; received ${typeof payload}`,
+          );
+        }
+        encodedFields.push((BigInt(payload ? 1 : 0) << 3n) | 2n);
         continue;
       }
       if (currentType.kind === "unit") {
@@ -241,10 +247,22 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== "signed-integer-64") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
+        const payload: unknown = currentValue.value;
+        if (
+          typeof payload !== "bigint" ||
+          payload < -0x8000000000000000n ||
+          payload > 0x7fffffffffffffffn
+        ) {
+          throw new RangeError(
+            `functional WASM i64 argument payload must be a signed i64; received ${
+              typeof payload === "bigint" ? payload : typeof payload
+            }`,
+          );
+        }
         encodedFields.push(allocateObject(
           NUMERIC_OBJECT_KIND,
           FunctionalWasmValueAbi.numericKinds.signedInteger64,
-          [currentValue.value],
+          [payload],
         ));
         continue;
       }
@@ -252,10 +270,16 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== "float-32") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
+        const payload: unknown = currentValue.value;
+        if (typeof payload !== "number") {
+          throw new TypeError(
+            `functional WASM f32 argument payload must be a number; received ${typeof payload}`,
+          );
+        }
         encodedFields.push(allocateObject(
           NUMERIC_OBJECT_KIND,
           FunctionalWasmValueAbi.numericKinds.float32,
-          [BigInt(float32Bits(currentValue.value))],
+          [BigInt(float32Bits(payload))],
         ));
         continue;
       }
@@ -263,10 +287,16 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== "float-64") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
+        const payload: unknown = currentValue.value;
+        if (typeof payload !== "number") {
+          throw new TypeError(
+            `functional WASM f64 argument payload must be a number; received ${typeof payload}`,
+          );
+        }
         encodedFields.push(allocateObject(
           NUMERIC_OBJECT_KIND,
           FunctionalWasmValueAbi.numericKinds.float64,
-          [BigInt.asIntN(64, float64Bits(currentValue.value))],
+          [BigInt.asIntN(64, float64Bits(payload))],
         ));
         continue;
       }
@@ -277,8 +307,14 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== "text") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
+        const payload: unknown = currentValue.value;
+        if (typeof payload !== "string") {
+          throw new TypeError(
+            `functional WASM text argument payload must be a string; received ${typeof payload}`,
+          );
+        }
         encodedFields.push(
-          allocateBytes(TEXT_OBJECT_KIND, new TextEncoder().encode(currentValue.value)),
+          allocateBytes(TEXT_OBJECT_KIND, new TextEncoder().encode(payload)),
         );
         continue;
       }
@@ -286,7 +322,15 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== "bytes") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
-        encodedFields.push(allocateBytes(BYTES_OBJECT_KIND, currentValue.value));
+        const payload: unknown = currentValue.value;
+        if (!(payload instanceof Uint8Array)) {
+          throw new TypeError(
+            `functional WASM bytes argument payload must be Uint8Array; received ${
+              Object.prototype.toString.call(payload)
+            }`,
+          );
+        }
+        encodedFields.push(allocateBytes(BYTES_OBJECT_KIND, payload));
         continue;
       }
       if (
