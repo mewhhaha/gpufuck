@@ -887,6 +887,41 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
       1,
       true,
     );
+    throws(() => retain(4n), WebAssembly.RuntimeError);
+    throws(
+      () => retain(BigInt(memory.buffer.byteLength - 8)),
+      WebAssembly.RuntimeError,
+    );
+    overflowView.setUint32(
+      overflowPointer + FunctionalWasmValueAbi.objectKindByteOffset,
+      0xffff_ffff,
+      true,
+    );
+    throws(() => retain(overflow), WebAssembly.RuntimeError);
+    throws(() => drop(overflow), WebAssembly.RuntimeError);
+    overflowView.setUint32(
+      overflowPointer + FunctionalWasmValueAbi.objectKindByteOffset,
+      FunctionalWasmValueAbi.objectKinds.constructor,
+      true,
+    );
+    overflowView.setUint32(
+      overflowPointer + FunctionalWasmValueAbi.objectValueCountByteOffset,
+      0xffff_ffff,
+      true,
+    );
+    throws(() => drop(overflow), WebAssembly.RuntimeError);
+    equal(
+      overflowView.getUint32(
+        overflowPointer + FunctionalWasmValueAbi.objectReferenceCountByteOffset,
+        true,
+      ),
+      1,
+    );
+    overflowView.setUint32(
+      overflowPointer + FunctionalWasmValueAbi.objectValueCountByteOffset,
+      2,
+      true,
+    );
     drop(overflow);
     equal(allocate(24), firstReleasedPointer);
   } finally {

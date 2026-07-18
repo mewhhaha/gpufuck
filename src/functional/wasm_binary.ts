@@ -178,6 +178,11 @@ export class WasmInstructions {
     this.unsigned(offset);
   }
 
+  memorySize(): void {
+    this.usesMemory = true;
+    this.emit(0x3f, 0x00);
+  }
+
   memoryCopy(): void {
     this.usesMemory = true;
     this.emit(0xfc);
