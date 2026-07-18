@@ -45,7 +45,7 @@ Compilation requires Deno 2.9 or newer, Deno's unstable WebGPU API, and a WebGPU
 the host.
 
 ```sh
-deno add jsr:@mewhhaha/gpufuck@^0.1.0
+deno add jsr:@mewhhaha/gpufuck@^0.2.0
 ```
 
 Enable WebGPU in `deno.json`:

@@ -3,6 +3,15 @@
 All notable changes to gpufuck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 0.2.0 - 2026-07-19
+
+- Added first-class static text and bytes, structural equality, and explicit located runtime faults
+  across Functional Surface, GPU inference, compile-time IR, and Wasm execution.
+- Added nominal type and constructor module interfaces with incremental dependency tracking.
+- Added direct host-bound definitions for source-language external functions.
+- Expanded the Gleam frontend with inferred module interfaces, labeled calls and records, guards,
+  multiple-subject cases, exact lists, bit arrays, panic, and JavaScript externals.
+
 ## 0.1.0 - 2026-07-18
 
 Initial public release.
