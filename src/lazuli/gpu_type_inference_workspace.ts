@@ -1,4 +1,8 @@
-import { type EncodedLazuliSurface, LAZULI_NO_INDEX } from "./abi.ts";
+import {
+  type EncodedLazuliSurface,
+  LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
+  LAZULI_NO_INDEX,
+} from "./abi.ts";
 import { LazuliCompilationStateWord, LazuliCompilationStatus } from "./compiler_shader.ts";
 import type {
   GpuLazuliTypeInferenceOptions,
@@ -22,7 +26,6 @@ import {
 } from "./type_inference_shader.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
-const MAXIMUM_CONSTRUCTOR_ARITY = 64;
 export const INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY = 64;
 const INITIAL_TYPE_RECORDS_PER_INPUT = 4;
 const INITIAL_MINIMUM_FRAME_CAPACITY = 64;
@@ -100,7 +103,7 @@ export function workspaceLayout(
     "schema scratch capacity",
     checkedProduct("schema parameter mapping", Math.max(schemaNodeCount, typeParameterCount), 2),
     checkedProduct("schema traversal", schemaNodeCount, 3),
-    MAXIMUM_CONSTRUCTOR_ARITY,
+    LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
     32,
   );
   const inferredTypeTraversalCapacity = checkedSum(
@@ -117,7 +120,7 @@ export function workspaceLayout(
       ),
       3,
     ),
-    MAXIMUM_CONSTRUCTOR_ARITY,
+    LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
   );
   const defaultScratchCapacity = checkedSum(
     "scratch arena capacity",

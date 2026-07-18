@@ -1,3 +1,5 @@
+import { LAZULI_MAXIMUM_CONSTRUCTOR_ARITY } from "./abi.ts";
+
 export const LAZULI_COMPILATION_STATE_WORD_LENGTH = 24;
 export const LAZULI_COMPILATION_STATE_BYTE_LENGTH = LAZULI_COMPILATION_STATE_WORD_LENGTH *
   Uint32Array.BYTES_PER_ELEMENT;
@@ -149,7 +151,7 @@ var<storage, read_write> compilation_states: array<CompilationState>;
 var<private> state: CompilationState;
 
 const NO_INDEX: u32 = 0xffffffffu;
-const MAXIMUM_CONSTRUCTOR_ARITY: u32 = 64u;
+const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${LAZULI_MAXIMUM_CONSTRUCTOR_ARITY}u;
 
 const STATUS_PENDING: u32 = 0u;
 const STATUS_OK: u32 = 1u;
