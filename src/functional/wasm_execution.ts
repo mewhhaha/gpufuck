@@ -428,11 +428,20 @@ export async function runFunctionalWasmModuleAsync(
         ) {
           const pending = Promise.resolve(returned).then(
             (result) => {
-              records.push({
-                field,
-                argument: stableArgument,
-                result: copyFunctionalWasmHostValue(result),
-              });
+              try {
+                records.push({
+                  field,
+                  argument: stableArgument,
+                  result: copyFunctionalWasmHostValue(result),
+                });
+              } catch (cause) {
+                throw functionalHostOperationError(
+                  module,
+                  capability.name,
+                  declaration.name,
+                  cause,
+                );
+              }
             },
             (cause) => {
               throw functionalHostOperationError(
@@ -552,32 +561,81 @@ function sameFunctionalWasmHostValue(
 function copyFunctionalWasmHostValue(
   value: FunctionalWasmHostValue,
 ): FunctionalWasmHostValue {
-  if (value.kind === "bytes") {
-    return { kind: "bytes", value: value.value.slice() };
-  }
-  if (value.kind === "tuple") {
-    return {
-      kind: "tuple",
-      values: [
-        copyFunctionalWasmHostValue(value.values[0]),
-        copyFunctionalWasmHostValue(value.values[1]),
-      ],
+  type CopyFrame =
+    | { readonly kind: "value"; readonly value: FunctionalWasmHostValue }
+    | {
+      readonly kind: "aggregate";
+      readonly value: Extract<
+        FunctionalWasmHostValue,
+        { readonly kind: "tuple" | "array" | "slice" | "constructor" }
+      >;
+      readonly childCount: number;
     };
+  const pending: CopyFrame[] = [{ kind: "value", value }];
+  const copiedValues: FunctionalWasmHostValue[] = [];
+  const activeValues = new WeakSet<object>();
+  while (pending.length !== 0) {
+    const frame = pending.pop()!;
+    if (frame.kind === "aggregate") {
+      const firstChild = copiedValues.length - frame.childCount;
+      if (firstChild < 0) {
+        throw new Error(
+          `functional WASM async snapshot expected ${frame.childCount} children; received ${copiedValues.length}`,
+        );
+      }
+      const children = copiedValues.splice(firstChild, frame.childCount);
+      activeValues.delete(frame.value);
+      if (frame.value.kind === "tuple") {
+        const first = children[0];
+        const second = children[1];
+        if (first === undefined || second === undefined) {
+          throw new Error("functional WASM async snapshot omitted a tuple field");
+        }
+        copiedValues.push({ kind: "tuple", values: [first, second] });
+      } else if (frame.value.kind === "constructor") {
+        copiedValues.push({
+          kind: "constructor",
+          name: frame.value.name,
+          fields: children,
+        });
+      } else {
+        copiedValues.push({ kind: frame.value.kind, values: children });
+      }
+      continue;
+    }
+
+    const current = frame.value;
+    if (current.kind === "bytes") {
+      copiedValues.push({ kind: "bytes", value: current.value.slice() });
+      continue;
+    }
+    if (
+      current.kind !== "tuple" && current.kind !== "array" && current.kind !== "slice" &&
+      current.kind !== "constructor"
+    ) {
+      copiedValues.push({ ...current });
+      continue;
+    }
+    if (activeValues.has(current)) {
+      throw new TypeError(`functional WASM async snapshot contains a cyclic ${current.kind} value`);
+    }
+    activeValues.add(current);
+    const children = current.kind === "constructor" ? current.fields : current.values;
+    pending.push({
+      kind: "aggregate",
+      value: current,
+      childCount: children.length,
+    });
+    for (let index = children.length - 1; index >= 0; index--) {
+      pending.push({ kind: "value", value: children[index]! });
+    }
   }
-  if (value.kind === "array" || value.kind === "slice") {
-    return {
-      kind: value.kind,
-      values: value.values.map(copyFunctionalWasmHostValue),
-    };
+  if (copiedValues.length !== 1) {
+    throw new Error(
+      `functional WASM async snapshot produced ${copiedValues.length} roots; expected 1`,
+    );
   }
-  if (value.kind === "constructor") {
-    return {
-      kind: "constructor",
-      name: value.name,
-      fields: value.fields.map(copyFunctionalWasmHostValue),
-    };
-  }
-  return { ...value };
+  return copiedValues[0]!;
 }
 
 function describeFunctionalWasmHostValue(

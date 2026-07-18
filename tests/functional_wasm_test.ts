@@ -2062,6 +2062,157 @@ Deno.test("async execution resumes suspending operations without replaying compl
   }
 });
 
+Deno.test("async replay snapshots deeply nested host results without using the call stack", async () => {
+  const chainType: FunctionalType = { kind: "named", name: "Chain", arguments: [] };
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["build"],
+          body: surface.apply(
+            surface.name("build"),
+            surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+          ),
+        }],
+      },
+    }],
+    [{
+      name: "Chain",
+      parameters: [],
+      constructors: [{ name: "End", fields: [] }, {
+        name: "Link",
+        fields: [{ name: "value", type: { kind: "integer" } }, {
+          name: "next",
+          type: chainType,
+        }],
+      }],
+    }],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{
+          kind: "operation",
+          name: "build",
+          purity: "effectful",
+          execution: "suspending",
+          parameter: { kind: "unit" },
+          result: chainType,
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("deep async result fixture did not compile");
+  let result: FunctionalWasmValue = { kind: "constructor", name: "End", fields: [] };
+  for (let depth = 0; depth < 10_000; depth++) {
+    result = {
+      kind: "constructor",
+      name: "Link",
+      fields: [{ kind: "integer", value: depth }, result],
+    };
+  }
+  let buildCalls = 0;
+  try {
+    const execution = await runFunctionalWasmModuleAsync(compilation.module, {
+      init: {
+        Environment: {
+          build: async () => {
+            buildCalls += 1;
+            await Promise.resolve();
+            return result;
+          },
+        },
+      },
+      maximumResultNodes: 20_001,
+    });
+    equal(buildCalls, 1);
+    let current = execution.value;
+    for (let depth = 9_999; depth >= 0; depth--) {
+      if (current.kind !== "constructor" || current.name !== "Link") {
+        throw new Error(`deep async result returned ${current.kind} at depth ${depth}`);
+      }
+      deepStrictEqual(current.fields[0], { kind: "integer", value: depth });
+      current = current.fields[1]!;
+    }
+    deepStrictEqual(current, { kind: "constructor", name: "End", fields: [] });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("async replay reports cyclic host results as host-operation failures", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["build"],
+          body: surface.apply(
+            surface.name("build"),
+            surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+          ),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{
+          kind: "operation",
+          name: "build",
+          purity: "effectful",
+          execution: "suspending",
+          parameter: { kind: "unit" },
+          result: FunctionalHostTypes.array({ kind: "integer" }),
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("cyclic async result fixture did not compile");
+  const values: FunctionalWasmValue[] = [];
+  const result: FunctionalWasmValue = { kind: "array", values };
+  values.push(result);
+  try {
+    await rejects(
+      () =>
+        runFunctionalWasmModuleAsync(compilation.module, {
+          init: {
+            Environment: {
+              build: () => Promise.resolve(result),
+            },
+          },
+        }),
+      (error) => {
+        ok(error instanceof FunctionalWasmRuntimeError);
+        equal(error.kind, "host-operation");
+        equal(error.capability, "Environment");
+        equal(error.operation, "build");
+        ok(error.message.includes("cyclic array value"));
+        return true;
+      },
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("async execution cancels a suspended invocation and remains reusable", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
