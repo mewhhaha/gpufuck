@@ -203,7 +203,18 @@ export function encodeFunctionalWasmValue(
       }
 
       const currentType = frame.expected;
-      const currentValue = frame.input;
+      const candidate: unknown = frame.input;
+      if (
+        candidate === null || typeof candidate !== "object" ||
+        typeof (candidate as { readonly kind?: unknown }).kind !== "string"
+      ) {
+        throw new TypeError(
+          `functional WASM argument expected ${describeFunctionalType(currentType)}; received ${
+            candidate === null ? "null" : typeof candidate
+          }`,
+        );
+      }
+      const currentValue = candidate as FunctionalWasmValue;
       if (currentType.kind === "integer") {
         if (currentValue.kind !== "integer") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
@@ -342,6 +353,14 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== valueKind) {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
+        const values: unknown = currentValue.values;
+        if (!Array.isArray(values)) {
+          throw new TypeError(
+            `functional WASM ${valueKind} argument values must be an array; received ${
+              Object.prototype.toString.call(values)
+            }`,
+          );
+        }
         const elementType = currentType.arguments[0];
         if (elementType === undefined || currentType.arguments.length !== 1) {
           throw new TypeError(`${valueKind} boundary type requires exactly one element type`);
@@ -351,14 +370,14 @@ export function encodeFunctionalWasmValue(
           kind: "object",
           objectKind: valueKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
           payload: 0,
-          fieldCount: currentValue.values.length,
+          fieldCount: values.length,
           source: currentValue,
         });
-        for (let index = currentValue.values.length - 1; index >= 0; index--) {
+        for (let index = values.length - 1; index >= 0; index--) {
           pending.push({
             kind: "value",
             expected: elementType,
-            input: currentValue.values[index]!,
+            input: values[index] as FunctionalWasmValue,
           });
         }
         continue;
@@ -382,6 +401,14 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== "tuple") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
+        const values: unknown = currentValue.values;
+        if (!Array.isArray(values) || values.length !== 2) {
+          throw new TypeError(
+            `functional WASM tuple argument requires exactly 2 values; received ${
+              Array.isArray(values) ? values.length : Object.prototype.toString.call(values)
+            }`,
+          );
+        }
         const constructorIndex = module.constructorNames.indexOf(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME);
         if (constructorIndex < 0) {
           throw new Error("functional WASM input omitted tuple constructor");
@@ -397,37 +424,51 @@ export function encodeFunctionalWasmValue(
         pending.push({
           kind: "value",
           expected: currentType.values[1],
-          input: currentValue.values[1],
+          input: values[1] as FunctionalWasmValue,
         });
         pending.push({
           kind: "value",
           expected: currentType.values[0],
-          input: currentValue.values[0],
+          input: values[0] as FunctionalWasmValue,
         });
         continue;
       }
       if (currentValue.kind !== "constructor") {
         throw wasmArgumentTypeMismatch(currentType, currentValue);
       }
-      const constructorIndex = module.constructorNames.indexOf(currentValue.name);
+      const constructorName: unknown = currentValue.name;
+      if (typeof constructorName !== "string") {
+        throw new TypeError(
+          `functional WASM constructor argument name must be a string; received ${typeof constructorName}`,
+        );
+      }
+      const fields: unknown = currentValue.fields;
+      if (!Array.isArray(fields)) {
+        throw new TypeError(
+          `functional WASM constructor argument fields must be an array; received ${
+            Object.prototype.toString.call(fields)
+          }`,
+        );
+      }
+      const constructorIndex = module.constructorNames.indexOf(constructorName);
       if (constructorIndex < 0) {
         throw new TypeError(
-          `functional WASM argument names unknown constructor ${JSON.stringify(currentValue.name)}`,
+          `functional WASM argument names unknown constructor ${JSON.stringify(constructorName)}`,
         );
       }
       const fieldTypes = functionalStructuredFieldTypes(
         module,
         currentType,
-        currentValue.name,
+        constructorName,
       );
-      if (fieldTypes.length !== currentValue.fields.length) {
+      if (fieldTypes.length !== fields.length) {
         throw new TypeError(
           `functional WASM argument constructor ${
-            JSON.stringify(currentValue.name)
-          } expects ${fieldTypes.length} fields; received ${currentValue.fields.length}`,
+            JSON.stringify(constructorName)
+          } expects ${fieldTypes.length} fields; received ${fields.length}`,
         );
       }
-      enterStructuredValue(currentValue, `constructor ${JSON.stringify(currentValue.name)}`);
+      enterStructuredValue(currentValue, `constructor ${JSON.stringify(constructorName)}`);
       pending.push({
         kind: "object",
         objectKind: CONSTRUCTOR_OBJECT_KIND,
@@ -439,7 +480,7 @@ export function encodeFunctionalWasmValue(
         pending.push({
           kind: "value",
           expected: fieldTypes[index]!,
-          input: currentValue.fields[index]!,
+          input: fields[index] as FunctionalWasmValue,
         });
       }
     }

@@ -3018,6 +3018,58 @@ Deno.test("rejects malformed scalar argument payloads without coercion", async (
   }
 });
 
+Deno.test("rejects malformed aggregate argument shapes with boundary evidence", async () => {
+  const integer: FunctionalType = { kind: "integer" };
+  const cases: readonly {
+    readonly type: FunctionalType;
+    readonly argument: unknown;
+    readonly message: RegExp;
+  }[] = [{
+    type: integer,
+    argument: null,
+    message: /argument expected integer; received null/,
+  }, {
+    type: { kind: "tuple", values: [integer, integer] },
+    argument: { kind: "tuple", values: [{ kind: "integer", value: 1 }] },
+    message: /tuple argument requires exactly 2 values; received 1/,
+  }, {
+    type: FunctionalHostTypes.array(integer) as FunctionalType,
+    argument: { kind: "array", values: { first: { kind: "integer", value: 1 } } },
+    message: /array argument values must be an array; received \[object Object\]/,
+  }];
+  for (const testCase of cases) {
+    const encoded = buildFunctionalSurfaceModule(
+      [{
+        name: "main",
+        parameters: ["value"],
+        annotation: { kind: "function", parameter: testCase.type, result: testCase.type },
+        body: surface.name("value"),
+      }],
+      [],
+      "main",
+      0,
+    );
+    const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+    if (!compilation.ok) throw new Error("malformed aggregate argument fixture did not compile");
+    try {
+      await rejects(
+        () =>
+          runFunctionalWasmModule(compilation.module, {
+            argument: testCase.argument as FunctionalWasmValue,
+          }),
+        (error) => {
+          ok(error instanceof FunctionalWasmBoundaryError);
+          equal(error.path, "argument");
+          ok(testCase.message.test(error.message), error.message);
+          return true;
+        },
+      );
+    } finally {
+      compilation.module.destroy();
+    }
+  }
+});
+
 Deno.test("rejects malformed scalar host results without coercion", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
