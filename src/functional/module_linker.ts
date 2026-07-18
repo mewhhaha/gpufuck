@@ -151,13 +151,28 @@ export function createFunctionalModuleArtifact(
     }
     exportNames.add(exported.name);
   }
+  let snapshot: FunctionalModuleArtifact;
+  try {
+    snapshot = structuredClone(artifact);
+  } catch (cause) {
+    throw new FunctionalLinkError({
+      code: "F4001",
+      kind: "invalid-artifact",
+      module: artifact.name,
+      message: `functional module ${
+        JSON.stringify(artifact.name)
+      } contains metadata that cannot be snapshotted: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    }, cause);
+  }
   return Object.freeze({
-    ...artifact,
-    definitions: Object.freeze([...artifact.definitions]),
-    typeDeclarations: Object.freeze([...artifact.typeDeclarations]),
-    imports: Object.freeze([...artifact.imports]),
-    exports: Object.freeze([...artifact.exports]),
-    options: Object.freeze({ ...artifact.options }),
+    ...snapshot,
+    definitions: Object.freeze(snapshot.definitions),
+    typeDeclarations: Object.freeze(snapshot.typeDeclarations),
+    imports: Object.freeze(snapshot.imports),
+    exports: Object.freeze(snapshot.exports),
+    options: Object.freeze(snapshot.options),
   });
 }
 

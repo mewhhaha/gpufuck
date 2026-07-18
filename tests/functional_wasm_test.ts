@@ -4,6 +4,7 @@ import {
   beginFunctionalWasmArena,
   buildFunctionalSurfaceModule,
   compileFunctionalModuleToWasm,
+  createFunctionalModuleArtifact,
   type EncodedFunctionalModule,
   encodeFunctionalWasmArenaValue,
   encodeFunctionalWasmOwnedValue,
@@ -15,6 +16,7 @@ import {
   FunctionalEvaluationProfile,
   FunctionalHostTypes,
   FunctionalLinkError,
+  type FunctionalModuleArtifact,
   FunctionalNumericConversion,
   FunctionalPersistentSharing,
   type FunctionalSurfaceExpression,
@@ -2593,6 +2595,30 @@ Deno.test("lazy callable exports retain the general WebAssembly runtime", async 
   } finally {
     compilation.module.destroy();
   }
+});
+
+Deno.test("validated module artifacts detach nested frontend state", () => {
+  const body: { kind: "integer"; value: number } = { kind: "integer", value: 1 };
+  const artifact: FunctionalModuleArtifact = {
+    name: "application",
+    definitions: [{ name: "main", parameters: [], annotation: null, body }],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{
+      name: "main",
+      definition: "main",
+      type: { kind: "integer" },
+    }],
+    sourceByteLength: 1,
+    options: {},
+  };
+  const snapshot = createFunctionalModuleArtifact(artifact);
+  body.value = 2;
+  const snapshotBody = snapshot.definitions[0]?.body;
+  if (snapshotBody?.kind !== "integer") {
+    throw new Error(`module artifact snapshot returned ${snapshotBody?.kind ?? "no body"}`);
+  }
+  equal(snapshotBody.value, 1);
 });
 
 Deno.test("links typed imports and exports from separately prepared functional modules", async () => {
