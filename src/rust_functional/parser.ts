@@ -418,6 +418,11 @@ class RustFunctionalParser {
   }
 
   private parseUnary(options: ExpressionOptions): RustFunctionalExpression {
+    if (this.consumeText("&")) {
+      const start = this.previous();
+      const value = this.parseUnary(options);
+      return { kind: "borrow", value, span: combine(start.span, value.span) };
+    }
     if (!this.consumeText("-")) return this.parsePostfix(options);
     const start = this.previous();
     const body = this.parseUnary(options);

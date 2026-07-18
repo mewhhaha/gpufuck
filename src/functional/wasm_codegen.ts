@@ -73,10 +73,17 @@ import {
   wideLiteralBits,
 } from "./wasm_numeric.ts";
 import {
+  ownedValueExportFunction,
+  releaseOwnedValueFunction,
+  retainOwnedValueFunction,
+} from "./wasm_owned_runtime.ts";
+import {
   createFunctionalStoragePlan,
+  FunctionalStorageClass,
   type FunctionalStorageDecision,
   type FunctionalStoragePlan,
 } from "./storage_plan.ts";
+import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
 
 const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
@@ -145,6 +152,7 @@ interface CompactRuntimeGlobals {
 }
 
 interface ConstructorApplication {
+  readonly constructorNode: number;
   readonly constructorIndex: number;
   readonly arguments: readonly FunctionalCallArgument[];
 }
@@ -173,10 +181,57 @@ export function compileFunctionalWasmArtifact(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
   instrumentedFuel = false,
+  options: FunctionalWasmCompilationOptions = {},
 ): FunctionalWasmArtifact {
   const captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes);
-  const storagePlan = createFunctionalStoragePlan(module, nodes, captureAnalysis);
+  const storagePlan = createFunctionalStoragePlan(module, nodes, captureAnalysis, {
+    ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
+  });
   const entry = functionalWasmEntry(module);
+  const ownedTypeExports = options.ownedTypeExports ?? [];
+  if (ownedTypeExports.length !== 0) {
+    if (options.storageCore === undefined) {
+      throw new TypeError(
+        "functional WASM ownedTypeExports require a verified frontend storageCore",
+      );
+    }
+    if (
+      module.evaluationProfile !== FunctionalEvaluationProfile.StrictEager ||
+      nodes.some((node) =>
+        (node.tag === FunctionalCoreTag.Apply || node.tag === FunctionalCoreTag.Let) &&
+        node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
+      )
+    ) {
+      throw new TypeError(
+        "functional WASM ownedTypeExports require strict Core without lazy boundaries",
+      );
+    }
+    if (
+      !options.storageCore.operations.some((operation) =>
+        (operation.kind === "declare" && operation.lifetime === "owned") ||
+        (operation.kind === "promote" && operation.targetLifetime === "owned")
+      )
+    ) {
+      throw new TypeError(
+        "functional WASM ownedTypeExports require an owned declaration or promotion in Storage Core",
+      );
+    }
+    const exportNames = new Set(["main", ...module.wasmExports.map((exported) => exported.name)]);
+    for (const owned of ownedTypeExports) {
+      if (owned.name.length === 0) {
+        throw new TypeError("functional WASM owned type export name must not be empty");
+      }
+      requireFirstOrderFunctionalWasmType(module, owned.type, `owned type ${owned.name}`);
+      for (const generatedName of [`retain_${owned.name}`, `drop_${owned.name}`]) {
+        if (exportNames.has(generatedName)) {
+          throw new TypeError(
+            `functional WASM owned type export repeats ${JSON.stringify(generatedName)}`,
+          );
+        }
+        exportNames.add(generatedName);
+      }
+    }
+  }
   const scalarResult = functionalHostScalarType(entry.result);
   const compactScalar = module.evaluationProfile === FunctionalEvaluationProfile.StrictEager &&
     module.entryEffects.length === 0 &&
@@ -185,7 +240,9 @@ export function compileFunctionalWasmArtifact(
     entry.parameter === undefined &&
     scalarResult !== undefined &&
     scalarResult.kind !== "unit";
-  if (compactScalar) {
+  const compactScalarWithStorage = compactScalar && options.storageCore === undefined &&
+    ownedTypeExports.length === 0;
+  if (compactScalarWithStorage) {
     const compactCompiler = new FunctionalWasmCompiler(
       module,
       nodes,
@@ -193,6 +250,7 @@ export function compileFunctionalWasmArtifact(
       storagePlan,
       true,
       instrumentedFuel,
+      options,
     );
     const compactBytes = compactCompiler.compileCompactScalar();
     if (compactBytes !== undefined) return compactCompiler.artifact(compactBytes);
@@ -205,6 +263,7 @@ export function compileFunctionalWasmArtifact(
     storagePlan,
     false,
     instrumentedFuel,
+    options,
   );
   return compiler.artifact(compiler.compile());
 }
@@ -236,6 +295,8 @@ class FunctionalWasmCompiler {
   readonly #instrumentedFuel: boolean;
   readonly #compactRuntimeGlobals: CompactRuntimeGlobals;
   readonly #automaticArenaReset: boolean;
+  readonly #compilationOptions: FunctionalWasmCompilationOptions;
+  readonly #ownedRuntimeEnabled: boolean;
   #lambdaSetAnalysis: FunctionalLambdaSetAnalysis | undefined;
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
@@ -252,11 +313,14 @@ class FunctionalWasmCompiler {
     storagePlan: FunctionalStoragePlan,
     compactScalar: boolean,
     instrumentedFuel = false,
+    compilationOptions: FunctionalWasmCompilationOptions = {},
   ) {
     this.#module = module;
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
     this.#instrumentedFuel = instrumentedFuel;
+    this.#compilationOptions = compilationOptions;
+    this.#ownedRuntimeEnabled = (compilationOptions.ownedTypeExports?.length ?? 0) > 0;
     this.#automaticArenaReset = storagePlan.summary.automaticArenaReset;
     this.#compactRuntimeGlobals = compactRuntimeGlobals(
       nodes,
@@ -529,7 +593,7 @@ class FunctionalWasmCompiler {
       [WasmValueType.I32, WasmValueType.I32],
       [],
     );
-    const functions = [
+    const baseFunctions = [
       allocateFunction(),
       forceThunkFunction(),
       freeFunction(freeType),
@@ -554,6 +618,43 @@ class FunctionalWasmCompiler {
       ),
       ...callableFunctions,
     ];
+    const ownedTypeExports = this.#compilationOptions.ownedTypeExports ?? [];
+    const ownedRuntimeType = ownedTypeExports.length === 0
+      ? undefined
+      : this.functionTypeIndex([WasmValueType.I64], []);
+    const retainOwnedFunctionIndex = ownedRuntimeType === undefined
+      ? undefined
+      : this.#functionImports.length + baseFunctions.length;
+    const releaseOwnedFunctionIndex = retainOwnedFunctionIndex === undefined
+      ? undefined
+      : retainOwnedFunctionIndex + 1;
+    const ownedRuntimeFunctions = ownedRuntimeType === undefined ||
+        retainOwnedFunctionIndex === undefined || releaseOwnedFunctionIndex === undefined
+      ? []
+      : [
+        retainOwnedValueFunction(ownedRuntimeType, this.heapStart()),
+        releaseOwnedValueFunction(
+          ownedRuntimeType,
+          releaseOwnedFunctionIndex,
+          this.#functionImports.length + 2,
+          this.heapStart(),
+        ),
+        ...ownedTypeExports.flatMap((owned) => [
+          ownedValueExportFunction(
+            ownedRuntimeType,
+            retainOwnedFunctionIndex,
+            "retain",
+            owned.name,
+          ),
+          ownedValueExportFunction(
+            ownedRuntimeType,
+            releaseOwnedFunctionIndex,
+            "drop",
+            owned.name,
+          ),
+        ]),
+      ];
+    const functions = [...baseFunctions, ...ownedRuntimeFunctions];
     const indirectFunctionIndices = indirectFunctions.map((_, slot) =>
       this.indirectFunctionOffset() + slot
     );
@@ -570,10 +671,21 @@ class FunctionalWasmCompiler {
       this.#functionImports.length + 4 + indirectFunctions.length,
       this.#functionImports.length,
       this.#functionImports.length + 2,
-      this.#module.wasmExports.map((exported, index) => ({
-        name: exported.name,
-        functionIndex: entryFunctionIndex + 1 + index,
-      })),
+      [
+        ...this.#module.wasmExports.map((exported, index) => ({
+          name: exported.name,
+          functionIndex: entryFunctionIndex + 1 + index,
+        })),
+        ...(releaseOwnedFunctionIndex === undefined
+          ? []
+          : ownedTypeExports.flatMap((owned, index) => [{
+            name: `retain_${owned.name}`,
+            functionIndex: releaseOwnedFunctionIndex + 1 + index * 2,
+          }, {
+            name: `drop_${owned.name}`,
+            functionIndex: releaseOwnedFunctionIndex + 2 + index * 2,
+          }])),
+      ],
       this.#instrumentedFuel,
     );
   }
@@ -1136,6 +1248,11 @@ class FunctionalWasmCompiler {
 
     const constructorApplication = this.constructorApplication(nodeIndex);
     if (constructorApplication !== undefined) {
+      this.storageDecision(
+        constructorApplication.constructorNode,
+        "constructor",
+        [FunctionalStorageClass.InvocationArena],
+      );
       const fields: ValueSource[] = [];
       for (const argument of constructorApplication.arguments) {
         this.compileApplicationArgument(
@@ -3245,6 +3362,7 @@ class FunctionalWasmCompiler {
       return undefined;
     }
     return {
+      constructorNode: calleeIndex,
       constructorIndex: callee.payload,
       arguments: Object.freeze(reverseArguments.reverse()),
     };
@@ -3698,6 +3816,11 @@ class FunctionalWasmCompiler {
     instructions.localGet(pointer);
     instructions.i32Const(valueCount);
     instructions.i32Store(8);
+    if (this.#ownedRuntimeEnabled) {
+      instructions.localGet(pointer);
+      instructions.i32Const(1);
+      instructions.i32Store(12);
+    }
     return pointer;
   }
 
@@ -4123,6 +4246,11 @@ class FunctionalWasmCompiler {
     instructions.localGet(pointer);
     instructions.localGet(length);
     instructions.i32Store(8);
+    if (this.#ownedRuntimeEnabled) {
+      instructions.localGet(pointer);
+      instructions.i32Const(1);
+      instructions.i32Store(12);
+    }
     return pointer;
   }
 
@@ -4692,11 +4820,19 @@ class FunctionalWasmCompiler {
   storageDecision(
     coreNode: number,
     valueKind: "closure" | "constructor" | "thunk",
+    allowedStorage?: readonly FunctionalStorageClass[],
   ): FunctionalStorageDecision {
     const decision = this.#storageDecisions.get(`${valueKind}:${coreNode}`);
     if (decision === undefined) {
       throw new Error(
         `functional WASM ${valueKind} at core node ${coreNode} omitted its storage decision`,
+      );
+    }
+    if (allowedStorage !== undefined && !allowedStorage.includes(decision.storage)) {
+      throw new Error(
+        `functional WASM ${valueKind} at core node ${coreNode} uses ${decision.storage} storage; expected ${
+          allowedStorage.join(" or ")
+        }`,
       );
     }
     return decision;

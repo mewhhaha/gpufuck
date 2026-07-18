@@ -6,6 +6,7 @@ import {
   compileFunctionalModuleToWasm,
   type EncodedFunctionalModule,
   encodeFunctionalWasmArenaValue,
+  encodeFunctionalWasmOwnedValue,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
@@ -15,6 +16,7 @@ import {
   FunctionalHostTypes,
   FunctionalLinkError,
   FunctionalNumericConversion,
+  FunctionalPersistentSharing,
   type FunctionalSurfaceExpression,
   type FunctionalType,
   type FunctionalTypeSchema,
@@ -27,6 +29,7 @@ import {
   GpuFunctionalEvaluator,
   linkFunctionalModules,
   markFunctionalWasmScratch,
+  planFunctionalModuleStorage,
   promoteFunctionalWasmArenaValueToOwned,
   promoteFunctionalWasmArenaValueToParent,
   requestWebGpuDevice,
@@ -69,6 +72,7 @@ Deno.test("runs every checked-in Rust program through GPU compilation and WebAss
       ["examples/rust-functional/point.rs", 2_022],
       ["examples/rust-functional/factorial.rs", 120],
       ["examples/rust-functional/tuple.rs", 42],
+      ["examples/rust-functional/ownership.rs", 42],
     ] as const
   ) {
     await assertWasmMatchesGpu(
@@ -677,6 +681,7 @@ Deno.test("arena promotion preserves nested values and recursively drops owned r
     deepStrictEqual(owned.decode(), aggregateValue);
     const ownedHeapStart = outer.mark;
     const retained = owned.retain();
+    throws(() => owned.transfer(), /cannot transfer with 2 active leases/);
     owned.release();
     equal(owned.active, false);
     deepStrictEqual(dropped, []);
@@ -740,6 +745,99 @@ Deno.test("arena encoding reclaims partial allocations after a boundary mismatch
     );
     equal(allocate(24), arena.mark);
     arena.reset();
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("verified Storage Core emits standalone retain and recursive drop exports", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.integer(0),
+    }],
+    [],
+    "main",
+    0,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("owned drop export fixture did not compile");
+  try {
+    const plan = await planFunctionalModuleStorage(compilation.module);
+    const storageCore = {
+      persistentSharing: FunctionalPersistentSharing.ExplicitReferenceCounting,
+      operations: [
+        { kind: "declare" as const, value: "frontend-owned", lifetime: "owned" as const },
+        ...plan.core.operations,
+      ],
+    };
+    const ownedType: FunctionalType = {
+      kind: "tuple",
+      values: [
+        FunctionalHostTypes.text as FunctionalType,
+        FunctionalHostTypes.array({ kind: "integer" }) as FunctionalType,
+      ],
+    };
+    const bytes = await compileFunctionalModuleToWasm(compilation.module, {
+      storageCore,
+      ownedTypeExports: [{ name: "message", type: ownedType }],
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const retain = instance.exports.retain_message;
+    const drop = instance.exports.drop_message;
+    const allocate = instance.exports.allocate;
+    const freeListHead = instance.exports.freeListHead;
+    const heapTop = instance.exports.heapTop;
+    ok(typeof initialize === "function");
+    ok(typeof retain === "function");
+    ok(typeof drop === "function");
+    ok(typeof allocate === "function");
+    ok(freeListHead instanceof WebAssembly.Global);
+    ok(heapTop instanceof WebAssembly.Global);
+    initialize();
+
+    const owned = encodeFunctionalWasmOwnedValue(
+      instance,
+      compilation.module,
+      ownedType,
+      {
+        kind: "tuple",
+        values: [
+          { kind: "text", value: "owned" },
+          { kind: "array", values: [{ kind: "integer", value: 42 }] },
+        ],
+      },
+    );
+    const pointer = owned.transfer();
+    equal(owned.active, false);
+    retain(pointer);
+    drop(pointer);
+    equal(Number(freeListHead.value), 0);
+    drop(pointer);
+    const firstReleasedPointer = Number(freeListHead.value);
+    ok(firstReleasedPointer > 0);
+    const stableHeapTop = Number(heapTop.value);
+    for (let iteration = 0; iteration < 128; iteration++) {
+      const next = encodeFunctionalWasmOwnedValue(
+        instance,
+        compilation.module,
+        ownedType,
+        {
+          kind: "tuple",
+          values: [
+            { kind: "text", value: "owned" },
+            { kind: "array", values: [{ kind: "integer", value: iteration }] },
+          ],
+        },
+      );
+      drop(next.transfer());
+    }
+    equal(Number(heapTop.value), stableHeapTop);
+    equal(allocate(24), firstReleasedPointer);
   } finally {
     compilation.module.destroy();
   }

@@ -1,5 +1,6 @@
 import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
 import { compileFunctionalWasmArtifact, type FunctionalWasmArtifact } from "./wasm_codegen.ts";
+import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
 
 const MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS = 64;
 
@@ -23,7 +24,16 @@ const instrumentedWasmByResolvedCore = new Map<
 
 export async function compileFunctionalModuleToWasm(
   module: GpuFunctionalModule,
+  options: FunctionalWasmCompilationOptions = {},
 ): Promise<Uint8Array<ArrayBuffer>> {
+  if (options.storageCore !== undefined || options.ownedTypeExports !== undefined) {
+    return compileFunctionalWasmArtifact(
+      module,
+      await module.readCoreNodes(),
+      false,
+      options,
+    ).bytes.slice();
+  }
   return (await cachedFunctionalWasmArtifact(module)).bytes.slice();
 }
 

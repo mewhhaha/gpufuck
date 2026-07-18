@@ -26,6 +26,7 @@ const oneCharacterSymbols = new Set([
   "*",
   "/",
   "_",
+  "&",
 ]);
 
 export function lexRustFunctionalSource(source: string): readonly RustFunctionalToken[] {

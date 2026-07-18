@@ -8,6 +8,7 @@ export interface FunctionalWasmValueAbiLayout {
   readonly objectKindByteOffset: number;
   readonly objectPayloadByteOffset: number;
   readonly objectValueCountByteOffset: number;
+  readonly objectReferenceCountByteOffset: number;
   readonly objectValuesByteOffset: number;
   readonly objectKinds: Readonly<{
     closure: number;
@@ -42,6 +43,7 @@ export const FunctionalWasmValueAbi: FunctionalWasmValueAbiLayout = Object.freez
     objectKindByteOffset: 0,
     objectPayloadByteOffset: 4,
     objectValueCountByteOffset: 8,
+    objectReferenceCountByteOffset: 12,
     objectValuesByteOffset: 16,
     objectKinds: Object.freeze({
       closure: 1,

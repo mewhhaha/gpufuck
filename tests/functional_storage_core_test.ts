@@ -207,6 +207,44 @@ Deno.test("Storage Core rejects releasing a value retained by a live owner", () 
   ok(verification.diagnostic.message.includes("persistent owners"));
 });
 
+Deno.test("Storage Core verifies 1024 deterministic lexical ownership graphs", () => {
+  let randomState = 0x6d2b79f5;
+  const random = (): number => {
+    randomState = Math.imul(randomState ^ randomState >>> 15, 1 | randomState);
+    randomState ^= randomState + Math.imul(randomState ^ randomState >>> 7, 61 | randomState);
+    return (randomState ^ randomState >>> 14) >>> 0;
+  };
+
+  for (let graph = 0; graph < 1_024; graph++) {
+    const depth = random() % 8 + 1;
+    const operations: FunctionalStorageCoreProgram["operations"][number][] = [];
+    for (let arena = 0; arena < depth; arena++) {
+      operations.push({ kind: "enter-arena", arena: `arena-${arena}` });
+      operations.push({
+        kind: "declare",
+        value: `value-${arena}`,
+        lifetime: "invocation-arena",
+        arena: `arena-${arena}`,
+      });
+      if (arena > 0) {
+        operations.push({
+          kind: "reference",
+          owner: `value-${arena}`,
+          target: `value-${random() % arena}`,
+        });
+      }
+    }
+    for (let arena = depth - 1; arena >= 0; arena--) {
+      operations.push({ kind: "leave-arena", arena: `arena-${arena}` });
+    }
+    const verification = verifyFunctionalStorageCore({
+      persistentSharing: FunctionalPersistentSharing.Reject,
+      operations,
+    });
+    ok(verification.ok, verification.ok ? undefined : verification.diagnostic.message);
+  }
+});
+
 function sharedOwnedValueProgram(
   persistentSharing: FunctionalPersistentSharing,
   retainSharedValue: boolean,

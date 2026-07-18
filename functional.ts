@@ -149,6 +149,7 @@ export {
   type FunctionalStoredValueKind,
   planFunctionalModuleStorage,
 } from "./src/functional/storage_plan.ts";
+export type { FunctionalStorageReference } from "./src/functional/storage_reference_analysis.ts";
 export {
   type FunctionalWasmAsyncRunOptions,
   type FunctionalWasmExecution,
@@ -208,11 +209,13 @@ export type {
   FunctionalWasmBoundaryDiagnosticCode,
   FunctionalWasmBoundaryErrorDetails,
   FunctionalWasmBoundaryFaultKind,
+  FunctionalWasmCompilationOptions,
   FunctionalWasmExportDeclaration,
   FunctionalWasmHostOperation,
   FunctionalWasmHostValue,
   FunctionalWasmInit,
   FunctionalWasmInitBinding,
+  FunctionalWasmOwnedTypeExport,
   FunctionalWasmRuntimeDiagnosticCode,
   FunctionalWasmRuntimeErrorDetails,
   FunctionalWasmRuntimeFaultKind,

@@ -1,7 +1,8 @@
-import { deepStrictEqual, equal, ok } from "node:assert/strict";
+import { deepStrictEqual, equal, ok, rejects } from "node:assert/strict";
 
 import {
   buildFunctionalSurfaceModule,
+  compileFunctionalModuleToWasm,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
   FunctionalConstraintElaborator,
@@ -165,6 +166,27 @@ Deno.test("storage planning separates static, scalar-local, and recursive closur
     ok(plan.summary.scalarLocalValues >= 1);
     ok(plan.summary.invocationArenaValues >= 1);
     equal(plan.summary.automaticArenaReset, false);
+    ok(plan.references.length >= 1);
+    const coreReferences = new Set(
+      plan.core.operations.flatMap((operation) =>
+        operation.kind === "reference" ? [`${operation.owner}->${operation.target}`] : []
+      ),
+    );
+    for (const reference of plan.references) {
+      ok(coreReferences.has(`${reference.owner}->${reference.target}`));
+    }
+    const firstReference = plan.core.operations.find((operation) => operation.kind === "reference");
+    if (firstReference === undefined) throw new Error("storage plan omitted capture references");
+    await rejects(
+      () =>
+        compileFunctionalModuleToWasm(compilation.module, {
+          storageCore: {
+            persistentSharing: plan.core.persistentSharing,
+            operations: plan.core.operations.filter((operation) => operation !== firstReference),
+          },
+        }),
+      /omits required reference/,
+    );
 
     const execution = await runFunctionalWasmModule(compilation.module);
     deepStrictEqual(execution.value, { kind: "integer", value: 42 });

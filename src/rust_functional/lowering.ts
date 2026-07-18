@@ -21,6 +21,7 @@ import type {
   RustFunctionalType,
 } from "./ast.ts";
 import { RustFunctionalLoweringError } from "./diagnostic.ts";
+import { validateRustFunctionalOwnership } from "./ownership.ts";
 
 export interface LoweredRustFunctionalProgram {
   readonly program: RustFunctionalProgram;
@@ -63,6 +64,7 @@ class RustFunctionalLowering {
   constructor(private readonly program: RustFunctionalProgram) {}
 
   lower(): LoweredRustFunctionalProgram {
+    validateRustFunctionalOwnership(this.program);
     this.indexDeclarations();
     const typeDeclarations = this.program.declarations.flatMap((declaration) =>
       declaration.kind === "function" ? [] : [this.lowerTypeDeclaration(declaration)]
@@ -232,6 +234,8 @@ class RustFunctionalLowering {
       case "integer":
       case "boolean":
         return expression;
+      case "borrow":
+        return this.lowerExpression(expression.value);
       case "unit":
         return { kind: "name", name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, span: expression.span };
       case "tuple":

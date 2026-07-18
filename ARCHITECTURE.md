@@ -707,6 +707,15 @@ that violated the invariant. `planFunctionalModuleStorage()` returns the derived
 successful verification alongside its summary. A frontend that introduces more lexical arenas can
 submit its own `FunctionalStorageCoreProgram` to the same verifier before emission.
 
+[`storage_reference_analysis.ts`](src/functional/storage_reference_analysis.ts) derives every
+reference whose runtime owner and target have stable resolved-Core identities. This includes lexical
+closure and thunk captures, recursive self environments, retained constructor arguments, and global
+definitions. Values produced only through an opaque call have no stable local identity; their
+frontend must name the later boundary declaration or promotion explicitly. When a frontend supplies
+Storage Core to Wasm compilation, its declarations and references must be a superset of this derived
+graph with identical physical lifetimes. Verification is therefore an emission precondition rather
+than an optional audit.
+
 Code generation consumes the derived plan and treats a missing decision as an invariant violation
 with the value kind and Core node attached. A Rust-like frontend can compare its move/borrow proof
 with the selected representation; a lazy frontend can inspect where thunks introduce invocation
@@ -728,6 +737,14 @@ implements the last policy with independent `FunctionalWasmOwnedValue` leases; t
 recursively frees every encoded block and calls frontend-provided drop glue for opaque resources.
 This is deterministic destruction, not cycle collection. A language requiring cyclic persistent
 heaps must lower a collector or reject that shape.
+
+An explicitly configured strict module can emit typed `retain_<name>` and `drop_<name>` exports.
+These wrappers share one recursive runtime implementation and are generated only for requested
+first-order types. Reference counts occupy the final word of the public object header. A final drop
+returns a parent block before visiting fields in reverse order, preserving allocation order and
+preventing repeated aggregate ownership cycles from growing the heap. Internal thunks have a
+different header and cannot cross this first-order owned boundary. Opaque resource wrappers are
+reclaimed, but destroying the host resource itself remains a declared host operation.
 
 Scratch arenas can reclaim a region only when no static definition, memoized global, result, or host
 borrow points into it. Gpufuck therefore does not reset the entire heap at an arbitrary public call
@@ -771,13 +788,13 @@ promise from ordinary function types.
 Wasm values where the entry permits it. General structured values use an eight-byte tagged value and
 aligned objects with a sixteen-byte header:
 
-| Byte offset |    Width | Meaning                                                |
-| ----------: | -------: | ------------------------------------------------------ |
-|           0 |        4 | Object kind                                            |
-|           4 |        4 | Constructor index, state, numeric kind, or resource ID |
-|           8 |        4 | Field count or byte length                             |
-|          12 |        4 | Reserved                                               |
-|          16 | variable | Contiguous fields or bytes                             |
+| Byte offset |    Width | Meaning                                                     |
+| ----------: | -------: | ----------------------------------------------------------- |
+|           0 |        4 | Object kind                                                 |
+|           4 |        4 | Constructor index, state, numeric kind, or resource ID      |
+|           8 |        4 | Field count or byte length                                  |
+|          12 |        4 | Owned reference count; internal thunks use their own layout |
+|          16 | variable | Contiguous fields or bytes                                  |
 
 [`wasm_value_codec.ts`](src/functional/wasm_value_codec.ts) validates and encodes arguments, forces
 structured results as required, decodes fields within `maximumResultNodes`, and rejects cyclic or

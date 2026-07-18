@@ -100,6 +100,11 @@ export class WasmInstructions {
     this.unsigned(depth);
   }
 
+  branchIf(depth: number): void {
+    this.emit(0x0d);
+    this.unsigned(depth);
+  }
+
   i32Const(value: number): void {
     this.emit(0x41);
     this.signed32(value);

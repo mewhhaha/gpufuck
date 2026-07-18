@@ -373,7 +373,28 @@ Frontends with additional lexical regions or persistent values can describe thos
 checks LIFO arena scope, use after scope, references from longer to shorter lifetimes, promotion,
 owned retain/release operations, and the selected `reject`, `host-managed`, or
 `explicit-reference-counting` sharing policy. The plan returned above includes the verified Storage
-Core derived by the standard backend.
+Core derived by the standard backend. Reference analysis records statically named closure captures,
+recursive environments, constructor fields, local bindings, and globals. Passing a frontend
+`storageCore` to `compileFunctionalModuleToWasm()` makes that manifest mandatory: compilation
+rejects any missing declaration, lifetime, or resolved reference edge.
+
+Strict frontends can request standalone owned-value operations without adding them to ordinary
+binaries:
+
+```ts
+const bytes = await compileFunctionalModuleToWasm(compilation.module, {
+  storageCore: frontendStorageCore,
+  ownedTypeExports: [{ name: "message", type: messageType }],
+});
+
+// The emitted module exports retain_message(i64) and drop_message(i64).
+```
+
+`ownedTypeExports` requires verified owned storage and strict first-order Core. Generated drop glue
+walks tuples, ADTs, arrays, slices, text, bytes, numerics, and resource wrappers before returning
+their blocks to the Wasm free list. Opaque host resources still require the embedding-side
+`dropResource` callback. `FunctionalWasmOwnedValue.transfer()` relinquishes the JavaScript lease
+when ownership crosses into emitted Wasm.
 
 Embedders that instantiate emitted Wasm directly can create nested temporary lifetimes with
 `beginFunctionalWasmArena(instance)` or the exception-safe `withFunctionalWasmArena(instance, run)`.
@@ -445,7 +466,7 @@ lowering techniques, not complete compatibility with their source languages.
 | Frontend                                                | Boundary demonstrated                                                    |
 | ------------------------------------------------------- | ------------------------------------------------------------------------ |
 | [Gleam](examples/gleam-functional/README.md)            | Strict inference, ADTs, pipelines, and typed multi-module linking        |
-| [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, and rejection of mutation             |
+| [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, moves, borrows, and rejected mutation |
 | [Haskell](examples/haskell-functional/README.md)        | Laziness, inference, dictionaries, GADTs, and recursive data             |
 | [OCaml](examples/ocaml-functional/README.md)            | Sequential scope, explicit recursion, variants, and lists                |
 | [1SubML](examples/onesubml-functional/README.md)        | Rank-N parameters, modules as records, and expression blocks             |

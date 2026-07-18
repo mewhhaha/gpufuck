@@ -18,3 +18,6 @@ Initial public release.
   lowering, lambda-set specialization, structured values, host capabilities, and async effects.
 - Added typed static linking, incremental compilation, persistent caches, deterministic diagnostics,
   cancellation, and elastic GPU workspaces.
+- Added verified Storage Core manifests, lexical arenas, owned promotion, deterministic recursive
+  destruction, and opt-in standalone Wasm retain/drop exports.
+- Added Rust-profile move checking and explicit frontend borrows that erase after ownership proof.

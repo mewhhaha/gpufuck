@@ -88,6 +88,11 @@ export type RustFunctionalExpression =
   }
   | { readonly kind: "name"; readonly name: string; readonly span: FunctionalSpan }
   | {
+    readonly kind: "borrow";
+    readonly value: RustFunctionalExpression;
+    readonly span: FunctionalSpan;
+  }
+  | {
     readonly kind: "call";
     readonly callee: RustFunctionalExpression;
     readonly arguments: readonly RustFunctionalExpression[];

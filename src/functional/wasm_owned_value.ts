@@ -29,6 +29,7 @@ export interface FunctionalWasmOwnedValue {
   readonly active: boolean;
   decode(maximumNodes?: number): FunctionalWasmValue;
   retain(): FunctionalWasmOwnedValue;
+  transfer(): bigint;
   release(): void;
 }
 
@@ -127,6 +128,17 @@ export function encodeFunctionalWasmOwnedValue(
         if (!active) throw new Error("functional WASM owned value was already released");
         ownership.references += 1;
         return createLease();
+      },
+      transfer(): bigint {
+        if (!active) throw new Error("functional WASM owned value was already released");
+        if (ownership.references !== 1) {
+          throw new Error(
+            `functional WASM owned value cannot transfer with ${ownership.references} active leases`,
+          );
+        }
+        active = false;
+        ownership.references = 0;
+        return encoded;
       },
       release(): void {
         if (!active) throw new Error("functional WASM owned value was already released");

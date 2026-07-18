@@ -1,3 +1,16 @@
+import type { FunctionalType } from "./abi.ts";
+import type { FunctionalStorageCoreProgram } from "./storage_core.ts";
+
+export interface FunctionalWasmOwnedTypeExport {
+  readonly name: string;
+  readonly type: FunctionalType;
+}
+
+export interface FunctionalWasmCompilationOptions {
+  readonly storageCore?: FunctionalStorageCoreProgram;
+  readonly ownedTypeExports?: readonly FunctionalWasmOwnedTypeExport[];
+}
+
 export type FunctionalWasmRuntimeDiagnosticCode =
   | "F3002"
   | "F3003"

@@ -2,12 +2,17 @@ import { FUNCTIONAL_NO_INDEX, FunctionalCoreTag, FunctionalEvaluationMode } from
 import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
 import {
   FunctionalPersistentSharing,
+  type FunctionalStorageCoreLifetime,
   type FunctionalStorageCoreOperation,
   type FunctionalStorageCoreProgram,
   type FunctionalStorageVerification,
   verifyFunctionalStorageCore,
 } from "./storage_core.ts";
 import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
+import {
+  analyzeFunctionalStorageReferences,
+  type FunctionalStorageReference,
+} from "./storage_reference_analysis.ts";
 
 export const FunctionalStorageClass = {
   Static: "static",
@@ -49,6 +54,7 @@ export interface FunctionalStoragePlanSummary {
 
 export interface FunctionalStoragePlan {
   readonly values: readonly FunctionalStorageDecision[];
+  readonly references: readonly FunctionalStorageReference[];
   readonly boundaries: readonly FunctionalBoundaryStorageDecision[];
   readonly core: FunctionalStorageCoreProgram;
   readonly verification: FunctionalStorageVerification & { readonly ok: true };
@@ -57,6 +63,7 @@ export interface FunctionalStoragePlan {
 
 export interface FunctionalStoragePlanningOptions {
   readonly persistentSharing?: FunctionalPersistentSharing;
+  readonly storageCore?: FunctionalStorageCoreProgram;
 }
 
 export async function planFunctionalModuleStorage(
@@ -205,12 +212,34 @@ export function createFunctionalStoragePlan(
   }
 
   const boundaries = boundaryStorageDecisions(module);
-  const core = storageCore(values, boundaries, options.persistentSharing);
+  const references = analyzeFunctionalStorageReferences(
+    module,
+    nodes,
+    values,
+    captureAnalysis,
+  );
+  const derivedCore = storageCore(values, references, boundaries, options.persistentSharing);
+  const core = options.storageCore ?? derivedCore;
+  if (
+    options.storageCore !== undefined && options.persistentSharing !== undefined &&
+    options.storageCore.persistentSharing !== options.persistentSharing
+  ) {
+    throw new Error(
+      `frontend Functional Storage Core uses ${
+        JSON.stringify(options.storageCore.persistentSharing)
+      } persistent sharing while storage planning requested ${
+        JSON.stringify(options.persistentSharing)
+      }`,
+    );
+  }
   const verification = verifyFunctionalStorageCore(core);
   if (!verification.ok) {
     throw new Error(
       `derived Functional Storage Core failed at operation ${verification.diagnostic.operation}: ${verification.diagnostic.message}`,
     );
+  }
+  if (options.storageCore !== undefined) {
+    requireCompleteStorageCore(derivedCore, options.storageCore);
   }
   const summary = Object.freeze({
     staticValues: values.filter((value) => value.storage === FunctionalStorageClass.Static).length,
@@ -233,6 +262,7 @@ export function createFunctionalStoragePlan(
   });
   return Object.freeze({
     values: Object.freeze(values),
+    references,
     boundaries,
     core,
     verification,
@@ -240,8 +270,54 @@ export function createFunctionalStoragePlan(
   });
 }
 
+function requireCompleteStorageCore(
+  derived: FunctionalStorageCoreProgram,
+  supplied: FunctionalStorageCoreProgram,
+): void {
+  const suppliedDeclarations = new Map<string, FunctionalStorageCoreLifetime>();
+  const suppliedReferences = new Set<string>();
+  for (const operation of supplied.operations) {
+    if (operation.kind === "declare") {
+      suppliedDeclarations.set(operation.value, operation.lifetime);
+    } else if (operation.kind === "reference") {
+      suppliedReferences.add(`${operation.owner}->${operation.target}`);
+    }
+  }
+  for (const operation of derived.operations) {
+    if (operation.kind === "declare") {
+      const lifetime = suppliedDeclarations.get(operation.value);
+      if (lifetime === undefined) {
+        throw new Error(
+          `frontend Functional Storage Core omits required value ${
+            JSON.stringify(operation.value)
+          }`,
+        );
+      }
+      if (lifetime !== operation.lifetime) {
+        throw new Error(
+          `frontend Functional Storage Core gives ${JSON.stringify(operation.value)} ${
+            JSON.stringify(lifetime)
+          } lifetime; resolved Core requires ${JSON.stringify(operation.lifetime)}`,
+        );
+      }
+      continue;
+    }
+    if (
+      operation.kind === "reference" &&
+      !suppliedReferences.has(`${operation.owner}->${operation.target}`)
+    ) {
+      throw new Error(
+        `frontend Functional Storage Core omits required reference ${
+          JSON.stringify(operation.owner)
+        } -> ${JSON.stringify(operation.target)} from core node ${operation.coreNode ?? "unknown"}`,
+      );
+    }
+  }
+}
+
 function storageCore(
   values: readonly FunctionalStorageDecision[],
+  references: readonly FunctionalStorageReference[],
   boundaries: readonly FunctionalBoundaryStorageDecision[],
   persistentSharing: FunctionalPersistentSharing | undefined,
 ): FunctionalStorageCoreProgram {
@@ -291,6 +367,15 @@ function storageCore(
       lifetime: boundary.storage,
       arena: "invocation",
       reason: boundary.reason,
+    });
+  }
+  for (const reference of references) {
+    operations.push({
+      kind: "reference",
+      owner: reference.owner,
+      target: reference.target,
+      coreNode: reference.coreNode,
+      reason: reference.reason,
     });
   }
   operations.push({ kind: "leave-arena", arena: "invocation" });

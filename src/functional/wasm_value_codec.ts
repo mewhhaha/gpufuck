@@ -133,7 +133,7 @@ export function encodeFunctionalWasmValue(
     view.setUint32(pointer, objectKind, true);
     view.setUint32(pointer + 4, payload, true);
     view.setUint32(pointer + 8, fields.length, true);
-    view.setUint32(pointer + 12, 0, true);
+    view.setUint32(pointer + 12, 1, true);
     for (const [index, field] of fields.entries()) {
       view.setBigInt64(
         pointer + OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH,
@@ -150,7 +150,7 @@ export function encodeFunctionalWasmValue(
     view.setUint32(pointer, objectKind, true);
     view.setUint32(pointer + 4, 0, true);
     view.setUint32(pointer + 8, bytes.byteLength, true);
-    view.setUint32(pointer + 12, 0, true);
+    view.setUint32(pointer + 12, 1, true);
     new Uint8Array(memory.buffer, pointer + OBJECT_HEADER_BYTE_LENGTH, bytes.byteLength).set(bytes);
     return BigInt(pointer);
   };

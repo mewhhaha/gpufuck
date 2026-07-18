@@ -57,6 +57,60 @@ Deno.test("lowers Rust tuples, immutable bindings, and conditionals", async () =
   deepStrictEqual(evaluation, { kind: "integer", value: 42 });
 });
 
+Deno.test("proves a Rust-like borrow before moving the owned value", async () => {
+  const evaluation = await evaluateExample("examples/rust-functional/ownership.rs");
+
+  deepStrictEqual(evaluation, { kind: "integer", value: 42 });
+});
+
+Deno.test("rejects reuse after moving a non-Copy Rust value", () => {
+  const frontend = lowerRustFunctionalSource(`
+    struct Boxed { value: i32 }
+    fn read(boxed: Boxed) -> i32 {
+      match boxed { Boxed { value } => value }
+    }
+    fn gpu_main() -> i32 {
+      let boxed = Boxed { value: 21 };
+      let first = read(boxed);
+      first + read(boxed)
+    }
+  `);
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  equal(frontend.diagnostics[0].code, "R1002");
+  match(frontend.diagnostics[0].message, /uses moved value "boxed"/);
+});
+
+Deno.test("copy results remain reusable after consuming an owned argument", async () => {
+  const frontend = lowerRustFunctionalSource(`
+    struct Boxed { value: i32 }
+    fn take(boxed: Boxed) -> i32 {
+      match boxed { Boxed { value } => value }
+    }
+    fn gpu_main() -> i32 {
+      let boxed = Boxed { value: 21 };
+      let value = take(boxed);
+      value + value
+    }
+  `);
+
+  equal(frontend.ok, true);
+  if (!frontend.ok) return;
+  const { compiler, evaluator } = rustRuntime();
+  const compilation = await compiler.compileModule(frontend.lowered.module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const evaluation = await evaluator.evaluate(compilation.module);
+    ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
+    if (!evaluation.ok) return;
+    deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("rejects mutable Rust bindings at the frontend boundary", () => {
   const frontend = lowerRustFunctionalSource(
     "fn gpu_main() -> i32 { let mut value = 41; value + 1 }",
