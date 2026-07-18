@@ -190,6 +190,9 @@ export function compileFunctionalWasmArtifact(
   });
   const entry = functionalWasmEntry(module);
   const ownedTypeExports = options.ownedTypeExports ?? [];
+  if (!Array.isArray(ownedTypeExports)) {
+    throw new TypeError("functional WASM ownedTypeExports must be an array");
+  }
   if (ownedTypeExports.length !== 0) {
     if (options.storageCore === undefined) {
       throw new TypeError(
@@ -207,21 +210,44 @@ export function compileFunctionalWasmArtifact(
         "functional WASM ownedTypeExports require strict Core without lazy boundaries",
       );
     }
-    if (
-      !options.storageCore.operations.some((operation) =>
-        (operation.kind === "declare" && operation.lifetime === "owned") ||
-        (operation.kind === "promote" && operation.targetLifetime === "owned")
-      )
-    ) {
-      throw new TypeError(
-        "functional WASM ownedTypeExports require an owned declaration or promotion in Storage Core",
-      );
-    }
     const exportNames = new Set(["main", ...module.wasmExports.map((exported) => exported.name)]);
+    const storageValues = new Set<string>();
     for (const owned of ownedTypeExports) {
-      if (owned.name.length === 0) {
-        throw new TypeError("functional WASM owned type export name must not be empty");
+      if (owned === null || typeof owned !== "object") {
+        throw new TypeError("functional WASM owned type export must be an object");
       }
+      if (typeof owned.name !== "string" || owned.name.length === 0) {
+        throw new TypeError("functional WASM owned type export name must be a non-empty string");
+      }
+      if (typeof owned.storageValue !== "string" || owned.storageValue.length === 0) {
+        throw new TypeError(
+          `functional WASM owned type export ${
+            JSON.stringify(owned.name)
+          } storageValue must be a non-empty string`,
+        );
+      }
+      if (storageValues.has(owned.storageValue)) {
+        throw new TypeError(
+          `functional WASM owned type exports repeat Storage Core value ${
+            JSON.stringify(owned.storageValue)
+          }`,
+        );
+      }
+      if (
+        !options.storageCore.operations.some((operation) =>
+          (operation.kind === "declare" && operation.value === owned.storageValue &&
+            operation.lifetime === "owned") ||
+          (operation.kind === "promote" && operation.target === owned.storageValue &&
+            operation.targetLifetime === "owned")
+        )
+      ) {
+        throw new TypeError(
+          `functional WASM owned type export ${
+            JSON.stringify(owned.name)
+          } requires owned Storage Core value ${JSON.stringify(owned.storageValue)}`,
+        );
+      }
+      storageValues.add(owned.storageValue);
       requireFirstOrderFunctionalWasmType(module, owned.type, `owned type ${owned.name}`);
       for (const generatedName of [`retain_${owned.name}`, `drop_${owned.name}`]) {
         if (exportNames.has(generatedName)) {

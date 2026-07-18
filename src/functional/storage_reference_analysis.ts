@@ -10,6 +10,23 @@ export interface FunctionalStorageReference {
   readonly reason: string;
 }
 
+interface GlobalReferenceOwner {
+  readonly name: string;
+  readonly coreNode: number;
+  readonly parent: GlobalReferenceOwner | undefined;
+}
+
+interface StorageEnvironment {
+  readonly storageName: string | undefined;
+  readonly parent: StorageEnvironment | undefined;
+}
+
+interface StorageTraversal {
+  readonly nodeIndex: number;
+  readonly environment: StorageEnvironment | undefined;
+  readonly globalOwners: GlobalReferenceOwner | undefined;
+}
+
 export function analyzeFunctionalStorageReferences(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
@@ -37,9 +54,8 @@ export function analyzeFunctionalStorageReferences(
     storageNameByNode.set(decision.coreNode, name);
   }
   const globalStorageNames = module.definitionRoots.map((root) =>
-    storageTarget(root, [], nodes, storageNameByNode, [])
+    storageTarget(root, undefined, nodes, storageNameByNode, [])
   );
-  const globalReferencesByNode = new Map<number, readonly number[]>();
   const references: FunctionalStorageReference[] = [];
   const recorded = new Set<string>();
   const record = (
@@ -55,34 +71,35 @@ export function analyzeFunctionalStorageReferences(
     references.push({ owner, target, coreNode, reason });
   };
 
-  function recordGlobalReferences(
-    owner: string,
-    root: number,
-    evidenceNode: number,
-  ): void {
-    for (const global of referencedGlobals(root, nodes, globalReferencesByNode)) {
-      record(
-        owner,
-        globalStorageNames[global],
-        evidenceNode,
-        `${owner} references global definition d${global}`,
-      );
-    }
+  const pending: StorageTraversal[] = [];
+  for (let definition = module.definitionRoots.length - 1; definition >= 0; definition--) {
+    pending.push({
+      nodeIndex: module.definitionRoots[definition]!,
+      environment: undefined,
+      globalOwners: undefined,
+    });
   }
-
-  const walk = (nodeIndex: number, environment: readonly (string | undefined)[]): void => {
+  while (pending.length !== 0) {
+    const traversal = pending.pop();
+    if (traversal === undefined) continue;
+    const { nodeIndex, environment, globalOwners } = traversal;
     const node = requiredNode(nodes, nodeIndex);
     const storageName = storageNameByNode.get(nodeIndex);
+    let childGlobalOwners = globalOwners;
     if (storageName !== undefined && decisionByNode.get(nodeIndex)?.valueKind === "thunk") {
       for (const depth of captureAnalysis.freeLocalDepths(nodeIndex)) {
         record(
           storageName,
-          environment[depth],
+          storageNameAtDepth(environment, depth),
           nodeIndex,
           `thunk at core node ${nodeIndex} captures lexical depth ${depth}`,
         );
       }
-      recordGlobalReferences(storageName, nodeIndex, nodeIndex);
+      childGlobalOwners = {
+        name: storageName,
+        coreNode: nodeIndex,
+        parent: globalOwners,
+      };
     }
 
     switch (node.tag) {
@@ -92,24 +109,45 @@ export function analyzeFunctionalStorageReferences(
       case FunctionalCoreTag.Float64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Local:
-      case FunctionalCoreTag.Global:
       case FunctionalCoreTag.Constructor:
-        return;
+        continue;
+      case FunctionalCoreTag.Global: {
+        let owner = childGlobalOwners;
+        while (owner !== undefined) {
+          record(
+            owner.name,
+            globalStorageNames[node.payload],
+            owner.coreNode,
+            `${owner.name} references global definition d${node.payload}`,
+          );
+          owner = owner.parent;
+        }
+        continue;
+      }
       case FunctionalCoreTag.Lambda: {
+        let bodyGlobalOwners = childGlobalOwners;
         if (storageName !== undefined) {
           for (const depth of captureAnalysis.freeLocalDepths(node.child0)) {
             if (depth < 1) continue;
             record(
               storageName,
-              environment[depth - 1],
+              storageNameAtDepth(environment, depth - 1),
               nodeIndex,
               `closure at core node ${nodeIndex} captures lexical depth ${depth - 1}`,
             );
           }
-          recordGlobalReferences(storageName, node.child0, nodeIndex);
+          bodyGlobalOwners = {
+            name: storageName,
+            coreNode: nodeIndex,
+            parent: childGlobalOwners,
+          };
         }
-        walk(node.child0, [undefined, ...environment]);
-        return;
+        pending.push({
+          nodeIndex: node.child0,
+          environment: { storageName: undefined, parent: environment },
+          globalOwners: bodyGlobalOwners,
+        });
+        continue;
       }
       case FunctionalCoreTag.Apply: {
         const application = constructorApplication(nodeIndex, nodes, module.constructorArities);
@@ -132,12 +170,19 @@ export function analyzeFunctionalStorageReferences(
             }
           }
         }
-        walk(node.child0, environment);
-        walk(node.child1, environment);
-        return;
+        pending.push({
+          nodeIndex: node.child1,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        pending.push({
+          nodeIndex: node.child0,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
       }
       case FunctionalCoreTag.Let: {
-        walk(node.child0, environment);
         const bound = storageTarget(
           node.child0,
           environment,
@@ -145,8 +190,17 @@ export function analyzeFunctionalStorageReferences(
           storageNameByNode,
           globalStorageNames,
         );
-        walk(node.child1, [bound, ...environment]);
-        return;
+        pending.push({
+          nodeIndex: node.child1,
+          environment: { storageName: bound, parent: environment },
+          globalOwners: childGlobalOwners,
+        });
+        pending.push({
+          nodeIndex: node.child0,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
       }
       case FunctionalCoreTag.LetRec: {
         const bound = storageNameByNode.get(node.child0) ?? storageTarget(
@@ -156,42 +210,87 @@ export function analyzeFunctionalStorageReferences(
           storageNameByNode,
           globalStorageNames,
         );
-        const recursiveEnvironment = [bound, ...environment];
-        walk(node.child0, recursiveEnvironment);
-        walk(node.child1, recursiveEnvironment);
-        return;
+        const recursiveEnvironment = { storageName: bound, parent: environment };
+        pending.push({
+          nodeIndex: node.child1,
+          environment: recursiveEnvironment,
+          globalOwners: childGlobalOwners,
+        });
+        pending.push({
+          nodeIndex: node.child0,
+          environment: recursiveEnvironment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
       }
       case FunctionalCoreTag.If:
-        walk(node.child0, environment);
-        walk(node.child1, environment);
-        walk(node.child2, environment);
-        return;
+        pending.push({
+          nodeIndex: node.child2,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        pending.push({
+          nodeIndex: node.child1,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        pending.push({
+          nodeIndex: node.child0,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
-        walk(node.child0, environment);
-        return;
+        pending.push({
+          nodeIndex: node.child0,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
       case FunctionalCoreTag.Binary:
-        walk(node.child0, environment);
-        walk(node.child1, environment);
-        return;
+        pending.push({
+          nodeIndex: node.child1,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        pending.push({
+          nodeIndex: node.child0,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
       case FunctionalCoreTag.Case:
       case FunctionalCoreTag.CaseArm:
-        walk(node.child0, environment);
-        if (node.child1 !== FUNCTIONAL_NO_INDEX) walk(node.child1, environment);
-        return;
+        if (node.child1 !== FUNCTIONAL_NO_INDEX) {
+          pending.push({
+            nodeIndex: node.child1,
+            environment,
+            globalOwners: childGlobalOwners,
+          });
+        }
+        pending.push({
+          nodeIndex: node.child0,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
       case FunctionalCoreTag.PatternBind:
-        walk(node.child0, [undefined, ...environment]);
-        return;
+        pending.push({
+          nodeIndex: node.child0,
+          environment: { storageName: undefined, parent: environment },
+          globalOwners: childGlobalOwners,
+        });
+        continue;
     }
-  };
+  }
 
-  for (const root of module.definitionRoots) walk(root, []);
   return Object.freeze(references.map((reference) => Object.freeze(reference)));
 }
 
 function storageTarget(
   nodeIndex: number,
-  environment: readonly (string | undefined)[],
+  environment: StorageEnvironment | undefined,
   nodes: readonly FunctionalCoreNode[],
   storageNameByNode: ReadonlyMap<number, string>,
   globalStorageNames: readonly (string | undefined)[],
@@ -199,7 +298,9 @@ function storageTarget(
   const direct = storageNameByNode.get(nodeIndex);
   if (direct !== undefined) return direct;
   const node = requiredNode(nodes, nodeIndex);
-  if (node.tag === FunctionalCoreTag.Local) return environment[node.payload];
+  if (node.tag === FunctionalCoreTag.Local) {
+    return storageNameAtDepth(environment, node.payload);
+  }
   if (node.tag === FunctionalCoreTag.Global) return globalStorageNames[node.payload];
   if (node.tag !== FunctionalCoreTag.Apply) return undefined;
   let calleeIndex = nodeIndex;
@@ -211,6 +312,17 @@ function storageTarget(
   return callee.tag === FunctionalCoreTag.Constructor
     ? storageNameByNode.get(calleeIndex)
     : undefined;
+}
+
+function storageNameAtDepth(
+  environment: StorageEnvironment | undefined,
+  depth: number,
+): string | undefined {
+  let current = environment;
+  for (let remaining = depth; remaining > 0 && current !== undefined; remaining--) {
+    current = current.parent;
+  }
+  return current?.storageName;
 }
 
 function constructorApplication(
@@ -233,81 +345,6 @@ function constructorApplication(
     constructorNode: calleeIndex,
     arguments: Object.freeze(reversedArguments.reverse()),
   };
-}
-
-function referencedGlobals(
-  root: number,
-  nodes: readonly FunctionalCoreNode[],
-  referencesByNode: Map<number, readonly number[]>,
-): readonly number[] {
-  const cached = referencesByNode.get(root);
-  if (cached !== undefined) return cached;
-  const pending: { readonly nodeIndex: number; readonly expanded: boolean }[] = [{
-    nodeIndex: root,
-    expanded: false,
-  }];
-  const active = new Set<number>();
-  while (pending.length !== 0) {
-    const entry = pending.pop();
-    if (entry === undefined || referencesByNode.has(entry.nodeIndex)) continue;
-    const node = requiredNode(nodes, entry.nodeIndex);
-    if (!entry.expanded) {
-      active.add(entry.nodeIndex);
-      pending.push({ nodeIndex: entry.nodeIndex, expanded: true });
-      for (const child of childNodes(node)) {
-        if (child === FUNCTIONAL_NO_INDEX || referencesByNode.has(child)) continue;
-        if (active.has(child)) {
-          throw new Error(
-            `functional storage reference analysis found a core cycle from node ${entry.nodeIndex} to active node ${child}`,
-          );
-        }
-        pending.push({ nodeIndex: child, expanded: false });
-      }
-      continue;
-    }
-    active.delete(entry.nodeIndex);
-    const globals = new Set<number>();
-    if (node.tag === FunctionalCoreTag.Global) globals.add(node.payload);
-    for (const child of childNodes(node)) {
-      const childReferences = referencesByNode.get(child);
-      if (childReferences !== undefined) {
-        for (const global of childReferences) globals.add(global);
-      }
-    }
-    referencesByNode.set(
-      entry.nodeIndex,
-      Object.freeze([...globals].sort((left, right) => left - right)),
-    );
-  }
-  return referencesByNode.get(root) ?? [];
-}
-
-function childNodes(node: FunctionalCoreNode): readonly number[] {
-  switch (node.tag) {
-    case FunctionalCoreTag.Integer:
-    case FunctionalCoreTag.SignedInteger64:
-    case FunctionalCoreTag.Float32:
-    case FunctionalCoreTag.Float64:
-    case FunctionalCoreTag.Boolean:
-    case FunctionalCoreTag.Local:
-    case FunctionalCoreTag.Global:
-    case FunctionalCoreTag.Constructor:
-      return [];
-    case FunctionalCoreTag.Lambda:
-    case FunctionalCoreTag.Unary:
-    case FunctionalCoreTag.NumericConvert:
-    case FunctionalCoreTag.PatternBind:
-      return [node.child0];
-    case FunctionalCoreTag.Apply:
-    case FunctionalCoreTag.Let:
-    case FunctionalCoreTag.LetRec:
-    case FunctionalCoreTag.Binary:
-    case FunctionalCoreTag.Case:
-    case FunctionalCoreTag.CaseArm:
-      return [node.child0, node.child1];
-    case FunctionalCoreTag.If:
-      return [node.child0, node.child1, node.child2];
-  }
 }
 
 function requiredNode(

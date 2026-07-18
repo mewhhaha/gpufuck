@@ -384,18 +384,25 @@ binaries:
 ```ts
 const bytes = await compileFunctionalModuleToWasm(compilation.module, {
   storageCore: frontendStorageCore,
-  ownedTypeExports: [{ name: "message", type: messageType }],
+  ownedTypeExports: [{
+    name: "message",
+    storageValue: "owned-message",
+    type: messageType,
+  }],
 });
 
 // The emitted module exports retain_message(i64) and drop_message(i64).
 ```
 
-`ownedTypeExports` requires verified owned storage and strict first-order Core. Generated drop glue
-walks tuples, ADTs, arrays, slices, text, bytes, numerics, and resource wrappers before returning
-their blocks to the Wasm free list. Opaque host resources still require the embedding-side
-`dropResource` callback. `FunctionalWasmOwnedValue.transfer()` relinquishes the JavaScript lease
-when ownership crosses into emitted Wasm. A value with an embedding-side `dropResource` callback
-cannot transfer because standalone Wasm drop glue cannot invoke that JavaScript responsibility.
+Each `ownedTypeExports` entry names its owned declaration or promotion target in verified Storage
+Core. Generated drop glue requires strict first-order Core and walks tuples, ADTs, arrays, slices,
+text, bytes, numerics, and resource wrappers before returning their blocks to the Wasm free list.
+Opaque host resources still require the embedding-side `dropResource` callback.
+`FunctionalWasmOwnedValue.transfer()` relinquishes the JavaScript lease when ownership crosses into
+emitted Wasm. A value with an embedding-side `dropResource` callback cannot transfer because
+standalone Wasm drop glue cannot invoke that JavaScript responsibility. The raw retain/drop exports
+accept only values transferred for their named Storage Core value; passing an arbitrary `i64`
+violates the embedding contract and can trap.
 
 Embedders that instantiate emitted Wasm directly can create nested temporary lifetimes with
 `beginFunctionalWasmArena(instance)` or the exception-safe `withFunctionalWasmArena(instance, run)`.

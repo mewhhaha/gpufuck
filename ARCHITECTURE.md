@@ -742,11 +742,12 @@ This is deterministic destruction, not cycle collection. A language requiring cy
 heaps must lower a collector or reject that shape.
 
 An explicitly configured strict module can emit typed `retain_<name>` and `drop_<name>` exports.
-These wrappers share one recursive runtime implementation and are generated only for requested
-first-order types. Reference counts occupy the final word of the public object header. A final drop
-returns a parent block before visiting fields in reverse order, preserving allocation order and
-preventing repeated aggregate ownership cycles from growing the heap. Internal thunks have a
-different header and cannot cross this first-order owned boundary. Opaque resource wrappers are
+Each wrapper names the exact owned declaration or promotion target that authorizes it in verified
+Storage Core. The wrappers share one recursive runtime implementation and are generated only for
+requested first-order types. Reference counts occupy the final word of the public object header. A
+final drop returns a parent block before visiting fields in reverse order, preserving allocation
+order and preventing repeated aggregate ownership cycles from growing the heap. Internal thunks have
+a different header and cannot cross this first-order owned boundary. Opaque resource wrappers are
 reclaimed, but destroying the host resource itself remains a declared host operation. A JavaScript
 owned value with a `dropResource` callback therefore cannot transfer into standalone Wasm drop glue.
 
@@ -1081,7 +1082,7 @@ and collection contract.
 ## 15. Limits and safety properties
 
 Current structural limits include 1 MiB of source evidence, 65,536 surface nodes, semantic depth
-512, constructor arity 64, and device-derived buffer maxima. Runtime and compile-time APIs add
+512, constructor arity 256, and device-derived buffer maxima. Runtime and compile-time APIs add
 explicit fuel, heap, stack, dispatch, output-node, output-byte, output-depth, and suspension limits.
 
 These limits serve several purposes:

@@ -3,6 +3,7 @@ import type { FunctionalStorageCoreProgram } from "./storage_core.ts";
 
 export interface FunctionalWasmOwnedTypeExport {
   readonly name: string;
+  readonly storageValue: string;
   readonly type: FunctionalType;
 }
 

@@ -105,11 +105,25 @@ export function createFunctionalStoragePlan(
   }
 
   const values: FunctionalStorageDecision[] = [];
-  const recorded = new Set<string>();
+  const recorded = new Map<string, FunctionalStorageDecision>();
   const record = (decision: FunctionalStorageDecision): void => {
     const key = `${decision.valueKind}:${decision.coreNode}`;
-    if (recorded.has(key)) return;
-    recorded.add(key);
+    const existing = recorded.get(key);
+    if (existing !== undefined) {
+      if (
+        existing.storage !== decision.storage ||
+        existing.escapeStorage !== decision.escapeStorage ||
+        existing.capturedLocalCount !== decision.capturedLocalCount
+      ) {
+        throw new Error(
+          `functional storage plan gives ${JSON.stringify(key)} conflicting ${
+            JSON.stringify(existing.storage)
+          } and ${JSON.stringify(decision.storage)} decisions`,
+        );
+      }
+      return;
+    }
+    recorded.set(key, decision);
     values.push(Object.freeze(decision));
   };
 

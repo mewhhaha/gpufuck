@@ -785,9 +785,25 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
         FunctionalHostTypes.array({ kind: "integer" }) as FunctionalType,
       ],
     };
+    await rejects(
+      () =>
+        compileFunctionalModuleToWasm(compilation.module, {
+          storageCore,
+          ownedTypeExports: [{
+            name: "message",
+            storageValue: "unrelated-owned-value",
+            type: ownedType,
+          }],
+        }),
+      /requires owned Storage Core value "unrelated-owned-value"/,
+    );
     const bytes = await compileFunctionalModuleToWasm(compilation.module, {
       storageCore,
-      ownedTypeExports: [{ name: "message", type: ownedType }],
+      ownedTypeExports: [{
+        name: "message",
+        storageValue: "frontend-owned",
+        type: ownedType,
+      }],
     });
     const { instance } = await WebAssembly.instantiate(bytes);
     const initialize = instance.exports.initialize;

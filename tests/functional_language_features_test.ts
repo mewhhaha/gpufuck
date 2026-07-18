@@ -113,7 +113,7 @@ Deno.test("storage planning separates static, scalar-local, and recursive closur
       name: "main",
       parameters: [],
       annotation: null,
-      body: {
+      body: surface.apply(surface.name("identity"), {
         kind: "let",
         name: "increment",
         value: surface.lambda(
@@ -142,7 +142,7 @@ Deno.test("storage planning separates static, scalar-local, and recursive closur
           }),
           body: surface.apply(surface.name("countdown"), surface.integer(2)),
         },
-      },
+      }),
     }],
     [],
     "main",
@@ -168,6 +168,12 @@ Deno.test("storage planning separates static, scalar-local, and recursive closur
     ok(plan.summary.invocationArenaValues >= 1);
     equal(plan.summary.automaticArenaReset, false);
     ok(plan.references.length >= 1);
+    ok(
+      plan.references.some((reference) =>
+        reference.reason.includes("references global definition")
+      ),
+      JSON.stringify(plan.references),
+    );
     const coreReferences = new Set(
       plan.core.operations.flatMap((operation) =>
         operation.kind === "reference" ? [`${operation.owner}->${operation.target}`] : []
