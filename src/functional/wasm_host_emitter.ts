@@ -5,7 +5,7 @@ import {
   FunctionalWasmIntrinsic,
 } from "./host_contract.ts";
 import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
-import { type WasmInstructions, WasmValueType } from "./wasm_binary.ts";
+import { FunctionalWasmFunctionType, type WasmInstructions, WasmValueType } from "./wasm_binary.ts";
 import { WASM_FAULT_OUT_OF_BOUNDS, WASM_FAULT_OUT_OF_MEMORY } from "./wasm_runtime_binary.ts";
 
 const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
@@ -115,7 +115,7 @@ export class FunctionalWasmHostEmitter {
       this.#context.emitEncodeInteger(instructions);
       instructions.localGet(generator);
       instructions.i32Load(4);
-      instructions.callIndirect(2);
+      instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
       this.#context.emitForceValue(instructions);
       this.#context.emitDecodeInteger(instructions);
       instructions.i32Store8(OBJECT_HEADER_BYTE_LENGTH);

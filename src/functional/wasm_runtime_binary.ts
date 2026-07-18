@@ -1,5 +1,10 @@
 import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
-import { type WasmFunctionBody, WasmInstructions, WasmValueType } from "./wasm_binary.ts";
+import {
+  FunctionalWasmFunctionType,
+  type WasmFunctionBody,
+  WasmInstructions,
+  WasmValueType,
+} from "./wasm_binary.ts";
 import {
   FUNCTIONAL_WASM_ALLOCATION_MAGIC,
   FUNCTIONAL_WASM_FREE_BLOCK_MAGIC,
@@ -149,7 +154,7 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.globalSet(FunctionalWasmRuntimeGlobal.HeapTop);
   emitInitializeAllocation(instructions, previousTop, 0);
   instructions.localGet(previousTop);
-  return functionBody(0, instructions, "allocator");
+  return functionBody(FunctionalWasmFunctionType.Allocator, instructions, "allocator");
 }
 
 export function freeFunction(typeIndex: number, heapStart: number): WasmFunctionBody {
@@ -455,7 +460,7 @@ export function forceThunkFunction(): WasmFunctionBody {
   instructions.localGet(0);
   instructions.localGet(0);
   instructions.i32Load(8);
-  instructions.callIndirect(4);
+  instructions.callIndirect(FunctionalWasmFunctionType.ThunkForce);
   instructions.localSet(value);
   instructions.localGet(0);
   instructions.localGet(value);
@@ -465,7 +470,11 @@ export function forceThunkFunction(): WasmFunctionBody {
   instructions.i32Store(4);
   instructions.localGet(value);
   instructions.emit(0x0b);
-  return functionBody(4, instructions, "thunk force slow path");
+  return functionBody(
+    FunctionalWasmFunctionType.ThunkForce,
+    instructions,
+    "thunk force slow path",
+  );
 }
 
 export function functionBody(

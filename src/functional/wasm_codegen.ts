@@ -23,6 +23,8 @@ import {
 import {
   encodeCompactScalarWasmModule,
   encodeWasmModule,
+  FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT,
+  FunctionalWasmFunctionType,
   type WasmFunctionBody,
   type WasmFunctionImport,
   type WasmFunctionType,
@@ -91,7 +93,6 @@ const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
 const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
-const BASE_WASM_FUNCTION_TYPE_COUNT = 5;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
 
@@ -849,7 +850,7 @@ class FunctionalWasmCompiler {
       instructions.localGet(index);
       instructions.localGet(closure);
       instructions.i32Load(4);
-      instructions.callIndirect(2);
+      instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
     }
     this.emitPublicResult(instructions, result);
     const scalarResult = functionalHostScalarType(result);
@@ -900,7 +901,7 @@ class FunctionalWasmCompiler {
           field.declaration.result,
         );
         this.#indirectFunctions[field.closureSlot] = functionBody(
-          2,
+          FunctionalWasmFunctionType.ClosureCall,
           instructions,
           `WASM intrinsic ${field.declaration.wasmIntrinsic}`,
         );
@@ -917,7 +918,7 @@ class FunctionalWasmCompiler {
       instructions.call(field.importIndex);
       this.emitHostResult(instructions, field.declaration.result);
       this.#indirectFunctions[field.closureSlot] = functionBody(
-        2,
+        FunctionalWasmFunctionType.ClosureCall,
         instructions,
         `host operation ${hostFieldKey(field.capability, field.declaration.name)}`,
       );
@@ -934,7 +935,7 @@ class FunctionalWasmCompiler {
       instructions.localGet(0);
       instructions.localGet(closure);
       instructions.i32Load(4);
-      instructions.callIndirect(2);
+      instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
       return;
     }
     if (!this.#entry.takesInit) return;
@@ -945,7 +946,7 @@ class FunctionalWasmCompiler {
     this.emitHostInit(instructions);
     instructions.localGet(closure);
     instructions.i32Load(4);
-    instructions.callIndirect(2);
+    instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
   }
 
   emitHostInit(instructions: WasmInstructions): void {
@@ -1003,7 +1004,7 @@ class FunctionalWasmCompiler {
         [],
       );
       this.#indirectFunctions[slot] = functionBody(
-        4,
+        FunctionalWasmFunctionType.ThunkForce,
         instructions,
         `global thunk d${definitionIndex}`,
       );
@@ -1241,7 +1242,7 @@ class FunctionalWasmCompiler {
       );
     }
     this.#indirectFunctions[slot] = functionBody(
-      2,
+      FunctionalWasmFunctionType.ClosureCall,
       instructions,
       `constructor ${constructorIndex} stage ${stage}`,
     );
@@ -1395,7 +1396,7 @@ class FunctionalWasmCompiler {
     );
     instructions.localGet(closure);
     instructions.i32Load(4);
-    instructions.callIndirect(2);
+    instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
   }
 
   uncurriedApplication(
@@ -4534,7 +4535,7 @@ class FunctionalWasmCompiler {
     const key = `${parameters.join(",")}->${results.join(",")}`;
     const existing = this.#additionalFunctionTypeIndices.get(key);
     if (existing !== undefined) return existing;
-    const index = BASE_WASM_FUNCTION_TYPE_COUNT +
+    const index = FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT +
       this.#additionalFunctionTypes.length;
     this.#additionalFunctionTypes.push({
       parameters: [...parameters],

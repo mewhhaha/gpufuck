@@ -1,9 +1,23 @@
+import { FunctionalWasmRuntimeGlobal } from "./wasm_runtime_layout.ts";
+
 export const WasmValueType = {
   I32: 0x7f,
   I64: 0x7e,
   F32: 0x7d,
   F64: 0x7c,
 } as const;
+
+export const FunctionalWasmFunctionType = Object.freeze(
+  {
+    Allocator: 0,
+    NullaryValue: 1,
+    ClosureCall: 2,
+    NullaryI32: 3,
+    ThunkForce: 4,
+  } as const,
+);
+
+export const FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT = FunctionalWasmFunctionType.ThunkForce + 1;
 
 export interface WasmFunctionBody {
   readonly typeIndex: number;
@@ -287,16 +301,16 @@ export function encodeWasmModule(
           ...encodeUnsigned(exported.functionIndex),
         ]),
         [...name("memory"), 0x02, 0x00],
-        [...name("thunkEvaluations"), 0x03, 0x01],
-        [...name("runtimeFault"), 0x03, 0x02],
-        [...name("runtimeFaultNode"), 0x03, 0x05],
-        [...name("heapTop"), 0x03, 0x00],
-        [...name("freeListHead"), 0x03, 0x04],
-        [...name("arenaDepth"), 0x03, 0x06],
+        globalExport("thunkEvaluations", FunctionalWasmRuntimeGlobal.ThunkEvaluations),
+        globalExport("runtimeFault", FunctionalWasmRuntimeGlobal.RuntimeFault),
+        globalExport("runtimeFaultNode", FunctionalWasmRuntimeGlobal.RuntimeFaultNode),
+        globalExport("heapTop", FunctionalWasmRuntimeGlobal.HeapTop),
+        globalExport("freeListHead", FunctionalWasmRuntimeGlobal.FreeListHead),
+        globalExport("arenaDepth", FunctionalWasmRuntimeGlobal.ArenaDepth),
         ...(instrumentedFuel
           ? [
-            [...name("comptimeFuel"), 0x03, 0x07],
-            [...name("comptimeSteps"), 0x03, 0x08],
+            globalExport("comptimeFuel", FunctionalWasmRuntimeGlobal.ComptimeFuel),
+            globalExport("comptimeSteps", FunctionalWasmRuntimeGlobal.ComptimeSteps),
           ]
           : []),
       ]),
@@ -502,6 +516,10 @@ function appendBytes(target: number[], source: readonly number[]): void {
 function name(value: string): number[] {
   const bytes = new TextEncoder().encode(value);
   return [...encodeUnsigned(bytes.length), ...bytes];
+}
+
+function globalExport(exportName: string, globalIndex: number): number[] {
+  return [...name(exportName), 0x03, ...encodeUnsigned(globalIndex)];
 }
 
 function encodeUnsigned(value: number): number[] {
