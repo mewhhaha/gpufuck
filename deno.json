@@ -31,6 +31,8 @@
   },
   "publish": {
     "include": [
+      "ARCHITECTURE.md",
+      "DEVELOPMENT.md",
       "LICENSE",
       "README.md",
       "deno.json",
