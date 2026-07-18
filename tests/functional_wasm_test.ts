@@ -5,6 +5,7 @@ import {
   buildFunctionalSurfaceModule,
   compileFunctionalModuleToWasm,
   type EncodedFunctionalModule,
+  encodeFunctionalWasmArenaValue,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
@@ -15,6 +16,7 @@ import {
   FunctionalLinkError,
   FunctionalNumericConversion,
   type FunctionalSurfaceExpression,
+  type FunctionalType,
   type FunctionalTypeSchema,
   FunctionalUnaryOperator,
   FunctionalWasmBoundaryError,
@@ -25,11 +27,14 @@ import {
   GpuFunctionalEvaluator,
   linkFunctionalModules,
   markFunctionalWasmScratch,
+  promoteFunctionalWasmArenaValueToOwned,
+  promoteFunctionalWasmArenaValueToParent,
   requestWebGpuDevice,
   resetFunctionalWasmScratch,
   runFunctionalWasmModule,
   runFunctionalWasmModuleAsync,
   surface,
+  withFunctionalWasmArena,
 } from "../functional.ts";
 import { lowerHaskellFunctionalSource } from "../haskell_functional.ts";
 import { lowerOcamlFunctionalSource } from "../ocaml_functional.ts";
@@ -597,6 +602,193 @@ Deno.test("nested WebAssembly arenas reset in order without consuming owned free
     resetFunctionalWasmScratch(instance, scratchMark);
     equal(Number(heapTop.value), scratchMark);
     equal(Number(freeListHead.value), ownedPointer);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("arena promotion preserves nested values and recursively drops owned resources", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: {
+        kind: "function",
+        parameter: { kind: "integer" },
+        result: { kind: "integer" },
+      },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("arena promotion fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const allocate = instance.exports.allocate;
+    ok(typeof initialize === "function");
+    ok(typeof allocate === "function");
+    initialize();
+
+    const resource = FunctionalHostTypes.resource("duck.file") as FunctionalType;
+    const aggregateType: FunctionalType = {
+      kind: "tuple",
+      values: [resource, FunctionalHostTypes.array(resource) as FunctionalType],
+    };
+    const aggregateValue = {
+      kind: "tuple",
+      values: [
+        { kind: "resource", id: 7 },
+        { kind: "array", values: [{ kind: "resource", id: 8 }] },
+      ],
+    } as const;
+    const outer = beginFunctionalWasmArena(instance);
+    const nested = beginFunctionalWasmArena(instance);
+    const temporary = encodeFunctionalWasmArenaValue(
+      nested,
+      compilation.module,
+      aggregateType,
+      aggregateValue,
+    );
+    const parentValue = promoteFunctionalWasmArenaValueToParent(
+      nested,
+      compilation.module,
+      aggregateType,
+      temporary,
+    );
+    equal(nested.active, false);
+    equal(outer.active, true);
+
+    const dropped: [string, number][] = [];
+    const owned = promoteFunctionalWasmArenaValueToOwned(
+      outer,
+      compilation.module,
+      aggregateType,
+      parentValue,
+      {
+        dropResource: (resourceName, id) => dropped.push([resourceName, id]),
+      },
+    );
+    equal(outer.active, false);
+    deepStrictEqual(owned.decode(), aggregateValue);
+    const ownedHeapStart = outer.mark;
+    const retained = owned.retain();
+    owned.release();
+    equal(owned.active, false);
+    deepStrictEqual(dropped, []);
+    deepStrictEqual(retained.decode(), aggregateValue);
+    retained.release();
+    deepStrictEqual(dropped, [["duck.file", 7], ["duck.file", 8]]);
+    throws(() => owned.decode(), /already released/);
+    throws(() => owned.release(), /already released/);
+    equal(allocate(16), ownedHeapStart);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("arena encoding reclaims partial allocations after a boundary mismatch", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: {
+        kind: "function",
+        parameter: { kind: "integer" },
+        result: { kind: "integer" },
+      },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("arena cleanup fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const allocate = instance.exports.allocate;
+    ok(typeof initialize === "function");
+    ok(typeof allocate === "function");
+    initialize();
+
+    const arena = beginFunctionalWasmArena(instance);
+    throws(
+      () =>
+        encodeFunctionalWasmArenaValue(
+          arena,
+          compilation.module,
+          {
+            kind: "tuple",
+            values: [FunctionalHostTypes.text as FunctionalType, { kind: "integer" }],
+          },
+          {
+            kind: "tuple",
+            values: [
+              { kind: "text", value: "failure" },
+              { kind: "boolean", value: false },
+            ],
+          },
+        ),
+      /expected integer; received boolean/,
+    );
+    equal(allocate(24), arena.mark);
+    arena.reset();
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("lexical WebAssembly arenas remain active across await and reset after rejection", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: {
+        kind: "function",
+        parameter: { kind: "integer" },
+        result: { kind: "integer" },
+      },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("async arena fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const allocate = instance.exports.allocate;
+    const heapTop = instance.exports.heapTop;
+    ok(typeof initialize === "function");
+    ok(typeof allocate === "function");
+    ok(heapTop instanceof WebAssembly.Global);
+    initialize();
+    const heapStart = Number(heapTop.value);
+    let scopedArenaMark = -1;
+
+    await rejects(
+      () =>
+        withFunctionalWasmArena(instance, async (arena) => {
+          scopedArenaMark = arena.mark;
+          allocate(32);
+          await Promise.resolve();
+          equal(arena.active, true);
+          throw new Error("scope failed");
+        }),
+      /scope failed/,
+    );
+    equal(scopedArenaMark, heapStart);
+    equal(Number(heapTop.value), heapStart);
   } finally {
     compilation.module.destroy();
   }
@@ -1207,6 +1399,85 @@ Deno.test("async execution resumes suspending operations without replaying compl
     deepStrictEqual(execution.value, { kind: "integer", value: 42 });
     equal(tickCalls, 1);
     equal(readCalls, 1);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("async execution cancels a suspended invocation and remains reusable", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["read"],
+          body: surface.apply(
+            surface.name("read"),
+            surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+          ),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{
+          kind: "operation",
+          name: "read",
+          purity: "effectful",
+          execution: "suspending",
+          parameter: { kind: "unit" },
+          result: { kind: "integer" },
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("async cancellation module did not compile");
+  let notifyStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => notifyStarted = resolve);
+  let finishRead: ((result: { kind: "integer"; value: number }) => void) | undefined;
+  const pendingRead = new Promise<{ kind: "integer"; value: number }>(
+    (resolve) => finishRead = resolve,
+  );
+  const controller = new AbortController();
+  try {
+    const cancelledExecution = runFunctionalWasmModuleAsync(compilation.module, {
+      init: {
+        Environment: {
+          read: () => {
+            notifyStarted?.();
+            return pendingRead;
+          },
+        },
+      },
+      signal: controller.signal,
+    });
+    await started;
+    const cancellation = new Error("cancel async invocation");
+    controller.abort(cancellation);
+    await rejects(
+      () => cancelledExecution,
+      (error) => error === cancellation,
+    );
+    finishRead?.({ kind: "integer", value: 1 });
+
+    const execution = await runFunctionalWasmModuleAsync(compilation.module, {
+      init: {
+        Environment: {
+          read: () => Promise.resolve({ kind: "integer", value: 42 }),
+        },
+      },
+    });
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
   } finally {
     compilation.module.destroy();
   }

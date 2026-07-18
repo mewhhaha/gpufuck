@@ -8,6 +8,7 @@ import {
   functionalEffectOperationsFromRow,
   FunctionalEvaluationProfile,
   functionalExistentialType,
+  FunctionalPersistentSharing,
   functionalRecordConstructorName,
   functionalRowTypeDeclaration,
   FunctionalStorageClass,
@@ -151,6 +152,8 @@ Deno.test("storage planning separates static, scalar-local, and recursive closur
   if (!compilation.ok) return;
   try {
     const plan = await planFunctionalModuleStorage(compilation.module);
+    equal(plan.verification.ok, true);
+    equal(plan.core.persistentSharing, FunctionalPersistentSharing.Reject);
     const closures = plan.values.filter((value) => value.valueKind === "closure");
     ok(closures.some((value) => value.storage === FunctionalStorageClass.Static));
     ok(closures.some((value) =>

@@ -101,8 +101,12 @@ export function encodeFunctionalWasmValue(
 ): bigint {
   const memory = instance.exports.memory;
   const allocate = instance.exports.allocate;
-  if (!(memory instanceof WebAssembly.Memory) || typeof allocate !== "function") {
-    throw new Error("functional WASM input module omitted memory or allocate exports");
+  const free = instance.exports.free;
+  if (
+    !(memory instanceof WebAssembly.Memory) || typeof allocate !== "function" ||
+    typeof free !== "function"
+  ) {
+    throw new Error("functional WASM input module omitted memory, allocate, or free exports");
   }
   const allocations: { readonly pointer: number; readonly byteLength: number }[] = [];
   const allocateBytesLength = (byteLength: number): number => {
@@ -247,7 +251,7 @@ export function encodeFunctionalWasmValue(
         `functional WASM argument names unknown constructor ${JSON.stringify(input.name)}`,
       );
     }
-    const fieldTypes = structuredFieldTypes(module, expected, input.name);
+    const fieldTypes = functionalStructuredFieldTypes(module, expected, input.name);
     if (fieldTypes.length !== input.fields.length) {
       throw new TypeError(
         `functional WASM argument constructor ${
@@ -260,7 +264,23 @@ export function encodeFunctionalWasmValue(
       fieldTypes.map((fieldType, index) => encode(fieldType, input.fields[index]!)),
     );
   };
-  const encoded = encode(type, value);
+  let encoded: bigint;
+  try {
+    encoded = encode(type, value);
+  } catch (cause) {
+    try {
+      for (let index = allocations.length - 1; index >= 0; index--) {
+        const allocation = allocations[index];
+        if (allocation !== undefined) free(allocation.pointer, allocation.byteLength);
+      }
+    } catch (cleanupCause) {
+      throw new AggregateError(
+        [cause, cleanupCause],
+        `functional WASM argument encoding and cleanup both failed after ${allocations.length} allocations`,
+      );
+    }
+    throw cause;
+  }
   if (allocations.length !== 0) {
     let groups = allocationGroups.get(instance);
     if (groups === undefined) {
@@ -424,7 +444,7 @@ export function decodeFunctionalWasmValue(
           `functional WASM result references constructor ${constructorIndex} beyond ${module.constructorCount}`,
         );
       }
-      const fieldTypes = structuredFieldTypes(module, expected, constructorName);
+      const fieldTypes = functionalStructuredFieldTypes(module, expected, constructorName);
       if (fieldTypes.length !== fieldCount) {
         throw new Error(
           `functional WASM constructor ${
@@ -617,7 +637,7 @@ function boundedBytes(
   return new Uint8Array(view.buffer, start, byteLength);
 }
 
-function structuredFieldTypes(
+export function functionalStructuredFieldTypes(
   module: GpuFunctionalModule,
   type: Extract<FunctionalType, { readonly kind: "tuple" | "named" }>,
   constructorName: string,

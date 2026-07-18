@@ -1,5 +1,12 @@
 import { FUNCTIONAL_NO_INDEX, FunctionalCoreTag, FunctionalEvaluationMode } from "./abi.ts";
 import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
+import {
+  FunctionalPersistentSharing,
+  type FunctionalStorageCoreOperation,
+  type FunctionalStorageCoreProgram,
+  type FunctionalStorageVerification,
+  verifyFunctionalStorageCore,
+} from "./storage_core.ts";
 import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 
 export const FunctionalStorageClass = {
@@ -43,19 +50,33 @@ export interface FunctionalStoragePlanSummary {
 export interface FunctionalStoragePlan {
   readonly values: readonly FunctionalStorageDecision[];
   readonly boundaries: readonly FunctionalBoundaryStorageDecision[];
+  readonly core: FunctionalStorageCoreProgram;
+  readonly verification: FunctionalStorageVerification & { readonly ok: true };
   readonly summary: FunctionalStoragePlanSummary;
+}
+
+export interface FunctionalStoragePlanningOptions {
+  readonly persistentSharing?: FunctionalPersistentSharing;
 }
 
 export async function planFunctionalModuleStorage(
   module: GpuFunctionalModule,
+  options: FunctionalStoragePlanningOptions = {},
 ): Promise<FunctionalStoragePlan> {
-  return createFunctionalStoragePlan(module, await module.readCoreNodes());
+  const nodes = await module.readCoreNodes();
+  return createFunctionalStoragePlan(
+    module,
+    nodes,
+    new FunctionalWasmCaptureAnalysis(nodes),
+    options,
+  );
 }
 
 export function createFunctionalStoragePlan(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
   captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes),
+  options: FunctionalStoragePlanningOptions = {},
 ): FunctionalStoragePlan {
   const definitionByRoot = new Map<number, number>();
   for (const [definition, root] of module.definitionRoots.entries()) {
@@ -184,6 +205,13 @@ export function createFunctionalStoragePlan(
   }
 
   const boundaries = boundaryStorageDecisions(module);
+  const core = storageCore(values, boundaries, options.persistentSharing);
+  const verification = verifyFunctionalStorageCore(core);
+  if (!verification.ok) {
+    throw new Error(
+      `derived Functional Storage Core failed at operation ${verification.diagnostic.operation}: ${verification.diagnostic.message}`,
+    );
+  }
   const summary = Object.freeze({
     staticValues: values.filter((value) => value.storage === FunctionalStorageClass.Static).length,
     scalarLocalValues: values.filter((value) =>
@@ -206,7 +234,69 @@ export function createFunctionalStoragePlan(
   return Object.freeze({
     values: Object.freeze(values),
     boundaries,
+    core,
+    verification,
     summary,
+  });
+}
+
+function storageCore(
+  values: readonly FunctionalStorageDecision[],
+  boundaries: readonly FunctionalBoundaryStorageDecision[],
+  persistentSharing: FunctionalPersistentSharing | undefined,
+): FunctionalStorageCoreProgram {
+  const operations: FunctionalStorageCoreOperation[] = [];
+  for (const value of values) {
+    if (value.storage !== FunctionalStorageClass.Static) continue;
+    operations.push({
+      kind: "declare",
+      value: `${value.valueKind}:${value.coreNode}`,
+      lifetime: value.storage,
+      coreNode: value.coreNode,
+      reason: value.reason,
+    });
+  }
+  for (const boundary of boundaries) {
+    if (
+      boundary.storage !== FunctionalStorageClass.Owned &&
+      boundary.storage !== FunctionalStorageClass.HostManaged
+    ) continue;
+    operations.push({
+      kind: "declare",
+      value: `boundary:${boundary.path}`,
+      lifetime: boundary.storage,
+      reason: boundary.reason,
+    });
+  }
+  operations.push({ kind: "enter-arena", arena: "invocation" });
+  for (const value of values) {
+    if (value.storage === FunctionalStorageClass.Static) continue;
+    operations.push({
+      kind: "declare",
+      value: `${value.valueKind}:${value.coreNode}`,
+      lifetime: value.storage,
+      ...(value.storage === FunctionalStorageClass.ScalarLocal ||
+          value.storage === FunctionalStorageClass.InvocationArena
+        ? { arena: "invocation" }
+        : {}),
+      coreNode: value.coreNode,
+      reason: value.reason,
+    });
+  }
+  for (const boundary of boundaries) {
+    if (boundary.storage !== FunctionalStorageClass.InvocationArena) continue;
+    operations.push({
+      kind: "declare",
+      value: `boundary:${boundary.path}`,
+      lifetime: boundary.storage,
+      arena: "invocation",
+      reason: boundary.reason,
+    });
+  }
+  operations.push({ kind: "leave-arena", arena: "invocation" });
+  return Object.freeze({
+    persistentSharing: persistentSharing ?? FunctionalPersistentSharing.Reject,
+    operations: Object.freeze(operations),
   });
 }
 

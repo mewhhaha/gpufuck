@@ -689,11 +689,28 @@ escape is stack-safe. Local recursive closures use invocation storage because th
 contain a self reference. Global thunks remain static because memoized results can be reachable from
 the module's definition table after a call returns.
 
-Code generation consumes the plan and treats a missing decision as an invariant violation with the
-value kind and Core node attached. `planFunctionalModuleStorage()` exposes the same immutable plan
-to frontends. A Rust-like frontend can compare its move/borrow proof with the selected
-representation; a lazy frontend can inspect where thunks introduce invocation storage. Neither needs
-to encode those language-specific rules into Functional Core.
+The plan lowers into the target-neutral Storage Core in
+[`storage_core.ts`](src/functional/storage_core.ts). Storage Core is a linear sequence of
+declarations, references, arena entry/exit, promotion, retain/release, and use operations. It is
+deliberately separate from semantic Core: source evaluation and typechecking do not change when a
+frontend picks a region or ownership policy. The verifier enforces these invariants before code
+generation:
+
+- arena declarations name the innermost active lexical arena and arenas leave in LIFO order;
+- a longer-lived value cannot retain an arena value that expires first;
+- values cannot be used, retained, or released after their lifetime ends;
+- arena-to-owned promotion names an active source and a fresh target;
+- persistent ownership is rejected, delegated to host management, or balanced by explicit retains.
+
+Failures carry `F6001`–`F6006`, the failing operation, an optional semantic Core node, and the names
+that violated the invariant. `planFunctionalModuleStorage()` returns the derived operations and
+successful verification alongside its summary. A frontend that introduces more lexical arenas can
+submit its own `FunctionalStorageCoreProgram` to the same verifier before emission.
+
+Code generation consumes the derived plan and treats a missing decision as an invariant violation
+with the value kind and Core node attached. A Rust-like frontend can compare its move/borrow proof
+with the selected representation; a lazy frontend can inspect where thunks introduce invocation
+storage. Neither needs to encode those language-specific rules into Functional Core.
 
 General modules use aligned growing linear memory for closures, environments, constructors, thunks,
 text, bytes, arrays, slices, and boxed wide values. Allocation checks are reduced only where
@@ -704,13 +721,18 @@ markers for temporary boundary allocations. It is not a tracing collector. Funct
 allocates immutable graph objects, while ownership-transfer values can be reclaimed at explicit
 boundary points.
 
-The frontend must lower persistent shared graphs into an explicit reference-counted or host-managed
-representation, or reject them. Scratch markers can reclaim a region only when no static definition,
-memoized global, result, or host borrow points into it. Gpufuck therefore does not reset the entire
-heap at an arbitrary public call boundary: doing so would invalidate global call-by-need results.
-The frontend must lower a language requiring tracing GC or another lifetime model into explicit
-runtime operations and host contracts. Functional Core does not silently choose one
-memory-management policy for every language.
+Persistent sharing has three explicit policies. `reject` diagnoses a second durable owner.
+`host-managed` requires the shared value to cross the boundary with host-managed lifetime.
+`explicit-reference-counting` requires enough retains for the recorded owners. The Wasm embedding
+implements the last policy with independent `FunctionalWasmOwnedValue` leases; the final release
+recursively frees every encoded block and calls frontend-provided drop glue for opaque resources.
+This is deterministic destruction, not cycle collection. A language requiring cyclic persistent
+heaps must lower a collector or reject that shape.
+
+Scratch arenas can reclaim a region only when no static definition, memoized global, result, or host
+borrow points into it. Gpufuck therefore does not reset the entire heap at an arbitrary public call
+boundary: doing so would invalidate global call-by-need results. Functional Core does not silently
+choose one memory-management policy for every language.
 
 The standard runner initializes static values before opening the invocation arena. When the plan
 contains no static thunk, it resets that region after decoding the public result, including failure
@@ -725,10 +747,23 @@ predates the arena. Reset discards encoded-value ownership records created above
 restores both frontiers. The standard runner and the compatibility scratch-mark API use this same
 path.
 
+`withFunctionalWasmArena()` holds a lexical arena across synchronous or asynchronous embedding code
+and resets it in `finally`. Boundary values are encoded explicitly into the active arena. Promotion
+decodes the selected graph, resets the source region, and re-encodes it into its parent or into
+owned storage. Partial encoding failures release every block already allocated. Owned encoding is
+rejected while any arena is active, preventing a temporary pointer from being mislabeled as
+persistent.
+
+The async runner does not keep a Wasm arena alive while a host promise is pending. Each replay
+attempt closes its invocation arena before awaiting the suspension. An `AbortSignal` races the wait;
+cancellation rejects with the signal reason, and a later invocation starts with independent replay
+records and storage. Wasm itself remains synchronous, so cancellation cannot preempt instructions
+inside one direct Wasm call.
+
 This supplies invocation and embedding arenas without adding an arena opcode to semantic Core. A
-source language that exposes lexically nested arenas inside one invocation must prove non-escape and
-lower its arena operations through an explicit runtime capability; the generic compiler must not
-infer that source-level lifetime promise from ordinary function types.
+source language that exposes lexically nested arenas lowers its proven scopes into Storage Core and
+the explicit runtime operations; the generic compiler does not infer that source-level lifetime
+promise from ordinary function types.
 
 ### 10.7 Public value ABI
 

@@ -331,7 +331,9 @@ algebraic-effect program with `lowerFunctionalEffectProgram()` or submit verifie
 At the Wasm boundary, an optional `Init` value carries declared host values and operations. Each
 operation has a concrete parameter and result type and may be synchronous or suspending. Suspending
 operations use `runFunctionalWasmModuleAsync()`, which resumes through bounded deterministic replay;
-the synchronous runner rejects them.
+the synchronous runner rejects them. Both runners accept an `AbortSignal`. The async runner races
+each suspension against that signal, releases the invocation arena before waiting, and can reuse the
+compiled module after cancellation.
 
 `FunctionalHostOwnership` describes transfer, unique, bounded-borrow, and frozen-shareable contracts
 for host values. Gpufuck validates and enforces the selected boundary representation, but it does
@@ -345,6 +347,7 @@ for frontend audits and build tooling:
 import { FunctionalStorageClass, planFunctionalModuleStorage } from "@mewhhaha/gpufuck";
 
 const storage = await planFunctionalModuleStorage(compilation.module);
+if (!storage.verification.ok) throw new Error("unreachable: derived storage was not verified");
 if (storage.summary.invocationArenaValues > 0) {
   console.log("the module uses invocation-lifetime allocation");
 }
@@ -365,11 +368,23 @@ selects the Wasm representation. Persistent shared graphs still require an expli
 strategy such as reference counting or host management; Functional Core does not silently add a
 tracing collector.
 
+Frontends with additional lexical regions or persistent values can describe those decisions as
+`FunctionalStorageCoreProgram` operations and call `verifyFunctionalStorageCore()`. The verifier
+checks LIFO arena scope, use after scope, references from longer to shorter lifetimes, promotion,
+owned retain/release operations, and the selected `reject`, `host-managed`, or
+`explicit-reference-counting` sharing policy. The plan returned above includes the verified Storage
+Core derived by the standard backend.
+
 Embedders that instantiate emitted Wasm directly can create nested temporary lifetimes with
-`beginFunctionalWasmArena(instance)`. Arena allocation is isolated from owned free-list blocks that
-predate it. `arena.reset()` must run from the innermost arena outward and restores both allocator
-frontiers. The older numeric scratch-mark functions remain as compatibility wrappers over the same
-arena implementation.
+`beginFunctionalWasmArena(instance)` or the exception-safe `withFunctionalWasmArena(instance, run)`.
+`encodeFunctionalWasmArenaValue()` allocates a boundary value in that scope. Promotion to a parent
+arena or to owned storage performs a checked deep copy and ends the source arena, so no pointer into
+the expired region survives. Owned values expose `retain()` leases and release their complete
+encoded object graph after the final lease. A `dropResource` callback supplies recursive drop glue
+for opaque resource fields. Arena allocation is isolated from owned free-list blocks that predate
+it. `arena.reset()` must run from the innermost arena outward and restores both allocator frontiers.
+The older numeric scratch-mark functions remain as compatibility wrappers over the same arena
+implementation.
 
 ## Wasm boundary
 
@@ -389,14 +404,15 @@ the same way as `runFunctionalWasmModule()`.
 
 Expected source failures are returned as structured results:
 
-| Boundary                                         | Failure channel                                         |
-| ------------------------------------------------ | ------------------------------------------------------- |
-| GPU semantic compilation                         | `{ ok: false, diagnostics }` with `F1xxx`/`F2xxx` codes |
-| GPU or Wasm evaluation                           | `{ ok: false, fault }` or `FunctionalWasmRuntimeError`  |
-| Static linking                                   | `FunctionalLinkError` with `F4001`–`F4007`              |
-| Wasm arguments and `Init`                        | `FunctionalWasmBoundaryError`                           |
-| Required compile-time execution                  | compile, runtime, or `F5001`/`F5002` evidence           |
-| WebGPU setup, cancellation, or invariant failure | thrown or rejected error with its cause                 |
+| Boundary                                         | Failure channel                                            |
+| ------------------------------------------------ | ---------------------------------------------------------- |
+| GPU semantic compilation                         | `{ ok: false, diagnostics }` with `F1xxx`/`F2xxx` codes    |
+| GPU or Wasm evaluation                           | `{ ok: false, fault }` or `FunctionalWasmRuntimeError`     |
+| Static linking                                   | `FunctionalLinkError` with `F4001`–`F4007`                 |
+| Wasm arguments and `Init`                        | `FunctionalWasmBoundaryError`                              |
+| Required compile-time execution                  | compile, runtime, or `F5001`/`F5002` evidence              |
+| Storage Core lifetime and ownership verification | `F6001`–`F6006` diagnostic or `FunctionalStorageCoreError` |
+| WebGPU setup, cancellation, or invariant failure | thrown or rejected error with its cause                    |
 
 Spans are UTF-8 byte offsets. Linked modules retain source ranges, and
 `locateFunctionalDiagnostic()` maps aggregate offsets back to the owning module. Frontends are

@@ -127,10 +127,24 @@ export type {
 } from "./src/functional/effect_core_contract.ts";
 export { compileFunctionalModuleToWasm } from "./src/functional/wasm_artifacts.ts";
 export {
+  FunctionalPersistentSharing,
+  FunctionalStorageCoreError,
+  type FunctionalStorageCoreLifetime,
+  type FunctionalStorageCoreOperation,
+  type FunctionalStorageCoreProgram,
+  type FunctionalStorageDiagnostic,
+  type FunctionalStorageDiagnosticCode,
+  type FunctionalStorageFaultKind,
+  type FunctionalStorageVerification,
+  requireVerifiedFunctionalStorageCore,
+  verifyFunctionalStorageCore,
+} from "./src/functional/storage_core.ts";
+export {
   type FunctionalBoundaryStorageDecision,
   FunctionalStorageClass,
   type FunctionalStorageDecision,
   type FunctionalStoragePlan,
+  type FunctionalStoragePlanningOptions,
   type FunctionalStoragePlanSummary,
   type FunctionalStoredValueKind,
   planFunctionalModuleStorage,
@@ -158,7 +172,16 @@ export {
   type FunctionalWasmArena,
   markFunctionalWasmScratch,
   resetFunctionalWasmScratch,
+  withFunctionalWasmArena,
 } from "./src/functional/wasm_arena.ts";
+export {
+  encodeFunctionalWasmArenaValue,
+  encodeFunctionalWasmOwnedValue,
+  type FunctionalWasmOwnedValue,
+  type FunctionalWasmOwnedValueOptions,
+  promoteFunctionalWasmArenaValueToOwned,
+  promoteFunctionalWasmArenaValueToParent,
+} from "./src/functional/wasm_owned_value.ts";
 export {
   FUNCTIONAL_ARRAY_TYPE_NAME,
   FUNCTIONAL_BYTES_TYPE_NAME,

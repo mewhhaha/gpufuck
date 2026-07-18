@@ -56,6 +56,7 @@ export interface FunctionalWasmRunOptions {
   readonly argument?: FunctionalWasmValue;
   readonly maximumResultNodes?: number;
   readonly argumentOwnership?: "bounded-borrow" | "ownership-transfer";
+  readonly signal?: AbortSignal;
 }
 
 export interface FunctionalWasmAsyncRunOptions extends Omit<FunctionalWasmRunOptions, "init"> {
@@ -93,6 +94,7 @@ async function runFunctionalWasmAttempt(
   allowSuspendingHostOperations: boolean,
   maximumSteps?: number,
 ): Promise<FunctionalWasmExecution & { readonly semanticSteps?: number }> {
+  options.signal?.throwIfAborted();
   if (!allowSuspendingHostOperations) {
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
@@ -117,6 +119,7 @@ async function runFunctionalWasmAttempt(
   const [artifact, executable] = instrumented === undefined
     ? await Promise.all([cachedFunctionalWasmArtifact(module), cachedExecutableWasm(module)])
     : [instrumented, instrumented.executable] as const;
+  options.signal?.throwIfAborted();
   const { bytes } = artifact;
   const host = functionalWasmImports(module, options.init);
   const instance = new WebAssembly.Instance(executable, host.imports);
@@ -228,6 +231,7 @@ async function runFunctionalWasmAttempt(
       : 0;
     let result: number | bigint;
     try {
+      options.signal?.throwIfAborted();
       result = (argument === undefined ? exportedMain() : exportedMain(argument)) as
         | number
         | bigint;
@@ -460,10 +464,32 @@ export async function runFunctionalWasmModuleAsync(
           message: `functional WASM execution exceeded maximumSuspensions ${maximumSuspensions}`,
         });
       }
-      await error.pending;
+      await awaitFunctionalWasmSuspension(error.pending, options.signal);
     }
   }
   throw new Error("functional WASM suspension loop exited without a result");
+}
+
+function awaitFunctionalWasmSuspension(
+  pending: Promise<void>,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (signal === undefined) return pending;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(
+      () => {
+        signal.removeEventListener("abort", abort);
+        resolve();
+      },
+      (cause) => {
+        signal.removeEventListener("abort", abort);
+        reject(cause);
+      },
+    );
+  });
 }
 
 function sameFunctionalWasmHostValue(
