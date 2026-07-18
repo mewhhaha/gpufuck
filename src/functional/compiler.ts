@@ -29,6 +29,8 @@ import {
   type FunctionalDiagnostic,
   type FunctionalDiagnosticCode,
   FunctionalEvaluationProfile,
+  FunctionalExpressionTag,
+  FunctionalNodeWord,
   FunctionalTypecheckingProfile,
   type FunctionalTypeSchema,
 } from "./abi.ts";
@@ -40,6 +42,7 @@ import {
 import type { FunctionalEffectCoreModule } from "./effect_core_contract.ts";
 import { GpuFunctionalEffectCoreVerifier } from "./effect_core.ts";
 import { normalizeFunctionalHostCapabilities } from "./host_contract.ts";
+import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import { buildFunctionalSurfaceModule } from "./surface_builder.ts";
 import type {
   FunctionalCompilationOptions,
@@ -496,11 +499,59 @@ function functionalModule(
       type: concreteFunctionalType(annotation),
     });
   });
+  const hostCapabilities = normalizeFunctionalHostCapabilities(encodedModule.hostCapabilities);
+  const boundDefinitions = new Set<string>();
+  const hostDefinitions = (encodedModule.hostDefinitions ?? []).map((binding, index) => {
+    const definitionIndex = definitionNames.indexOf(binding.definition);
+    if (definitionIndex < 0) {
+      throw new Error(
+        `functional host definition binding ${index} references missing definition ${
+          JSON.stringify(binding.definition)
+        }`,
+      );
+    }
+    if (boundDefinitions.has(binding.definition)) {
+      throw new Error(
+        `functional host definition bindings repeat definition ${
+          JSON.stringify(binding.definition)
+        }`,
+      );
+    }
+    const capability = hostCapabilities.find((candidate) => candidate.name === binding.capability);
+    const field = capability?.fields.find((field) => field.name === binding.field);
+    if (field === undefined) {
+      throw new Error(
+        `functional host definition ${
+          JSON.stringify(binding.definition)
+        } references missing field ${JSON.stringify(`${binding.capability}.${binding.field}`)}`,
+      );
+    }
+    const expectedType: FunctionalTypeSchema = field.kind === "value"
+      ? field.type
+      : { kind: "function", parameter: field.parameter, result: field.result };
+    const annotation = encodedModule.definitionTypes[definitionIndex]?.annotation;
+    if (
+      annotation === null || annotation === undefined ||
+      JSON.stringify(schemaShape(annotation)) !== JSON.stringify(schemaShape(expectedType))
+    ) {
+      throw new Error(
+        `functional host definition ${JSON.stringify(binding.definition)} annotation ${
+          JSON.stringify(annotation)
+        } does not match field ${JSON.stringify(`${binding.capability}.${binding.field}`)} type ${
+          JSON.stringify(expectedType)
+        }`,
+      );
+    }
+    boundDefinitions.add(binding.definition);
+    return Object.freeze({ ...binding });
+  });
   return {
     ...module,
+    symbolNames: Object.freeze([...encodedModule.symbolNames]),
     definitionNames: Object.freeze(definitionNames),
     definitionRoots: Object.freeze(definitionRoots),
-    hostCapabilities: normalizeFunctionalHostCapabilities(encodedModule.hostCapabilities),
+    hostCapabilities,
+    hostDefinitions: Object.freeze(hostDefinitions),
     wasmExports: Object.freeze(wasmExports),
     sources: Object.freeze([...(encodedModule.sources ?? [])]),
     evaluationProfile: encodedModule.evaluationProfile,
@@ -509,6 +560,32 @@ function functionalModule(
     readCoreNodes: async () => await module.readCoreNodes(),
     destroy: () => module.destroy(),
   };
+}
+
+function schemaShape(schema: FunctionalTypeSchema): unknown {
+  switch (schema.kind) {
+    case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+    case "boolean":
+    case "unit":
+      return { kind: schema.kind };
+    case "parameter":
+      return { kind: schema.kind, name: schema.name };
+    case "tuple":
+      return { kind: schema.kind, values: schema.values.map(schemaShape) };
+    case "named":
+      return { kind: schema.kind, name: schema.name, arguments: schema.arguments.map(schemaShape) };
+    case "function":
+      return {
+        kind: schema.kind,
+        parameter: schemaShape(schema.parameter),
+        result: schemaShape(schema.result),
+      };
+    case "forall":
+      return { kind: schema.kind, parameters: schema.parameters, body: schemaShape(schema.body) };
+  }
 }
 
 export function validateFunctionalCompilationOptions(
@@ -600,6 +677,9 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
   }
   validatePrimitiveCapabilities(module.primitiveCapabilities);
   normalizeFunctionalHostCapabilities(module.hostCapabilities);
+  if (module.hostDefinitions !== undefined && !Array.isArray(module.hostDefinitions)) {
+    throw new Error("functional module host definition bindings must be an array");
+  }
   if (module.wasmExports !== undefined && !Array.isArray(module.wasmExports)) {
     throw new Error("functional module WASM exports must be an array");
   }
@@ -629,6 +709,32 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
   for (const [symbol, name] of module.symbolNames.entries()) {
     if (typeof name !== "string") {
       throw new Error(`functional module symbol ${symbol} is not a string; received ${name}`);
+    }
+  }
+  for (let nodeIndex = 0; nodeIndex < module.nodeCount; nodeIndex++) {
+    const offset = nodeIndex * FUNCTIONAL_NODE_WORD_LENGTH;
+    const tag = module.nodeWords[offset + FunctionalNodeWord.Tag];
+    if (tag === FunctionalExpressionTag.RuntimeFault) {
+      const symbol = module.nodeWords[offset + FunctionalNodeWord.Payload]!;
+      if (symbol >= module.symbolNames.length) {
+        throw new Error(
+          `functional runtime fault node ${nodeIndex} references symbol ${symbol}; expected fewer than ${module.symbolNames.length}`,
+        );
+      }
+      continue;
+    }
+    if (tag !== FunctionalExpressionTag.Text && tag !== FunctionalExpressionTag.Bytes) continue;
+    const symbol = module.nodeWords[offset + FunctionalNodeWord.Payload]!;
+    const typeIndex = module.nodeWords[offset + FunctionalNodeWord.Child0]!;
+    if (symbol >= module.symbolNames.length || typeIndex >= module.typeCount) {
+      throw new Error(
+        `functional ${
+          tag === FunctionalExpressionTag.Text ? "text" : "bytes"
+        } literal node ${nodeIndex} references symbol ${symbol} and type ${typeIndex}; expected bounds ${module.symbolNames.length} and ${module.typeCount}`,
+      );
+    }
+    if (tag === FunctionalExpressionTag.Bytes) {
+      functionalBytesFromLiteralSymbol(module.symbolNames[symbol]!);
     }
   }
   if (module.definitionTypes.length !== module.definitionCount) {

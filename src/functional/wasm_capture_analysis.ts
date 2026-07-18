@@ -22,6 +22,9 @@ export class FunctionalWasmCaptureAnalysis {
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
       case FunctionalCoreTag.Boolean:
+      case FunctionalCoreTag.Text:
+      case FunctionalCoreTag.Bytes:
+      case FunctionalCoreTag.RuntimeFault:
       case FunctionalCoreTag.Global:
       case FunctionalCoreTag.Constructor:
         depths = [];
@@ -87,6 +90,9 @@ export class FunctionalWasmCaptureAnalysis {
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
       case FunctionalCoreTag.Boolean:
+      case FunctionalCoreTag.Text:
+      case FunctionalCoreTag.Bytes:
+      case FunctionalCoreTag.RuntimeFault:
       case FunctionalCoreTag.Global:
       case FunctionalCoreTag.Constructor:
         return 0;

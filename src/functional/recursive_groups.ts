@@ -53,6 +53,9 @@ function elaborateExpression(
     case "float-32":
     case "float-64":
     case "boolean":
+    case "text":
+    case "bytes":
+    case "runtime-fault":
     case "name":
       return expression;
     case "lambda":
@@ -194,6 +197,9 @@ function rewriteNames(
     case "float-32":
     case "float-64":
     case "boolean":
+    case "text":
+    case "bytes":
+    case "runtime-fault":
       return expression;
     case "name":
       return boundNames.has(expression.name)

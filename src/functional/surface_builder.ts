@@ -33,6 +33,7 @@ import {
   normalizeFunctionalHostCapabilities,
 } from "./host_contract.ts";
 import { elaborateFunctionalRecursiveGroups } from "./recursive_groups.ts";
+import { functionalBytesLiteralSymbol } from "./static_literals.ts";
 
 const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
 const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
@@ -43,6 +44,9 @@ export type FunctionalSurfaceExpression =
   | { readonly kind: "float-32"; readonly value: number; readonly span?: FunctionalSpan }
   | { readonly kind: "float-64"; readonly value: number; readonly span?: FunctionalSpan }
   | { readonly kind: "boolean"; readonly value: boolean; readonly span?: FunctionalSpan }
+  | { readonly kind: "text"; readonly value: string; readonly span?: FunctionalSpan }
+  | { readonly kind: "bytes"; readonly value: Uint8Array; readonly span?: FunctionalSpan }
+  | { readonly kind: "runtime-fault"; readonly message: string; readonly span?: FunctionalSpan }
   | { readonly kind: "name"; readonly name: string; readonly span?: FunctionalSpan }
   | {
     readonly kind: "lambda";
@@ -176,6 +180,11 @@ export function buildFunctionalSurfaceModule(
   const evaluationProfile = options.evaluationProfile ?? FunctionalEvaluationProfile.StrictEager;
   requireEvaluationProfile(evaluationProfile, "functional surface module");
   const hostCapabilities = normalizeFunctionalHostCapabilities(options.hostCapabilities);
+  const hostDefinitions = normalizeHostDefinitions(
+    elaboratedDefinitions,
+    hostCapabilities,
+    options.hostDefinitions,
+  );
   const wasmExports = normalizeWasmExports(definitions, options.wasmExports);
   const usesHigherRankTypes =
     elaboratedDefinitions.some((definition) =>
@@ -211,8 +220,10 @@ export function buildFunctionalSurfaceModule(
   const usesExplicitThunk = (surfaceFeatures & SURFACE_FEATURE_EXPLICIT_THUNK) !== 0;
   const encodedTypeDeclarations = [
     ...typeDeclarations,
-    ...[...boundaryTypeNames].sort().map(boundaryTypeDeclaration),
-    ...(hostCapabilities.length === 0 ? [] : [hostInitTypeDeclaration(hostCapabilities)]),
+    ...[...boundaryTypeNames].sort().map((name) => boundaryTypeDeclaration(name, sourceByteLength)),
+    ...(hostCapabilities.length === 0
+      ? []
+      : [hostInitTypeDeclaration(hostCapabilities, sourceByteLength)]),
     ...primitiveTypeDeclarations(sourceByteLength, usesExplicitThunk),
   ];
   const symbols = new SurfaceSymbolTable();
@@ -223,7 +234,10 @@ export function buildFunctionalSurfaceModule(
     for (const constructor of declaration.constructors) symbols.intern(constructor.name);
   }
 
-  const encoder = new SurfaceExpressionEncoder(symbols, evaluationProfile);
+  const typeIndices = new Map(
+    encodedTypeDeclarations.map((declaration, index) => [declaration.name, index]),
+  );
+  const encoder = new SurfaceExpressionEncoder(symbols, typeIndices, evaluationProfile);
   const definitionWords: number[] = [];
   for (const definition of elaboratedDefinitions) {
     const rootNode = encoder.emitDefinitionBody(
@@ -270,6 +284,7 @@ export function buildFunctionalSurfaceModule(
       : FunctionalTypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities,
+    hostDefinitions,
     wasmExports,
     nodeWords: Uint32Array.from(encoder.words),
     definitionWords: Uint32Array.from(definitionWords),
@@ -301,6 +316,69 @@ export function buildFunctionalSurfaceModule(
       })),
     })),
   };
+}
+
+function normalizeHostDefinitions(
+  definitions: readonly FunctionalSurfaceDefinition[],
+  capabilities: ReturnType<typeof normalizeFunctionalHostCapabilities>,
+  bindings: FunctionalSurfaceModuleOptions["hostDefinitions"],
+): NonNullable<FunctionalSurfaceModuleOptions["hostDefinitions"]> {
+  if (bindings === undefined) return Object.freeze([]);
+  if (!Array.isArray(bindings)) {
+    throw new TypeError("functional host definition bindings must be an array");
+  }
+  const definitionsByName = new Map(definitions.map((definition) => [definition.name, definition]));
+  const boundDefinitions = new Set<string>();
+  return Object.freeze(bindings.map((binding, index) => {
+    if (binding === null || typeof binding !== "object") {
+      throw new TypeError(
+        `functional host definition binding ${index} must be an object; received ${
+          JSON.stringify(binding)
+        }`,
+      );
+    }
+    const definition = definitionsByName.get(binding.definition);
+    if (definition === undefined) {
+      throw new Error(
+        `functional host definition binding ${index} references missing definition ${
+          JSON.stringify(binding.definition)
+        }`,
+      );
+    }
+    if (boundDefinitions.has(binding.definition)) {
+      throw new Error(
+        `functional host definition bindings repeat definition ${
+          JSON.stringify(binding.definition)
+        }`,
+      );
+    }
+    const capability = capabilities.find((candidate) => candidate.name === binding.capability);
+    const field = capability?.fields.find((candidate) => candidate.name === binding.field);
+    if (field === undefined) {
+      throw new Error(
+        `functional host definition ${
+          JSON.stringify(binding.definition)
+        } references missing field ${JSON.stringify(`${binding.capability}.${binding.field}`)}`,
+      );
+    }
+    const expectedType: FunctionalTypeSchema = field.kind === "value"
+      ? field.type
+      : { kind: "function", parameter: field.parameter, result: field.result };
+    if (
+      definition.annotation === null ||
+      JSON.stringify(definition.annotation) !== JSON.stringify(expectedType)
+    ) {
+      throw new Error(
+        `functional host definition ${JSON.stringify(binding.definition)} annotation ${
+          JSON.stringify(definition.annotation)
+        } does not match field ${JSON.stringify(`${binding.capability}.${binding.field}`)} type ${
+          JSON.stringify(expectedType)
+        }`,
+      );
+    }
+    boundDefinitions.add(binding.definition);
+    return Object.freeze({ ...binding });
+  }));
 }
 
 function normalizeWasmExports(
@@ -382,16 +460,21 @@ function schemaContainsForall(schema: FunctionalTypeSchema): boolean {
 
 function hostInitTypeDeclaration(
   capabilities: ReturnType<typeof normalizeFunctionalHostCapabilities>,
+  sourceByteLength: number,
 ): FunctionalSurfaceTypeDeclaration {
+  const span = { startByte: sourceByteLength, endByte: sourceByteLength };
   return {
     name: FUNCTIONAL_INIT_TYPE_NAME,
     parameters: [],
+    span,
     constructors: [{
       name: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+      span,
       fields: capabilities.flatMap((capability) =>
         capability.fields.map((field) => ({
           name: `${capability.name}.${field.name}`,
           type: functionalHostFieldType(field),
+          span,
         }))
       ),
     }],
@@ -437,6 +520,56 @@ function collectBoundaryTypeNames(
       if (constructor.result !== undefined) visit(constructor.result);
     }
   }
+  const visitExpression = (expression: FunctionalSurfaceExpression): void => {
+    switch (expression.kind) {
+      case "text":
+        names.add(FUNCTIONAL_TEXT_TYPE_NAME);
+        return;
+      case "bytes":
+        names.add(FUNCTIONAL_BYTES_TYPE_NAME);
+        return;
+      case "lambda":
+      case "unary":
+      case "numeric-convert":
+        visitExpression(expression.kind === "lambda" ? expression.body : expression.value);
+        return;
+      case "let":
+      case "let-rec":
+        visitExpression(expression.value);
+        visitExpression(expression.body);
+        return;
+      case "let-rec-group":
+        for (const binding of expression.bindings) visitExpression(binding.body);
+        visitExpression(expression.body);
+        return;
+      case "if":
+        visitExpression(expression.condition);
+        visitExpression(expression.consequent);
+        visitExpression(expression.alternate);
+        return;
+      case "apply":
+        visitExpression(expression.callee);
+        visitExpression(expression.argument);
+        return;
+      case "binary":
+        visitExpression(expression.left);
+        visitExpression(expression.right);
+        return;
+      case "case":
+        visitExpression(expression.value);
+        for (const arm of expression.arms) visitExpression(arm.body);
+        return;
+      case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
+      case "boolean":
+      case "name":
+      case "runtime-fault":
+        return;
+    }
+  };
+  for (const definition of definitions) visitExpression(definition.body);
   for (const capability of capabilities) {
     for (const field of capability.fields) visit(functionalHostFieldType(field));
   }
@@ -485,19 +618,27 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
     case "float-32":
     case "float-64":
     case "boolean":
+    case "text":
+    case "bytes":
+    case "runtime-fault":
       return 0;
   }
 }
 
-function boundaryTypeDeclaration(name: string): FunctionalSurfaceTypeDeclaration {
+function boundaryTypeDeclaration(
+  name: string,
+  sourceByteLength: number,
+): FunctionalSurfaceTypeDeclaration {
+  const span = { startByte: sourceByteLength, endByte: sourceByteLength };
   if (name === FUNCTIONAL_ARRAY_TYPE_NAME || name === FUNCTIONAL_SLICE_TYPE_NAME) {
     return {
       name,
       parameters: ["element"],
-      constructors: [{ name: `${name}Value`, fields: [] }],
+      constructors: [{ name: `${name}Value`, fields: [], span }],
+      span,
     };
   }
-  return { name, parameters: [], constructors: [{ name: `${name}Value`, fields: [] }] };
+  return { name, parameters: [], constructors: [{ name: `${name}Value`, fields: [], span }], span };
 }
 
 function primitiveTypeDeclarations(
@@ -545,6 +686,7 @@ class SurfaceExpressionEncoder {
 
   constructor(
     private readonly symbols: SurfaceSymbolTable,
+    private readonly typeIndices: ReadonlyMap<string, number>,
     private readonly defaultEvaluation: FunctionalEvaluationProfile,
   ) {}
 
@@ -633,6 +775,36 @@ class SurfaceExpressionEncoder {
         return this.emitNode(
           FunctionalExpressionTag.Boolean,
           expression.value ? 1 : 0,
+          [],
+          parent,
+          expression.span,
+        );
+      case "text":
+      case "bytes": {
+        const typeName = expression.kind === "text"
+          ? FUNCTIONAL_TEXT_TYPE_NAME
+          : FUNCTIONAL_BYTES_TYPE_NAME;
+        const typeIndex = this.typeIndices.get(typeName);
+        if (typeIndex === undefined) {
+          throw new Error(`functional surface omitted literal type ${JSON.stringify(typeName)}`);
+        }
+        const symbol = expression.kind === "text"
+          ? this.symbols.intern(expression.value)
+          : this.symbols.intern(functionalBytesLiteralSymbol(expression.value));
+        const node = this.emitNode(
+          expression.kind === "text" ? FunctionalExpressionTag.Text : FunctionalExpressionTag.Bytes,
+          symbol,
+          [],
+          parent,
+          expression.span,
+        );
+        this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child0] = typeIndex;
+        return node;
+      }
+      case "runtime-fault":
+        return this.emitNode(
+          FunctionalExpressionTag.RuntimeFault,
+          this.symbols.intern(expression.message),
           [],
           parent,
           expression.span,
@@ -944,6 +1116,9 @@ export const surface: Readonly<{
   float32(value: number): FunctionalSurfaceExpression;
   float64(value: number): FunctionalSurfaceExpression;
   boolean(value: boolean): FunctionalSurfaceExpression;
+  text(value: string): FunctionalSurfaceExpression;
+  bytes(value: Uint8Array): FunctionalSurfaceExpression;
+  runtimeFault(message: string): FunctionalSurfaceExpression;
   name(name: string): FunctionalSurfaceExpression;
   lambda(parameter: string, body: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
   delay(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
@@ -966,6 +1141,10 @@ export const surface: Readonly<{
     value: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression;
   equal(
+    left: FunctionalSurfaceExpression,
+    right: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
+  structuralEqual(
     left: FunctionalSurfaceExpression,
     right: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression;
@@ -1046,6 +1225,26 @@ export const surface: Readonly<{
     right: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression {
     return { kind: "binary", operator: FunctionalBinaryOperator.Equal, left, right };
+  },
+  structuralEqual(
+    left: FunctionalSurfaceExpression,
+    right: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression {
+    return {
+      kind: "binary",
+      operator: FunctionalBinaryOperator.StructuralEqual,
+      left,
+      right,
+    };
+  },
+  text(value: string): FunctionalSurfaceExpression {
+    return { kind: "text", value };
+  },
+  bytes(value: Uint8Array): FunctionalSurfaceExpression {
+    return { kind: "bytes", value: value.slice() };
+  },
+  runtimeFault(message: string): FunctionalSurfaceExpression {
+    return { kind: "runtime-fault", message };
   },
 };
 

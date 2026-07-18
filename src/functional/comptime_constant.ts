@@ -391,17 +391,30 @@ export function functionalConstantFromTypeCoreValue(value: TypeCoreValue): Funct
     case "boolean":
       return constructor(DESCRIPTOR_BOOLEAN, [{ kind: "boolean", value: value.value }]);
     case "symbol":
-      return constructor(DESCRIPTOR_SYMBOL, [byteList(value.value)]);
+      return constructor(DESCRIPTOR_SYMBOL, [functionalConstantFromComptimeString(value.value)]);
     case "type":
       return constructor(DESCRIPTOR_TYPE, [typeTree(value.type)]);
   }
 }
 
 export function functionalConstantFromComptimeString(value: string): FunctionalConstant {
+  return byteList(new TextEncoder().encode(value));
+}
+
+export function functionalConstantFromComptimeBytes(value: Uint8Array): FunctionalConstant {
   return byteList(value);
 }
 
 export function functionalComptimeStringFromConstant(constant: FunctionalConstant): string {
+  const bytes = functionalComptimeBytesFromConstant(constant);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (cause) {
+    throw new TypeError("functional comptime string contains invalid UTF-8", { cause });
+  }
+}
+
+export function functionalComptimeBytesFromConstant(constant: FunctionalConstant): Uint8Array {
   validateFunctionalConstant(constant);
   const bytes: number[] = [];
   let current = constant;
@@ -434,11 +447,7 @@ export function functionalComptimeStringFromConstant(constant: FunctionalConstan
       }; expected ${JSON.stringify(BYTE_NIL)}`,
     );
   }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
-  } catch (cause) {
-    throw new TypeError("functional comptime string contains invalid UTF-8", { cause });
-  }
+  return Uint8Array.from(bytes);
 }
 
 function comptimeConstructorMatches(actual: string, expected: string): boolean {
@@ -455,7 +464,7 @@ function typeTree(type: TypeCoreType): FunctionalConstant {
       return constructor(TYPE_UNIT);
     case "named":
       return constructor(TYPE_NAMED, [
-        byteList(type.name),
+        functionalConstantFromComptimeString(type.name),
         descriptorList(type.arguments.map(functionalConstantFromTypeCoreValue)),
       ]);
     case "tuple":
@@ -465,9 +474,8 @@ function typeTree(type: TypeCoreType): FunctionalConstant {
   }
 }
 
-function byteList(value: string): FunctionalConstant {
+function byteList(bytes: Uint8Array): FunctionalConstant {
   let result = constructor(BYTE_NIL);
-  const bytes = new TextEncoder().encode(value);
   for (let index = bytes.length - 1; index >= 0; index--) {
     result = constructor(BYTE_CONS, [{ kind: "integer", value: bytes[index]! }, result]);
   }

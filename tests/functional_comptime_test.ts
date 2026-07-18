@@ -397,6 +397,20 @@ Deno.test("compiled metaprograms return typed Functional IR that validates and e
     () => functionalSurfaceExpressionFromConstant(malformedOperator),
     /unknown binary operator 999/,
   );
+  for (
+    const expression of [
+      surface.text("Zażółć 🦆"),
+      surface.bytes(new Uint8Array([0, 127, 128, 255])),
+      surface.runtimeFault("generated failure"),
+    ]
+  ) {
+    deepStrictEqual(
+      functionalSurfaceExpressionFromConstant(
+        functionalConstantFromSurfaceExpression(expression),
+      ),
+      expression,
+    );
+  }
 });
 
 Deno.test("required comptime reports fuel, output, and closure failures across numeric backends", async () => {

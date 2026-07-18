@@ -138,7 +138,7 @@ export class GpuFunctionalComptimeExecutor {
   ): Promise<FunctionalComptimeFunctionCompilationResult> {
     options.signal?.throwIfAborted();
     const modules = artifacts.map(comptimeArtifact);
-    const selectedModule = modules.find((module) => module.name === selection.module);
+    const selectedModule = artifacts.find((module) => module.name === selection.module);
     const selectedExport = selectedModule?.exports.find((exported) =>
       exported.name === selection.exportName
     );
@@ -534,8 +534,8 @@ function prepareComptimeProgram(
 ): PreparedComptimeProgram {
   const functionalArtifacts = artifacts.map(comptimeArtifact);
   const modules = new Map(functionalArtifacts.map((artifact) => [artifact.name, artifact]));
-  const availableOutputs: ComptimeOutput[] = functionalArtifacts.flatMap((artifact) =>
-    artifact.exports.map((exported) => ({
+  const availableOutputs: ComptimeOutput[] = functionalArtifacts.flatMap((artifact, index) =>
+    artifacts[index]!.exports.map((exported) => ({
       module: artifact.name,
       exportName: exported.name,
       definition: exported.definition,

@@ -130,6 +130,12 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
       return `${indent}${expression.value}f64`;
     case "boolean":
       return `${indent}${expression.value}`;
+    case "text":
+      return `${indent}${JSON.stringify(expression.value)}`;
+    case "bytes":
+      return `${indent}bytes[${[...expression.value].join(", ")}]`;
+    case "runtime-fault":
+      return `${indent}fault ${JSON.stringify(expression.message)}`;
     case "name":
       return `${indent}${expression.name}`;
     case "lambda":

@@ -6,11 +6,7 @@ import type {
   FunctionalTypeSchema,
 } from "./abi.ts";
 import type { FunctionalEvaluationStats, FunctionalRuntimeFault } from "./evaluator.ts";
-import type {
-  FunctionalModuleArtifact,
-  FunctionalModuleExport,
-  FunctionalModuleImport,
-} from "./module_linker.ts";
+import type { FunctionalModuleArtifact, FunctionalModuleImport } from "./module_linker.ts";
 import type {
   FunctionalSurfaceDefinition,
   FunctionalSurfaceTypeDeclaration,
@@ -38,9 +34,15 @@ export interface FunctionalComptimeModuleArtifact {
   readonly definitions: readonly FunctionalSurfaceDefinition[];
   readonly typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[];
   readonly imports: readonly FunctionalModuleImport[];
-  readonly exports: readonly FunctionalModuleExport[];
+  readonly exports: readonly FunctionalComptimeModuleExport[];
   readonly sourceByteLength: number;
   readonly evaluationProfile?: FunctionalEvaluationProfile;
+}
+
+export interface FunctionalComptimeModuleExport {
+  readonly name: string;
+  readonly definition: string;
+  readonly type: FunctionalTypeSchema;
 }
 
 export interface FunctionalComptimeExecutionOptions {

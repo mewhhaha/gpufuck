@@ -8,7 +8,9 @@ import {
 import {
   FUNCTIONAL_COMPTIME_BYTE_LIST_NAME,
   FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPES,
+  functionalComptimeBytesFromConstant,
   functionalComptimeStringFromConstant,
+  functionalConstantFromComptimeBytes,
   functionalConstantFromComptimeString,
   validateFunctionalConstant,
 } from "./comptime_constant.ts";
@@ -45,6 +47,9 @@ const EXPRESSION_SIGNED_INTEGER_64 = "$ComptimeFunctionalSignedInteger64";
 const EXPRESSION_FLOAT_32 = "$ComptimeFunctionalFloat32";
 const EXPRESSION_FLOAT_64 = "$ComptimeFunctionalFloat64";
 const EXPRESSION_BOOLEAN = "$ComptimeFunctionalBoolean";
+const EXPRESSION_TEXT = "$ComptimeFunctionalText";
+const EXPRESSION_BYTES = "$ComptimeFunctionalBytes";
+const EXPRESSION_RUNTIME_FAULT = "$ComptimeFunctionalRuntimeFault";
 const EXPRESSION_NAME = "$ComptimeFunctionalName";
 const EXPRESSION_LAMBDA = "$ComptimeFunctionalLambda";
 const EXPRESSION_LET = "$ComptimeFunctionalLet";
@@ -135,6 +140,9 @@ export const FUNCTIONAL_COMPTIME_IR_TYPES: readonly FunctionalSurfaceTypeDeclara
         { name: EXPRESSION_FLOAT_32, fields: [{ name: "value", type: { kind: "float-32" } }] },
         { name: EXPRESSION_FLOAT_64, fields: [{ name: "value", type: { kind: "float-64" } }] },
         { name: EXPRESSION_BOOLEAN, fields: [{ name: "value", type: { kind: "boolean" } }] },
+        { name: EXPRESSION_TEXT, fields: [{ name: "value", type: byteString }] },
+        { name: EXPRESSION_BYTES, fields: [{ name: "value", type: byteString }] },
+        { name: EXPRESSION_RUNTIME_FAULT, fields: [{ name: "message", type: byteString }] },
         { name: EXPRESSION_NAME, fields: [{ name: "name", type: byteString }] },
         {
           name: EXPRESSION_LAMBDA,
@@ -251,6 +259,14 @@ export function functionalConstantFromSurfaceExpression(
       return constructor(EXPRESSION_FLOAT_64, [{ kind: "float-64", value: value.value }]);
     case "boolean":
       return constructor(EXPRESSION_BOOLEAN, [{ kind: "boolean", value: value.value }]);
+    case "text":
+      return constructor(EXPRESSION_TEXT, [functionalConstantFromComptimeString(value.value)]);
+    case "bytes":
+      return constructor(EXPRESSION_BYTES, [functionalConstantFromComptimeBytes(value.value)]);
+    case "runtime-fault":
+      return constructor(EXPRESSION_RUNTIME_FAULT, [
+        functionalConstantFromComptimeString(value.message),
+      ]);
     case "name":
       return constructor(EXPRESSION_NAME, [functionalConstantFromComptimeString(value.name)]);
     case "lambda":
@@ -398,6 +414,21 @@ function decodedExpression(constant: FunctionalConstant): FunctionalSurfaceExpre
       return { kind: "float-64", value: requiredNumber(encoded, name, "float-64") };
     case EXPRESSION_BOOLEAN:
       return { kind: "boolean", value: requiredBoolean(encoded, name) };
+    case EXPRESSION_TEXT:
+      return {
+        kind: "text",
+        value: functionalComptimeStringFromConstant(requiredFields(encoded, name, 1)[0]!),
+      };
+    case EXPRESSION_BYTES:
+      return {
+        kind: "bytes",
+        value: functionalComptimeBytesFromConstant(requiredFields(encoded, name, 1)[0]!),
+      };
+    case EXPRESSION_RUNTIME_FAULT:
+      return {
+        kind: "runtime-fault",
+        message: functionalComptimeStringFromConstant(requiredFields(encoded, name, 1)[0]!),
+      };
     case EXPRESSION_NAME:
       return { kind: "name", name: requiredName(requiredFields(encoded, name, 1)[0]!, "name") };
     case EXPRESSION_LAMBDA: {

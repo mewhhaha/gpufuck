@@ -7,7 +7,10 @@ import type {
   FunctionalType,
   FunctionalTypeDeclaration,
 } from "./abi.ts";
-import type { FunctionalHostCapabilityDeclaration } from "./host_contract.ts";
+import type {
+  FunctionalHostCapabilityDeclaration,
+  FunctionalHostDefinitionBinding,
+} from "./host_contract.ts";
 
 export interface FunctionalWasmExport {
   readonly name: string;
@@ -37,12 +40,14 @@ export interface GpuFunctionalModule {
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly definitionNames: readonly string[];
+  readonly symbolNames: readonly string[];
   readonly definitionRoots: readonly number[];
   readonly entryDefinition: number;
   readonly entryType: FunctionalType;
   readonly entryEffects: readonly string[];
   readonly typeDeclarations: readonly FunctionalTypeDeclaration[];
   readonly hostCapabilities: readonly FunctionalHostCapabilityDeclaration[];
+  readonly hostDefinitions: readonly FunctionalHostDefinitionBinding[];
   readonly wasmExports: readonly FunctionalWasmExport[];
   readonly sources: readonly FunctionalSourceRange[];
   readonly evaluationProfile: FunctionalEvaluationProfile;

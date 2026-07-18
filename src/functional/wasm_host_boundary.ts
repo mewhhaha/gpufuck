@@ -17,6 +17,7 @@ import { WasmValueType } from "./wasm_binary.ts";
 import {
   WASM_FAULT_BLACKHOLE,
   WASM_FAULT_DIVIDE_BY_ZERO,
+  WASM_FAULT_EXPLICIT,
   WASM_FAULT_INVALID_NUMERIC_CONVERSION,
   WASM_FAULT_OUT_OF_BOUNDS,
   WASM_FAULT_OUT_OF_FUEL,
@@ -124,8 +125,15 @@ export function wasmValueType(type: FunctionalHostType): number {
 }
 
 export function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasmEntry {
+  const requiresInit = module.hostCapabilities.some((capability) =>
+    capability.fields.some((field) =>
+      !module.hostDefinitions.some((binding) =>
+        binding.capability === capability.name && binding.field === field.name
+      )
+    )
+  );
   if (module.entryType.kind !== "function") {
-    if (module.hostCapabilities.length !== 0) {
+    if (requiresInit) {
       throw new TypeError(
         `functional WASM entry d${module.entryDefinition} declares ${module.hostCapabilities.length} host capabilities but does not accept ${FUNCTIONAL_INIT_TYPE_NAME}`,
       );
@@ -157,7 +165,7 @@ export function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasm
     );
     return { takesInit: true, result: module.entryType.result };
   }
-  if (module.hostCapabilities.length !== 0) {
+  if (requiresInit) {
     throw new TypeError(
       `functional WASM entry d${module.entryDefinition} declares host capabilities but accepts ${
         describeFunctionalType(parameter)
@@ -250,6 +258,17 @@ function functionalWasmRuntimeErrorDetails(
       message: `functional WASM entry ${
         JSON.stringify(entryName)
       } accessed a buffer outside its bounds`,
+    };
+  }
+  if (faultCode === WASM_FAULT_EXPLICIT) {
+    const detail = node === undefined ? undefined : module.symbolNames[node.payload];
+    return {
+      ...context,
+      code: "F3013",
+      kind: "explicit-fault",
+      message: `functional WASM entry ${JSON.stringify(entryName)} raised an explicit fault${
+        detail === undefined ? "" : `: ${detail}`
+      }`,
     };
   }
   return {

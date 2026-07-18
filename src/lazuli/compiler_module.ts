@@ -215,6 +215,9 @@ function decodeCoreTag(tag: number, nodeIndex: number): KnownLazuliCoreTag {
     case LazuliCoreTag.SignedInteger64:
     case LazuliCoreTag.Float32:
     case LazuliCoreTag.Float64:
+    case LazuliCoreTag.Text:
+    case LazuliCoreTag.Bytes:
+    case LazuliCoreTag.RuntimeFault:
     case LazuliCoreTag.NumericConvert:
     case LazuliCoreTag.Boolean:
     case LazuliCoreTag.Let:

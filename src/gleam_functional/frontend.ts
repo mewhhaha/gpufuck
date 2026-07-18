@@ -12,7 +12,8 @@ import {
 } from "./diagnostic.ts";
 import {
   type GleamFunctionalExportSignature,
-  gleamFunctionalExportSignatures,
+  gleamFunctionalNominalExportSignatures,
+  gleamFunctionalValueExportSignatures,
   type LoweredGleamFunctionalModule,
   lowerGleamFunctionalModule,
 } from "./lowering.ts";
@@ -90,8 +91,11 @@ export function lowerGleamFunctionalSources(
 
   const signatures: GleamFunctionalExportSignature[] = [];
   for (const module of modules) {
+    signatures.push(...gleamFunctionalNominalExportSignatures(module));
+  }
+  for (const module of modules) {
     try {
-      signatures.push(...gleamFunctionalExportSignatures(module));
+      signatures.push(...gleamFunctionalValueExportSignatures(module, signatures));
     } catch (error) {
       if (error instanceof GleamFunctionalLoweringError) {
         return { ok: false, diagnostics: [lowerDiagnostic(module.name, error)] };

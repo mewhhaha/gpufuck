@@ -146,6 +146,7 @@ async function resolvedCoreFingerprint(
     entryEffects: module.entryEffects,
     typeDeclarations: module.typeDeclarations,
     hostCapabilities: module.hostCapabilities,
+    hostDefinitions: module.hostDefinitions,
     wasmExports: module.wasmExports,
     sources: module.sources,
     evaluationProfile: module.evaluationProfile,

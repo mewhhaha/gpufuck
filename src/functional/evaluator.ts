@@ -258,6 +258,12 @@ async function inspectModuleNumericRequirements(
   for (const node of nodes) {
     if (node.tag === FunctionalCoreTag.SignedInteger64) signedInteger64 = true;
     if (node.tag === FunctionalCoreTag.Float64) boundedWasm = true;
+    if (
+      node.tag === FunctionalCoreTag.Text || node.tag === FunctionalCoreTag.Bytes ||
+      node.tag === FunctionalCoreTag.RuntimeFault
+    ) {
+      boundedWasm = true;
+    }
     if (node.tag === FunctionalCoreTag.Unary) {
       if (node.payload === FunctionalUnaryOperator.NegateSignedInteger64) signedInteger64 = true;
       if (
@@ -266,6 +272,10 @@ async function inspectModuleNumericRequirements(
       ) boundedWasm = true;
     }
     if (node.tag === FunctionalCoreTag.Binary) {
+      if (
+        node.payload === FunctionalBinaryOperator.StructuralEqual ||
+        node.payload === FunctionalBinaryOperator.StructuralNotEqual
+      ) boundedWasm = true;
       if (
         (node.payload >= FunctionalBinaryOperator.EqualSignedInteger64 &&
           node.payload <= FunctionalBinaryOperator.DivideSignedInteger64) ||

@@ -58,9 +58,11 @@ import {
   THUNK_EVALUATED,
   THUNK_UNEVALUATED,
   WASM_FAULT_DIVIDE_BY_ZERO,
+  WASM_FAULT_EXPLICIT,
   WASM_FAULT_INVALID_NUMERIC_CONVERSION,
 } from "./wasm_runtime_binary.ts";
 import { FunctionalWasmRuntimeEmitter } from "./wasm_runtime_emitter.ts";
+import { structuralEqualityFunction } from "./wasm_structural_equality.ts";
 import {
   float32FromBits,
   float64FromBits,
@@ -83,6 +85,7 @@ import {
   type FunctionalStoragePlan,
 } from "./storage_plan.ts";
 import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
+import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 
 const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
@@ -303,6 +306,7 @@ class FunctionalWasmCompiler {
   readonly #globalThunkSlots: (number | undefined)[];
   readonly #entry: FunctionalWasmEntry;
   readonly #hostFields: readonly HostField[];
+  readonly #hostDefinitionFields: ReadonlyMap<number, HostField>;
   readonly #functionImports: readonly WasmFunctionImport[];
   readonly #activeSpecializedLambdas = new Set<number>();
   readonly #activeFusedWorkers = new Set<number>();
@@ -322,6 +326,7 @@ class FunctionalWasmCompiler {
   #nativeScalarWorkerDepth = 0;
   #requestedAllocator = false;
   #requestedThunkForce = false;
+  #structuralEqualitySlot: number | undefined;
 
   constructor(
     module: GpuFunctionalModule,
@@ -434,6 +439,23 @@ class FunctionalWasmCompiler {
       }
     }
     this.#hostFields = Object.freeze(hostFields);
+    const hostDefinitionFields = new Map<number, HostField>();
+    for (const binding of module.hostDefinitions) {
+      const definitionIndex = module.definitionNames.indexOf(binding.definition);
+      const field = hostFields.find((candidate) =>
+        candidate.capability === binding.capability &&
+        candidate.declaration.name === binding.field
+      );
+      if (definitionIndex < 0 || field === undefined) {
+        throw new Error(
+          `functional host definition ${JSON.stringify(binding.definition)} could not resolve ${
+            JSON.stringify(`${binding.capability}.${binding.field}`)
+          }`,
+        );
+      }
+      hostDefinitionFields.set(definitionIndex, field);
+    }
+    this.#hostDefinitionFields = hostDefinitionFields;
     this.#functionImports = Object.freeze(functionImports);
     this.#constructorClosureSlots = module.constructorArities.map((arity) =>
       Array.from({ length: arity }, () => undefined)
@@ -582,6 +604,7 @@ class FunctionalWasmCompiler {
       ),
     ]);
     for (const definitionIndex of this.#runtimeDefinitionIndices) {
+      if (this.#hostDefinitionFields.has(definitionIndex)) continue;
       const rootNode = this.#module.definitionRoots[definitionIndex];
       if (rootNode === undefined || this.expressionIsWhnf(rootNode)) continue;
       this.#globalThunkSlots[definitionIndex] = this.reserveIndirectFunction();
@@ -952,38 +975,39 @@ class FunctionalWasmCompiler {
     }
     const fields: ValueSource[] = [];
     for (const field of this.#hostFields) {
-      if (field.declaration.kind === "value") {
-        if (field.declaration.wasmLiteral !== undefined) {
-          this.#hostEmitter.emitLiteral(instructions, field.declaration.wasmLiteral);
-          const value = instructions.addLocal(WasmValueType.I64);
-          instructions.localSet(value);
-          fields.push({ kind: "i64-local", index: value });
-          continue;
-        }
-        if (field.importIndex === undefined) {
-          throw new Error(
-            `functional WASM host value ${
-              hostFieldKey(field.capability, field.declaration.name)
-            } omitted its import`,
-          );
-        }
-        instructions.call(field.importIndex);
-        this.emitHostResult(instructions, field.declaration.type);
-      } else {
-        if (field.closureSlot === undefined) {
-          throw new Error(
-            `functional WASM host operation ${
-              hostFieldKey(field.capability, field.declaration.name)
-            } omitted its closure slot`,
-          );
-        }
-        this.emitClosure(instructions, field.closureSlot, []);
-      }
+      this.emitHostFieldValue(instructions, field);
       const value = instructions.addLocal(WasmValueType.I64);
       instructions.localSet(value);
       fields.push({ kind: "i64-local", index: value });
     }
     this.emitConstructor(instructions, constructorIndex, fields);
+  }
+
+  emitHostFieldValue(instructions: WasmInstructions, field: HostField): void {
+    if (field.declaration.kind === "value") {
+      if (field.declaration.wasmLiteral !== undefined) {
+        this.#hostEmitter.emitLiteral(instructions, field.declaration.wasmLiteral);
+        return;
+      }
+      if (field.importIndex === undefined) {
+        throw new Error(
+          `functional WASM host value ${
+            hostFieldKey(field.capability, field.declaration.name)
+          } omitted its import`,
+        );
+      }
+      instructions.call(field.importIndex);
+      this.emitHostResult(instructions, field.declaration.type);
+      return;
+    }
+    if (field.closureSlot === undefined) {
+      throw new Error(
+        `functional WASM host operation ${
+          hostFieldKey(field.capability, field.declaration.name)
+        } omitted its closure slot`,
+      );
+    }
+    this.emitClosure(instructions, field.closureSlot, []);
   }
 
   compileGlobalThunks(): void {
@@ -1022,6 +1046,12 @@ class FunctionalWasmCompiler {
     ) {
       if (!this.#runtimeDefinitionIndices.has(definitionIndex)) continue;
       instructions.i32Const(definitionIndex * VALUE_BYTE_LENGTH);
+      const hostField = this.#hostDefinitionFields.get(definitionIndex);
+      if (hostField !== undefined) {
+        this.emitHostFieldValue(instructions, hostField);
+        instructions.i64Store(0);
+        continue;
+      }
       const slot = this.#globalThunkSlots[definitionIndex];
       if (slot === undefined) {
         this.compileExpression(instructions, rootNode, []);
@@ -1080,6 +1110,25 @@ class FunctionalWasmCompiler {
       case FunctionalCoreTag.Float64:
         this.compileFloat64Expression(instructions, nodeIndex, environment);
         this.emitBoxFloat64(instructions);
+        return;
+      case FunctionalCoreTag.Text:
+      case FunctionalCoreTag.Bytes: {
+        const symbol = this.#module.symbolNames[node.payload];
+        if (symbol === undefined) {
+          throw new Error(
+            `functional WASM literal at core node ${nodeIndex} references missing symbol ${node.payload}`,
+          );
+        }
+        this.#hostEmitter.emitLiteral(
+          instructions,
+          node.tag === FunctionalCoreTag.Text
+            ? { kind: "text", value: symbol }
+            : { kind: "bytes", value: functionalBytesFromLiteralSymbol(symbol) },
+        );
+        return;
+      }
+      case FunctionalCoreTag.RuntimeFault:
+        this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_EXPLICIT, nodeIndex);
         return;
       case FunctionalCoreTag.Boolean:
         instructions.i64Const((BigInt(node.payload) << 3n) | 2n);
@@ -2617,6 +2666,13 @@ class FunctionalWasmCompiler {
         return;
       }
       case FunctionalCoreTag.Binary:
+        if (
+          node.payload === FunctionalBinaryOperator.StructuralEqual ||
+          node.payload === FunctionalBinaryOperator.StructuralNotEqual
+        ) {
+          this.compileStructuralEquality(instructions, node, environment);
+          return;
+        }
         if (!isComparisonOperator(node.payload)) break;
         this.compileComparisonOperands(
           instructions,
@@ -3034,6 +3090,14 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     nodeIndex: number,
   ): void {
+    if (
+      node.payload === FunctionalBinaryOperator.StructuralEqual ||
+      node.payload === FunctionalBinaryOperator.StructuralNotEqual
+    ) {
+      this.compileStructuralEquality(instructions, node, environment);
+      this.emitEncodeBoolean(instructions);
+      return;
+    }
     const group = numericOperatorGroup(node.payload);
     if (group !== "integer") {
       this.compileComparisonOperands(
@@ -3076,6 +3140,35 @@ class FunctionalWasmCompiler {
     }
     this.compileIntegerExpression(instructions, nodeIndex, environment);
     this.emitEncodeInteger(instructions);
+  }
+
+  compileStructuralEquality(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    environment: FunctionalEnvironment,
+  ): void {
+    this.compileExpression(instructions, node.child0, environment);
+    this.compileExpression(instructions, node.child1, environment);
+    instructions.call(this.structuralEqualityFunctionIndex());
+    if (node.payload === FunctionalBinaryOperator.StructuralNotEqual) instructions.emit(0x45);
+  }
+
+  structuralEqualityFunctionIndex(): number {
+    if (this.#structuralEqualitySlot !== undefined) {
+      return this.indirectFunctionOffset() + this.#structuralEqualitySlot;
+    }
+    const slot = this.reserveIndirectFunction();
+    this.#structuralEqualitySlot = slot;
+    const functionIndex = this.indirectFunctionOffset() + slot;
+    this.#indirectFunctions[slot] = structuralEqualityFunction({
+      typeIndex: this.functionTypeIndex(
+        [WasmValueType.I64, WasmValueType.I64],
+        [WasmValueType.I32],
+      ),
+      functionIndex,
+      emitForceValue: (instructions) => this.emitForceValue(instructions),
+    });
+    return functionIndex;
   }
 
   compileCase(

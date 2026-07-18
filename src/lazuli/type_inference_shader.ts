@@ -7,6 +7,7 @@ import {
   LAZULI_NO_INDEX,
   LAZULI_NODE_WORD_LENGTH,
   LAZULI_TYPE_WORD_LENGTH,
+  LazuliBinaryOperator,
   LazuliCoreTag,
 } from "./abi.ts";
 import {
@@ -763,6 +764,8 @@ const TAG_LAMBDA: u32 = ${LazuliCoreTag.Lambda}u;
 const TAG_APPLY: u32 = ${LazuliCoreTag.Apply}u;
 const TAG_UNARY: u32 = ${LazuliCoreTag.Unary}u;
 const TAG_BINARY: u32 = ${LazuliCoreTag.Binary}u;
+const BINARY_STRUCTURAL_EQUAL: u32 = ${LazuliBinaryOperator.StructuralEqual}u;
+const BINARY_STRUCTURAL_NOT_EQUAL: u32 = ${LazuliBinaryOperator.StructuralNotEqual}u;
 const TAG_CASE: u32 = ${LazuliCoreTag.Case}u;
 const TAG_CASE_ARM: u32 = ${LazuliCoreTag.CaseArm}u;
 const TAG_PATTERN_BIND: u32 = ${LazuliCoreTag.PatternBind}u;
@@ -774,6 +777,9 @@ const TAG_SIGNED_INTEGER_64: u32 = ${LazuliCoreTag.SignedInteger64}u;
 const TAG_FLOAT_32: u32 = ${LazuliCoreTag.Float32}u;
 const TAG_FLOAT_64: u32 = ${LazuliCoreTag.Float64}u;
 const TAG_NUMERIC_CONVERT: u32 = ${LazuliCoreTag.NumericConvert}u;
+const TAG_TEXT: u32 = ${LazuliCoreTag.Text}u;
+const TAG_BYTES: u32 = ${LazuliCoreTag.Bytes}u;
+const TAG_RUNTIME_FAULT: u32 = ${LazuliCoreTag.RuntimeFault}u;
 
 const OUTPUT_INTEGER: u32 = 1u;
 const OUTPUT_BOOLEAN: u32 = 2u;
@@ -813,6 +819,10 @@ fn numeric_type_index_for_unary(operation: u32) -> u32 {
 
 fn numeric_operator_is_comparison(operation: u32) -> bool {
   return operation <= 40u && (operation - 1u) % 10u < 6u;
+}
+
+fn operator_is_structural_equality(operation: u32) -> bool {
+  return operation == BINARY_STRUCTURAL_EQUAL || operation == BINARY_STRUCTURAL_NOT_EQUAL;
 }
 
 fn numeric_conversion_source(conversion: u32) -> u32 {
@@ -2584,6 +2594,16 @@ fn expression_transition() {
     if node.tag == TAG_SIGNED_INTEGER_64 { complete_expression(3u); return; }
     if node.tag == TAG_FLOAT_32 { complete_expression(4u); return; }
     if node.tag == TAG_FLOAT_64 { complete_expression(5u); return; }
+    if node.tag == TAG_TEXT || node.tag == TAG_BYTES {
+      if !require_type_slots(1u) { return; }
+      complete_expression(allocate_type(TYPE_NAMED, node.child0, NO_INDEX, NO_INDEX));
+      return;
+    }
+    if node.tag == TAG_RUNTIME_FAULT {
+      if !require_type_slots(1u) { return; }
+      complete_expression(fresh_variable());
+      return;
+    }
     if node.tag == TAG_LOCAL {
       let expected = frame_get(frame, 11u);
       if node.payload == 0u && environment != NO_INDEX && expected != NO_INDEX {
@@ -2679,10 +2699,15 @@ fn expression_transition() {
       return;
     }
     if node.tag == TAG_BINARY {
-      if !require_frame_slots(1u) { return; }
+      let structural = operator_is_structural_equality(node.payload);
+      if !require_frame_slots(1u) || (structural && !require_type_slots(1u)) { return; }
+      var operand_type = numeric_type_index_for_operator(node.payload);
+      if structural { operand_type = fresh_variable(); }
+      if state.status != STATUS_PENDING { return; }
+      frame_set(frame, 3u, operand_type);
       frame_set(frame, 1u, 60u);
       if push_expression(node.child0, environment) {
-        frame_set(state.frame_top - 1u, 11u, numeric_type_index_for_operator(node.payload));
+        frame_set(state.frame_top - 1u, 11u, operand_type);
       }
       return;
     }
@@ -2995,7 +3020,7 @@ fn expression_transition() {
   }
 
   if stage == 60u {
-    let operand_type = numeric_type_index_for_operator(node.payload);
+    let operand_type = frame_get(frame, 3u);
     if operand_type == state.returned_type {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 61u);
@@ -3013,15 +3038,16 @@ fn expression_transition() {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 61u);
     if push_expression(node.child1, environment) {
-      frame_set(state.frame_top - 1u, 11u, numeric_type_index_for_operator(node.payload));
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 3u));
     }
     return;
   }
   if stage == 61u {
-    let operand_type = numeric_type_index_for_operator(node.payload);
+    let operand_type = frame_get(frame, 3u);
     if operand_type == state.returned_type {
       complete_expression(select(
-        operand_type, 1u, numeric_operator_is_comparison(node.payload)));
+        operand_type, 1u,
+        numeric_operator_is_comparison(node.payload) || operator_is_structural_equality(node.payload)));
       return;
     }
     if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
@@ -3031,8 +3057,8 @@ fn expression_transition() {
   }
   if stage == 63u {
     complete_expression(select(
-      numeric_type_index_for_operator(node.payload), 1u,
-      numeric_operator_is_comparison(node.payload)));
+      frame_get(frame, 3u), 1u,
+      numeric_operator_is_comparison(node.payload) || operator_is_structural_equality(node.payload)));
     return;
   }
   if stage == 64u {
@@ -3467,13 +3493,21 @@ fn node_shape_is_valid(node_index: u32) -> bool {
   if node.tag == TAG_SIGNED_INTEGER_64 || node.tag == TAG_FLOAT_64 {
     return node.child1 == NO_INDEX && node.child2 == NO_INDEX && node.evaluation_mode == 0u;
   }
+  if node.tag == TAG_TEXT || node.tag == TAG_BYTES {
+    return node.child0 < state.type_count && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
+      node.evaluation_mode == 0u;
+  }
+  if node.tag == TAG_RUNTIME_FAULT {
+    return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
+      node.evaluation_mode == 0u;
+  }
   if node.tag == TAG_LET || node.tag == TAG_LET_REC || node.tag == TAG_APPLY ||
     node.tag == TAG_BINARY {
     return required_child_is_valid(node_index, node.child0) &&
       required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
       (node.evaluation_mode == 0u || node.tag == TAG_LET || node.tag == TAG_APPLY) &&
       (node.tag != TAG_LET_REC || core_node(node.child0).tag == TAG_LAMBDA) &&
-      (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 52u));
+      (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 54u));
   }
   if node.tag == TAG_IF {
     return required_child_is_valid(node_index, node.child0) &&

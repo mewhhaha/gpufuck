@@ -180,7 +180,7 @@ export class FunctionalWasmHostEmitter {
     instructions: WasmInstructions,
     literal: { readonly kind: "text"; readonly value: string } | {
       readonly kind: "bytes";
-      readonly value: readonly number[];
+      readonly value: readonly number[] | Uint8Array;
     },
   ): void {
     const bytes = literal.kind === "text" ? new TextEncoder().encode(literal.value) : literal.value;

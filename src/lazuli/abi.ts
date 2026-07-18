@@ -70,6 +70,9 @@ export const LazuliSurfaceTag = {
   Float32: 20,
   Float64: 21,
   NumericConvert: 22,
+  Text: 23,
+  Bytes: 24,
+  RuntimeFault: 25,
 } as const;
 
 export type LazuliSurfaceTag = (typeof LazuliSurfaceTag)[keyof typeof LazuliSurfaceTag];
@@ -94,6 +97,9 @@ export const LazuliCoreTag = {
   Float32: LazuliSurfaceTag.Float32,
   Float64: LazuliSurfaceTag.Float64,
   NumericConvert: LazuliSurfaceTag.NumericConvert,
+  Text: LazuliSurfaceTag.Text,
+  Bytes: LazuliSurfaceTag.Bytes,
+  RuntimeFault: LazuliSurfaceTag.RuntimeFault,
 } as const;
 
 export type LazuliCoreTag = (typeof LazuliCoreTag)[keyof typeof LazuliCoreTag];
@@ -168,6 +174,8 @@ export const LazuliBinaryOperator = {
   BitwiseXorSignedInteger64: 50,
   ShiftLeftSignedInteger64: 51,
   ShiftRightUnsignedSignedInteger64: 52,
+  StructuralEqual: 53,
+  StructuralNotEqual: 54,
 } as const;
 
 export type LazuliBinaryOperator = (typeof LazuliBinaryOperator)[keyof typeof LazuliBinaryOperator];

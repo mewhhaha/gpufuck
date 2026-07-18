@@ -134,7 +134,7 @@ or Rust-style matches. Those shapes do not enter the GPU ABI directly.
 
 The surface is the required high-level target. It contains:
 
-- literals and names;
+- scalar, static text, and static bytes literals, names, and explicit runtime faults;
 - lambdas and unary application;
 - immutable `let`, lambda-valued `let-rec`, and local mutually recursive groups;
 - `if`, primitive unary/binary operations, and numeric conversions;
@@ -260,8 +260,8 @@ Source modules and target modules solve different problems.
 
 The frontend parses imports, locates packages, applies visibility and language coherence, and emits
 one `FunctionalModuleArtifact` for each selected source module. Each artifact contains definitions,
-nominal types, typed imports, typed exports, source length, evaluation profile, host contracts, and
-optional Wasm exports.
+nominal types, separately declared value/type/constructor imports and exports, source length,
+evaluation profile, host contracts, and optional Wasm exports.
 
 [`module_linker.ts`](src/functional/module_linker.ts) then:
 
@@ -564,7 +564,10 @@ implementations of the same resolved Core semantics.
 Portable WGSL does not expose native `i64` or `f64`, and its floating-point rules do not promise all
 host-Wasm rounding behavior. The evaluator represents wrapping `i64` with two words and handles a
 safe basic `f32` subset on GPU. Operations requiring exact portable wide or division/square-root
-semantics use cached fuel-instrumented Wasm. The limitation follows the scalar types defined by the
+semantics use cached fuel-instrumented Wasm. Target-neutral structural equality uses the same path:
+GPU inference requires both operands to have one type, then Wasm compares immediate values and
+recursively compares constructors, text, bytes, arrays, slices, resources, and boxed numerics. The
+limitation follows the scalar types defined by the
 [WGSL specification](https://www.w3.org/TR/WGSL/), not a frontend restriction.
 
 ## 10. Wasm backend
@@ -819,6 +822,12 @@ Host capabilities are declared values and operations, collected into one reserve
 constructor. User Core destructures that constructor like ordinary algebraic data, so inference
 needs no host-specific opcode.
 
+`hostDefinitions` is the alternate boundary for languages whose external functions are ordinary
+top-level names. The GPU checks a normal annotated definition; after successful resolution the Wasm
+initializer binds that definition's global slot directly to the declared capability field. The
+placeholder body is unreachable in a valid emitted module. This keeps host identity out of the GPU
+IR while avoiding implicit `Init` threading through every source function.
+
 Each operation declares concrete input/output types, purity, and sync or suspending execution. Pure
 intrinsics such as byte length or indexing may lower entirely into the module. Other operations
 become Wasm imports under a capability-qualified namespace.
@@ -920,12 +929,14 @@ features must be exposed through `src/functional/` contracts and must not depend
 or parser structures.
 
 The repository's Baba-generated Gleam parser demonstrates the intended separation at module scale:
-its adapter owns Gleam syntax, visibility, pipeline desugaring, and the rule that public functions
-need complete artifact types; the neutral linker and GPU compiler only see strict Functional Surface
-modules. A smaller Baba-generated PureScript grammar parses an explicit-layout profile that
-exercises open rows, associated results, recursive capability evidence, and rank-2 checking without
-claiming full PureScript compatibility. Together they distinguish a usable source adapter from a
-backend-representation experiment.
+its adapter owns Gleam syntax, visibility, labels, records, bit-array syntax, external annotations,
+and pipeline desugaring. Public annotations become stable artifact interfaces when present;
+otherwise the neutral linker keeps the boundary open and the GPU infers the linked program.
+Incremental fingerprints include the defining expression for an inferred export, conservatively
+rechecking dependents instead of treating an unknown schema as stable. A smaller Baba-generated
+PureScript grammar parses an explicit-layout profile that exercises open rows, associated results,
+recursive capability evidence, and rank-2 checking without claiming full PureScript compatibility.
+Together they distinguish a usable source adapter from a backend-representation experiment.
 
 The old Brainfuck compiler remains only as historical and benchmark context. Its instruction format
 is not an intermediate representation for other languages.
@@ -1148,24 +1159,24 @@ allocations, and thunk forces separately.
 
 ## 17. Internal source map
 
-| Concern                   | Primary modules                                                                                          |
-| ------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Public types and ABI      | `src/functional/abi.ts`, `functional.ts`                                                                 |
-| Surface packing           | `src/functional/surface_builder.ts`                                                                      |
-| Static linking            | `src/functional/module_linker.ts`                                                                        |
-| Incremental graph/cache   | `src/functional/incremental_graph.ts`, `incremental_compiler.ts`, `incremental_cache.ts`                 |
-| Compiler facade/admission | `src/functional/compiler.ts`, `compilation_admission.ts`                                                 |
-| GPU resolution            | `src/lazuli/compiler_shader.ts`, `gpu_semantic_compiler.ts`                                              |
-| GPU inference             | `src/lazuli/type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts` |
-| Canonical schemas         | `src/lazuli/type_schema_abi.ts`                                                                          |
-| Type services             | `src/functional/type_program.ts`, `type_core.ts`, `capability_resolver.ts`                               |
-| Effects                   | `src/functional/effect_core.ts`, `effect_core_lowering.ts`, `effect_lowering.ts`                         |
-| Comptime                  | `src/functional/comptime.ts`, `comptime_constant.ts`, `comptime_ir.ts`, `partial_evaluation.ts`          |
-| Compiled module/evaluator | `src/functional/compiler_module.ts`, `evaluator.ts`                                                      |
-| Wasm analyses             | `src/functional/wasm_function_analysis.ts`, `wasm_capture_analysis.ts`, `wasm_lambda_sets.ts`            |
-| Wasm emission/runtime     | `src/functional/wasm_codegen.ts`, `wasm_binary.ts`, `wasm_runtime_binary.ts`                             |
-| Wasm boundary/execution   | `src/functional/wasm_value_codec.ts`, `wasm_host_boundary.ts`, `wasm_execution.ts`                       |
-| Diagnostics               | `src/functional/diagnostics.ts`, `src/lazuli/compilation_diagnostics.ts`                                 |
+| Concern                   | Primary modules                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Public types and ABI      | `src/functional/abi.ts`, `functional.ts`                                                                    |
+| Surface packing           | `src/functional/surface_builder.ts`                                                                         |
+| Static linking            | `src/functional/module_linker.ts`                                                                           |
+| Incremental graph/cache   | `src/functional/incremental_graph.ts`, `incremental_compiler.ts`, `incremental_cache.ts`                    |
+| Compiler facade/admission | `src/functional/compiler.ts`, `compilation_admission.ts`                                                    |
+| GPU resolution            | `src/lazuli/compiler_shader.ts`, `gpu_semantic_compiler.ts`                                                 |
+| GPU inference             | `src/lazuli/type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts`    |
+| Canonical schemas         | `src/lazuli/type_schema_abi.ts`                                                                             |
+| Type services             | `src/functional/type_program.ts`, `type_core.ts`, `capability_resolver.ts`                                  |
+| Effects                   | `src/functional/effect_core.ts`, `effect_core_lowering.ts`, `effect_lowering.ts`                            |
+| Comptime                  | `src/functional/comptime.ts`, `comptime_constant.ts`, `comptime_ir.ts`, `partial_evaluation.ts`             |
+| Compiled module/evaluator | `src/functional/compiler_module.ts`, `evaluator.ts`                                                         |
+| Wasm analyses             | `src/functional/wasm_function_analysis.ts`, `wasm_capture_analysis.ts`, `wasm_lambda_sets.ts`               |
+| Wasm emission/runtime     | `src/functional/wasm_codegen.ts`, `wasm_binary.ts`, `wasm_structural_equality.ts`, `wasm_runtime_binary.ts` |
+| Wasm boundary/execution   | `src/functional/wasm_value_codec.ts`, `wasm_host_boundary.ts`, `wasm_execution.ts`                          |
+| Diagnostics               | `src/functional/diagnostics.ts`, `src/lazuli/compilation_diagnostics.ts`                                    |
 
 ## 18. Technical references
 
@@ -1216,6 +1227,13 @@ standards and algorithms that shaped specific decisions:
 - Andrey Mokhov, Neil Mitchell, and Simon Peyton Jones,
   [“Build Systems à la Carte”](https://www.microsoft.com/en-us/research/publication/build-systems-la-carte/)
   — separating dependency graphs, incremental validity, and build execution.
+
+### Source adapter contracts
+
+- Gleam documentation, [External functions](https://gleam.run/documentation/externals/) — mandatory
+  annotations and target/module/function identity at the external boundary.
+- Gleam language tour, [Bit arrays](https://tour.gleam.run/data-types/bit-arrays/) — segment options
+  and the JavaScript target's portable-representation constraints.
 
 When a new algorithm or platform proposal materially shapes an invariant, add the primary source
 next to the relevant design section and to this index. References document rationale; tests and the

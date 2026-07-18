@@ -108,8 +108,15 @@ export interface FunctionalHostCapabilityDeclaration {
   readonly fields: readonly FunctionalHostFieldDeclaration[];
 }
 
+export interface FunctionalHostDefinitionBinding {
+  readonly definition: string;
+  readonly capability: string;
+  readonly field: string;
+}
+
 export interface FunctionalSurfaceModuleOptions {
   readonly hostCapabilities?: readonly FunctionalHostCapabilityDeclaration[];
+  readonly hostDefinitions?: readonly FunctionalHostDefinitionBinding[];
   readonly evaluationProfile?: FunctionalEvaluationProfile;
   readonly wasmExports?: readonly FunctionalWasmExportDeclaration[];
 }

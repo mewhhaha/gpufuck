@@ -15,6 +15,7 @@ import {
   FunctionalExpressionTag,
   type FunctionalIncrementalCache,
   type FunctionalModuleArtifact,
+  FunctionalNodeWord,
   FunctionalTypecheckingProfile,
   FunctionalWasmIntrinsic,
   GpuFunctionalCompiler,
@@ -107,6 +108,96 @@ Deno.test("compiles and evaluates a parser-independent functional module", async
     }
   } finally {
     compilation.module.destroy();
+  }
+});
+
+Deno.test("infers and executes target-neutral structural equality", async () => {
+  const pair = (left: number, right: number) =>
+    surface.apply(
+      surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+      surface.integer(left),
+      surface.integer(right),
+    );
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.structuralEqual(pair(20, 22), pair(20, 22)),
+    }],
+    [],
+    "main",
+    0,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
+  const { compiler, evaluator } = functionalRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    deepStrictEqual(compilation.module.entryType, { kind: "boolean" });
+    const evaluation = await evaluator.evaluate(compilation.module);
+    ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
+    if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "boolean", value: true });
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "boolean", value: true });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects structural equality between different operand types", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.structuralEqual(surface.integer(42), surface.boolean(true)),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalRuntime().compiler.compileModule(module);
+  ok(!compilation.ok);
+  if (compilation.ok) return;
+  match(compilation.diagnostics[0].message, /expected Int, received Bool/);
+});
+
+Deno.test("infers and emits first-class static text and bytes literals", async () => {
+  const modules = [
+    buildFunctionalSurfaceModule(
+      [{ name: "main", parameters: [], annotation: null, body: surface.text("Zażółć 🦆") }],
+      [],
+      "main",
+      0,
+    ),
+    buildFunctionalSurfaceModule(
+      [{
+        name: "main",
+        parameters: [],
+        annotation: null,
+        body: surface.bytes(new Uint8Array([0, 127, 128, 255])),
+      }],
+      [],
+      "main",
+      0,
+    ),
+  ];
+  const compilations = await functionalRuntime().compiler.compileBatch(modules);
+  ok(compilations.every((compilation) => compilation.ok));
+  const compiled = compilations.flatMap((compilation) =>
+    compilation.ok ? [compilation.module] : []
+  );
+  try {
+    const results = await Promise.all(compiled.map((module) => runFunctionalWasmModule(module)));
+    deepStrictEqual(results[0]?.value, { kind: "text", value: "Zażółć 🦆" });
+    deepStrictEqual(results[1]?.value, {
+      kind: "bytes",
+      value: new Uint8Array([0, 127, 128, 255]),
+    });
+  } finally {
+    for (const module of compiled) module.destroy();
   }
 });
 
@@ -343,6 +434,66 @@ Deno.test("incremental compilation treats mutually recursive modules as one cach
   if (!changed.ok) return;
   try {
     deepStrictEqual(changed.incremental.compiledModules, ["left", "right"]);
+    const evaluation = await evaluator.evaluate(changed.module);
+    ok(evaluation.ok);
+    if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
+  } finally {
+    changed.module.destroy();
+  }
+});
+
+Deno.test("incremental compilation conservatively invalidates inferred module interfaces", async () => {
+  const { compiler, evaluator } = functionalRuntime();
+  const incremental = new IncrementalGpuFunctionalCompiler(compiler, {
+    cache: new MemoryFunctionalIncrementalCache(),
+  });
+  const library = (value: number): FunctionalModuleArtifact => ({
+    name: "inferred-library",
+    definitions: [{
+      name: "answer",
+      parameters: [],
+      annotation: null,
+      body: surface.integer(value),
+    }],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "answer", definition: "answer" }],
+    sourceByteLength: 1,
+    options: {},
+  });
+  const application: FunctionalModuleArtifact = {
+    name: "inferred-application",
+    definitions: [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.name("answer"),
+    }],
+    typeDeclarations: [],
+    imports: [{
+      name: "answer",
+      fromModule: "inferred-library",
+      exportName: "answer",
+    }],
+    exports: [{ name: "main", definition: "main" }],
+    sourceByteLength: 1,
+    options: {},
+  };
+  const entry = { module: application.name, exportName: "main" };
+
+  const first = await incremental.compile([library(41), application], entry);
+  ok(first.ok, first.ok ? undefined : first.diagnostics[0].message);
+  if (!first.ok) return;
+  first.module.destroy();
+
+  const changed = await incremental.compile([library(42), application], entry);
+  ok(changed.ok, changed.ok ? undefined : changed.diagnostics[0].message);
+  if (!changed.ok) return;
+  try {
+    deepStrictEqual(changed.incremental.compiledModules, [
+      "inferred-application",
+      "inferred-library",
+    ]);
     const evaluation = await evaluator.evaluate(changed.module);
     ok(evaluation.ok);
     if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
@@ -849,6 +1000,39 @@ Deno.test("rejects malformed functional record tables with their exact shape", a
   await rejects(
     () => compiler.compileModule({ ...valid, nodeWords: valid.nodeWords.slice(0, 7) }),
     /has 7 node words for 1 records; expected 8/,
+  );
+});
+
+Deno.test("rejects malformed encoded bytes before GPU work", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [{ name: "main", parameters: [], annotation: null, body: surface.bytes(Uint8Array.of(42)) }],
+    [],
+    "main",
+    0,
+  );
+  const symbols = [...module.symbolNames];
+  const literalSymbol = module.nodeWords[FunctionalNodeWord.Payload]!;
+  symbols[literalSymbol] = "$bytes:zz";
+
+  await rejects(
+    () => functionalRuntime().compiler.compileModule({ ...module, symbolNames: symbols }),
+    /malformed hexadecimal bytes.*\$bytes:zz/,
+  );
+});
+
+Deno.test("rejects runtime faults outside the symbol table before GPU work", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [{ name: "main", parameters: [], annotation: null, body: surface.runtimeFault("broken") }],
+    [],
+    "main",
+    0,
+  );
+  const nodeWords = module.nodeWords.slice();
+  nodeWords[FunctionalNodeWord.Payload] = module.symbolNames.length;
+
+  await rejects(
+    () => functionalRuntime().compiler.compileModule({ ...module, nodeWords }),
+    /runtime fault node 0 references symbol.*expected fewer than/,
   );
 });
 

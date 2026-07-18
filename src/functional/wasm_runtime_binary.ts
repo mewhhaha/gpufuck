@@ -19,6 +19,7 @@ export const WASM_FAULT_OUT_OF_MEMORY = 3;
 export const WASM_FAULT_OUT_OF_FUEL = 4;
 export const WASM_FAULT_INVALID_NUMERIC_CONVERSION = 5;
 export const WASM_FAULT_OUT_OF_BOUNDS = 6;
+export const WASM_FAULT_EXPLICIT = 7;
 
 export const THUNK_UNEVALUATED = 0;
 export const THUNK_EVALUATING = 1;

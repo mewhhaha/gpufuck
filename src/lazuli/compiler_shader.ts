@@ -194,6 +194,9 @@ const SURFACE_SIGNED_INTEGER_64: u32 = 19u;
 const SURFACE_FLOAT_32: u32 = 20u;
 const SURFACE_FLOAT_64: u32 = 21u;
 const SURFACE_NUMERIC_CONVERT: u32 = 22u;
+const SURFACE_TEXT: u32 = 23u;
+const SURFACE_BYTES: u32 = 24u;
+const SURFACE_RUNTIME_FAULT: u32 = 25u;
 
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
@@ -294,6 +297,12 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     case SURFACE_FLOAT_32: {
       return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
+    case SURFACE_TEXT, SURFACE_BYTES: {
+      return node.child0 < state.type_count && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
+    }
+    case SURFACE_RUNTIME_FAULT: {
+      return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
+    }
     case SURFACE_BOOLEAN: {
       return node.payload <= 1u && node.child0 == NO_INDEX && node.child1 == NO_INDEX &&
         node.child2 == NO_INDEX;
@@ -334,7 +343,7 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_BINARY: {
-      return node.payload >= 1u && node.payload <= 52u &&
+      return node.payload >= 1u && node.payload <= 54u &&
         required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }

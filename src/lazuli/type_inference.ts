@@ -5,6 +5,7 @@ import {
   LAZULI_NO_INDEX,
   LAZULI_NODE_WORD_LENGTH,
   LAZULI_TYPE_WORD_LENGTH,
+  LazuliBinaryOperator,
   LazuliConstructorWord,
   LazuliDefinitionWord,
   type LazuliDiagnostic,
@@ -753,6 +754,18 @@ class InferenceContext {
         return FLOAT_32;
       case LazuliSurfaceTag.Float64:
         return FLOAT_64;
+      case LazuliSurfaceTag.Text:
+      case LazuliSurfaceTag.Bytes: {
+        const declaration = this.#surface.typeDeclarations[
+          this.nodeWord(nodeIndex, LazuliSurfaceWord.Child0)
+        ];
+        if (declaration === undefined) {
+          throw this.invalidTypeMetadata("literal references unknown type", span);
+        }
+        return { kind: "named", name: declaration.name, arguments: [] };
+      }
+      case LazuliSurfaceTag.RuntimeFault:
+        return this.inferenceVariable();
       case LazuliSurfaceTag.Boolean:
         return BOOLEAN;
       case LazuliSurfaceTag.Name: {
@@ -865,6 +878,22 @@ class InferenceContext {
         return operandType;
       }
       case LazuliSurfaceTag.Binary: {
+        if (
+          payload === LazuliBinaryOperator.StructuralEqual ||
+          payload === LazuliBinaryOperator.StructuralNotEqual
+        ) {
+          const left = this.inferNode(
+            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+            environment,
+          );
+          const right = this.inferNode(
+            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+            environment,
+            left,
+          );
+          this.unify(left, right, span);
+          return BOOLEAN;
+        }
         const operandType = numericTypeForBinaryOperator(payload);
         const left = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),

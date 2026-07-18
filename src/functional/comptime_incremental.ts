@@ -258,7 +258,7 @@ function comptimeArtifact(artifact: FunctionalModuleArtifact): FunctionalComptim
     definitions: artifact.definitions,
     typeDeclarations: artifact.typeDeclarations,
     imports: artifact.imports,
-    exports: artifact.exports,
+    exports: typedComptimeExports(artifact),
     sourceByteLength: artifact.sourceByteLength,
     ...(artifact.options.evaluationProfile === undefined
       ? {}
@@ -275,7 +275,7 @@ function constantStub(
     exported,
   ]));
   const definitions = new Map<string, FunctionalComptimeModuleArtifact["definitions"][number]>();
-  for (const exported of artifact.exports) {
+  for (const exported of typedComptimeExports(artifact)) {
     if (definitions.has(exported.definition)) continue;
     const cachedExport = cachedExports.get(exportKey(artifact.name, exported.name));
     if (cachedExport === undefined) {
@@ -304,12 +304,20 @@ function constantStub(
     definitions: Object.freeze([...definitions.values()]),
     typeDeclarations: artifact.typeDeclarations,
     imports: artifact.imports,
-    exports: artifact.exports,
+    exports: typedComptimeExports(artifact),
     sourceByteLength: artifact.sourceByteLength,
     ...(artifact.options.evaluationProfile === undefined
       ? {}
       : { evaluationProfile: artifact.options.evaluationProfile }),
   };
+}
+
+function typedComptimeExports(
+  artifact: FunctionalModuleArtifact,
+): FunctionalComptimeModuleArtifact["exports"] {
+  return artifact.exports.flatMap((exported) =>
+    exported.type === undefined ? [] : [{ ...exported, type: exported.type }]
+  );
 }
 
 async function comptimeComponentKey(

@@ -24,7 +24,8 @@ portable WebAssembly
 The portable language includes:
 
 - strict eager and lazy call-by-need evaluation;
-- `i32`, `i64`, `f32`, `f64`, Boolean, unit, tuples, and nominal algebraic data;
+- `i32`, `i64`, `f32`, `f64`, Boolean, unit, static text and bytes, tuples, and nominal algebraic
+  data;
 - immutable bindings, closures, higher-order functions, recursion, and pattern matching;
 - Hindley–Milner inference, indexed constructor results, and annotated predicative rank-N
   parameters;
@@ -218,7 +219,17 @@ IR can encode `EncodedFunctionalModule` directly.
 | Module or record          | A generated nominal type or a linked module artifact              |
 | Typeclass or trait        | Static evidence resolution or an explicit dictionary value        |
 | Effect                    | Effect Core or an explicit host capability                        |
+| External function         | A host-bound definition plus a typed host capability              |
+| Panic or failed assertion | `runtime-fault` with source span and frontend-owned message       |
+| Bit array                 | Bytes plus an explicit bit length or a frontend nominal wrapper   |
 | Ownership or borrowing    | A frontend proof plus a selected host-boundary ownership contract |
+
+Host operations normally arrive through an explicit `Init` value. A frontend can instead bind a
+top-level definition directly to one capability field with `hostDefinitions`. This is useful for
+source languages whose annotated external functions are ordinary names rather than explicit entry
+parameters. The declaration still owns the operation's concrete parameter/result schemas, purity,
+execution mode, and ownership contracts; the runner still requires the corresponding implementation
+in `options.init`.
 
 The GPU resolves portable lexical names, global definitions, constructors, dependencies, recursive
 SCCs, annotations, and case coverage. A frontend must still reject constructs whose meaning belongs
@@ -473,7 +484,7 @@ lowering techniques, not complete compatibility with their source languages.
 
 | Frontend                                                | Boundary demonstrated                                                    |
 | ------------------------------------------------------- | ------------------------------------------------------------------------ |
-| [Gleam](examples/gleam-functional/README.md)            | Strict inference, ADTs, pipelines, and typed multi-module linking        |
+| [Gleam](examples/gleam-functional/README.md)            | Strict inference, ADTs, structural equality, and inferred module links   |
 | [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, moves, borrows, and rejected mutation |
 | [Haskell](examples/haskell-functional/README.md)        | Laziness, inference, dictionaries, GADTs, and recursive data             |
 | [OCaml](examples/ocaml-functional/README.md)            | Sequential scope, explicit recursion, variants, and lists                |

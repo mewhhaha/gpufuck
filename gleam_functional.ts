@@ -1,6 +1,8 @@
 export type {
   GleamFunctionalBinaryOperator,
+  GleamFunctionalCallArgument,
   GleamFunctionalCaseArm,
+  GleamFunctionalConstant,
   GleamFunctionalConstructor,
   GleamFunctionalDeclaration,
   GleamFunctionalExpression,
@@ -8,7 +10,9 @@ export type {
   GleamFunctionalImport,
   GleamFunctionalModule,
   GleamFunctionalPattern,
+  GleamFunctionalPatternArgument,
   GleamFunctionalType,
+  GleamFunctionalTypeAlias,
   GleamFunctionalTypeDeclaration,
 } from "./src/gleam_functional/ast.ts";
 export type {

@@ -493,6 +493,9 @@ function coreChildren(
     case FunctionalCoreTag.Float32:
     case FunctionalCoreTag.Float64:
     case FunctionalCoreTag.Boolean:
+    case FunctionalCoreTag.Text:
+    case FunctionalCoreTag.Bytes:
+    case FunctionalCoreTag.RuntimeFault:
     case FunctionalCoreTag.Local:
     case FunctionalCoreTag.Global:
     case FunctionalCoreTag.Constructor:

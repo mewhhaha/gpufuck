@@ -77,6 +77,7 @@ function compactRuntimeGlobals(
 ): FunctionalWasmCompactRuntimeGlobals {
   let nextIndex = 0;
   const mayFault = instrumentedFuel || nodes.some((node) => {
+    if (node.tag === FunctionalCoreTag.RuntimeFault) return true;
     if (node.tag === FunctionalCoreTag.Binary) {
       return node.payload === FunctionalBinaryOperator.Divide ||
         node.payload === FunctionalBinaryOperator.DivideSignedInteger64 ||

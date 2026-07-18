@@ -31,7 +31,10 @@ import {
   LazuliTypeWord,
   LazuliUnaryOperator,
 } from "../lazuli/abi.ts";
-import type { FunctionalHostCapabilityDeclaration } from "./host_contract.ts";
+import type {
+  FunctionalHostCapabilityDeclaration,
+  FunctionalHostDefinitionBinding,
+} from "./host_contract.ts";
 import type { FunctionalWasmExportDeclaration } from "./wasm_contract.ts";
 
 export const FUNCTIONAL_MODULE_ABI_VERSION = LAZULI_ABI_VERSION;
@@ -102,6 +105,10 @@ export const FunctionalPrimitiveCapability = {
   Pair: "pair",
   Function: "function",
   AlgebraicData: "algebraic-data",
+  StaticText: "static-text",
+  StaticBytes: "static-bytes",
+  ExplicitFault: "explicit-fault",
+  StructuralEquality: "structural-equality",
 } as const;
 
 export type FunctionalPrimitiveCapability =
@@ -119,6 +126,10 @@ export const FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES: readonly FunctionalPrimi
       FunctionalPrimitiveCapability.Pair,
       FunctionalPrimitiveCapability.Function,
       FunctionalPrimitiveCapability.AlgebraicData,
+      FunctionalPrimitiveCapability.StaticText,
+      FunctionalPrimitiveCapability.StaticBytes,
+      FunctionalPrimitiveCapability.ExplicitFault,
+      FunctionalPrimitiveCapability.StructuralEquality,
     ] as const,
   );
 
@@ -161,6 +172,7 @@ export interface EncodedFunctionalModule {
   readonly typecheckingProfile: FunctionalTypecheckingProfile;
   readonly primitiveCapabilities: readonly FunctionalPrimitiveCapability[];
   readonly hostCapabilities?: readonly FunctionalHostCapabilityDeclaration[];
+  readonly hostDefinitions?: readonly FunctionalHostDefinitionBinding[];
   readonly wasmExports?: readonly FunctionalWasmExportDeclaration[];
   readonly sources?: readonly FunctionalSourceRange[];
   readonly nodeWords: Uint32Array;

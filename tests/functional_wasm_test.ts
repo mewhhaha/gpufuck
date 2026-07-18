@@ -549,6 +549,79 @@ Deno.test("round-trips text, bytes, arrays, slices, and resources through WebAss
   }
 });
 
+Deno.test("compares every portable WebAssembly object kind structurally", async () => {
+  const integer = { kind: "integer" } as const;
+  const cases = [
+    [
+      FunctionalHostTypes.text,
+      { kind: "text", value: "Zażółć 🦆" },
+      { kind: "text", value: "Zażółć" },
+    ],
+    [
+      FunctionalHostTypes.bytes,
+      { kind: "bytes", value: new Uint8Array([0, 127, 128, 255]) },
+      { kind: "bytes", value: new Uint8Array([0, 127, 128, 254]) },
+    ],
+    [
+      FunctionalHostTypes.array(integer),
+      { kind: "array", values: [{ kind: "integer", value: 1 }] },
+      { kind: "array", values: [{ kind: "integer", value: 2 }] },
+    ],
+    [
+      FunctionalHostTypes.slice(FunctionalHostTypes.text),
+      { kind: "slice", values: [{ kind: "text", value: "same" }] },
+      { kind: "slice", values: [{ kind: "text", value: "different" }] },
+    ],
+    [
+      FunctionalHostTypes.resource("duck.file"),
+      { kind: "resource", id: 42 },
+      { kind: "resource", id: 43 },
+    ],
+  ] as const;
+  for (const [type, matching, different] of cases) {
+    const pairType = { kind: "tuple", values: [type, type] } as const;
+    const encoded = buildFunctionalSurfaceModule(
+      [{
+        name: "main",
+        parameters: ["pair"],
+        annotation: {
+          kind: "function",
+          parameter: pairType,
+          result: { kind: "boolean" },
+        },
+        body: {
+          kind: "case",
+          value: surface.name("pair"),
+          arms: [{
+            constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+            binders: ["left", "right"],
+            body: surface.structuralEqual(surface.name("left"), surface.name("right")),
+          }],
+        },
+      }],
+      [],
+      "main",
+      0,
+    );
+    const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+    if (!compilation.ok) {
+      throw new Error(`structural ${type.kind} equality did not compile`);
+    }
+    try {
+      const equalResult = await runFunctionalWasmModule(compilation.module, {
+        argument: { kind: "tuple", values: [matching, matching] },
+      });
+      deepStrictEqual(equalResult.value, { kind: "boolean", value: true });
+      const unequalResult = await runFunctionalWasmModule(compilation.module, {
+        argument: { kind: "tuple", values: [matching, different] },
+      });
+      deepStrictEqual(unequalResult.value, { kind: "boolean", value: false });
+    } finally {
+      compilation.module.destroy();
+    }
+  }
+});
+
 Deno.test("reclaims bounded-borrow arguments when static thunks disable arena reset", async () => {
   const integer: FunctionalType = { kind: "integer" };
   const pair: FunctionalType = { kind: "tuple", values: [integer, integer] };
@@ -2780,6 +2853,68 @@ Deno.test("links nominal values through typed module boundaries", async () => {
     deepStrictEqual(execution.value, {
       kind: "constructor",
       name: "library::Box",
+      fields: [{ kind: "integer", value: 42 }],
+    });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("links explicitly exported nominal types and constructors", async () => {
+  const integer = { kind: "integer" } as const;
+  const maybeInteger = { kind: "named", name: "Maybe", arguments: [integer] } as const;
+  const linked = linkFunctionalModules([
+    {
+      name: "library",
+      definitions: [],
+      typeDeclarations: [{
+        name: "Option",
+        parameters: ["value"],
+        constructors: [
+          {
+            name: "Some",
+            fields: [{ name: "value", type: { kind: "parameter", name: "value" } }],
+          },
+          { name: "None", fields: [] },
+        ],
+      }],
+      imports: [],
+      exports: [],
+      typeExports: [{ name: "Option", declaration: "Option" }],
+      constructorExports: [
+        { name: "Some", constructor: "Some" },
+        { name: "None", constructor: "None" },
+      ],
+      sourceByteLength: 0,
+      options: {},
+    },
+    {
+      name: "application",
+      definitions: [{
+        name: "main",
+        parameters: [],
+        annotation: maybeInteger,
+        body: surface.apply(surface.name("Just"), surface.integer(42)),
+      }],
+      typeDeclarations: [],
+      imports: [],
+      typeImports: [{ name: "Maybe", fromModule: "library", exportName: "Option" }],
+      constructorImports: [
+        { name: "Just", fromModule: "library", exportName: "Some" },
+        { name: "Nothing", fromModule: "library", exportName: "None" },
+      ],
+      exports: [{ name: "main", definition: "main", type: maybeInteger }],
+      sourceByteLength: 0,
+      options: {},
+    },
+  ], { module: "application", exportName: "main" });
+  const compilation = await functionalWasmRuntime().compiler.compileModule(linked.module);
+  if (!compilation.ok) throw new Error("nominal interface module did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, {
+      kind: "constructor",
+      name: "library::Some",
       fields: [{ kind: "integer", value: 42 }],
     });
   } finally {

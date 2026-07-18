@@ -276,6 +276,7 @@ function compilationClosure(
 }
 
 function dependencyInterfaceStub(artifact: FunctionalModuleArtifact): FunctionalModuleArtifact {
+  if (artifact.exports.some((exported) => exported.type === undefined)) return artifact;
   const exportsByDefinition = new Map<string, FunctionalModuleArtifact["exports"][number]>();
   for (const exported of artifact.exports) {
     if (!exportsByDefinition.has(exported.definition)) {
@@ -289,7 +290,7 @@ function dependencyInterfaceStub(artifact: FunctionalModuleArtifact): Functional
     return {
       name: exported.definition,
       parameters: [],
-      annotation: exported.type,
+      annotation: exported.type!,
       body: {
         kind: "name" as const,
         name: exported.definition,
@@ -304,6 +305,14 @@ function dependencyInterfaceStub(artifact: FunctionalModuleArtifact): Functional
     typeDeclarations: artifact.typeDeclarations,
     imports: artifact.imports,
     exports: artifact.exports,
+    ...(artifact.typeImports === undefined ? {} : { typeImports: artifact.typeImports }),
+    ...(artifact.constructorImports === undefined
+      ? {}
+      : { constructorImports: artifact.constructorImports }),
+    ...(artifact.typeExports === undefined ? {} : { typeExports: artifact.typeExports }),
+    ...(artifact.constructorExports === undefined
+      ? {}
+      : { constructorExports: artifact.constructorExports }),
     sourceByteLength: artifact.sourceByteLength,
     options: {
       ...(artifact.options.evaluationProfile === undefined

@@ -55,12 +55,12 @@ export async function buildFunctionalModuleGraph(
     artifacts.set(artifact.name, artifact);
   }
   for (const artifact of artifacts.values()) {
-    for (const imported of artifact.imports) {
-      if (artifacts.has(imported.fromModule)) continue;
+    for (const dependency of moduleDependencies(artifact)) {
+      if (artifacts.has(dependency.module)) continue;
       throw new Error(
         `incremental functional module ${JSON.stringify(artifact.name)} imports missing module ${
-          JSON.stringify(imported.fromModule)
-        } through ${JSON.stringify(imported.name)}`,
+          JSON.stringify(dependency.module)
+        } through ${JSON.stringify(dependency.name)}`,
       );
     }
   }
@@ -155,19 +155,31 @@ function requiredFingerprint(
 }
 
 function interfaceShape(artifact: FunctionalModuleArtifact): unknown {
+  const inferredExportDefinitions = new Set(
+    artifact.exports.flatMap((exported) =>
+      exported.type === undefined ? [exported.definition] : []
+    ),
+  );
   return {
     name: artifact.name,
     imports: [...artifact.imports].sort(compareNamed).map((imported) => ({
       name: imported.name,
       fromModule: imported.fromModule,
       exportName: imported.exportName,
-      type: schemaShape(imported.type),
+      type: imported.type === undefined ? null : schemaShape(imported.type),
     })),
     exports: [...artifact.exports].sort(compareNamed).map((exported) => ({
       name: exported.name,
       definition: exported.definition,
-      type: schemaShape(exported.type),
+      type: exported.type === undefined ? null : schemaShape(exported.type),
     })),
+    typeImports: [...artifact.typeImports ?? []].sort(compareNamed),
+    constructorImports: [...artifact.constructorImports ?? []].sort(compareNamed),
+    typeExports: [...artifact.typeExports ?? []].sort(compareNamed),
+    constructorExports: [...artifact.constructorExports ?? []].sort(compareNamed),
+    inferredExportDefinitions: artifact.definitions.filter((definition) =>
+      inferredExportDefinitions.has(definition.name)
+    ),
     typeDeclarations: [...artifact.typeDeclarations].sort(compareNamed).map((declaration) => ({
       name: declaration.name,
       parameters: declaration.parameters,
@@ -182,6 +194,7 @@ function interfaceShape(artifact: FunctionalModuleArtifact): unknown {
     })),
     evaluationProfile: artifact.options.evaluationProfile ?? null,
     hostCapabilities: artifact.options.hostCapabilities ?? [],
+    hostDefinitions: artifact.options.hostDefinitions ?? [],
     wasmExports: artifact.options.wasmExports ?? [],
   };
 }
@@ -229,7 +242,7 @@ function stronglyConnectedComponents(
     stack.push(name);
     stacked.add(name);
     const artifact = artifacts.get(name)!;
-    const dependencies = [...new Set(artifact.imports.map((imported) => imported.fromModule))]
+    const dependencies = [...new Set(moduleDependencies(artifact).map((value) => value.module))]
       .sort();
     for (const dependency of dependencies) {
       if (!indexes.has(dependency)) {
@@ -259,8 +272,8 @@ function stronglyConnectedComponents(
   const components = memberGroups.map((modules, componentIndex) => {
     const dependencies = new Set<number>();
     for (const name of modules) {
-      for (const imported of artifacts.get(name)!.imports) {
-        const dependencyIndex = componentByModule.get(imported.fromModule)!;
+      for (const dependency of moduleDependencies(artifacts.get(name)!)) {
+        const dependencyIndex = componentByModule.get(dependency.module)!;
         if (dependencyIndex !== componentIndex) dependencies.add(dependencyIndex);
       }
     }
@@ -273,6 +286,22 @@ function stronglyConnectedComponents(
     components: Object.freeze(components),
     componentByModule,
   };
+}
+
+function moduleDependencies(
+  artifact: FunctionalModuleArtifact,
+): readonly { readonly module: string; readonly name: string }[] {
+  return [
+    ...artifact.imports.map((imported) => ({ module: imported.fromModule, name: imported.name })),
+    ...(artifact.typeImports ?? []).map((imported) => ({
+      module: imported.fromModule,
+      name: imported.name,
+    })),
+    ...(artifact.constructorImports ?? []).map((imported) => ({
+      module: imported.fromModule,
+      name: imported.name,
+    })),
+  ];
 }
 
 function compareNamed(left: { readonly name: string }, right: { readonly name: string }): number {

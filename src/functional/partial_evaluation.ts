@@ -15,7 +15,9 @@ export async function partiallyEvaluateFunctionalModule(
 ): Promise<FunctionalPartialEvaluationResult> {
   const validated = createFunctionalModuleArtifact(artifact);
   const exportTypes = new Map(
-    validated.exports.map((exported) => [exported.definition, exported.type]),
+    validated.exports.flatMap((exported) =>
+      exported.type === undefined ? [] : [[exported.definition, exported.type] as const]
+    ),
   );
   const candidates = validated.definitions.filter((definition) =>
     definition.parameters.length === 0 &&
@@ -91,7 +93,9 @@ function comptimeArtifact(artifact: FunctionalModuleArtifact): FunctionalComptim
     definitions: artifact.definitions,
     typeDeclarations: artifact.typeDeclarations,
     imports: artifact.imports,
-    exports: artifact.exports,
+    exports: artifact.exports.flatMap((exported) =>
+      exported.type === undefined ? [] : [{ ...exported, type: exported.type }]
+    ),
     sourceByteLength: artifact.sourceByteLength,
     ...(artifact.options.evaluationProfile === undefined
       ? {}

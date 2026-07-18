@@ -63,13 +63,35 @@ export interface FunctionalModuleImport {
   readonly name: string;
   readonly fromModule: string;
   readonly exportName: string;
-  readonly type: FunctionalTypeSchema;
+  readonly type?: FunctionalTypeSchema;
 }
 
 export interface FunctionalModuleExport {
   readonly name: string;
   readonly definition: string;
-  readonly type: FunctionalTypeSchema;
+  readonly type?: FunctionalTypeSchema;
+}
+
+export interface FunctionalModuleTypeImport {
+  readonly name: string;
+  readonly fromModule: string;
+  readonly exportName: string;
+}
+
+export interface FunctionalModuleConstructorImport {
+  readonly name: string;
+  readonly fromModule: string;
+  readonly exportName: string;
+}
+
+export interface FunctionalModuleTypeExport {
+  readonly name: string;
+  readonly declaration: string;
+}
+
+export interface FunctionalModuleConstructorExport {
+  readonly name: string;
+  readonly constructor: string;
 }
 
 export interface FunctionalModuleArtifact {
@@ -78,6 +100,10 @@ export interface FunctionalModuleArtifact {
   readonly typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[];
   readonly imports: readonly FunctionalModuleImport[];
   readonly exports: readonly FunctionalModuleExport[];
+  readonly typeImports?: readonly FunctionalModuleTypeImport[];
+  readonly constructorImports?: readonly FunctionalModuleConstructorImport[];
+  readonly typeExports?: readonly FunctionalModuleTypeExport[];
+  readonly constructorExports?: readonly FunctionalModuleConstructorExport[];
   readonly sourceByteLength: number;
   readonly options: FunctionalSurfaceModuleOptions;
 }
@@ -116,6 +142,19 @@ export function createFunctionalModuleArtifact(
     }
     importNames.add(imported.name);
   }
+  const typeNames = new Set(artifact.typeDeclarations.map((declaration) => declaration.name));
+  validateNominalImports(artifact.name, "type", artifact.typeImports ?? [], typeNames);
+  const constructorNames = new Set(
+    artifact.typeDeclarations.flatMap((declaration) =>
+      declaration.constructors.map((constructor) => constructor.name)
+    ),
+  );
+  validateNominalImports(
+    artifact.name,
+    "constructor",
+    artifact.constructorImports ?? [],
+    constructorNames,
+  );
   const definitionNames = new Set(artifact.definitions.map((definition) => definition.name));
   for (const imported of artifact.imports) {
     if (definitionNames.has(imported.name)) {
@@ -151,6 +190,20 @@ export function createFunctionalModuleArtifact(
     }
     exportNames.add(exported.name);
   }
+  validateNominalExports(
+    artifact.name,
+    "type",
+    artifact.typeExports ?? [],
+    typeNames,
+    (exported) => exported.declaration,
+  );
+  validateNominalExports(
+    artifact.name,
+    "constructor",
+    artifact.constructorExports ?? [],
+    constructorNames,
+    (exported) => exported.constructor,
+  );
   let snapshot: FunctionalModuleArtifact;
   try {
     snapshot = structuredClone(artifact);
@@ -172,6 +225,18 @@ export function createFunctionalModuleArtifact(
     typeDeclarations: Object.freeze(snapshot.typeDeclarations),
     imports: Object.freeze(snapshot.imports),
     exports: Object.freeze(snapshot.exports),
+    ...(snapshot.typeImports === undefined
+      ? {}
+      : { typeImports: Object.freeze(snapshot.typeImports) }),
+    ...(snapshot.constructorImports === undefined
+      ? {}
+      : { constructorImports: Object.freeze(snapshot.constructorImports) }),
+    ...(snapshot.typeExports === undefined
+      ? {}
+      : { typeExports: Object.freeze(snapshot.typeExports) }),
+    ...(snapshot.constructorExports === undefined
+      ? {}
+      : { constructorExports: Object.freeze(snapshot.constructorExports) }),
     options: Object.freeze(snapshot.options),
   });
 }
@@ -201,6 +266,8 @@ export function linkFunctionalModules(
     modules.set(artifact.name, artifact);
   }
   const exportedDefinitions = new Map<string, string>();
+  const exportedTypes = new Map<string, string>();
+  const exportedConstructors = new Map<string, string>();
   for (const artifact of modules.values()) {
     for (const exported of artifact.exports) {
       exportedDefinitions.set(
@@ -208,13 +275,29 @@ export function linkFunctionalModules(
         qualified(artifact.name, exported.definition),
       );
     }
+    for (const exported of artifact.typeExports ?? []) {
+      exportedTypes.set(
+        exportKey(artifact.name, exported.name),
+        qualified(artifact.name, exported.declaration),
+      );
+    }
+    for (const exported of artifact.constructorExports ?? []) {
+      exportedConstructors.set(
+        exportKey(artifact.name, exported.name),
+        qualified(artifact.name, exported.constructor),
+      );
+    }
   }
   const linkedDefinitions: FunctionalSurfaceDefinition[] = [];
   const linkedTypes: FunctionalSurfaceTypeDeclaration[] = [];
   const sources: FunctionalLinkedSource[] = [];
   const capabilities: FunctionalHostCapabilityDeclaration[] = [];
-  const capabilityKeys = new Set<string>();
   const linkedWasmExports: { readonly name: string; readonly definition: string }[] = [];
+  const linkedHostDefinitions: {
+    readonly definition: string;
+    readonly capability: string;
+    readonly field: string;
+  }[] = [];
   const linkedWasmExportNames = new Set<string>();
   let sourceBase = 0;
   let evaluationProfile: FunctionalEvaluationProfile | undefined;
@@ -242,6 +325,18 @@ export function linkFunctionalModules(
         definition,
       ) => [definition.name, qualified(artifact.name, definition.name)]),
     );
+    for (const binding of artifact.options.hostDefinitions ?? []) {
+      const definition = definitionNames.get(binding.definition);
+      if (definition === undefined) {
+        throw invalidFunctionalArtifact(
+          artifact.name,
+          `functional module ${
+            JSON.stringify(artifact.name)
+          } host definition references unknown definition ${JSON.stringify(binding.definition)}`,
+        );
+      }
+      linkedHostDefinitions.push({ ...binding, definition });
+    }
     for (const exported of artifact.options.wasmExports ?? []) {
       const definition = definitionNames.get(exported.definition);
       if (definition === undefined) {
@@ -288,11 +383,25 @@ export function linkFunctionalModules(
         }
       }
     }
+    for (const imported of artifact.typeImports ?? []) {
+      const target = exportedTypes.get(exportKey(imported.fromModule, imported.exportName));
+      if (target === undefined) {
+        throw missingNominalImport(artifact.name, "type", imported);
+      }
+      availableTypeNames.set(imported.name, target);
+    }
     const constructorNames = new Map<string, string>();
     for (const declaration of artifact.typeDeclarations) {
       for (const constructor of declaration.constructors) {
         constructorNames.set(constructor.name, qualified(artifact.name, constructor.name));
       }
+    }
+    for (const imported of artifact.constructorImports ?? []) {
+      const target = exportedConstructors.get(exportKey(imported.fromModule, imported.exportName));
+      if (target === undefined) {
+        throw missingNominalImport(artifact.name, "constructor", imported);
+      }
+      constructorNames.set(imported.name, target);
     }
     const importNames = new Map<string, string>();
     for (const imported of artifact.imports) {
@@ -315,13 +424,17 @@ export function linkFunctionalModules(
       linkedDefinitions.push({
         name: alias,
         parameters: [],
-        annotation: rewriteSchema(imported.type, availableTypeNames),
+        annotation: imported.type === undefined
+          ? null
+          : rewriteSchema(imported.type, availableTypeNames),
         body: { kind: "name", name: target, span: offsetSpan(undefined, sourceBase) },
         span: offsetSpan(undefined, sourceBase),
       });
     }
     const exportTypes = new Map(
-      artifact.exports.map((exported) => [exported.definition, exported.type]),
+      artifact.exports.flatMap((exported) =>
+        exported.type === undefined ? [] : [[exported.definition, exported.type] as const]
+      ),
     );
     for (const definition of artifact.definitions) {
       linkedDefinitions.push({
@@ -375,21 +488,33 @@ export function linkFunctionalModules(
             }
         ),
       };
-      const key = JSON.stringify(linkedCapability);
-      if (capabilityKeys.has(key)) continue;
-      if (capabilities.some((candidate) => candidate.name === linkedCapability.name)) {
+      const existingIndex = capabilities.findIndex((candidate) =>
+        candidate.name === linkedCapability.name
+      );
+      if (existingIndex < 0) {
+        capabilities.push(linkedCapability);
+        continue;
+      }
+      const existing = capabilities[existingIndex]!;
+      const fields = [...existing.fields];
+      for (const field of linkedCapability.fields) {
+        const previous = fields.find((candidate) => candidate.name === field.name);
+        if (previous === undefined) {
+          fields.push(field);
+          continue;
+        }
+        if (JSON.stringify(previous) === JSON.stringify(field)) continue;
         throw new FunctionalLinkError({
           code: "F4005",
           kind: "incompatible-capability",
           module: artifact.name,
           reference: linkedCapability.name,
-          message: `functional modules declare incompatible host capability ${
-            JSON.stringify(linkedCapability.name)
+          message: `functional modules declare incompatible host field ${
+            JSON.stringify(`${linkedCapability.name}.${field.name}`)
           }`,
         });
       }
-      capabilityKeys.add(key);
-      capabilities.push(linkedCapability);
+      capabilities[existingIndex] = { name: existing.name, fields };
     }
     sourceBase += artifact.sourceByteLength;
   }
@@ -412,6 +537,7 @@ export function linkFunctionalModules(
     sourceBase,
     {
       hostCapabilities: capabilities,
+      hostDefinitions: linkedHostDefinitions,
       evaluationProfile: evaluationProfile ?? FunctionalEvaluationProfile.StrictEager,
       wasmExports: linkedWasmExports,
     },
@@ -439,6 +565,9 @@ function rewriteExpression(
     case "float-32":
     case "float-64":
     case "boolean":
+    case "text":
+    case "bytes":
+    case "runtime-fault":
       return { ...expression, span };
     case "name":
       return {
@@ -597,6 +726,84 @@ function qualified(module: string, name: string): string {
 
 function exportKey(module: string, name: string): string {
   return `${module}\0${name}`;
+}
+
+function validateNominalImports(
+  module: string,
+  kind: "type" | "constructor",
+  imports: readonly {
+    readonly name: string;
+    readonly fromModule: string;
+    readonly exportName: string;
+  }[],
+  localNames: ReadonlySet<string>,
+): void {
+  const names = new Set<string>();
+  for (const imported of imports) {
+    requireModuleName(imported.name, `module ${JSON.stringify(module)} ${kind} import name`);
+    requireModuleName(imported.fromModule, `${kind} import source module`);
+    requireModuleName(imported.exportName, `${kind} import export name`);
+    if (localNames.has(imported.name) || names.has(imported.name)) {
+      throw invalidFunctionalArtifact(
+        module,
+        `functional module ${JSON.stringify(module)} repeats ${kind} name ${
+          JSON.stringify(imported.name)
+        }`,
+      );
+    }
+    names.add(imported.name);
+  }
+}
+
+function validateNominalExports<Export extends { readonly name: string }>(
+  module: string,
+  kind: "type" | "constructor",
+  exports: readonly Export[],
+  localNames: ReadonlySet<string>,
+  declarationName: (exported: Export) => string,
+): void {
+  const names = new Set<string>();
+  for (const exported of exports) {
+    requireModuleName(exported.name, `module ${JSON.stringify(module)} ${kind} export name`);
+    const declaration = declarationName(exported);
+    if (!localNames.has(declaration)) {
+      throw invalidFunctionalArtifact(
+        module,
+        `functional module ${JSON.stringify(module)} ${kind} export ${
+          JSON.stringify(exported.name)
+        } references unknown ${kind} ${JSON.stringify(declaration)}`,
+      );
+    }
+    if (names.has(exported.name)) {
+      throw new FunctionalLinkError({
+        code: "F4007",
+        kind: "duplicate-export",
+        module,
+        reference: exported.name,
+        message: `functional module ${JSON.stringify(module)} repeats ${kind} export ${
+          JSON.stringify(exported.name)
+        }`,
+      });
+    }
+    names.add(exported.name);
+  }
+}
+
+function missingNominalImport(
+  module: string,
+  kind: "type" | "constructor",
+  imported: { readonly fromModule: string; readonly exportName: string },
+): FunctionalLinkError {
+  const reference = `${imported.fromModule}.${imported.exportName}`;
+  return new FunctionalLinkError({
+    code: "F4003",
+    kind: "missing-import",
+    module,
+    reference,
+    message: `functional module ${JSON.stringify(module)} references missing ${kind} export ${
+      JSON.stringify(reference)
+    }`,
+  });
 }
 
 function requireModuleName(name: string, location: string): void {
