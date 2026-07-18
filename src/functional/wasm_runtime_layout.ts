@@ -3,7 +3,7 @@ export const FunctionalWasmRuntimeGlobal = Object.freeze(
     HeapTop: 0,
     ThunkEvaluations: 1,
     RuntimeFault: 2,
-    HeapByteLength: 3,
+    HeapCapacityByteLength: 3,
     FreeListHead: 4,
     RuntimeFaultNode: 5,
     ArenaDepth: 6,

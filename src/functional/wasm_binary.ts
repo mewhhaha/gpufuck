@@ -183,6 +183,11 @@ export class WasmInstructions {
     this.emit(0x3f, 0x00);
   }
 
+  memoryGrow(): void {
+    this.usesMemory = true;
+    this.emit(0x40, 0x00);
+  }
+
   memoryCopy(): void {
     this.usesMemory = true;
     this.emit(0xfc);

@@ -225,7 +225,6 @@ function emitPointerGuard(
   heapStart: number,
 ): void {
   const immediateTag = instructions.addLocal(WasmValueType.I64);
-  const objectEnd = instructions.addLocal(WasmValueType.I32);
   instructions.localGet(0);
   instructions.i64Const(BigInt(FunctionalWasmValueAbi.immediateTags.bitMask));
   instructions.emit(0x83);
@@ -242,18 +241,7 @@ function emitPointerGuard(
   instructions.localTee(pointer);
   instructions.i32Const(heapStart);
   instructions.emit(0x49, 0x04, 0x40, 0x0f, 0x0b);
-  instructions.localGet(pointer);
-  instructions.i32Const(FunctionalWasmValueAbi.objectAlignment - 1);
-  instructions.emit(0x71, 0x04, 0x40, 0x00, 0x0b);
-  instructions.localGet(pointer);
-  instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
-  instructions.emit(0x6a);
-  instructions.localTee(objectEnd);
-  instructions.localGet(pointer);
-  instructions.emit(0x49, 0x04, 0x40, 0x00, 0x0b);
-  instructions.localGet(objectEnd);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapTop);
-  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+  emitDynamicPointerGuard(instructions, pointer);
 }
 
 function emitOwnedObjectKindGuard(

@@ -4101,9 +4101,9 @@ class FunctionalWasmCompiler {
 
   emitRuntimeFault(instructions: WasmInstructions, fault: number): void {
     instructions.i32Const(fault);
-    instructions.globalSet(2);
+    instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFault);
     instructions.i32Const(-1);
-    instructions.globalSet(5);
+    instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFaultNode);
     instructions.emit(0x00);
   }
 

@@ -650,6 +650,31 @@ Deno.test("WebAssembly allocator rejects wrapped sizes and invalid frees without
   }
 });
 
+Deno.test("WebAssembly allocator uses externally grown memory without false exhaustion", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(surface.integer(0)),
+  );
+  if (!compilation.ok) throw new Error("external memory growth fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const allocate = instance.exports.allocate;
+    const memory = instance.exports.memory;
+    ok(typeof initialize === "function");
+    ok(typeof allocate === "function");
+    ok(memory instanceof WebAssembly.Memory);
+    initialize();
+
+    equal(memory.grow(2), 1);
+    const externallyGrownByteLength = memory.buffer.byteLength;
+    ok((allocate(70_000) as number) > 0);
+    equal(memory.buffer.byteLength, externallyGrownByteLength);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("arena promotion preserves nested values and recursively drops owned resources", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
