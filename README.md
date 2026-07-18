@@ -434,6 +434,7 @@ invariants.
 
 ## Documentation
 
+- [CHANGELOG.md](CHANGELOG.md) records public release changes.
 - [ARCHITECTURE.md](ARCHITECTURE.md) explains the compiler pipeline, ownership boundaries, GPU
   machine, Wasm backend, decision record, and technical references.
 - [DEVELOPMENT.md](DEVELOPMENT.md) covers repository setup, generated files, tests, benchmarks,

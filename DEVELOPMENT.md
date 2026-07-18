@@ -288,6 +288,10 @@ Before changing the version:
 - inspect the dry-run package for repository-only frontends or generated artifacts that should not
   ship.
 
+For the first release, create `@mewhhaha/gpufuck` on JSR and link it to the `mewhhaha/gpufuck`
+GitHub repository before pushing the version tag. The release workflow publishes only tags whose
+`v<version>` name exactly matches `deno.json`; for example, version `0.1.0` must be tagged `v0.1.0`.
+
 ## Commit scope
 
 Keep generated changes, ABI migrations, performance work, and documentation reorganizations easy to
