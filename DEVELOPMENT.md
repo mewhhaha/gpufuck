@@ -211,7 +211,9 @@ Relevant seams:
 - `wasm_capture_analysis.ts`: lexical captures and environment layout;
 - `wasm_lambda_sets.ts`: finite callee-set analysis and specialization limits;
 - `wasm_codegen.ts`: orchestration and expression emission;
+- `wasm_host_emitter.ts`: built-in host-buffer literals and intrinsic emission;
 - `wasm_runtime_binary.ts`: allocator, thunk forcing, and runtime support bodies;
+- `wasm_runtime_layout.ts`: shared runtime global indices and allocator markers;
 - `wasm_value_codec.ts`: public argument and result representation;
 - `wasm_execution.ts`: compilation cache, instantiation, sync/async execution, and fault
   translation.

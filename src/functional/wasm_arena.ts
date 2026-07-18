@@ -25,9 +25,15 @@ const arenaRecords = new WeakMap<FunctionalWasmArena, FunctionalWasmArenaRecord>
 export function beginFunctionalWasmArena(
   instance: WebAssembly.Instance,
 ): FunctionalWasmArena {
-  const { heapTop, freeListHead } = allocatorGlobals(instance);
+  const { heapTop, freeListHead, arenaDepth } = allocatorGlobals(instance);
   const stack = arenaStacks.get(instance) ?? [];
   if (!arenaStacks.has(instance)) arenaStacks.set(instance, stack);
+  const runtimeArenaDepth = Number(arenaDepth.value) >>> 0;
+  if (runtimeArenaDepth !== stack.length) {
+    throw new Error(
+      `functional WASM arena depth global is ${runtimeArenaDepth}; expected ${stack.length}`,
+    );
+  }
   const state: FunctionalWasmArenaState = {
     mark: Number(heapTop.value) >>> 0,
     savedFreeListHead: Number(freeListHead.value) >>> 0,
@@ -38,6 +44,7 @@ export function beginFunctionalWasmArena(
 
   // Arena allocations must not consume owned blocks that predate the arena.
   freeListHead.value = 0;
+  arenaDepth.value = state.depth;
   const arena: FunctionalWasmArena = {
     get mark(): number {
       return state.mark;
@@ -138,7 +145,7 @@ function resetArena(
     );
   }
 
-  const { heapTop, freeListHead } = allocatorGlobals(instance);
+  const { heapTop, freeListHead, arenaDepth } = allocatorGlobals(instance);
   const currentHeapTop = Number(heapTop.value) >>> 0;
   if (state.mark > currentHeapTop) {
     throw new RangeError(
@@ -147,6 +154,7 @@ function resetArena(
   }
   heapTop.value = state.mark;
   freeListHead.value = state.savedFreeListHead;
+  arenaDepth.value = state.depth - 1;
   discardEncodedFunctionalWasmValuesFrom(instance, state.mark);
   stack.pop();
   state.active = false;
@@ -155,11 +163,17 @@ function resetArena(
 function allocatorGlobals(instance: WebAssembly.Instance): {
   readonly heapTop: WebAssembly.Global;
   readonly freeListHead: WebAssembly.Global;
+  readonly arenaDepth: WebAssembly.Global;
 } {
   const heapTop = instance.exports.heapTop;
   const freeListHead = instance.exports.freeListHead;
-  if (!(heapTop instanceof WebAssembly.Global) || !(freeListHead instanceof WebAssembly.Global)) {
-    throw new Error("functional WASM module omitted heapTop or freeListHead exports");
+  const arenaDepth = instance.exports.arenaDepth;
+  if (
+    !(heapTop instanceof WebAssembly.Global) ||
+    !(freeListHead instanceof WebAssembly.Global) ||
+    !(arenaDepth instanceof WebAssembly.Global)
+  ) {
+    throw new Error("functional WASM module omitted heapTop, freeListHead, or arenaDepth exports");
   }
-  return { heapTop, freeListHead };
+  return { heapTop, freeListHead, arenaDepth };
 }

@@ -251,6 +251,7 @@ export function encodeWasmModule(
         [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
         [0x7f, 0x01, 0x41, 0x00, 0x0b],
         [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
         ...(instrumentedFuel
           ? [
             [0x7f, 0x01, 0x41, 0x00, 0x0b],
@@ -286,10 +287,11 @@ export function encodeWasmModule(
         [...name("runtimeFaultNode"), 0x03, 0x05],
         [...name("heapTop"), 0x03, 0x00],
         [...name("freeListHead"), 0x03, 0x04],
+        [...name("arenaDepth"), 0x03, 0x06],
         ...(instrumentedFuel
           ? [
-            [...name("comptimeFuel"), 0x03, 0x06],
-            [...name("comptimeSteps"), 0x03, 0x07],
+            [...name("comptimeFuel"), 0x03, 0x07],
+            [...name("comptimeSteps"), 0x03, 0x08],
           ]
           : []),
       ]),

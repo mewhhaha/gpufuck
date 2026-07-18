@@ -43,6 +43,7 @@ import {
 import { lowerHaskellFunctionalSource } from "../haskell_functional.ts";
 import { lowerOcamlFunctionalSource } from "../ocaml_functional.ts";
 import { lowerRustFunctionalSource } from "../rust_functional.ts";
+import { decodeFunctionalWasmValue } from "../src/functional/wasm_value_codec.ts";
 
 interface FunctionalWasmRuntime {
   readonly device: GPUDevice;
@@ -612,6 +613,43 @@ Deno.test("nested WebAssembly arenas reset in order without consuming owned free
   }
 });
 
+Deno.test("WebAssembly allocator rejects wrapped sizes and invalid frees without corrupting reuse", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(surface.integer(0)),
+  );
+  if (!compilation.ok) throw new Error("allocator validation fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const allocate = instance.exports.allocate;
+    const free = instance.exports.free;
+    const heapTop = instance.exports.heapTop;
+    const freeListHead = instance.exports.freeListHead;
+    ok(typeof initialize === "function");
+    ok(typeof allocate === "function");
+    ok(typeof free === "function");
+    ok(heapTop instanceof WebAssembly.Global);
+    ok(freeListHead instanceof WebAssembly.Global);
+    initialize();
+
+    const initialHeapTop = Number(heapTop.value);
+    throws(() => allocate(-1), WebAssembly.RuntimeError);
+    equal(Number(heapTop.value), initialHeapTop);
+    const pointer = allocate(16) as number;
+    throws(() => free(pointer, 24), WebAssembly.RuntimeError);
+    throws(() => free(pointer + 8, 16), WebAssembly.RuntimeError);
+    equal(Number(freeListHead.value), 0);
+    free(pointer, 16);
+    equal(Number(freeListHead.value), pointer);
+    throws(() => free(pointer, 16), WebAssembly.RuntimeError);
+    equal(Number(freeListHead.value), pointer);
+    equal(allocate(16), pointer);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("arena promotion preserves nested values and recursively drops owned resources", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
@@ -690,6 +728,13 @@ Deno.test("arena promotion preserves nested values and recursively drops owned r
     equal(owned.active, false);
     deepStrictEqual(dropped, []);
     deepStrictEqual(retained.decode(), aggregateValue);
+    const releaseArena = beginFunctionalWasmArena(instance);
+    throws(
+      () => retained.release(),
+      /cannot release its final lease while 1 arenas are active/,
+    );
+    equal(retained.active, true);
+    releaseArena.reset();
     retained.release();
     deepStrictEqual(dropped, [["duck.file", 7], ["duck.file", 8]]);
     throws(() => owned.decode(), /already released/);
@@ -754,7 +799,7 @@ Deno.test("arena encoding reclaims partial allocations after a boundary mismatch
   }
 });
 
-Deno.test("verified Storage Core emits standalone retain and recursive drop exports", async () => {
+Deno.test("verified Storage Core emits standalone retain and stack-safe drop exports", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
       name: "main",
@@ -812,12 +857,14 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
     const allocate = instance.exports.allocate;
     const freeListHead = instance.exports.freeListHead;
     const heapTop = instance.exports.heapTop;
+    const memory = instance.exports.memory;
     ok(typeof initialize === "function");
     ok(typeof retain === "function");
     ok(typeof drop === "function");
     ok(typeof allocate === "function");
     ok(freeListHead instanceof WebAssembly.Global);
     ok(heapTop instanceof WebAssembly.Global);
+    ok(memory instanceof WebAssembly.Memory);
     initialize();
 
     const owned = encodeFunctionalWasmOwnedValue(
@@ -837,6 +884,9 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
     additionalLease.release();
     const pointer = owned.transfer();
     equal(owned.active, false);
+    const activeArena = beginFunctionalWasmArena(instance);
+    throws(() => drop(pointer), WebAssembly.RuntimeError);
+    activeArena.reset();
     retain(pointer);
     drop(pointer);
     equal(Number(freeListHead.value), 0);
@@ -860,6 +910,33 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
       drop(next.transfer());
     }
     equal(Number(heapTop.value), stableHeapTop);
+    let deepValue = 1n;
+    for (let depth = 0; depth < 20_000; depth++) {
+      const deepPointer = allocate(24) as number;
+      const deepView = new DataView(memory.buffer);
+      deepView.setUint32(
+        deepPointer + FunctionalWasmValueAbi.objectKindByteOffset,
+        FunctionalWasmValueAbi.objectKinds.constructor,
+        true,
+      );
+      deepView.setUint32(deepPointer + FunctionalWasmValueAbi.objectPayloadByteOffset, 0, true);
+      deepView.setUint32(deepPointer + FunctionalWasmValueAbi.objectValueCountByteOffset, 1, true);
+      deepView.setUint32(
+        deepPointer + FunctionalWasmValueAbi.objectReferenceCountByteOffset,
+        1,
+        true,
+      );
+      deepView.setBigInt64(
+        deepPointer + FunctionalWasmValueAbi.objectValuesByteOffset,
+        deepValue,
+        true,
+      );
+      deepValue = BigInt(deepPointer);
+    }
+    const deepHeapTop = Number(heapTop.value);
+    drop(deepValue);
+    equal(Number(heapTop.value), deepHeapTop);
+    ok(Number(freeListHead.value) > 0);
     const overflow = encodeFunctionalWasmOwnedValue(
       instance,
       compilation.module,
@@ -872,8 +949,7 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
         ],
       },
     ).transfer();
-    const memory = instance.exports.memory;
-    ok(memory instanceof WebAssembly.Memory);
+    const overflowHeapTop = Number(heapTop.value);
     const overflowPointer = Number(BigInt.asUintN(32, overflow));
     const overflowView = new DataView(memory.buffer);
     overflowView.setUint32(
@@ -892,6 +968,7 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
       () => retain(BigInt(memory.buffer.byteLength - 8)),
       WebAssembly.RuntimeError,
     );
+    throws(() => retain(BigInt(Number(heapTop.value))), WebAssembly.RuntimeError);
     overflowView.setUint32(
       overflowPointer + FunctionalWasmValueAbi.objectKindByteOffset,
       0xffff_ffff,
@@ -923,7 +1000,9 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
       true,
     );
     drop(overflow);
-    equal(allocate(24), firstReleasedPointer);
+    const reusedPointer = allocate(24) as number;
+    ok(reusedPointer > 0 && reusedPointer < overflowHeapTop);
+    equal(Number(heapTop.value), overflowHeapTop);
   } finally {
     compilation.module.destroy();
   }
@@ -1203,78 +1282,72 @@ Deno.test("generates Bytes with a source callback inside WebAssembly", async () 
   }
 });
 
-Deno.test("uncurried workers load caller-local captures from their closure", async () => {
+Deno.test("branch-selected uncurried workers load their caller-local capture", async () => {
   const integer = { kind: "integer" } as const;
-  const body: FunctionalSurfaceExpression = {
-    kind: "let",
-    name: "capturedLength",
-    value: surface.apply(surface.name("length"), surface.name("text")),
-    body: {
-      kind: "let",
-      name: "combine",
-      value: surface.lambda(
-        "left",
-        surface.lambda(
-          "right",
+  const combine = (): FunctionalSurfaceExpression =>
+    surface.lambda(
+      "left",
+      surface.lambda(
+        "right",
+        surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("seed"),
           surface.binary(
             FunctionalBinaryOperator.Add,
-            surface.name("capturedLength"),
-            surface.binary(
-              FunctionalBinaryOperator.Add,
-              surface.name("left"),
-              surface.name("right"),
-            ),
+            surface.name("left"),
+            surface.name("right"),
           ),
         ),
       ),
-      body: surface.apply(
-        surface.apply(surface.name("combine"), surface.integer(20)),
-        surface.integer(20),
-      ),
-    },
-  };
+    );
   const encoded = buildFunctionalSurfaceModule(
-    [{
-      name: "main",
-      parameters: ["init"],
-      annotation: null,
-      body: {
-        kind: "case",
-        value: surface.name("init"),
-        arms: [{
-          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
-          binders: ["text", "length"],
-          body,
-        }],
+    [
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.integer(0),
       },
-    }],
+      {
+        name: "run",
+        parameters: ["seed"],
+        annotation: { kind: "function", parameter: integer, result: integer },
+        body: {
+          kind: "let",
+          name: "selected",
+          value: {
+            kind: "if",
+            condition: surface.equal(surface.name("seed"), surface.integer(0)),
+            consequent: combine(),
+            alternate: combine(),
+          },
+          body: surface.apply(
+            surface.apply(surface.name("selected"), surface.integer(20)),
+            surface.integer(20),
+          ),
+        },
+      },
+    ],
     [],
     "main",
     0,
     {
       evaluationProfile: FunctionalEvaluationProfile.StrictEager,
-      hostCapabilities: [{
-        name: "Buffer",
-        fields: [{
-          kind: "value",
-          name: "text",
-          type: FunctionalHostTypes.text,
-          ownership: "frozen-shareable",
-          wasmLiteral: { kind: "text", value: "AB" },
-        }, {
-          kind: "operation",
-          name: "length",
-          purity: "pure",
-          parameter: FunctionalHostTypes.text,
-          result: integer,
-          wasmIntrinsic: FunctionalWasmIntrinsic.BufferByteLength,
-        }],
-      }],
+      wasmExports: [{ name: "run", definition: "run" }],
     },
   );
-
-  const execution = await runCompiledWasm(encoded);
-  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("uncurried capture fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const run = instance.exports.run;
+    ok(typeof run === "function");
+    equal(run(1n), 40);
+    equal(run((2n << 3n) | 1n), 42);
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("initializes more than 64 native WebAssembly host values", async () => {
@@ -1370,6 +1443,74 @@ Deno.test("returns structured tuples through the stable WebAssembly aggregate AB
         return true;
       },
     );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("decodes deeply nested WebAssembly values without using the JavaScript call stack", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.apply(
+        surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+        surface.integer(0),
+        surface.integer(0),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("deep decoder fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const allocate = instance.exports.allocate;
+    const memory = instance.exports.memory;
+    ok(typeof initialize === "function");
+    ok(typeof allocate === "function");
+    ok(memory instanceof WebAssembly.Memory);
+    initialize();
+    const pairConstructor = compilation.module.constructorNames.indexOf(
+      FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+    );
+    ok(pairConstructor >= 0);
+
+    const integer: FunctionalType = { kind: "integer" };
+    let deepType: FunctionalType = { kind: "integer" };
+    let deepValue = 1n;
+    for (let depth = 0; depth < 10_000; depth++) {
+      const pointer = allocate(32) as number;
+      const view = new DataView(memory.buffer);
+      view.setUint32(pointer, FunctionalWasmValueAbi.objectKinds.constructor, true);
+      view.setUint32(pointer + 4, pairConstructor, true);
+      view.setUint32(pointer + 8, 2, true);
+      view.setBigInt64(pointer + 16, (BigInt(depth) << 3n) | 1n, true);
+      view.setBigInt64(pointer + 24, deepValue, true);
+      deepValue = BigInt(pointer);
+      deepType = { kind: "tuple", values: [integer, deepType] };
+    }
+
+    let decoded = decodeFunctionalWasmValue(
+      instance,
+      compilation.module,
+      deepType,
+      deepValue,
+      20_001,
+    );
+    for (let depth = 9_999; depth >= 0; depth--) {
+      if (decoded.kind !== "tuple") {
+        throw new Error(`deep decoder returned ${decoded.kind} at depth ${depth}`);
+      }
+      deepStrictEqual(decoded.values[0], { kind: "integer", value: depth });
+      decoded = decoded.values[1];
+    }
+    deepStrictEqual(decoded, { kind: "integer", value: 0 });
   } finally {
     compilation.module.destroy();
   }

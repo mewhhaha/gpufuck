@@ -575,7 +575,11 @@ and emits a dependency-free binary directly; there is no WAT round trip.
 The backend follows the [WebAssembly Core Specification](https://webassembly.github.io/spec/core/)
 for binary encoding, validation, functions, tables, linear memory, numeric operations, and control
 flow. Binary primitives are implemented in [`wasm_binary.ts`](src/functional/wasm_binary.ts), while
-[`wasm_codegen.ts`](src/functional/wasm_codegen.ts) orchestrates analysis and emission.
+[`wasm_codegen.ts`](src/functional/wasm_codegen.ts) orchestrates analysis and expression emission.
+Built-in host-buffer operations live in
+[`wasm_host_emitter.ts`](src/functional/wasm_host_emitter.ts); runtime functions and their shared
+global layout live in [`wasm_runtime_binary.ts`](src/functional/wasm_runtime_binary.ts) and
+[`wasm_runtime_layout.ts`](src/functional/wasm_runtime_layout.ts).
 
 ### 10.1 Analysis order
 

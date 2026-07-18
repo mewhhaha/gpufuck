@@ -149,72 +149,89 @@ export function encodeFunctionalWasmOwnedValue(
       },
       release(): void {
         if (!active) throw new Error("functional WASM owned value was already released");
+        const arenaDepth = functionalWasmInstanceArenaDepth(instance);
+        if (ownership.references === 1 && arenaDepth !== 0) {
+          throw new Error(
+            `functional WASM owned value cannot release its final lease while ${arenaDepth} arenas are active`,
+          );
+        }
         active = false;
         ownership.references -= 1;
         if (ownership.references !== 0) return;
         const dropFailures: unknown[] = [];
         if (options.dropResource !== undefined) {
           const dropResource = options.dropResource;
-          const dropResourceFields = (
-            currentType: FunctionalType,
-            currentValue: FunctionalWasmValue,
-          ): void => {
-            if (
-              currentType.kind === "named" &&
-              currentType.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
-            ) {
-              if (currentValue.kind !== "resource") {
-                dropFailures.push(
-                  new TypeError(
-                    `functional WASM drop expected resource; received ${currentValue.kind}`,
-                  ),
-                );
-                return;
-              }
-              try {
-                dropResource(
-                  decodeURIComponent(
-                    currentType.name.slice(FUNCTIONAL_RESOURCE_TYPE_PREFIX.length),
-                  ),
-                  currentValue.id,
-                );
-              } catch (cause) {
-                dropFailures.push(cause);
-              }
-              return;
-            }
-            if (currentType.kind === "tuple") {
-              if (currentValue.kind !== "tuple") return;
-              dropResourceFields(currentType.values[0], currentValue.values[0]);
-              dropResourceFields(currentType.values[1], currentValue.values[1]);
-              return;
-            }
-            if (
-              currentType.kind === "named" &&
-              (currentType.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
-                currentType.name === FUNCTIONAL_SLICE_TYPE_NAME)
-            ) {
-              if (currentValue.kind !== "array" && currentValue.kind !== "slice") return;
-              const elementType = currentType.arguments[0];
-              if (elementType === undefined) return;
-              for (const element of currentValue.values) {
-                dropResourceFields(elementType, element);
-              }
-              return;
-            }
-            if (currentType.kind !== "named" || currentValue.kind !== "constructor") return;
-            const fieldTypes = functionalStructuredFieldTypes(
-              module,
-              currentType,
-              currentValue.name,
-            );
-            for (const [index, fieldType] of fieldTypes.entries()) {
-              const field = currentValue.fields[index];
-              if (field !== undefined) dropResourceFields(fieldType, field);
-            }
-          };
+          const pendingFields: {
+            readonly type: FunctionalType;
+            readonly value: FunctionalWasmValue;
+          }[] = [{ type, value }];
           try {
-            dropResourceFields(type, value);
+            while (pendingFields.length !== 0) {
+              const current = pendingFields.pop()!;
+              const currentType = current.type;
+              const currentValue = current.value;
+              if (
+                currentType.kind === "named" &&
+                currentType.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
+              ) {
+                if (currentValue.kind !== "resource") {
+                  dropFailures.push(
+                    new TypeError(
+                      `functional WASM drop expected resource; received ${currentValue.kind}`,
+                    ),
+                  );
+                  continue;
+                }
+                try {
+                  dropResource(
+                    decodeURIComponent(
+                      currentType.name.slice(FUNCTIONAL_RESOURCE_TYPE_PREFIX.length),
+                    ),
+                    currentValue.id,
+                  );
+                } catch (cause) {
+                  dropFailures.push(cause);
+                }
+                continue;
+              }
+              if (currentType.kind === "tuple") {
+                if (currentValue.kind !== "tuple") continue;
+                pendingFields.push(
+                  { type: currentType.values[1], value: currentValue.values[1] },
+                  { type: currentType.values[0], value: currentValue.values[0] },
+                );
+                continue;
+              }
+              if (
+                currentType.kind === "named" &&
+                (currentType.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
+                  currentType.name === FUNCTIONAL_SLICE_TYPE_NAME)
+              ) {
+                if (currentValue.kind !== "array" && currentValue.kind !== "slice") continue;
+                const elementType = currentType.arguments[0];
+                if (elementType === undefined) continue;
+                for (let index = currentValue.values.length - 1; index >= 0; index--) {
+                  const element = currentValue.values[index];
+                  if (element !== undefined) {
+                    pendingFields.push({ type: elementType, value: element });
+                  }
+                }
+                continue;
+              }
+              if (currentType.kind !== "named" || currentValue.kind !== "constructor") continue;
+              const fieldTypes = functionalStructuredFieldTypes(
+                module,
+                currentType,
+                currentValue.name,
+              );
+              for (let index = fieldTypes.length - 1; index >= 0; index--) {
+                const fieldType = fieldTypes[index];
+                const field = currentValue.fields[index];
+                if (fieldType !== undefined && field !== undefined) {
+                  pendingFields.push({ type: fieldType, value: field });
+                }
+              }
+            }
           } catch (cause) {
             dropFailures.push(cause);
           }

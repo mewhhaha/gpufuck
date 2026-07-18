@@ -353,9 +353,132 @@ export function decodeFunctionalWasmValue(
   if (!(memory instanceof WebAssembly.Memory) || typeof forceValue !== "function") {
     throw new Error("functional WASM structured result omitted memory or forceValue exports");
   }
+
+  type DecodeFrame =
+    | {
+      readonly kind: "value";
+      readonly rawValue: bigint;
+      readonly expected: FunctionalType;
+    }
+    | {
+      readonly kind: "collection";
+      readonly pointer: number;
+      readonly valueKind: "array" | "slice";
+      readonly elementType: FunctionalType;
+      readonly valueCount: number;
+      nextIndex: number;
+      readonly values: FunctionalWasmValue[];
+    }
+    | {
+      readonly kind: "constructor";
+      readonly pointer: number;
+      readonly expected: Extract<FunctionalType, { readonly kind: "tuple" | "named" }>;
+      readonly constructorName: string;
+      readonly fieldTypes: readonly FunctionalType[];
+      nextIndex: number;
+      readonly fields: FunctionalWasmValue[];
+    };
+
   let decodedNodes = 0;
+  let decodedResult: FunctionalWasmValue | undefined;
   const activePointers = new Set<number>();
-  const decode = (rawValue: bigint, expected: FunctionalType): FunctionalWasmValue => {
+  const frames: DecodeFrame[] = [{
+    kind: "value",
+    rawValue: BigInt(rawResult),
+    expected: type,
+  }];
+  const appendDecodedValue = (value: FunctionalWasmValue): void => {
+    const parent = frames.at(-1);
+    if (parent === undefined) {
+      decodedResult = value;
+      return;
+    }
+    if (parent.kind === "value") {
+      throw new Error("functional WASM decoder retained a completed value frame");
+    }
+    if (parent.kind === "collection") {
+      parent.values.push(value);
+      return;
+    }
+    parent.fields.push(value);
+  };
+
+  while (frames.length !== 0) {
+    const frame = frames.at(-1)!;
+    if (frame.kind === "collection") {
+      if (frame.nextIndex === frame.valueCount) {
+        activePointers.delete(frame.pointer);
+        frames.pop();
+        appendDecodedValue(
+          frame.valueKind === "array"
+            ? { kind: "array", values: frame.values }
+            : { kind: "slice", values: frame.values },
+        );
+        continue;
+      }
+      const index = frame.nextIndex;
+      frame.nextIndex += 1;
+      const view = new DataView(memory.buffer);
+      const offset = frame.pointer + OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH;
+      if (offset > view.byteLength - VALUE_BYTE_LENGTH) {
+        throw new RangeError(
+          `functional WASM ${frame.valueKind} element ${index} exceeds memory length ${view.byteLength}`,
+        );
+      }
+      frames.push({
+        kind: "value",
+        rawValue: view.getBigInt64(offset, true),
+        expected: frame.elementType,
+      });
+      continue;
+    }
+    if (frame.kind === "constructor") {
+      if (frame.nextIndex === frame.fieldTypes.length) {
+        activePointers.delete(frame.pointer);
+        frames.pop();
+        if (frame.expected.kind === "tuple") {
+          const first = frame.fields[0];
+          const second = frame.fields[1];
+          if (first === undefined || second === undefined) {
+            throw new Error("functional WASM tuple result omitted a field");
+          }
+          appendDecodedValue({ kind: "tuple", values: [first, second] });
+        } else {
+          appendDecodedValue({
+            kind: "constructor",
+            name: frame.constructorName,
+            fields: frame.fields,
+          });
+        }
+        continue;
+      }
+      const index = frame.nextIndex;
+      const fieldType = frame.fieldTypes[index];
+      if (fieldType === undefined) {
+        throw new Error(
+          `functional WASM constructor ${
+            JSON.stringify(frame.constructorName)
+          } omitted field type ${index}`,
+        );
+      }
+      frame.nextIndex += 1;
+      const view = new DataView(memory.buffer);
+      const offset = frame.pointer + OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH;
+      if (offset > view.byteLength - VALUE_BYTE_LENGTH) {
+        throw new RangeError(
+          `functional WASM constructor ${
+            JSON.stringify(frame.constructorName)
+          } field ${index} exceeds memory length ${view.byteLength}`,
+        );
+      }
+      frames.push({
+        kind: "value",
+        rawValue: view.getBigInt64(offset, true),
+        expected: fieldType,
+      });
+      continue;
+    }
+
     decodedNodes += 1;
     if (decodedNodes > maximumResultNodes) {
       throw new FunctionalWasmValueError(
@@ -365,17 +488,33 @@ export function decodeFunctionalWasmValue(
         }`,
       );
     }
-    const forced = forceValue(rawValue) as bigint;
+    const forced = forceValue(frame.rawValue) as bigint;
+    const expected = frame.expected;
     if (expected.kind === "integer") {
-      return { kind: "integer", value: Number(BigInt.asIntN(32, forced >> 3n)) };
+      frames.pop();
+      appendDecodedValue({
+        kind: "integer",
+        value: Number(BigInt.asIntN(32, forced >> 3n)),
+      });
+      continue;
     }
-    if (expected.kind === "boolean") return { kind: "boolean", value: forced >> 3n !== 0n };
-    if (expected.kind === "unit") return { kind: "unit" };
+    if (expected.kind === "boolean") {
+      frames.pop();
+      appendDecodedValue({ kind: "boolean", value: forced >> 3n !== 0n });
+      continue;
+    }
+    if (expected.kind === "unit") {
+      frames.pop();
+      appendDecodedValue({ kind: "unit" });
+      continue;
+    }
     if (
       expected.kind === "signed-integer-64" || expected.kind === "float-32" ||
       expected.kind === "float-64"
     ) {
-      return decodeBoxedNumeric(memory, forced, expected);
+      frames.pop();
+      appendDecodedValue(decodeBoxedNumeric(memory, forced, expected));
+      continue;
     }
     if (expected.kind === "function") {
       throw new TypeError("functional WASM structured results cannot contain function fields");
@@ -387,104 +526,103 @@ export function decodeFunctionalWasmValue(
         `functional WASM structured result contains a cycle through pointer ${pointer}`,
       );
     }
-    activePointers.add(pointer);
-    try {
-      const view = new DataView(memory.buffer);
-      if (pointer > view.byteLength - OBJECT_HEADER_BYTE_LENGTH) {
-        throw new RangeError(
-          `functional WASM constructor pointer ${pointer} exceeds memory length ${view.byteLength}`,
-        );
-      }
-      const objectKind = view.getUint32(pointer, true);
-      const valueCount = view.getUint32(pointer + 8, true);
-      if (expected.kind === "named" && expected.name === FUNCTIONAL_TEXT_TYPE_NAME) {
-        requireObjectKind(pointer, objectKind, TEXT_OBJECT_KIND, "text");
-        const bytes = boundedBytes(view, pointer, valueCount, "text");
-        return { kind: "text", value: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
-      }
-      if (expected.kind === "named" && expected.name === FUNCTIONAL_BYTES_TYPE_NAME) {
-        requireObjectKind(pointer, objectKind, BYTES_OBJECT_KIND, "bytes");
-        return { kind: "bytes", value: boundedBytes(view, pointer, valueCount, "bytes").slice() };
-      }
-      if (
-        expected.kind === "named" &&
-        (expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
-          expected.name === FUNCTIONAL_SLICE_TYPE_NAME)
-      ) {
-        const expectedKind = expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ? "array" : "slice";
-        requireObjectKind(
-          pointer,
-          objectKind,
-          expectedKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
-          expectedKind,
-        );
-        const elementType = expected.arguments[0];
-        if (elementType === undefined || expected.arguments.length !== 1) {
-          throw new TypeError(`${expectedKind} boundary type requires exactly one element type`);
-        }
-        const values: FunctionalWasmValue[] = [];
-        for (let index = 0; index < valueCount; index++) {
-          const offset = pointer + OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH;
-          if (offset > view.byteLength - VALUE_BYTE_LENGTH) {
-            throw new RangeError(
-              `functional WASM ${expectedKind} element ${index} exceeds memory length ${view.byteLength}`,
-            );
-          }
-          values.push(decode(view.getBigInt64(offset, true), elementType));
-        }
-        if (expectedKind === "array") return { kind: "array", values };
-        return { kind: "slice", values };
-      }
-      if (expected.kind === "named" && expected.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
-        requireObjectKind(pointer, objectKind, RESOURCE_OBJECT_KIND, "resource");
-        return { kind: "resource", id: view.getUint32(pointer + 4, true) };
-      }
-      if (objectKind !== CONSTRUCTOR_OBJECT_KIND) {
-        throw new Error(
-          `functional WASM result pointer ${pointer} has object kind ${objectKind}; expected constructor kind ${CONSTRUCTOR_OBJECT_KIND}`,
-        );
-      }
-      const constructorIndex = view.getUint32(pointer + 4, true);
-      const fieldCount = valueCount;
-      const constructorName = module.constructorNames[constructorIndex];
-      if (constructorName === undefined) {
-        throw new Error(
-          `functional WASM result references constructor ${constructorIndex} beyond ${module.constructorCount}`,
-        );
-      }
-      const fieldTypes = functionalStructuredFieldTypes(module, expected, constructorName);
-      if (fieldTypes.length !== fieldCount) {
-        throw new Error(
-          `functional WASM constructor ${
-            JSON.stringify(constructorName)
-          } stores ${fieldCount} fields; its type declares ${fieldTypes.length}`,
-        );
-      }
-      const fields = fieldTypes.map((fieldType, fieldIndex) => {
-        const fieldOffset = pointer + OBJECT_HEADER_BYTE_LENGTH + fieldIndex * VALUE_BYTE_LENGTH;
-        if (fieldOffset > view.byteLength - VALUE_BYTE_LENGTH) {
-          throw new RangeError(
-            `functional WASM constructor ${
-              JSON.stringify(constructorName)
-            } field ${fieldIndex} exceeds memory length ${view.byteLength}`,
-          );
-        }
-        return decode(view.getBigInt64(fieldOffset, true), fieldType);
-      });
-      if (expected.kind === "tuple") {
-        const first = fields[0];
-        const second = fields[1];
-        if (first === undefined || second === undefined) {
-          throw new Error("functional WASM tuple result omitted a field");
-        }
-        return { kind: "tuple", values: [first, second] };
-      }
-      return { kind: "constructor", name: constructorName, fields };
-    } finally {
-      activePointers.delete(pointer);
+    const view = new DataView(memory.buffer);
+    if (pointer > view.byteLength - OBJECT_HEADER_BYTE_LENGTH) {
+      throw new RangeError(
+        `functional WASM constructor pointer ${pointer} exceeds memory length ${view.byteLength}`,
+      );
     }
-  };
-  return decode(BigInt(rawResult), type);
+    const objectKind = view.getUint32(pointer, true);
+    const valueCount = view.getUint32(pointer + 8, true);
+    if (expected.kind === "named" && expected.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+      requireObjectKind(pointer, objectKind, TEXT_OBJECT_KIND, "text");
+      const bytes = boundedBytes(view, pointer, valueCount, "text");
+      frames.pop();
+      appendDecodedValue({
+        kind: "text",
+        value: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      });
+      continue;
+    }
+    if (expected.kind === "named" && expected.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+      requireObjectKind(pointer, objectKind, BYTES_OBJECT_KIND, "bytes");
+      frames.pop();
+      appendDecodedValue({
+        kind: "bytes",
+        value: boundedBytes(view, pointer, valueCount, "bytes").slice(),
+      });
+      continue;
+    }
+    if (
+      expected.kind === "named" &&
+      (expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
+        expected.name === FUNCTIONAL_SLICE_TYPE_NAME)
+    ) {
+      const valueKind = expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ? "array" : "slice";
+      requireObjectKind(
+        pointer,
+        objectKind,
+        valueKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
+        valueKind,
+      );
+      const elementType = expected.arguments[0];
+      if (elementType === undefined || expected.arguments.length !== 1) {
+        throw new TypeError(`${valueKind} boundary type requires exactly one element type`);
+      }
+      activePointers.add(pointer);
+      frames[frames.length - 1] = {
+        kind: "collection",
+        pointer,
+        valueKind,
+        elementType,
+        valueCount,
+        nextIndex: 0,
+        values: [],
+      };
+      continue;
+    }
+    if (expected.kind === "named" && expected.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
+      requireObjectKind(pointer, objectKind, RESOURCE_OBJECT_KIND, "resource");
+      frames.pop();
+      appendDecodedValue({ kind: "resource", id: view.getUint32(pointer + 4, true) });
+      continue;
+    }
+    if (objectKind !== CONSTRUCTOR_OBJECT_KIND) {
+      throw new Error(
+        `functional WASM result pointer ${pointer} has object kind ${objectKind}; expected constructor kind ${CONSTRUCTOR_OBJECT_KIND}`,
+      );
+    }
+    const constructorIndex = view.getUint32(pointer + 4, true);
+    const constructorName = module.constructorNames[constructorIndex];
+    if (constructorName === undefined) {
+      throw new Error(
+        `functional WASM result references constructor ${constructorIndex} beyond ${module.constructorCount}`,
+      );
+    }
+    const fieldTypes = functionalStructuredFieldTypes(module, expected, constructorName);
+    if (fieldTypes.length !== valueCount) {
+      throw new Error(
+        `functional WASM constructor ${
+          JSON.stringify(constructorName)
+        } stores ${valueCount} fields; its type declares ${fieldTypes.length}`,
+      );
+    }
+    activePointers.add(pointer);
+    frames[frames.length - 1] = {
+      kind: "constructor",
+      pointer,
+      expected,
+      constructorName,
+      fieldTypes,
+      nextIndex: 0,
+      fields: [],
+    };
+  }
+
+  if (decodedResult === undefined) {
+    throw new Error("functional WASM decoder completed without a value");
+  }
+  return decodedResult;
 }
 
 export function concreteFunctionalType(schema: FunctionalTypeSchema): FunctionalType {
