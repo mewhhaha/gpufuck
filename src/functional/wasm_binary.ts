@@ -303,7 +303,7 @@ export function encodeWasmModule(
     ),
     section(10, vector(functions.map(encodeFunctionBody))),
   ];
-  return new Uint8Array([
+  const encoded = [
     0x00,
     0x61,
     0x73,
@@ -312,8 +312,11 @@ export function encodeWasmModule(
     0x00,
     0x00,
     0x00,
-    ...sections.flat(),
-  ]);
+  ];
+  for (const wasmSection of sections) {
+    appendBytes(encoded, wasmSection);
+  }
+  return new Uint8Array(encoded);
 }
 
 export function encodeCompactScalarWasmModule(
@@ -458,18 +461,30 @@ function encodeFunctionBody(body: WasmFunctionBody): number[] {
   const locals = vector(
     localGroups.map(([count, type]) => [...encodeUnsigned(count!), type!]),
   );
-  const encoded = [...locals, ...body.instructions, 0x0b];
-  return [...encodeUnsigned(encoded.length), ...encoded];
+  const encoded: number[] = [];
+  appendBytes(encoded, locals);
+  appendBytes(encoded, body.instructions);
+  encoded.push(0x0b);
+  const sized = encodeUnsigned(encoded.length);
+  appendBytes(sized, encoded);
+  return sized;
 }
 
 function section(id: number, contents: readonly number[]): number[] {
-  return [id, ...encodeUnsigned(contents.length), ...contents];
+  const encoded = [id];
+  appendBytes(encoded, encodeUnsigned(contents.length));
+  appendBytes(encoded, contents);
+  return encoded;
 }
 
 function vector(values: readonly (readonly number[])[]): number[] {
   const encoded: number[] = [...encodeUnsigned(values.length)];
-  for (const value of values) encoded.push(...value);
+  for (const value of values) appendBytes(encoded, value);
   return encoded;
+}
+
+function appendBytes(target: number[], source: readonly number[]): void {
+  for (const byte of source) target.push(byte);
 }
 
 function name(value: string): number[] {
