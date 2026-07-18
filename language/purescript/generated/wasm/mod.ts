@@ -10,15 +10,14 @@ import {
   createParserAsync as createSharedParserAsync,
 } from "@mewhhaha/baba/runtime/generated-wasm";
 import type {
+  AsyncParserInstanceOptions as SharedAsyncParserInstanceOptions,
   ParserInstanceOptions as SharedParserInstanceOptions,
 } from "@mewhhaha/baba/runtime/generated-wasm";
 
 export * from "./syntax.ts";
 export {
   parserDiagnosticCodeAmbiguousParse,
-  parserDiagnosticCodeBranchLimit,
   parserDiagnosticCodeInternalError,
-  parserDiagnosticCodeParseInvalidTokenStream,
   parserDiagnosticCodeParseLexicalError,
   parserDiagnosticCodeParseTrailingInput,
   parserDiagnosticCodeParseUnexpectedToken,
@@ -26,6 +25,7 @@ export {
   parserDiagnosticDetailKindNone,
   parserDiagnosticDetailKindParserState,
   parserPlanFormat,
+  parserPlanRuntimeMetadataVersion,
   parserPlanSemantics,
   parserPlanVersion,
   runtimeImplementationFormat,
@@ -44,14 +44,8 @@ export {
   wasmTokenRecordI32Count,
 } from "@mewhhaha/baba/runtime/generated-wasm";
 
-export interface ParserInstanceOptions extends SharedParserInstanceOptions {
-  plan: Uint8Array;
-}
-
-export interface AsyncParserInstanceOptions extends ParserInstanceOptions {
-  url?: URL;
-  planUrl?: URL;
-}
+export type ParserInstanceOptions = SharedParserInstanceOptions;
+export type AsyncParserInstanceOptions = SharedAsyncParserInstanceOptions;
 
 export interface ParserInstance {
   lex(source: string, options?: LexOptions): LexTapeResult;

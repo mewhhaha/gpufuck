@@ -1,16 +1,16 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@mewhhaha/baba@4.0.0": "4.0.0"
+    "jsr:@mewhhaha/baba@5.1.0": "5.1.0"
   },
   "jsr": {
-    "@mewhhaha/baba@4.0.0": {
-      "integrity": "f1a172755fec45e21b14a44c88fca0067b3f01fabf2dedd07cb7e398e5a18814"
+    "@mewhhaha/baba@5.1.0": {
+      "integrity": "b34c5c324f4f4768d73321f0aaca6d7515ef7f589e8a14300579591a0e277a31"
     }
   },
   "workspace": {
     "dependencies": [
-      "jsr:@mewhhaha/baba@4.0.0"
+      "jsr:@mewhhaha/baba@5.1.0"
     ]
   }
 }

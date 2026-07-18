@@ -73,8 +73,6 @@ export interface ParseDiagnostic {
     | "PARSE_LEXICAL_ERROR"
     | "PARSE_UNEXPECTED_TOKEN"
     | "PARSE_TRAILING_INPUT"
-    | "PARSE_INVALID_TOKEN_STREAM"
-    | "PARSER_BRANCH_LIMIT"
     | "PARSER_TRACE_LIMIT"
     | "PARSER_AMBIGUOUS_PARSE"
     | "PARSER_INTERNAL_ERROR";
@@ -1001,10 +999,7 @@ export interface LexTapeResult {
 
 export interface ParseOptions {
   preserveTrivia?: boolean;
-  contextualLexingStats?: (stats: unknown) => void;
-  maxExploredBranches?: number;
   maxTraceActions?: number;
-  ambiguityMode?: "first-success" | "reject-ambiguous-success";
 }
 
 export type CursorParseResult<Root extends RuleCursor = RootCursor> =

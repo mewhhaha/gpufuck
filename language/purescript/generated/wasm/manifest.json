@@ -5,6 +5,7 @@
   "parserPlan": {
     "format": "baba-parser-plan",
     "version": 1,
+    "runtimeMetadataVersion": 2,
     "semantics": "baba-portable-v1",
     "storage": "external-binary",
     "moduleExport": "load_plan",
@@ -14,7 +15,7 @@
     "format": "baba-runtime-implementation",
     "version": 1,
     "semantics": "baba-runtime-portable-v1",
-    "hash": "fnv1a64:b8104c00b668e9d6"
+    "hash": "fnv1a64:9b25cc0c8ab36db3"
   },
   "module": "parser.wasm",
   "plan": "parser.plan"

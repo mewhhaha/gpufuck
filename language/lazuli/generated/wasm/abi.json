@@ -5,6 +5,7 @@
   "parserPlan": {
     "format": "baba-parser-plan",
     "version": 1,
+    "runtimeMetadataVersion": 2,
     "semantics": "baba-portable-v1",
     "storage": "external-binary"
   },
@@ -12,7 +13,7 @@
     "format": "baba-runtime-implementation",
     "version": 1,
     "semantics": "baba-runtime-portable-v1",
-    "hash": "fnv1a64:b8104c00b668e9d6"
+    "hash": "fnv1a64:9b25cc0c8ab36db3"
   },
   "core": {
     "abiVersion": 7,
@@ -347,9 +348,7 @@
     "parseLexicalError": 1,
     "parseUnexpectedToken": 2,
     "parseTrailingInput": 3,
-    "parseInvalidTokenStream": 4,
     "internalError": 5,
-    "branchLimit": 6,
     "traceLimit": 7,
     "ambiguousParse": 8
   },
@@ -392,25 +391,9 @@
         ]
       },
       {
-        "name": "parseInvalidTokenStream",
-        "publicCode": "PARSE_INVALID_TOKEN_STREAM",
-        "runtimeCode": 4,
-        "detailKind": "none",
-        "detailKindId": 0,
-        "payloadFields": []
-      },
-      {
         "name": "internalError",
         "publicCode": "PARSER_INTERNAL_ERROR",
         "runtimeCode": 5,
-        "detailKind": "none",
-        "detailKindId": 0,
-        "payloadFields": []
-      },
-      {
-        "name": "branchLimit",
-        "publicCode": "PARSER_BRANCH_LIMIT",
-        "runtimeCode": 6,
         "detailKind": "none",
         "detailKindId": 0,
         "payloadFields": []
