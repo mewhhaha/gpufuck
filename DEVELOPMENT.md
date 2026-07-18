@@ -136,6 +136,12 @@ usually includes:
 Keep parsing and desugaring out of `src/functional/`. That directory is target-neutral and cannot
 acquire rules named after Lazuli, Haskell, Rust, OCaml, or another source language.
 
+Reusable elaboration belongs beside the target contracts. `recursive_groups.ts` lambda-lifts local
+SCCs, `constraint_elaboration.ts` inserts normalized capability evidence, `row_types.ts` closes
+record/variant/effect rows, and `existential.ts` builds fixed-eliminator packages. These passes must
+produce ordinary surface constructs; do not extend the packed ABI when a bounded elaboration can
+preserve the same semantics.
+
 ## Changing the packed ABI
 
 The packed surface, resolved Core, type metadata, and Wasm value ABI are compatibility boundaries.

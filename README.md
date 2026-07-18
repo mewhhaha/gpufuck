@@ -211,10 +211,10 @@ IR can encode `EncodedFunctionalModule` directly.
 | Multiple parameters       | `parameters` or nested unary lambdas                              |
 | Function call             | Left-associated `apply` nodes                                     |
 | Tuple and unit            | Reserved pair and unit constructors                               |
-| Struct, enum, or variant  | A nominal declaration plus constructor applications               |
+| Struct, enum, or variant  | A nominal declaration, optionally lowered from a closed row       |
 | Nested pattern            | Nested flat `case` expressions                                    |
 | Local binding             | `let`                                                             |
-| Local recursion           | `let-rec` whose value is a lambda                                 |
+| Local recursion           | `let-rec` or a mutually recursive `let-rec-group`                 |
 | Module or record          | A generated nominal type or a linked module artifact              |
 | Typeclass or trait        | Static evidence resolution or an explicit dictionary value        |
 | Effect                    | Effect Core or an explicit host capability                        |
@@ -231,8 +231,10 @@ Haskell-like frontend normally selects `LazyCallByNeed`. Mixed languages can set
 of an individual `let` value or application argument.
 
 The choice is recorded in resolved Core and observed identically by the GPU evaluator and Wasm
-backend. It controls evaluation at binding boundaries; the public surface does not currently expose
-an arbitrary first-class `Thunk<T>` with general `delay` and `force` operations.
+backend. It controls implicit evaluation at binding boundaries. Explicit laziness is separate:
+`surface.delay(expression)` creates a typed `Thunk value`, and `surface.force(thunk)` evaluates it
+at most once and shares the result. Use `functionalThunkType(valueSchema)` when an exported boundary
+needs an explicit thunk annotation.
 
 ### Types and inference
 
@@ -254,9 +256,12 @@ const optionType = {
 } as const;
 ```
 
-The current inference profile is Hindley–Milner with GADT-style indexed constructor results and
-explicitly annotated predicative rank-N function parameters. It is not a dependent or impredicative
-type system. The entry definition must resolve to a concrete first-order boundary type.
+The current inference profile is Hindley–Milner with mutually recursive SCCs, GADT-style indexed
+constructor results, and explicitly annotated predicative rank-N function parameters. Existential
+payloads use a fixed-eliminator closure encoding, so the hidden witness cannot escape. Higher-kinded
+type functions, constraints, and open rows elaborate to ordinary first-order schemas, dictionaries,
+and nominal declarations before GPU inference. The system is not dependent or impredicative. The
+entry definition must resolve to a concrete first-order boundary type.
 
 ## Modules, incremental builds, and dead code
 
@@ -309,6 +314,10 @@ Type-level computation is exposed separately:
   applications, and associated-family-style equations.
 - `TypeCoreCapabilityResolver` searches bounded rules for proofs, facts, methods, fields, and other
   frontend-defined capabilities.
+- `FunctionalConstraintElaborator` combines both services and inserts resolved runtime dictionaries
+  into ordinary surface calls.
+- `unifyFunctionalRows` shares open-row unification across records, variants, and effects; closed
+  rows lower through `functionalRowTypeDeclaration()` or `functionalEffectOperationsFromRow()`.
 - `GpuTypeCoreExecutor` runs pure type programs over symbols, values, and type trees.
 
 These services are optional. A simple Hindley–Milner frontend can ignore them.
@@ -412,7 +421,7 @@ Important current limits include:
   arity at 64;
 - compilation defaults to 1,000,000 persistent semantic transitions;
 - the type system is HM plus indexed results and annotated predicative rank-N boundaries;
-- existential constructor parameters, full dependent types, and impredicative inference are absent;
+- native existential constructors, full dependent types, and impredicative inference are absent;
 - raw memory intrinsics, native SIMD, tracing GC, and a runtime borrow checker are outside
   Functional Core;
 - direct public Wasm boundaries exclude higher-order values and cyclic structured results;

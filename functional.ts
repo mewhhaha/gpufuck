@@ -24,6 +24,8 @@ export {
   FUNCTIONAL_NODE_BYTE_LENGTH,
   FUNCTIONAL_NODE_WORD_LENGTH,
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+  FUNCTIONAL_THUNK_CONSTRUCTOR_NAME,
+  FUNCTIONAL_THUNK_TYPE_NAME,
   FUNCTIONAL_TYPE_BYTE_LENGTH,
   FUNCTIONAL_TYPE_WORD_LENGTH,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
@@ -186,9 +188,19 @@ export {
   type FunctionalSurfaceCaseArm,
   type FunctionalSurfaceDefinition,
   type FunctionalSurfaceExpression,
+  type FunctionalSurfaceRecursiveBinding,
+  type FunctionalSurfaceRecursiveGroup,
   type FunctionalSurfaceTypeDeclaration,
+  functionalThunkType,
   surface,
 } from "./src/functional/surface_builder.ts";
+export { elaborateFunctionalRecursiveGroups } from "./src/functional/recursive_groups.ts";
+export {
+  type FunctionalExistentialType,
+  functionalExistentialType,
+  packFunctionalExistential,
+  unpackFunctionalExistential,
+} from "./src/functional/existential.ts";
 export {
   createFunctionalModuleArtifact,
   type FunctionalLinkDiagnosticCode,
@@ -248,6 +260,14 @@ export {
   type TypeCoreCapabilityWitness,
 } from "./src/functional/capability_contract.ts";
 export { TypeCoreCapabilityResolver } from "./src/functional/capability_resolver.ts";
+export {
+  type FunctionalConstraintCallElaboration,
+  type FunctionalConstraintElaboration,
+  type FunctionalConstraintElaborationOptions,
+  FunctionalConstraintElaborator,
+  type FunctionalConstraintGoal,
+  functionalRuntimeEvidenceExpression,
+} from "./src/functional/constraint_elaboration.ts";
 export type {
   FunctionalEffectExpression,
   FunctionalEffectHandler,
@@ -257,6 +277,20 @@ export type {
   LoweredFunctionalEffectProgram,
 } from "./src/functional/effect_contract.ts";
 export { lowerFunctionalEffectProgram } from "./src/functional/effect_lowering.ts";
+export {
+  functionalEffectOperationsFromRow,
+  functionalRecordConstructorName,
+  type FunctionalRow,
+  type FunctionalRowField,
+  type FunctionalRowKind,
+  type FunctionalRowSubstitutionEntry,
+  functionalRowTypeDeclaration,
+  type FunctionalRowUnification,
+  type FunctionalRowUnificationOptions,
+  functionalVariantConstructorName,
+  resolveFunctionalRow,
+  unifyFunctionalRows,
+} from "./src/functional/row_types.ts";
 export {
   type TypeCoreExecutionOptions,
   type TypeCoreExecutionResult,

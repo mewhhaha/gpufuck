@@ -62,14 +62,14 @@ multiple languages can describe it without importing one frontend's syntax or po
 ## 2. System context
 
 ```text
-┌──────────────────────── source-language implementation ────────────────────────┐
-│ parser ─► source AST ─► source checks ─► desugaring ─► artifacts and spans     │
+┌──────────────────────── source-language implementation ─────────────────────────┐
+│ parser ─► source AST ─► source checks ─► desugaring ─► artifacts and spans      │
 └──────────────────────────────────┬──────────────────────────────────────────────┘
                                    │
                ┌───────────────────┼────────────────────────┐
                ▼                   ▼                        ▼
         Functional Surface   Type services            Effect Core
-               │             and comptime                  │
+               │             and comptime                   │
                └───────────────────┬────────────────────────┘
                                    ▼
                     module artifacts and static linker
@@ -98,19 +98,19 @@ deployment dependency.
 
 The following table is the quickest answer to “where should this feature live?”
 
-| Stage              | Decisions made                                                               | Owner                                          | Durable output                           |
-| ------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------- |
-| Parse              | Tokens, grammar, layout, macro expansion                                     | Frontend                                       | Source AST with UTF-8 spans              |
-| Source checking    | Visibility, moves, borrows, language-specific effects and coherence          | Frontend                                       | Trusted source AST                       |
-| Desugar            | How source constructs map to functions, values, constructors, cases, effects | Frontend                                       | Functional Surface or optional higher IR |
-| Type normalization | Higher-kinded application, type functions, associated evidence               | Optional gpufuck service under frontend policy | First-order schemas plus evidence        |
-| Artifact creation  | Typed imports/exports and module-local declarations                          | Frontend using target contracts                | `FunctionalModuleArtifact`               |
-| Static link        | Qualification, import/export compatibility, aggregate source ranges          | gpufuck                                        | One encoded linked module                |
-| GPU resolution     | Local depths, global indices, constructor indices, dependency edges and SCCs | gpufuck                                        | Resolved numeric Core tables             |
-| GPU inference      | Schemes, unification, refinements, coverage, concrete entry type             | gpufuck                                        | Checked `GpuFunctionalModule`            |
-| Wasm analysis      | Reachability, captures, lambda sets, worker shapes, runtime requirements     | gpufuck                                        | Backend analysis state                   |
-| Wasm emission      | Representation, direct/indirect calls, thunks, loops, memory and exports     | gpufuck                                        | Standalone bytes                         |
-| Host execution     | Concrete host values, operations, ownership promises, suspension             | Application plus validated gpufuck adapter     | Execution value or structured fault      |
+| Stage             | Decisions made                                                               | Owner                                          | Durable output                           |
+| ----------------- | ---------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------- |
+| Parse             | Tokens, grammar, layout, macro expansion                                     | Frontend                                       | Source AST with UTF-8 spans              |
+| Source checking   | Visibility, moves, borrows, language-specific effects and coherence          | Frontend                                       | Trusted source AST                       |
+| Desugar           | How source constructs map to functions, values, constructors, cases, effects | Frontend                                       | Functional Surface or optional higher IR |
+| Type elaboration  | Higher-kinded application, constraints, existentials, and open rows          | Optional gpufuck service under frontend policy | First-order schemas plus evidence        |
+| Artifact creation | Typed imports/exports and module-local declarations                          | Frontend using target contracts                | `FunctionalModuleArtifact`               |
+| Static link       | Qualification, import/export compatibility, aggregate source ranges          | gpufuck                                        | One encoded linked module                |
+| GPU resolution    | Local depths, global indices, constructor indices, dependency edges and SCCs | gpufuck                                        | Resolved numeric Core tables             |
+| GPU inference     | Schemes, unification, refinements, coverage, concrete entry type             | gpufuck                                        | Checked `GpuFunctionalModule`            |
+| Wasm analysis     | Reachability, captures, lambda sets, worker shapes, runtime requirements     | gpufuck                                        | Backend analysis state                   |
+| Wasm emission     | Representation, direct/indirect calls, thunks, loops, memory and exports     | gpufuck                                        | Standalone bytes                         |
+| Host execution    | Concrete host values, operations, ownership promises, suspension             | Application plus validated gpufuck adapter     | Execution value or structured fault      |
 
 Decisions move only in one direction. The Wasm backend must not reinterpret source syntax, and a
 frontend must not patch resolved Core indices after GPU checking.
@@ -136,7 +136,7 @@ The surface is the required high-level target. It contains:
 
 - literals and names;
 - lambdas and unary application;
-- immutable `let` and lambda-valued `let-rec`;
+- immutable `let`, lambda-valued `let-rec`, and local mutually recursive groups;
 - `if`, primitive unary/binary operations, and numeric conversions;
 - nominal constructors and flat constructor cases;
 - definitions, structural annotations, nominal declarations, and an entry;
@@ -150,10 +150,11 @@ The surface retains unresolved names. This is intentional: name resolution, depe
 recursive SCCs, and the relationship between annotations and definitions are part of the semantic
 GPU workload.
 
-Lists, records, traits, source modules, and multi-argument functions are not Core primitives. A
-frontend lowers them into nominal declarations, explicit dictionaries, linked artifacts, and unary
-functions. Keeping the target small makes the same inference and backend machinery useful to many
-languages.
+Lists, records, traits, source modules, and multi-argument functions are not Core primitives. The
+shared elaborators lower them into nominal declarations, explicit dictionaries, linked artifacts,
+and unary functions. Local recursive groups are lambda-lifted into ordinary top-level SCCs, with
+captured lexical values made explicit. Keeping the target small makes the same inference and backend
+machinery useful to many languages.
 
 ### 4.3 Type schemas
 
@@ -199,6 +200,22 @@ element(container)  -> elementType
 Resolution returns an evidence tree. `verify()` can replay that tree independently, which allows
 cache or transport boundaries without trusting a bare answer. Search is separate from normalization
 because normalization should be deterministic while capability selection may be ambiguous.
+
+[`constraint_elaboration.ts`](src/functional/constraint_elaboration.ts) joins normalization and
+evidence search at call sites. Compile-time and erased evidence disappear; runtime evidence becomes
+an explicit leading dictionary argument. This is also the higher-kinded boundary: constructor-kinded
+parameters normalize before the first-order schema ABI is packed.
+
+[`row_types.ts`](src/functional/row_types.ts) defines one open-row substitution algorithm for
+records, variants, and effects. It is bounded by semantic transitions and rejects kind changes,
+conflicting fields, recursive tails, and closed-row mismatches. Closed record and variant rows lower
+to nominal constructors. Closed effect rows lower to Effect Core operation contracts. Open tails do
+not enter the packed GPU ABI.
+
+[`existential.ts`](src/functional/existential.ts) provides predicative existential packages through
+a fixed-eliminator closure. The implementation captures a payload whose type mentions the hidden
+parameter, but only a closed result crosses the package boundary. This supports abstract interfaces
+without introducing impredicative inference or a new runtime representation.
 
 [`type_core.ts`](src/functional/type_core.ts) supplies a small pure, kinded execution language for
 closed type computations over types, wrapping integers, Booleans, and symbols. Structural lowering
@@ -625,6 +642,10 @@ record, preserving sharing. Immediately applied lambdas and saturated constructo
 closure/thunk allocation where demand is statically known, provided the transformation preserves
 non-strictness.
 
+`surface.delay()` and `surface.force()` expose the same mechanism as an explicit nominal
+`Thunk value`. This is distinct from selecting a module-wide or per-boundary evaluation profile: the
+former is a value in the source program, while the latter defines implicit evaluation semantics.
+
 This operational model corresponds to the sharing requirement formalized by John Launchbury in
 [“A natural semantics for lazy evaluation”](https://doi.org/10.1145/158511.158618). Gpufuck uses an
 explicit Wasm heap representation rather than reproducing Launchbury's semantics as an
@@ -862,15 +883,16 @@ inflating ordinary programs.
 
 ### 14.6 Frontend-selected strictness
 
-**Decision:** the frontend selects strict or lazy defaults and may annotate binding boundaries.
+**Decision:** the frontend selects strict or lazy defaults and may annotate binding boundaries;
+explicit thunks remain ordinary typed values.
 
 **Why:** strictness is source-language semantics. Treating every value as a thunk penalizes strict
 languages; forcing everything changes Haskell-like programs.
 
 **Cost:** evaluators and Wasm emission support mixed representation.
 
-**Revisit when:** adding an explicit first-class thunk type, which must remain distinct from an
-implicit evaluation-profile choice.
+**Revisit when:** a frontend requires a thunk operation beyond deterministic call-by-need
+`delay`/`force`, not merely another spelling for implicit laziness.
 
 ### 14.7 Whole-program Wasm after incremental checking
 

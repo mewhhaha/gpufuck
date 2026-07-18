@@ -459,6 +459,24 @@ function rewriteExpression(
         span,
       };
     }
+    case "let-rec-group": {
+      const scope = new Set(bound);
+      for (const binding of expression.bindings) scope.add(binding.name);
+      return {
+        ...expression,
+        bindings: expression.bindings.map((binding) => {
+          const bindingScope = new Set(scope);
+          for (const parameter of binding.parameters) bindingScope.add(parameter);
+          return {
+            ...binding,
+            body: rewrite(binding.body, bindingScope),
+            span: offsetSpan(binding.span, sourceBase),
+          };
+        }),
+        body: rewrite(expression.body, scope),
+        span,
+      };
+    }
     case "if":
       return {
         ...expression,

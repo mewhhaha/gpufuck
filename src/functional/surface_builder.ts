@@ -6,6 +6,8 @@ import {
   FUNCTIONAL_NO_INDEX,
   FUNCTIONAL_NODE_WORD_LENGTH,
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+  FUNCTIONAL_THUNK_CONSTRUCTOR_NAME,
+  FUNCTIONAL_THUNK_TYPE_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
   FunctionalEvaluationProfile,
@@ -30,6 +32,10 @@ import {
   type FunctionalSurfaceModuleOptions,
   normalizeFunctionalHostCapabilities,
 } from "./host_contract.ts";
+import { elaborateFunctionalRecursiveGroups } from "./recursive_groups.ts";
+
+const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
+const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
 
 export type FunctionalSurfaceExpression =
   | { readonly kind: "integer"; readonly value: number; readonly span?: FunctionalSpan }
@@ -59,6 +65,7 @@ export type FunctionalSurfaceExpression =
     readonly body: FunctionalSurfaceExpression;
     readonly span?: FunctionalSpan;
   }
+  | FunctionalSurfaceRecursiveGroup
   | {
     readonly kind: "if";
     readonly condition: FunctionalSurfaceExpression;
@@ -99,11 +106,33 @@ export type FunctionalSurfaceExpression =
     readonly span?: FunctionalSpan;
   };
 
+export interface FunctionalSurfaceRecursiveBinding {
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly body: FunctionalSurfaceExpression;
+  readonly span?: FunctionalSpan;
+}
+
+export interface FunctionalSurfaceRecursiveGroup {
+  readonly kind: "let-rec-group";
+  readonly bindings: readonly FunctionalSurfaceRecursiveBinding[];
+  readonly body: FunctionalSurfaceExpression;
+  readonly span?: FunctionalSpan;
+}
+
 export interface FunctionalSurfaceCaseArm {
   readonly constructor: string;
   readonly binders: readonly string[];
   readonly body: FunctionalSurfaceExpression;
   readonly span?: FunctionalSpan;
+}
+
+export function functionalThunkType(value: FunctionalTypeSchema): FunctionalTypeSchema {
+  return {
+    kind: "named",
+    name: FUNCTIONAL_THUNK_TYPE_NAME,
+    arguments: [value],
+  };
 }
 
 export interface FunctionalSurfaceDefinition {
@@ -137,12 +166,19 @@ export function buildFunctionalSurfaceModule(
   sourceByteLength: number,
   options: FunctionalSurfaceModuleOptions = {},
 ): EncodedFunctionalModule {
+  let surfaceFeatures = 0;
+  for (const definition of definitions) {
+    surfaceFeatures |= expressionFeatureMask(definition.body);
+  }
+  const elaboratedDefinitions = surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP
+    ? elaborateFunctionalRecursiveGroups(definitions)
+    : definitions;
   const evaluationProfile = options.evaluationProfile ?? FunctionalEvaluationProfile.StrictEager;
   requireEvaluationProfile(evaluationProfile, "functional surface module");
   const hostCapabilities = normalizeFunctionalHostCapabilities(options.hostCapabilities);
   const wasmExports = normalizeWasmExports(definitions, options.wasmExports);
   const usesHigherRankTypes =
-    definitions.some((definition) =>
+    elaboratedDefinitions.some((definition) =>
       definition.annotation !== null && schemaContainsForall(definition.annotation)
     ) || typeDeclarations.some((declaration) =>
       declaration.constructors.some((constructor) =>
@@ -156,6 +192,7 @@ export function buildFunctionalSurfaceModule(
   for (const declaredName of declaredNames) {
     if (
       declaredName === "$UnitType" || declaredName === "$TupleType" ||
+      declaredName === FUNCTIONAL_THUNK_TYPE_NAME ||
       declaredName === FUNCTIONAL_INIT_TYPE_NAME || declaredName === FUNCTIONAL_TEXT_TYPE_NAME ||
       declaredName === FUNCTIONAL_BYTES_TYPE_NAME || declaredName === FUNCTIONAL_ARRAY_TYPE_NAME ||
       declaredName === FUNCTIONAL_SLICE_TYPE_NAME ||
@@ -167,18 +204,19 @@ export function buildFunctionalSurfaceModule(
     }
   }
   const boundaryTypeNames = collectBoundaryTypeNames(
-    definitions,
+    elaboratedDefinitions,
     typeDeclarations,
     hostCapabilities,
   );
+  const usesExplicitThunk = (surfaceFeatures & SURFACE_FEATURE_EXPLICIT_THUNK) !== 0;
   const encodedTypeDeclarations = [
     ...typeDeclarations,
     ...[...boundaryTypeNames].sort().map(boundaryTypeDeclaration),
     ...(hostCapabilities.length === 0 ? [] : [hostInitTypeDeclaration(hostCapabilities)]),
-    ...primitiveTypeDeclarations(sourceByteLength),
+    ...primitiveTypeDeclarations(sourceByteLength, usesExplicitThunk),
   ];
   const symbols = new SurfaceSymbolTable();
-  for (const definition of definitions) symbols.intern(definition.name);
+  for (const definition of elaboratedDefinitions) symbols.intern(definition.name);
   symbols.intern(entryName);
   for (const declaration of encodedTypeDeclarations) {
     symbols.intern(declaration.name);
@@ -187,7 +225,7 @@ export function buildFunctionalSurfaceModule(
 
   const encoder = new SurfaceExpressionEncoder(symbols, evaluationProfile);
   const definitionWords: number[] = [];
-  for (const definition of definitions) {
+  for (const definition of elaboratedDefinitions) {
     const rootNode = encoder.emitDefinitionBody(
       definition.parameters,
       definition.body,
@@ -238,12 +276,12 @@ export function buildFunctionalSurfaceModule(
     typeWords: Uint32Array.from(typeWords),
     constructorWords: Uint32Array.from(constructorWords),
     nodeCount: encoder.nodeCount,
-    definitionCount: definitions.length,
+    definitionCount: elaboratedDefinitions.length,
     typeCount: encodedTypeDeclarations.length,
     constructorCount: constructorWords.length / FUNCTIONAL_CONSTRUCTOR_WORD_LENGTH,
     entrySymbol: symbols.id(entryName),
     symbolNames: symbols.names,
-    definitionTypes: definitions.map((definition) => ({
+    definitionTypes: elaboratedDefinitions.map((definition) => ({
       annotation: definition.annotation === null
         ? null
         : sourceType(definition.annotation, definition.span),
@@ -405,6 +443,52 @@ function collectBoundaryTypeNames(
   return names;
 }
 
+function expressionFeatureMask(expression: FunctionalSurfaceExpression): number {
+  switch (expression.kind) {
+    case "name":
+      return expression.name === FUNCTIONAL_THUNK_CONSTRUCTOR_NAME
+        ? SURFACE_FEATURE_EXPLICIT_THUNK
+        : 0;
+    case "lambda":
+      return expressionFeatureMask(expression.body);
+    case "let":
+    case "let-rec":
+      return expressionFeatureMask(expression.value) |
+        expressionFeatureMask(expression.body);
+    case "let-rec-group":
+      return expression.bindings.reduce(
+        (features, binding) => features | expressionFeatureMask(binding.body),
+        SURFACE_FEATURE_RECURSIVE_GROUP | expressionFeatureMask(expression.body),
+      );
+    case "if":
+      return expressionFeatureMask(expression.condition) |
+        expressionFeatureMask(expression.consequent) |
+        expressionFeatureMask(expression.alternate);
+    case "apply":
+    case "binary":
+      return expressionFeatureMask(
+        expression.kind === "apply" ? expression.callee : expression.left,
+      ) |
+        expressionFeatureMask(
+          expression.kind === "apply" ? expression.argument : expression.right,
+        );
+    case "unary":
+    case "numeric-convert":
+      return expressionFeatureMask(expression.value);
+    case "case":
+      return expression.arms.reduce(
+        (features, arm) => features | expressionFeatureMask(arm.body),
+        expressionFeatureMask(expression.value),
+      );
+    case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+    case "boolean":
+      return 0;
+  }
+}
+
 function boundaryTypeDeclaration(name: string): FunctionalSurfaceTypeDeclaration {
   if (name === FUNCTIONAL_ARRAY_TYPE_NAME || name === FUNCTIONAL_SLICE_TYPE_NAME) {
     return {
@@ -418,9 +502,22 @@ function boundaryTypeDeclaration(name: string): FunctionalSurfaceTypeDeclaration
 
 function primitiveTypeDeclarations(
   sourceByteLength: number,
+  usesExplicitThunk: boolean,
 ): readonly FunctionalSurfaceTypeDeclaration[] {
   const span = { startByte: sourceByteLength, endByte: sourceByteLength };
   return [
+    ...(usesExplicitThunk
+      ? [{
+        name: FUNCTIONAL_THUNK_TYPE_NAME,
+        parameters: ["value"],
+        constructors: [{
+          name: FUNCTIONAL_THUNK_CONSTRUCTOR_NAME,
+          fields: [{ name: "value", type: { kind: "parameter", name: "value" } as const, span }],
+          span,
+        }],
+        span,
+      }]
+      : []),
     {
       name: "$UnitType",
       parameters: [],
@@ -590,6 +687,8 @@ class SurfaceExpressionEncoder {
         this.setChildren(node, [value, body]);
         return node;
       }
+      case "let-rec-group":
+        throw new Error("functional recursive group reached the packed surface encoder");
       case "if": {
         const node = this.reserveNode(FunctionalExpressionTag.If, 0, parent, expression.span);
         const condition = this.emit(expression.condition, node);
@@ -847,6 +946,8 @@ export const surface: Readonly<{
   boolean(value: boolean): FunctionalSurfaceExpression;
   name(name: string): FunctionalSurfaceExpression;
   lambda(parameter: string, body: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
+  delay(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
+  force(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
   apply(
     callee: FunctionalSurfaceExpression,
     ...arguments_: readonly FunctionalSurfaceExpression[]
@@ -892,6 +993,26 @@ export const surface: Readonly<{
     body: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression {
     return { kind: "lambda", parameter, body };
+  },
+  delay(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+    return {
+      kind: "apply",
+      callee: { kind: "name", name: FUNCTIONAL_THUNK_CONSTRUCTOR_NAME },
+      argument: value,
+      argumentEvaluation: FunctionalEvaluationProfile.LazyCallByNeed,
+    };
+  },
+  force(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+    const valueName = "$forcedThunkValue";
+    return {
+      kind: "case",
+      value,
+      arms: [{
+        constructor: FUNCTIONAL_THUNK_CONSTRUCTOR_NAME,
+        binders: [valueName],
+        body: { kind: "name", name: valueName },
+      }],
+    };
   },
   apply(
     callee: FunctionalSurfaceExpression,

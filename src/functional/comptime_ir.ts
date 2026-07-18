@@ -271,6 +271,10 @@ export function functionalConstantFromSurfaceExpression(
         functionalConstantFromSurfaceExpression(value.value),
         functionalConstantFromSurfaceExpression(value.body),
       ]);
+    case "let-rec-group":
+      throw new Error(
+        "functional comptime IR requires recursive groups to be elaborated before encoding",
+      );
     case "if":
       return constructor(EXPRESSION_IF, [
         functionalConstantFromSurfaceExpression(value.condition),

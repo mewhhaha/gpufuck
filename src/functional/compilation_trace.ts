@@ -142,6 +142,14 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
       return `${indent}(let-rec ${expression.name}\n${nested(expression.value)}\n${
         nested(expression.body)
       })`;
+    case "let-rec-group": {
+      const bindings = expression.bindings.map((binding) =>
+        `${"  ".repeat(depth + 1)}(${binding.name} ${binding.parameters.join(" ")} =\n${
+          formatExpression(binding.body, depth + 2)
+        })`
+      );
+      return `${indent}(let-rec-group\n${bindings.join("\n")}\n${nested(expression.body)})`;
+    }
     case "if":
       return `${indent}(if\n${nested(expression.condition)}\n${nested(expression.consequent)}\n${
         nested(expression.alternate)
