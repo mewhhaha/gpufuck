@@ -1277,6 +1277,59 @@ Deno.test("uncurried workers load caller-local captures from their closure", asy
   deepStrictEqual(execution.value, { kind: "integer", value: 42 });
 });
 
+Deno.test("initializes more than 64 native WebAssembly host values", async () => {
+  const integer = { kind: "integer" } as const;
+  const literalNames = Array.from(
+    { length: 65 },
+    (_, index) => `literal${index}`,
+  );
+  const fields = literalNames.map((name) => ({
+    kind: "value" as const,
+    name,
+    type: FunctionalHostTypes.text,
+    ownership: "frozen-shareable" as const,
+    wasmLiteral: { kind: "text" as const, value: name },
+  }));
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: [...literalNames, "length"],
+          body: surface.apply(
+            surface.name("length"),
+            surface.name("literal64"),
+          ),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Buffer",
+        fields: [...fields, {
+          kind: "operation",
+          name: "length",
+          purity: "pure",
+          parameter: FunctionalHostTypes.text,
+          result: integer,
+          wasmIntrinsic: FunctionalWasmIntrinsic.BufferByteLength,
+        }],
+      }],
+    },
+  );
+
+  const execution = await runCompiledWasm(encoded);
+  deepStrictEqual(execution.value, { kind: "integer", value: 9 });
+});
+
 Deno.test("returns structured tuples through the stable WebAssembly aggregate ABI", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
