@@ -21,6 +21,7 @@ import {
   type FunctionalType,
   type FunctionalTypeSchema,
   FunctionalUnaryOperator,
+  type FunctionalWasmAsyncInit,
   FunctionalWasmBoundaryError,
   type FunctionalWasmExecution,
   type FunctionalWasmInit,
@@ -2718,6 +2719,33 @@ Deno.test("rejects invalid argument ownership before reading host initialization
         equal(error.path, "argumentOwnership");
         return true;
       },
+    );
+    equal(initializationReads, 0);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("async execution validates shared controls before reading host initialization", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    hostInitModule(surface.name("base")),
+  );
+  if (!compilation.ok) throw new Error("async control validation fixture did not compile");
+  let initializationReads = 0;
+  const init = new Proxy<FunctionalWasmAsyncInit>({}, {
+    get() {
+      initializationReads += 1;
+      return undefined;
+    },
+  });
+  try {
+    await rejects(
+      () =>
+        runFunctionalWasmModuleAsync(compilation.module, {
+          init,
+          maximumResultNodes: 0,
+        }),
+      /maximumResultNodes must be a positive safe integer; received 0/,
     );
     equal(initializationReads, 0);
   } finally {

@@ -95,27 +95,7 @@ async function runFunctionalWasmAttempt(
   maximumSteps?: number,
 ): Promise<FunctionalWasmExecution & { readonly semanticSteps?: number }> {
   options.signal?.throwIfAborted();
-  const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
-  if (
-    argumentOwnership !== "bounded-borrow" &&
-    argumentOwnership !== "ownership-transfer"
-  ) {
-    throw new FunctionalWasmBoundaryError({
-      code: "F4101",
-      kind: "invalid-argument",
-      path: "argumentOwnership",
-      message:
-        `functional WASM argumentOwnership must be bounded-borrow or ownership-transfer; received ${
-          JSON.stringify(argumentOwnership)
-        }`,
-    });
-  }
-  const maximumResultNodes = options.maximumResultNodes ?? 2_047;
-  if (!Number.isSafeInteger(maximumResultNodes) || maximumResultNodes < 1) {
-    throw new RangeError(
-      `functional WASM maximumResultNodes must be a positive safe integer; received ${maximumResultNodes}`,
-    );
-  }
+  const maximumResultNodes = validateFunctionalWasmRunControls(options);
   if (!allowSuspendingHostOperations) {
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
@@ -307,6 +287,33 @@ async function runFunctionalWasmAttempt(
   }
 }
 
+function validateFunctionalWasmRunControls(
+  options: Pick<FunctionalWasmRunOptions, "argumentOwnership" | "maximumResultNodes">,
+): number {
+  const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
+  if (
+    argumentOwnership !== "bounded-borrow" &&
+    argumentOwnership !== "ownership-transfer"
+  ) {
+    throw new FunctionalWasmBoundaryError({
+      code: "F4101",
+      kind: "invalid-argument",
+      path: "argumentOwnership",
+      message:
+        `functional WASM argumentOwnership must be bounded-borrow or ownership-transfer; received ${
+          JSON.stringify(argumentOwnership)
+        }`,
+    });
+  }
+  const maximumResultNodes = options.maximumResultNodes ?? 2_047;
+  if (!Number.isSafeInteger(maximumResultNodes) || maximumResultNodes < 1) {
+    throw new RangeError(
+      `functional WASM maximumResultNodes must be a positive safe integer; received ${maximumResultNodes}`,
+    );
+  }
+  return maximumResultNodes;
+}
+
 interface FunctionalWasmReplayRecord {
   readonly field: string;
   readonly argument: FunctionalWasmHostValue;
@@ -323,6 +330,8 @@ export async function runFunctionalWasmModuleAsync(
       `functional WASM maximumSuspensions must be a positive safe integer; received ${maximumSuspensions}`,
     );
   }
+  options.signal?.throwIfAborted();
+  validateFunctionalWasmRunControls(options);
   const records: FunctionalWasmReplayRecord[] = [];
   let cursor = 0;
   const init: Record<string, Record<string, FunctionalWasmInitBinding>> = {};
