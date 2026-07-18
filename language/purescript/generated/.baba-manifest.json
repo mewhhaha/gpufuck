@@ -1,0 +1,54 @@
+{
+  "generator": "@mewhhaha/baba",
+  "manifestVersion": 1,
+  "files": {
+    "queries/generated-highlights.scm": {
+      "hash": "f025dc36c905d878cc43666faf9d1cd3eeac532709b765d384d4f900567d4019",
+      "ownership": "generated",
+      "encoding": "utf-8",
+      "kind": "query"
+    },
+    "queries/generated-rainbows.scm": {
+      "hash": "c630bcd42f7b88b152dcb3020b6336e1f80a9834abccf8803fd10ab794206179",
+      "ownership": "generated",
+      "encoding": "utf-8",
+      "kind": "query"
+    },
+    "wasm/abi.json": {
+      "hash": "082ade6dd31ce4ef026f3f8ddda0ae334b3db5d29421426f7619730ba8a68821",
+      "ownership": "generated",
+      "encoding": "utf-8",
+      "kind": "config"
+    },
+    "wasm/manifest.json": {
+      "hash": "602880eadc3c08c51f46a7f82cbee4b5d9420f44845e8fabe44c876488941264",
+      "ownership": "generated",
+      "encoding": "utf-8",
+      "kind": "config"
+    },
+    "wasm/mod.ts": {
+      "hash": "daef30077e283147488ad12002f39c3164d0fe24c55b2a946865d9617df6586a",
+      "ownership": "generated",
+      "encoding": "utf-8",
+      "kind": "source"
+    },
+    "wasm/parser.plan": {
+      "hash": "0c2670bbd372b9faf7b57e81ffb6982946aaf7af7cd82759b1e778e7f39ee741",
+      "ownership": "generated",
+      "encoding": "binary",
+      "kind": "binary"
+    },
+    "wasm/parser.wasm": {
+      "hash": "a1ee1e6e8faa7692c96786870a50038e69ecdca6425d5c7e7610f2e147fdb825",
+      "ownership": "generated",
+      "encoding": "binary",
+      "kind": "binary"
+    },
+    "wasm/syntax.ts": {
+      "hash": "4264d4caa318d27424b2f2f1fb2050f9e188b40346152941d00deb8c61446e44",
+      "ownership": "generated",
+      "encoding": "utf-8",
+      "kind": "source"
+    }
+  }
+}

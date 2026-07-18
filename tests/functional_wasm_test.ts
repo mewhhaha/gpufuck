@@ -511,15 +511,17 @@ Deno.test("round-trips text, bytes, arrays, slices, and resources through WebAss
       });
       deepStrictEqual(execution.value, value);
       const freeListHead = execution.instance.exports.freeListHead;
+      const heapTop = execution.instance.exports.heapTop;
       const allocate = execution.instance.exports.allocate;
       const free = execution.instance.exports.free;
       ok(freeListHead instanceof WebAssembly.Global);
+      ok(heapTop instanceof WebAssembly.Global);
       ok(typeof allocate === "function");
       ok(typeof free === "function");
-      const releasedPointer = Number(freeListHead.value);
-      ok(releasedPointer !== 0);
+      equal(Number(freeListHead.value), 0);
+      const reclaimedTop = Number(heapTop.value);
       const reusedPointer = allocate(8) as number;
-      equal(reusedPointer, releasedPointer);
+      equal(reusedPointer, reclaimedTop);
       free(reusedPointer, 8);
     } finally {
       compilation.module.destroy();

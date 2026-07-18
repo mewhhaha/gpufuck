@@ -127,6 +127,15 @@ export type {
 } from "./src/functional/effect_core_contract.ts";
 export { compileFunctionalModuleToWasm } from "./src/functional/wasm_artifacts.ts";
 export {
+  type FunctionalBoundaryStorageDecision,
+  FunctionalStorageClass,
+  type FunctionalStorageDecision,
+  type FunctionalStoragePlan,
+  type FunctionalStoragePlanSummary,
+  type FunctionalStoredValueKind,
+  planFunctionalModuleStorage,
+} from "./src/functional/storage_plan.ts";
+export {
   type FunctionalWasmAsyncRunOptions,
   type FunctionalWasmExecution,
   type FunctionalWasmRunOptions,

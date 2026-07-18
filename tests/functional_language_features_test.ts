@@ -2,6 +2,7 @@ import { deepStrictEqual, equal, ok } from "node:assert/strict";
 
 import {
   buildFunctionalSurfaceModule,
+  FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
   FunctionalConstraintElaborator,
   functionalEffectOperationsFromRow,
@@ -9,11 +10,13 @@ import {
   functionalExistentialType,
   functionalRecordConstructorName,
   functionalRowTypeDeclaration,
+  FunctionalStorageClass,
   type FunctionalSurfaceExpression,
   functionalThunkType,
   functionalVariantConstructorName,
   GpuFunctionalCompiler,
   packFunctionalExistential,
+  planFunctionalModuleStorage,
   requestWebGpuDevice,
   runFunctionalWasmModule,
   surface,
@@ -91,6 +94,149 @@ Deno.test("mutually recursive local functions retain lexical captures", async ()
   try {
     const execution = await runFunctionalWasmModule(compilation.module);
     deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("storage planning separates static, scalar-local, and recursive closures", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "identity",
+      parameters: ["value"],
+      annotation: null,
+      body: surface.name("value"),
+    }, {
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: {
+        kind: "let",
+        name: "increment",
+        value: surface.lambda(
+          "value",
+          surface.binary(
+            FunctionalBinaryOperator.Add,
+            surface.name("value"),
+            surface.integer(1),
+          ),
+        ),
+        body: {
+          kind: "let-rec",
+          name: "countdown",
+          value: surface.lambda("value", {
+            kind: "if",
+            condition: surface.equal(surface.name("value"), surface.integer(0)),
+            consequent: surface.apply(surface.name("increment"), surface.integer(41)),
+            alternate: surface.apply(
+              surface.name("countdown"),
+              surface.binary(
+                FunctionalBinaryOperator.Subtract,
+                surface.name("value"),
+                surface.integer(1),
+              ),
+            ),
+          }),
+          body: surface.apply(surface.name("countdown"), surface.integer(2)),
+        },
+      },
+    }],
+    [],
+    "main",
+    0,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const plan = await planFunctionalModuleStorage(compilation.module);
+    const closures = plan.values.filter((value) => value.valueKind === "closure");
+    ok(closures.some((value) => value.storage === FunctionalStorageClass.Static));
+    ok(closures.some((value) =>
+      value.storage === FunctionalStorageClass.ScalarLocal &&
+      value.escapeStorage === FunctionalStorageClass.InvocationRegion
+    ));
+    ok(closures.some((value) => value.storage === FunctionalStorageClass.InvocationRegion));
+    ok(plan.summary.staticValues >= 1);
+    ok(plan.summary.scalarLocalValues >= 1);
+    ok(plan.summary.invocationRegionValues >= 1);
+    equal(plan.summary.automaticInvocationReset, false);
+
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("storage planning preserves frontend-selected host ownership contracts", async () => {
+  const integer = { kind: "integer" } as const;
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["seed", "echo"],
+          body: surface.name("seed"),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Runtime",
+        fields: [{
+          kind: "value",
+          name: "seed",
+          type: integer,
+          ownership: "ownership-transfer",
+        }, {
+          kind: "operation",
+          name: "echo",
+          purity: "pure",
+          parameter: integer,
+          result: integer,
+          parameterOwnership: "bounded-borrow",
+          resultOwnership: "frozen-shareable",
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const plan = await planFunctionalModuleStorage(compilation.module);
+    deepStrictEqual(
+      plan.boundaries.map((boundary) => ({
+        path: boundary.path,
+        direction: boundary.direction,
+        storage: boundary.storage,
+      })),
+      [{
+        path: "Runtime.seed",
+        direction: "host-to-module",
+        storage: FunctionalStorageClass.Owned,
+      }, {
+        path: "Runtime.echo.parameter",
+        direction: "module-to-host",
+        storage: FunctionalStorageClass.InvocationRegion,
+      }, {
+        path: "Runtime.echo.result",
+        direction: "host-to-module",
+        storage: FunctionalStorageClass.HostManaged,
+      }],
+    );
+    equal(plan.summary.ownedBoundaries, 1);
+    equal(plan.summary.hostManagedBoundaries, 1);
   } finally {
     compilation.module.destroy();
   }

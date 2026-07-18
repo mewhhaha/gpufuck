@@ -28,7 +28,9 @@ import {
   encodeFunctionalWasmValue,
   type FunctionalWasmValue,
   FunctionalWasmValueError,
+  markFunctionalWasmScratch,
   releaseEncodedFunctionalWasmValue,
+  resetFunctionalWasmScratch,
 } from "./wasm_value_codec.ts";
 
 export type { FunctionalWasmValue } from "./wasm_value_codec.ts";
@@ -144,70 +146,87 @@ async function runFunctionalWasmAttempt(
       `functional WASM entry d${module.entryDefinition} exported a non-global allocator heap top`,
     );
   }
-  let argument: bigint | undefined;
-  if (entry.parameter !== undefined) {
+  const heapTopBeforeInitialization = heapTop instanceof WebAssembly.Global
+    ? Number(heapTop.value) >>> 0
+    : 0;
+  if (heapTop instanceof WebAssembly.Global) {
     const initialize = instance.exports.initialize;
     if (typeof initialize !== "function") {
       throw new Error(
-        "functional WASM input module omitted its initialize export",
+        "functional WASM runtime module omitted its initialize export",
       );
-    }
-    initialize();
-    if (options.argument === undefined) {
-      throw new FunctionalWasmBoundaryError({
-        code: "F4101",
-        kind: "invalid-argument",
-        path: "argument",
-        message: `functional WASM entry requires ${
-          describeFunctionalType(entry.parameter)
-        } argument; received undefined`,
-      });
     }
     try {
-      argument = encodeFunctionalWasmValue(
-        instance,
-        module,
-        entry.parameter,
-        options.argument,
-      );
+      initialize();
     } catch (cause) {
-      if (cause instanceof WebAssembly.RuntimeError) {
-        throwFunctionalWasmTrap(module, nodes, instance, cause);
+      throwFunctionalWasmTrap(module, nodes, instance, cause);
+    }
+  }
+  const invocationMark = heapTop instanceof WebAssembly.Global &&
+      artifact.automaticInvocationReset
+    ? markFunctionalWasmScratch(instance)
+    : undefined;
+  let argument: bigint | undefined;
+  const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
+  try {
+    if (entry.parameter !== undefined) {
+      if (options.argument === undefined) {
+        throw new FunctionalWasmBoundaryError({
+          code: "F4101",
+          kind: "invalid-argument",
+          path: "argument",
+          message: `functional WASM entry requires ${
+            describeFunctionalType(entry.parameter)
+          } argument; received undefined`,
+        });
       }
+      try {
+        argument = encodeFunctionalWasmValue(
+          instance,
+          module,
+          entry.parameter,
+          options.argument,
+        );
+      } catch (cause) {
+        if (cause instanceof WebAssembly.RuntimeError) {
+          throwFunctionalWasmTrap(module, nodes, instance, cause);
+        }
+        throw new FunctionalWasmBoundaryError({
+          code: "F4101",
+          kind: "invalid-argument",
+          path: "argument",
+          message: cause instanceof Error
+            ? cause.message
+            : `functional WASM argument encoding failed with ${String(cause)}`,
+        }, cause);
+      }
+    } else if (options.argument !== undefined) {
       throw new FunctionalWasmBoundaryError({
         code: "F4101",
         kind: "invalid-argument",
         path: "argument",
-        message: cause instanceof Error
-          ? cause.message
-          : `functional WASM argument encoding failed with ${String(cause)}`,
-      }, cause);
+        message: "functional WASM entry does not accept an argument",
+      });
     }
-  } else if (options.argument !== undefined) {
-    throw new FunctionalWasmBoundaryError({
-      code: "F4101",
-      kind: "invalid-argument",
-      path: "argument",
-      message: "functional WASM entry does not accept an argument",
-    });
-  }
-  const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
-  if (
-    argumentOwnership !== "bounded-borrow" &&
-    argumentOwnership !== "ownership-transfer"
-  ) {
-    throw new FunctionalWasmBoundaryError({
-      code: "F4101",
-      kind: "invalid-argument",
-      path: "argumentOwnership",
-      message:
-        `functional WASM argumentOwnership must be bounded-borrow or ownership-transfer; received ${
-          JSON.stringify(argumentOwnership)
-        }`,
-    });
-  }
-  try {
-    const heapBase = heapTop instanceof WebAssembly.Global ? Number(heapTop.value) >>> 0 : 0;
+    if (
+      argumentOwnership !== "bounded-borrow" &&
+      argumentOwnership !== "ownership-transfer"
+    ) {
+      throw new FunctionalWasmBoundaryError({
+        code: "F4101",
+        kind: "invalid-argument",
+        path: "argumentOwnership",
+        message:
+          `functional WASM argumentOwnership must be bounded-borrow or ownership-transfer; received ${
+            JSON.stringify(argumentOwnership)
+          }`,
+      });
+    }
+    const heapBase = entry.parameter === undefined
+      ? heapTopBeforeInitialization
+      : heapTop instanceof WebAssembly.Global
+      ? Number(heapTop.value) >>> 0
+      : 0;
     let result: number | bigint;
     try {
       result = (argument === undefined ? exportedMain() : exportedMain(argument)) as
@@ -268,8 +287,14 @@ async function runFunctionalWasmAttempt(
         : {}),
     };
   } finally {
-    if (argument !== undefined && argumentOwnership === "ownership-transfer") {
-      releaseEncodedFunctionalWasmValue(instance, argument);
+    try {
+      if (argument !== undefined && argumentOwnership === "ownership-transfer") {
+        releaseEncodedFunctionalWasmValue(instance, argument);
+      }
+    } finally {
+      if (invocationMark !== undefined) {
+        resetFunctionalWasmScratch(instance, invocationMark);
+      }
     }
   }
 }

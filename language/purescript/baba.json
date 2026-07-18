@@ -1,0 +1,15 @@
+{
+  "parser": {
+    "resolutions": [
+      {
+        "conflict": "c_495f4d8056c0b802",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_a768759840cf3119",
+        "prefer": "reduce",
+        "reduce": "constructor_pattern = IDENT"
+      }
+    ]
+  }
+}

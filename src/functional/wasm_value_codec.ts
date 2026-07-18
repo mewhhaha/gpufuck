@@ -77,6 +77,14 @@ export function resetFunctionalWasmScratch(
   }
   heapTop.value = mark;
   freeListHead.value = 0;
+  const groups = allocationGroups.get(instance);
+  if (groups !== undefined) {
+    for (const [root, allocations] of groups) {
+      if (allocations.some((allocation) => allocation.pointer >= mark)) {
+        groups.delete(root);
+      }
+    }
+  }
   for (const activeMark of marks) {
     if (activeMark >= mark) marks.delete(activeMark);
   }

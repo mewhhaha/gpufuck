@@ -24,17 +24,19 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 
 ## Repository map
 
-| Path                      | Responsibility                                                                              |
-| ------------------------- | ------------------------------------------------------------------------------------------- |
-| `functional.ts`           | Published language-neutral API                                                              |
-| `src/functional/`         | Functional ABI, optional IRs, compiler facade, linking, caches, evaluator, and Wasm backend |
-| `src/lazuli/`             | Shared packed semantic engine plus Lazuli compatibility API                                 |
-| `language/lazuli/`        | Baba grammar and generated parser/editor artifacts                                          |
-| `examples/functional-ir/` | Direct target-API examples                                                                  |
-| `examples/*-functional/`  | Independent source-language frontend examples and traces                                    |
-| `tests/`                  | Behavioral, differential, stress, cancellation, growth, and Wasm execution tests            |
-| `benchmarks/`             | Deno benchmark entry points                                                                 |
-| `tools/`                  | Profiling, comparison, parser, and editor-support scripts                                   |
+| Path                      | Responsibility                                                                               |
+| ------------------------- | -------------------------------------------------------------------------------------------- |
+| `functional.ts`           | Published language-neutral API                                                               |
+| `src/functional/`         | Functional ABI, optional IRs, compiler facade, linking, caches, evaluator, and Wasm backend  |
+| `src/lazuli/`             | Shared packed semantic engine plus Lazuli compatibility API                                  |
+| `language/lazuli/`        | Baba grammar and generated parser/editor artifacts                                           |
+| `examples/functional-ir/` | Direct target-API examples                                                                   |
+| `examples/*-functional/`  | Independent source-language frontend examples and traces                                     |
+| `src/gleam_functional/`   | Repository-only Gleam parser, strict lowering, module artifacts, and trace adapter           |
+| `src/purescript_profile/` | Repository-only stress profile for rows, capabilities, associated types, and rank-2 checking |
+| `tests/`                  | Behavioral, differential, stress, cancellation, growth, and Wasm execution tests             |
+| `benchmarks/`             | Deno benchmark entry points                                                                  |
+| `tools/`                  | Profiling, comparison, parser, and editor-support scripts                                    |
 
 The published package exports `functional.ts`. Repository-only compatibility and language example
 entry points are intentionally separate.
@@ -132,6 +134,10 @@ usually includes:
 5. Translate neutral diagnostics back to source files and terminology.
 6. Add a small accepted program, a rejected program, and an end-to-end Wasm execution test.
 7. Add or update a trace showing source, normalized surface, packed ABI, and resolved Core.
+
+Repository grammars use Baba and keep generated Wasm parser artifacts beside their source under
+`language/<frontend>/generated/`. Run the matching `generate:<frontend>` task after changing a
+grammar, and keep cursor-to-AST conversion in the frontend rather than the neutral compiler.
 
 Keep parsing and desugaring out of `src/functional/`. That directory is target-neutral and cannot
 acquire rules named after Lazuli, Haskell, Rust, OCaml, or another source language.

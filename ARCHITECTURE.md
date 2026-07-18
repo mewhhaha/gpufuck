@@ -669,7 +669,31 @@ ABI types.
 Specialization limits bound code growth. Constructors used as callables, host operations, very wide
 sets, and sites beyond the inline budget retain the general closure path without changing behavior.
 
-### 10.6 Runtime memory
+### 10.6 Storage planning and runtime memory
+
+[`storage_plan.ts`](src/functional/storage_plan.ts) runs after semantic Core resolution and before
+Wasm emission. It is deliberately a representation pass rather than a source ownership checker.
+Every closure, constructor function, and thunk that can require storage receives a durable decision:
+
+| Storage class       | Meaning                                                               |
+| ------------------- | --------------------------------------------------------------------- |
+| `static`            | Reachable for the lifetime of one instantiated module                 |
+| `scalar-local`      | Virtual/code-and-local representation with no allocation on that path |
+| `invocation-region` | Immutable graph storage bounded by one logical invocation             |
+| `owned`             | A boundary transfers responsibility for eventual release              |
+| `host-managed`      | The host retains lifetime responsibility and promises safe sharing    |
+
+A scalar-local closure can carry `escapeStorage: "invocation-region"`. That distinction is
+important: specialization may keep the common call path allocation-free without claiming that a
+first-class escape is stack-safe. Local recursive closures use invocation storage because their
+environment may contain a self reference. Global thunks remain static because memoized results can
+be reachable from the module's definition table after a call returns.
+
+Code generation consumes the plan and treats a missing decision as an invariant violation with the
+value kind and Core node attached. `planFunctionalModuleStorage()` exposes the same immutable plan
+to frontends. A Rust-like frontend can compare its move/borrow proof with the selected
+representation; a lazy frontend can inspect where thunks introduce invocation storage. Neither needs
+to encode those language-specific rules into Functional Core.
 
 General modules use aligned growing linear memory for closures, environments, constructors, thunks,
 text, bytes, arrays, slices, and boxed wide values. Allocation checks are reduced only where
@@ -680,9 +704,19 @@ markers for temporary boundary allocations. It is not a tracing collector. Funct
 allocates immutable graph objects, while ownership-transfer values can be reclaimed at explicit
 boundary points.
 
-The frontend must lower a language requiring tracing GC, regions, reference counting, or ownership
-into explicit runtime operations and host contracts. Functional Core does not silently choose one
+The frontend must lower persistent shared graphs into an explicit reference-counted or host-managed
+representation, or reject them. Scratch markers can reclaim a region only when no static definition,
+memoized global, result, or host borrow points into it. Gpufuck therefore does not reset the entire
+heap at an arbitrary public call boundary: doing so would invalidate global call-by-need results.
+The frontend must lower a language requiring tracing GC or another lifetime model into explicit
+runtime operations and host contracts. Functional Core does not silently choose one
 memory-management policy for every language.
+
+The standard runner initializes static values before marking the invocation region. When the plan
+contains no static thunk, it resets that region after decoding the public result, including failure
+paths and temporary encoded arguments. If a static thunk exists, the plan sets
+`automaticInvocationReset` to false and preserves the heap so memoized pointers remain valid. The
+explicit scratch API remains available to an embedding with stronger reachability knowledge.
 
 ### 10.7 Public value ABI
 
@@ -811,6 +845,14 @@ Lazuli exercises:
 The historical implementation names under `src/lazuli/` are shared physical machinery. New semantic
 features must be exposed through `src/functional/` contracts and must not depend on Lazuli keywords
 or parser structures.
+
+The repository's Baba-generated Gleam parser demonstrates the intended separation at module scale:
+its adapter owns Gleam syntax, visibility, pipeline desugaring, and the rule that public functions
+need complete artifact types; the neutral linker and GPU compiler only see strict Functional Surface
+modules. A smaller Baba-generated PureScript grammar parses an explicit-layout profile that
+exercises open rows, associated results, recursive capability evidence, and rank-2 checking without
+claiming full PureScript compatibility. Together they distinguish a usable source adapter from a
+backend-representation experiment.
 
 The old Brainfuck compiler remains only as historical and benchmark context. Its instruction format
 is not an intermediate representation for other languages.

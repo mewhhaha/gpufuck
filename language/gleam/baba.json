@@ -1,0 +1,14 @@
+{
+  "parser": {
+    "resolutions": [
+      {
+        "conflict": "c_49574f47f7fa509a",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_432c818ef2d21643",
+        "prefer": "shift"
+      }
+    ]
+  }
+}

@@ -72,6 +72,11 @@ import {
   type NumericPrimitiveKind,
   wideLiteralBits,
 } from "./wasm_numeric.ts";
+import {
+  createFunctionalStoragePlan,
+  type FunctionalStorageDecision,
+  type FunctionalStoragePlan,
+} from "./storage_plan.ts";
 
 const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
@@ -161,6 +166,7 @@ interface UncurriedWorker {
 export interface FunctionalWasmArtifact {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly specializedCallSites: number;
+  readonly automaticInvocationReset: boolean;
 }
 
 export function compileFunctionalWasmArtifact(
@@ -168,6 +174,8 @@ export function compileFunctionalWasmArtifact(
   nodes: readonly FunctionalCoreNode[],
   instrumentedFuel = false,
 ): FunctionalWasmArtifact {
+  const captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes);
+  const storagePlan = createFunctionalStoragePlan(module, nodes, captureAnalysis);
   const entry = functionalWasmEntry(module);
   const scalarResult = functionalHostScalarType(entry.result);
   const compactScalar = module.evaluationProfile === FunctionalEvaluationProfile.StrictEager &&
@@ -181,6 +189,8 @@ export function compileFunctionalWasmArtifact(
     const compactCompiler = new FunctionalWasmCompiler(
       module,
       nodes,
+      captureAnalysis,
+      storagePlan,
       true,
       instrumentedFuel,
     );
@@ -188,7 +198,14 @@ export function compileFunctionalWasmArtifact(
     if (compactBytes !== undefined) return compactCompiler.artifact(compactBytes);
   }
 
-  const compiler = new FunctionalWasmCompiler(module, nodes, false, instrumentedFuel);
+  const compiler = new FunctionalWasmCompiler(
+    module,
+    nodes,
+    captureAnalysis,
+    storagePlan,
+    false,
+    instrumentedFuel,
+  );
   return compiler.artifact(compiler.compile());
 }
 
@@ -197,6 +214,7 @@ class FunctionalWasmCompiler {
   readonly #nodes: readonly FunctionalCoreNode[];
   readonly #captureAnalysis: FunctionalWasmCaptureAnalysis;
   readonly #functionAnalysis: FunctionalWasmFunctionAnalysis;
+  readonly #storageDecisions: ReadonlyMap<string, FunctionalStorageDecision>;
   readonly #indirectFunctions: (WasmFunctionBody | undefined)[] = [];
   readonly #lambdaSlots: (number | undefined)[];
   readonly #recursiveLambdaOwners = new Map<number, number>();
@@ -217,6 +235,7 @@ class FunctionalWasmCompiler {
   readonly #hasLazyEvaluationBoundary: boolean;
   readonly #instrumentedFuel: boolean;
   readonly #compactRuntimeGlobals: CompactRuntimeGlobals;
+  readonly #automaticInvocationReset: boolean;
   #lambdaSetAnalysis: FunctionalLambdaSetAnalysis | undefined;
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
@@ -229,6 +248,8 @@ class FunctionalWasmCompiler {
   constructor(
     module: GpuFunctionalModule,
     nodes: readonly FunctionalCoreNode[],
+    captureAnalysis: FunctionalWasmCaptureAnalysis,
+    storagePlan: FunctionalStoragePlan,
     compactScalar: boolean,
     instrumentedFuel = false,
   ) {
@@ -236,6 +257,7 @@ class FunctionalWasmCompiler {
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
     this.#instrumentedFuel = instrumentedFuel;
+    this.#automaticInvocationReset = storagePlan.summary.automaticInvocationReset;
     this.#compactRuntimeGlobals = compactRuntimeGlobals(
       nodes,
       instrumentedFuel,
@@ -245,7 +267,13 @@ class FunctionalWasmCompiler {
         node.tag === FunctionalCoreTag.Let) &&
       node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
     );
-    this.#captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes);
+    this.#captureAnalysis = captureAnalysis;
+    this.#storageDecisions = new Map(
+      storagePlan.values.map((decision) => [
+        `${decision.valueKind}:${decision.coreNode}`,
+        decision,
+      ]),
+    );
     this.#functionAnalysis = new FunctionalWasmFunctionAnalysis(
       nodes,
       module.definitionRoots,
@@ -353,6 +381,7 @@ class FunctionalWasmCompiler {
     return {
       bytes,
       specializedCallSites: this.#specializedCallSiteCount,
+      automaticInvocationReset: this.#automaticInvocationReset,
     };
   }
 
@@ -1001,6 +1030,7 @@ class FunctionalWasmCompiler {
     constructorIndex: number,
     nodeIndex: number,
   ): void {
+    this.storageDecision(nodeIndex, "constructor");
     const arity = this.#module.constructorArities[constructorIndex];
     if (arity === undefined) {
       throw new Error(
@@ -1068,6 +1098,7 @@ class FunctionalWasmCompiler {
     lambdaNode: number,
     environment: FunctionalEnvironment,
   ): void {
+    this.storageDecision(lambdaNode, "closure");
     const lambda = this.node(lambdaNode);
     if (lambda.tag !== FunctionalCoreTag.Lambda) {
       throw new Error(
@@ -3071,6 +3102,7 @@ class FunctionalWasmCompiler {
     expressionNode: number,
     environment: FunctionalEnvironment,
   ): void {
+    this.storageDecision(expressionNode, "thunk");
     const slot = this.reserveIndirectFunction();
     const captured = this.prunedCaptures(
       expressionNode,
@@ -4319,6 +4351,7 @@ class FunctionalWasmCompiler {
   }
 
   lambdaSlot(lambdaNode: number): number {
+    this.storageDecision(lambdaNode, "closure");
     const existing = this.#lambdaSlots[lambdaNode];
     if (existing !== undefined) return existing;
     const lambda = this.node(lambdaNode);
@@ -4654,6 +4687,19 @@ class FunctionalWasmCompiler {
       throw new Error(`functional WASM compact module omitted required ${name} global`);
     }
     return index;
+  }
+
+  storageDecision(
+    coreNode: number,
+    valueKind: "closure" | "constructor" | "thunk",
+  ): FunctionalStorageDecision {
+    const decision = this.#storageDecisions.get(`${valueKind}:${coreNode}`);
+    if (decision === undefined) {
+      throw new Error(
+        `functional WASM ${valueKind} at core node ${coreNode} omitted its storage decision`,
+      );
+    }
+    return decision;
   }
 
   node(index: number): FunctionalCoreNode {

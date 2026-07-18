@@ -61,8 +61,8 @@ The package entry point is the language-neutral API:
 import { GpuFunctionalCompiler, requestWebGpuDevice } from "@mewhhaha/gpufuck";
 ```
 
-The bundled Lazuli, Haskell, OCaml, Rust, and 1SubML frontends are repository examples; they are not
-loaded by the published entry point.
+The bundled Lazuli, Gleam, Haskell, OCaml, Rust, and 1SubML frontends are repository examples; they
+are not loaded by the published entry point.
 
 ### Machines without a GPU
 
@@ -338,6 +338,33 @@ for host values. Gpufuck validates and enforces the selected boundary representa
 not infer a source language's ownership rules or provide a runtime borrow checker. Languages such as
 Rust must prove moves and borrows before lowering.
 
+After GPU compilation, `planFunctionalModuleStorage()` exposes the backend representation decisions
+for frontend audits and build tooling:
+
+```ts
+import { FunctionalStorageClass, planFunctionalModuleStorage } from "@mewhhaha/gpufuck";
+
+const storage = await planFunctionalModuleStorage(compilation.module);
+if (storage.summary.invocationRegionValues > 0) {
+  console.log("the module uses invocation-lifetime allocation");
+}
+```
+
+The plan keeps semantic Core independent of a memory policy. Captureless and directly used closures
+prefer scalar-local representation; module definitions and nullary constructors have static
+lifetime; escaping closures, local thunks, and recursive environments use the invocation region. An
+`escapeStorage` records the fallback when a value that is normally virtual becomes first-class.
+Ownership-transfer boundaries are `owned`, while frozen values remain `host-managed`.
+`summary.automaticInvocationReset` reports whether the standard runner can reclaim the invocation
+region after decoding the result. A module with a static memoized thunk keeps its heap because that
+thunk may retain values across calls.
+
+This division is intentional: a frontend proves source moves, borrows, affine use, and destructor
+ordering. Gpufuck validates the chosen host contract, computes captures and escape fallbacks, and
+selects the Wasm representation. Persistent shared graphs still require an explicit frontend/runtime
+strategy such as reference counting or host management; Functional Core does not silently add a
+tracing collector.
+
 ## Wasm boundary
 
 Direct execution accepts one concrete first-order argument and result, or an `Init -> result` entry.
@@ -395,6 +422,7 @@ lowering techniques, not complete compatibility with their source languages.
 
 | Frontend                                                | Boundary demonstrated                                                    |
 | ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [Gleam](examples/gleam-functional/README.md)            | Strict inference, ADTs, pipelines, and typed multi-module linking        |
 | [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, and rejection of mutation             |
 | [Haskell](examples/haskell-functional/README.md)        | Laziness, inference, dictionaries, GADTs, and recursive data             |
 | [OCaml](examples/ocaml-functional/README.md)            | Sequential scope, explicit recursion, variants, and lists                |
@@ -402,6 +430,7 @@ lowering techniques, not complete compatibility with their source languages.
 | [Lazuli](examples/lazuli/)                              | Reference syntax, indexed proofs, host values, and laziness              |
 | [Functional IR](examples/functional-ir/README.md)       | Direct effects, host `Init`, comptime code generation, and type programs |
 | [Type programming](examples/type-programming/README.md) | Idris2-style indices and Zig-style reflection experiments                |
+| [PureScript profile](examples/purescript-functional/)   | Open rows, functional dependencies, composed evidence, and rank-2 types  |
 
 Each source-language example has a trace task that writes the source, normalized surface, packed
 ABI, and GPU-resolved Core side by side. For example:
@@ -411,6 +440,11 @@ deno task trace:haskell-functional \
   examples/haskell-functional/tree.hs \
   examples/haskell-functional/tree.trace.md
 ```
+
+The Gleam example includes a three-module program whose generated trace makes source modules,
+normalized surface expressions, the packed ABI, and linked GPU-resolved Core directly comparable.
+The PureScript example is intentionally a type-system profile rather than a syntax frontend; its
+README separates the represented features from the remaining frontend work.
 
 ## Limits
 

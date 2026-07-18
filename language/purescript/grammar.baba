@@ -1,0 +1,54 @@
+token IDENT = /[A-Za-z_][A-Za-z0-9_']*/ ;
+token INTEGER = /[0-9]+/ ;
+skip WS = /[ \t\r\n]+/ ;
+skip COMMENT = /--[^\n\r]*/ ;
+
+module = header:module_header imports:import_declaration* declarations:declaration* ;
+module_header = "module" name:qualified_name "where" ";" ;
+import_declaration = "import" module:qualified_name ";" ;
+declaration = newtype_declaration | class_declaration | instance_declaration | type_signature | value_definition ;
+
+newtype_declaration = "newtype" name:IDENT parameters:IDENT* "=" constructor:IDENT "(" representation:source_type ")" ";" ;
+class_declaration = "class" name:IDENT parameters:IDENT+ dependency:functional_dependency? "where" "{" members:class_member* "}" ";" ;
+functional_dependency = "|" inputs:identifier_words "->" outputs:identifier_words ;
+identifier_words = head:IDENT tail:IDENT* ;
+class_member = name:IDENT "::" type:source_type ";" ;
+instance_declaration = "instance" name:IDENT "::" class:IDENT arguments:type_atom+ "where" "{" definitions:value_definition* "}" ";" ;
+type_signature = name:IDENT "::" type:source_type ";" ;
+value_definition = name:IDENT parameters:IDENT* "=" body:expr ";" ;
+
+source_type = forall_type | function_type ;
+forall_type = "forall" parameters:IDENT+ "." body:source_type ;
+function_type = parameter:type_application tail:function_type_tail? ;
+function_type_tail = "->" result:source_type ;
+type_application = head:type_atom arguments:type_atom* ;
+type_atom = record_type | grouped_type | named_type ;
+record_type = "{" fields:row_fields? tail:row_tail? "}" ;
+row_fields = head:row_field rest:row_field_tail* ;
+row_field_tail = "," value:row_field ;
+row_field = label:IDENT "::" type:source_type ;
+row_tail = "|" name:IDENT ;
+grouped_type = "(" body:source_type ")" ;
+named_type = name:qualified_name ;
+
+expr = case_expression | if_expression | lambda_expression | application ;
+case_expression = "case" value:expr "of" "{" arms:case_arm+ "}" ;
+case_arm = pattern:pattern "->" body:expr ";" ;
+if_expression = "if" condition:expr "then" consequent:expr "else" alternate:expr ;
+lambda_expression = "\\" parameters:IDENT+ "->" body:expr ;
+application = callee:postfix arguments:postfix* ;
+postfix = primary projections:projection* ;
+projection = "." field:IDENT ;
+primary = grouped_expression | integer_expression | boolean_expression | named_expression ;
+grouped_expression = "(" body:expr ")" ;
+integer_expression = value:INTEGER ;
+boolean_expression = truth | falsity ;
+truth = "true" ;
+falsity = "false" ;
+named_expression = name:qualified_name ;
+pattern = constructor_pattern | named_pattern ;
+constructor_pattern = constructor:IDENT arguments:IDENT* ;
+named_pattern = name:IDENT ;
+
+qualified_name = head:IDENT tail:qualified_name_tail* ;
+qualified_name_tail = "." value:IDENT ;
