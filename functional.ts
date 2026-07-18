@@ -123,18 +123,20 @@ export type {
   FunctionalEffectCoreModule,
   LoweredFunctionalEffectCoreModule,
 } from "./src/functional/effect_core_contract.ts";
+export { compileFunctionalModuleToWasm } from "./src/functional/wasm_artifacts.ts";
 export {
-  compileFunctionalModuleToWasm,
   type FunctionalWasmAsyncRunOptions,
-  FunctionalWasmBoundaryError,
   type FunctionalWasmExecution,
   type FunctionalWasmRunOptions,
-  FunctionalWasmRuntimeError,
   type FunctionalWasmStats,
   type FunctionalWasmValue,
   runFunctionalWasmModule,
   runFunctionalWasmModuleAsync,
-} from "./src/functional/wasm_codegen.ts";
+} from "./src/functional/wasm_execution.ts";
+export {
+  FunctionalWasmBoundaryError,
+  FunctionalWasmRuntimeError,
+} from "./src/functional/wasm_host_boundary.ts";
 export {
   FUNCTIONAL_WASM_VALUE_ABI_VERSION,
   FunctionalWasmValueAbi,

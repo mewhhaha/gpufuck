@@ -39,6 +39,7 @@ export interface FunctionalNumericFold {
 
 export class FunctionalWasmFunctionAnalysis {
   readonly #nodes: readonly FunctionalCoreNode[];
+  readonly #definitionRoots: readonly number[];
   readonly #functions = new Map<number, FunctionalFunctionShape>();
   readonly #loops = new Map<number, FunctionalFunctionShape>();
   readonly #numericFolds = new Map<number, FunctionalNumericFold>();
@@ -49,6 +50,7 @@ export class FunctionalWasmFunctionAnalysis {
 
   constructor(nodes: readonly FunctionalCoreNode[], definitionRoots: readonly number[]) {
     this.#nodes = nodes;
+    this.#definitionRoots = definitionRoots;
     for (const node of nodes) {
       if (node.tag !== FunctionalCoreTag.LetRec) continue;
       this.#recursiveFunctions.set(node.child0, { local: true, definition: undefined });
@@ -72,6 +74,38 @@ export class FunctionalWasmFunctionAnalysis {
 
   numericFold(lambdaNode: number): FunctionalNumericFold | undefined {
     return this.#numericFolds.get(lambdaNode);
+  }
+
+  reachableDefinitions(rootDefinitions: readonly number[]): ReadonlySet<number> {
+    const definitions = new Set<number>();
+    const visitedNodes = new Set<number>();
+    const pendingDefinitions = [...rootDefinitions];
+    while (pendingDefinitions.length > 0) {
+      const definition = pendingDefinitions.pop();
+      if (definition === undefined || definitions.has(definition)) continue;
+      const rootNode = this.#definitionRoots[definition];
+      if (rootNode === undefined) {
+        throw new Error(
+          `functional WASM reachability root d${definition} exceeds ${this.#definitionRoots.length} definitions`,
+        );
+      }
+      definitions.add(definition);
+      const pendingNodes = [rootNode];
+      while (pendingNodes.length > 0) {
+        const nodeIndex = pendingNodes.pop();
+        if (nodeIndex === undefined || visitedNodes.has(nodeIndex)) continue;
+        visitedNodes.add(nodeIndex);
+        const node = this.#node(nodeIndex);
+        if (node.tag === FunctionalCoreTag.Global) {
+          pendingDefinitions.push(node.payload);
+          continue;
+        }
+        for (const child of coreNodeChildren(node)) {
+          if (child !== FUNCTIONAL_NO_INDEX) pendingNodes.push(child);
+        }
+      }
+    }
+    return definitions;
   }
 
   tailArguments(
@@ -603,6 +637,34 @@ export class FunctionalWasmFunctionAnalysis {
       );
     }
     return node;
+  }
+}
+
+function coreNodeChildren(node: FunctionalCoreNode): readonly number[] {
+  switch (node.tag) {
+    case FunctionalCoreTag.SignedInteger64:
+    case FunctionalCoreTag.Float64:
+    case FunctionalCoreTag.Integer:
+    case FunctionalCoreTag.Float32:
+    case FunctionalCoreTag.Boolean:
+    case FunctionalCoreTag.Local:
+    case FunctionalCoreTag.Global:
+    case FunctionalCoreTag.Constructor:
+      return [];
+    case FunctionalCoreTag.Lambda:
+    case FunctionalCoreTag.Unary:
+    case FunctionalCoreTag.NumericConvert:
+    case FunctionalCoreTag.PatternBind:
+      return [node.child0];
+    case FunctionalCoreTag.Apply:
+    case FunctionalCoreTag.Let:
+    case FunctionalCoreTag.LetRec:
+    case FunctionalCoreTag.Binary:
+    case FunctionalCoreTag.Case:
+    case FunctionalCoreTag.CaseArm:
+      return [node.child0, node.child1];
+    case FunctionalCoreTag.If:
+      return [node.child0, node.child1, node.child2];
   }
 }
 

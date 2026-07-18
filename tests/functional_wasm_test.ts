@@ -1189,12 +1189,16 @@ Deno.test("direct scalar exports bypass initialization required by an aggregate 
     const bytes = await compileFunctionalModuleToWasm(compilation.module);
     const instantiated = await WebAssembly.instantiate(bytes);
     const run = instantiated.instance.exports.run;
+    const initialize = instantiated.instance.exports.initialize;
     const heapTop = instantiated.instance.exports.heapTop;
     ok(typeof run === "function");
+    ok(typeof initialize === "function");
     ok(heapTop instanceof WebAssembly.Global);
     const heapBeforeCall = heapTop.value;
     equal(run((41n << 3n) | 1n), 42);
     equal(heapTop.value, heapBeforeCall);
+    initialize();
+    equal(Number(heapTop.value) - Number(heapBeforeCall), 24);
     ok(
       WebAssembly.Module.exports(new WebAssembly.Module(bytes)).some((entry) =>
         entry.kind === "memory"

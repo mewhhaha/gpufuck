@@ -12,11 +12,8 @@ import {
   FunctionalNumericConversion,
   FunctionalUnaryOperator,
 } from "./abi.ts";
-import {
-  type FunctionalWasmExecution,
-  FunctionalWasmRuntimeError,
-  runBoundedFunctionalWasmModule,
-} from "./wasm_codegen.ts";
+import { type FunctionalWasmExecution, runBoundedFunctionalWasmModule } from "./wasm_execution.ts";
+import { FunctionalWasmRuntimeError } from "./wasm_host_boundary.ts";
 import type { FunctionalWasmValue } from "./wasm_value_codec.ts";
 
 export interface FunctionalEvaluationOptions {

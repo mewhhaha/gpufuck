@@ -40,7 +40,7 @@ import type {
   FunctionalSurfaceExpression,
   FunctionalSurfaceTypeDeclaration,
 } from "./surface_builder.ts";
-import { functionalResolvedCoreFingerprint } from "./wasm_codegen.ts";
+import { functionalResolvedCoreFingerprint } from "./wasm_artifacts.ts";
 
 const DEFAULT_MAXIMUM_COMPTIME_STEPS = 1_000_000;
 const DEFAULT_MAXIMUM_OUTPUT_NODES = 4_096;
