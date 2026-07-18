@@ -95,6 +95,27 @@ async function runFunctionalWasmAttempt(
   maximumSteps?: number,
 ): Promise<FunctionalWasmExecution & { readonly semanticSteps?: number }> {
   options.signal?.throwIfAborted();
+  const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
+  if (
+    argumentOwnership !== "bounded-borrow" &&
+    argumentOwnership !== "ownership-transfer"
+  ) {
+    throw new FunctionalWasmBoundaryError({
+      code: "F4101",
+      kind: "invalid-argument",
+      path: "argumentOwnership",
+      message:
+        `functional WASM argumentOwnership must be bounded-borrow or ownership-transfer; received ${
+          JSON.stringify(argumentOwnership)
+        }`,
+    });
+  }
+  const maximumResultNodes = options.maximumResultNodes ?? 2_047;
+  if (!Number.isSafeInteger(maximumResultNodes) || maximumResultNodes < 1) {
+    throw new RangeError(
+      `functional WASM maximumResultNodes must be a positive safe integer; received ${maximumResultNodes}`,
+    );
+  }
   if (!allowSuspendingHostOperations) {
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
@@ -113,6 +134,24 @@ async function runFunctionalWasmAttempt(
   }
   const nodes = await module.readCoreNodes();
   const entry = functionalWasmEntry(module);
+  if (entry.parameter !== undefined && options.argument === undefined) {
+    throw new FunctionalWasmBoundaryError({
+      code: "F4101",
+      kind: "invalid-argument",
+      path: "argument",
+      message: `functional WASM entry requires ${
+        describeFunctionalType(entry.parameter)
+      } argument; received undefined`,
+    });
+  }
+  if (entry.parameter === undefined && options.argument !== undefined) {
+    throw new FunctionalWasmBoundaryError({
+      code: "F4101",
+      kind: "invalid-argument",
+      path: "argument",
+      message: "functional WASM entry does not accept an argument",
+    });
+  }
   const instrumented = maximumSteps === undefined
     ? undefined
     : await fuelInstrumentedWasm(module, nodes);
@@ -169,25 +208,14 @@ async function runFunctionalWasmAttempt(
     ? beginFunctionalWasmArena(instance)
     : undefined;
   let argument: bigint | undefined;
-  const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
   try {
     if (entry.parameter !== undefined) {
-      if (options.argument === undefined) {
-        throw new FunctionalWasmBoundaryError({
-          code: "F4101",
-          kind: "invalid-argument",
-          path: "argument",
-          message: `functional WASM entry requires ${
-            describeFunctionalType(entry.parameter)
-          } argument; received undefined`,
-        });
-      }
       try {
         argument = encodeFunctionalWasmValue(
           instance,
           module,
           entry.parameter,
-          options.argument,
+          options.argument!,
         );
       } catch (cause) {
         if (cause instanceof WebAssembly.RuntimeError) {
@@ -202,27 +230,6 @@ async function runFunctionalWasmAttempt(
             : `functional WASM argument encoding failed with ${String(cause)}`,
         }, cause);
       }
-    } else if (options.argument !== undefined) {
-      throw new FunctionalWasmBoundaryError({
-        code: "F4101",
-        kind: "invalid-argument",
-        path: "argument",
-        message: "functional WASM entry does not accept an argument",
-      });
-    }
-    if (
-      argumentOwnership !== "bounded-borrow" &&
-      argumentOwnership !== "ownership-transfer"
-    ) {
-      throw new FunctionalWasmBoundaryError({
-        code: "F4101",
-        kind: "invalid-argument",
-        path: "argumentOwnership",
-        message:
-          `functional WASM argumentOwnership must be bounded-borrow or ownership-transfer; received ${
-            JSON.stringify(argumentOwnership)
-          }`,
-      });
     }
     const heapBase = entry.parameter === undefined
       ? heapTopBeforeInitialization
@@ -245,7 +252,7 @@ async function runFunctionalWasmAttempt(
         module,
         entry.result,
         result,
-        options.maximumResultNodes ?? 2_047,
+        maximumResultNodes,
       );
     } catch (cause) {
       if (cause instanceof FunctionalWasmValueError) {
@@ -291,7 +298,7 @@ async function runFunctionalWasmAttempt(
     };
   } finally {
     try {
-      if (argument !== undefined && argumentOwnership === "ownership-transfer") {
+      if (argument !== undefined && invocationArena === undefined) {
         releaseEncodedFunctionalWasmValue(instance, argument);
       }
     } finally {

@@ -101,6 +101,7 @@
       "src/functional/wasm_owned_value.ts",
       "src/functional/wasm_owned_runtime.ts",
       "src/functional/wasm_runtime_binary.ts",
+      "src/functional/wasm_runtime_emitter.ts",
       "src/functional/wasm_runtime_layout.ts",
       "src/functional/wasm_value_codec.ts",
       "src/lazuli/abi.ts",

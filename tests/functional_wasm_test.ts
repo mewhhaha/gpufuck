@@ -23,8 +23,11 @@ import {
   FunctionalUnaryOperator,
   FunctionalWasmBoundaryError,
   type FunctionalWasmExecution,
+  type FunctionalWasmInit,
   FunctionalWasmIntrinsic,
+  type FunctionalWasmRunOptions,
   FunctionalWasmRuntimeError,
+  type FunctionalWasmValue,
   FunctionalWasmValueAbi,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
@@ -543,6 +546,52 @@ Deno.test("round-trips text, bytes, arrays, slices, and resources through WebAss
   }
 });
 
+Deno.test("reclaims bounded-borrow arguments when static thunks disable arena reset", async () => {
+  const integer: FunctionalType = { kind: "integer" };
+  const pair: FunctionalType = { kind: "tuple", values: [integer, integer] };
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "unused",
+      parameters: [],
+      annotation: null,
+      body: surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.integer(1),
+        surface.integer(2),
+      ),
+    }, {
+      name: "main",
+      parameters: ["value"],
+      annotation: { kind: "function", parameter: pair, result: pair },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("bounded-borrow cleanup fixture did not compile");
+  try {
+    const storage = await planFunctionalModuleStorage(compilation.module);
+    equal(storage.summary.automaticArenaReset, false);
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      argument: {
+        kind: "tuple",
+        values: [{ kind: "integer", value: 1 }, { kind: "integer", value: 2 }],
+      },
+    });
+    const freeListHead = execution.instance.exports.freeListHead;
+    const allocate = execution.instance.exports.allocate;
+    ok(freeListHead instanceof WebAssembly.Global);
+    ok(typeof allocate === "function");
+    const reclaimedPointer = Number(freeListHead.value);
+    ok(reclaimedPointer > 0);
+    equal(allocate(32), reclaimedPointer);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("nested WebAssembly arenas reset in order without consuming owned free blocks", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
@@ -819,6 +868,71 @@ Deno.test("arena encoding reclaims partial allocations after a boundary mismatch
     );
     equal(allocate(24), arena.mark);
     arena.reset();
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("cyclic structured arguments fail after reclaiming partial allocations", async () => {
+  const loopType: FunctionalType = { kind: "named", name: "Loop", arguments: [] };
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.apply(
+        surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+        surface.integer(0),
+        surface.integer(0),
+      ),
+    }],
+    [{
+      name: "Loop",
+      parameters: [],
+      constructors: [{
+        name: "Node",
+        fields: [{ name: "label", type: FunctionalHostTypes.text }, {
+          name: "next",
+          type: loopType,
+        }],
+      }],
+    }],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("cyclic argument fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const freeListHead = instance.exports.freeListHead;
+    const allocate = instance.exports.allocate;
+    ok(typeof initialize === "function");
+    ok(freeListHead instanceof WebAssembly.Global);
+    ok(typeof allocate === "function");
+    initialize();
+
+    const fields: FunctionalWasmValue[] = [{ kind: "text", value: "x" }];
+    const cyclicValue: FunctionalWasmValue = {
+      kind: "constructor",
+      name: "Node",
+      fields,
+    };
+    fields.push(cyclicValue);
+    throws(
+      () =>
+        encodeFunctionalWasmOwnedValue(
+          instance,
+          compilation.module,
+          loopType,
+          cyclicValue,
+        ),
+      /cyclic constructor "Node" value/,
+    );
+    const reclaimedPointer = Number(freeListHead.value);
+    ok(reclaimedPointer > 0);
+    equal(allocate(24), reclaimedPointer);
   } finally {
     compilation.module.destroy();
   }
@@ -1473,7 +1587,7 @@ Deno.test("returns structured tuples through the stable WebAssembly aggregate AB
   }
 });
 
-Deno.test("decodes deeply nested WebAssembly values without using the JavaScript call stack", async () => {
+Deno.test("round-trips deeply nested WebAssembly values without using the JavaScript call stack", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
       name: "main",
@@ -1490,52 +1604,47 @@ Deno.test("decodes deeply nested WebAssembly values without using the JavaScript
     0,
   );
   const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
-  if (!compilation.ok) throw new Error("deep decoder fixture did not compile");
+  if (!compilation.ok) throw new Error("deep boundary fixture did not compile");
   try {
     const bytes = await compileFunctionalModuleToWasm(compilation.module);
     const { instance } = await WebAssembly.instantiate(bytes);
     const initialize = instance.exports.initialize;
-    const allocate = instance.exports.allocate;
-    const memory = instance.exports.memory;
     ok(typeof initialize === "function");
-    ok(typeof allocate === "function");
-    ok(memory instanceof WebAssembly.Memory);
     initialize();
-    const pairConstructor = compilation.module.constructorNames.indexOf(
-      FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
-    );
-    ok(pairConstructor >= 0);
-
-    const integer: FunctionalType = { kind: "integer" };
-    let deepType: FunctionalType = { kind: "integer" };
-    let deepValue = 1n;
-    for (let depth = 0; depth < 10_000; depth++) {
-      const pointer = allocate(32) as number;
-      const view = new DataView(memory.buffer);
-      view.setUint32(pointer, FunctionalWasmValueAbi.objectKinds.constructor, true);
-      view.setUint32(pointer + 4, pairConstructor, true);
-      view.setUint32(pointer + 8, 2, true);
-      view.setBigInt64(pointer + 16, (BigInt(depth) << 3n) | 1n, true);
-      view.setBigInt64(pointer + 24, deepValue, true);
-      deepValue = BigInt(pointer);
-      deepType = { kind: "tuple", values: [integer, deepType] };
-    }
-
-    let decoded = decodeFunctionalWasmValue(
-      instance,
-      compilation.module,
-      deepType,
-      deepValue,
-      20_001,
-    );
-    for (let depth = 9_999; depth >= 0; depth--) {
-      if (decoded.kind !== "tuple") {
-        throw new Error(`deep decoder returned ${decoded.kind} at depth ${depth}`);
+    await withFunctionalWasmArena(instance, (arena) => {
+      const integer: FunctionalType = { kind: "integer" };
+      let deepType: FunctionalType = integer;
+      let deepValue: FunctionalWasmValue = { kind: "integer", value: 0 };
+      for (let depth = 0; depth < 10_000; depth++) {
+        deepType = { kind: "tuple", values: [integer, deepType] };
+        deepValue = {
+          kind: "tuple",
+          values: [{ kind: "integer", value: depth }, deepValue],
+        };
       }
-      deepStrictEqual(decoded.values[0], { kind: "integer", value: depth });
-      decoded = decoded.values[1];
-    }
-    deepStrictEqual(decoded, { kind: "integer", value: 0 });
+
+      const encodedValue = encodeFunctionalWasmArenaValue(
+        arena,
+        compilation.module,
+        deepType,
+        deepValue,
+      );
+      let decoded = decodeFunctionalWasmValue(
+        instance,
+        compilation.module,
+        deepType,
+        encodedValue,
+        20_001,
+      );
+      for (let depth = 9_999; depth >= 0; depth--) {
+        if (decoded.kind !== "tuple") {
+          throw new Error(`deep decoder returned ${decoded.kind} at depth ${depth}`);
+        }
+        deepStrictEqual(decoded.values[0], { kind: "integer", value: depth });
+        decoded = decoded.values[1];
+      }
+      deepStrictEqual(decoded, { kind: "integer", value: 0 });
+    });
   } finally {
     compilation.module.destroy();
   }
@@ -2535,6 +2644,133 @@ Deno.test("preserves frontend-demanded order for effectful host operations", asy
     });
     deepStrictEqual(execution.value, { kind: "integer", value: 3 });
     deepStrictEqual(observed, [1, 2]);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects invalid result bounds before running host effects", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    hostInitModule(
+      surface.apply(surface.name("observe"), surface.integer(1)),
+    ),
+  );
+  if (!compilation.ok) throw new Error("early result-bound fixture did not compile");
+  const observed: number[] = [];
+  try {
+    await rejects(
+      () =>
+        runFunctionalWasmModule(compilation.module, {
+          maximumResultNodes: 0,
+          init: {
+            Environment: {
+              base: { kind: "integer", value: 0 },
+              increment: (argument) => argument,
+              observe: (argument) => {
+                if (argument.kind === "integer") observed.push(argument.value);
+                return argument;
+              },
+            },
+          },
+        }),
+      /maximumResultNodes must be a positive safe integer; received 0/,
+    );
+    deepStrictEqual(observed, []);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects invalid argument ownership before reading host initialization", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    hostInitModule(surface.name("base")),
+  );
+  if (!compilation.ok) throw new Error("early ownership fixture did not compile");
+  const environment = {
+    base: { kind: "integer", value: 0 } as const,
+    increment: (argument: FunctionalWasmValue) => argument,
+    observe: (argument: FunctionalWasmValue) => argument,
+  };
+  let initializationReads = 0;
+  const init = new Proxy<FunctionalWasmInit>({}, {
+    get(_target, property) {
+      if (property !== "Environment") return undefined;
+      initializationReads += 1;
+      return environment;
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      if (property !== "Environment") return undefined;
+      initializationReads += 1;
+      return { configurable: true, enumerable: true, value: environment };
+    },
+  });
+  const options: FunctionalWasmRunOptions = {
+    init,
+    argumentOwnership: "invalid" as NonNullable<
+      FunctionalWasmRunOptions["argumentOwnership"]
+    >,
+  };
+  try {
+    await rejects(
+      () => runFunctionalWasmModule(compilation.module, options),
+      (error) => {
+        ok(error instanceof FunctionalWasmBoundaryError);
+        equal(error.path, "argumentOwnership");
+        return true;
+      },
+    );
+    equal(initializationReads, 0);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects a missing entry argument before WebAssembly execution", async () => {
+  const integer: FunctionalType = { kind: "integer" };
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: { kind: "function", parameter: integer, result: integer },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("missing argument fixture did not compile");
+  try {
+    await rejects(
+      () => runFunctionalWasmModule(compilation.module),
+      (error) => {
+        ok(error instanceof FunctionalWasmBoundaryError);
+        equal(error.path, "argument");
+        return true;
+      },
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects an unexpected entry argument before WebAssembly execution", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(surface.integer(1)),
+  );
+  if (!compilation.ok) throw new Error("unexpected argument fixture did not compile");
+  try {
+    await rejects(
+      () =>
+        runFunctionalWasmModule(compilation.module, {
+          argument: { kind: "integer", value: 1 },
+        }),
+      (error) => {
+        ok(error instanceof FunctionalWasmBoundaryError);
+        equal(error.path, "argument");
+        return true;
+      },
+    );
   } finally {
     compilation.module.destroy();
   }

@@ -10,6 +10,7 @@ import {
 } from "../functional.ts";
 import {
   encodeCompactScalarWasmModule,
+  FunctionalWasmFunctionType,
   type WasmFunctionBody,
   WasmInstructions,
   WasmValueType,
@@ -307,14 +308,13 @@ function controlFlowBaseline(): Uint8Array<ArrayBuffer> {
   instructions.branch(0);
   instructions.emit(0x0b, 0x00, 0x0b);
   const body: WasmFunctionBody = {
-    typeIndex: 3,
+    typeIndex: FunctionalWasmFunctionType.NullaryI32,
     localTypes: instructions.localTypes,
     instructions: instructions.bytes,
     usesMemory: false,
     usesIndirectCalls: false,
   };
   return encodeCompactScalarWasmModule([body], 0, [], {
-    includesRuntimeFaults: false,
-    instrumentedFuel: false,
+    runtimeGlobals: {},
   });
 }

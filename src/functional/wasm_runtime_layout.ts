@@ -12,6 +12,17 @@ export const FunctionalWasmRuntimeGlobal = Object.freeze(
   } as const,
 );
 
+export interface FunctionalWasmCompactRuntimeGlobals {
+  readonly fault?: {
+    readonly code: number;
+    readonly node: number;
+  };
+  readonly fuel?: {
+    readonly remaining: number;
+    readonly steps: number;
+  };
+}
+
 export const FUNCTIONAL_WASM_ALLOCATION_MAGIC = 0x4750_5541;
 export const FUNCTIONAL_WASM_FREE_BLOCK_MAGIC = 0x4750_5546;
 export const FUNCTIONAL_WASM_MINIMUM_ALLOCATION_BYTE_LENGTH = 16;

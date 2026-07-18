@@ -164,113 +164,247 @@ export function encodeFunctionalWasmValue(
   };
   const allocateConstructor = (constructorIndex: number, fields: readonly bigint[]): bigint =>
     allocateObject(CONSTRUCTOR_OBJECT_KIND, constructorIndex, fields);
+  type EncodeFrame =
+    | {
+      readonly kind: "value";
+      readonly expected: FunctionalType;
+      readonly input: FunctionalWasmValue;
+    }
+    | {
+      readonly kind: "object";
+      readonly objectKind: number;
+      readonly payload: number;
+      readonly fieldCount: number;
+      readonly source: object;
+    };
   const encode = (expected: FunctionalType, input: FunctionalWasmValue): bigint => {
-    if (expected.kind === "integer") {
-      if (input.kind !== "integer") throw wasmArgumentTypeMismatch(expected, input);
+    const pending: EncodeFrame[] = [{ kind: "value", expected, input }];
+    const encodedFields: bigint[] = [];
+    const activeValues = new WeakSet<object>();
+    const enterStructuredValue = (source: object, valueKind: string): void => {
+      if (activeValues.has(source)) {
+        throw new TypeError(`functional WASM argument contains a cyclic ${valueKind} value`);
+      }
+      activeValues.add(source);
+    };
+    while (pending.length !== 0) {
+      const frame = pending.pop()!;
+      if (frame.kind === "object") {
+        const firstField = encodedFields.length - frame.fieldCount;
+        if (firstField < 0) {
+          throw new Error(
+            `functional WASM ${frame.objectKind} object expected ${frame.fieldCount} encoded fields; received ${encodedFields.length}`,
+          );
+        }
+        const fields = encodedFields.splice(firstField, frame.fieldCount);
+        encodedFields.push(allocateObject(frame.objectKind, frame.payload, fields));
+        activeValues.delete(frame.source);
+        continue;
+      }
+
+      const currentType = frame.expected;
+      const currentValue = frame.input;
+      if (currentType.kind === "integer") {
+        if (currentValue.kind !== "integer") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        if (
+          !Number.isInteger(currentValue.value) || currentValue.value < -2_147_483_648 ||
+          currentValue.value > 2_147_483_647
+        ) {
+          throw new RangeError(
+            `functional WASM i32 argument is out of range: ${currentValue.value}`,
+          );
+        }
+        encodedFields.push((BigInt(currentValue.value | 0) << 3n) | 1n);
+        continue;
+      }
+      if (currentType.kind === "boolean") {
+        if (currentValue.kind !== "boolean") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        encodedFields.push((BigInt(currentValue.value ? 1 : 0) << 3n) | 2n);
+        continue;
+      }
+      if (currentType.kind === "unit") {
+        if (currentValue.kind !== "unit") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        const constructorIndex = module.constructorNames.indexOf(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME);
+        if (constructorIndex < 0) {
+          throw new Error("functional WASM input omitted unit constructor");
+        }
+        encodedFields.push(allocateConstructor(constructorIndex, []));
+        continue;
+      }
+      if (currentType.kind === "signed-integer-64") {
+        if (currentValue.kind !== "signed-integer-64") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        encodedFields.push(allocateObject(
+          NUMERIC_OBJECT_KIND,
+          FunctionalWasmValueAbi.numericKinds.signedInteger64,
+          [currentValue.value],
+        ));
+        continue;
+      }
+      if (currentType.kind === "float-32") {
+        if (currentValue.kind !== "float-32") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        encodedFields.push(allocateObject(
+          NUMERIC_OBJECT_KIND,
+          FunctionalWasmValueAbi.numericKinds.float32,
+          [BigInt(float32Bits(currentValue.value))],
+        ));
+        continue;
+      }
+      if (currentType.kind === "float-64") {
+        if (currentValue.kind !== "float-64") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        encodedFields.push(allocateObject(
+          NUMERIC_OBJECT_KIND,
+          FunctionalWasmValueAbi.numericKinds.float64,
+          [BigInt.asIntN(64, float64Bits(currentValue.value))],
+        ));
+        continue;
+      }
+      if (currentType.kind === "function") {
+        throw new TypeError("functional WASM ABI does not accept host function arguments");
+      }
+      if (currentType.kind === "named" && currentType.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+        if (currentValue.kind !== "text") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        encodedFields.push(
+          allocateBytes(TEXT_OBJECT_KIND, new TextEncoder().encode(currentValue.value)),
+        );
+        continue;
+      }
+      if (currentType.kind === "named" && currentType.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+        if (currentValue.kind !== "bytes") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        encodedFields.push(allocateBytes(BYTES_OBJECT_KIND, currentValue.value));
+        continue;
+      }
       if (
-        !Number.isInteger(input.value) || input.value < -2_147_483_648 ||
-        input.value > 2_147_483_647
+        currentType.kind === "named" &&
+        (currentType.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
+          currentType.name === FUNCTIONAL_SLICE_TYPE_NAME)
       ) {
-        throw new RangeError(`functional WASM i32 argument is out of range: ${input.value}`);
+        const valueKind = currentType.name === FUNCTIONAL_ARRAY_TYPE_NAME ? "array" : "slice";
+        if (currentValue.kind !== valueKind) {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        const elementType = currentType.arguments[0];
+        if (elementType === undefined || currentType.arguments.length !== 1) {
+          throw new TypeError(`${valueKind} boundary type requires exactly one element type`);
+        }
+        enterStructuredValue(currentValue, valueKind);
+        pending.push({
+          kind: "object",
+          objectKind: valueKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
+          payload: 0,
+          fieldCount: currentValue.values.length,
+          source: currentValue,
+        });
+        for (let index = currentValue.values.length - 1; index >= 0; index--) {
+          pending.push({
+            kind: "value",
+            expected: elementType,
+            input: currentValue.values[index]!,
+          });
+        }
+        continue;
       }
-      return (BigInt(input.value | 0) << 3n) | 1n;
-    }
-    if (expected.kind === "boolean") {
-      if (input.kind !== "boolean") throw wasmArgumentTypeMismatch(expected, input);
-      return (BigInt(input.value ? 1 : 0) << 3n) | 2n;
-    }
-    if (expected.kind === "unit") {
-      if (input.kind !== "unit") throw wasmArgumentTypeMismatch(expected, input);
-      const constructorIndex = module.constructorNames.indexOf(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME);
-      if (constructorIndex < 0) throw new Error("functional WASM input omitted unit constructor");
-      return allocateConstructor(constructorIndex, []);
-    }
-    if (expected.kind === "signed-integer-64") {
-      if (input.kind !== "signed-integer-64") throw wasmArgumentTypeMismatch(expected, input);
-      return allocateObject(
-        NUMERIC_OBJECT_KIND,
-        FunctionalWasmValueAbi.numericKinds.signedInteger64,
-        [input.value],
-      );
-    }
-    if (expected.kind === "float-32") {
-      if (input.kind !== "float-32") throw wasmArgumentTypeMismatch(expected, input);
-      return allocateObject(
-        NUMERIC_OBJECT_KIND,
-        FunctionalWasmValueAbi.numericKinds.float32,
-        [BigInt(float32Bits(input.value))],
-      );
-    }
-    if (expected.kind === "float-64") {
-      if (input.kind !== "float-64") throw wasmArgumentTypeMismatch(expected, input);
-      return allocateObject(
-        NUMERIC_OBJECT_KIND,
-        FunctionalWasmValueAbi.numericKinds.float64,
-        [BigInt.asIntN(64, float64Bits(input.value))],
-      );
-    }
-    if (expected.kind === "function") {
-      throw new TypeError("functional WASM ABI does not accept host function arguments");
-    }
-    if (expected.kind === "named" && expected.name === FUNCTIONAL_TEXT_TYPE_NAME) {
-      if (input.kind !== "text") throw wasmArgumentTypeMismatch(expected, input);
-      return allocateBytes(TEXT_OBJECT_KIND, new TextEncoder().encode(input.value));
-    }
-    if (expected.kind === "named" && expected.name === FUNCTIONAL_BYTES_TYPE_NAME) {
-      if (input.kind !== "bytes") throw wasmArgumentTypeMismatch(expected, input);
-      return allocateBytes(BYTES_OBJECT_KIND, input.value);
-    }
-    if (
-      expected.kind === "named" &&
-      (expected.name === FUNCTIONAL_ARRAY_TYPE_NAME || expected.name === FUNCTIONAL_SLICE_TYPE_NAME)
-    ) {
-      const expectedKind = expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ? "array" : "slice";
-      if (input.kind !== expectedKind) throw wasmArgumentTypeMismatch(expected, input);
-      const elementType = expected.arguments[0];
-      if (elementType === undefined || expected.arguments.length !== 1) {
-        throw new TypeError(`${expectedKind} boundary type requires exactly one element type`);
+      if (
+        currentType.kind === "named" &&
+        currentType.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
+      ) {
+        if (currentValue.kind !== "resource") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        if (
+          !Number.isInteger(currentValue.id) || currentValue.id < 0 || currentValue.id > 0xffffffff
+        ) {
+          throw new RangeError(`functional WASM resource id is outside u32: ${currentValue.id}`);
+        }
+        encodedFields.push(allocateObject(RESOURCE_OBJECT_KIND, currentValue.id, []));
+        continue;
       }
-      return allocateObject(
-        expectedKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
-        0,
-        input.values.map((element) => encode(elementType, element)),
-      );
-    }
-    if (expected.kind === "named" && expected.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
-      if (input.kind !== "resource") throw wasmArgumentTypeMismatch(expected, input);
-      if (!Number.isInteger(input.id) || input.id < 0 || input.id > 0xffffffff) {
-        throw new RangeError(`functional WASM resource id is outside u32: ${input.id}`);
+      if (currentType.kind === "tuple") {
+        if (currentValue.kind !== "tuple") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        const constructorIndex = module.constructorNames.indexOf(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME);
+        if (constructorIndex < 0) {
+          throw new Error("functional WASM input omitted tuple constructor");
+        }
+        enterStructuredValue(currentValue, "tuple");
+        pending.push({
+          kind: "object",
+          objectKind: CONSTRUCTOR_OBJECT_KIND,
+          payload: constructorIndex,
+          fieldCount: 2,
+          source: currentValue,
+        });
+        pending.push({
+          kind: "value",
+          expected: currentType.values[1],
+          input: currentValue.values[1],
+        });
+        pending.push({
+          kind: "value",
+          expected: currentType.values[0],
+          input: currentValue.values[0],
+        });
+        continue;
       }
-      return allocateObject(RESOURCE_OBJECT_KIND, input.id, []);
+      if (currentValue.kind !== "constructor") {
+        throw wasmArgumentTypeMismatch(currentType, currentValue);
+      }
+      const constructorIndex = module.constructorNames.indexOf(currentValue.name);
+      if (constructorIndex < 0) {
+        throw new TypeError(
+          `functional WASM argument names unknown constructor ${JSON.stringify(currentValue.name)}`,
+        );
+      }
+      const fieldTypes = functionalStructuredFieldTypes(
+        module,
+        currentType,
+        currentValue.name,
+      );
+      if (fieldTypes.length !== currentValue.fields.length) {
+        throw new TypeError(
+          `functional WASM argument constructor ${
+            JSON.stringify(currentValue.name)
+          } expects ${fieldTypes.length} fields; received ${currentValue.fields.length}`,
+        );
+      }
+      enterStructuredValue(currentValue, `constructor ${JSON.stringify(currentValue.name)}`);
+      pending.push({
+        kind: "object",
+        objectKind: CONSTRUCTOR_OBJECT_KIND,
+        payload: constructorIndex,
+        fieldCount: fieldTypes.length,
+        source: currentValue,
+      });
+      for (let index = fieldTypes.length - 1; index >= 0; index--) {
+        pending.push({
+          kind: "value",
+          expected: fieldTypes[index]!,
+          input: currentValue.fields[index]!,
+        });
+      }
     }
-    if (expected.kind === "tuple") {
-      if (input.kind !== "tuple") throw wasmArgumentTypeMismatch(expected, input);
-      const constructorIndex = module.constructorNames.indexOf(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME);
-      if (constructorIndex < 0) throw new Error("functional WASM input omitted tuple constructor");
-      return allocateConstructor(constructorIndex, [
-        encode(expected.values[0], input.values[0]),
-        encode(expected.values[1], input.values[1]),
-      ]);
-    }
-    if (input.kind !== "constructor") throw wasmArgumentTypeMismatch(expected, input);
-    const constructorIndex = module.constructorNames.indexOf(input.name);
-    if (constructorIndex < 0) {
-      throw new TypeError(
-        `functional WASM argument names unknown constructor ${JSON.stringify(input.name)}`,
+    if (encodedFields.length !== 1) {
+      throw new Error(
+        `functional WASM argument encoding produced ${encodedFields.length} root values; expected 1`,
       );
     }
-    const fieldTypes = functionalStructuredFieldTypes(module, expected, input.name);
-    if (fieldTypes.length !== input.fields.length) {
-      throw new TypeError(
-        `functional WASM argument constructor ${
-          JSON.stringify(input.name)
-        } expects ${fieldTypes.length} fields; received ${input.fields.length}`,
-      );
-    }
-    return allocateConstructor(
-      constructorIndex,
-      fieldTypes.map((fieldType, index) => encode(fieldType, input.fields[index]!)),
-    );
+    return encodedFields[0]!;
   };
   let encoded: bigint;
   try {

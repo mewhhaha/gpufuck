@@ -1,4 +1,7 @@
-import { FunctionalWasmRuntimeGlobal } from "./wasm_runtime_layout.ts";
+import {
+  type FunctionalWasmCompactRuntimeGlobals,
+  FunctionalWasmRuntimeGlobal,
+} from "./wasm_runtime_layout.ts";
 
 export const WasmValueType = {
   I32: 0x7f,
@@ -350,8 +353,7 @@ export function encodeCompactScalarWasmModule(
   entryFunctionIndex: number,
   additionalFunctionTypes: readonly WasmFunctionType[],
   options: {
-    readonly includesRuntimeFaults: boolean;
-    readonly instrumentedFuel: boolean;
+    readonly runtimeGlobals: FunctionalWasmCompactRuntimeGlobals;
   },
   functionExports: readonly {
     readonly name: string;
@@ -372,24 +374,29 @@ export function encodeCompactScalarWasmModule(
     }
     return type;
   });
-  const runtimeFaultGlobal = options.includesRuntimeFaults ? 0 : undefined;
-  const runtimeFaultNodeGlobal = options.includesRuntimeFaults ? 1 : undefined;
-  const fuelGlobal = options.instrumentedFuel ? options.includesRuntimeFaults ? 2 : 0 : undefined;
-  const stepsGlobal = fuelGlobal === undefined ? undefined : fuelGlobal + 1;
-  const globals = [
-    ...(options.includesRuntimeFaults
-      ? [
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
-      ]
-      : []),
-    ...(options.instrumentedFuel
-      ? [
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-      ]
-      : []),
-  ];
+  const faultGlobals = options.runtimeGlobals.fault;
+  const fuelGlobals = options.runtimeGlobals.fuel;
+  const indexedGlobals: { readonly index: number; readonly definition: number[] }[] = [
+    ...(faultGlobals === undefined ? [] : [
+      { index: faultGlobals.code, definition: [0x7f, 0x01, 0x41, 0x00, 0x0b] },
+      {
+        index: faultGlobals.node,
+        definition: [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
+      },
+    ]),
+    ...(fuelGlobals === undefined ? [] : [
+      { index: fuelGlobals.remaining, definition: [0x7f, 0x01, 0x41, 0x00, 0x0b] },
+      { index: fuelGlobals.steps, definition: [0x7f, 0x01, 0x41, 0x00, 0x0b] },
+    ]),
+  ].sort((left, right) => left.index - right.index);
+  for (const [expectedIndex, global] of indexedGlobals.entries()) {
+    if (global.index !== expectedIndex) {
+      throw new Error(
+        `compact WebAssembly global layout expected index ${expectedIndex}; received ${global.index}`,
+      );
+    }
+  }
+  const globals = indexedGlobals.map((global) => global.definition);
   const sections = [
     section(1, vector(usedFunctionTypes)),
     section(
@@ -414,28 +421,28 @@ export function encodeCompactScalarWasmModule(
           0x00,
           ...encodeUnsigned(exported.functionIndex),
         ]),
-        ...(runtimeFaultGlobal === undefined || runtimeFaultNodeGlobal === undefined ? [] : [
+        ...(faultGlobals === undefined ? [] : [
           [
             ...name("runtimeFault"),
             0x03,
-            ...encodeUnsigned(runtimeFaultGlobal),
+            ...encodeUnsigned(faultGlobals.code),
           ],
           [
             ...name("runtimeFaultNode"),
             0x03,
-            ...encodeUnsigned(runtimeFaultNodeGlobal),
+            ...encodeUnsigned(faultGlobals.node),
           ],
         ]),
-        ...(fuelGlobal === undefined || stepsGlobal === undefined ? [] : [
+        ...(fuelGlobals === undefined ? [] : [
           [
             ...name("comptimeFuel"),
             0x03,
-            ...encodeUnsigned(fuelGlobal),
+            ...encodeUnsigned(fuelGlobals.remaining),
           ],
           [
             ...name("comptimeSteps"),
             0x03,
-            ...encodeUnsigned(stepsGlobal),
+            ...encodeUnsigned(fuelGlobals.steps),
           ],
         ]),
       ]),

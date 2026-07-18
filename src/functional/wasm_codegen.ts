@@ -59,9 +59,8 @@ import {
   THUNK_UNEVALUATED,
   WASM_FAULT_DIVIDE_BY_ZERO,
   WASM_FAULT_INVALID_NUMERIC_CONVERSION,
-  WASM_FAULT_OUT_OF_FUEL,
 } from "./wasm_runtime_binary.ts";
-import { FunctionalWasmRuntimeGlobal } from "./wasm_runtime_layout.ts";
+import { FunctionalWasmRuntimeEmitter } from "./wasm_runtime_emitter.ts";
 import {
   float32FromBits,
   float64FromBits,
@@ -140,13 +139,6 @@ interface HostField {
   readonly declaration: FunctionalHostFieldDeclaration;
   readonly importIndex: number | undefined;
   readonly closureSlot?: number;
-}
-
-interface CompactRuntimeGlobals {
-  readonly runtimeFault?: number;
-  readonly runtimeFaultNode?: number;
-  readonly fuel?: number;
-  readonly steps?: number;
 }
 
 interface ConstructorApplication {
@@ -317,7 +309,7 @@ class FunctionalWasmCompiler {
   readonly #compactScalar: boolean;
   readonly #hasLazyEvaluationBoundary: boolean;
   readonly #instrumentedFuel: boolean;
-  readonly #compactRuntimeGlobals: CompactRuntimeGlobals;
+  readonly #runtimeEmitter: FunctionalWasmRuntimeEmitter;
   readonly #automaticArenaReset: boolean;
   readonly #compilationOptions: FunctionalWasmCompilationOptions;
   readonly #ownedRuntimeEnabled: boolean;
@@ -344,6 +336,10 @@ class FunctionalWasmCompiler {
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
     this.#instrumentedFuel = instrumentedFuel;
+    this.#runtimeEmitter = new FunctionalWasmRuntimeEmitter(nodes, {
+      compactScalar,
+      instrumentedFuel,
+    });
     this.#compilationOptions = compilationOptions;
     this.#ownedRuntimeEnabled = (compilationOptions.ownedTypeExports?.length ?? 0) > 0;
     this.#hostEmitter = new FunctionalWasmHostEmitter({
@@ -353,13 +349,10 @@ class FunctionalWasmCompiler {
       emitEncodeBoolean: (instructions) => this.emitEncodeBoolean(instructions),
       emitEncodeInteger: (instructions) => this.emitEncodeInteger(instructions),
       emitForceValue: (instructions) => this.emitForceValue(instructions),
-      emitRuntimeFault: (instructions, fault) => this.emitRuntimeFault(instructions, fault),
+      emitRuntimeFault: (instructions, fault) =>
+        this.#runtimeEmitter.emitFault(instructions, fault, -1),
     });
     this.#automaticArenaReset = storagePlan.summary.automaticArenaReset;
-    this.#compactRuntimeGlobals = compactRuntimeGlobals(
-      nodes,
-      instrumentedFuel,
-    );
     this.#hasLazyEvaluationBoundary = nodes.some((node) =>
       (node.tag === FunctionalCoreTag.Apply ||
         node.tag === FunctionalCoreTag.Let) &&
@@ -568,8 +561,7 @@ class FunctionalWasmCompiler {
       entryFunctionIndex,
       this.#additionalFunctionTypes,
       {
-        includesRuntimeFaults: this.#compactRuntimeGlobals.runtimeFault !== undefined,
-        instrumentedFuel: this.#instrumentedFuel,
+        runtimeGlobals: this.#runtimeEmitter.compactGlobals,
       },
       this.#module.wasmExports.map((exported, index) => ({
         name: exported.name,
@@ -1062,41 +1054,12 @@ class FunctionalWasmCompiler {
     );
   }
 
-  emitFuelCharge(instructions: WasmInstructions, nodeIndex: number): void {
-    if (!this.#instrumentedFuel) return;
-    const fuelGlobal = this.#compactScalar
-      ? this.requireCompactGlobal("fuel")
-      : FunctionalWasmRuntimeGlobal.ComptimeFuel;
-    const stepsGlobal = this.#compactScalar
-      ? this.requireCompactGlobal("steps")
-      : FunctionalWasmRuntimeGlobal.ComptimeSteps;
-    const runtimeFaultGlobal = this.#compactScalar ? this.requireCompactGlobal("runtimeFault") : 2;
-    const runtimeFaultNodeGlobal = this.#compactScalar
-      ? this.requireCompactGlobal("runtimeFaultNode")
-      : 5;
-    instructions.globalGet(fuelGlobal);
-    instructions.emit(0x45, 0x04, 0x40);
-    instructions.i32Const(WASM_FAULT_OUT_OF_FUEL);
-    instructions.globalSet(runtimeFaultGlobal);
-    instructions.i32Const(nodeIndex);
-    instructions.globalSet(runtimeFaultNodeGlobal);
-    instructions.emit(0x00, 0x0b);
-    instructions.globalGet(fuelGlobal);
-    instructions.i32Const(1);
-    instructions.emit(0x6b);
-    instructions.globalSet(fuelGlobal);
-    instructions.globalGet(stepsGlobal);
-    instructions.i32Const(1);
-    instructions.emit(0x6a);
-    instructions.globalSet(stepsGlobal);
-  }
-
   compileExpression(
     instructions: WasmInstructions,
     nodeIndex: number,
     environment: FunctionalEnvironment,
   ): void {
-    this.emitFuelCharge(instructions, nodeIndex);
+    this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
       case FunctionalCoreTag.Integer:
@@ -2369,7 +2332,7 @@ class FunctionalWasmCompiler {
     nodeIndex: number,
     environment: FunctionalEnvironment,
   ): void {
-    this.emitFuelCharge(instructions, nodeIndex);
+    this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     if (!this.#instrumentedFuel) {
       const constantLocals: number[] = [];
       let bodyNode = nodeIndex;
@@ -2629,7 +2592,7 @@ class FunctionalWasmCompiler {
     nodeIndex: number,
     environment: FunctionalEnvironment,
   ): void {
-    this.emitFuelCharge(instructions, nodeIndex);
+    this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const constant = this.constantBooleanExpression(nodeIndex, environment);
     if (constant !== undefined) {
       instructions.i32Const(constant ? 1 : 0);
@@ -2726,7 +2689,7 @@ class FunctionalWasmCompiler {
     nodeIndex: number,
     environment: FunctionalEnvironment,
   ): void {
-    this.emitFuelCharge(instructions, nodeIndex);
+    this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
       case FunctionalCoreTag.SignedInteger64:
@@ -2793,7 +2756,7 @@ class FunctionalWasmCompiler {
     nodeIndex: number,
     environment: FunctionalEnvironment,
   ): void {
-    this.emitFuelCharge(instructions, nodeIndex);
+    this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
       case FunctionalCoreTag.Float32:
@@ -2844,7 +2807,7 @@ class FunctionalWasmCompiler {
     nodeIndex: number,
     environment: FunctionalEnvironment,
   ): void {
-    this.emitFuelCharge(instructions, nodeIndex);
+    this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
       case FunctionalCoreTag.Float64:
@@ -2976,15 +2939,12 @@ class FunctionalWasmCompiler {
     if (source === "float-32") instructions.f32Const(upper);
     else instructions.f64Const(upper);
     instructions.emit(source === "float-32" ? 0x60 : 0x66, 0x72, 0x04, 0x40);
-    instructions.i32Const(WASM_FAULT_INVALID_NUMERIC_CONVERSION);
-    instructions.globalSet(
-      this.#compactScalar ? this.requireCompactGlobal("runtimeFault") : 2,
+    this.#runtimeEmitter.emitFault(
+      instructions,
+      WASM_FAULT_INVALID_NUMERIC_CONVERSION,
+      nodeIndex,
     );
-    instructions.i32Const(nodeIndex);
-    instructions.globalSet(
-      this.#compactScalar ? this.requireCompactGlobal("runtimeFaultNode") : 5,
-    );
-    instructions.emit(0x00, 0x0b);
+    instructions.emit(0x0b);
     instructions.localGet(value);
   }
 
@@ -3060,15 +3020,12 @@ class FunctionalWasmCompiler {
   ): void {
     instructions.localGet(divisor);
     instructions.emit(divisorType === "i32" ? 0x45 : 0x50, 0x04, 0x40);
-    instructions.i32Const(WASM_FAULT_DIVIDE_BY_ZERO);
-    instructions.globalSet(
-      this.#compactScalar ? this.requireCompactGlobal("runtimeFault") : 2,
+    this.#runtimeEmitter.emitFault(
+      instructions,
+      WASM_FAULT_DIVIDE_BY_ZERO,
+      nodeIndex,
     );
-    instructions.i32Const(nodeIndex);
-    instructions.globalSet(
-      this.#compactScalar ? this.requireCompactGlobal("runtimeFaultNode") : 5,
-    );
-    instructions.emit(0x00, 0x0b);
+    instructions.emit(0x0b);
   }
 
   compileBinary(
@@ -4100,14 +4057,6 @@ class FunctionalWasmCompiler {
     instructions.i64Load(0);
   }
 
-  emitRuntimeFault(instructions: WasmInstructions, fault: number): void {
-    instructions.i32Const(fault);
-    instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFault);
-    instructions.i32Const(-1);
-    instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFaultNode);
-    instructions.emit(0x00);
-  }
-
   emitEncodeInteger(instructions: WasmInstructions): void {
     instructions.emit(0xac);
     instructions.i64Const(3n);
@@ -4559,14 +4508,6 @@ class FunctionalWasmCompiler {
     return this.#functionImports.length + (this.#compactScalar ? 0 : 3);
   }
 
-  requireCompactGlobal(name: keyof CompactRuntimeGlobals): number {
-    const index = this.#compactRuntimeGlobals[name];
-    if (index === undefined) {
-      throw new Error(`functional WASM compact module omitted required ${name} global`);
-    }
-    return index;
-  }
-
   storageDecision(
     coreNode: number,
     valueKind: "closure" | "constructor" | "thunk",
@@ -4597,33 +4538,4 @@ class FunctionalWasmCompiler {
     }
     return node;
   }
-}
-
-function compactRuntimeGlobals(
-  nodes: readonly FunctionalCoreNode[],
-  instrumentedFuel: boolean,
-): CompactRuntimeGlobals {
-  let nextIndex = 0;
-  const mayFault = instrumentedFuel || nodes.some((node) => {
-    if (node.tag === FunctionalCoreTag.Binary) {
-      return node.payload === FunctionalBinaryOperator.Divide ||
-        node.payload === FunctionalBinaryOperator.DivideSignedInteger64 ||
-        node.payload === FunctionalBinaryOperator.Remainder ||
-        node.payload === FunctionalBinaryOperator.RemainderSignedInteger64;
-    }
-    if (node.tag !== FunctionalCoreTag.NumericConvert) return false;
-    const conversion = numericConversion(node.payload);
-    return (conversion.source === "float-32" || conversion.source === "float-64") &&
-      (conversion.result === "integer" || conversion.result === "signed-integer-64");
-  });
-  const runtimeFault = mayFault ? nextIndex++ : undefined;
-  const runtimeFaultNode = mayFault ? nextIndex++ : undefined;
-  const fuel = instrumentedFuel ? nextIndex++ : undefined;
-  const steps = instrumentedFuel ? nextIndex : undefined;
-  return {
-    ...(runtimeFault === undefined ? {} : { runtimeFault }),
-    ...(runtimeFaultNode === undefined ? {} : { runtimeFaultNode }),
-    ...(fuel === undefined ? {} : { fuel }),
-    ...(steps === undefined ? {} : { steps }),
-  };
 }
