@@ -110,6 +110,28 @@ export function encodeFunctionalWasmOwnedValue(
     );
   }
   const encoded = encodeFunctionalWasmValue(instance, module, type, value);
+  let resourceDropValue = value;
+  if (options.dropResource !== undefined) {
+    try {
+      resourceDropValue = decodeFunctionalWasmValue(
+        instance,
+        module,
+        type,
+        encoded,
+        Number.MAX_SAFE_INTEGER,
+      );
+    } catch (cause) {
+      try {
+        releaseEncodedFunctionalWasmValue(instance, encoded);
+      } catch (cleanupCause) {
+        throw new AggregateError(
+          [cause, cleanupCause],
+          "functional WASM owned value snapshot and cleanup both failed",
+        );
+      }
+      throw cause;
+    }
+  }
   const ownership = { references: 1 };
   const createLease = (): FunctionalWasmOwnedValue => {
     let active = true;
@@ -164,7 +186,7 @@ export function encodeFunctionalWasmOwnedValue(
           const pendingFields: {
             readonly type: FunctionalType;
             readonly value: FunctionalWasmValue;
-          }[] = [{ type, value }];
+          }[] = [{ type, value: resourceDropValue }];
           try {
             while (pendingFields.length !== 0) {
               const current = pendingFields.pop()!;

@@ -820,6 +820,41 @@ Deno.test("arena promotion preserves nested values and recursively drops owned r
   }
 });
 
+Deno.test("owned resource drops use the immutable encoded snapshot", async () => {
+  const encoded = singleDefinitionModule(
+    surface.apply(
+      surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+      surface.integer(0),
+      surface.integer(0),
+    ),
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("owned resource snapshot fixture did not compile");
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    ok(typeof initialize === "function");
+    initialize();
+
+    const resourceType = FunctionalHostTypes.resource("duck.file") as FunctionalType;
+    const resource: { kind: "resource"; id: number } = { kind: "resource", id: 7 };
+    const dropped: [string, number][] = [];
+    const owned = encodeFunctionalWasmOwnedValue(
+      instance,
+      compilation.module,
+      resourceType,
+      resource,
+      { dropResource: (resourceName, id) => dropped.push([resourceName, id]) },
+    );
+    resource.id = 99;
+    owned.release();
+    deepStrictEqual(dropped, [["duck.file", 7]]);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("arena encoding reclaims partial allocations after a boundary mismatch", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
