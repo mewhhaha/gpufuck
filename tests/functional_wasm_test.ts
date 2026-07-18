@@ -25,6 +25,7 @@ import {
   type FunctionalWasmExecution,
   FunctionalWasmIntrinsic,
   FunctionalWasmRuntimeError,
+  FunctionalWasmValueAbi,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   linkFunctionalModules,
@@ -680,8 +681,11 @@ Deno.test("arena promotion preserves nested values and recursively drops owned r
     equal(outer.active, false);
     deepStrictEqual(owned.decode(), aggregateValue);
     const ownedHeapStart = outer.mark;
+    throws(
+      () => owned.transfer(),
+      /cannot transfer while host resource drop callbacks remain attached/,
+    );
     const retained = owned.retain();
-    throws(() => owned.transfer(), /cannot transfer with 2 active leases/);
     owned.release();
     equal(owned.active, false);
     deepStrictEqual(dropped, []);
@@ -812,6 +816,9 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
         ],
       },
     );
+    const additionalLease = owned.retain();
+    throws(() => owned.transfer(), /cannot transfer with 2 active leases/);
+    additionalLease.release();
     const pointer = owned.transfer();
     equal(owned.active, false);
     retain(pointer);
@@ -837,6 +844,34 @@ Deno.test("verified Storage Core emits standalone retain and recursive drop expo
       drop(next.transfer());
     }
     equal(Number(heapTop.value), stableHeapTop);
+    const overflow = encodeFunctionalWasmOwnedValue(
+      instance,
+      compilation.module,
+      ownedType,
+      {
+        kind: "tuple",
+        values: [
+          { kind: "text", value: "overflow" },
+          { kind: "array", values: [] },
+        ],
+      },
+    ).transfer();
+    const memory = instance.exports.memory;
+    ok(memory instanceof WebAssembly.Memory);
+    const overflowPointer = Number(BigInt.asUintN(32, overflow));
+    const overflowView = new DataView(memory.buffer);
+    overflowView.setUint32(
+      overflowPointer + FunctionalWasmValueAbi.objectReferenceCountByteOffset,
+      0xffff_ffff,
+      true,
+    );
+    throws(() => retain(overflow), WebAssembly.RuntimeError);
+    overflowView.setUint32(
+      overflowPointer + FunctionalWasmValueAbi.objectReferenceCountByteOffset,
+      1,
+      true,
+    );
+    drop(overflow);
     equal(allocate(24), firstReleasedPointer);
   } finally {
     compilation.module.destroy();

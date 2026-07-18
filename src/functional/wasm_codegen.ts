@@ -92,6 +92,7 @@ const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
 const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
 const BYTES_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.bytes;
 const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
+const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
 const BASE_WASM_FUNCTION_TYPE_COUNT = 5;
@@ -3819,7 +3820,7 @@ class FunctionalWasmCompiler {
     if (this.#ownedRuntimeEnabled) {
       instructions.localGet(pointer);
       instructions.i32Const(1);
-      instructions.i32Store(12);
+      instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
     }
     return pointer;
   }
@@ -4249,7 +4250,7 @@ class FunctionalWasmCompiler {
     if (this.#ownedRuntimeEnabled) {
       instructions.localGet(pointer);
       instructions.i32Const(1);
-      instructions.i32Store(12);
+      instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
     }
     return pointer;
   }

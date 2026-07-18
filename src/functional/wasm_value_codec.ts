@@ -23,6 +23,7 @@ const ARRAY_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.array;
 const SLICE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.slice;
 const RESOURCE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.resource;
 const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
+const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
 const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
 
 export type FunctionalWasmValue = FunctionalWasmHostValue;
@@ -53,6 +54,13 @@ export function discardEncodedFunctionalWasmValuesFrom(
       groups.delete(root);
     }
   }
+}
+
+export function forgetEncodedFunctionalWasmValue(
+  instance: WebAssembly.Instance,
+  encoded: bigint,
+): void {
+  allocationGroups.get(instance)?.delete(Number(BigInt.asUintN(32, encoded)));
 }
 
 export function describeFunctionalType(type: FunctionalType): string {
@@ -133,7 +141,7 @@ export function encodeFunctionalWasmValue(
     view.setUint32(pointer, objectKind, true);
     view.setUint32(pointer + 4, payload, true);
     view.setUint32(pointer + 8, fields.length, true);
-    view.setUint32(pointer + 12, 1, true);
+    view.setUint32(pointer + OBJECT_REFERENCE_COUNT_BYTE_OFFSET, 1, true);
     for (const [index, field] of fields.entries()) {
       view.setBigInt64(
         pointer + OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH,
@@ -150,7 +158,7 @@ export function encodeFunctionalWasmValue(
     view.setUint32(pointer, objectKind, true);
     view.setUint32(pointer + 4, 0, true);
     view.setUint32(pointer + 8, bytes.byteLength, true);
-    view.setUint32(pointer + 12, 1, true);
+    view.setUint32(pointer + OBJECT_REFERENCE_COUNT_BYTE_OFFSET, 1, true);
     new Uint8Array(memory.buffer, pointer + OBJECT_HEADER_BYTE_LENGTH, bytes.byteLength).set(bytes);
     return BigInt(pointer);
   };

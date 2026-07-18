@@ -2,6 +2,7 @@ import { FUNCTIONAL_NO_INDEX, FunctionalCoreTag, FunctionalEvaluationMode } from
 import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
 import {
   FunctionalPersistentSharing,
+  FunctionalStorageCoreError,
   type FunctionalStorageCoreLifetime,
   type FunctionalStorageCoreOperation,
   type FunctionalStorageCoreProgram,
@@ -234,6 +235,9 @@ export function createFunctionalStoragePlan(
   }
   const verification = verifyFunctionalStorageCore(core);
   if (!verification.ok) {
+    if (options.storageCore !== undefined) {
+      throw new FunctionalStorageCoreError(verification.diagnostic);
+    }
     throw new Error(
       `derived Functional Storage Core failed at operation ${verification.diagnostic.operation}: ${verification.diagnostic.message}`,
     );
@@ -280,7 +284,7 @@ function requireCompleteStorageCore(
     if (operation.kind === "declare") {
       suppliedDeclarations.set(operation.value, operation.lifetime);
     } else if (operation.kind === "reference") {
-      suppliedReferences.add(`${operation.owner}->${operation.target}`);
+      suppliedReferences.add(JSON.stringify([operation.owner, operation.target]));
     }
   }
   for (const operation of derived.operations) {
@@ -304,7 +308,7 @@ function requireCompleteStorageCore(
     }
     if (
       operation.kind === "reference" &&
-      !suppliedReferences.has(`${operation.owner}->${operation.target}`)
+      !suppliedReferences.has(JSON.stringify([operation.owner, operation.target]))
     ) {
       throw new Error(
         `frontend Functional Storage Core omits required reference ${

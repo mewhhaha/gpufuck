@@ -207,6 +207,49 @@ Deno.test("Storage Core rejects releasing a value retained by a live owner", () 
   ok(verification.diagnostic.message.includes("persistent owners"));
 });
 
+Deno.test("Storage Core release recursively retires exclusively owned values", () => {
+  const verification = verifyFunctionalStorageCore({
+    persistentSharing: FunctionalPersistentSharing.Reject,
+    operations: [
+      { kind: "declare", value: "root", lifetime: "owned" },
+      { kind: "declare", value: "child", lifetime: "owned" },
+      { kind: "declare", value: "leaf", lifetime: "owned" },
+      { kind: "reference", owner: "root", target: "child" },
+      { kind: "reference", owner: "child", target: "leaf" },
+      { kind: "release", value: "root" },
+      { kind: "use", value: "leaf" },
+    ],
+  });
+
+  equal(verification.ok, false);
+  if (verification.ok) return;
+  equal(verification.diagnostic.code, "F6003");
+  ok(verification.diagnostic.message.includes('"leaf"'));
+});
+
+Deno.test("Storage Core retains a shared value until its final owner releases", () => {
+  const verification = verifyFunctionalStorageCore({
+    persistentSharing: FunctionalPersistentSharing.ExplicitReferenceCounting,
+    operations: [
+      { kind: "declare", value: "first-owner", lifetime: "owned" },
+      { kind: "declare", value: "second-owner", lifetime: "owned" },
+      { kind: "declare", value: "shared", lifetime: "owned" },
+      { kind: "reference", owner: "first-owner", target: "shared" },
+      { kind: "retain", value: "shared" },
+      { kind: "reference", owner: "second-owner", target: "shared" },
+      { kind: "release", value: "first-owner" },
+      { kind: "use", value: "shared" },
+      { kind: "release", value: "second-owner" },
+      { kind: "use", value: "shared" },
+    ],
+  });
+
+  equal(verification.ok, false);
+  if (verification.ok) return;
+  equal(verification.diagnostic.code, "F6003");
+  equal(verification.diagnostic.operation, 9);
+});
+
 Deno.test("Storage Core verifies 1024 deterministic lexical ownership graphs", () => {
   let randomState = 0x6d2b79f5;
   const random = (): number => {

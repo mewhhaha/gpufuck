@@ -13,6 +13,7 @@ import {
   functionalRecordConstructorName,
   functionalRowTypeDeclaration,
   FunctionalStorageClass,
+  FunctionalStorageCoreError,
   type FunctionalSurfaceExpression,
   functionalThunkType,
   functionalVariantConstructorName,
@@ -186,6 +187,19 @@ Deno.test("storage planning separates static, scalar-local, and recursive closur
           },
         }),
       /omits required reference/,
+    );
+    await rejects(
+      () =>
+        compileFunctionalModuleToWasm(compilation.module, {
+          storageCore: {
+            persistentSharing: plan.core.persistentSharing,
+            operations: [
+              ...plan.core.operations,
+              { kind: "enter-arena", arena: "forgotten" },
+            ],
+          },
+        }),
+      (error) => error instanceof FunctionalStorageCoreError && error.code === "F6006",
     );
 
     const execution = await runFunctionalWasmModule(compilation.module);

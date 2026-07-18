@@ -14,6 +14,7 @@ import {
 import {
   decodeFunctionalWasmValue,
   encodeFunctionalWasmValue,
+  forgetEncodedFunctionalWasmValue,
   functionalStructuredFieldTypes,
   type FunctionalWasmValue,
   releaseEncodedFunctionalWasmValue,
@@ -131,11 +132,17 @@ export function encodeFunctionalWasmOwnedValue(
       },
       transfer(): bigint {
         if (!active) throw new Error("functional WASM owned value was already released");
+        if (options.dropResource !== undefined) {
+          throw new Error(
+            "functional WASM owned value cannot transfer while host resource drop callbacks remain attached",
+          );
+        }
         if (ownership.references !== 1) {
           throw new Error(
             `functional WASM owned value cannot transfer with ${ownership.references} active leases`,
           );
         }
+        forgetEncodedFunctionalWasmValue(instance, encoded);
         active = false;
         ownership.references = 0;
         return encoded;

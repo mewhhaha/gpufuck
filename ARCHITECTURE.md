@@ -702,6 +702,9 @@ generation:
 - arena-to-owned promotion names an active source and a fresh target;
 - persistent ownership is rejected, delegated to host management, or balanced by explicit retains.
 
+Releasing an owned root retires its outgoing ownership edges recursively. Explicitly retained or
+multiply owned descendants remain active until their last root or owner releases them.
+
 Failures carry `F6001`–`F6006`, the failing operation, an optional semantic Core node, and the names
 that violated the invariant. `planFunctionalModuleStorage()` returns the derived operations and
 successful verification alongside its summary. A frontend that introduces more lexical arenas can
@@ -744,7 +747,8 @@ first-order types. Reference counts occupy the final word of the public object h
 returns a parent block before visiting fields in reverse order, preserving allocation order and
 preventing repeated aggregate ownership cycles from growing the heap. Internal thunks have a
 different header and cannot cross this first-order owned boundary. Opaque resource wrappers are
-reclaimed, but destroying the host resource itself remains a declared host operation.
+reclaimed, but destroying the host resource itself remains a declared host operation. A JavaScript
+owned value with a `dropResource` callback therefore cannot transfer into standalone Wasm drop glue.
 
 Scratch arenas can reclaim a region only when no static definition, memoized global, result, or host
 borrow points into it. Gpufuck therefore does not reset the entire heap at an arbitrary public call

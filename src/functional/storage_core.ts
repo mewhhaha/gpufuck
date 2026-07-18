@@ -364,17 +364,46 @@ export function verifyFunctionalStorageCore(
           }`,
         );
       }
-      value.references -= 1;
-      if (value.references < value.persistentOwners.size) {
-        return fail(
-          "F6004",
-          "invalid-ownership",
-          `Functional Storage Core owned value ${
-            JSON.stringify(operation.value)
-          } has reference count ${value.references} below its ${value.persistentOwners.size} persistent owners`,
-        );
+      const pendingReleases = [operation.value];
+      while (pendingReleases.length !== 0) {
+        const currentName = pendingReleases.pop();
+        if (currentName === undefined) continue;
+        const current = activeValue(values, currentName);
+        if (current === undefined) {
+          return fail(
+            "F6004",
+            "invalid-ownership",
+            `Functional Storage Core owned release reached absent or expired value ${
+              JSON.stringify(currentName)
+            } from ${JSON.stringify(operation.value)}`,
+          );
+        }
+        current.references -= 1;
+        if (current.references < current.persistentOwners.size) {
+          return fail(
+            "F6004",
+            "invalid-ownership",
+            `Functional Storage Core owned value ${
+              JSON.stringify(currentName)
+            } has reference count ${current.references} below its ${current.persistentOwners.size} persistent owners`,
+          );
+        }
+        if (current.references !== 0) continue;
+        current.active = false;
+        for (const targetName of current.ownedTargets) {
+          const target = activeValue(values, targetName);
+          if (target === undefined || !target.persistentOwners.delete(currentName)) {
+            return fail(
+              "F6004",
+              "invalid-ownership",
+              `Functional Storage Core owned value ${
+                JSON.stringify(currentName)
+              } has an invalid live edge to ${JSON.stringify(targetName)}`,
+            );
+          }
+          pendingReleases.push(targetName);
+        }
       }
-      if (value.references === 0) value.active = false;
       continue;
     }
 

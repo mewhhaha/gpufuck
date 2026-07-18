@@ -394,7 +394,8 @@ const bytes = await compileFunctionalModuleToWasm(compilation.module, {
 walks tuples, ADTs, arrays, slices, text, bytes, numerics, and resource wrappers before returning
 their blocks to the Wasm free list. Opaque host resources still require the embedding-side
 `dropResource` callback. `FunctionalWasmOwnedValue.transfer()` relinquishes the JavaScript lease
-when ownership crosses into emitted Wasm.
+when ownership crosses into emitted Wasm. A value with an embedding-side `dropResource` callback
+cannot transfer because standalone Wasm drop glue cannot invoke that JavaScript responsibility.
 
 Embedders that instantiate emitted Wasm directly can create nested temporary lifetimes with
 `beginFunctionalWasmArena(instance)` or the exception-safe `withFunctionalWasmArena(instance, run)`.

@@ -8,6 +8,7 @@ const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
 const BYTES_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.bytes;
 const RESOURCE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.resource;
 const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
+const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
 const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
 
 export function retainOwnedValueFunction(
@@ -23,14 +24,17 @@ export function retainOwnedValueFunction(
   instructions.i32Const(THUNK_OBJECT_KIND);
   instructions.emit(0x46, 0x04, 0x40, 0x0f, 0x0b);
   instructions.localGet(pointer);
-  instructions.i32Load(12);
+  instructions.i32Load(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
   instructions.localTee(references);
   instructions.emit(0x45, 0x04, 0x40, 0x0f, 0x0b);
+  instructions.localGet(references);
+  instructions.i32Const(-1);
+  instructions.emit(0x46, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(pointer);
   instructions.localGet(references);
   instructions.i32Const(1);
   instructions.emit(0x6a);
-  instructions.i32Store(12);
+  instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
   return functionBody(typeIndex, instructions, "owned value retain");
 }
 
@@ -54,7 +58,7 @@ export function releaseOwnedValueFunction(
   instructions.i32Const(THUNK_OBJECT_KIND);
   instructions.emit(0x46, 0x04, 0x40, 0x0f, 0x0b);
   instructions.localGet(pointer);
-  instructions.i32Load(12);
+  instructions.i32Load(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
   instructions.localTee(references);
   instructions.emit(0x45, 0x04, 0x40, 0x0f, 0x0b);
   instructions.localGet(references);
@@ -64,11 +68,11 @@ export function releaseOwnedValueFunction(
   instructions.localGet(references);
   instructions.i32Const(1);
   instructions.emit(0x6b);
-  instructions.i32Store(12);
+  instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
   instructions.emit(0x0f, 0x0b);
   instructions.localGet(pointer);
   instructions.i32Const(0);
-  instructions.i32Store(12);
+  instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
   instructions.localGet(pointer);
   instructions.i32Load(8);
   instructions.localSet(valueCount);

@@ -17,21 +17,29 @@ export function analyzeFunctionalStorageReferences(
   captureAnalysis: FunctionalWasmCaptureAnalysis,
 ): readonly FunctionalStorageReference[] {
   const storageNameByNode = new Map<number, string>();
+  const decisionByNode = new Map<number, FunctionalStorageDecision>();
   for (const decision of decisions) {
     const name = `${decision.valueKind}:${decision.coreNode}`;
-    const existing = storageNameByNode.get(decision.coreNode);
-    if (existing !== undefined && existing !== name) {
+    const existing = decisionByNode.get(decision.coreNode);
+    if (
+      existing !== undefined &&
+      (existing.valueKind !== decision.valueKind || existing.storage !== decision.storage ||
+        existing.escapeStorage !== decision.escapeStorage ||
+        existing.capturedLocalCount !== decision.capturedLocalCount)
+    ) {
       throw new Error(
-        `functional storage reference analysis maps core node ${decision.coreNode} to both ${
-          JSON.stringify(existing)
-        } and ${JSON.stringify(name)}`,
+        `functional storage reference analysis gives core node ${decision.coreNode} conflicting ${
+          JSON.stringify(`${existing.valueKind}:${existing.storage}`)
+        } and ${JSON.stringify(`${decision.valueKind}:${decision.storage}`)} decisions`,
       );
     }
+    decisionByNode.set(decision.coreNode, decision);
     storageNameByNode.set(decision.coreNode, name);
   }
   const globalStorageNames = module.definitionRoots.map((root) =>
     storageTarget(root, [], nodes, storageNameByNode, [])
   );
+  const globalReferencesByNode = new Map<number, readonly number[]>();
   const references: FunctionalStorageReference[] = [];
   const recorded = new Set<string>();
   const record = (
@@ -41,16 +49,31 @@ export function analyzeFunctionalStorageReferences(
     reason: string,
   ): void => {
     if (target === undefined) return;
-    const key = `${owner}->${target}`;
+    const key = JSON.stringify([owner, target]);
     if (recorded.has(key)) return;
     recorded.add(key);
     references.push({ owner, target, coreNode, reason });
   };
 
+  function recordGlobalReferences(
+    owner: string,
+    root: number,
+    evidenceNode: number,
+  ): void {
+    for (const global of referencedGlobals(root, nodes, globalReferencesByNode)) {
+      record(
+        owner,
+        globalStorageNames[global],
+        evidenceNode,
+        `${owner} references global definition d${global}`,
+      );
+    }
+  }
+
   const walk = (nodeIndex: number, environment: readonly (string | undefined)[]): void => {
     const node = requiredNode(nodes, nodeIndex);
     const storageName = storageNameByNode.get(nodeIndex);
-    if (storageName?.startsWith("thunk:") === true) {
+    if (storageName !== undefined && decisionByNode.get(nodeIndex)?.valueKind === "thunk") {
       for (const depth of captureAnalysis.freeLocalDepths(nodeIndex)) {
         record(
           storageName,
@@ -162,21 +185,6 @@ export function analyzeFunctionalStorageReferences(
     }
   };
 
-  const recordGlobalReferences = (
-    owner: string,
-    root: number,
-    evidenceNode: number,
-  ): void => {
-    for (const global of referencedGlobals(root, nodes)) {
-      record(
-        owner,
-        globalStorageNames[global],
-        evidenceNode,
-        `${owner} references global definition d${global}`,
-      );
-    }
-  };
-
   for (const root of module.definitionRoots) walk(root, []);
   return Object.freeze(references.map((reference) => Object.freeze(reference)));
 }
@@ -230,21 +238,48 @@ function constructorApplication(
 function referencedGlobals(
   root: number,
   nodes: readonly FunctionalCoreNode[],
+  referencesByNode: Map<number, readonly number[]>,
 ): readonly number[] {
-  const globals = new Set<number>();
-  const pending = [root];
-  const visited = new Set<number>();
+  const cached = referencesByNode.get(root);
+  if (cached !== undefined) return cached;
+  const pending: { readonly nodeIndex: number; readonly expanded: boolean }[] = [{
+    nodeIndex: root,
+    expanded: false,
+  }];
+  const active = new Set<number>();
   while (pending.length !== 0) {
-    const nodeIndex = pending.pop();
-    if (nodeIndex === undefined || visited.has(nodeIndex)) continue;
-    visited.add(nodeIndex);
-    const node = requiredNode(nodes, nodeIndex);
+    const entry = pending.pop();
+    if (entry === undefined || referencesByNode.has(entry.nodeIndex)) continue;
+    const node = requiredNode(nodes, entry.nodeIndex);
+    if (!entry.expanded) {
+      active.add(entry.nodeIndex);
+      pending.push({ nodeIndex: entry.nodeIndex, expanded: true });
+      for (const child of childNodes(node)) {
+        if (child === FUNCTIONAL_NO_INDEX || referencesByNode.has(child)) continue;
+        if (active.has(child)) {
+          throw new Error(
+            `functional storage reference analysis found a core cycle from node ${entry.nodeIndex} to active node ${child}`,
+          );
+        }
+        pending.push({ nodeIndex: child, expanded: false });
+      }
+      continue;
+    }
+    active.delete(entry.nodeIndex);
+    const globals = new Set<number>();
     if (node.tag === FunctionalCoreTag.Global) globals.add(node.payload);
     for (const child of childNodes(node)) {
-      if (child !== FUNCTIONAL_NO_INDEX) pending.push(child);
+      const childReferences = referencesByNode.get(child);
+      if (childReferences !== undefined) {
+        for (const global of childReferences) globals.add(global);
+      }
     }
+    referencesByNode.set(
+      entry.nodeIndex,
+      Object.freeze([...globals].sort((left, right) => left - right)),
+    );
   }
-  return Object.freeze([...globals].sort((left, right) => left - right));
+  return referencesByNode.get(root) ?? [];
 }
 
 function childNodes(node: FunctionalCoreNode): readonly number[] {
