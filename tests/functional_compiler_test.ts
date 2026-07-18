@@ -16,6 +16,7 @@ import {
   type FunctionalIncrementalCache,
   type FunctionalModuleArtifact,
   FunctionalTypecheckingProfile,
+  FunctionalWasmIntrinsic,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   IncrementalGpuFunctionalCompiler,
@@ -742,6 +743,32 @@ Deno.test("rejects duplicate host capability fields at the surface boundary", ()
         },
       ),
     /capability "Console" repeats field "enabled"/,
+  );
+});
+
+Deno.test("rejects a WASM buffer intrinsic with an incompatible signature", () => {
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: surface.integer(42) }],
+        [],
+        "main",
+        0,
+        {
+          hostCapabilities: [{
+            name: "Buffer",
+            fields: [{
+              kind: "operation",
+              name: "length",
+              purity: "pure",
+              parameter: { kind: "integer" },
+              result: { kind: "integer" },
+              wasmIntrinsic: FunctionalWasmIntrinsic.BufferByteLength,
+            }],
+          }],
+        },
+      ),
+    /parameter must be Text or Bytes/,
   );
 });
 

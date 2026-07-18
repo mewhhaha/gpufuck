@@ -62,12 +62,29 @@ export const FunctionalHostOwnership = {
 export type FunctionalHostOwnership =
   (typeof FunctionalHostOwnership)[keyof typeof FunctionalHostOwnership];
 
+export const FunctionalWasmIntrinsic = {
+  BufferByteLength: "buffer-byte-length",
+  BufferByteGet: "buffer-byte-get",
+  BufferByteSlice: "buffer-byte-slice",
+  BufferAppend: "buffer-append",
+  BufferEqual: "buffer-equal",
+  BufferConvert: "buffer-convert",
+} as const;
+
+export type FunctionalWasmIntrinsic =
+  (typeof FunctionalWasmIntrinsic)[keyof typeof FunctionalWasmIntrinsic];
+
 export interface FunctionalHostValueDeclaration {
   readonly kind: "value";
   readonly name: string;
   readonly type: FunctionalHostType;
   readonly ownership?: "frozen-shareable" | "ownership-transfer";
+  readonly wasmLiteral?: FunctionalWasmLiteral;
 }
+
+export type FunctionalWasmLiteral =
+  | { readonly kind: "text"; readonly value: string }
+  | { readonly kind: "bytes"; readonly value: readonly number[] };
 
 export interface FunctionalHostOperationDeclaration {
   readonly kind: "operation";
@@ -78,6 +95,7 @@ export interface FunctionalHostOperationDeclaration {
   readonly result: FunctionalHostType;
   readonly parameterOwnership?: "bounded-borrow" | "ownership-transfer";
   readonly resultOwnership?: "frozen-shareable" | "ownership-transfer" | "unique";
+  readonly wasmIntrinsic?: FunctionalWasmIntrinsic;
 }
 
 export type FunctionalHostFieldDeclaration =
@@ -161,7 +179,27 @@ export function normalizeFunctionalHostCapabilities(
             } has unsupported ownership ${JSON.stringify(field.ownership)}`,
           );
         }
-        return Object.freeze({ ...field, type: Object.freeze({ ...field.type }) });
+        let wasmLiteral: FunctionalWasmLiteral | undefined;
+        if (field.wasmLiteral !== undefined) {
+          wasmLiteral = normalizeWasmLiteral(
+            field.wasmLiteral,
+            field.type,
+            declaration.name,
+            field.name,
+          );
+          if (field.ownership === "ownership-transfer") {
+            throw new Error(
+              `functional WASM literal ${
+                JSON.stringify(`${declaration.name}.${field.name}`)
+              } must be frozen-shareable`,
+            );
+          }
+        }
+        return Object.freeze({
+          ...field,
+          type: Object.freeze({ ...field.type }),
+          ...(wasmLiteral === undefined ? {} : { wasmLiteral }),
+        });
       }
       if (field.kind !== "operation") {
         const unsupported = field as { readonly kind?: unknown; readonly name?: unknown };
@@ -187,6 +225,23 @@ export function normalizeFunctionalHostCapabilities(
             JSON.stringify(`${declaration.name}.${field.name}`)
           } has unsupported execution ${JSON.stringify(field.execution)}`,
         );
+      }
+      if (field.wasmIntrinsic !== undefined) {
+        if (!Object.values(FunctionalWasmIntrinsic).includes(field.wasmIntrinsic)) {
+          throw new Error(
+            `functional host operation ${
+              JSON.stringify(`${declaration.name}.${field.name}`)
+            } has unsupported WASM intrinsic ${JSON.stringify(field.wasmIntrinsic)}`,
+          );
+        }
+        if (field.purity !== "pure" || field.execution === "suspending") {
+          throw new Error(
+            `functional WASM intrinsic ${
+              JSON.stringify(`${declaration.name}.${field.name}`)
+            } must be pure and synchronous`,
+          );
+        }
+        requireWasmIntrinsicSignature(field, declaration.name);
       }
       if (
         field.parameterOwnership !== undefined &&
@@ -226,6 +281,124 @@ export function normalizeFunctionalHostCapabilities(
     });
     return Object.freeze({ name: declaration.name, fields: Object.freeze(fields) });
   }));
+}
+
+function normalizeWasmLiteral(
+  literal: FunctionalWasmLiteral,
+  type: FunctionalHostType,
+  capability: string,
+  field: string,
+): FunctionalWasmLiteral {
+  const location = JSON.stringify(`${capability}.${field}`);
+  if (literal.kind === "text") {
+    if (
+      type.kind !== "named" || type.name !== FUNCTIONAL_TEXT_TYPE_NAME ||
+      typeof literal.value !== "string"
+    ) {
+      throw new Error(`functional WASM literal ${location} must match Text`);
+    }
+    return Object.freeze({ kind: "text", value: literal.value });
+  }
+  if (literal.kind !== "bytes" || !Array.isArray(literal.value)) {
+    throw new Error(`functional WASM literal ${location} is unsupported`);
+  }
+  if (type.kind !== "named" || type.name !== FUNCTIONAL_BYTES_TYPE_NAME) {
+    throw new Error(`functional WASM literal ${location} must match Bytes`);
+  }
+  for (const [index, byte] of literal.value.entries()) {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+      throw new Error(
+        `functional WASM literal ${location} byte ${index} must be within [0, 255]`,
+      );
+    }
+  }
+  return Object.freeze({ kind: "bytes", value: Object.freeze([...literal.value]) });
+}
+
+function requireWasmIntrinsicSignature(
+  field: FunctionalHostOperationDeclaration,
+  capability: string,
+): void {
+  const intrinsic = field.wasmIntrinsic;
+  if (intrinsic === undefined) return;
+  const location = JSON.stringify(`${capability}.${field.name}`);
+  if (intrinsic === FunctionalWasmIntrinsic.BufferByteLength) {
+    requireBufferType(field.parameter, `${location} parameter`);
+    requireTypeKind(field.result, "integer", `${location} result`);
+    return;
+  }
+  if (intrinsic === FunctionalWasmIntrinsic.BufferByteGet) {
+    const [buffer, index] = requireTupleType(field.parameter, `${location} parameter`);
+    requireBufferType(buffer, `${location} buffer`);
+    requireTypeKind(index, "integer", `${location} index`);
+    requireTypeKind(field.result, "integer", `${location} result`);
+    return;
+  }
+  if (intrinsic === FunctionalWasmIntrinsic.BufferConvert) {
+    requireBufferType(field.parameter, `${location} parameter`);
+    requireBufferType(field.result, `${location} result`);
+    return;
+  }
+  if (intrinsic === FunctionalWasmIntrinsic.BufferByteSlice) {
+    const [buffer, bounds] = requireTupleType(field.parameter, `${location} parameter`);
+    const [start, end] = requireTupleType(bounds, `${location} bounds`);
+    requireBufferType(buffer, `${location} buffer`);
+    requireTypeKind(start, "integer", `${location} start`);
+    requireTypeKind(end, "integer", `${location} end`);
+    requireSameBufferType(buffer, field.result, location);
+    return;
+  }
+  const [left, right] = requireTupleType(field.parameter, `${location} parameter`);
+  requireBufferType(left, `${location} left`);
+  requireSameBufferType(left, right, location);
+  if (intrinsic === FunctionalWasmIntrinsic.BufferAppend) {
+    requireSameBufferType(left, field.result, location);
+    return;
+  }
+  requireTypeKind(field.result, "boolean", `${location} result`);
+}
+
+function requireTupleType(
+  type: FunctionalHostType,
+  location: string,
+): readonly [FunctionalHostType, FunctionalHostType] {
+  if (type.kind !== "tuple") {
+    throw new Error(`functional WASM intrinsic ${location} must be a tuple`);
+  }
+  return type.values;
+}
+
+function requireBufferType(type: FunctionalHostType, location: string): void {
+  if (
+    type.kind === "named" &&
+    (type.name === FUNCTIONAL_TEXT_TYPE_NAME || type.name === FUNCTIONAL_BYTES_TYPE_NAME) &&
+    type.arguments.length === 0
+  ) return;
+  throw new Error(`functional WASM intrinsic ${location} must be Text or Bytes`);
+}
+
+function requireSameBufferType(
+  expected: FunctionalHostType,
+  actual: FunctionalHostType,
+  location: string,
+): void {
+  requireBufferType(actual, `${location} buffer`);
+  if (
+    expected.kind !== "named" || actual.kind !== "named" ||
+    expected.name !== actual.name
+  ) {
+    throw new Error(`functional WASM intrinsic ${location} must use one buffer type`);
+  }
+}
+
+function requireTypeKind(
+  type: FunctionalHostType,
+  kind: "integer" | "boolean",
+  location: string,
+): void {
+  if (type.kind !== kind) {
+    throw new Error(`functional WASM intrinsic ${location} must be ${kind}`);
+  }
 }
 
 export function functionalHostFieldType(

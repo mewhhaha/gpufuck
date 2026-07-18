@@ -14,10 +14,13 @@ import type {
   GpuFunctionalModule,
 } from "./compiler_module.ts";
 import {
+  FUNCTIONAL_BYTES_TYPE_NAME,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
+  FUNCTIONAL_TEXT_TYPE_NAME,
   type FunctionalHostFieldDeclaration,
   type FunctionalHostType,
+  FunctionalWasmIntrinsic,
 } from "./host_contract.ts";
 import {
   encodeCompactScalarWasmModule,
@@ -55,7 +58,9 @@ import {
   THUNK_UNEVALUATED,
   WASM_FAULT_DIVIDE_BY_ZERO,
   WASM_FAULT_INVALID_NUMERIC_CONVERSION,
+  WASM_FAULT_OUT_OF_BOUNDS,
   WASM_FAULT_OUT_OF_FUEL,
+  WASM_FAULT_OUT_OF_MEMORY,
 } from "./wasm_runtime_binary.ts";
 import {
   float32FromBits,
@@ -72,6 +77,8 @@ const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
 const THUNK_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.thunk;
 const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
+const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
+const BYTES_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.bytes;
 const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
@@ -121,7 +128,7 @@ type FunctionalEnvironment = readonly (FunctionalBinding | undefined)[];
 interface HostField {
   readonly capability: string;
   readonly declaration: FunctionalHostFieldDeclaration;
-  readonly importIndex: number;
+  readonly importIndex: number | undefined;
   readonly closureSlot?: number;
 }
 
@@ -143,6 +150,7 @@ interface UncurriedApplication {
   readonly functionShape: FunctionalFunctionShape;
   readonly staticEnvironment?: FunctionalEnvironment;
   readonly inlineAtSoleCall: boolean;
+  readonly inlineVirtualBase: boolean;
 }
 
 interface UncurriedWorker {
@@ -271,17 +279,24 @@ class FunctionalWasmCompiler {
             `host operation ${JSON.stringify(`${capability.name}.${declaration.name}`)} result`,
           );
         }
-        const importIndex = functionImports.length;
-        functionImports.push({
-          module: hostImportModule(capability.name),
-          name: declaration.name,
-          typeIndex: declaration.kind === "value"
-            ? this.functionTypeIndex([], [wasmValueType(declaration.type)])
-            : this.functionTypeIndex(
-              [wasmValueType(declaration.parameter)],
-              [wasmValueType(declaration.result)],
-            ),
-        });
+        let importIndex: number | undefined;
+        if (
+          declaration.kind === "value"
+            ? declaration.wasmLiteral === undefined
+            : declaration.wasmIntrinsic === undefined
+        ) {
+          importIndex = functionImports.length;
+          functionImports.push({
+            module: hostImportModule(capability.name),
+            name: declaration.name,
+            typeIndex: declaration.kind === "value"
+              ? this.functionTypeIndex([], [wasmValueType(declaration.type)])
+              : this.functionTypeIndex(
+                [wasmValueType(declaration.parameter)],
+                [wasmValueType(declaration.result)],
+              ),
+          });
+        }
         hostFields.push({
           capability: capability.name,
           declaration,
@@ -697,6 +712,27 @@ class FunctionalWasmCompiler {
       const instructions = new WasmInstructions(2);
       instructions.localGet(1);
       this.emitForceValue(instructions);
+      if (field.declaration.wasmIntrinsic !== undefined) {
+        this.emitWasmIntrinsic(
+          instructions,
+          field.declaration.wasmIntrinsic,
+          field.declaration.parameter,
+          field.declaration.result,
+        );
+        this.#indirectFunctions[field.closureSlot] = functionBody(
+          2,
+          instructions,
+          `WASM intrinsic ${field.declaration.wasmIntrinsic}`,
+        );
+        continue;
+      }
+      if (field.importIndex === undefined) {
+        throw new Error(
+          `functional WASM host operation ${
+            hostFieldKey(field.capability, field.declaration.name)
+          } omitted its import`,
+        );
+      }
       this.emitHostArgument(instructions, field.declaration.parameter);
       instructions.call(field.importIndex);
       this.emitHostResult(instructions, field.declaration.result);
@@ -744,6 +780,20 @@ class FunctionalWasmCompiler {
     const fields: ValueSource[] = [];
     for (const field of this.#hostFields) {
       if (field.declaration.kind === "value") {
+        if (field.declaration.wasmLiteral !== undefined) {
+          this.emitWasmLiteral(instructions, field.declaration.wasmLiteral);
+          const value = instructions.addLocal(WasmValueType.I64);
+          instructions.localSet(value);
+          fields.push({ kind: "i64-local", index: value });
+          continue;
+        }
+        if (field.importIndex === undefined) {
+          throw new Error(
+            `functional WASM host value ${
+              hostFieldKey(field.capability, field.declaration.name)
+            } omitted its import`,
+          );
+        }
         instructions.call(field.importIndex);
         this.emitHostResult(instructions, field.declaration.type);
       } else {
@@ -1173,18 +1223,19 @@ class FunctionalWasmCompiler {
       node = this.node(baseNode);
     }
     if (reverseArguments.length === 0) return undefined;
+    const virtualBase = this.virtualLambda(baseNode, environment);
+    const localVirtualBase = virtualBase !== undefined && node.tag !== FunctionalCoreTag.Global;
+    const inlineVirtualBase = localVirtualBase && reverseArguments.length > 1;
+    if (localVirtualBase && !inlineVirtualBase) return undefined;
     if (
+      !inlineVirtualBase &&
       reverseArguments.some((argument) => this.virtualLambda(argument.node, environment))
     ) {
       return undefined;
     }
-    const virtualBase = this.virtualLambda(baseNode, environment);
-    if (virtualBase !== undefined && node.tag !== FunctionalCoreTag.Global) {
-      return undefined;
-    }
 
     let outerLambdaNode: number;
-    if (node.tag === FunctionalCoreTag.Global && virtualBase !== undefined) {
+    if (virtualBase !== undefined) {
       outerLambdaNode = virtualBase.node;
     } else {
       const lambdaSet = this.lambdaSet(baseNode);
@@ -1203,15 +1254,20 @@ class FunctionalWasmCompiler {
     const recursiveFunction = node.tag === FunctionalCoreTag.Local
       ? environment[node.payload]
       : undefined;
+    let staticEnvironment: FunctionalEnvironment | undefined;
+    if (recursiveFunction?.kind === "static-recursive-function") {
+      staticEnvironment = recursiveFunction.environment;
+    } else if (inlineVirtualBase) {
+      staticEnvironment = virtualBase.environment;
+    }
     return {
       baseNode,
       arguments: Object.freeze(reverseArguments.reverse()),
       functionShape,
       inlineAtSoleCall: recursiveFunction?.kind === "static-recursive-function" &&
         recursiveFunction.inlineAtSoleCall,
-      ...(recursiveFunction?.kind === "static-recursive-function"
-        ? { staticEnvironment: recursiveFunction.environment }
-        : {}),
+      inlineVirtualBase,
+      ...(staticEnvironment === undefined ? {} : { staticEnvironment }),
     };
   }
 
@@ -1293,6 +1349,79 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     resultKind: "value" | "integer",
   ): boolean {
+    if (
+      application.inlineVirtualBase &&
+      this.#remainingSpecializedInlineSites > 0 &&
+      !this.#activeSpecializedLambdas.has(application.functionShape.outerLambdaNode)
+    ) {
+      const parameterBindings: FunctionalBinding[] = [];
+      for (const [parameter, argument] of application.arguments.entries()) {
+        const virtualLambda = this.virtualLambda(argument.node, environment);
+        if (virtualLambda !== undefined) {
+          parameterBindings.push(virtualLambda);
+          continue;
+        }
+        const virtualConstructor = this.virtualConstructor(argument.node, environment);
+        if (virtualConstructor !== undefined) {
+          parameterBindings.push(virtualConstructor);
+          continue;
+        }
+        const integerConstant = this.constantIntegerExpression(argument.node, environment);
+        if (integerConstant !== undefined) {
+          parameterBindings.push({ kind: "i32-integer-constant", literal: integerConstant });
+          continue;
+        }
+        const booleanConstant = this.constantBooleanExpression(argument.node, environment);
+        if (booleanConstant !== undefined) {
+          parameterBindings.push({ kind: "i32-boolean-constant", literal: booleanConstant });
+          continue;
+        }
+        if (this.isUnboxedNumericParameter(application.functionShape, parameter)) {
+          this.compileIntegerExpression(instructions, argument.node, environment);
+          const local = instructions.addLocal(WasmValueType.I32);
+          instructions.localSet(local);
+          parameterBindings.push({ kind: "i32-integer", index: local });
+          continue;
+        }
+        this.compileApplicationArgument(
+          instructions,
+          argument,
+          environment,
+          application.functionShape.strictParameters[parameter] === true,
+        );
+        const local = instructions.addLocal(WasmValueType.I64);
+        instructions.localSet(local);
+        parameterBindings.push({ kind: "i64-local", index: local });
+      }
+      const bodyEnvironment = this.uncurriedBodyEnvironment(
+        application.functionShape,
+        parameterBindings,
+        application.staticEnvironment,
+        undefined,
+      );
+      this.#remainingSpecializedInlineSites -= 1;
+      this.#specializedCallSiteCount += 1;
+      this.#activeSpecializedLambdas.add(application.functionShape.outerLambdaNode);
+      try {
+        if (resultKind === "integer") {
+          this.compileIntegerExpression(
+            instructions,
+            application.functionShape.bodyNode,
+            bodyEnvironment,
+          );
+        } else {
+          this.compileExpression(
+            instructions,
+            application.functionShape.bodyNode,
+            bodyEnvironment,
+          );
+        }
+      } finally {
+        this.#activeSpecializedLambdas.delete(application.functionShape.outerLambdaNode);
+      }
+      return true;
+    }
+
     const tailLoop = this.#functionAnalysis.loop(
       application.functionShape.innerLambdaNode,
     );
@@ -3721,6 +3850,352 @@ class FunctionalWasmCompiler {
     }
     instructions.i32Const(offset);
     instructions.i64Load(0);
+  }
+
+  emitWasmIntrinsic(
+    instructions: WasmInstructions,
+    intrinsic: FunctionalWasmIntrinsic,
+    parameter: FunctionalHostType,
+    resultType: FunctionalHostType,
+  ): void {
+    const argument = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(argument);
+    if (intrinsic === FunctionalWasmIntrinsic.BufferByteLength) {
+      const pointer = this.bufferPointer(instructions, argument, parameter);
+      instructions.localGet(pointer);
+      instructions.i32Load(8);
+      this.emitEncodeInteger(instructions);
+      return;
+    }
+    if (intrinsic === FunctionalWasmIntrinsic.BufferConvert) {
+      const pointer = this.bufferPointer(instructions, argument, parameter);
+      const length = instructions.addLocal(WasmValueType.I32);
+      instructions.localGet(pointer);
+      instructions.i32Load(8);
+      instructions.localSet(length);
+      const resultKind = this.bufferObjectKind(resultType);
+      const result = this.allocateBuffer(instructions, resultKind, length);
+      instructions.localGet(result);
+      instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+      instructions.emit(0x6a);
+      instructions.localGet(pointer);
+      instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+      instructions.emit(0x6a);
+      instructions.localGet(length);
+      instructions.memoryCopy();
+      instructions.localGet(result);
+      instructions.emit(0xad);
+      return;
+    }
+
+    if (parameter.kind !== "tuple") {
+      throw new Error(
+        `functional WASM intrinsic ${intrinsic} requires a tuple parameter`,
+      );
+    }
+
+    const tuple = this.objectPointer(instructions, argument);
+    const first = this.objectField(instructions, tuple, 0);
+    if (intrinsic === FunctionalWasmIntrinsic.BufferByteGet) {
+      const indexValue = this.objectField(instructions, tuple, 1);
+      const pointer = this.bufferPointer(instructions, first, parameter.values[0]);
+      const index = this.decodedInteger(instructions, indexValue);
+      this.requireBufferIndex(instructions, pointer, index);
+      instructions.localGet(pointer);
+      instructions.localGet(index);
+      instructions.emit(0x6a);
+      instructions.i32Load8Unsigned(OBJECT_HEADER_BYTE_LENGTH);
+      this.emitEncodeInteger(instructions);
+      return;
+    }
+
+    const second = this.objectField(instructions, tuple, 1);
+    const bufferType = parameter.values[0];
+    const left = this.bufferPointer(instructions, first, bufferType);
+    if (intrinsic === FunctionalWasmIntrinsic.BufferByteSlice) {
+      const bounds = this.objectPointer(instructions, second);
+      const startValue = this.objectField(instructions, bounds, 0);
+      const endValue = this.objectField(instructions, bounds, 1);
+      const start = this.decodedInteger(instructions, startValue);
+      const end = this.decodedInteger(instructions, endValue);
+      this.requireBufferBounds(instructions, left, start, end);
+      const length = instructions.addLocal(WasmValueType.I32);
+      instructions.localGet(end);
+      instructions.localGet(start);
+      instructions.emit(0x6b);
+      instructions.localSet(length);
+      const result = this.allocateBuffer(
+        instructions,
+        this.bufferObjectKind(bufferType),
+        length,
+      );
+      instructions.localGet(result);
+      instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+      instructions.emit(0x6a);
+      instructions.localGet(left);
+      instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+      instructions.emit(0x6a);
+      instructions.localGet(start);
+      instructions.emit(0x6a);
+      instructions.localGet(length);
+      instructions.memoryCopy();
+      instructions.localGet(result);
+      instructions.emit(0xad);
+      return;
+    }
+
+    const right = this.bufferPointer(instructions, second, parameter.values[1]);
+    if (intrinsic === FunctionalWasmIntrinsic.BufferAppend) {
+      this.emitBufferAppend(instructions, left, right, bufferType);
+      return;
+    }
+    if (intrinsic === FunctionalWasmIntrinsic.BufferEqual) {
+      this.emitBufferEquality(instructions, left, right);
+      return;
+    }
+    intrinsic satisfies never;
+    throw new Error(`functional WASM intrinsic ${intrinsic} is unsupported`);
+  }
+
+  emitWasmLiteral(
+    instructions: WasmInstructions,
+    literal: { readonly kind: "text"; readonly value: string } | {
+      readonly kind: "bytes";
+      readonly value: readonly number[];
+    },
+  ): void {
+    const bytes = literal.kind === "text" ? new TextEncoder().encode(literal.value) : literal.value;
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(bytes.length);
+    instructions.localSet(length);
+    const pointer = this.allocateBuffer(
+      instructions,
+      literal.kind === "text" ? TEXT_OBJECT_KIND : BYTES_OBJECT_KIND,
+      length,
+    );
+    for (const [index, byte] of bytes.entries()) {
+      instructions.localGet(pointer);
+      instructions.i32Const(byte);
+      instructions.i32Store8(OBJECT_HEADER_BYTE_LENGTH + index);
+    }
+    instructions.localGet(pointer);
+    instructions.emit(0xad);
+  }
+
+  objectPointer(instructions: WasmInstructions, value: number): number {
+    const pointer = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(value);
+    instructions.emit(0xa7);
+    instructions.localSet(pointer);
+    return pointer;
+  }
+
+  objectField(
+    instructions: WasmInstructions,
+    pointer: number,
+    index: number,
+  ): number {
+    const value = instructions.addLocal(WasmValueType.I64);
+    instructions.localGet(pointer);
+    instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH + index * VALUE_BYTE_LENGTH);
+    this.emitForceValue(instructions);
+    instructions.localSet(value);
+    return value;
+  }
+
+  decodedInteger(instructions: WasmInstructions, value: number): number {
+    const integer = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(value);
+    this.emitDecodeInteger(instructions);
+    instructions.localSet(integer);
+    return integer;
+  }
+
+  bufferPointer(
+    instructions: WasmInstructions,
+    value: number,
+    type: FunctionalHostType,
+  ): number {
+    const pointer = this.objectPointer(instructions, value);
+    instructions.localGet(pointer);
+    instructions.i32Load(0);
+    instructions.i32Const(this.bufferObjectKind(type));
+    instructions.emit(0x47, 0x04, 0x40);
+    this.emitRuntimeFault(instructions, WASM_FAULT_OUT_OF_BOUNDS);
+    instructions.emit(0x0b);
+    return pointer;
+  }
+
+  bufferObjectKind(type: FunctionalHostType): number {
+    if (type.kind === "named" && type.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+      return TEXT_OBJECT_KIND;
+    }
+    if (type.kind === "named" && type.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+      return BYTES_OBJECT_KIND;
+    }
+    throw new Error(`functional WASM intrinsic received non-buffer type ${type.kind}`);
+  }
+
+  requireBufferIndex(
+    instructions: WasmInstructions,
+    pointer: number,
+    index: number,
+  ): void {
+    instructions.localGet(index);
+    instructions.i32Const(0);
+    instructions.emit(0x48);
+    instructions.localGet(index);
+    instructions.localGet(pointer);
+    instructions.i32Load(8);
+    instructions.emit(0x4f, 0x72, 0x04, 0x40);
+    this.emitRuntimeFault(instructions, WASM_FAULT_OUT_OF_BOUNDS);
+    instructions.emit(0x0b);
+  }
+
+  requireBufferBounds(
+    instructions: WasmInstructions,
+    pointer: number,
+    start: number,
+    end: number,
+  ): void {
+    instructions.localGet(start);
+    instructions.i32Const(0);
+    instructions.emit(0x48);
+    instructions.localGet(end);
+    instructions.localGet(start);
+    instructions.emit(0x48, 0x72);
+    instructions.localGet(end);
+    instructions.localGet(pointer);
+    instructions.i32Load(8);
+    instructions.emit(0x4b, 0x72, 0x04, 0x40);
+    this.emitRuntimeFault(instructions, WASM_FAULT_OUT_OF_BOUNDS);
+    instructions.emit(0x0b);
+  }
+
+  allocateBuffer(
+    instructions: WasmInstructions,
+    kind: number,
+    length: number,
+  ): number {
+    instructions.localGet(length);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.call(this.allocateFunctionIndex());
+    const pointer = instructions.addLocal(WasmValueType.I32);
+    instructions.localTee(pointer);
+    instructions.i32Const(kind);
+    instructions.i32Store(0);
+    instructions.localGet(pointer);
+    instructions.i32Const(0);
+    instructions.i32Store(4);
+    instructions.localGet(pointer);
+    instructions.localGet(length);
+    instructions.i32Store(8);
+    return pointer;
+  }
+
+  emitBufferAppend(
+    instructions: WasmInstructions,
+    left: number,
+    right: number,
+    type: FunctionalHostType,
+  ): void {
+    const leftLength = instructions.addLocal(WasmValueType.I32);
+    const rightLength = instructions.addLocal(WasmValueType.I32);
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(left);
+    instructions.i32Load(8);
+    instructions.localSet(leftLength);
+    instructions.localGet(right);
+    instructions.i32Load(8);
+    instructions.localSet(rightLength);
+    instructions.localGet(leftLength);
+    instructions.localGet(rightLength);
+    instructions.emit(0x6a);
+    instructions.localSet(length);
+    instructions.localGet(length);
+    instructions.localGet(leftLength);
+    instructions.emit(0x49, 0x04, 0x40);
+    this.emitRuntimeFault(instructions, WASM_FAULT_OUT_OF_MEMORY);
+    instructions.emit(0x0b);
+    const result = this.allocateBuffer(
+      instructions,
+      this.bufferObjectKind(type),
+      length,
+    );
+    instructions.localGet(result);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(left);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(leftLength);
+    instructions.memoryCopy();
+    instructions.localGet(result);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(leftLength);
+    instructions.emit(0x6a);
+    instructions.localGet(right);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(rightLength);
+    instructions.memoryCopy();
+    instructions.localGet(result);
+    instructions.emit(0xad);
+  }
+
+  emitBufferEquality(
+    instructions: WasmInstructions,
+    left: number,
+    right: number,
+  ): void {
+    const length = instructions.addLocal(WasmValueType.I32);
+    const index = instructions.addLocal(WasmValueType.I32);
+    const equal = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(index);
+    instructions.localGet(left);
+    instructions.i32Load(8);
+    instructions.localTee(length);
+    instructions.localGet(right);
+    instructions.i32Load(8);
+    instructions.emit(0x46);
+    instructions.localSet(equal);
+    instructions.localGet(equal);
+    instructions.emit(0x04, 0x40);
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(index);
+    instructions.localGet(length);
+    instructions.emit(0x4f, 0x0d);
+    instructions.unsigned(1);
+    instructions.localGet(equal);
+    instructions.localGet(left);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.localGet(right);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x46, 0x71);
+    instructions.localSet(equal);
+    instructions.localGet(index);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b, 0x0b);
+    instructions.localGet(equal);
+    this.emitEncodeBoolean(instructions);
+  }
+
+  emitRuntimeFault(instructions: WasmInstructions, fault: number): void {
+    instructions.i32Const(fault);
+    instructions.globalSet(2);
+    instructions.i32Const(-1);
+    instructions.globalSet(5);
+    instructions.emit(0x00);
   }
 
   emitEncodeInteger(instructions: WasmInstructions): void {

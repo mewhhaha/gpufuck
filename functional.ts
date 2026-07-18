@@ -163,6 +163,8 @@ export {
   FunctionalHostTypes,
   type FunctionalHostValueDeclaration,
   type FunctionalSurfaceModuleOptions,
+  FunctionalWasmIntrinsic,
+  type FunctionalWasmLiteral,
 } from "./src/functional/host_contract.ts";
 export type {
   FunctionalWasmAsyncHostOperation,

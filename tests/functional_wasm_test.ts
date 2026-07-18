@@ -18,6 +18,7 @@ import {
   FunctionalUnaryOperator,
   FunctionalWasmBoundaryError,
   type FunctionalWasmExecution,
+  FunctionalWasmIntrinsic,
   FunctionalWasmRuntimeError,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
@@ -523,6 +524,160 @@ Deno.test("round-trips text, bytes, arrays, slices, and resources through WebAss
     } finally {
       compilation.module.destroy();
     }
+  }
+});
+
+Deno.test("executes Text and Bytes intrinsics inside WebAssembly", async () => {
+  const integer = { kind: "integer" } as const;
+  const boolean = { kind: "boolean" } as const;
+  const pair = (
+    left: FunctionalSurfaceExpression,
+    right: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression =>
+    surface.apply(surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME), left, right);
+  const joined = surface.apply(
+    surface.name("append"),
+    pair(surface.name("first"), surface.name("last")),
+  );
+  const sliced = surface.apply(
+    surface.name("slice"),
+    pair(
+      surface.name("first"),
+      pair(surface.integer(0), surface.integer(2)),
+    ),
+  );
+  const matchingScore = surface.binary(
+    FunctionalBinaryOperator.Add,
+    surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.binary(
+        FunctionalBinaryOperator.Multiply,
+        surface.apply(surface.name("length"), joined),
+        surface.integer(100),
+      ),
+      surface.apply(
+        surface.name("get"),
+        pair(joined, surface.integer(2)),
+      ),
+    ),
+    {
+      kind: "if",
+      condition: surface.apply(
+        surface.name("equal"),
+        pair(sliced, surface.name("first")),
+      ),
+      consequent: surface.integer(1),
+      alternate: surface.integer(0),
+    },
+  );
+  const score = surface.binary(
+    FunctionalBinaryOperator.Add,
+    matchingScore,
+    {
+      kind: "if",
+      condition: surface.apply(
+        surface.name("equal"),
+        pair(surface.name("first"), surface.name("last")),
+      ),
+      consequent: surface.integer(0),
+      alternate: surface.integer(10),
+    },
+  );
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["first", "last", "length", "get", "slice", "append", "equal"],
+          body: score,
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Buffer",
+        fields: [{
+          kind: "value",
+          name: "first",
+          type: FunctionalHostTypes.text,
+          ownership: "frozen-shareable",
+          wasmLiteral: { kind: "text", value: "AB" },
+        }, {
+          kind: "value",
+          name: "last",
+          type: FunctionalHostTypes.text,
+          ownership: "frozen-shareable",
+          wasmLiteral: { kind: "text", value: "C" },
+        }, {
+          kind: "operation",
+          name: "length",
+          purity: "pure",
+          parameter: FunctionalHostTypes.text,
+          result: integer,
+          wasmIntrinsic: FunctionalWasmIntrinsic.BufferByteLength,
+        }, {
+          kind: "operation",
+          name: "get",
+          purity: "pure",
+          parameter: { kind: "tuple", values: [FunctionalHostTypes.text, integer] },
+          result: integer,
+          wasmIntrinsic: FunctionalWasmIntrinsic.BufferByteGet,
+        }, {
+          kind: "operation",
+          name: "slice",
+          purity: "pure",
+          parameter: {
+            kind: "tuple",
+            values: [
+              FunctionalHostTypes.text,
+              { kind: "tuple", values: [integer, integer] },
+            ],
+          },
+          result: FunctionalHostTypes.text,
+          wasmIntrinsic: FunctionalWasmIntrinsic.BufferByteSlice,
+        }, {
+          kind: "operation",
+          name: "append",
+          purity: "pure",
+          parameter: {
+            kind: "tuple",
+            values: [FunctionalHostTypes.text, FunctionalHostTypes.text],
+          },
+          result: FunctionalHostTypes.text,
+          wasmIntrinsic: FunctionalWasmIntrinsic.BufferAppend,
+        }, {
+          kind: "operation",
+          name: "equal",
+          purity: "pure",
+          parameter: {
+            kind: "tuple",
+            values: [FunctionalHostTypes.text, FunctionalHostTypes.text],
+          },
+          result: boolean,
+          wasmIntrinsic: FunctionalWasmIntrinsic.BufferEqual,
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) {
+    throw new Error("native buffer intrinsic module did not compile");
+  }
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 378 });
+    const wasmModule = await WebAssembly.compile(execution.bytes);
+    deepStrictEqual(WebAssembly.Module.imports(wasmModule), []);
+  } finally {
+    compilation.module.destroy();
   }
 });
 
@@ -2237,6 +2392,46 @@ Deno.test("strict higher-order scalar calls omit closures and the lazy runtime",
       entry,
     ) => entry.kind === "memory"),
     false,
+  );
+});
+
+Deno.test("strict curried higher-order calls inline known functions into compact WASM", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "applyTwice",
+    value: surface.lambda(
+      "value",
+      surface.lambda(
+        "function",
+        surface.apply(
+          surface.name("function"),
+          surface.apply(surface.name("function"), surface.name("value")),
+        ),
+      ),
+    ),
+    body: {
+      kind: "let",
+      name: "increment",
+      value: surface.lambda(
+        "value",
+        surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("value"),
+          surface.integer(1),
+        ),
+      ),
+      body: surface.apply(
+        surface.apply(surface.name("applyTwice"), surface.integer(40)),
+        surface.name("increment"),
+      ),
+    },
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 0);
+  deepStrictEqual(
+    WebAssembly.Module.exports(new WebAssembly.Module(execution.bytes)),
+    [{ name: "main", kind: "function" }],
   );
 });
 

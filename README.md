@@ -915,9 +915,13 @@ every use of a host field without needing host-specific inference rules or core 
 `runFunctionalWasmModule(module, { init })` validates the supplied capability and field names before
 instantiation. Immutable values are read once while constructing `Init`. Operations become direct
 WASM imports under `functional_init:<capability>` and receive and return the same values accepted by
-`runFunctionalWasmModule()`. The host ABI supports `i32`, `i64`, `f32`, `f64`, boolean, unit, tuple,
-and nominal constructor fields and operations. It is synchronous and wraps host exceptions with the
-capability and operation name while preserving the original exception as `cause`.
+`runFunctionalWasmModule()`. A Text or Bytes value may instead provide `wasmLiteral`, and a pure
+synchronous operation may select a `FunctionalWasmIntrinsic` for byte length, indexing, slicing,
+append, equality, or Text/Bytes conversion. Those fields are allocated or executed entirely inside
+the emitted module and require no JavaScript `init` binding or WASM import. The host ABI supports
+`i32`, `i64`, `f32`, `f64`, boolean, unit, tuple, and nominal constructor fields and operations. It
+wraps host exceptions with the capability and operation name while preserving the original exception
+as `cause`.
 
 Purity is a frontend contract recorded on each operation as `pure` or `effectful`; the backend never
 guesses it from a JavaScript implementation. The language decides which operations are effects and

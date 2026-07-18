@@ -18,6 +18,7 @@ import {
   WASM_FAULT_BLACKHOLE,
   WASM_FAULT_DIVIDE_BY_ZERO,
   WASM_FAULT_INVALID_NUMERIC_CONVERSION,
+  WASM_FAULT_OUT_OF_BOUNDS,
   WASM_FAULT_OUT_OF_FUEL,
   WASM_FAULT_OUT_OF_MEMORY,
 } from "./wasm_runtime_binary.ts";
@@ -241,6 +242,16 @@ function functionalWasmRuntimeErrorDetails(
       } converted a non-finite or out-of-range float to an integer`,
     };
   }
+  if (faultCode === WASM_FAULT_OUT_OF_BOUNDS) {
+    return {
+      ...context,
+      code: "F3103",
+      kind: "out-of-bounds",
+      message: `functional WASM entry ${
+        JSON.stringify(entryName)
+      } accessed a buffer outside its bounds`,
+    };
+  }
   return {
     ...context,
     code: "F3103",
@@ -340,12 +351,19 @@ export function functionalWasmImports(
       instance = value;
     },
   });
-  if (capabilities.length === 0) return bridge({});
+  const externalCapabilities = capabilities.map((capability) => ({
+    name: capability.name,
+    fields: capability.fields.filter((field) => {
+      if (field.kind === "value") return field.wasmLiteral === undefined;
+      return field.wasmIntrinsic === undefined;
+    }),
+  })).filter((capability) => capability.fields.length > 0);
+  if (externalCapabilities.length === 0) return bridge({});
   if (init === undefined || init === null || typeof init !== "object") {
     throw invalidFunctionalWasmInit(
       "init",
       `functional WASM module requires init capabilities ${
-        JSON.stringify(capabilities.map((capability) => capability.name))
+        JSON.stringify(externalCapabilities.map((capability) => capability.name))
       }; received ${describeHostBinding(init)}`,
     );
   }
@@ -353,7 +371,7 @@ export function functionalWasmImports(
     string,
     Record<string, CallableFunction>
   >;
-  for (const capability of capabilities) {
+  for (const capability of externalCapabilities) {
     const fields = Object.hasOwn(init, capability.name) ? init[capability.name] : undefined;
     if (fields === undefined || fields === null || typeof fields !== "object") {
       throw invalidFunctionalWasmInit(

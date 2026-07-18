@@ -294,6 +294,13 @@ export async function runFunctionalWasmModuleAsync(
   let cursor = 0;
   const init: Record<string, Record<string, FunctionalWasmInitBinding>> = {};
   for (const capability of module.hostCapabilities) {
+    const externalFields = capability.fields.filter((declaration) => {
+      if (declaration.kind === "value") {
+        return declaration.wasmLiteral === undefined;
+      }
+      return declaration.wasmIntrinsic === undefined;
+    });
+    if (externalFields.length === 0) continue;
     const suppliedCapability = options.init[capability.name];
     if (suppliedCapability === undefined) {
       throw invalidFunctionalWasmInit(
@@ -303,7 +310,7 @@ export async function runFunctionalWasmModuleAsync(
     }
     const bindings: Record<string, FunctionalWasmInitBinding> = {};
     init[capability.name] = bindings;
-    for (const declaration of capability.fields) {
+    for (const declaration of externalFields) {
       const supplied = suppliedCapability[declaration.name];
       const field = hostFieldKey(capability.name, declaration.name);
       if (declaration.kind === "value") {

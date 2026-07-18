@@ -131,6 +131,13 @@ export class WasmInstructions {
     this.unsigned(offset);
   }
 
+  i32Load8Unsigned(offset: number): void {
+    this.usesMemory = true;
+    this.emit(0x2d);
+    this.unsigned(0);
+    this.unsigned(offset);
+  }
+
   i64Load(offset: number, alignment = 3): void {
     this.usesMemory = true;
     this.emit(0x29);
@@ -157,6 +164,21 @@ export class WasmInstructions {
     this.emit(0x36);
     this.unsigned(alignment);
     this.unsigned(offset);
+  }
+
+  i32Store8(offset: number): void {
+    this.usesMemory = true;
+    this.emit(0x3a);
+    this.unsigned(0);
+    this.unsigned(offset);
+  }
+
+  memoryCopy(): void {
+    this.usesMemory = true;
+    this.emit(0xfc);
+    this.unsigned(10);
+    this.unsigned(0);
+    this.unsigned(0);
   }
 
   i64Store(offset: number, alignment = 3): void {

@@ -19,6 +19,7 @@ export type FunctionalWasmRuntimeFaultKind =
   | "result-too-large"
   | "cyclic-result"
   | "invalid-numeric-conversion"
+  | "out-of-bounds"
   | "host-operation"
   | "async-replay-diverged"
   | "trap"
