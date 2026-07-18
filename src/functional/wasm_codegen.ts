@@ -1580,6 +1580,7 @@ class FunctionalWasmCompiler {
         parameterBindings,
         application.staticEnvironment,
         undefined,
+        "caller",
       );
       this.#remainingSpecializedInlineSites -= 1;
       this.#specializedCallSiteCount += 1;
@@ -1610,11 +1611,7 @@ class FunctionalWasmCompiler {
     if (
       application.inlineAtSoleCall &&
       tailLoop !== undefined &&
-      !this.#activeFusedWorkers.has(application.functionShape.outerLambdaNode) &&
-      !this.uncurriedWorkerHasEnvironmentParameter(
-        application.functionShape,
-        application.staticEnvironment,
-      )
+      !this.#activeFusedWorkers.has(application.functionShape.outerLambdaNode)
     ) {
       const argumentLocals = this.compileUncurriedArguments(
         instructions,
@@ -1631,6 +1628,7 @@ class FunctionalWasmCompiler {
         parameterBindings,
         application.staticEnvironment,
         undefined,
+        "caller",
       );
       this.#specializedCallSiteCount += 1;
       this.#activeFusedWorkers.add(application.functionShape.outerLambdaNode);
@@ -1659,12 +1657,45 @@ class FunctionalWasmCompiler {
     const localBase = base.tag === FunctionalCoreTag.Local
       ? this.localSource(environment, base.payload, application.baseNode)
       : undefined;
-    if (
-      localBase?.kind === "i32-pointer" ||
-      localBase?.kind === "static-recursive-function"
-    ) {
-      if (localBase.kind === "i32-pointer") instructions.localGet(localBase.index);
-      else instructions.i32Const(0);
+    if (localBase?.kind === "i32-pointer") {
+      instructions.localGet(localBase.index);
+    } else if (localBase?.kind === "static-recursive-function") {
+      const lambda = this.node(localBase.node);
+      if (lambda.tag !== FunctionalCoreTag.Lambda) {
+        throw new Error(
+          `functional WASM recursive environment ${localBase.node} has core tag ${lambda.tag}`,
+        );
+      }
+      const capturesSelf = this.#captureAnalysis.freeLocalDepths(lambda.child0)
+        .includes(1);
+      const firstOuterCaptureByteOffset = OBJECT_HEADER_BYTE_LENGTH +
+        (capturesSelf ? VALUE_BYTE_LENGTH : 0);
+      const captured = this.prunedCaptures(
+        lambda.child0,
+        2,
+        localBase.environment,
+        firstOuterCaptureByteOffset,
+      );
+      const pointer = this.allocateObject(
+        instructions,
+        CLOSURE_OBJECT_KIND,
+        this.lambdaSlot(localBase.node),
+        captured.captureSources.length + (capturesSelf ? 1 : 0),
+      );
+      if (capturesSelf) {
+        instructions.localGet(pointer);
+        instructions.localGet(pointer);
+        instructions.emit(0xad);
+        instructions.i64Store(OBJECT_HEADER_BYTE_LENGTH);
+      }
+      for (const [index, source] of captured.captureSources.entries()) {
+        instructions.localGet(pointer);
+        this.emitBinding(instructions, source);
+        instructions.i64Store(
+          firstOuterCaptureByteOffset + index * VALUE_BYTE_LENGTH,
+        );
+      }
+      instructions.localGet(pointer);
     } else if (
       this.scalarSpecializationEnabled() &&
       base.tag === FunctionalCoreTag.Global &&
@@ -1767,6 +1798,7 @@ class FunctionalWasmCompiler {
       parameterBindings,
       staticEnvironment,
       hasEnvironmentParameter ? 0 : undefined,
+      "worker",
     );
 
     if (resultKind === "integer") this.#nativeScalarWorkerDepth += 1;
@@ -1823,7 +1855,11 @@ class FunctionalWasmCompiler {
     const captureBinderDepth = recursive ? 2 : 1;
     return this.#captureAnalysis.freeLocalDepths(outerLambda.child0)
       .filter((depth) => depth >= captureBinderDepth)
-      .some((depth) => staticEnvironment?.[depth - captureBinderDepth] === undefined);
+      .some((depth) =>
+        this.staticCaptureForWorker(
+          staticEnvironment?.[depth - captureBinderDepth],
+        ) === undefined
+      );
   }
 
   uncurriedBodyEnvironment(
@@ -1831,6 +1867,7 @@ class FunctionalWasmCompiler {
     parameterBindings: readonly FunctionalBinding[],
     staticEnvironment: FunctionalEnvironment | undefined,
     environmentParameter: number | undefined,
+    staticCaptureMode: "caller" | "worker",
   ): FunctionalEnvironment {
     const outerLambda = this.node(functionShape.outerLambdaNode);
     if (outerLambda.tag !== FunctionalCoreTag.Lambda) {
@@ -1862,7 +1899,10 @@ class FunctionalWasmCompiler {
     const capturedDepths = outerFreeDepths.filter((depth) => depth >= captureBinderDepth);
     for (const [captureIndex, freeDepth] of capturedDepths.entries()) {
       const bodyDepth = freeDepth + functionShape.parameterCount - 1;
-      const staticCapture = staticEnvironment?.[freeDepth - captureBinderDepth];
+      let staticCapture = staticEnvironment?.[freeDepth - captureBinderDepth];
+      if (staticCaptureMode === "worker") {
+        staticCapture = this.staticCaptureForWorker(staticCapture);
+      }
       if (staticCapture !== undefined) {
         bodyEnvironment[bodyDepth] = staticCapture;
         continue;
@@ -1878,6 +1918,15 @@ class FunctionalWasmCompiler {
       };
     }
     return bodyEnvironment;
+  }
+
+  staticCaptureForWorker(
+    binding: FunctionalBinding | undefined,
+  ): FunctionalBinding | undefined {
+    if (binding?.kind === "i32-integer-constant") return binding;
+    if (binding?.kind === "i32-boolean-constant") return binding;
+    if (binding?.kind === "static-recursive-function") return binding;
+    return undefined;
   }
 
   canUseNativeIntegerWorker(application: UncurriedApplication): boolean {

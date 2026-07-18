@@ -1203,6 +1203,80 @@ Deno.test("generates Bytes with a source callback inside WebAssembly", async () 
   }
 });
 
+Deno.test("uncurried workers load caller-local captures from their closure", async () => {
+  const integer = { kind: "integer" } as const;
+  const body: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "capturedLength",
+    value: surface.apply(surface.name("length"), surface.name("text")),
+    body: {
+      kind: "let",
+      name: "combine",
+      value: surface.lambda(
+        "left",
+        surface.lambda(
+          "right",
+          surface.binary(
+            FunctionalBinaryOperator.Add,
+            surface.name("capturedLength"),
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("left"),
+              surface.name("right"),
+            ),
+          ),
+        ),
+      ),
+      body: surface.apply(
+        surface.apply(surface.name("combine"), surface.integer(20)),
+        surface.integer(20),
+      ),
+    },
+  };
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["text", "length"],
+          body,
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      evaluationProfile: FunctionalEvaluationProfile.StrictEager,
+      hostCapabilities: [{
+        name: "Buffer",
+        fields: [{
+          kind: "value",
+          name: "text",
+          type: FunctionalHostTypes.text,
+          ownership: "frozen-shareable",
+          wasmLiteral: { kind: "text", value: "AB" },
+        }, {
+          kind: "operation",
+          name: "length",
+          purity: "pure",
+          parameter: FunctionalHostTypes.text,
+          result: integer,
+          wasmIntrinsic: FunctionalWasmIntrinsic.BufferByteLength,
+        }],
+      }],
+    },
+  );
+
+  const execution = await runCompiledWasm(encoded);
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+});
+
 Deno.test("returns structured tuples through the stable WebAssembly aggregate ABI", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
