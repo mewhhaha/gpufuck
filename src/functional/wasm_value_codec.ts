@@ -14,6 +14,7 @@ import {
   FUNCTIONAL_TEXT_TYPE_NAME,
 } from "./host_contract.ts";
 import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
+import { FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH } from "./wasm_runtime_layout.ts";
 
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
 const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
@@ -118,7 +119,17 @@ export function encodeFunctionalWasmValue(
   }
   const allocations: { readonly pointer: number; readonly byteLength: number }[] = [];
   const allocateBytesLength = (byteLength: number): number => {
-    const alignedByteLength = (byteLength + 7) & ~7;
+    if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
+      throw new RangeError(
+        `functional WASM allocation byte length must be a nonnegative safe integer; received ${byteLength}`,
+      );
+    }
+    const alignedByteLength = Math.ceil(byteLength / 8) * 8;
+    if (alignedByteLength > FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH) {
+      throw new RangeError(
+        `functional WASM allocation requires ${alignedByteLength} aligned bytes; maximum is ${FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH}`,
+      );
+    }
     const rawPointer = allocate(alignedByteLength) as number;
     const pointer = rawPointer >>> 0;
     const end = pointer + alignedByteLength;

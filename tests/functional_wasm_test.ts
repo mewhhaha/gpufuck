@@ -3070,6 +3070,41 @@ Deno.test("rejects malformed aggregate argument shapes with boundary evidence", 
   }
 });
 
+Deno.test("rejects oversized host allocations before WebAssembly i32 truncation", async () => {
+  const bytesType = FunctionalHostTypes.bytes as FunctionalType;
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: { kind: "function", parameter: bytesType, result: bytesType },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("oversized allocation fixture did not compile");
+  const oversizedBytes = new Uint8Array(0);
+  Object.defineProperty(oversizedBytes, "byteLength", { value: 0xffff_0000 });
+  try {
+    await rejects(
+      () =>
+        runFunctionalWasmModule(compilation.module, {
+          argument: { kind: "bytes", value: oversizedBytes },
+        }),
+      (error) => {
+        ok(error instanceof FunctionalWasmBoundaryError);
+        equal(error.path, "argument");
+        ok(error.message.includes("allocation requires 4294901776 aligned bytes"));
+        return true;
+      },
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("rejects malformed scalar host results without coercion", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
