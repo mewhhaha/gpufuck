@@ -178,11 +178,11 @@ function decodeCoreNodes(words: DataView, nodeCount: number): readonly LazuliCor
       `GPU Lazuli core readback has ${words.byteLength} bytes for ${nodeCount} nodes; expected ${expectedByteLength}`,
     );
   }
-  const nodes: LazuliCoreNode[] = [];
+  const nodes = new Array<LazuliCoreNode>(nodeCount);
   for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex++) {
     const byteOffset = nodeIndex * LAZULI_NODE_BYTE_LENGTH;
     const tag = decodeCoreTag(words.getUint32(byteOffset, true), nodeIndex);
-    nodes.push({
+    nodes[nodeIndex] = Object.freeze({
       tag,
       payload: words.getUint32(byteOffset + 4, true),
       child0: words.getUint32(byteOffset + 8, true),
@@ -193,7 +193,7 @@ function decodeCoreNodes(words: DataView, nodeCount: number): readonly LazuliCor
       evaluationMode: decodeEvaluationMode(words.getUint32(byteOffset + 28, true), nodeIndex),
     });
   }
-  return deepFreeze(nodes);
+  return Object.freeze(nodes);
 }
 
 function decodeEvaluationMode(value: number, nodeIndex: number): LazuliEvaluationMode {

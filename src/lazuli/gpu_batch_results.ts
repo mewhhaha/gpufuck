@@ -47,6 +47,7 @@ export async function finishBatchInferenceResults(
   lanes: readonly BatchLane[],
   terminal: readonly (TerminalInference | undefined)[],
   terminalOutputs: readonly (ArrayBuffer | undefined)[],
+  terminalCoreNodes: readonly (ArrayBuffer | undefined)[],
   results: (LazuliCompileResult | undefined)[],
   workspaceBuffer: GPUBuffer,
   outputBuffer: GPUBuffer,
@@ -209,6 +210,7 @@ export async function finishBatchInferenceResults(
           completed.semanticState.entryDefinition,
           mainType,
           publicTypeMetadata(lane.surface).typeDeclarations,
+          terminalCoreNodes[laneIndex],
         );
         completedModules.push(module);
         results[lane.resultIndex] = { ok: true, module };

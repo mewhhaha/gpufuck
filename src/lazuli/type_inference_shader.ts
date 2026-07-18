@@ -750,6 +750,11 @@ const FRAME_SUBSUME: u32 = 30u;
 const FRAME_FORALL_SEARCH: u32 = 31u;
 const FRAME_SCHEMA_OCCURRENCE: u32 = 32u;
 
+fn type_kind_is_primitive(kind: u32) -> bool {
+  return kind == TYPE_INTEGER || kind == TYPE_BOOLEAN || kind == TYPE_UNIT ||
+    kind == TYPE_SIGNED_INTEGER_64 || kind == TYPE_FLOAT_32 || kind == TYPE_FLOAT_64;
+}
+
 const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
 const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
 const TAG_LET: u32 = ${LazuliCoreTag.Let}u;
@@ -1640,7 +1645,13 @@ fn local_lookup_transition(frame: u32) {
     pop_work_frame();
     return;
   }
-  if !start_instantiate(workspace[address]) { return; }
+  let scheme = workspace[address];
+  if type_kind_is_primitive(type_get(scheme, 0u)) {
+    state.returned_type = scheme;
+    pop_work_frame();
+    return;
+  }
+  if !start_instantiate(scheme) { return; }
   frame_set(frame, 1u, 1u);
 }
 
@@ -2574,12 +2585,24 @@ fn expression_transition() {
     if node.tag == TAG_FLOAT_32 { complete_expression(4u); return; }
     if node.tag == TAG_FLOAT_64 { complete_expression(5u); return; }
     if node.tag == TAG_LOCAL {
+      let expected = frame_get(frame, 11u);
+      if node.payload == 0u && environment != NO_INDEX && expected != NO_INDEX {
+        let scheme = workspace[environment_address(environment)];
+        if scheme == expected && type_kind_is_primitive(type_get(scheme, 0u)) {
+          complete_expression(scheme);
+          return;
+        }
+      }
       if start_local_lookup(node.payload, environment, node_index) { frame_set(frame, 1u, 90u); }
       return;
     }
     if node.tag == TAG_GLOBAL {
       let scheme = scratch_get(0u, node.payload);
       if scheme == NO_INDEX { invalid_input(ERROR_INVALID_SURFACE, node_index); return; }
+      if type_kind_is_primitive(type_get(scheme, 0u)) {
+        complete_expression(scheme);
+        return;
+      }
       if start_instantiate(scheme) { frame_set(frame, 1u, 91u); }
       return;
     }
@@ -2696,6 +2719,16 @@ fn expression_transition() {
 
   if stage == 1u {
     state.current_level = frame_get(frame, 9u);
+    if type_kind_is_primitive(type_get(state.returned_type, 0u)) {
+      if !require_environment_slots(1u) || !require_frame_slots(1u) { return; }
+      let body_environment = allocate_environment(state.returned_type, environment);
+      if state.status != STATUS_PENDING { return; }
+      frame_set(frame, 1u, 2u);
+      if push_expression(node.child1, body_environment) {
+        frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+      }
+      return;
+    }
     if start_generalize(state.returned_type, state.current_level) { frame_set(frame, 1u, 3u); }
     return;
   }
@@ -2947,6 +2980,10 @@ fn expression_transition() {
 
   if stage == 50u {
     let operand_type = numeric_type_index_for_unary(node.payload);
+    if operand_type == state.returned_type {
+      complete_expression(operand_type);
+      return;
+    }
     if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 51u);
     }
@@ -2959,6 +2996,14 @@ fn expression_transition() {
 
   if stage == 60u {
     let operand_type = numeric_type_index_for_operator(node.payload);
+    if operand_type == state.returned_type {
+      if !require_frame_slots(1u) { return; }
+      frame_set(frame, 1u, 61u);
+      if push_expression(node.child1, environment) {
+        frame_set(state.frame_top - 1u, 11u, operand_type);
+      }
+      return;
+    }
     if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 62u);
     }
@@ -2974,6 +3019,11 @@ fn expression_transition() {
   }
   if stage == 61u {
     let operand_type = numeric_type_index_for_operator(node.payload);
+    if operand_type == state.returned_type {
+      complete_expression(select(
+        operand_type, 1u, numeric_operator_is_comparison(node.payload)));
+      return;
+    }
     if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 63u);
     }

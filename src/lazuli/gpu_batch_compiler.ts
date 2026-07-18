@@ -331,6 +331,7 @@ async function runPackedCompilation(
     const results: (LazuliCompileResult | undefined)[] = new Array(lanes.length);
     const terminalInference: (TerminalInference | undefined)[] = new Array(lanes.length);
     const terminalOutputs: (ArrayBuffer | undefined)[] = new Array(lanes.length);
+    const terminalCoreNodes: (ArrayBuffer | undefined)[] = new Array(lanes.length);
     const previousSemanticSteps = new Uint32Array(lanes.length);
     const previousInferenceTransitions = new Uint32Array(lanes.length);
     let terminalLaneCount = 0;
@@ -346,6 +347,7 @@ async function runPackedCompilation(
         semanticStateBuffer,
         inferenceStateBuffer,
         stateReadbackBuffer,
+        coreBuffer,
         outputBuffer,
         lanes,
         fastCompletion,
@@ -441,6 +443,16 @@ async function runPackedCompilation(
               outputByteOffset + outputByteLength,
             );
           }
+          if (
+            fastCompletion &&
+            inferenceState.status === LazuliInferenceStatus.Complete
+          ) {
+            const coreByteOffset = fastCoreByteOffset(lanes, lane);
+            terminalCoreNodes[laneIndex] = stateBytes.slice(
+              coreByteOffset,
+              coreByteOffset + lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH,
+            );
+          }
           terminalLaneCount++;
           continue;
         }
@@ -464,6 +476,7 @@ async function runPackedCompilation(
       lanes,
       terminalInference,
       terminalOutputs,
+      terminalCoreNodes,
       results,
       workspaceBuffer,
       outputBuffer,
@@ -793,7 +806,8 @@ async function allocateBatchBuffers(
       stateReadback: create(
         "Lazuli packed state readback",
         lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
-          totals.fastOutputRecords * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
+          totals.fastOutputRecords * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES +
+          totals.nodes * LAZULI_NODE_BYTE_LENGTH,
         GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
       ),
     };
@@ -829,6 +843,7 @@ async function dispatchBatch(
   semanticStateBuffer: GPUBuffer,
   inferenceStateBuffer: GPUBuffer,
   stateReadbackBuffer: GPUBuffer,
+  coreBuffer: GPUBuffer,
   outputBuffer: GPUBuffer,
   lanes: readonly BatchLane[],
   fastCompletion: boolean,
@@ -900,6 +915,19 @@ async function dispatchBatch(
             fastOutputByteLength,
           );
         }
+      }
+      const lastLane = lanes.at(-1);
+      if (lastLane === undefined) throw new Error("packed dispatch omitted all lanes");
+      const coreByteLength = (lastLane.nodeBase + lastLane.surface.nodeCount) *
+        LAZULI_NODE_BYTE_LENGTH;
+      if (coreByteLength > 0) {
+        commands.copyBufferToBuffer(
+          coreBuffer,
+          0,
+          stateReadbackBuffer,
+          fastCoreBaseByteOffset(lanes),
+          coreByteLength,
+        );
       }
     }
     signal?.throwIfAborted();
@@ -1007,6 +1035,18 @@ function inferenceStateByteOffset(laneIndex: number): number {
 function fastOutputByteOffset(laneCount: number, lane: BatchLane): number {
   return laneCount * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
     lane.fastOutputBase * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
+}
+
+function fastCoreByteOffset(lanes: readonly BatchLane[], lane: BatchLane): number {
+  return fastCoreBaseByteOffset(lanes) + lane.nodeBase * LAZULI_NODE_BYTE_LENGTH;
+}
+
+function fastCoreBaseByteOffset(lanes: readonly BatchLane[]): number {
+  const lastLane = lanes.at(-1);
+  if (lastLane === undefined) throw new Error("packed core readback omitted all lanes");
+  const fastOutputRecords = lastLane.fastOutputBase + lastLane.fastOutputCapacity;
+  return lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
+    fastOutputRecords * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
 }
 
 class PackedAllocationError extends Error {
