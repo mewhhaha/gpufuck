@@ -66,6 +66,7 @@ export const FunctionalWasmIntrinsic = {
   BufferByteLength: "buffer-byte-length",
   BufferByteGet: "buffer-byte-get",
   BufferByteSlice: "buffer-byte-slice",
+  BufferGenerate: "buffer-generate",
   BufferAppend: "buffer-append",
   BufferEqual: "buffer-equal",
   BufferConvert: "buffer-convert",
@@ -264,10 +265,12 @@ export function normalizeFunctionalHostCapabilities(
           } has unsupported result ownership ${JSON.stringify(field.resultOwnership)}`,
         );
       }
-      requireHostType(
-        field.parameter,
-        `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} parameter`,
-      );
+      if (field.wasmIntrinsic !== FunctionalWasmIntrinsic.BufferGenerate) {
+        requireHostType(
+          field.parameter,
+          `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} parameter`,
+        );
+      }
       requireHostType(
         field.result,
         `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} result`,
@@ -346,6 +349,17 @@ function requireWasmIntrinsicSignature(
     requireTypeKind(start, "integer", `${location} start`);
     requireTypeKind(end, "integer", `${location} end`);
     requireSameBufferType(buffer, field.result, location);
+    return;
+  }
+  if (intrinsic === FunctionalWasmIntrinsic.BufferGenerate) {
+    const [length, generate] = requireTupleType(field.parameter, `${location} parameter`);
+    requireTypeKind(length, "integer", `${location} length`);
+    if (generate.kind !== "function") {
+      throw new Error(`functional WASM intrinsic ${location} generator must be a function`);
+    }
+    requireTypeKind(generate.parameter, "integer", `${location} generator parameter`);
+    requireTypeKind(generate.result, "integer", `${location} generator result`);
+    requireBufferType(field.result, `${location} result`);
     return;
   }
   const [left, right] = requireTupleType(field.parameter, `${location} parameter`);

@@ -1097,6 +1097,77 @@ Deno.test("executes Text and Bytes intrinsics inside WebAssembly", async () => {
   }
 });
 
+Deno.test("generates Bytes with a source callback inside WebAssembly", async () => {
+  const integer = { kind: "integer" } as const;
+  const generator = surface.lambda(
+    "index",
+    surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.name("index"),
+      surface.integer(65),
+    ),
+  );
+  const argument = surface.apply(
+    surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+    surface.integer(4),
+    generator,
+  );
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["generate"],
+          body: surface.apply(surface.name("generate"), argument),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Buffer",
+        fields: [{
+          kind: "operation",
+          name: "generate",
+          purity: "pure",
+          parameter: {
+            kind: "tuple",
+            values: [
+              integer,
+              { kind: "function", parameter: integer, result: integer },
+            ],
+          },
+          result: FunctionalHostTypes.bytes,
+          resultOwnership: "unique",
+          wasmIntrinsic: FunctionalWasmIntrinsic.BufferGenerate,
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) {
+    throw new Error("native byte generation module did not compile");
+  }
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, {
+      kind: "bytes",
+      value: new Uint8Array([65, 66, 67, 68]),
+    });
+    const wasmModule = await WebAssembly.compile(execution.bytes);
+    deepStrictEqual(WebAssembly.Module.imports(wasmModule), []);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("returns structured tuples through the stable WebAssembly aggregate ABI", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{

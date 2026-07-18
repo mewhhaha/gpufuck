@@ -387,11 +387,18 @@ class FunctionalWasmCompiler {
             `host value ${JSON.stringify(`${capability.name}.${declaration.name}`)}`,
           );
         } else {
-          requireFirstOrderFunctionalWasmType(
-            module,
-            concreteFunctionalType(declaration.parameter),
-            `host operation ${JSON.stringify(`${capability.name}.${declaration.name}`)} parameter`,
-          );
+          if (
+            declaration.wasmIntrinsic !==
+              FunctionalWasmIntrinsic.BufferGenerate
+          ) {
+            requireFirstOrderFunctionalWasmType(
+              module,
+              concreteFunctionalType(declaration.parameter),
+              `host operation ${
+                JSON.stringify(`${capability.name}.${declaration.name}`)
+              } parameter`,
+            );
+          }
           requireFirstOrderFunctionalWasmType(
             module,
             concreteFunctionalType(declaration.result),
@@ -4092,6 +4099,49 @@ class FunctionalWasmCompiler {
     }
 
     const second = this.objectField(instructions, tuple, 1);
+    if (intrinsic === FunctionalWasmIntrinsic.BufferGenerate) {
+      const length = this.decodedInteger(instructions, first);
+      instructions.localGet(length);
+      instructions.i32Const(0);
+      instructions.emit(0x48, 0x04, 0x40);
+      this.emitRuntimeFault(instructions, WASM_FAULT_OUT_OF_BOUNDS);
+      instructions.emit(0x0b);
+      const generator = this.objectPointer(instructions, second);
+      const result = this.allocateBuffer(
+        instructions,
+        this.bufferObjectKind(resultType),
+        length,
+      );
+      const index = instructions.addLocal(WasmValueType.I32);
+      instructions.i32Const(0);
+      instructions.localSet(index);
+      instructions.emit(0x02, 0x40, 0x03, 0x40);
+      instructions.localGet(index);
+      instructions.localGet(length);
+      instructions.emit(0x4f);
+      instructions.branchIf(1);
+      instructions.localGet(result);
+      instructions.localGet(index);
+      instructions.emit(0x6a);
+      instructions.localGet(generator);
+      instructions.localGet(index);
+      this.emitEncodeInteger(instructions);
+      instructions.localGet(generator);
+      instructions.i32Load(4);
+      instructions.callIndirect(2);
+      this.emitForceValue(instructions);
+      this.emitDecodeInteger(instructions);
+      instructions.i32Store8(OBJECT_HEADER_BYTE_LENGTH);
+      instructions.localGet(index);
+      instructions.i32Const(1);
+      instructions.emit(0x6a);
+      instructions.localSet(index);
+      instructions.branch(0);
+      instructions.emit(0x0b, 0x0b);
+      instructions.localGet(result);
+      instructions.emit(0xad);
+      return;
+    }
     const bufferType = parameter.values[0];
     const left = this.bufferPointer(instructions, first, bufferType);
     if (intrinsic === FunctionalWasmIntrinsic.BufferByteSlice) {
