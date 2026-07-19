@@ -2,11 +2,19 @@
   "parser": {
     "resolutions": [
       {
-        "conflict": "c_53372f1ac7e80942",
+        "conflict": "c_ba64ceec2a6426d8",
         "prefer": "shift"
       },
       {
-        "conflict": "c_bc17b35feab409f8",
+        "conflict": "c_f64192c4725ec1d6",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_ae389804341a9dbf",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_24b553d21a6afa80",
         "prefer": "shift"
       }
     ]

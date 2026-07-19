@@ -14,8 +14,10 @@ import type {
   GpuFunctionalModule,
 } from "./compiler_module.ts";
 import {
+  FUNCTIONAL_BYTES_TYPE_NAME,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
+  FUNCTIONAL_TEXT_TYPE_NAME,
   type FunctionalHostFieldDeclaration,
   type FunctionalHostType,
   FunctionalWasmIntrinsic,
@@ -1111,6 +1113,29 @@ class FunctionalWasmCompiler {
         this.compileFloat64Expression(instructions, nodeIndex, environment);
         this.emitBoxFloat64(instructions);
         return;
+      case FunctionalCoreTag.WholeNumberF64:
+        this.compileWholeNumberF64Expression(instructions, nodeIndex, environment);
+        this.emitBoxFloat64(instructions);
+        return;
+      case FunctionalCoreTag.BufferAppend: {
+        const typeName = this.#module.typeNames[node.child2];
+        if (typeName !== FUNCTIONAL_TEXT_TYPE_NAME && typeName !== FUNCTIONAL_BYTES_TYPE_NAME) {
+          throw new Error(
+            `functional WASM buffer append at core node ${nodeIndex} references non-buffer type ${
+              JSON.stringify(typeName)
+            } at index ${node.child2}`,
+          );
+        }
+        const type: FunctionalHostType = {
+          kind: "named",
+          name: typeName,
+          arguments: [],
+        };
+        this.compileExpression(instructions, node.child0, environment);
+        this.compileExpression(instructions, node.child1, environment);
+        this.#hostEmitter.emitBufferAppendValues(instructions, type);
+        return;
+      }
       case FunctionalCoreTag.Text:
       case FunctionalCoreTag.Bytes: {
         const symbol = this.#module.symbolNames[node.payload];
@@ -2365,6 +2390,12 @@ class FunctionalWasmCompiler {
       this.emitBoxFloat64(instructions);
       return;
     }
+    if (node.payload === FunctionalUnaryOperator.NegateWholeNumberF64) {
+      this.compileWholeNumberF64Expression(instructions, node.child0, environment);
+      instructions.emit(0x9a);
+      this.emitBoxFloat64(instructions);
+      return;
+    }
     if (node.payload === FunctionalUnaryOperator.SquareRootFloat32) {
       this.compileFloat32Expression(instructions, node.child0, environment);
       instructions.emit(0x91);
@@ -2926,11 +2957,49 @@ class FunctionalWasmCompiler {
     } else if (group === "float-32") {
       this.compileFloat32Expression(instructions, node.child0, environment);
       this.compileFloat32Expression(instructions, node.child1, environment);
-    } else {
+    } else if (group === "float-64") {
       this.compileFloat64Expression(instructions, node.child0, environment);
       this.compileFloat64Expression(instructions, node.child1, environment);
+    } else {
+      this.compileWholeNumberF64Expression(instructions, node.child0, environment);
+      this.compileWholeNumberF64Expression(instructions, node.child1, environment);
     }
     this.emitNumericBinary(instructions, node.payload, nodeIndex);
+  }
+
+  compileWholeNumberF64Expression(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
+    const node = this.node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.WholeNumberF64:
+        instructions.f64Const(float64FromBits(wideLiteralBits(node)));
+        return;
+      case FunctionalCoreTag.Unary:
+        if (node.payload !== FunctionalUnaryOperator.NegateWholeNumberF64) break;
+        this.compileWholeNumberF64Expression(instructions, node.child0, environment);
+        instructions.emit(0x9a);
+        return;
+      case FunctionalCoreTag.Binary:
+        if (numericOperatorGroup(node.payload) !== "whole-number-f64") break;
+        this.compileWholeNumberF64Expression(instructions, node.child0, environment);
+        this.compileWholeNumberF64Expression(instructions, node.child1, environment);
+        this.emitNumericBinary(instructions, node.payload, nodeIndex);
+        return;
+      case FunctionalCoreTag.If:
+        this.compileBooleanExpression(instructions, node.child0, environment);
+        instructions.emit(0x04, WasmValueType.F64);
+        this.compileWholeNumberF64Expression(instructions, node.child1, environment);
+        instructions.emit(0x05);
+        this.compileWholeNumberF64Expression(instructions, node.child2, environment);
+        instructions.emit(0x0b);
+        return;
+    }
+    this.compileExpression(instructions, nodeIndex, environment);
+    this.emitUnboxFloat64(instructions);
   }
 
   compileNumericConversion(
@@ -3035,6 +3104,34 @@ class FunctionalWasmCompiler {
     operator: number,
     nodeIndex: number,
   ): void {
+    if (
+      operator === FunctionalBinaryOperator.DivideWholeNumberF64 ||
+      operator === FunctionalBinaryOperator.RemainderWholeNumberF64
+    ) {
+      const divisor = instructions.addLocal(WasmValueType.F64);
+      instructions.localSet(divisor);
+      const dividend = instructions.addLocal(WasmValueType.F64);
+      instructions.localSet(dividend);
+      instructions.localGet(divisor);
+      instructions.f64Const(0);
+      instructions.emit(0x61, 0x04, WasmValueType.F64);
+      instructions.f64Const(0);
+      instructions.emit(0x05);
+      instructions.localGet(dividend);
+      instructions.localGet(divisor);
+      instructions.emit(0xa3, 0x9d);
+      if (operator === FunctionalBinaryOperator.RemainderWholeNumberF64) {
+        instructions.localGet(divisor);
+        instructions.emit(0xa2);
+        const multiple = instructions.addLocal(WasmValueType.F64);
+        instructions.localSet(multiple);
+        instructions.localGet(dividend);
+        instructions.localGet(multiple);
+        instructions.emit(0xa1);
+      }
+      instructions.emit(0x0b);
+      return;
+    }
     const opcode = numericBinaryOpcode(operator);
     if (opcode === undefined) {
       throw new Error(
@@ -3113,10 +3210,13 @@ class FunctionalWasmCompiler {
       if (group === "signed-integer-64") {
         this.emitBoxSignedInteger64(instructions);
       } else if (group === "float-32") this.emitBoxFloat32(instructions);
-      else if (group === "float-64") this.emitBoxFloat64(instructions);
-      else {throw new Error(
+      else if (group === "float-64" || group === "whole-number-f64") {
+        this.emitBoxFloat64(instructions);
+      } else {
+        throw new Error(
           `functional WASM operator ${node.payload} has invalid numeric group`,
-        );}
+        );
+      }
       return;
     }
     if (isComparisonOperator(node.payload)) {
@@ -3674,6 +3774,7 @@ class FunctionalWasmCompiler {
       case FunctionalCoreTag.SignedInteger64:
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.WholeNumberF64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Lambda:
       case FunctionalCoreTag.Constructor:

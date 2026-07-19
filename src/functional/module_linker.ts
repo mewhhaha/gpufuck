@@ -564,6 +564,7 @@ function rewriteExpression(
     case "signed-integer-64":
     case "float-32":
     case "float-64":
+    case "whole-number-f64":
     case "boolean":
     case "text":
     case "bytes":
@@ -639,6 +640,8 @@ function rewriteExpression(
     case "unary":
       return { ...expression, value: rewrite(expression.value), span };
     case "binary":
+    case "text-append":
+    case "bytes-append":
       return {
         ...expression,
         left: rewrite(expression.left),

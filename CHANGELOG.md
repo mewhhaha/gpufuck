@@ -11,6 +11,11 @@ All notable changes to gpufuck are documented here. The project follows
 - Added direct host-bound definitions for source-language external functions.
 - Expanded the Gleam frontend with inferred module interfaces, labeled calls and records, guards,
   multiple-subject cases, exact lists, bit arrays, panic, and JavaScript externals.
+- Added f64-backed whole-number primitives for Gleam-compatible `Int`, direct text and byte
+  concatenation, destructuring lets, exact and prefix string patterns, float patterns, module
+  aliases, external opaque types, and target-specific fallback bodies.
+- Added a pinned upstream Gleam stdlib execution check and value-level differential coverage against
+  the official Gleam JavaScript backend.
 
 ## 0.1.0 - 2026-07-18
 

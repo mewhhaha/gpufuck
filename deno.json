@@ -132,6 +132,7 @@
     "bench:functional-wasm": "deno bench benchmarks/functional_wasm_bench.ts",
     "bench:lazuli": "deno bench --allow-read=language/lazuli/generated benchmarks/lazuli_compiler_bench.ts",
     "compare:type-programming": "deno run --allow-read --allow-run=zig --allow-write=/tmp tools/compare_type_programming.ts",
+    "check:gleam-stdlib": "deno run --allow-read --allow-run=git --allow-write=/tmp tools/check_gleam_stdlib.ts",
     "profile:lazuli-compiler": "deno run --allow-read tools/profile_lazuli_compiler.ts",
     "publish:dry-run": "deno publish --dry-run --allow-dirty",
     "compile": "deno run --allow-read cli.ts",
@@ -160,6 +161,7 @@
     "trace:ocaml-functional": "deno run --allow-read --allow-write ocaml_functional_cli.ts trace",
     "trace:onesubml-functional": "deno run --allow-read --allow-write onesubml_functional_cli.ts trace",
     "trace:rust-functional": "deno run --allow-read --allow-write rust_functional_cli.ts trace",
-    "test": "DENO_JOBS=2 deno test --parallel --allow-read tests/*.ts"
+    "test": "DENO_JOBS=2 deno test --parallel --allow-read tests/*.ts",
+    "test:gleam-differential": "deno test -A tests/gleam_differential_test.ts"
   }
 }

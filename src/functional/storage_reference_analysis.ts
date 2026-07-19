@@ -107,6 +107,7 @@ export function analyzeFunctionalStorageReferences(
       case FunctionalCoreTag.SignedInteger64:
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.WholeNumberF64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Local:
       case FunctionalCoreTag.Constructor:
@@ -249,6 +250,7 @@ export function analyzeFunctionalStorageReferences(
         });
         continue;
       case FunctionalCoreTag.Binary:
+      case FunctionalCoreTag.BufferAppend:
         pending.push({
           nodeIndex: node.child1,
           environment,

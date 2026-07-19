@@ -614,6 +614,12 @@ function formatWorkspaceType(
         return "Bool";
       case 6:
         return "()";
+      case 13:
+        return "I64";
+      case 14:
+        return "F32";
+      case 15:
+        return "F64";
       case 7:
         return `(${format(typeWord(typeIndex, 2), false)}, ${
           format(typeWord(typeIndex, 3), false)

@@ -52,6 +52,7 @@ function elaborateExpression(
     case "signed-integer-64":
     case "float-32":
     case "float-64":
+    case "whole-number-f64":
     case "boolean":
     case "text":
     case "bytes":
@@ -101,6 +102,8 @@ function elaborateExpression(
     case "numeric-convert":
       return { ...expression, value: elaborate(expression.value) };
     case "binary":
+    case "text-append":
+    case "bytes-append":
       return {
         ...expression,
         left: elaborate(expression.left),
@@ -196,6 +199,7 @@ function rewriteNames(
     case "signed-integer-64":
     case "float-32":
     case "float-64":
+    case "whole-number-f64":
     case "boolean":
     case "text":
     case "bytes":
@@ -252,6 +256,8 @@ function rewriteNames(
     case "numeric-convert":
       return { ...expression, value: rewrite(expression.value) };
     case "binary":
+    case "text-append":
+    case "bytes-append":
       return { ...expression, left: rewrite(expression.left), right: rewrite(expression.right) };
     case "case":
       return {

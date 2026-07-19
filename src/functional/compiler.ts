@@ -49,6 +49,7 @@ import type {
   FunctionalCompileResult,
   GpuFunctionalModule,
 } from "./compiler_module.ts";
+import { registerCompleteFunctionalTypeDeclarations } from "./compiler_module.ts";
 import { concreteFunctionalType } from "./wasm_value_codec.ts";
 
 export type {
@@ -545,10 +546,11 @@ function functionalModule(
     boundDefinitions.add(binding.definition);
     return Object.freeze({ ...binding });
   });
-  return {
+  const functional = {
     ...module,
     symbolNames: Object.freeze([...encodedModule.symbolNames]),
     definitionNames: Object.freeze(definitionNames),
+    typeNames: Object.freeze(encodedModule.typeDeclarations.map((declaration) => declaration.name)),
     definitionRoots: Object.freeze(definitionRoots),
     hostCapabilities,
     hostDefinitions: Object.freeze(hostDefinitions),
@@ -560,6 +562,8 @@ function functionalModule(
     readCoreNodes: async () => await module.readCoreNodes(),
     destroy: () => module.destroy(),
   };
+  registerCompleteFunctionalTypeDeclarations(functional, encodedModule.typeDeclarations);
+  return functional;
 }
 
 function schemaShape(schema: FunctionalTypeSchema): unknown {

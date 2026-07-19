@@ -21,6 +21,7 @@ export class FunctionalWasmCaptureAnalysis {
       case FunctionalCoreTag.SignedInteger64:
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.WholeNumberF64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Text:
       case FunctionalCoreTag.Bytes:
@@ -38,6 +39,7 @@ export class FunctionalWasmCaptureAnalysis {
         break;
       case FunctionalCoreTag.Apply:
       case FunctionalCoreTag.Binary:
+      case FunctionalCoreTag.BufferAppend:
         depths = mergeLocalDepths(
           this.freeLocalDepths(node.child0),
           this.freeLocalDepths(node.child1),
@@ -89,6 +91,7 @@ export class FunctionalWasmCaptureAnalysis {
       case FunctionalCoreTag.SignedInteger64:
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.WholeNumberF64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Text:
       case FunctionalCoreTag.Bytes:
@@ -101,6 +104,7 @@ export class FunctionalWasmCaptureAnalysis {
         return this.localReferenceCount(node.child0, localDepth);
       case FunctionalCoreTag.Apply:
       case FunctionalCoreTag.Binary:
+      case FunctionalCoreTag.BufferAppend:
         return this.localReferenceCount(node.child0, localDepth) +
           this.localReferenceCount(node.child1, localDepth);
       case FunctionalCoreTag.If:

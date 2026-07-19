@@ -1,3 +1,4 @@
+"!" @operator
 "#" @operator
 "&&" @operator
 "(" @punctuation.bracket
@@ -8,6 +9,7 @@
 ":" @punctuation.delimiter
 "<-" @operator
 "<<" @operator
+"<>" @operator
 "=" @operator
 ">>" @operator
 "@external" @operator
@@ -63,14 +65,17 @@
 (float_minus) @number
 (float_star) @number
 (float_slash) @number
-(string_bit_array_segment) @string
-(integer_bit_array_segment) @number
+(boolean_not) @constant.builtin
+(field_access) @variable.other.member
 (string_expression) @string
 (float_expression) @number
 (integer_expression) @number
 (boolean_expression) @constant.builtin
 (integer_pattern) @number
+(float_pattern) @number
 (boolean_pattern) @constant.builtin
+(string_prefix_pattern) @string
+(string_pattern) @string
 (FLOAT) @number
 (INTEGER) @number
 (STRING) @string
@@ -83,7 +88,6 @@
 (labeled_function_parameter label: (IDENT) @label)
 (labeled_function_parameter name: (IDENT) @function)
 (labeled_pattern_argument label: (IDENT) @label)
-(let_binding name: (IDENT) @variable)
 (named_type name: (qualified_name) @type)
 (positional_function_parameter name: (IDENT) @function)
 (type_declaration name: (IDENT) @type)

@@ -4,6 +4,7 @@ import {
   FunctionalCoreTag,
   FunctionalEvaluationMode,
   type FunctionalEvaluationMode as FunctionalEvaluationModeValue,
+  FunctionalUnaryOperator,
 } from "./abi.ts";
 import type { FunctionalCoreNode } from "./compiler_module.ts";
 
@@ -141,6 +142,7 @@ export class FunctionalWasmFunctionAnalysis {
       case FunctionalCoreTag.SignedInteger64:
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.WholeNumberF64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Text:
       case FunctionalCoreTag.Bytes:
@@ -153,6 +155,7 @@ export class FunctionalWasmFunctionAnalysis {
       case FunctionalCoreTag.NumericConvert:
         return this.canEvaluateEagerly(node.child0);
       case FunctionalCoreTag.Binary:
+      case FunctionalCoreTag.BufferAppend:
         return node.payload !== FunctionalBinaryOperator.Divide &&
           this.canEvaluateEagerly(node.child0) && this.canEvaluateEagerly(node.child1);
       case FunctionalCoreTag.If:
@@ -337,6 +340,7 @@ export class FunctionalWasmFunctionAnalysis {
       case FunctionalCoreTag.SignedInteger64:
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.WholeNumberF64:
       case FunctionalCoreTag.Boolean:
       case FunctionalCoreTag.Text:
       case FunctionalCoreTag.Bytes:
@@ -352,6 +356,7 @@ export class FunctionalWasmFunctionAnalysis {
           scope,
         );
       case FunctionalCoreTag.Binary:
+      case FunctionalCoreTag.BufferAppend:
       case FunctionalCoreTag.Apply:
         return this.#containsSelfReference(
           node.child0,
@@ -592,11 +597,15 @@ export class FunctionalWasmFunctionAnalysis {
       }
       switch (node.tag) {
         case FunctionalCoreTag.Unary:
-          visit(node.child0, binderDepth, true);
+          visit(
+            node.child0,
+            binderDepth,
+            node.payload === FunctionalUnaryOperator.Negate,
+          );
           return;
         case FunctionalCoreTag.Binary:
-          visit(node.child0, binderDepth, true);
-          visit(node.child1, binderDepth, true);
+          visit(node.child0, binderDepth, integerOperator(node.payload));
+          visit(node.child1, binderDepth, integerOperator(node.payload));
           return;
         case FunctionalCoreTag.Lambda:
         case FunctionalCoreTag.PatternBind:
@@ -645,10 +654,18 @@ export class FunctionalWasmFunctionAnalysis {
   }
 }
 
+function integerOperator(operator: number): boolean {
+  return operator >= FunctionalBinaryOperator.Equal &&
+      operator <= FunctionalBinaryOperator.Divide ||
+    operator >= FunctionalBinaryOperator.Remainder &&
+      operator <= FunctionalBinaryOperator.ShiftRightUnsigned;
+}
+
 function coreNodeChildren(node: FunctionalCoreNode): readonly number[] {
   switch (node.tag) {
     case FunctionalCoreTag.SignedInteger64:
     case FunctionalCoreTag.Float64:
+    case FunctionalCoreTag.WholeNumberF64:
     case FunctionalCoreTag.Integer:
     case FunctionalCoreTag.Float32:
     case FunctionalCoreTag.Boolean:
@@ -668,6 +685,7 @@ function coreNodeChildren(node: FunctionalCoreNode): readonly number[] {
     case FunctionalCoreTag.Let:
     case FunctionalCoreTag.LetRec:
     case FunctionalCoreTag.Binary:
+    case FunctionalCoreTag.BufferAppend:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:
       return [node.child0, node.child1];

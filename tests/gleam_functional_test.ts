@@ -72,6 +72,24 @@ pub fn main() -> Float {
   deepStrictEqual(await evaluate(frontend.lowered), { kind: "float-64", value: 4 });
 });
 
+Deno.test("matches exhaustive Gleam float patterns", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "float_pattern",
+    `
+pub fn main() -> Int {
+  case -0.5 {
+    -0.5 -> 42
+    _ -> 0
+  }
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+});
+
 Deno.test("preserves UTF-8 Gleam string literals through WASM", async () => {
   const frontend = lowerGleamFunctionalSource(
     "string_literal",
@@ -79,16 +97,153 @@ Deno.test("preserves UTF-8 Gleam string literals through WASM", async () => {
   );
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
-  const { compiler } = gleamRuntime();
-  const compilation = await compiler.compileModule(frontend.lowered.module);
-  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
-  if (!compilation.ok) return;
-  try {
-    const execution = await runFunctionalWasmModule(compilation.module);
-    deepStrictEqual(execution.value, { kind: "text", value: "Zażółć 🦆" });
-  } finally {
-    compilation.module.destroy();
+
+  deepStrictEqual(await evaluateWasm(frontend.lowered), {
+    kind: "text",
+    value: "Zażółć 🦆",
+  });
+});
+
+Deno.test("evaluates portable Gleam integers beyond the i32 range", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "wide_integers",
+    `
+pub fn main() -> Int {
+  let quotient = 4_000_000_009 / 3
+  let remainder = 4_000_000_009 % 3
+  quotient + remainder
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), {
+    kind: "integer",
+    value: 1_333_333_337,
+  });
+});
+
+Deno.test("lowers Gleam string concatenation and exact string patterns", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "string_patterns",
+    `
+fn classify(value: String) -> String {
+  case value {
+    "gpufuck" -> "exact"
+    "gpu" <> rest -> rest
+    _ -> "other"
   }
+}
+
+pub fn main() -> String {
+  classify("gpu" <> "fuck") <> classify("gpu-fast")
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluateWasm(frontend.lowered), { kind: "text", value: "exact-fast" });
+});
+
+Deno.test("destructures Gleam tuples and constructors in let bindings", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "let_patterns",
+    `
+pub type Box(value) { Box(value) }
+
+pub fn main() -> Int {
+  let #(left, Box(right)) = #(20, Box(22))
+  left + right
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+});
+
+Deno.test("projects pair fields with Gleam tuple indices", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "tuple_indices",
+    `
+fn total(pair: #(Int, Int)) -> Int {
+  pair.0 + pair.1
+}
+
+pub fn main() -> Int {
+  total(#(20, 22))
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+});
+
+Deno.test("evaluates the final value after sequential Gleam block expressions", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "block_sequence",
+    `pub fn main() -> Int { 20 + 20 42 }\n`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+});
+
+Deno.test("selects JavaScript-targeted declarations before lowering", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "target_selection",
+    `
+@target(erlang)
+fn answer() -> Int { 0 }
+
+@target(javascript)
+fn answer() -> Int { 42 }
+
+pub fn main() -> Int { answer() }
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+});
+
+Deno.test("infers missing pieces of partially annotated Gleam functions", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "partial_annotations",
+    `
+fn choose(left: Int, right) -> Int { right }
+
+pub fn main() -> Int { choose(0, 42) }
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+});
+
+Deno.test("projects keyword-named fields after function calls", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "postfix_fields",
+    `
+pub type Decoder { Decoder(function: fn(Int) -> Int) }
+
+fn decoder() -> Decoder { Decoder(fn(value: Int) -> Int { value + 2 }) }
+
+pub fn main() -> Int { decoder().function(40) }
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
 });
 
 Deno.test("compares nested Gleam algebraic values structurally", async () => {
@@ -165,6 +320,31 @@ pub fn main() -> Int {
   if (!frontend.ok) return;
 
   deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 52 });
+});
+
+Deno.test("recognizes exhaustive nested constructor patterns without a catch-all", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "nested_coverage",
+    `
+pub type Maybe(value) { None Some(value) }
+
+fn sum(values: List(Maybe(Int)), total: Int) -> Int {
+  case values {
+    [] -> total
+    [None, ..rest] -> sum(rest, total)
+    [Some(value), ..rest] -> sum(rest, total + value)
+  }
+}
+
+pub fn main() -> Int {
+  sum([Some(20), None, Some(22)], 0)
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
 });
 
 Deno.test("desugars use bindings and function captures to ordinary callbacks", async () => {
@@ -422,7 +602,7 @@ pub fn main() -> Int {
     const execution = await runFunctionalWasmModule(compilation.module, {
       init: {
         "GleamExternal:./math.mjs": {
-          add: (argument) => {
+          "add@external/add.add": (argument) => {
             if (argument.kind !== "tuple") {
               throw new TypeError(`external add expected a tuple; received ${argument.kind}`);
             }
@@ -432,7 +612,7 @@ pub fn main() -> Int {
             }
             return { kind: "integer", value: left.value + right.value };
           },
-          subtract: (argument) => {
+          "subtract@external/subtract.subtract": (argument) => {
             if (argument.kind !== "tuple") {
               throw new TypeError(`external subtract expected a tuple; received ${argument.kind}`);
             }
@@ -687,6 +867,20 @@ async function evaluate(
       throw new Error(`Gleam example returned ${evaluation.value.kind}.`);
     }
     return evaluation.value;
+  } finally {
+    compilation.module.destroy();
+  }
+}
+
+async function evaluateWasm(
+  lowered: LoweredGleamFunctionalProgram,
+): Promise<{ readonly kind: string; readonly value?: unknown }> {
+  const { compiler } = gleamRuntime();
+  const compilation = await compiler.compileModule(lowered.module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("Gleam example did not compile.");
+  try {
+    return (await runFunctionalWasmModule(compilation.module)).value;
   } finally {
     compilation.module.destroy();
   }

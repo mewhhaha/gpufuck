@@ -2,6 +2,7 @@ import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
 import {
   babaChildRule,
   babaOptionalRuleField,
+  babaOptionalTokenField,
   babaRequiredRuleField,
   babaRequiredTokenField,
   type BabaRuleCursor,
@@ -10,6 +11,7 @@ import {
 } from "../baba_frontend.ts";
 import type {
   GleamFunctionalBinaryOperator,
+  GleamFunctionalBitArraySegment,
   GleamFunctionalCaseArm,
   GleamFunctionalConstant,
   GleamFunctionalConstructor,
@@ -35,7 +37,9 @@ export function parseGleamFunctionalModule(
 ): GleamFunctionalModule {
   if (name.length === 0) throw new Error("Gleam module name must be nonempty");
   const byteOffsets = new BabaUtf8ByteOffsets(source);
-  const parsed = getGleamParser().parse(source, { preserveTrivia: false });
+  const parsed = getGleamParser().parse(normalizeGleamParserSource(source), {
+    preserveTrivia: false,
+  });
   if (!parsed.ok) {
     const diagnostic = parsed.diagnostics[0];
     if (diagnostic === undefined) {
@@ -52,7 +56,9 @@ export function parseGleamFunctionalModule(
   const imports: GleamFunctionalImport[] = [];
   const values: GleamFunctionalDeclaration[] = [];
   for (const declaration of declarations) {
-    const topLevel = babaChildRule(declaration);
+    const child = babaChildRule(declaration);
+    const topLevel = child.name === "top_level_declaration" ? babaChildRule(child) : child;
+    if (declarationTarget(source, topLevel.span.start) === "erlang") continue;
     if (topLevel.name === "import_declaration") imports.push(parseImport(topLevel, byteOffsets));
     else values.push(parseDeclaration(topLevel, byteOffsets));
   }
@@ -62,6 +68,65 @@ export function parseGleamFunctionalModule(
     declarations: values,
     span: { startByte: 0, endByte: byteOffsets.byteLength },
   };
+}
+
+function declarationTarget(source: string, declarationStart: number): string | null {
+  const match = /@target\(([^)]+)\)\s*$/.exec(source.slice(0, declarationStart));
+  return match?.[1] ?? null;
+}
+
+function normalizeGleamParserSource(source: string): string {
+  const normalized = source.split("");
+  let inString = false;
+  let escaped = false;
+  let inComment = false;
+  for (let index = 0; index < normalized.length; index++) {
+    const character = normalized[index]!;
+    if (inComment) {
+      if (character === "\n" || character === "\r") inComment = false;
+      continue;
+    }
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "/" && normalized[index + 1] === "/") {
+      inComment = true;
+      index++;
+      continue;
+    }
+    if (character === "a" && isAssertModifier(source, index)) {
+      for (let keywordIndex = index; keywordIndex < index + "assert".length; keywordIndex++) {
+        normalized[keywordIndex] = " ";
+      }
+      index += "assert".length - 1;
+      continue;
+    }
+    if (character !== ",") continue;
+    let next = index + 1;
+    while (/\s/.test(normalized[next] ?? "")) next++;
+    if (
+      normalized[next] === ")" || normalized[next] === "]" || normalized[next] === "}" ||
+      normalized[next] === ">" && normalized[next + 1] === ">"
+    ) normalized[index] = " ";
+  }
+  return normalized.join("");
+}
+
+function isAssertModifier(source: string, start: number): boolean {
+  if (!source.startsWith("assert", start) || /[A-Za-z0-9_]/.test(source[start + 6] ?? "")) {
+    return false;
+  }
+  let previous = start - 1;
+  while (/\s/.test(source[previous] ?? "")) previous--;
+  if (source.slice(previous - 2, previous + 1) !== "let") return false;
+  return !/[A-Za-z0-9_]/.test(source[previous - 3] ?? "");
 }
 
 function getGleamParser(): GleamParser {
@@ -84,6 +149,7 @@ function parseImport(
   const moduleNode = babaRequiredRuleField(node, "module");
   const module = joinedName(moduleNode, "/");
   const namesNode = babaOptionalRuleField(node, "names");
+  const aliasNode = babaOptionalRuleField(node, "alias");
   const valuesNode = namesNode === null ? null : babaOptionalRuleField(namesNode, "values");
   const names = valuesNode === null ? [] : listRules(valuesNode).map((imported) => {
     const value = babaChildRule(imported);
@@ -96,7 +162,12 @@ function parseImport(
       span: offsets.span(imported.span),
     };
   });
-  return { module, names, span: offsets.span(node.span) };
+  return {
+    module,
+    alias: aliasNode === null ? null : babaRequiredTokenField(aliasNode, "name").text,
+    names,
+    span: offsets.span(node.span),
+  };
 }
 
 function parseDeclaration(
@@ -135,7 +206,19 @@ function parseTypeDeclaration(
     ? null
     : babaOptionalRuleField(parametersNode, "values");
   const parameters = valuesNode === null ? [] : identifierList(valuesNode);
-  const body = babaChildRule(babaRequiredRuleField(node, "body"));
+  const bodyNode = babaOptionalRuleField(node, "body");
+  if (bodyNode === null) {
+    return {
+      kind: "type",
+      public: babaOptionalRuleField(node, "visibility") !== null,
+      opaque: true,
+      name: babaRequiredTokenField(node, "name").text,
+      parameters,
+      constructors: [],
+      span: offsets.span(node.span),
+    };
+  }
+  const body = babaChildRule(bodyNode);
   if (body.name === "type_alias_body") {
     if (babaOptionalRuleField(node, "opacity") !== null) {
       throw new GleamFunctionalSyntaxError(
@@ -194,12 +277,12 @@ function parseFunction(
   const declaration = node.name === "function_declaration" ? babaChildRule(node) : node;
   const parametersNode = babaOptionalRuleField(declaration, "parameters");
   const resultNode = babaOptionalRuleField(declaration, "result");
-  const externalNode = babaOptionalRuleField(declaration, "external");
+  const externalNodes = babaRuleFieldArray(declaration, "external");
   const bodyNode = babaOptionalRuleField(declaration, "body");
-  if ((externalNode === null) === (bodyNode === null)) {
+  if (externalNodes.length === 0 && bodyNode === null) {
     throw new GleamFunctionalSyntaxError(
       offsets.span(declaration.span),
-      "A Gleam function must have either a body or one @external annotation.",
+      "A Gleam function must have a body or at least one @external annotation.",
     );
   }
   return {
@@ -224,15 +307,24 @@ function parseFunction(
       ? null
       : parseType(babaRequiredRuleField(resultNode, "type"), offsets),
     body: bodyNode === null ? null : parseBlock(bodyNode, offsets),
-    external: externalNode === null ? null : {
-      target: babaRequiredTokenField(externalNode, "target").text,
-      module: parseStringToken(
-        babaRequiredTokenField(externalNode, "module"),
-        offsets,
-      ).value,
-      name: parseStringToken(babaRequiredTokenField(externalNode, "name"), offsets).value,
-    },
+    external: selectedExternal(externalNodes, offsets),
     span: offsets.span(node.span),
+  };
+}
+
+function selectedExternal(
+  externalNodes: readonly BabaRuleCursor[],
+  offsets: BabaUtf8ByteOffsets,
+): GleamFunctionalFunction["external"] {
+  const node =
+    externalNodes.find((candidate) =>
+      babaRequiredTokenField(candidate, "target").text === "javascript"
+    ) ?? externalNodes[0];
+  if (node === undefined) return null;
+  return {
+    target: babaRequiredTokenField(node, "target").text,
+    module: parseStringToken(babaRequiredTokenField(node, "module"), offsets).value,
+    name: parseStringToken(babaRequiredTokenField(node, "name"), offsets).value,
   };
 }
 
@@ -280,7 +372,7 @@ function parseType(node: BabaRuleCursor, offsets: BabaUtf8ByteOffsets): GleamFun
     case "Nil":
       return { kind: "unit", span };
     default:
-      return startsLowercase(name)
+      return !name.includes(".") && startsLowercase(name)
         ? { kind: "parameter", name, span }
         : { kind: "named", name, arguments: arguments_, span };
   }
@@ -290,18 +382,36 @@ function parseBlock(
   node: BabaRuleCursor,
   offsets: BabaUtf8ByteOffsets,
 ): GleamFunctionalExpression {
-  let expression = parseExpression(babaRequiredRuleField(node, "result"), offsets);
-  const bindings = babaRuleFieldArray(node, "bindings");
-  for (let index = bindings.length - 1; index >= 0; index--) {
-    const binding = bindings[index]!;
-    const statement = babaChildRule(binding);
+  const entries = babaRuleFieldArray(node, "entries");
+  const result = babaChildRule(entries.at(-1)!);
+  if (result.name !== "expression_statement") {
+    throw new GleamFunctionalSyntaxError(
+      offsets.span(result.span),
+      "A Gleam block must end with an expression.",
+    );
+  }
+  let expression = parseExpression(babaRequiredRuleField(result, "value"), offsets);
+  for (let index = entries.length - 2; index >= 0; index--) {
+    const entry = entries[index]!;
+    const statement = babaChildRule(entry);
+    if (statement.name === "expression_statement") {
+      const value = parseExpression(babaRequiredRuleField(statement, "value"), offsets);
+      expression = {
+        kind: "let",
+        pattern: { kind: "discard", span: offsets.span(statement.span) },
+        value,
+        body: expression,
+        span: offsets.span({ start: entry.span.start, end: node.span.end }),
+      };
+      continue;
+    }
     if (statement.name === "let_binding") {
       expression = {
         kind: "let",
-        name: babaRequiredTokenField(statement, "name").text,
+        pattern: parsePattern(babaRequiredRuleField(statement, "pattern"), offsets),
         value: parseExpression(babaRequiredRuleField(statement, "value"), offsets),
         body: expression,
-        span: offsets.span({ start: binding.span.start, end: node.span.end }),
+        span: offsets.span({ start: entry.span.start, end: node.span.end }),
       };
       continue;
     }
@@ -313,7 +423,7 @@ function parseBlock(
       kind: "lambda",
       parameters: parametersNode === null ? [] : identifierList(parametersNode),
       body: expression,
-      span: offsets.span({ start: binding.span.start, end: node.span.end }),
+      span: offsets.span({ start: entry.span.start, end: node.span.end }),
     };
     const target = parseExpression(babaRequiredRuleField(statement, "value"), offsets);
     expression = target.kind === "call"
@@ -349,6 +459,8 @@ function parseExpression(
     case "additive":
     case "multiplicative":
       return foldNamedOperators(expression, offsets);
+    case "concatenation":
+      return foldOperator(expression, offsets, "<>");
     case "unary":
     case "primary":
       return parseExpression(babaChildRule(expression), offsets);
@@ -365,9 +477,34 @@ function parseExpression(
         span: offsets.span(expression.span),
       };
     }
+    case "boolean_not": {
+      const value = parseExpression(babaRequiredRuleField(expression, "value"), offsets);
+      const span = offsets.span(expression.span);
+      return {
+        kind: "binary",
+        operator: "==",
+        left: value,
+        right: { kind: "boolean", value: false, span },
+        span,
+      };
+    }
     case "call": {
       let result = parseExpression(babaRequiredRuleField(expression, "callee"), offsets);
-      for (const call of babaRuleFieldArray(expression, "calls")) {
+      for (const entry of babaRuleFieldArray(expression, "operations")) {
+        const operation = babaChildRule(entry);
+        if (operation.name === "field_access") {
+          result = {
+            kind: "field-access",
+            value: result,
+            field: nameTailValue(operation),
+            span: offsets.span({
+              start: result.span.startByte,
+              end: offsets.span(operation.span).endByte,
+            }),
+          };
+          continue;
+        }
+        const call = operation;
         const valuesNode = babaOptionalRuleField(call, "values");
         const arguments_ = valuesNode === null ? [] : listRules(valuesNode).map((argument) => {
           const value = babaChildRule(argument);
@@ -410,7 +547,11 @@ function parseExpression(
       const parametersNode = babaOptionalRuleField(expression, "parameters");
       return {
         kind: "lambda",
-        parameters: parametersNode === null ? [] : identifierList(parametersNode),
+        parameters: parametersNode === null
+          ? []
+          : listRules(parametersNode).map((parameter) =>
+            babaRequiredTokenField(babaChildRule(parameter), "name").text
+          ),
         body: parseBlock(babaRequiredRuleField(expression, "body"), offsets),
         span: offsets.span(expression.span),
       };
@@ -454,19 +595,22 @@ function parseExpression(
       };
     }
     case "bit_array_expression":
-      return {
-        kind: "bit-array",
-        bytes: parseStaticBitArray(expression, offsets),
-        span: offsets.span(expression.span),
-      };
+      return parseBitArrayExpression(expression, offsets);
     case "group_expression":
       return parseExpression(babaRequiredRuleField(expression, "body"), offsets);
     case "unit_expression":
       return { kind: "unit", span: offsets.span(expression.span) };
+    case "tuple_index_expression":
+      return {
+        kind: "tuple-index",
+        value: parseExpression(babaRequiredRuleField(expression, "value"), offsets),
+        index: parseIntegerToken(babaRequiredTokenField(expression, "index").text.slice(1)),
+        span: offsets.span(expression.span),
+      };
     case "float_expression":
       return {
         kind: "float",
-        value: Number(babaRequiredTokenField(expression, "value").text),
+        value: parseFloatToken(babaRequiredTokenField(expression, "value").text),
         span: offsets.span(expression.span),
       };
     case "string_expression":
@@ -484,7 +628,7 @@ function parseExpression(
     case "integer_expression":
       return {
         kind: "integer",
-        value: Number(babaRequiredTokenField(expression, "value").text),
+        value: parseIntegerToken(babaRequiredTokenField(expression, "value").text),
         span: offsets.span(expression.span),
       };
     case "boolean_expression":
@@ -495,12 +639,12 @@ function parseExpression(
       };
     case "capture_expression":
       return { kind: "capture", span: offsets.span(expression.span) };
-    case "named_expression":
-      return {
-        kind: "name",
-        name: joinedName(babaRequiredRuleField(expression, "name"), "."),
-        span: offsets.span(expression.span),
-      };
+    case "named_expression": {
+      const name = joinedName(babaRequiredRuleField(expression, "name"), ".");
+      return name === "Nil"
+        ? { kind: "unit", span: offsets.span(expression.span) }
+        : { kind: "name", name, span: offsets.span(expression.span) };
+    }
     default:
       throw new Error(`Unsupported Baba Gleam expression node ${expression.name}.`);
   }
@@ -581,8 +725,7 @@ function parsePattern(
     case "discard_pattern":
       return { kind: "discard", span };
     case "bit_array_pattern": {
-      const value = babaRequiredRuleField(pattern, "value");
-      return { kind: "bit-array", bytes: parseStaticBitArray(value, offsets), span };
+      return parseBitArrayPattern(pattern, offsets);
     }
     case "list_pattern": {
       const entriesNode = babaOptionalRuleField(pattern, "entries");
@@ -633,15 +776,36 @@ function parsePattern(
     case "integer_pattern":
       return {
         kind: "integer",
-        value: Number(babaRequiredTokenField(pattern, "value").text),
+        value: (babaOptionalTokenField(pattern, "sign") === null ? 1 : -1) *
+          parseIntegerToken(babaRequiredTokenField(pattern, "value").text),
+        span,
+      };
+    case "float_pattern":
+      return {
+        kind: "float",
+        value: (babaOptionalTokenField(pattern, "sign") === null ? 1 : -1) *
+          parseFloatToken(babaRequiredTokenField(pattern, "value").text),
         span,
       };
     case "boolean_pattern":
       return { kind: "boolean", value: babaChildRule(pattern).name === "truth", span };
+    case "string_pattern":
+      return {
+        kind: "string",
+        value: parseStringToken(babaRequiredTokenField(pattern, "value"), offsets).value,
+        span,
+      };
+    case "string_prefix_pattern":
+      return {
+        kind: "string-prefix",
+        prefix: parseStringToken(babaRequiredTokenField(pattern, "prefix"), offsets).value,
+        rest: parsePattern(babaRequiredRuleField(pattern, "rest"), offsets),
+        span,
+      };
     case "named_pattern": {
       const name = joinedName(babaRequiredRuleField(pattern, "name"), ".");
       const argumentsNode = babaOptionalRuleField(pattern, "arguments");
-      if (argumentsNode === null && startsLowercase(name)) {
+      if (argumentsNode === null && !name.includes(".") && startsLowercase(name)) {
         return { kind: "variable", name, span };
       }
       const entriesNode = argumentsNode === null
@@ -691,46 +855,115 @@ function parsePattern(
   }
 }
 
-function parseStaticBitArray(
-  expression: BabaRuleCursor,
+function parseBitArrayExpression(
+  node: BabaRuleCursor,
   offsets: BabaUtf8ByteOffsets,
-): Uint8Array {
-  const segmentsNode = babaOptionalRuleField(expression, "segments");
-  if (segmentsNode === null) return new Uint8Array();
+): GleamFunctionalExpression {
+  const segmentsNode = babaOptionalRuleField(node, "segments");
+  const segments = segmentsNode === null ? [] : listRules(segmentsNode).map((segment) => ({
+    value: parseExpression(babaRequiredRuleField(segment, "value"), offsets),
+    options: parseBitArrayOptions(segment, offsets),
+    span: offsets.span(segment.span),
+  }));
+  const bytes = staticBitArrayBytes(segments);
+  return bytes === null
+    ? { kind: "bit-array-build", segments, span: offsets.span(node.span) }
+    : { kind: "bit-array", bytes, span: offsets.span(node.span) };
+}
+
+function parseBitArrayPattern(
+  node: BabaRuleCursor,
+  offsets: BabaUtf8ByteOffsets,
+): GleamFunctionalPattern {
+  const segmentsNode = babaOptionalRuleField(node, "segments");
+  const segments = segmentsNode === null ? [] : listRules(segmentsNode).map((segment) => ({
+    value: parsePattern(babaRequiredRuleField(segment, "value"), offsets),
+    options: parseBitArrayOptions(segment, offsets),
+    span: offsets.span(segment.span),
+  }));
+  const bytes = staticBitArrayBytes(segments);
+  return bytes === null
+    ? { kind: "bit-array-segments", segments, span: offsets.span(node.span) }
+    : { kind: "bit-array", bytes, span: offsets.span(node.span) };
+}
+
+function parseBitArrayOptions(
+  segment: BabaRuleCursor,
+  offsets: BabaUtf8ByteOffsets,
+) {
+  const optionsNode = babaOptionalRuleField(segment, "options");
+  if (optionsNode === null) return [];
+  return listRules(optionsNode).map((option) => {
+    const argumentsNode = babaOptionalRuleField(option, "arguments");
+    const valuesNode = argumentsNode === null
+      ? null
+      : babaOptionalRuleField(argumentsNode, "values");
+    return {
+      name: babaRequiredTokenField(option, "name").text,
+      arguments: valuesNode === null
+        ? []
+        : listRules(valuesNode).map((argument) =>
+          parseExpression(babaRequiredRuleField(babaChildRule(argument), "value"), offsets)
+        ),
+      span: offsets.span(option.span),
+    };
+  });
+}
+
+function staticBitArrayBytes(
+  segments: readonly GleamFunctionalBitArraySegment<
+    GleamFunctionalExpression | GleamFunctionalPattern
+  >[],
+): Uint8Array | null {
   const bytes: number[] = [];
-  for (const segment of listRules(segmentsNode)) {
-    const value = babaChildRule(babaRequiredRuleField(segment, "value"));
-    const encodingNode = babaOptionalRuleField(segment, "encoding");
-    const encoding = encodingNode === null ? null : babaRequiredTokenField(encodingNode, "value");
-    if (value.name === "string_bit_array_segment") {
-      if (encoding?.text !== "utf8") {
+  for (const segment of segments) {
+    const [encoding] = segment.options;
+    if (segment.value.kind === "string") {
+      if (segment.options.length !== 1 || encoding?.name !== "utf8") {
         throw new GleamFunctionalSyntaxError(
-          encoding === null ? offsets.span(value.span) : offsets.span(encoding.span),
+          encoding?.span ?? segment.span,
           "A portable Gleam bit-array string segment must use the utf8 encoding.",
         );
       }
-      const text = parseStringToken(babaRequiredTokenField(value, "value"), offsets).value;
-      bytes.push(...new TextEncoder().encode(text));
+      bytes.push(...new TextEncoder().encode(segment.value.value));
       continue;
     }
-    if (encoding !== null && encoding.text !== "int") {
+    if (segment.value.kind !== "integer") return null;
+    if (segment.options.length > 1 || encoding !== undefined && encoding.name !== "int") {
       throw new GleamFunctionalSyntaxError(
-        offsets.span(encoding.span),
-        `A portable Gleam bit-array integer segment supports only int encoding; received ${encoding.text}.`,
+        encoding?.span ?? segment.span,
+        `A portable Gleam bit-array integer segment supports only int encoding; received ${
+          encoding?.name ?? "multiple options"
+        }.`,
       );
     }
-    const token = babaRequiredTokenField(value, "value");
-    const byte = Number(token.text);
-    if (byte <= 255) {
+    const byte = segment.value.value;
+    if (byte >= 0 && byte <= 255) {
       bytes.push(byte);
       continue;
     }
     throw new GleamFunctionalSyntaxError(
-      offsets.span(token.span),
-      `A portable Gleam bit-array byte must be within 0..255; received ${token.text}.`,
+      segment.value.span,
+      `A portable Gleam bit-array byte must be within 0..255; received ${byte}.`,
     );
   }
   return new Uint8Array(bytes);
+}
+
+function parseIntegerToken(value: string): number {
+  const integer = Number(value.replaceAll("_", ""));
+  if (!Number.isFinite(integer) || !Number.isInteger(integer)) {
+    throw new Error(`Baba produced invalid Gleam integer token ${JSON.stringify(value)}.`);
+  }
+  return integer;
+}
+
+function parseFloatToken(value: string): number {
+  const float = Number(value.replaceAll("_", ""));
+  if (!Number.isFinite(float)) {
+    throw new Error(`Baba produced invalid Gleam float token ${JSON.stringify(value)}.`);
+  }
+  return float;
 }
 
 function foldOperator(
@@ -824,8 +1057,16 @@ function identifierList(node: BabaRuleCursor): readonly string[] {
 function joinedName(node: BabaRuleCursor, separator: string): string {
   return [
     babaRequiredTokenField(node, "head").text,
-    ...babaRuleFieldArray(node, "tail").map((tail) => babaRequiredTokenField(tail, "value").text),
+    ...babaRuleFieldArray(node, "tail").map(nameTailValue),
   ].join(separator);
+}
+
+function nameTailValue(node: BabaRuleCursor): string {
+  const value = babaOptionalTokenField(node, "value");
+  if (value !== null) return value.text;
+  const keyword = babaRequiredRuleField(node, "keyword");
+  if (babaChildRule(keyword).name === "function_keyword") return "function";
+  throw new Error(`Unsupported Baba Gleam qualified-name keyword ${keyword.name}.`);
 }
 
 function operatorText(name: string): GleamFunctionalBinaryOperator {

@@ -464,6 +464,7 @@ function expressionIsWeakHeadNormalForm(
     node.tag === FunctionalCoreTag.SignedInteger64 ||
     node.tag === FunctionalCoreTag.Float32 ||
     node.tag === FunctionalCoreTag.Float64 ||
+    node.tag === FunctionalCoreTag.WholeNumberF64 ||
     node.tag === FunctionalCoreTag.Boolean ||
     node.tag === FunctionalCoreTag.Lambda ||
     node.tag === FunctionalCoreTag.Constructor;
@@ -492,6 +493,7 @@ function coreChildren(
     case FunctionalCoreTag.SignedInteger64:
     case FunctionalCoreTag.Float32:
     case FunctionalCoreTag.Float64:
+    case FunctionalCoreTag.WholeNumberF64:
     case FunctionalCoreTag.Boolean:
     case FunctionalCoreTag.Text:
     case FunctionalCoreTag.Bytes:
@@ -509,6 +511,7 @@ function coreChildren(
     case FunctionalCoreTag.Let:
     case FunctionalCoreTag.LetRec:
     case FunctionalCoreTag.Binary:
+    case FunctionalCoreTag.BufferAppend:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:
       return [["child0", node.child0], ["child1", node.child1]];

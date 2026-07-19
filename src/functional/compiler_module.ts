@@ -40,6 +40,7 @@ export interface GpuFunctionalModule {
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly definitionNames: readonly string[];
+  readonly typeNames: readonly string[];
   readonly symbolNames: readonly string[];
   readonly definitionRoots: readonly number[];
   readonly entryDefinition: number;
@@ -53,6 +54,27 @@ export interface GpuFunctionalModule {
   readonly evaluationProfile: FunctionalEvaluationProfile;
   readCoreNodes(): Promise<readonly FunctionalCoreNode[]>;
   destroy(): void;
+}
+
+const completeTypeDeclarations = new WeakMap<
+  GpuFunctionalModule,
+  readonly FunctionalTypeDeclaration[]
+>();
+
+export function registerCompleteFunctionalTypeDeclarations(
+  module: GpuFunctionalModule,
+  declarations: readonly FunctionalTypeDeclaration[],
+): void {
+  if (completeTypeDeclarations.has(module)) {
+    throw new Error("functional module complete type declarations were registered twice");
+  }
+  completeTypeDeclarations.set(module, declarations);
+}
+
+export function completeFunctionalTypeDeclarations(
+  module: GpuFunctionalModule,
+): readonly FunctionalTypeDeclaration[] {
+  return completeTypeDeclarations.get(module) ?? module.typeDeclarations;
 }
 
 export interface FunctionalCompilationOptions {

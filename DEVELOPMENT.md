@@ -17,6 +17,7 @@ Optional tools:
 - `just` for Lazuli editor-support recipes;
 - `tree-sitter` and Helix for `just install`;
 - Zig for `deno task compare:type-programming`;
+- Gleam 1.17 or newer for `deno task test:gleam-differential`;
 - a hardware GPU for representative performance measurements.
 
 No dependency installation step is needed. Deno resolves the pinned imports in `deno.json` and
@@ -54,6 +55,18 @@ deno task test
 git diff --check
 ```
 
+The pinned Gleam compatibility checks are separate because one invokes an installed compiler and the
+other fetches an upstream repository:
+
+```sh
+deno task test:gleam-differential
+deno task check:gleam-stdlib
+```
+
+`check:gleam-stdlib` accepts an existing checkout as its first argument. The checkout must be at the
+commit recorded by the tool, so the result cannot silently change with upstream `main`. It compiles
+all 19 package modules together and can take roughly 20–30 seconds on the GPU used for development.
+
 `deno task test` uses `deno test --parallel` with `DENO_JOBS=2`. GPU tests are not ordinary
 millisecond unit tests: some deliberately force workspace growth, single-transition dispatches,
 device-limit failures, cancellation, or complete cross-backend execution. Individual stress tests
@@ -85,6 +98,7 @@ Tests are grouped by externally observable contract:
 | `lazuli_gpu_workspace_test.ts`                         | Elastic arena growth, device bounds, cleanup, exact fuel                   |
 | `lazuli_gpu_diagnostic_parity_test.ts`                 | GPU/TypeScript oracle parity                                               |
 | `*_functional_test.ts`                                 | Source-language frontend behavior and trace stability                      |
+| `gleam_differential_test.ts`                           | Value parity with the installed official Gleam JavaScript backend          |
 
 The TypeScript inference implementation is a differential oracle. Production semantic inference must
 remain on the GPU path; do not turn the oracle into an implicit CPU fallback.

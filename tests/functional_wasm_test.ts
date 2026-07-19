@@ -477,6 +477,51 @@ Deno.test("wide numeric primitives cross functions and structured WebAssembly va
   }
 });
 
+Deno.test("passes portable whole numbers through the WebAssembly boundary", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: {
+        kind: "function",
+        parameter: FunctionalHostTypes.wholeNumberF64,
+        result: FunctionalHostTypes.wholeNumberF64,
+      },
+      body: surface.binary(
+        FunctionalBinaryOperator.AddWholeNumberF64,
+        surface.name("value"),
+        surface.wholeNumberF64(42),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const execution = await runCompiledWasm(encoded, {
+    argument: { kind: "integer", value: 4_000_000_000 },
+  });
+  deepStrictEqual(execution.value, { kind: "integer", value: 4_000_000_042 });
+});
+
+Deno.test("appends Text and Bytes without a host callback", async () => {
+  const text = await runCompiledWasm(singleDefinitionModule({
+    kind: "text-append",
+    left: { kind: "text", value: "Zażółć " },
+    right: { kind: "text", value: "🦆" },
+  }));
+  deepStrictEqual(text.value, { kind: "text", value: "Zażółć 🦆" });
+
+  const bytes = await runCompiledWasm(singleDefinitionModule({
+    kind: "bytes-append",
+    left: { kind: "bytes", value: new Uint8Array([0, 127]) },
+    right: { kind: "bytes", value: new Uint8Array([128, 255]) },
+  }));
+  deepStrictEqual(bytes.value, {
+    kind: "bytes",
+    value: new Uint8Array([0, 127, 128, 255]),
+  });
+});
+
 Deno.test("round-trips text, bytes, arrays, slices, and resources through WebAssembly", async () => {
   const integer = { kind: "integer" } as const;
   const cases = [
@@ -4860,6 +4905,7 @@ function doubleWithoutImmediateForce(): FunctionalSurfaceExpression {
 
 async function runCompiledWasm(
   module: EncodedFunctionalModule,
+  options: FunctionalWasmRunOptions = {},
 ): Promise<FunctionalWasmExecution> {
   const { compiler } = functionalWasmRuntime();
   const compilation = await compiler.compileModule(module);
@@ -4871,7 +4917,7 @@ async function runCompiledWasm(
     throw new Error("functional module did not compile on the GPU");
   }
   try {
-    return await runFunctionalWasmModule(compilation.module);
+    return await runFunctionalWasmModule(compilation.module, options);
   } finally {
     compilation.module.destroy();
   }

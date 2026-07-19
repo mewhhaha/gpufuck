@@ -4,7 +4,7 @@ import {
   type FunctionalType,
   type FunctionalTypeSchema,
 } from "./abi.ts";
-import type { GpuFunctionalModule } from "./compiler_module.ts";
+import { completeFunctionalTypeDeclarations, type GpuFunctionalModule } from "./compiler_module.ts";
 import type { FunctionalWasmHostValue } from "./wasm_contract.ts";
 import {
   FUNCTIONAL_ARRAY_TYPE_NAME,
@@ -12,6 +12,7 @@ import {
   FUNCTIONAL_RESOURCE_TYPE_PREFIX,
   FUNCTIONAL_SLICE_TYPE_NAME,
   FUNCTIONAL_TEXT_TYPE_NAME,
+  FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
 } from "./host_contract.ts";
 import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
 import { FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH } from "./wasm_runtime_layout.ts";
@@ -79,6 +80,7 @@ export function describeFunctionalType(type: FunctionalType): string {
     case "unit":
       return "unit";
     case "named":
+      if (type.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME) return "whole number (f64)";
       if (type.name === FUNCTIONAL_TEXT_TYPE_NAME) return "text";
       if (type.name === FUNCTIONAL_BYTES_TYPE_NAME) return "bytes";
       if (type.name === FUNCTIONAL_ARRAY_TYPE_NAME) {
@@ -324,6 +326,30 @@ export function encodeFunctionalWasmValue(
       }
       if (currentType.kind === "function") {
         throw new TypeError("functional WASM ABI does not accept host function arguments");
+      }
+      if (
+        currentType.kind === "named" &&
+        currentType.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME
+      ) {
+        if (currentValue.kind !== "integer") {
+          throw wasmArgumentTypeMismatch(currentType, currentValue);
+        }
+        const payload: unknown = currentValue.value;
+        if (
+          typeof payload !== "number" || !Number.isFinite(payload) || !Number.isInteger(payload)
+        ) {
+          throw new TypeError(
+            `functional WASM whole-number f64 argument payload must be a finite integer; received ${
+              String(payload)
+            }`,
+          );
+        }
+        encodedFields.push(allocateObject(
+          NUMERIC_OBJECT_KIND,
+          FunctionalWasmValueAbi.numericKinds.float64,
+          [BigInt.asIntN(64, float64Bits(payload))],
+        ));
+        continue;
       }
       if (currentType.kind === "named" && currentType.name === FUNCTIONAL_TEXT_TYPE_NAME) {
         if (currentValue.kind !== "text") {
@@ -749,6 +775,14 @@ export function decodeFunctionalWasmValue(
     if (expected.kind === "function") {
       throw new TypeError("functional WASM structured results cannot contain function fields");
     }
+    if (
+      expected.kind === "named" &&
+      expected.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME
+    ) {
+      frames.pop();
+      appendDecodedValue(decodeBoxedWholeNumberF64(memory, forced));
+      continue;
+    }
     const pointer = Number(BigInt.asUintN(32, forced));
     if (activePointers.has(pointer)) {
       throw new FunctionalWasmValueError(
@@ -889,6 +923,7 @@ export function requireFirstOrderFunctionalWasmType(
         if (
           current.name === FUNCTIONAL_TEXT_TYPE_NAME ||
           current.name === FUNCTIONAL_BYTES_TYPE_NAME ||
+          current.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME ||
           current.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
           current.name === FUNCTIONAL_SLICE_TYPE_NAME ||
           current.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
@@ -896,7 +931,7 @@ export function requireFirstOrderFunctionalWasmType(
         const key = JSON.stringify(current);
         if (visitedNamedTypes.has(key)) return;
         visitedNamedTypes.add(key);
-        const declaration = module.typeDeclarations.find((candidate) =>
+        const declaration = completeFunctionalTypeDeclarations(module).find((candidate) =>
           candidate.name === current.name
         );
         if (declaration === undefined) {
@@ -979,6 +1014,36 @@ function decodeBoxedNumeric(
   };
 }
 
+function decodeBoxedWholeNumberF64(
+  memory: WebAssembly.Memory,
+  rawValue: bigint,
+): FunctionalWasmValue {
+  const pointer = Number(BigInt.asUintN(32, rawValue));
+  const view = new DataView(memory.buffer);
+  if (pointer > view.byteLength - (OBJECT_HEADER_BYTE_LENGTH + VALUE_BYTE_LENGTH)) {
+    throw new RangeError(
+      `functional WASM whole-number f64 pointer ${pointer} exceeds memory length ${view.byteLength}`,
+    );
+  }
+  const objectKind = view.getUint32(pointer, true);
+  const numericKind = view.getUint32(pointer + 4, true);
+  if (
+    objectKind !== NUMERIC_OBJECT_KIND ||
+    numericKind !== FunctionalWasmValueAbi.numericKinds.float64
+  ) {
+    throw new Error(
+      `functional WASM whole-number f64 pointer ${pointer} has object kind ${objectKind} and numeric kind ${numericKind}`,
+    );
+  }
+  const value = view.getFloat64(pointer + OBJECT_HEADER_BYTE_LENGTH, true);
+  if (!Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(
+      `functional WASM whole-number f64 pointer ${pointer} contains non-integer ${value}`,
+    );
+  }
+  return { kind: "integer", value };
+}
+
 function wasmArgumentTypeMismatch(type: FunctionalType, value: FunctionalWasmValue): TypeError {
   return new TypeError(
     `functional WASM argument expected ${describeFunctionalType(type)}; received ${value.kind}`,
@@ -1026,7 +1091,9 @@ export function functionalStructuredFieldTypes(
     }
     return type.values;
   }
-  const declaration = module.typeDeclarations.find((candidate) => candidate.name === type.name);
+  const declaration = completeFunctionalTypeDeclarations(module).find((candidate) =>
+    candidate.name === type.name
+  );
   if (declaration === undefined) {
     throw new Error(`functional WASM result type ${JSON.stringify(type.name)} is undeclared`);
   }

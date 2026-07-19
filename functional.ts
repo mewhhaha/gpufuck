@@ -193,6 +193,7 @@ export {
   FUNCTIONAL_RESOURCE_TYPE_PREFIX,
   FUNCTIONAL_SLICE_TYPE_NAME,
   FUNCTIONAL_TEXT_TYPE_NAME,
+  FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
   type FunctionalHostCapabilityDeclaration,
   type FunctionalHostDefinitionBinding,
   type FunctionalHostFieldDeclaration,

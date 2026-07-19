@@ -7,6 +7,7 @@ export const FUNCTIONAL_INIT_TYPE_NAME = "$FunctionalInitType";
 export const FUNCTIONAL_INIT_CONSTRUCTOR_NAME = "$FunctionalInit";
 export const FUNCTIONAL_TEXT_TYPE_NAME = "$FunctionalText";
 export const FUNCTIONAL_BYTES_TYPE_NAME = "$FunctionalBytes";
+export const FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME = "$FunctionalWholeNumberF64";
 export const FUNCTIONAL_ARRAY_TYPE_NAME = "$FunctionalArray";
 export const FUNCTIONAL_SLICE_TYPE_NAME = "$FunctionalSlice";
 export const FUNCTIONAL_RESOURCE_TYPE_PREFIX = "$FunctionalResource:";
@@ -14,12 +15,18 @@ export const FUNCTIONAL_RESOURCE_TYPE_PREFIX = "$FunctionalResource:";
 export const FunctionalHostTypes: Readonly<{
   readonly text: FunctionalTypeSchema;
   readonly bytes: FunctionalTypeSchema;
+  readonly wholeNumberF64: FunctionalTypeSchema;
   readonly array: (element: FunctionalTypeSchema) => FunctionalTypeSchema;
   readonly slice: (element: FunctionalTypeSchema) => FunctionalTypeSchema;
   readonly resource: (name: string) => FunctionalTypeSchema;
 }> = Object.freeze({
   text: Object.freeze({ kind: "named", name: FUNCTIONAL_TEXT_TYPE_NAME, arguments: [] }),
   bytes: Object.freeze({ kind: "named", name: FUNCTIONAL_BYTES_TYPE_NAME, arguments: [] }),
+  wholeNumberF64: Object.freeze({
+    kind: "named",
+    name: FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
+    arguments: [],
+  }),
   array(element: FunctionalTypeSchema): FunctionalTypeSchema {
     return Object.freeze({
       kind: "named",

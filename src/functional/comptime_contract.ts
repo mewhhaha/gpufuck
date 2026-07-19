@@ -17,6 +17,7 @@ export type FunctionalConstant =
   | { readonly kind: "signed-integer-64"; readonly value: bigint }
   | { readonly kind: "float-32"; readonly value: number }
   | { readonly kind: "float-64"; readonly value: number }
+  | { readonly kind: "whole-number-f64"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
   | { readonly kind: "unit" }
   | {

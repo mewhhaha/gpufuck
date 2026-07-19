@@ -73,6 +73,8 @@ export const LazuliSurfaceTag = {
   Text: 23,
   Bytes: 24,
   RuntimeFault: 25,
+  WholeNumberF64: 26,
+  BufferAppend: 27,
 } as const;
 
 export type LazuliSurfaceTag = (typeof LazuliSurfaceTag)[keyof typeof LazuliSurfaceTag];
@@ -100,6 +102,8 @@ export const LazuliCoreTag = {
   Text: LazuliSurfaceTag.Text,
   Bytes: LazuliSurfaceTag.Bytes,
   RuntimeFault: LazuliSurfaceTag.RuntimeFault,
+  WholeNumberF64: LazuliSurfaceTag.WholeNumberF64,
+  BufferAppend: LazuliSurfaceTag.BufferAppend,
 } as const;
 
 export type LazuliCoreTag = (typeof LazuliCoreTag)[keyof typeof LazuliCoreTag];
@@ -117,6 +121,7 @@ export const LazuliUnaryOperator = {
   NegateFloat32: 3,
   NegateFloat64: 4,
   SquareRootFloat32: 5,
+  NegateWholeNumberF64: 6,
 } as const;
 
 export type LazuliUnaryOperator = (typeof LazuliUnaryOperator)[keyof typeof LazuliUnaryOperator];
@@ -176,6 +181,17 @@ export const LazuliBinaryOperator = {
   ShiftRightUnsignedSignedInteger64: 52,
   StructuralEqual: 53,
   StructuralNotEqual: 54,
+  EqualWholeNumberF64: 55,
+  NotEqualWholeNumberF64: 56,
+  LessWholeNumberF64: 57,
+  LessEqualWholeNumberF64: 58,
+  GreaterWholeNumberF64: 59,
+  GreaterEqualWholeNumberF64: 60,
+  AddWholeNumberF64: 61,
+  SubtractWholeNumberF64: 62,
+  MultiplyWholeNumberF64: 63,
+  DivideWholeNumberF64: 64,
+  RemainderWholeNumberF64: 65,
 } as const;
 
 export type LazuliBinaryOperator = (typeof LazuliBinaryOperator)[keyof typeof LazuliBinaryOperator];

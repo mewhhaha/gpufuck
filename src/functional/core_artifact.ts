@@ -104,6 +104,7 @@ function childReferences(
   switch (node.tag) {
     case FunctionalCoreTag.SignedInteger64:
     case FunctionalCoreTag.Float64:
+    case FunctionalCoreTag.WholeNumberF64:
     case FunctionalCoreTag.Integer:
     case FunctionalCoreTag.Float32:
     case FunctionalCoreTag.Boolean:
@@ -123,6 +124,7 @@ function childReferences(
     case FunctionalCoreTag.Let:
     case FunctionalCoreTag.LetRec:
     case FunctionalCoreTag.Binary:
+    case FunctionalCoreTag.BufferAppend:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:
       return [["child0", node.child0], ["child1", node.child1]];
@@ -137,6 +139,7 @@ function isCoreTag(tag: number): boolean {
     case FunctionalCoreTag.SignedInteger64:
     case FunctionalCoreTag.Float32:
     case FunctionalCoreTag.Float64:
+    case FunctionalCoreTag.WholeNumberF64:
     case FunctionalCoreTag.Boolean:
     case FunctionalCoreTag.Text:
     case FunctionalCoreTag.Bytes:
@@ -150,6 +153,7 @@ function isCoreTag(tag: number): boolean {
     case FunctionalCoreTag.If:
     case FunctionalCoreTag.Unary:
     case FunctionalCoreTag.Binary:
+    case FunctionalCoreTag.BufferAppend:
     case FunctionalCoreTag.NumericConvert:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:

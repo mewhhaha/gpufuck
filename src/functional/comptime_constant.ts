@@ -273,6 +273,18 @@ export function validateFunctionalConstant(constant: FunctionalConstant): void {
           );
         }
         break;
+      case "whole-number-f64":
+        if (
+          typeof scalarValue !== "number" || !Number.isFinite(scalarValue) ||
+          !Number.isInteger(scalarValue)
+        ) {
+          throw new TypeError(
+            `functional constant whole-number-f64 must be a finite integer; received ${
+              String(scalarValue)
+            }`,
+          );
+        }
+        break;
       case "boolean":
         if (typeof scalarValue !== "boolean") {
           throw new TypeError(
@@ -315,6 +327,7 @@ function functionalConstantExpressionUnchecked(
     case "signed-integer-64":
     case "float-32":
     case "float-64":
+    case "whole-number-f64":
     case "boolean":
       return { ...constant, ...(span === undefined ? {} : { span }) };
     case "unit":
@@ -527,6 +540,7 @@ function encodedConstant(constant: FunctionalConstant): unknown {
       return { kind: constant.kind, value: constant.value.toString() };
     case "float-32":
     case "float-64":
+    case "whole-number-f64":
       return { kind: constant.kind, value: encodedFloat(constant.value) };
     case "unit":
       return { kind: "unit" };
@@ -572,6 +586,15 @@ function decodedConstant(candidate: unknown, depth: number): FunctionalConstant 
     case "float-32":
     case "float-64":
       return Object.freeze({ kind: candidate.kind, value: decodedFloat(candidate.value) });
+    case "whole-number-f64": {
+      const value = decodedFloat(candidate.value);
+      if (!Number.isFinite(value) || !Number.isInteger(value)) {
+        throw new Error(
+          `functional constant contains invalid whole-number-f64 ${String(value)}`,
+        );
+      }
+      return Object.freeze({ kind: "whole-number-f64", value });
+    }
     case "boolean":
       if (typeof candidate.value !== "boolean") {
         throw new Error(`functional constant contains invalid boolean ${String(candidate.value)}`);

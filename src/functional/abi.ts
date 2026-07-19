@@ -100,6 +100,7 @@ export const FunctionalPrimitiveCapability = {
   SignedInteger64: "signed-integer-i64",
   Float32: "float-f32",
   Float64: "float-f64",
+  WholeNumberF64: "whole-number-f64",
   Boolean: "boolean",
   Unit: "unit",
   Pair: "pair",
@@ -109,6 +110,7 @@ export const FunctionalPrimitiveCapability = {
   StaticBytes: "static-bytes",
   ExplicitFault: "explicit-fault",
   StructuralEquality: "structural-equality",
+  BufferAppend: "buffer-append",
 } as const;
 
 export type FunctionalPrimitiveCapability =
@@ -121,6 +123,7 @@ export const FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES: readonly FunctionalPrimi
       FunctionalPrimitiveCapability.SignedInteger64,
       FunctionalPrimitiveCapability.Float32,
       FunctionalPrimitiveCapability.Float64,
+      FunctionalPrimitiveCapability.WholeNumberF64,
       FunctionalPrimitiveCapability.Boolean,
       FunctionalPrimitiveCapability.Unit,
       FunctionalPrimitiveCapability.Pair,
@@ -130,6 +133,7 @@ export const FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES: readonly FunctionalPrimi
       FunctionalPrimitiveCapability.StaticBytes,
       FunctionalPrimitiveCapability.ExplicitFault,
       FunctionalPrimitiveCapability.StructuralEquality,
+      FunctionalPrimitiveCapability.BufferAppend,
     ] as const,
   );
 

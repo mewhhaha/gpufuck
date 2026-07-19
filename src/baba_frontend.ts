@@ -93,6 +93,18 @@ export function babaRequiredTokenField(node: BabaRuleCursor, name: string): Baba
   return value;
 }
 
+export function babaOptionalTokenField(
+  node: BabaRuleCursor,
+  name: string,
+): BabaTokenCursor | null {
+  const value = node.field(name);
+  if (value === undefined || value === null) return null;
+  if (!isBabaTokenCursor(value)) {
+    throw new Error(`Expected optional token field ${JSON.stringify(name)} on ${node.name}.`);
+  }
+  return value;
+}
+
 export function babaRuleFieldArray(
   node: BabaRuleCursor,
   name: string,

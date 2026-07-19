@@ -197,6 +197,8 @@ const SURFACE_NUMERIC_CONVERT: u32 = 22u;
 const SURFACE_TEXT: u32 = 23u;
 const SURFACE_BYTES: u32 = 24u;
 const SURFACE_RUNTIME_FAULT: u32 = 25u;
+const SURFACE_WHOLE_NUMBER_F64: u32 = 26u;
+const SURFACE_BUFFER_APPEND: u32 = 27u;
 
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
@@ -294,6 +296,9 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     case SURFACE_SIGNED_INTEGER_64, SURFACE_FLOAT_64: {
       return node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
+    case SURFACE_WHOLE_NUMBER_F64: {
+      return node.child1 < state.type_count && node.child2 == NO_INDEX;
+    }
     case SURFACE_FLOAT_32: {
       return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
@@ -333,9 +338,11 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
     case SURFACE_UNARY: {
-      return node.payload >= 1u && node.payload <= 5u &&
+      let whole_number = node.payload == 6u;
+      return node.payload >= 1u && node.payload <= 6u &&
         required_child_is_valid(node_index, node.child0) &&
-        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
+        select(node.child1 == NO_INDEX, node.child1 < state.type_count, whole_number) &&
+        node.child2 == NO_INDEX;
     }
     case SURFACE_NUMERIC_CONVERT: {
       return node.payload >= 1u && node.payload <= 14u &&
@@ -343,9 +350,15 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_BINARY: {
-      return node.payload >= 1u && node.payload <= 54u &&
+      let whole_number = node.payload >= 55u && node.payload <= 65u;
+      return node.payload >= 1u && node.payload <= 65u &&
         required_child_is_valid(node_index, node.child0) &&
-        required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
+        required_child_is_valid(node_index, node.child1) &&
+        select(node.child2 == NO_INDEX, node.child2 < state.type_count, whole_number);
+    }
+    case SURFACE_BUFFER_APPEND: {
+      return node.payload == 0u && required_child_is_valid(node_index, node.child0) &&
+        required_child_is_valid(node_index, node.child1) && node.child2 < state.type_count;
     }
     case SURFACE_CASE: {
       return required_child_is_valid(node_index, node.child0) &&

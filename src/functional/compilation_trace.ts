@@ -128,6 +128,8 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
       return `${indent}${expression.value}f32`;
     case "float-64":
       return `${indent}${expression.value}f64`;
+    case "whole-number-f64":
+      return `${indent}${expression.value}whole-f64`;
     case "boolean":
       return `${indent}${expression.value}`;
     case "text":
@@ -166,6 +168,11 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
       return `${indent}(${unaryOperatorName(expression.operator)}\n${nested(expression.value)})`;
     case "binary":
       return `${indent}(${binaryOperatorName(expression.operator)}\n${nested(expression.left)}\n${
+        nested(expression.right)
+      })`;
+    case "text-append":
+    case "bytes-append":
+      return `${indent}(${expression.kind}\n${nested(expression.left)}\n${
         nested(expression.right)
       })`;
     case "numeric-convert":

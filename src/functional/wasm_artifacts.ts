@@ -1,4 +1,8 @@
-import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
+import {
+  completeFunctionalTypeDeclarations,
+  type FunctionalCoreNode,
+  type GpuFunctionalModule,
+} from "./compiler_module.ts";
 import { compileFunctionalWasmArtifact, type FunctionalWasmArtifact } from "./wasm_codegen.ts";
 import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
 
@@ -144,7 +148,7 @@ async function resolvedCoreFingerprint(
     entryDefinition: module.entryDefinition,
     entryType: module.entryType,
     entryEffects: module.entryEffects,
-    typeDeclarations: module.typeDeclarations,
+    typeDeclarations: completeFunctionalTypeDeclarations(module),
     hostCapabilities: module.hostCapabilities,
     hostDefinitions: module.hostDefinitions,
     wasmExports: module.wasmExports,

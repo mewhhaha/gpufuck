@@ -399,8 +399,19 @@ Deno.test("compiled metaprograms return typed Functional IR that validates and e
   );
   for (
     const expression of [
+      surface.wholeNumberF64(4_000_000_042),
       surface.text("Zażółć 🦆"),
       surface.bytes(new Uint8Array([0, 127, 128, 255])),
+      {
+        kind: "text-append" as const,
+        left: surface.text("gpu"),
+        right: surface.text("fuck"),
+      },
+      {
+        kind: "bytes-append" as const,
+        left: surface.bytes(new Uint8Array([0, 127])),
+        right: surface.bytes(new Uint8Array([128, 255])),
+      },
       surface.runtimeFault("generated failure"),
     ]
   ) {
@@ -871,6 +882,7 @@ Deno.test("comptime constants round-trip wide numerics and reject malformed buff
       { kind: "signed-integer-64", value: -9_223_372_036_854_775_808n },
       { kind: "float-64", value: NaN },
       { kind: "float-32", value: -0 },
+      { kind: "whole-number-f64", value: 4_000_000_042 },
     ],
   };
   const decoded = decodeFunctionalConstant(encodeFunctionalConstant(constant));
@@ -879,6 +891,7 @@ Deno.test("comptime constants round-trip wide numerics and reject malformed buff
   deepStrictEqual(decoded.fields[0], constant.fields[0]);
   ok(decoded.fields[1]?.kind === "float-64" && Number.isNaN(decoded.fields[1].value));
   ok(decoded.fields[2]?.kind === "float-32" && Object.is(decoded.fields[2].value, -0));
+  deepStrictEqual(decoded.fields[3], constant.fields[3]);
   throws(
     () => decodeFunctionalConstant(new TextEncoder().encode("not-json")),
     /not valid UTF-8 JSON/,

@@ -930,13 +930,22 @@ or parser structures.
 
 The repository's Baba-generated Gleam parser demonstrates the intended separation at module scale:
 its adapter owns Gleam syntax, visibility, labels, records, bit-array syntax, external annotations,
-and pipeline desugaring. Public annotations become stable artifact interfaces when present;
-otherwise the neutral linker keeps the boundary open and the GPU infers the linked program.
-Incremental fingerprints include the defining expression for an inferred export, conservatively
-rechecking dependents instead of treating an unknown schema as stable. A smaller Baba-generated
-PureScript grammar parses an explicit-layout profile that exercises open rows, associated results,
-recursive capability evidence, and rank-2 checking without claiming full PureScript compatibility.
-Together they distinguish a usable source adapter from a backend-representation experiment.
+pipeline desugaring, and Gleam's f64-backed JavaScript `Int` model. Text and byte concatenation are
+direct Functional Core operations; no host callback is required. Public annotations become stable
+artifact interfaces when present; otherwise the neutral linker keeps the boundary open and the GPU
+infers the linked program. Incremental fingerprints include the defining expression for an inferred
+export, conservatively rechecking dependents instead of treating an unknown schema as stable. A
+smaller Baba-generated PureScript grammar parses an explicit-layout profile that exercises open
+rows, associated results, recursive capability evidence, and rank-2 checking without claiming full
+PureScript compatibility. Together they distinguish a usable source adapter from a
+backend-representation experiment.
+
+Gleam compatibility is checked in two directions. A pinned upstream task parses, lowers,
+GPU-typechecks, and links all 19 unmodified modules in Gleam's `stdlib` package, then executes a
+host-independent harness. A differential test compares gpufuck Wasm results with the official Gleam
+JavaScript backend. This establishes complete compile coverage for that pinned package revision, not
+complete runtime parity: bit-array matching and runtime-backed externals still require host
+implementations, and the adapter does not implement Gleam's package manager or Gleam/OTP.
 
 The old Brainfuck compiler remains only as historical and benchmark context. Its instruction format
 is not an intermediate representation for other languages.

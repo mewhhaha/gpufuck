@@ -88,13 +88,17 @@ export interface ParseDiagnostic {
 
 export type MainTokenKind =
   | "IDENT"
+  | "TARGET_ERLANG"
+  | "TARGET_JAVASCRIPT"
   | "FLOAT"
   | "INTEGER"
+  | "TUPLE_INDEX"
   | "STRING";
 
 export type TriviaTokenKind =
   | "WS"
-  | "COMMENT";
+  | "COMMENT"
+  | "INTERNAL_ATTRIBUTE";
 
 export type NamedTokenKind = MainTokenKind | TriviaTokenKind;
 
@@ -150,10 +154,12 @@ export type LiteralKind =
   | "-."
   | "+"
   | "-"
+  | "<>"
   | "*."
   | "/."
   | "*"
   | "%"
+  | "!"
   | ".."
   | "panic"
   | "case"
@@ -166,6 +172,7 @@ export type LiteralKind =
   | "True"
   | "False"
   | "_"
+  | "function"
   | "Nil";
 
 export type AnyLiteralKind = LiteralKind extends never
@@ -227,6 +234,7 @@ export type Token =
 export type RuleName =
   | "module"
   | "top_level"
+  | "top_level_declaration"
   | "import_declaration"
   | "module_path"
   | "module_path_tail"
@@ -272,7 +280,8 @@ export type RuleName =
   | "type_list"
   | "type_tail"
   | "block"
-  | "block_binding"
+  | "block_entry"
+  | "expression_statement"
   | "let_binding"
   | "use_binding"
   | "expr"
@@ -305,6 +314,8 @@ export type RuleName =
   | "float_minus"
   | "plus"
   | "minus"
+  | "concatenation"
+  | "concatenation_tail"
   | "multiplicative"
   | "multiplicative_tail"
   | "multiplicative_op"
@@ -315,7 +326,9 @@ export type RuleName =
   | "remainder"
   | "unary"
   | "negate"
+  | "boolean_not"
   | "call"
+  | "call_operation"
   | "call_arguments"
   | "call_argument_list"
   | "call_argument_tail"
@@ -334,6 +347,7 @@ export type RuleName =
   | "case_guard"
   | "pattern_list"
   | "pattern_tail"
+  | "field_access"
   | "lambda_expression"
   | "tuple_expression"
   | "tuple_expression_tail"
@@ -347,10 +361,9 @@ export type RuleName =
   | "bit_array_segments"
   | "bit_array_segment_tail"
   | "bit_array_segment"
-  | "bit_array_segment_value"
-  | "bit_array_segment_encoding"
-  | "string_bit_array_segment"
-  | "integer_bit_array_segment"
+  | "bit_array_segment_options"
+  | "bit_array_segment_option_tail"
+  | "bit_array_segment_option"
   | "group_expression"
   | "unit_expression"
   | "string_expression"
@@ -360,14 +373,20 @@ export type RuleName =
   | "truth"
   | "falsity"
   | "capture_expression"
+  | "tuple_index_expression"
   | "named_expression"
   | "qualified_name"
   | "qualified_name_tail"
+  | "qualified_name_keyword"
+  | "function_keyword"
   | "pattern"
   | "base_pattern"
   | "pattern_alias"
   | "discard_pattern"
   | "bit_array_pattern"
+  | "bit_array_pattern_segments"
+  | "bit_array_pattern_segment_tail"
+  | "bit_array_pattern_segment"
   | "list_pattern"
   | "list_pattern_entries"
   | "list_pattern_entry_tail"
@@ -378,7 +397,10 @@ export type RuleName =
   | "tuple_pattern_tail"
   | "unit_pattern"
   | "integer_pattern"
+  | "float_pattern"
   | "boolean_pattern"
+  | "string_prefix_pattern"
+  | "string_pattern"
   | "named_pattern"
   | "pattern_arguments"
   | "pattern_argument_entries"
@@ -428,9 +450,18 @@ export interface ModuleCursor extends RuleCursorBase<"module"> {
 }
 
 export interface TopLevelCursor extends RuleCursorBase<"top_level"> {
+  field(name: "declaration"): TopLevelDeclarationCursor;
+  field(name: "erlang_target"): TokenCursor<"named", "TARGET_ERLANG"> | null;
+  field(name: "javascript_target"): TokenCursor<"named", "TARGET_JAVASCRIPT"> | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface TopLevelDeclarationCursor extends RuleCursorBase<"top_level_declaration"> {
 }
 
 export interface ImportDeclarationCursor extends RuleCursorBase<"import_declaration"> {
+  field(name: "alias"): ImportAliasCursor | null;
   field(name: "module"): ModulePathCursor;
   field(name: "names"): ImportNamesCursor | null;
   field(name: string): CursorFieldValue | undefined;
@@ -493,7 +524,7 @@ export interface ImportAliasCursor extends RuleCursorBase<"import_alias"> {
 }
 
 export interface TypeDeclarationCursor extends RuleCursorBase<"type_declaration"> {
-  field(name: "body"): TypeDeclarationBodyCursor;
+  field(name: "body"): TypeDeclarationBodyCursor | null;
   field(name: "name"): TokenCursor<"named", "IDENT">;
   field(name: "opacity"): OpaqueVisibilityCursor | null;
   field(name: "parameters"): TypeParametersCursor | null;
@@ -584,7 +615,8 @@ export interface FunctionDeclarationCursor extends RuleCursorBase<"function_decl
 }
 
 export interface ExternalFunctionDeclarationCursor extends RuleCursorBase<"external_function_declaration"> {
-  field(name: "external"): ExternalAttributeCursor;
+  field(name: "body"): BlockCursor | null;
+  field(name: "external"): ReadonlyArray<ExternalAttributeCursor>;
   field(name: "name"): TokenCursor<"named", "IDENT">;
   field(name: "parameters"): FunctionParameterListCursor | null;
   field(name: "result"): FunctionResultCursor | null;
@@ -705,17 +737,23 @@ export interface TypeTailCursor extends RuleCursorBase<"type_tail"> {
 }
 
 export interface BlockCursor extends RuleCursorBase<"block"> {
-  field(name: "bindings"): ReadonlyArray<BlockBindingCursor>;
-  field(name: "result"): ExprCursor;
+  field(name: "entries"): ReadonlyArray<BlockEntryCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface BlockBindingCursor extends RuleCursorBase<"block_binding"> {
+export interface BlockEntryCursor extends RuleCursorBase<"block_entry"> {
+}
+
+export interface ExpressionStatementCursor extends RuleCursorBase<"expression_statement"> {
+  field(name: "value"): ExprCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface LetBindingCursor extends RuleCursorBase<"let_binding"> {
-  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "annotation"): TypeAnnotationCursor | null;
+  field(name: "pattern"): PatternCursor;
   field(name: "value"): ExprCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -835,7 +873,7 @@ export interface GeCursor extends RuleCursorBase<"ge"> {
 }
 
 export interface AdditiveCursor extends RuleCursorBase<"additive"> {
-  field(name: "left"): MultiplicativeCursor;
+  field(name: "left"): ConcatenationCursor;
   field(name: "rest"): ReadonlyArray<AdditiveTailCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -843,7 +881,7 @@ export interface AdditiveCursor extends RuleCursorBase<"additive"> {
 
 export interface AdditiveTailCursor extends RuleCursorBase<"additive_tail"> {
   field(name: "op"): AdditiveOpCursor;
-  field(name: "right"): MultiplicativeCursor;
+  field(name: "right"): ConcatenationCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -861,6 +899,19 @@ export interface PlusCursor extends RuleCursorBase<"plus"> {
 }
 
 export interface MinusCursor extends RuleCursorBase<"minus"> {
+}
+
+export interface ConcatenationCursor extends RuleCursorBase<"concatenation"> {
+  field(name: "left"): MultiplicativeCursor;
+  field(name: "rest"): ReadonlyArray<ConcatenationTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConcatenationTailCursor extends RuleCursorBase<"concatenation_tail"> {
+  field(name: "right"): MultiplicativeCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface MultiplicativeCursor extends RuleCursorBase<"multiplicative"> {
@@ -904,11 +955,20 @@ export interface NegateCursor extends RuleCursorBase<"negate"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface CallCursor extends RuleCursorBase<"call"> {
-  field(name: "callee"): PrimaryCursor;
-  field(name: "calls"): ReadonlyArray<CallArgumentsCursor>;
+export interface BooleanNotCursor extends RuleCursorBase<"boolean_not"> {
+  field(name: "value"): UnaryCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface CallCursor extends RuleCursorBase<"call"> {
+  field(name: "callee"): PrimaryCursor;
+  field(name: "operations"): ReadonlyArray<CallOperationCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface CallOperationCursor extends RuleCursorBase<"call_operation"> {
 }
 
 export interface CallArgumentsCursor extends RuleCursorBase<"call_arguments"> {
@@ -1021,9 +1081,17 @@ export interface PatternTailCursor extends RuleCursorBase<"pattern_tail"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface FieldAccessCursor extends RuleCursorBase<"field_access"> {
+  field(name: "keyword"): QualifiedNameKeywordCursor | null;
+  field(name: "value"): TokenCursor<"named", "IDENT"> | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface LambdaExpressionCursor extends RuleCursorBase<"lambda_expression"> {
   field(name: "body"): BlockCursor;
-  field(name: "parameters"): IdentifierListCursor | null;
+  field(name: "parameters"): FunctionParameterListCursor | null;
+  field(name: "result"): FunctionResultCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1096,29 +1164,28 @@ export interface BitArraySegmentTailCursor extends RuleCursorBase<"bit_array_seg
 }
 
 export interface BitArraySegmentCursor extends RuleCursorBase<"bit_array_segment"> {
-  field(name: "encoding"): BitArraySegmentEncodingCursor | null;
-  field(name: "value"): BitArraySegmentValueCursor;
+  field(name: "options"): BitArraySegmentOptionsCursor | null;
+  field(name: "value"): ExprCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface BitArraySegmentValueCursor extends RuleCursorBase<"bit_array_segment_value"> {
-}
-
-export interface BitArraySegmentEncodingCursor extends RuleCursorBase<"bit_array_segment_encoding"> {
-  field(name: "value"): TokenCursor<"named", "IDENT">;
+export interface BitArraySegmentOptionsCursor extends RuleCursorBase<"bit_array_segment_options"> {
+  field(name: "head"): BitArraySegmentOptionCursor;
+  field(name: "tail"): ReadonlyArray<BitArraySegmentOptionTailCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface StringBitArraySegmentCursor extends RuleCursorBase<"string_bit_array_segment"> {
-  field(name: "value"): TokenCursor<"named", "STRING">;
+export interface BitArraySegmentOptionTailCursor extends RuleCursorBase<"bit_array_segment_option_tail"> {
+  field(name: "value"): BitArraySegmentOptionCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface IntegerBitArraySegmentCursor extends RuleCursorBase<"integer_bit_array_segment"> {
-  field(name: "value"): TokenCursor<"named", "INTEGER">;
+export interface BitArraySegmentOptionCursor extends RuleCursorBase<"bit_array_segment_option"> {
+  field(name: "arguments"): CallArgumentsCursor | null;
+  field(name: "name"): TokenCursor<"named", "IDENT">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1162,6 +1229,13 @@ export interface FalsityCursor extends RuleCursorBase<"falsity"> {
 export interface CaptureExpressionCursor extends RuleCursorBase<"capture_expression"> {
 }
 
+export interface TupleIndexExpressionCursor extends RuleCursorBase<"tuple_index_expression"> {
+  field(name: "index"): TokenCursor<"named", "TUPLE_INDEX">;
+  field(name: "value"): NamedExpressionCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface NamedExpressionCursor extends RuleCursorBase<"named_expression"> {
   field(name: "name"): QualifiedNameCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -1176,9 +1250,16 @@ export interface QualifiedNameCursor extends RuleCursorBase<"qualified_name"> {
 }
 
 export interface QualifiedNameTailCursor extends RuleCursorBase<"qualified_name_tail"> {
-  field(name: "value"): TokenCursor<"named", "IDENT">;
+  field(name: "keyword"): QualifiedNameKeywordCursor | null;
+  field(name: "value"): TokenCursor<"named", "IDENT"> | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface QualifiedNameKeywordCursor extends RuleCursorBase<"qualified_name_keyword"> {
+}
+
+export interface FunctionKeywordCursor extends RuleCursorBase<"function_keyword"> {
 }
 
 export interface PatternCursor extends RuleCursorBase<"pattern"> {
@@ -1201,7 +1282,27 @@ export interface DiscardPatternCursor extends RuleCursorBase<"discard_pattern"> 
 }
 
 export interface BitArrayPatternCursor extends RuleCursorBase<"bit_array_pattern"> {
-  field(name: "value"): BitArrayExpressionCursor;
+  field(name: "segments"): BitArrayPatternSegmentsCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface BitArrayPatternSegmentsCursor extends RuleCursorBase<"bit_array_pattern_segments"> {
+  field(name: "head"): BitArrayPatternSegmentCursor;
+  field(name: "tail"): ReadonlyArray<BitArrayPatternSegmentTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface BitArrayPatternSegmentTailCursor extends RuleCursorBase<"bit_array_pattern_segment_tail"> {
+  field(name: "value"): BitArrayPatternSegmentCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface BitArrayPatternSegmentCursor extends RuleCursorBase<"bit_array_pattern_segment"> {
+  field(name: "options"): BitArraySegmentOptionsCursor | null;
+  field(name: "value"): PatternCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1258,12 +1359,33 @@ export interface UnitPatternCursor extends RuleCursorBase<"unit_pattern"> {
 }
 
 export interface IntegerPatternCursor extends RuleCursorBase<"integer_pattern"> {
+  field(name: "sign"): TokenCursor<"literal", "-"> | null;
   field(name: "value"): TokenCursor<"named", "INTEGER">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface FloatPatternCursor extends RuleCursorBase<"float_pattern"> {
+  field(name: "sign"): TokenCursor<"literal", "-"> | null;
+  field(name: "value"): TokenCursor<"named", "FLOAT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface BooleanPatternCursor extends RuleCursorBase<"boolean_pattern"> {
+}
+
+export interface StringPrefixPatternCursor extends RuleCursorBase<"string_prefix_pattern"> {
+  field(name: "prefix"): TokenCursor<"named", "STRING">;
+  field(name: "rest"): PatternCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface StringPatternCursor extends RuleCursorBase<"string_pattern"> {
+  field(name: "value"): TokenCursor<"named", "STRING">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface NamedPatternCursor extends RuleCursorBase<"named_pattern"> {
@@ -1327,6 +1449,7 @@ export interface IdentifierTailCursor extends RuleCursorBase<"identifier_tail"> 
 export type AnyRuleCursor =
   | ModuleCursor
   | TopLevelCursor
+  | TopLevelDeclarationCursor
   | ImportDeclarationCursor
   | ModulePathCursor
   | ModulePathTailCursor
@@ -1372,7 +1495,8 @@ export type AnyRuleCursor =
   | TypeListCursor
   | TypeTailCursor
   | BlockCursor
-  | BlockBindingCursor
+  | BlockEntryCursor
+  | ExpressionStatementCursor
   | LetBindingCursor
   | UseBindingCursor
   | ExprCursor
@@ -1405,6 +1529,8 @@ export type AnyRuleCursor =
   | FloatMinusCursor
   | PlusCursor
   | MinusCursor
+  | ConcatenationCursor
+  | ConcatenationTailCursor
   | MultiplicativeCursor
   | MultiplicativeTailCursor
   | MultiplicativeOpCursor
@@ -1415,7 +1541,9 @@ export type AnyRuleCursor =
   | RemainderCursor
   | UnaryCursor
   | NegateCursor
+  | BooleanNotCursor
   | CallCursor
+  | CallOperationCursor
   | CallArgumentsCursor
   | CallArgumentListCursor
   | CallArgumentTailCursor
@@ -1434,6 +1562,7 @@ export type AnyRuleCursor =
   | CaseGuardCursor
   | PatternListCursor
   | PatternTailCursor
+  | FieldAccessCursor
   | LambdaExpressionCursor
   | TupleExpressionCursor
   | TupleExpressionTailCursor
@@ -1447,10 +1576,9 @@ export type AnyRuleCursor =
   | BitArraySegmentsCursor
   | BitArraySegmentTailCursor
   | BitArraySegmentCursor
-  | BitArraySegmentValueCursor
-  | BitArraySegmentEncodingCursor
-  | StringBitArraySegmentCursor
-  | IntegerBitArraySegmentCursor
+  | BitArraySegmentOptionsCursor
+  | BitArraySegmentOptionTailCursor
+  | BitArraySegmentOptionCursor
   | GroupExpressionCursor
   | UnitExpressionCursor
   | StringExpressionCursor
@@ -1460,14 +1588,20 @@ export type AnyRuleCursor =
   | TruthCursor
   | FalsityCursor
   | CaptureExpressionCursor
+  | TupleIndexExpressionCursor
   | NamedExpressionCursor
   | QualifiedNameCursor
   | QualifiedNameTailCursor
+  | QualifiedNameKeywordCursor
+  | FunctionKeywordCursor
   | PatternCursor
   | BasePatternCursor
   | PatternAliasCursor
   | DiscardPatternCursor
   | BitArrayPatternCursor
+  | BitArrayPatternSegmentsCursor
+  | BitArrayPatternSegmentTailCursor
+  | BitArrayPatternSegmentCursor
   | ListPatternCursor
   | ListPatternEntriesCursor
   | ListPatternEntryTailCursor
@@ -1478,7 +1612,10 @@ export type AnyRuleCursor =
   | TuplePatternTailCursor
   | UnitPatternCursor
   | IntegerPatternCursor
+  | FloatPatternCursor
   | BooleanPatternCursor
+  | StringPrefixPatternCursor
+  | StringPatternCursor
   | NamedPatternCursor
   | PatternArgumentsCursor
   | PatternArgumentEntriesCursor

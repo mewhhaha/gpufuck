@@ -24,8 +24,8 @@ portable WebAssembly
 The portable language includes:
 
 - strict eager and lazy call-by-need evaluation;
-- `i32`, `i64`, `f32`, `f64`, Boolean, unit, static text and bytes, tuples, and nominal algebraic
-  data;
+- `i32`, `i64`, `f32`, `f64`, portable f64-backed whole numbers, Boolean, unit, text and bytes,
+  tuples, and nominal algebraic data;
 - immutable bindings, closures, higher-order functions, recursion, and pattern matching;
 - Hindley–Milner inference, indexed constructor results, and annotated predicative rank-N
   parameters;
@@ -484,7 +484,7 @@ lowering techniques, not complete compatibility with their source languages.
 
 | Frontend                                                | Boundary demonstrated                                                    |
 | ------------------------------------------------------- | ------------------------------------------------------------------------ |
-| [Gleam](examples/gleam-functional/README.md)            | Strict inference, ADTs, structural equality, and inferred module links   |
+| [Gleam](examples/gleam-functional/README.md)            | Strict inference, all 19 stdlib modules, and differential JS parity      |
 | [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, moves, borrows, and rejected mutation |
 | [Haskell](examples/haskell-functional/README.md)        | Laziness, inference, dictionaries, GADTs, and recursive data             |
 | [OCaml](examples/ocaml-functional/README.md)            | Sequential scope, explicit recursion, variants, and lists                |

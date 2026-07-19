@@ -45,6 +45,7 @@ export type FunctionalInputValue =
   | { readonly kind: "signed-integer-64"; readonly value: bigint }
   | { readonly kind: "float-32"; readonly value: number }
   | { readonly kind: "float-64"; readonly value: number }
+  | { readonly kind: "whole-number-f64"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
   | { readonly kind: "unit" }
   | {
@@ -257,10 +258,13 @@ async function inspectModuleNumericRequirements(
   let boundedWasm = false;
   for (const node of nodes) {
     if (node.tag === FunctionalCoreTag.SignedInteger64) signedInteger64 = true;
-    if (node.tag === FunctionalCoreTag.Float64) boundedWasm = true;
+    if (
+      node.tag === FunctionalCoreTag.Float64 ||
+      node.tag === FunctionalCoreTag.WholeNumberF64
+    ) boundedWasm = true;
     if (
       node.tag === FunctionalCoreTag.Text || node.tag === FunctionalCoreTag.Bytes ||
-      node.tag === FunctionalCoreTag.RuntimeFault
+      node.tag === FunctionalCoreTag.RuntimeFault || node.tag === FunctionalCoreTag.BufferAppend
     ) {
       boundedWasm = true;
     }
@@ -268,6 +272,7 @@ async function inspectModuleNumericRequirements(
       if (node.payload === FunctionalUnaryOperator.NegateSignedInteger64) signedInteger64 = true;
       if (
         node.payload === FunctionalUnaryOperator.NegateFloat64 ||
+        node.payload === FunctionalUnaryOperator.NegateWholeNumberF64 ||
         node.payload === FunctionalUnaryOperator.SquareRootFloat32
       ) boundedWasm = true;
     }
@@ -284,6 +289,10 @@ async function inspectModuleNumericRequirements(
       if (
         node.payload >= FunctionalBinaryOperator.EqualFloat64 &&
         node.payload <= FunctionalBinaryOperator.DivideFloat64
+      ) boundedWasm = true;
+      if (
+        node.payload >= FunctionalBinaryOperator.EqualWholeNumberF64 &&
+        node.payload <= FunctionalBinaryOperator.RemainderWholeNumberF64
       ) boundedWasm = true;
       if (node.payload === FunctionalBinaryOperator.DivideFloat32) boundedWasm = true;
     }
@@ -356,7 +365,7 @@ export async function evaluateFunctionalModuleWithBoundedWasm(
   let execution;
   try {
     execution = await runBoundedFunctionalWasmModule(module, maximumSteps, {
-      ...(options.input === undefined ? {} : { argument: options.input as FunctionalWasmValue }),
+      ...(options.input === undefined ? {} : { argument: wasmInputValue(options.input) }),
       ...(options.maximumResultNodes === undefined
         ? {}
         : { maximumResultNodes: options.maximumResultNodes }),
@@ -387,6 +396,26 @@ export async function evaluateFunctionalModuleWithBoundedWasm(
       thunkEvaluations: execution.stats.thunkEvaluations,
     },
   };
+}
+
+function wasmInputValue(value: FunctionalInputValue): FunctionalWasmValue {
+  switch (value.kind) {
+    case "whole-number-f64":
+      return { kind: "integer", value: value.value };
+    case "tuple":
+      return {
+        kind: "tuple",
+        values: [wasmInputValue(value.values[0]), wasmInputValue(value.values[1])],
+      };
+    case "constructor":
+      return {
+        kind: "constructor",
+        name: value.name,
+        fields: value.fields.map(wasmInputValue),
+      };
+    default:
+      return value;
+  }
 }
 
 function functionalFaultFromBoundedWasm(

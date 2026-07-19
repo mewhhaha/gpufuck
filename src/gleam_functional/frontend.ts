@@ -13,6 +13,7 @@ import {
 import {
   type GleamFunctionalExportSignature,
   gleamFunctionalNominalExportSignatures,
+  gleamFunctionalPreludeArtifact,
   gleamFunctionalValueExportSignatures,
   type LoweredGleamFunctionalModule,
   lowerGleamFunctionalModule,
@@ -118,7 +119,7 @@ export function lowerGleamFunctionalSources(
 
   try {
     const linked = linkFunctionalModules(
-      loweredModules.map((lowered) => lowered.artifact),
+      [gleamFunctionalPreludeArtifact(), ...loweredModules.map((lowered) => lowered.artifact)],
       entry,
     );
     return {

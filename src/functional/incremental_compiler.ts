@@ -437,6 +437,10 @@ function portableChild(
   relativeIndex: number,
 ): number {
   if (child === "child0" && isLiteralPayloadChild(node.tag)) return node[child];
+  if (child === "child1" && node.tag === FunctionalCoreTag.WholeNumberF64) return node[child];
+  if (child === "child1" && node.tag === FunctionalCoreTag.Unary) return node[child];
+  if (child === "child2" && node.tag === FunctionalCoreTag.Binary) return node[child];
+  if (child === "child2" && node.tag === FunctionalCoreTag.BufferAppend) return node[child];
   const value = node[child];
   if (value === FUNCTIONAL_NO_INDEX) return value;
   if (value >= root && value < end) return value - root;
@@ -539,12 +543,19 @@ function assembledChild(
   root: number,
 ): number {
   if (child === "child0" && isLiteralPayloadChild(node.tag)) return node[child];
+  if (child === "child1" && node.tag === FunctionalCoreTag.WholeNumberF64) return node[child];
+  if (child === "child1" && node.tag === FunctionalCoreTag.Unary) return node[child];
+  if (
+    child === "child2" &&
+    (node.tag === FunctionalCoreTag.Binary || node.tag === FunctionalCoreTag.BufferAppend)
+  ) return node[child];
   const value = node[child];
   return value === FUNCTIONAL_NO_INDEX ? value : root + value;
 }
 
 function isLiteralPayloadChild(tag: number): boolean {
-  return tag === FunctionalCoreTag.SignedInteger64 || tag === FunctionalCoreTag.Float64;
+  return tag === FunctionalCoreTag.SignedInteger64 || tag === FunctionalCoreTag.Float64 ||
+    tag === FunctionalCoreTag.WholeNumberF64;
 }
 
 function encodedDefinitionNames(
@@ -769,6 +780,7 @@ function portableChildValues(node: PortableCoreNode): readonly number[] {
   switch (node.tag) {
     case FunctionalCoreTag.SignedInteger64:
     case FunctionalCoreTag.Float64:
+    case FunctionalCoreTag.WholeNumberF64:
     case FunctionalCoreTag.Integer:
     case FunctionalCoreTag.Float32:
     case FunctionalCoreTag.Boolean:
@@ -785,6 +797,7 @@ function portableChildValues(node: PortableCoreNode): readonly number[] {
     case FunctionalCoreTag.Let:
     case FunctionalCoreTag.LetRec:
     case FunctionalCoreTag.Binary:
+    case FunctionalCoreTag.BufferAppend:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:
       return [node.child0, node.child1];

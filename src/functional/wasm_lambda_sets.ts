@@ -115,6 +115,7 @@ export class FunctionalLambdaSetAnalysis {
       case FunctionalCoreTag.SignedInteger64:
       case FunctionalCoreTag.Float32:
       case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.WholeNumberF64:
       case FunctionalCoreTag.Boolean:
         return;
       case FunctionalCoreTag.Local: {
@@ -179,6 +180,7 @@ export class FunctionalLambdaSetAnalysis {
         this.#visitExpression(node.child0, environment);
         return;
       case FunctionalCoreTag.Binary:
+      case FunctionalCoreTag.BufferAppend:
         this.#visitExpression(node.child0, environment);
         this.#visitExpression(node.child1, environment);
         return;

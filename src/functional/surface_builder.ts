@@ -18,7 +18,7 @@ import {
   type FunctionalSpan,
   FunctionalTypecheckingProfile,
   type FunctionalTypeSchema,
-  type FunctionalUnaryOperator,
+  FunctionalUnaryOperator,
 } from "./abi.ts";
 import {
   FUNCTIONAL_ARRAY_TYPE_NAME,
@@ -28,6 +28,7 @@ import {
   FUNCTIONAL_RESOURCE_TYPE_PREFIX,
   FUNCTIONAL_SLICE_TYPE_NAME,
   FUNCTIONAL_TEXT_TYPE_NAME,
+  FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
   functionalHostFieldType,
   type FunctionalSurfaceModuleOptions,
   normalizeFunctionalHostCapabilities,
@@ -43,10 +44,17 @@ export type FunctionalSurfaceExpression =
   | { readonly kind: "signed-integer-64"; readonly value: bigint; readonly span?: FunctionalSpan }
   | { readonly kind: "float-32"; readonly value: number; readonly span?: FunctionalSpan }
   | { readonly kind: "float-64"; readonly value: number; readonly span?: FunctionalSpan }
+  | { readonly kind: "whole-number-f64"; readonly value: number; readonly span?: FunctionalSpan }
   | { readonly kind: "boolean"; readonly value: boolean; readonly span?: FunctionalSpan }
   | { readonly kind: "text"; readonly value: string; readonly span?: FunctionalSpan }
   | { readonly kind: "bytes"; readonly value: Uint8Array; readonly span?: FunctionalSpan }
   | { readonly kind: "runtime-fault"; readonly message: string; readonly span?: FunctionalSpan }
+  | {
+    readonly kind: "text-append" | "bytes-append";
+    readonly left: FunctionalSurfaceExpression;
+    readonly right: FunctionalSurfaceExpression;
+    readonly span?: FunctionalSpan;
+  }
   | { readonly kind: "name"; readonly name: string; readonly span?: FunctionalSpan }
   | {
     readonly kind: "lambda";
@@ -204,6 +212,7 @@ export function buildFunctionalSurfaceModule(
       declaredName === FUNCTIONAL_THUNK_TYPE_NAME ||
       declaredName === FUNCTIONAL_INIT_TYPE_NAME || declaredName === FUNCTIONAL_TEXT_TYPE_NAME ||
       declaredName === FUNCTIONAL_BYTES_TYPE_NAME || declaredName === FUNCTIONAL_ARRAY_TYPE_NAME ||
+      declaredName === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME ||
       declaredName === FUNCTIONAL_SLICE_TYPE_NAME ||
       declaredName.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
     ) {
@@ -491,6 +500,7 @@ function collectBoundaryTypeNames(
     if (schema.kind === "named") {
       if (
         schema.name === FUNCTIONAL_TEXT_TYPE_NAME || schema.name === FUNCTIONAL_BYTES_TYPE_NAME ||
+        schema.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME ||
         schema.name === FUNCTIONAL_ARRAY_TYPE_NAME || schema.name === FUNCTIONAL_SLICE_TYPE_NAME ||
         schema.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
       ) {
@@ -528,6 +538,9 @@ function collectBoundaryTypeNames(
       case "bytes":
         names.add(FUNCTIONAL_BYTES_TYPE_NAME);
         return;
+      case "whole-number-f64":
+        names.add(FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME);
+        return;
       case "lambda":
       case "unary":
       case "numeric-convert":
@@ -552,6 +565,16 @@ function collectBoundaryTypeNames(
         visitExpression(expression.argument);
         return;
       case "binary":
+        visitExpression(expression.left);
+        visitExpression(expression.right);
+        return;
+      case "text-append":
+        names.add(FUNCTIONAL_TEXT_TYPE_NAME);
+        visitExpression(expression.left);
+        visitExpression(expression.right);
+        return;
+      case "bytes-append":
+        names.add(FUNCTIONAL_BYTES_TYPE_NAME);
         visitExpression(expression.left);
         visitExpression(expression.right);
         return;
@@ -599,6 +622,8 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
         expressionFeatureMask(expression.alternate);
     case "apply":
     case "binary":
+    case "text-append":
+    case "bytes-append":
       return expressionFeatureMask(
         expression.kind === "apply" ? expression.callee : expression.left,
       ) |
@@ -617,6 +642,7 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
     case "signed-integer-64":
     case "float-32":
     case "float-64":
+    case "whole-number-f64":
     case "boolean":
     case "text":
     case "bytes":
@@ -771,6 +797,32 @@ class SurfaceExpressionEncoder {
         this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child0] = high;
         return node;
       }
+      case "whole-number-f64": {
+        if (!Number.isFinite(expression.value) || !Number.isInteger(expression.value)) {
+          throw new RangeError(
+            `functional whole-number f64 literal must be a finite integer; received ${expression.value}`,
+          );
+        }
+        const typeIndex = this.typeIndices.get(FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME);
+        if (typeIndex === undefined) {
+          throw new Error(
+            `functional surface omitted literal type ${
+              JSON.stringify(FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME)
+            }`,
+          );
+        }
+        const [low, high] = float64Bits(expression.value);
+        const node = this.emitNode(
+          FunctionalExpressionTag.WholeNumberF64,
+          low,
+          [],
+          parent,
+          expression.span,
+        );
+        this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child0] = high;
+        this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child1] = typeIndex;
+        return node;
+      }
       case "boolean":
         return this.emitNode(
           FunctionalExpressionTag.Boolean,
@@ -894,6 +946,10 @@ class SurfaceExpressionEncoder {
         );
         const value = this.emit(expression.value, node);
         this.setChildren(node, [value]);
+        if (expression.operator === FunctionalUnaryOperator.NegateWholeNumberF64) {
+          this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child1] = this
+            .requiredTypeIndex(FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME);
+        }
         return node;
       }
       case "binary": {
@@ -906,6 +962,32 @@ class SurfaceExpressionEncoder {
         const left = this.emit(expression.left, node);
         const right = this.emit(expression.right, node);
         this.setChildren(node, [left, right]);
+        if (
+          expression.operator >= FunctionalBinaryOperator.EqualWholeNumberF64 &&
+          expression.operator <= FunctionalBinaryOperator.RemainderWholeNumberF64
+        ) {
+          this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child2] = this
+            .requiredTypeIndex(FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME);
+        }
+        return node;
+      }
+      case "text-append":
+      case "bytes-append": {
+        const node = this.reserveNode(
+          FunctionalExpressionTag.BufferAppend,
+          0,
+          parent,
+          expression.span,
+        );
+        const left = this.emit(expression.left, node);
+        const right = this.emit(expression.right, node);
+        this.setChildren(node, [left, right]);
+        this.words[node * FUNCTIONAL_NODE_WORD_LENGTH + FunctionalNodeWord.Child2] = this
+          .requiredTypeIndex(
+            expression.kind === "text-append"
+              ? FUNCTIONAL_TEXT_TYPE_NAME
+              : FUNCTIONAL_BYTES_TYPE_NAME,
+          );
         return node;
       }
       case "numeric-convert": {
@@ -986,6 +1068,14 @@ class SurfaceExpressionEncoder {
     const node = this.reserveNode(tag, payload, parent, span);
     this.setChildren(node, children);
     return node;
+  }
+
+  private requiredTypeIndex(name: string): number {
+    const typeIndex = this.typeIndices.get(name);
+    if (typeIndex === undefined) {
+      throw new Error(`functional surface omitted expression type ${JSON.stringify(name)}`);
+    }
+    return typeIndex;
   }
 
   private reserveNode(
@@ -1115,6 +1205,7 @@ export const surface: Readonly<{
   signedInteger64(value: bigint): FunctionalSurfaceExpression;
   float32(value: number): FunctionalSurfaceExpression;
   float64(value: number): FunctionalSurfaceExpression;
+  wholeNumberF64(value: number): FunctionalSurfaceExpression;
   boolean(value: boolean): FunctionalSurfaceExpression;
   text(value: string): FunctionalSurfaceExpression;
   bytes(value: Uint8Array): FunctionalSurfaceExpression;
@@ -1160,6 +1251,9 @@ export const surface: Readonly<{
   },
   float64(value: number): FunctionalSurfaceExpression {
     return { kind: "float-64", value };
+  },
+  wholeNumberF64(value: number): FunctionalSurfaceExpression {
+    return { kind: "whole-number-f64", value };
   },
   boolean(value: boolean): FunctionalSurfaceExpression {
     return { kind: "boolean", value };

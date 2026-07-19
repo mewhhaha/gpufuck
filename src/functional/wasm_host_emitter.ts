@@ -201,6 +201,19 @@ export class FunctionalWasmHostEmitter {
     instructions.emit(0xad);
   }
 
+  emitBufferAppendValues(
+    instructions: WasmInstructions,
+    type: FunctionalHostType,
+  ): void {
+    const rightValue = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(rightValue);
+    const leftValue = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(leftValue);
+    const left = this.bufferPointer(instructions, leftValue, type);
+    const right = this.bufferPointer(instructions, rightValue, type);
+    this.emitBufferAppend(instructions, left, right, type);
+  }
+
   private objectPointer(instructions: WasmInstructions, value: number): number {
     const pointer = instructions.addLocal(WasmValueType.I32);
     instructions.localGet(value);

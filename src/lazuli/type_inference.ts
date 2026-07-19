@@ -16,6 +16,7 @@ import {
   type LazuliTypeDeclaration,
   type LazuliTypeSchema,
   LazuliTypeWord,
+  LazuliUnaryOperator,
 } from "./abi.ts";
 
 export interface LazuliTypeInferenceSuccess {
@@ -171,7 +172,9 @@ function numericTypeForBinaryOperator(operator: number): InferenceType {
 }
 
 function binaryOperatorIsComparison(operator: number): boolean {
-  return operator <= 40 && (operator - 1) % 10 < 6;
+  return operator <= 40 && (operator - 1) % 10 < 6 ||
+    operator >= LazuliBinaryOperator.EqualWholeNumberF64 &&
+      operator <= LazuliBinaryOperator.GreaterEqualWholeNumberF64;
 }
 
 function numericConversionTypes(operator: number): readonly [InferenceType, InferenceType] {
@@ -625,6 +628,7 @@ class InferenceContext {
         case LazuliSurfaceTag.SignedInteger64:
         case LazuliSurfaceTag.Float32:
         case LazuliSurfaceTag.Float64:
+        case LazuliSurfaceTag.WholeNumberF64:
         case LazuliSurfaceTag.Boolean:
           return;
         case LazuliSurfaceTag.Name: {
@@ -662,6 +666,7 @@ class InferenceContext {
         case LazuliSurfaceTag.Apply:
         case LazuliSurfaceTag.StrictApply:
         case LazuliSurfaceTag.Binary:
+        case LazuliSurfaceTag.BufferAppend:
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), boundSymbols);
           return;
@@ -754,6 +759,8 @@ class InferenceContext {
         return FLOAT_32;
       case LazuliSurfaceTag.Float64:
         return FLOAT_64;
+      case LazuliSurfaceTag.WholeNumberF64:
+        return this.namedNodeType(nodeIndex, LazuliSurfaceWord.Child1, span);
       case LazuliSurfaceTag.Text:
       case LazuliSurfaceTag.Bytes: {
         const declaration = this.#surface.typeDeclarations[
@@ -868,6 +875,16 @@ class InferenceContext {
         return result;
       }
       case LazuliSurfaceTag.Unary: {
+        if (payload === LazuliUnaryOperator.NegateWholeNumberF64) {
+          const operandType = this.namedNodeType(nodeIndex, LazuliSurfaceWord.Child1, span);
+          const body = this.inferNode(
+            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+            environment,
+            operandType,
+          );
+          this.unify(operandType, body, span);
+          return operandType;
+        }
         const operandType = numericTypeForUnaryOperator(payload);
         const body = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
@@ -894,6 +911,25 @@ class InferenceContext {
           this.unify(left, right, span);
           return BOOLEAN;
         }
+        if (
+          payload >= LazuliBinaryOperator.EqualWholeNumberF64 &&
+          payload <= LazuliBinaryOperator.RemainderWholeNumberF64
+        ) {
+          const operandType = this.namedNodeType(nodeIndex, LazuliSurfaceWord.Child2, span);
+          const left = this.inferNode(
+            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+            environment,
+            operandType,
+          );
+          const right = this.inferNode(
+            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+            environment,
+            operandType,
+          );
+          this.unify(operandType, left, span);
+          this.unify(operandType, right, span);
+          return binaryOperatorIsComparison(payload) ? BOOLEAN : operandType;
+        }
         const operandType = numericTypeForBinaryOperator(payload);
         const left = this.inferNode(
           this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
@@ -908,6 +944,22 @@ class InferenceContext {
         this.unify(operandType, left, span);
         this.unify(operandType, right, span);
         return binaryOperatorIsComparison(payload) ? BOOLEAN : operandType;
+      }
+      case LazuliSurfaceTag.BufferAppend: {
+        const operandType = this.namedNodeType(nodeIndex, LazuliSurfaceWord.Child2, span);
+        const left = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          environment,
+          operandType,
+        );
+        const right = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          environment,
+          operandType,
+        );
+        this.unify(operandType, left, span);
+        this.unify(operandType, right, span);
+        return operandType;
       }
       case LazuliSurfaceTag.NumericConvert: {
         const [source, result] = numericConversionTypes(payload);
@@ -924,6 +976,18 @@ class InferenceContext {
       default:
         throw new Error(`Unsupported Lazuli expression tag ${tag} at node ${nodeIndex}.`);
     }
+  }
+
+  private namedNodeType(
+    nodeIndex: number,
+    word: 4 | 5 | 6,
+    span: LazuliDiagnostic["span"],
+  ): InferenceType {
+    const declaration = this.#surface.typeDeclarations[this.nodeWord(nodeIndex, word)];
+    if (declaration === undefined) {
+      throw this.invalidTypeMetadata("expression references unknown named type", span);
+    }
+    return { kind: "named", name: declaration.name, arguments: [] };
   }
 
   private inferCase(

@@ -26,6 +26,7 @@ import type {
   FunctionalSurfaceExpression,
   FunctionalSurfaceTypeDeclaration,
 } from "./surface_builder.ts";
+import { FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME } from "./host_contract.ts";
 
 export const FUNCTIONAL_COMPTIME_IR_EXPRESSION_NAME = "$ComptimeFunctionalExpression";
 export const FUNCTIONAL_COMPTIME_IR_DEFINITION_LIST_NAME = "$ComptimeFunctionalDefinitionList";
@@ -46,6 +47,7 @@ const EXPRESSION_INTEGER = "$ComptimeFunctionalInteger";
 const EXPRESSION_SIGNED_INTEGER_64 = "$ComptimeFunctionalSignedInteger64";
 const EXPRESSION_FLOAT_32 = "$ComptimeFunctionalFloat32";
 const EXPRESSION_FLOAT_64 = "$ComptimeFunctionalFloat64";
+const EXPRESSION_WHOLE_NUMBER_F64 = "$ComptimeFunctionalWholeNumberF64";
 const EXPRESSION_BOOLEAN = "$ComptimeFunctionalBoolean";
 const EXPRESSION_TEXT = "$ComptimeFunctionalText";
 const EXPRESSION_BYTES = "$ComptimeFunctionalBytes";
@@ -58,6 +60,8 @@ const EXPRESSION_IF = "$ComptimeFunctionalIf";
 const EXPRESSION_APPLY = "$ComptimeFunctionalApply";
 const EXPRESSION_UNARY = "$ComptimeFunctionalUnary";
 const EXPRESSION_BINARY = "$ComptimeFunctionalBinary";
+const EXPRESSION_TEXT_APPEND = "$ComptimeFunctionalTextAppend";
+const EXPRESSION_BYTES_APPEND = "$ComptimeFunctionalBytesAppend";
 const EXPRESSION_CONVERT = "$ComptimeFunctionalNumericConvert";
 const EXPRESSION_CASE = "$ComptimeFunctionalCase";
 
@@ -139,6 +143,17 @@ export const FUNCTIONAL_COMPTIME_IR_TYPES: readonly FunctionalSurfaceTypeDeclara
         },
         { name: EXPRESSION_FLOAT_32, fields: [{ name: "value", type: { kind: "float-32" } }] },
         { name: EXPRESSION_FLOAT_64, fields: [{ name: "value", type: { kind: "float-64" } }] },
+        {
+          name: EXPRESSION_WHOLE_NUMBER_F64,
+          fields: [{
+            name: "value",
+            type: {
+              kind: "named",
+              name: FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
+              arguments: [],
+            },
+          }],
+        },
         { name: EXPRESSION_BOOLEAN, fields: [{ name: "value", type: { kind: "boolean" } }] },
         { name: EXPRESSION_TEXT, fields: [{ name: "value", type: byteString }] },
         { name: EXPRESSION_BYTES, fields: [{ name: "value", type: byteString }] },
@@ -195,6 +210,14 @@ export const FUNCTIONAL_COMPTIME_IR_TYPES: readonly FunctionalSurfaceTypeDeclara
             { name: "left", type: expression },
             { name: "right", type: expression },
           ],
+        },
+        {
+          name: EXPRESSION_TEXT_APPEND,
+          fields: [{ name: "left", type: expression }, { name: "right", type: expression }],
+        },
+        {
+          name: EXPRESSION_BYTES_APPEND,
+          fields: [{ name: "left", type: expression }, { name: "right", type: expression }],
         },
         {
           name: EXPRESSION_CONVERT,
@@ -257,6 +280,10 @@ export function functionalConstantFromSurfaceExpression(
       return constructor(EXPRESSION_FLOAT_32, [{ kind: "float-32", value: value.value }]);
     case "float-64":
       return constructor(EXPRESSION_FLOAT_64, [{ kind: "float-64", value: value.value }]);
+    case "whole-number-f64":
+      return constructor(EXPRESSION_WHOLE_NUMBER_F64, [
+        { kind: "whole-number-f64", value: value.value },
+      ]);
     case "boolean":
       return constructor(EXPRESSION_BOOLEAN, [{ kind: "boolean", value: value.value }]);
     case "text":
@@ -314,6 +341,15 @@ export function functionalConstantFromSurfaceExpression(
         functionalConstantFromSurfaceExpression(value.left),
         functionalConstantFromSurfaceExpression(value.right),
       ]);
+    case "text-append":
+    case "bytes-append":
+      return constructor(
+        value.kind === "text-append" ? EXPRESSION_TEXT_APPEND : EXPRESSION_BYTES_APPEND,
+        [
+          functionalConstantFromSurfaceExpression(value.left),
+          functionalConstantFromSurfaceExpression(value.right),
+        ],
+      );
     case "numeric-convert":
       return constructor(EXPRESSION_CONVERT, [
         { kind: "integer", value: value.conversion },
@@ -412,6 +448,11 @@ function decodedExpression(constant: FunctionalConstant): FunctionalSurfaceExpre
       return { kind: "float-32", value: requiredNumber(encoded, name, "float-32") };
     case EXPRESSION_FLOAT_64:
       return { kind: "float-64", value: requiredNumber(encoded, name, "float-64") };
+    case EXPRESSION_WHOLE_NUMBER_F64:
+      return {
+        kind: "whole-number-f64",
+        value: requiredNumber(encoded, name, "whole-number-f64"),
+      };
     case EXPRESSION_BOOLEAN:
       return { kind: "boolean", value: requiredBoolean(encoded, name) };
     case EXPRESSION_TEXT:
@@ -501,6 +542,15 @@ function decodedExpression(constant: FunctionalConstant): FunctionalSurfaceExpre
         operator: operator as FunctionalBinaryOperator,
         left: decodedExpression(fields[1]!),
         right: decodedExpression(fields[2]!),
+      };
+    }
+    case EXPRESSION_TEXT_APPEND:
+    case EXPRESSION_BYTES_APPEND: {
+      const fields = requiredFields(encoded, name, 2);
+      return {
+        kind: name === EXPRESSION_TEXT_APPEND ? "text-append" : "bytes-append",
+        left: decodedExpression(fields[0]!),
+        right: decodedExpression(fields[1]!),
       };
     }
     case EXPRESSION_CONVERT: {
@@ -654,7 +704,7 @@ function requiredInteger(constant: FunctionalConstant, location: string): number
 function requiredNumber(
   constant: Extract<FunctionalConstant, { readonly kind: "constructor" }>,
   name: string,
-  kind: "integer" | "float-32" | "float-64",
+  kind: "integer" | "float-32" | "float-64" | "whole-number-f64",
 ): number {
   const field = requiredFields(constant, name, 1)[0];
   if (field?.kind === kind) {

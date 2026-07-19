@@ -9,6 +9,7 @@ export interface GleamFunctionalModule {
 
 export interface GleamFunctionalImport {
   readonly module: string;
+  readonly alias: string | null;
   readonly names: readonly {
     readonly kind: "type" | "value";
     readonly name: string;
@@ -113,12 +114,29 @@ export type GleamFunctionalExpression =
   | { readonly kind: "string"; readonly value: string; readonly span: FunctionalSpan }
   | { readonly kind: "bit-array"; readonly bytes: Uint8Array; readonly span: FunctionalSpan }
   | {
+    readonly kind: "bit-array-build";
+    readonly segments: readonly GleamFunctionalBitArraySegment<GleamFunctionalExpression>[];
+    readonly span: FunctionalSpan;
+  }
+  | {
     readonly kind: "panic";
     readonly message: GleamFunctionalExpression | null;
     readonly span: FunctionalSpan;
   }
   | { readonly kind: "unit"; readonly span: FunctionalSpan }
   | { readonly kind: "name"; readonly name: string; readonly span: FunctionalSpan }
+  | {
+    readonly kind: "field-access";
+    readonly value: GleamFunctionalExpression;
+    readonly field: string;
+    readonly span: FunctionalSpan;
+  }
+  | {
+    readonly kind: "tuple-index";
+    readonly value: GleamFunctionalExpression;
+    readonly index: number;
+    readonly span: FunctionalSpan;
+  }
   | { readonly kind: "capture"; readonly span: FunctionalSpan }
   | {
     readonly kind: "tuple";
@@ -149,7 +167,7 @@ export type GleamFunctionalExpression =
   }
   | {
     readonly kind: "let";
-    readonly name: string;
+    readonly pattern: GleamFunctionalPattern;
     readonly value: GleamFunctionalExpression;
     readonly body: GleamFunctionalExpression;
     readonly span: FunctionalSpan;
@@ -192,9 +210,22 @@ export type GleamFunctionalPattern =
     readonly span: FunctionalSpan;
   }
   | { readonly kind: "integer"; readonly value: number; readonly span: FunctionalSpan }
+  | { readonly kind: "float"; readonly value: number; readonly span: FunctionalSpan }
   | { readonly kind: "boolean"; readonly value: boolean; readonly span: FunctionalSpan }
+  | { readonly kind: "string"; readonly value: string; readonly span: FunctionalSpan }
+  | {
+    readonly kind: "string-prefix";
+    readonly prefix: string;
+    readonly rest: GleamFunctionalPattern;
+    readonly span: FunctionalSpan;
+  }
   | { readonly kind: "unit"; readonly span: FunctionalSpan }
   | { readonly kind: "bit-array"; readonly bytes: Uint8Array; readonly span: FunctionalSpan }
+  | {
+    readonly kind: "bit-array-segments";
+    readonly segments: readonly GleamFunctionalBitArraySegment<GleamFunctionalPattern>[];
+    readonly span: FunctionalSpan;
+  }
   | {
     readonly kind: "constructor";
     readonly name: string;
@@ -218,6 +249,16 @@ export type GleamFunctionalPattern =
     readonly tail: GleamFunctionalPattern;
     readonly span: FunctionalSpan;
   };
+
+export interface GleamFunctionalBitArraySegment<Value> {
+  readonly value: Value;
+  readonly options: readonly {
+    readonly name: string;
+    readonly arguments: readonly GleamFunctionalExpression[];
+    readonly span: FunctionalSpan;
+  }[];
+  readonly span: FunctionalSpan;
+}
 
 export interface GleamFunctionalPatternArgument {
   readonly label: string | null;
@@ -245,5 +286,6 @@ export type GleamFunctionalBinaryOperator =
   | "*."
   | "/."
   | "%"
+  | "<>"
   | "&&"
   | "||";
