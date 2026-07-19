@@ -1,14 +1,9 @@
 import { FUNCTIONAL_NO_INDEX, FunctionalCoreTag } from "./abi.ts";
 import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
-import type { FunctionalStorageDecision } from "./storage_plan.ts";
+import type { FunctionalStorageDecision, FunctionalStorageReference } from "./storage_contract.ts";
 import type { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 
-export interface FunctionalStorageReference {
-  readonly owner: string;
-  readonly target: string;
-  readonly coreNode: number;
-  readonly reason: string;
-}
+export type { FunctionalStorageReference } from "./storage_contract.ts";
 
 interface GlobalReferenceOwner {
   readonly name: string;

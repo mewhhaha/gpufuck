@@ -56,11 +56,21 @@ Enable WebGPU in `deno.json`:
 }
 ```
 
-The package entry point is the language-neutral API:
+The root package is the complete language-neutral API:
 
 ```ts
 import { GpuFunctionalCompiler, requestWebGpuDevice } from "@mewhhaha/gpufuck";
 ```
+
+Smaller subpaths keep consumers from loading contracts they do not use:
+
+| Import                            | Purpose                                      |
+| --------------------------------- | -------------------------------------------- |
+| `@mewhhaha/gpufuck/core`          | Surface/Core contracts and GPU compilation   |
+| `@mewhhaha/gpufuck/wasm`          | Wasm emission, execution, storage, and WIT   |
+| `@mewhhaha/gpufuck/comptime`      | Required and opportunistic compile-time work |
+| `@mewhhaha/gpufuck/effects`       | Effect programs, Effect Core, and rows       |
+| `@mewhhaha/gpufuck/type-services` | Type programs, proofs, and capabilities      |
 
 The bundled Lazuli, Gleam, Haskell, OCaml, Rust, and 1SubML frontends are repository examples; they
 are not loaded by the published entry point.
@@ -346,7 +356,9 @@ These services are optional. A simple Hindley–Milner frontend can ignore them.
 
 Effects are explicit rather than inferred from arbitrary host calls. A frontend can lower an
 algebraic-effect program with `lowerFunctionalEffectProgram()` or submit verified Effect Core with
-`compileEffectModule()`.
+`compileEffectModule()`. The convenience lowerer validates the same canonical Effect Core tree
+before preserving its historical continuation-passing surface output. New frontends that require GPU
+effect verification should submit Effect Core directly.
 
 At the Wasm boundary, an optional `Init` value carries declared host values and operations. Each
 operation has a concrete specialization and may be synchronous or suspending. Suspending operations
@@ -387,6 +399,16 @@ ordering. Gpufuck validates the chosen host contract, computes captures and esca
 selects the Wasm representation. Persistent shared graphs still require an explicit frontend/runtime
 strategy such as reference counting or host management; Functional Core does not silently add a
 tracing collector.
+
+For strict owned traces, `planFunctionalStorageReuse()` derives exact retain/release counts and
+matches a last release with a later allocation only when their declared byte lengths are identical.
+It is a planning boundary, not an unsound promise that arbitrary Core values are unique. Frontends
+must still provide the Storage Core ownership evidence that makes a release legal.
+
+`functionalWitWorld()` derives an optional WebAssembly Component Model world from public exports,
+host capabilities, resources, and concrete ADTs. `compileFunctionalComponentBoundary()` returns the
+WIT together with the ordinary core Wasm bytes; a component toolchain can componentize those bytes.
+Generic or erased boundary values fail with evidence instead of receiving an unstable implicit ABI.
 
 Frontends with additional lexical regions or persistent values can describe those decisions as
 `FunctionalStorageCoreProgram` operations and call `verifyFunctionalStorageCore()`. The verifier

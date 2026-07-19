@@ -129,6 +129,10 @@ export type {
 } from "./src/functional/effect_core_contract.ts";
 export { compileFunctionalModuleToWasm } from "./src/functional/wasm_artifacts.ts";
 export {
+  compileFunctionalComponentBoundary,
+  functionalWitWorld,
+} from "./src/functional/wasm_component_boundary.ts";
+export {
   FunctionalPersistentSharing,
   FunctionalStorageCoreError,
   type FunctionalStorageCoreLifetime,
@@ -152,6 +156,13 @@ export {
   planFunctionalModuleStorage,
 } from "./src/functional/storage_plan.ts";
 export type { FunctionalStorageReference } from "./src/functional/storage_reference_analysis.ts";
+export {
+  type FunctionalStorageAllocationShape,
+  type FunctionalStorageReferenceCountStep,
+  type FunctionalStorageReuseDecision,
+  type FunctionalStorageReusePlan,
+  planFunctionalStorageReuse,
+} from "./src/functional/storage_reuse_plan.ts";
 export {
   type FunctionalWasmAsyncRunOptions,
   type FunctionalWasmExecution,
@@ -209,6 +220,8 @@ export {
   type FunctionalWasmLiteral,
 } from "./src/functional/host_contract.ts";
 export type {
+  FunctionalComponentBoundaryArtifact,
+  FunctionalComponentBoundaryOptions,
   FunctionalRuntimeTypeDescriptor,
   FunctionalWasmAsyncHostOperation,
   FunctionalWasmAsyncInit,

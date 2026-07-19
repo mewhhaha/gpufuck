@@ -25,22 +25,25 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 
 ## Repository map
 
-| Path                      | Responsibility                                                                               |
-| ------------------------- | -------------------------------------------------------------------------------------------- |
-| `functional.ts`           | Published language-neutral API                                                               |
-| `src/functional/`         | Functional ABI, optional IRs, compiler facade, linking, caches, evaluator, and Wasm backend  |
-| `src/lazuli/`             | Shared packed semantic engine plus Lazuli compatibility API                                  |
-| `language/lazuli/`        | Baba grammar and generated parser/editor artifacts                                           |
-| `examples/functional-ir/` | Direct target-API examples                                                                   |
-| `examples/*-functional/`  | Independent source-language frontend examples and traces                                     |
-| `src/gleam_functional/`   | Repository-only Gleam parser, strict lowering, module artifacts, and trace adapter           |
-| `src/purescript_profile/` | Repository-only stress profile for rows, capabilities, associated types, and rank-2 checking |
-| `tests/`                  | Behavioral, differential, stress, cancellation, growth, and Wasm execution tests             |
-| `benchmarks/`             | Deno benchmark entry points                                                                  |
-| `tools/`                  | Profiling, comparison, parser, and editor-support scripts                                    |
+| Path                                                                  | Responsibility                                                                               |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `functional.ts`                                                       | Complete published language-neutral API                                                      |
+| `core.ts`, `wasm.ts`, `comptime.ts`, `effects.ts`, `type_services.ts` | Focused package subpaths                                                                     |
+| `src/functional/`                                                     | Functional ABI, optional IRs, compiler facade, linking, caches, evaluator, and Wasm backend  |
+| `src/semantic/`                                                       | Shared packed semantic engine                                                                |
+| `src/lazuli/`                                                         | Thin Lazuli compatibility adapters                                                           |
+| `language/lazuli/`                                                    | Baba grammar and generated parser/editor artifacts                                           |
+| `examples/functional-ir/`                                             | Direct target-API examples                                                                   |
+| `examples/*-functional/`                                              | Independent source-language frontend examples and traces                                     |
+| `src/gleam_functional/`                                               | Repository-only Gleam parser, strict lowering, module artifacts, and trace adapter           |
+| `src/purescript_profile/`                                             | Repository-only stress profile for rows, capabilities, associated types, and rank-2 checking |
+| `tests/`                                                              | Behavioral, differential, stress, cancellation, growth, and Wasm execution tests             |
+| `benchmarks/`                                                         | Deno benchmark entry points                                                                  |
+| `tools/`                                                              | Profiling, comparison, parser, and editor-support scripts                                    |
 
-The published package exports `functional.ts`. Repository-only compatibility and language example
-entry points are intentionally separate.
+The published package exports the complete `functional.ts` entry plus focused subpaths for Core,
+Wasm, comptime, effects, and type services. Repository-only language example entry points remain
+separate.
 
 ## Normal verification loop
 
@@ -177,7 +180,7 @@ Before changing one:
 - verify evaluator behavior separately from inference behavior.
 
 The Functional module ABI is declared in `src/functional/abi.ts`. Canonical linked-preorder type
-metadata is encoded and decoded by `src/lazuli/type_schema_abi.ts`. The public structured Wasm
+metadata is encoded and decoded by `src/semantic/type_schema_abi.ts`. The public structured Wasm
 boundary is in `src/functional/wasm_abi.ts` and `src/functional/wasm_value_codec.ts`.
 
 Never silently accept a record from an unknown ABI version.
@@ -223,6 +226,8 @@ representation and specialization are secondary.
 
 Relevant seams:
 
+- `wasm_backend_plan.ts`: validated capture, function, storage, entry, and compact-representation
+  facts consumed by emission;
 - `wasm_function_analysis.ts`: function shapes, reachability, tail calls, numeric folds;
 - `wasm_capture_analysis.ts`: lexical captures and environment layout;
 - `wasm_lambda_sets.ts`: finite callee-set analysis and specialization limits;
@@ -248,6 +253,7 @@ after a performance change:
 deno task bench:lazuli
 deno task bench:functional-wasm
 deno task bench:functional-comptime
+deno task bench:semantic-wavefront
 deno task profile:lazuli-compiler
 ```
 
@@ -255,6 +261,12 @@ deno task profile:lazuli-compiler
 dispatch, readback, and batch behavior. Record the adapter description and whether it is a software
 fallback. Software adapters are useful for correctness and synchronization analysis but do not
 predict hardware-GPU latency.
+
+`bench:semantic-wavefront` separates latency from sustained device-resident throughput. Host
+scheduling remains the correct path when JavaScript immediately needs one small schedule: a WebGPU
+submission and readback costs far more than the work. The reusable GPU plan instead leaves its waves
+in a storage buffer and batches independent graphs in one dispatch. Compare both rows; do not use
+the resident throughput number to claim lower single-compilation latency.
 
 For code-generation changes, measure at least:
 

@@ -1,10 +1,10 @@
-import type { GpuLazuliModule, LazuliCoreNode } from "../lazuli/compiler_module.ts";
+import type { GpuLazuliModule, LazuliCoreNode } from "../semantic/compiler_module.ts";
 import {
   GpuLazuliEvaluator,
   type LazuliDeepEvaluationResult,
   type LazuliEvaluationResult,
   type LazuliRuntimeFault,
-} from "../lazuli/evaluator.ts";
+} from "../semantic/evaluator.ts";
 import type { GpuFunctionalModule } from "./compiler_module.ts";
 import {
   FunctionalBinaryOperator,

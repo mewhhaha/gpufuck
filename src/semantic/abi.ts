@@ -1,0 +1,353 @@
+export const LAZULI_ABI_VERSION = 5;
+export const LAZULI_NO_INDEX = 0xffffffff;
+export const LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
+export const LAZULI_MAXIMUM_SURFACE_NODES = 65_536;
+export const LAZULI_MAXIMUM_PARSE_DEPTH = 512;
+export const LAZULI_MAXIMUM_CONSTRUCTOR_ARITY = 256;
+
+export const LAZULI_NODE_WORD_LENGTH = 8;
+export const LAZULI_NODE_BYTE_LENGTH = LAZULI_NODE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
+export const LAZULI_DEFINITION_WORD_LENGTH = 4;
+export const LAZULI_DEFINITION_BYTE_LENGTH = LAZULI_DEFINITION_WORD_LENGTH *
+  Uint32Array.BYTES_PER_ELEMENT;
+export const LAZULI_TYPE_WORD_LENGTH = 5;
+export const LAZULI_TYPE_BYTE_LENGTH = LAZULI_TYPE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
+export const LAZULI_CONSTRUCTOR_WORD_LENGTH = 5;
+export const LAZULI_CONSTRUCTOR_BYTE_LENGTH = LAZULI_CONSTRUCTOR_WORD_LENGTH *
+  Uint32Array.BYTES_PER_ELEMENT;
+
+export const LazuliSurfaceWord = {
+  Tag: 0,
+  StartByte: 1,
+  EndByte: 2,
+  Payload: 3,
+  Child0: 4,
+  Child1: 5,
+  Child2: 6,
+  Parent: 7,
+} as const;
+
+export const LazuliDefinitionWord = {
+  Symbol: 0,
+  RootNode: 1,
+  StartByte: 2,
+  EndByte: 3,
+} as const;
+
+export const LazuliTypeWord = {
+  Symbol: 0,
+  FirstConstructor: 1,
+  ConstructorCount: 2,
+  StartByte: 3,
+  EndByte: 4,
+} as const;
+
+export const LazuliConstructorWord = {
+  Symbol: 0,
+  Type: 1,
+  Arity: 2,
+  StartByte: 3,
+  EndByte: 4,
+} as const;
+
+export const LazuliSurfaceTag = {
+  Integer: 1,
+  Boolean: 2,
+  Name: 3,
+  Let: 4,
+  If: 5,
+  Lambda: 6,
+  Apply: 7,
+  Unary: 8,
+  Binary: 9,
+  Case: 10,
+  CaseArm: 11,
+  PatternBind: 12,
+  LetRec: 16,
+  StrictLet: 17,
+  StrictApply: 18,
+  SignedInteger64: 19,
+  Float32: 20,
+  Float64: 21,
+  NumericConvert: 22,
+  Text: 23,
+  Bytes: 24,
+  RuntimeFault: 25,
+  WholeNumberF64: 26,
+  BufferAppend: 27,
+} as const;
+
+export type LazuliSurfaceTag = (typeof LazuliSurfaceTag)[keyof typeof LazuliSurfaceTag];
+
+export const LazuliCoreTag = {
+  Integer: LazuliSurfaceTag.Integer,
+  Boolean: LazuliSurfaceTag.Boolean,
+  Let: LazuliSurfaceTag.Let,
+  If: LazuliSurfaceTag.If,
+  Lambda: LazuliSurfaceTag.Lambda,
+  Apply: LazuliSurfaceTag.Apply,
+  Unary: LazuliSurfaceTag.Unary,
+  Binary: LazuliSurfaceTag.Binary,
+  Case: LazuliSurfaceTag.Case,
+  CaseArm: LazuliSurfaceTag.CaseArm,
+  PatternBind: LazuliSurfaceTag.PatternBind,
+  Local: 13,
+  Global: 14,
+  Constructor: 15,
+  LetRec: LazuliSurfaceTag.LetRec,
+  SignedInteger64: LazuliSurfaceTag.SignedInteger64,
+  Float32: LazuliSurfaceTag.Float32,
+  Float64: LazuliSurfaceTag.Float64,
+  NumericConvert: LazuliSurfaceTag.NumericConvert,
+  Text: LazuliSurfaceTag.Text,
+  Bytes: LazuliSurfaceTag.Bytes,
+  RuntimeFault: LazuliSurfaceTag.RuntimeFault,
+  WholeNumberF64: LazuliSurfaceTag.WholeNumberF64,
+  BufferAppend: LazuliSurfaceTag.BufferAppend,
+} as const;
+
+export type LazuliCoreTag = (typeof LazuliCoreTag)[keyof typeof LazuliCoreTag];
+
+export const LazuliEvaluationMode = {
+  LazyCallByNeed: 0,
+  StrictEager: 1,
+} as const;
+
+export type LazuliEvaluationMode = (typeof LazuliEvaluationMode)[keyof typeof LazuliEvaluationMode];
+
+export const LazuliUnaryOperator = {
+  Negate: 1,
+  NegateSignedInteger64: 2,
+  NegateFloat32: 3,
+  NegateFloat64: 4,
+  SquareRootFloat32: 5,
+  NegateWholeNumberF64: 6,
+} as const;
+
+export type LazuliUnaryOperator = (typeof LazuliUnaryOperator)[keyof typeof LazuliUnaryOperator];
+
+export const LazuliBinaryOperator = {
+  Equal: 1,
+  NotEqual: 2,
+  Less: 3,
+  LessEqual: 4,
+  Greater: 5,
+  GreaterEqual: 6,
+  Add: 7,
+  Subtract: 8,
+  Multiply: 9,
+  Divide: 10,
+  EqualSignedInteger64: 11,
+  NotEqualSignedInteger64: 12,
+  LessSignedInteger64: 13,
+  LessEqualSignedInteger64: 14,
+  GreaterSignedInteger64: 15,
+  GreaterEqualSignedInteger64: 16,
+  AddSignedInteger64: 17,
+  SubtractSignedInteger64: 18,
+  MultiplySignedInteger64: 19,
+  DivideSignedInteger64: 20,
+  EqualFloat32: 21,
+  NotEqualFloat32: 22,
+  LessFloat32: 23,
+  LessEqualFloat32: 24,
+  GreaterFloat32: 25,
+  GreaterEqualFloat32: 26,
+  AddFloat32: 27,
+  SubtractFloat32: 28,
+  MultiplyFloat32: 29,
+  DivideFloat32: 30,
+  EqualFloat64: 31,
+  NotEqualFloat64: 32,
+  LessFloat64: 33,
+  LessEqualFloat64: 34,
+  GreaterFloat64: 35,
+  GreaterEqualFloat64: 36,
+  AddFloat64: 37,
+  SubtractFloat64: 38,
+  MultiplyFloat64: 39,
+  DivideFloat64: 40,
+  Remainder: 41,
+  BitwiseAnd: 42,
+  BitwiseOr: 43,
+  BitwiseXor: 44,
+  ShiftLeft: 45,
+  ShiftRightUnsigned: 46,
+  RemainderSignedInteger64: 47,
+  BitwiseAndSignedInteger64: 48,
+  BitwiseOrSignedInteger64: 49,
+  BitwiseXorSignedInteger64: 50,
+  ShiftLeftSignedInteger64: 51,
+  ShiftRightUnsignedSignedInteger64: 52,
+  StructuralEqual: 53,
+  StructuralNotEqual: 54,
+  EqualWholeNumberF64: 55,
+  NotEqualWholeNumberF64: 56,
+  LessWholeNumberF64: 57,
+  LessEqualWholeNumberF64: 58,
+  GreaterWholeNumberF64: 59,
+  GreaterEqualWholeNumberF64: 60,
+  AddWholeNumberF64: 61,
+  SubtractWholeNumberF64: 62,
+  MultiplyWholeNumberF64: 63,
+  DivideWholeNumberF64: 64,
+  RemainderWholeNumberF64: 65,
+} as const;
+
+export type LazuliBinaryOperator = (typeof LazuliBinaryOperator)[keyof typeof LazuliBinaryOperator];
+
+export const LazuliNumericConversion = {
+  SignedInteger32ToSignedInteger64: 1,
+  SignedInteger64ToSignedInteger32: 2,
+  SignedInteger32ToFloat32: 3,
+  SignedInteger32ToFloat64: 4,
+  SignedInteger64ToFloat32: 5,
+  SignedInteger64ToFloat64: 6,
+  Float32ToSignedInteger32: 7,
+  Float32ToSignedInteger64: 8,
+  Float32ToFloat64: 9,
+  Float64ToSignedInteger32: 10,
+  Float64ToSignedInteger64: 11,
+  Float64ToFloat32: 12,
+  ReinterpretFloat32AsSignedInteger32: 13,
+  ReinterpretSignedInteger32AsFloat32: 14,
+} as const;
+
+export type LazuliNumericConversion =
+  (typeof LazuliNumericConversion)[keyof typeof LazuliNumericConversion];
+
+export interface LazuliSpan {
+  readonly startByte: number;
+  readonly endByte: number;
+}
+
+export type LazuliDiagnosticCode =
+  | "L1001"
+  | "L1002"
+  | "L1003"
+  | "L2001"
+  | "L2002"
+  | "L2003"
+  | "L2004"
+  | "L2005"
+  | "L2006"
+  | "L2007"
+  | "L2008"
+  | "L2009"
+  | "L2010"
+  | "L2101"
+  | "L2102"
+  | "L2103"
+  | "L2104";
+
+export type LazuliType =
+  | { readonly kind: "integer" }
+  | { readonly kind: "signed-integer-64" }
+  | { readonly kind: "float-32" }
+  | { readonly kind: "float-64" }
+  | { readonly kind: "boolean" }
+  | { readonly kind: "unit" }
+  | { readonly kind: "tuple"; readonly values: readonly [LazuliType, LazuliType] }
+  | {
+    readonly kind: "named";
+    readonly name: string;
+    readonly arguments: readonly LazuliType[];
+  }
+  | { readonly kind: "function"; readonly parameter: LazuliType; readonly result: LazuliType };
+
+export type LazuliTypeSchema =
+  | { readonly kind: "integer" }
+  | { readonly kind: "signed-integer-64" }
+  | { readonly kind: "float-32" }
+  | { readonly kind: "float-64" }
+  | { readonly kind: "boolean" }
+  | { readonly kind: "unit" }
+  | { readonly kind: "parameter"; readonly name: string }
+  | {
+    readonly kind: "tuple";
+    readonly values: readonly [LazuliTypeSchema, LazuliTypeSchema];
+  }
+  | {
+    readonly kind: "named";
+    readonly name: string;
+    readonly arguments: readonly LazuliTypeSchema[];
+  }
+  | {
+    readonly kind: "function";
+    readonly parameter: LazuliTypeSchema;
+    readonly result: LazuliTypeSchema;
+  }
+  | {
+    readonly kind: "forall";
+    readonly parameters: readonly string[];
+    readonly body: LazuliTypeSchema;
+  };
+
+export interface LazuliConstructorFieldDeclaration {
+  readonly name: string;
+  readonly type: LazuliTypeSchema;
+}
+
+export interface LazuliConstructorDeclaration {
+  readonly name: string;
+  readonly fields: readonly LazuliConstructorFieldDeclaration[];
+  readonly result?: LazuliTypeSchema;
+}
+
+export interface LazuliTypeDeclaration {
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly constructors: readonly LazuliConstructorDeclaration[];
+}
+
+export type LazuliSourceType = LazuliTypeSchema & LazuliSpan;
+
+export interface EncodedLazuliDefinitionType {
+  readonly annotation: LazuliSourceType | null;
+}
+
+export interface EncodedLazuliTypeDeclaration {
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly constructors: readonly {
+    readonly name: string;
+    readonly fields: readonly {
+      readonly name: string;
+      readonly type: LazuliSourceType;
+    }[];
+    readonly result?: LazuliSourceType;
+  }[];
+}
+
+export interface LazuliDiagnostic {
+  readonly stage: "parse" | "compile";
+  readonly code: LazuliDiagnosticCode;
+  readonly message: string;
+  readonly span: LazuliSpan;
+  readonly related?: readonly {
+    readonly message: string;
+    readonly span: LazuliSpan;
+  }[];
+}
+
+export interface EncodedLazuliSurface {
+  readonly nodeWords: Uint32Array;
+  readonly definitionWords: Uint32Array;
+  readonly typeWords: Uint32Array;
+  readonly constructorWords: Uint32Array;
+  readonly nodeCount: number;
+  readonly definitionCount: number;
+  readonly typeCount: number;
+  readonly constructorCount: number;
+  readonly mainSymbol: number;
+  readonly symbolNames: readonly string[];
+  readonly definitionTypes: readonly EncodedLazuliDefinitionType[];
+  readonly typeDeclarations: readonly EncodedLazuliTypeDeclaration[];
+}
+
+export type LazuliFrontendResult =
+  | { readonly ok: true; readonly surface: EncodedLazuliSurface }
+  | {
+    readonly ok: false;
+    readonly diagnostics: readonly [LazuliDiagnostic, ...LazuliDiagnostic[]];
+  };

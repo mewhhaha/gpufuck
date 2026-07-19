@@ -1,16 +1,16 @@
-import type { EncodedLazuliSurface, LazuliDiagnostic } from "../lazuli/abi.ts";
-import { CompiledGpuLazuliModule, type GpuLazuliModule } from "../lazuli/compiler_module.ts";
+import type { EncodedLazuliSurface, LazuliDiagnostic } from "../semantic/abi.ts";
+import { CompiledGpuLazuliModule, type GpuLazuliModule } from "../semantic/compiler_module.ts";
 import {
   constructorLimitDiagnostic,
   definitionLimitDiagnostic,
   nodeLimitDiagnostic,
   typeLimitDiagnostic,
-} from "../lazuli/compilation_diagnostics.ts";
+} from "../semantic/compilation_diagnostics.ts";
 import {
   GpuLazuliSemanticCompiler,
   type LazuliSemanticCompilationLimits,
-} from "../lazuli/gpu_semantic_compiler.ts";
-import { publicTypeMetadata } from "../lazuli/gpu_type_inference_results.ts";
+} from "../semantic/gpu_semantic_compiler.ts";
+import { publicTypeMetadata } from "../semantic/gpu_type_inference_results.ts";
 import {
   type EncodedFunctionalModule,
   FUNCTIONAL_CONSTRUCTOR_BYTE_LENGTH,

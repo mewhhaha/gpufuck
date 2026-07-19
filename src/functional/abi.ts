@@ -21,21 +21,37 @@ import {
   type LazuliDiagnosticCode,
   LazuliEvaluationMode,
   LazuliNumericConversion,
-  type LazuliSourceType,
-  type LazuliSpan,
   LazuliSurfaceTag,
   LazuliSurfaceWord,
-  type LazuliType,
-  type LazuliTypeDeclaration,
-  type LazuliTypeSchema,
   LazuliTypeWord,
   LazuliUnaryOperator,
-} from "../lazuli/abi.ts";
+} from "../semantic/abi.ts";
 import type {
   FunctionalHostCapabilityDeclaration,
   FunctionalHostDefinitionBinding,
 } from "./host_contract.ts";
-import type { FunctionalWasmExportDeclaration } from "./wasm_contract.ts";
+import type { FunctionalSourceRange, FunctionalWasmExportDeclaration } from "./module_contract.ts";
+import type {
+  FunctionalEvaluationProfile as FunctionalEvaluationProfileContract,
+  FunctionalSpan,
+  FunctionalTypecheckingProfile as FunctionalTypecheckingProfileContract,
+} from "./schema_contract.ts";
+
+export {
+  type FunctionalSourceRange,
+  type FunctionalWasmExportDeclaration,
+} from "./module_contract.ts";
+export {
+  type FunctionalSourceType,
+  type FunctionalSpan,
+  type FunctionalType,
+  type FunctionalTypeDeclaration,
+  type FunctionalTypeSchema,
+} from "./schema_contract.ts";
+import {
+  FunctionalEvaluationProfile as EvaluationProfile,
+  FunctionalTypecheckingProfile as TypecheckingProfile,
+} from "./schema_contract.ts";
 
 export const FUNCTIONAL_MODULE_ABI_VERSION = LAZULI_ABI_VERSION;
 export const FUNCTIONAL_NO_INDEX = LAZULI_NO_INDEX;
@@ -79,21 +95,10 @@ export type FunctionalEvaluationMode =
 export type FunctionalNumericConversion =
   (typeof FunctionalNumericConversion)[keyof typeof FunctionalNumericConversion];
 
-export const FunctionalEvaluationProfile = {
-  LazyCallByNeed: "lazy-call-by-need-v1",
-  StrictEager: "strict-eager-v1",
-} as const;
-
-export type FunctionalEvaluationProfile =
-  (typeof FunctionalEvaluationProfile)[keyof typeof FunctionalEvaluationProfile];
-
-export const FunctionalTypecheckingProfile = {
-  HindleyMilnerIndexed: "hindley-milner-indexed-v1",
-  PredicativeRankNIndexed: "predicative-rank-n-indexed-v1",
-} as const;
-
-export type FunctionalTypecheckingProfile =
-  (typeof FunctionalTypecheckingProfile)[keyof typeof FunctionalTypecheckingProfile];
+export const FunctionalEvaluationProfile = EvaluationProfile;
+export type FunctionalEvaluationProfile = FunctionalEvaluationProfileContract;
+export const FunctionalTypecheckingProfile = TypecheckingProfile;
+export type FunctionalTypecheckingProfile = FunctionalTypecheckingProfileContract;
 
 export const FunctionalPrimitiveCapability = {
   SignedInteger32: "signed-integer-i32",
@@ -137,11 +142,6 @@ export const FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES: readonly FunctionalPrimi
     ] as const,
   );
 
-export type FunctionalSpan = LazuliSpan;
-export type FunctionalType = LazuliType;
-export type FunctionalTypeSchema = LazuliTypeSchema;
-export type FunctionalSourceType = LazuliSourceType;
-export type FunctionalTypeDeclaration = LazuliTypeDeclaration;
 export type EncodedFunctionalDefinitionType = EncodedLazuliDefinitionType;
 export type EncodedFunctionalTypeDeclaration = EncodedLazuliTypeDeclaration;
 
@@ -161,12 +161,6 @@ export interface FunctionalDiagnostic {
   readonly message: string;
   readonly span: FunctionalSpan;
   readonly related?: readonly FunctionalRelatedDiagnostic[];
-}
-
-export interface FunctionalSourceRange {
-  readonly module: string;
-  readonly startByte: number;
-  readonly endByte: number;
 }
 
 export interface EncodedFunctionalModule {

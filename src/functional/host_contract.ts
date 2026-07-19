@@ -1,5 +1,5 @@
-import type { FunctionalEvaluationProfile, FunctionalTypeSchema } from "./abi.ts";
-import type { FunctionalWasmExportDeclaration } from "./wasm_contract.ts";
+import type { FunctionalWasmExportDeclaration } from "./module_contract.ts";
+import type { FunctionalEvaluationProfile, FunctionalTypeSchema } from "./schema_contract.ts";
 
 export type FunctionalHostType = FunctionalTypeSchema;
 

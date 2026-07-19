@@ -1,5 +1,7 @@
-import type { FunctionalType } from "./abi.ts";
+import type { FunctionalType } from "./schema_contract.ts";
 import type { FunctionalStorageCoreProgram } from "./storage_core.ts";
+
+export type { FunctionalWasmExportDeclaration } from "./module_contract.ts";
 
 export interface FunctionalWasmOwnedTypeExport {
   readonly name: string;
@@ -10,6 +12,16 @@ export interface FunctionalWasmOwnedTypeExport {
 export interface FunctionalWasmCompilationOptions {
   readonly storageCore?: FunctionalStorageCoreProgram;
   readonly ownedTypeExports?: readonly FunctionalWasmOwnedTypeExport[];
+}
+
+export interface FunctionalComponentBoundaryOptions {
+  readonly packageName?: string;
+  readonly worldName?: string;
+}
+
+export interface FunctionalComponentBoundaryArtifact {
+  readonly coreWasm: Uint8Array<ArrayBuffer>;
+  readonly wit: string;
 }
 
 export type FunctionalWasmRuntimeDiagnosticCode =
@@ -66,11 +78,6 @@ export interface FunctionalWasmBoundaryErrorDetails {
   readonly kind: FunctionalWasmBoundaryFaultKind;
   readonly message: string;
   readonly path?: string;
-}
-
-export interface FunctionalWasmExportDeclaration {
-  readonly name: string;
-  readonly definition: string;
 }
 
 export type FunctionalWasmHostOperation = (

@@ -853,6 +853,67 @@ Deno.test("runs handled algebraic effects as explicit GPU continuations", async 
   }
 });
 
+Deno.test("compatibility effect handlers may discard their continuation", async () => {
+  const handled = lowerFunctionalEffectProgram({
+    operations: [{
+      effect: "Abort",
+      name: "stop",
+      parameter: { kind: "unit" },
+      result: { kind: "integer" },
+    }],
+    handlers: [{
+      effect: "Abort",
+      operation: "stop",
+      implementation: surface.lambda(
+        "$request",
+        surface.lambda("$resume", surface.integer(99)),
+      ),
+    }],
+    expression: {
+      kind: "bind",
+      name: "unreachable",
+      computation: {
+        kind: "perform",
+        effect: "Abort",
+        operation: "stop",
+        argument: surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+      },
+      body: {
+        kind: "pure",
+        value: surface.integer(0),
+        valueType: { kind: "integer" },
+      },
+    },
+  });
+  const module = buildFunctionalSurfaceModule(
+    [
+      ...handled.definitions,
+      {
+        name: "gpuMain",
+        parameters: [],
+        annotation: handled.resultType.value,
+        body: handled.expression,
+      },
+    ],
+    [],
+    "gpuMain",
+    0,
+  );
+  const { compiler, evaluator } = functionalRuntime();
+
+  const compilation = await compiler.compileModule(module);
+
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const evaluation = await evaluator.evaluate(compilation.module);
+    ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
+    if (evaluation.ok) deepStrictEqual(evaluation.value, { kind: "integer", value: 99 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("rejects performed effects without an explicit handler", () => {
   throws(
     () =>

@@ -6,66 +6,28 @@ import {
   type FunctionalStorageCoreLifetime,
   type FunctionalStorageCoreOperation,
   type FunctionalStorageCoreProgram,
-  type FunctionalStorageVerification,
   verifyFunctionalStorageCore,
 } from "./storage_core.ts";
-import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import {
-  analyzeFunctionalStorageReferences,
+  type FunctionalBoundaryStorageDecision,
+  FunctionalStorageClass,
+  type FunctionalStorageDecision,
+  type FunctionalStoragePlan,
+  type FunctionalStoragePlanningOptions,
   type FunctionalStorageReference,
-} from "./storage_reference_analysis.ts";
+} from "./storage_contract.ts";
+import { analyzeFunctionalStorageReferences } from "./storage_reference_analysis.ts";
+import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 
-export const FunctionalStorageClass = {
-  Static: "static",
-  ScalarLocal: "scalar-local",
-  InvocationArena: "invocation-arena",
-  Owned: "owned",
-  HostManaged: "host-managed",
-} as const;
-
-export type FunctionalStorageClass =
-  (typeof FunctionalStorageClass)[keyof typeof FunctionalStorageClass];
-
-export type FunctionalStoredValueKind = "closure" | "constructor" | "thunk";
-
-export interface FunctionalStorageDecision {
-  readonly coreNode: number;
-  readonly valueKind: FunctionalStoredValueKind;
-  readonly storage: FunctionalStorageClass;
-  readonly escapeStorage?: FunctionalStorageClass;
-  readonly capturedLocalCount: number;
-  readonly reason: string;
-}
-
-export interface FunctionalBoundaryStorageDecision {
-  readonly path: string;
-  readonly direction: "host-to-module" | "module-to-host";
-  readonly storage: FunctionalStorageClass;
-  readonly reason: string;
-}
-
-export interface FunctionalStoragePlanSummary {
-  readonly staticValues: number;
-  readonly scalarLocalValues: number;
-  readonly invocationArenaValues: number;
-  readonly ownedBoundaries: number;
-  readonly hostManagedBoundaries: number;
-  readonly automaticArenaReset: boolean;
-}
-
-export interface FunctionalStoragePlan {
-  readonly values: readonly FunctionalStorageDecision[];
-  readonly references: readonly FunctionalStorageReference[];
-  readonly boundaries: readonly FunctionalBoundaryStorageDecision[];
-  readonly core: FunctionalStorageCoreProgram;
-  readonly verification: FunctionalStorageVerification & { readonly ok: true };
-  readonly summary: FunctionalStoragePlanSummary;
-}
-
-export interface FunctionalStoragePlanningOptions {
-  readonly persistentSharing?: FunctionalPersistentSharing;
-  readonly storageCore?: FunctionalStorageCoreProgram;
-}
+export {
+  type FunctionalBoundaryStorageDecision,
+  FunctionalStorageClass,
+  type FunctionalStorageDecision,
+  type FunctionalStoragePlan,
+  type FunctionalStoragePlanningOptions,
+  type FunctionalStoragePlanSummary,
+  type FunctionalStoredValueKind,
+} from "./storage_contract.ts";
 
 export async function planFunctionalModuleStorage(
   module: GpuFunctionalModule,

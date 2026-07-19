@@ -35,18 +35,17 @@ import {
 } from "./wasm_binary.ts";
 import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
 import { concreteFunctionalType, requireFirstOrderFunctionalWasmType } from "./wasm_value_codec.ts";
-import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
+import type { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import { type FunctionalLambdaSet, FunctionalLambdaSetAnalysis } from "./wasm_lambda_sets.ts";
-import {
-  type FunctionalCallArgument,
-  type FunctionalFunctionShape,
-  type FunctionalNumericFold,
+import type {
+  FunctionalCallArgument,
+  FunctionalFunctionShape,
+  FunctionalNumericFold,
   FunctionalWasmFunctionAnalysis,
 } from "./wasm_function_analysis.ts";
 import {
   functionalHostScalarType,
   type FunctionalWasmEntry,
-  functionalWasmEntry,
   hostFieldKey,
   hostImportModule,
   wasmValueType,
@@ -80,14 +79,13 @@ import {
   releaseOwnedValueFunction,
   retainOwnedValueFunction,
 } from "./wasm_owned_runtime.ts";
-import {
-  createFunctionalStoragePlan,
-  FunctionalStorageClass,
-  type FunctionalStorageDecision,
-  type FunctionalStoragePlan,
-} from "./storage_plan.ts";
+import { FunctionalStorageClass, type FunctionalStorageDecision } from "./storage_contract.ts";
 import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
+import {
+  createFunctionalWasmBackendPlan,
+  type FunctionalWasmBackendPlan,
+} from "./wasm_backend_plan.ts";
 
 const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
@@ -178,113 +176,19 @@ export function compileFunctionalWasmArtifact(
   instrumentedFuel = false,
   options: FunctionalWasmCompilationOptions = {},
 ): FunctionalWasmArtifact {
-  const captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes);
-  const storagePlan = createFunctionalStoragePlan(module, nodes, captureAnalysis, {
-    ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
-  });
-  const entry = functionalWasmEntry(module);
-  const ownedTypeExports = options.ownedTypeExports ?? [];
-  if (!Array.isArray(ownedTypeExports)) {
-    throw new TypeError("functional WASM ownedTypeExports must be an array");
-  }
-  if (ownedTypeExports.length !== 0) {
-    if (options.storageCore === undefined) {
-      throw new TypeError(
-        "functional WASM ownedTypeExports require a verified frontend storageCore",
-      );
-    }
-    if (
-      module.evaluationProfile !== FunctionalEvaluationProfile.StrictEager ||
-      nodes.some((node) =>
-        (node.tag === FunctionalCoreTag.Apply || node.tag === FunctionalCoreTag.Let) &&
-        node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
-      )
-    ) {
-      throw new TypeError(
-        "functional WASM ownedTypeExports require strict Core without lazy boundaries",
-      );
-    }
-    const exportNames = new Set(["main", ...module.wasmExports.map((exported) => exported.name)]);
-    const storageValues = new Set<string>();
-    for (const owned of ownedTypeExports) {
-      if (owned === null || typeof owned !== "object") {
-        throw new TypeError("functional WASM owned type export must be an object");
-      }
-      if (typeof owned.name !== "string" || owned.name.length === 0) {
-        throw new TypeError("functional WASM owned type export name must be a non-empty string");
-      }
-      if (typeof owned.storageValue !== "string" || owned.storageValue.length === 0) {
-        throw new TypeError(
-          `functional WASM owned type export ${
-            JSON.stringify(owned.name)
-          } storageValue must be a non-empty string`,
-        );
-      }
-      if (storageValues.has(owned.storageValue)) {
-        throw new TypeError(
-          `functional WASM owned type exports repeat Storage Core value ${
-            JSON.stringify(owned.storageValue)
-          }`,
-        );
-      }
-      if (
-        !options.storageCore.operations.some((operation) =>
-          (operation.kind === "declare" && operation.value === owned.storageValue &&
-            operation.lifetime === "owned") ||
-          (operation.kind === "promote" && operation.target === owned.storageValue &&
-            operation.targetLifetime === "owned")
-        )
-      ) {
-        throw new TypeError(
-          `functional WASM owned type export ${
-            JSON.stringify(owned.name)
-          } requires owned Storage Core value ${JSON.stringify(owned.storageValue)}`,
-        );
-      }
-      storageValues.add(owned.storageValue);
-      requireFirstOrderFunctionalWasmType(module, owned.type, `owned type ${owned.name}`);
-      for (const generatedName of [`retain_${owned.name}`, `drop_${owned.name}`]) {
-        if (exportNames.has(generatedName)) {
-          throw new TypeError(
-            `functional WASM owned type export repeats ${JSON.stringify(generatedName)}`,
-          );
-        }
-        exportNames.add(generatedName);
-      }
-    }
-  }
-  const scalarResult = functionalHostScalarType(entry.result);
-  const compactScalar = module.evaluationProfile === FunctionalEvaluationProfile.StrictEager &&
-    module.entryEffects.length === 0 &&
-    module.hostCapabilities.every((capability) => capability.fields.length === 0) &&
-    !entry.takesInit &&
-    entry.parameter === undefined &&
-    scalarResult !== undefined &&
-    scalarResult.kind !== "unit";
-  const compactScalarWithStorage = compactScalar && options.storageCore === undefined &&
-    ownedTypeExports.length === 0;
-  if (compactScalarWithStorage) {
+  const plan = createFunctionalWasmBackendPlan(module, nodes, instrumentedFuel, options);
+  if (plan.compactScalarEligible) {
     const compactCompiler = new FunctionalWasmCompiler(
-      module,
-      nodes,
-      captureAnalysis,
-      storagePlan,
+      plan,
       true,
-      instrumentedFuel,
-      options,
     );
     const compactBytes = compactCompiler.compileCompactScalar();
     if (compactBytes !== undefined) return compactCompiler.artifact(compactBytes);
   }
 
   const compiler = new FunctionalWasmCompiler(
-    module,
-    nodes,
-    captureAnalysis,
-    storagePlan,
+    plan,
     false,
-    instrumentedFuel,
-    options,
   );
   return compiler.artifact(compiler.compile());
 }
@@ -331,24 +235,20 @@ class FunctionalWasmCompiler {
   #structuralEqualitySlot: number | undefined;
 
   constructor(
-    module: GpuFunctionalModule,
-    nodes: readonly FunctionalCoreNode[],
-    captureAnalysis: FunctionalWasmCaptureAnalysis,
-    storagePlan: FunctionalStoragePlan,
+    plan: FunctionalWasmBackendPlan,
     compactScalar: boolean,
-    instrumentedFuel = false,
-    compilationOptions: FunctionalWasmCompilationOptions = {},
   ) {
+    const { module, nodes } = plan;
     this.#module = module;
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
-    this.#instrumentedFuel = instrumentedFuel;
+    this.#instrumentedFuel = plan.instrumentedFuel;
     this.#runtimeEmitter = new FunctionalWasmRuntimeEmitter(nodes, {
       compactScalar,
-      instrumentedFuel,
+      instrumentedFuel: plan.instrumentedFuel,
     });
-    this.#compilationOptions = compilationOptions;
-    this.#ownedRuntimeEnabled = (compilationOptions.ownedTypeExports?.length ?? 0) > 0;
+    this.#compilationOptions = plan.options;
+    this.#ownedRuntimeEnabled = (plan.options.ownedTypeExports?.length ?? 0) > 0;
     this.#hostEmitter = new FunctionalWasmHostEmitter({
       ownedRuntimeEnabled: this.#ownedRuntimeEnabled,
       allocateFunctionIndex: () => this.allocateFunctionIndex(),
@@ -359,30 +259,27 @@ class FunctionalWasmCompiler {
       emitRuntimeFault: (instructions, fault) =>
         this.#runtimeEmitter.emitFault(instructions, fault, -1),
     });
-    this.#automaticArenaReset = storagePlan.summary.automaticArenaReset;
+    this.#automaticArenaReset = plan.storage.summary.automaticArenaReset;
     this.#hasLazyEvaluationBoundary = nodes.some((node) =>
       (node.tag === FunctionalCoreTag.Apply ||
         node.tag === FunctionalCoreTag.Let) &&
       node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
     );
-    this.#captureAnalysis = captureAnalysis;
+    this.#captureAnalysis = plan.captureAnalysis;
     this.#storageDecisions = new Map(
-      storagePlan.values.map((decision) => [
+      plan.storage.values.map((decision) => [
         `${decision.valueKind}:${decision.coreNode}`,
         decision,
       ]),
     );
-    this.#functionAnalysis = new FunctionalWasmFunctionAnalysis(
-      nodes,
-      module.definitionRoots,
-    );
+    this.#functionAnalysis = plan.functionAnalysis;
     this.#lambdaSlots = Array.from({ length: nodes.length }, () => undefined);
     for (const [nodeIndex, node] of nodes.entries()) {
       if (node.tag === FunctionalCoreTag.LetRec) {
         this.#recursiveLambdaOwners.set(node.child0, nodeIndex);
       }
     }
-    this.#entry = functionalWasmEntry(module);
+    this.#entry = plan.entry;
     const hostFields: HostField[] = [];
     const functionImports: WasmFunctionImport[] = [];
     for (const capability of module.hostCapabilities) {

@@ -1,5 +1,10 @@
 import type { FunctionalTypeSchema } from "./abi.ts";
 import type {
+  FunctionalEffectCoreExpression,
+  FunctionalEffectCoreModule,
+} from "./effect_core_contract.ts";
+import { prepareFunctionalEffectCore } from "./effect_core_encoding.ts";
+import type {
   FunctionalEffectExpression,
   FunctionalEffectHandler,
   FunctionalEffectOperation,
@@ -9,9 +14,46 @@ import type {
 } from "./effect_contract.ts";
 import type { FunctionalSurfaceExpression } from "./surface_builder.ts";
 
+const COMPATIBILITY_ENTRY_NAME = "$FunctionalEffectMain";
+
 interface AnalyzedEffectExpression {
   readonly valueType: FunctionalTypeSchema;
   readonly operations: ReadonlySet<string>;
+}
+
+function effectCoreProgramShape(
+  program: FunctionalEffectProgram,
+): FunctionalEffectCoreModule {
+  const operations = indexOperations(program.operations);
+  const handlers = indexHandlers(program.handlers, operations);
+  const analyzed = analyzeEffectExpression(program.expression, operations);
+  for (const operation of analyzed.operations) {
+    if (handlers.has(operation)) continue;
+    throw new Error(
+      `Functional effect program performs ${JSON.stringify(operation)} without a handler`,
+    );
+  }
+
+  let expression = effectCoreExpression(program.expression, operations);
+  for (const handler of [...program.handlers].reverse()) {
+    expression = {
+      kind: "handle",
+      effect: handler.effect,
+      operation: handler.operation,
+      implementation: handler.implementation,
+      computation: expression,
+    };
+  }
+
+  return Object.freeze({
+    definitions: Object.freeze([]),
+    typeDeclarations: Object.freeze([]),
+    operations: Object.freeze([...program.operations]),
+    hostCapabilities: Object.freeze([]),
+    expression,
+    entryName: COMPATIBILITY_ENTRY_NAME,
+    sourceByteLength: 0,
+  });
 }
 
 export function lowerFunctionalEffectProgram(
@@ -26,6 +68,7 @@ export function lowerFunctionalEffectProgram(
       `Functional effect program performs ${JSON.stringify(operation)} without a handler`,
     );
   }
+  prepareFunctionalEffectCore(effectCoreProgramShape(program));
 
   const handlerNames = new Map<string, string>();
   const definitions = program.handlers.map((handler, handlerIndex) => {
@@ -62,10 +105,9 @@ export function lowerFunctionalEffectProgram(
     parameter: resultName,
     body: { kind: "name", name: resultName },
   });
-  const effectNames = Object.freeze([...analyzed.operations]);
   const computationType: FunctionalEffectType = Object.freeze({
     value: analyzed.valueType,
-    effects: effectNames,
+    effects: Object.freeze([...analyzed.operations]),
   });
   const resultType: FunctionalEffectType = Object.freeze({
     value: analyzed.valueType,
@@ -128,6 +170,43 @@ class EffectCpsLowering {
           ...(expression.span === undefined ? {} : { span: expression.span }),
         });
     }
+  }
+}
+
+function effectCoreExpression(
+  expression: FunctionalEffectExpression,
+  operations: ReadonlyMap<string, FunctionalEffectOperation>,
+): FunctionalEffectCoreExpression {
+  switch (expression.kind) {
+    case "pure":
+      return {
+        kind: "return",
+        value: expression.value,
+        valueType: expression.valueType,
+      };
+    case "perform": {
+      const key = operationKey(expression.effect, expression.operation);
+      const operation = operations.get(key);
+      if (operation === undefined) {
+        throw new Error(
+          `Functional effect expression performs unknown operation ${JSON.stringify(key)}`,
+        );
+      }
+      return {
+        kind: "perform",
+        effect: expression.effect,
+        operation: expression.operation,
+        argument: expression.argument,
+        argumentType: operation.parameter,
+      };
+    }
+    case "bind":
+      return {
+        kind: "bind",
+        name: expression.name,
+        computation: effectCoreExpression(expression.computation, operations),
+        body: effectCoreExpression(expression.body, operations),
+      };
   }
 }
 

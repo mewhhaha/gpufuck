@@ -108,7 +108,7 @@ The following table is the quickest answer to “where should this feature live?
 | Static link       | Qualification, import/export compatibility, aggregate source ranges          | gpufuck                                        | One encoded linked module                |
 | GPU resolution    | Local depths, global indices, constructor indices, dependency edges and SCCs | gpufuck                                        | Resolved numeric Core tables             |
 | GPU inference     | Schemes, unification, refinements, coverage, concrete entry type             | gpufuck                                        | Checked `GpuFunctionalModule`            |
-| Wasm analysis     | Reachability, captures, lambda sets, worker shapes, runtime requirements     | gpufuck                                        | Backend analysis state                   |
+| Wasm analysis     | Reachability, captures, lambda sets, worker shapes, storage and entry ABI    | gpufuck                                        | Private backend lowering plan            |
 | Wasm emission     | Representation, direct/indirect calls, thunks, loops, memory and exports     | gpufuck                                        | Standalone bytes                         |
 | Host execution    | Concrete host values, operations, ownership promises, suspension             | Application plus validated gpufuck adapter     | Execution value or structured fault      |
 
@@ -173,7 +173,7 @@ Schemas use one canonical linked-preorder encoding. Each six-word record contain
 
 Definition roots, type-parameter tables, constructor-field roots, and indexed result roots share the
 same metadata buffer. The encoder and decoder are in
-[`type_schema_abi.ts`](src/lazuli/type_schema_abi.ts). Inferred output is serialized in the same
+[`type_schema_abi.ts`](src/semantic/type_schema_abi.ts). Inferred output is serialized in the same
 format and read through the same decoder, preventing host and shader schema formats from drifting.
 
 The decoder rejects cycles, reused records, invalid sibling relationships, invalid symbols, wrong
@@ -239,6 +239,10 @@ Effect Core representation.
 into the ordinary surface. The normal resolver and inferencer then independently check embedded
 value expressions. This two-stage check keeps effects explicit without adding effect-specific
 expression tags to the resolved runtime Core.
+
+The compatibility `lowerFunctionalEffectProgram()` API validates this same Effect Core shape before
+preserving its historical continuation-passing surface output. New frontends that require GPU effect
+verification submit Effect Core directly through `compileEffectModule()`.
 
 ### 4.6 Resolved Functional Core
 
@@ -358,10 +362,9 @@ and impossible internal state are infrastructure failures and propagate with evi
 
 [`compiler.ts`](src/functional/compiler.ts) is the language-neutral facade. It validates public
 options and device-derived size limits, normalizes host contracts, admits work under a transient
-memory budget, and delegates to the shared semantic engine in `src/lazuli/`.
-
-The name “Lazuli” in the physical engine is historical. `src/functional/abi.ts` maps the neutral
-contract onto that packed implementation, and no source-language syntax reaches its shaders.
+memory budget, and delegates to the shared engine in `src/semantic/`. The files in `src/lazuli/` are
+compatibility re-exports; shared code does not depend on them. Some internal symbol names retain
+`Lazuli` for ABI compatibility, but no source-language syntax reaches the semantic shaders.
 
 ### 7.1 Pipeline creation
 
@@ -458,7 +461,7 @@ records, and serialized output. Initial capacities are derived from input shape 
 large multipliers.
 
 When an arena fills, the runner in
-[`gpu_type_inference_runner.ts`](src/lazuli/gpu_type_inference_runner.ts):
+[`gpu_type_inference_runner.ts`](src/semantic/gpu_type_inference_runner.ts):
 
 1. identifies the exhausted arena from structured state;
 2. doubles only that logical capacity, subject to device limits;
@@ -496,6 +499,23 @@ callers from exhausting one device merely because JavaScript scheduled them conc
 Cancellation is checked while queued, before submission, and after the validation scope resolves. A
 submitted GPU dispatch cannot be interrupted mid-command; bounded quanta limit the interval until
 the next observation.
+
+`definition_wavefront.ts` condenses recursive definitions into SCCs and schedules the acyclic
+component graph in deterministic dependency waves. Latency-sensitive host-visible schedules stay on
+the CPU. A 128-component schedule takes roughly 14 µs on the current development machine, while a
+WebGPU submission and readback still takes roughly 11 ms even after the kernel was reduced to one
+dispatch.
+
+The GPU seam is therefore a reusable device-resident plan rather than a synchronous replacement for
+the host algorithm. One bounded invocation schedules each graph, independent graphs fill the
+dispatch, and the resulting wave buffer can feed later GPU passes without returning to JavaScript.
+The plan retains immutable dependency counts, resets only its mutable buffers, and can encode
+several schedules into one command buffer. In the checked-in benchmark, 64 resident batches of 256
+graphs take roughly 32 ms, compared with roughly 288 ms for reconstructing the same schedules on the
+host: about nine times the throughput. These numbers describe sustained throughput, not
+first-compilation latency. A graph is bounded to 256 components and 256 dependency edges; larger
+graphs keep using the host scheduler until a multi-workgroup kernel can preserve the same
+deterministic and bounded behavior.
 
 ## 8. Compile-time execution
 
@@ -577,9 +597,10 @@ and emits a dependency-free binary directly; there is no WAT round trip.
 
 The backend follows the [WebAssembly Core Specification](https://webassembly.github.io/spec/core/)
 for binary encoding, validation, functions, tables, linear memory, numeric operations, and control
-flow. Binary primitives are implemented in [`wasm_binary.ts`](src/functional/wasm_binary.ts), while
-[`wasm_codegen.ts`](src/functional/wasm_codegen.ts) orchestrates analysis and expression emission.
-Built-in host-buffer operations live in
+flow. Binary primitives are implemented in [`wasm_binary.ts`](src/functional/wasm_binary.ts).
+[`wasm_backend_plan.ts`](src/functional/wasm_backend_plan.ts) owns the validated, private lowering
+plan shared by compact and general emission; [`wasm_codegen.ts`](src/functional/wasm_codegen.ts)
+consumes that plan and emits expressions. Built-in host-buffer operations live in
 [`wasm_host_emitter.ts`](src/functional/wasm_host_emitter.ts); runtime functions and their shared
 global layout live in [`wasm_runtime_binary.ts`](src/functional/wasm_runtime_binary.ts) and
 [`wasm_runtime_layout.ts`](src/functional/wasm_runtime_layout.ts).
@@ -598,6 +619,10 @@ Backend analyses run in an order that exposes facts to later choices:
 8. Emit functions, runtime support, memory/table sections, imports, exports, and fault evidence.
 
 Analysis consumes resolved indices. No pass performs string-based source name resolution.
+Constructing `FunctionalWasmBackendPlan` is the boundary between analysis and emission. It carries
+the module and Core nodes together with capture, function, storage, entry, instrumentation, and
+compact-scalar decisions, preventing compact and general emitters from independently rebuilding
+those facts.
 
 ### 10.2 Dead-code and runtime elimination
 
@@ -711,6 +736,14 @@ generation:
 
 Releasing an owned root retires its outgoing ownership edges recursively. Explicitly retained or
 multiply owned descendants remain active until their last root or owner releases them.
+
+[`storage_reuse_plan.ts`](src/functional/storage_reuse_plan.ts) adds an optional Perceus-style
+planning step for strict owned traces. After Storage Core verification, it computes exact reference
+counts and pairs a last release with a later same-sized declaration. It does not yet rewrite general
+Core allocation sites: safe in-place mutation also needs explicit control-flow liveness and a
+runtime pointer identity, neither of which can be inferred from a bare type. This boundary follows
+the ordering in Perceus—precise release evidence first, reuse second—without claiming cycle
+collection or uniqueness that the frontend did not prove.
 
 Failures carry `F6001`–`F6006`, the failing operation, an optional semantic Core node, and the names
 that violated the invariant. `planFunctionalModuleStorage()` returns the derived operations and
@@ -869,6 +902,19 @@ The algebraic-effect boundary is informed by Plotkin and Pretnar,
 [“Handling Algebraic Effects”](https://doi.org/10.2168/LMCS-9(4:23)2013), while the concrete replay
 protocol is a gpufuck portability choice rather than an implementation of that paper's calculus.
 
+### 10.10 Component Model boundary
+
+The core backend remains the stable deployment primitive. `functionalWitWorld()` optionally derives
+a WebAssembly Component Model world from concrete public types, resources, capability imports, and
+sync or async operations. Named types live in a shared WIT interface so imports and exports refer to
+one nominal identity. Generic and erased boundary values are rejected until a frontend monomorphizes
+or selects a concrete representation.
+
+`compileFunctionalComponentBoundary()` returns the ordinary core Wasm bytes and the WIT package as
+one artifact. It does not pretend those core bytes are already a component binary; standard
+component tooling performs canonical-ABI adaptation and component encoding. Keeping this optional
+preserves the compact raw-Wasm path and avoids coupling semantic Core to a changing deployment ABI.
+
 ## 11. Diagnostics
 
 Errors are divided by trust boundary.
@@ -931,9 +977,9 @@ Lazuli exercises:
 - host `Init` values;
 - a compiler written in Lazuli that emits Wasm text bytes.
 
-The historical implementation names under `src/lazuli/` are shared physical machinery. New semantic
-features must be exposed through `src/functional/` contracts and must not depend on Lazuli keywords
-or parser structures.
+The shared physical machinery lives under `src/semantic/`. `src/lazuli/` preserves historical import
+paths as thin adapters. New semantic features must be exposed through `src/functional/` contracts
+and must not depend on Lazuli keywords or parser structures.
 
 The repository's Baba-generated Gleam parser demonstrates the intended separation at module scale:
 its adapter owns Gleam syntax, visibility, labels, records, bit-array syntax, external annotations,
@@ -1184,18 +1230,18 @@ allocations, and thunk forces separately.
 | Static linking            | `src/functional/module_linker.ts`                                                                           |
 | Incremental graph/cache   | `src/functional/incremental_graph.ts`, `incremental_compiler.ts`, `incremental_cache.ts`                    |
 | Compiler facade/admission | `src/functional/compiler.ts`, `compilation_admission.ts`                                                    |
-| GPU resolution            | `src/lazuli/compiler_shader.ts`, `gpu_semantic_compiler.ts`                                                 |
-| GPU inference             | `src/lazuli/type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts`    |
-| Canonical schemas         | `src/lazuli/type_schema_abi.ts`                                                                             |
+| GPU resolution            | `src/semantic/compiler_shader.ts`, `gpu_semantic_compiler.ts`                                               |
+| GPU inference             | `src/semantic/type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts`  |
+| Canonical schemas         | `src/semantic/type_schema_abi.ts`                                                                           |
 | Type services             | `src/functional/type_program.ts`, `type_core.ts`, `capability_resolver.ts`                                  |
 | Effects                   | `src/functional/effect_core.ts`, `effect_core_lowering.ts`, `effect_lowering.ts`                            |
 | Comptime                  | `src/functional/comptime.ts`, `comptime_constant.ts`, `comptime_ir.ts`, `partial_evaluation.ts`             |
 | Compiled module/evaluator | `src/functional/compiler_module.ts`, `evaluator.ts`                                                         |
 | Host contracts/runtime    | `src/functional/host_contract.ts`, `host_specialization.ts`, `opaque_resource.ts`, `bit_buffer.ts`          |
-| Wasm analyses             | `src/functional/wasm_function_analysis.ts`, `wasm_capture_analysis.ts`, `wasm_lambda_sets.ts`               |
+| Wasm analyses             | `src/functional/wasm_backend_plan.ts`, `wasm_function_analysis.ts`, `wasm_capture_analysis.ts`              |
 | Wasm emission/runtime     | `src/functional/wasm_codegen.ts`, `wasm_binary.ts`, `wasm_structural_equality.ts`, `wasm_runtime_binary.ts` |
-| Wasm boundary/execution   | `src/functional/wasm_value_codec.ts`, `wasm_host_boundary.ts`, `wasm_execution.ts`                          |
-| Diagnostics               | `src/functional/diagnostics.ts`, `src/lazuli/compilation_diagnostics.ts`                                    |
+| Wasm boundary/execution   | `src/functional/wasm_component_boundary.ts`, `wasm_value_codec.ts`, `wasm_execution.ts`                     |
+| Diagnostics               | `src/functional/diagnostics.ts`, `src/semantic/compilation_diagnostics.ts`                                  |
 
 ## 18. Technical references
 
@@ -1211,6 +1257,10 @@ standards and algorithms that shaped specific decisions:
 - WebAssembly Community Group,
   [WebAssembly Core Specification](https://webassembly.github.io/spec/core/) — binary format,
   validation, execution, numeric behavior, memory, tables, and control flow emitted by the backend.
+- WebAssembly Community Group,
+  [WebAssembly Interface Types](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md)
+  — package, interface, world, resource, and async function syntax emitted by the optional component
+  boundary.
 
 ### Names, graphs, and inference
 
@@ -1240,6 +1290,9 @@ standards and algorithms that shaped specific decisions:
 - Michael Vollmer et al.,
   [“Lambda Set Specialization”](https://www.cs.princeton.edu/~mpmilano/publication/lss/) — finite
   callee-set analysis and direct higher-order dispatch.
+- Alex Reinking et al.,
+  [“Perceus: Garbage Free Reference Counting with Reuse”](https://doi.org/10.1145/3453483.3454032) —
+  precise reference counting followed by same-shape reuse planning for strict functional values.
 - Gordon Plotkin and Matija Pretnar,
   [“Handling Algebraic Effects”](https://doi.org/10.2168/LMCS-9(4:23)2013) — algebraic operations
   and handlers informing the neutral Effect Core boundary.

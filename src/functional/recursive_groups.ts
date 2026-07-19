@@ -2,7 +2,7 @@ import type {
   FunctionalSurfaceDefinition,
   FunctionalSurfaceExpression,
   FunctionalSurfaceRecursiveBinding,
-} from "./surface_builder.ts";
+} from "./surface_contract.ts";
 
 interface RecursiveGroupElaboration {
   readonly definitions: FunctionalSurfaceDefinition[];
