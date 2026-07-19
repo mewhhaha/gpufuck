@@ -129,6 +129,160 @@ export class FunctionalWasmCaptureAnalysis {
     }
   }
 
+  hasOnlySaturatedLocalReferences(
+    nodeIndex: number,
+    localDepth: number,
+    parameterCount: number,
+  ): boolean {
+    return !this.#containsUnsaturatedLocalReference(
+      nodeIndex,
+      localDepth,
+      parameterCount,
+      false,
+    );
+  }
+
+  #containsUnsaturatedLocalReference(
+    nodeIndex: number,
+    localDepth: number,
+    parameterCount: number,
+    insideLambda: boolean,
+  ): boolean {
+    const arguments_: number[] = [];
+    let baseIndex = nodeIndex;
+    let base = this.#node(baseIndex);
+    while (base.tag === FunctionalCoreTag.Apply) {
+      arguments_.push(base.child1);
+      baseIndex = base.child0;
+      base = this.#node(baseIndex);
+    }
+    if (
+      base.tag === FunctionalCoreTag.Local && base.payload === localDepth &&
+      arguments_.length === parameterCount
+    ) {
+      if (insideLambda) return true;
+      return arguments_.some((argument) =>
+        this.#containsUnsaturatedLocalReference(
+          argument,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        )
+      );
+    }
+    if (base.tag === FunctionalCoreTag.Local && base.payload === localDepth) {
+      return true;
+    }
+
+    const node = this.#node(nodeIndex);
+    switch (node.tag) {
+      case FunctionalCoreTag.Integer:
+      case FunctionalCoreTag.SignedInteger64:
+      case FunctionalCoreTag.Float32:
+      case FunctionalCoreTag.Float64:
+      case FunctionalCoreTag.WholeNumberF64:
+      case FunctionalCoreTag.Boolean:
+      case FunctionalCoreTag.Text:
+      case FunctionalCoreTag.Bytes:
+      case FunctionalCoreTag.RuntimeFault:
+      case FunctionalCoreTag.Local:
+      case FunctionalCoreTag.Global:
+      case FunctionalCoreTag.Constructor:
+        return false;
+      case FunctionalCoreTag.Unary:
+      case FunctionalCoreTag.NumericConvert:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        );
+      case FunctionalCoreTag.Apply:
+      case FunctionalCoreTag.Binary:
+      case FunctionalCoreTag.BufferAppend:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        ) || this.#containsUnsaturatedLocalReference(
+          node.child1,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        );
+      case FunctionalCoreTag.If:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        ) || this.#containsUnsaturatedLocalReference(
+          node.child1,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        ) || this.#containsUnsaturatedLocalReference(
+          node.child2,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        );
+      case FunctionalCoreTag.Lambda:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth + 1,
+          parameterCount,
+          true,
+        );
+      case FunctionalCoreTag.PatternBind:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth + 1,
+          parameterCount,
+          insideLambda,
+        );
+      case FunctionalCoreTag.Let:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        ) || this.#containsUnsaturatedLocalReference(
+          node.child1,
+          localDepth + 1,
+          parameterCount,
+          insideLambda,
+        );
+      case FunctionalCoreTag.LetRec:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth + 1,
+          parameterCount,
+          true,
+        ) || this.#containsUnsaturatedLocalReference(
+          node.child1,
+          localDepth + 1,
+          parameterCount,
+          insideLambda,
+        );
+      case FunctionalCoreTag.Case:
+      case FunctionalCoreTag.CaseArm:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        ) || node.child1 !== FUNCTIONAL_NO_INDEX &&
+            this.#containsUnsaturatedLocalReference(
+              node.child1,
+              localDepth,
+              parameterCount,
+              insideLambda,
+            );
+    }
+  }
+
   #node(index: number): FunctionalCoreNode {
     const node = this.#nodes[index];
     if (node === undefined) {

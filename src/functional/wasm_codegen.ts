@@ -2303,6 +2303,11 @@ class FunctionalWasmCompiler {
       this.scalarSpecializationEnabled() &&
       functionShape !== undefined &&
       this.#functionAnalysis.hasOnlySaturatedSelfReferences(functionShape) &&
+      this.#captureAnalysis.hasOnlySaturatedLocalReferences(
+        node.child1,
+        0,
+        functionShape.parameterCount,
+      ) &&
       captured.captureSources.every((source) =>
         source.kind === "i32-integer-constant" ||
         source.kind === "i32-boolean-constant" ||
@@ -4149,10 +4154,46 @@ class FunctionalWasmCompiler {
         );
         return;
       }
-      case "static-recursive-function":
-        throw new Error(
-          `functional WASM recursive lambda ${source.node} escaped its statically saturated call sites`,
+      case "static-recursive-function": {
+        const lambda = this.node(source.node);
+        if (lambda.tag !== FunctionalCoreTag.Lambda) {
+          throw new Error(
+            `functional WASM recursive closure ${source.node} has core tag ${lambda.tag}`,
+          );
+        }
+        const capturesSelf = this.#captureAnalysis.freeLocalDepths(lambda.child0)
+          .includes(1);
+        const firstOuterCaptureByteOffset = OBJECT_HEADER_BYTE_LENGTH +
+          (capturesSelf ? VALUE_BYTE_LENGTH : 0);
+        const captured = this.prunedCaptures(
+          lambda.child0,
+          2,
+          source.environment,
+          firstOuterCaptureByteOffset,
         );
+        const pointer = this.allocateObject(
+          instructions,
+          CLOSURE_OBJECT_KIND,
+          this.lambdaSlot(source.node),
+          captured.captureSources.length + (capturesSelf ? 1 : 0),
+        );
+        if (capturesSelf) {
+          instructions.localGet(pointer);
+          instructions.localGet(pointer);
+          instructions.emit(0xad);
+          instructions.i64Store(OBJECT_HEADER_BYTE_LENGTH);
+        }
+        for (const [index, capture] of captured.captureSources.entries()) {
+          instructions.localGet(pointer);
+          this.emitBinding(instructions, capture);
+          instructions.i64Store(
+            firstOuterCaptureByteOffset + index * VALUE_BYTE_LENGTH,
+          );
+        }
+        instructions.localGet(pointer);
+        instructions.emit(0xad);
+        return;
+      }
     }
   }
 

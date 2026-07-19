@@ -4769,6 +4769,43 @@ Deno.test("omits a let-rec self capture when the function is not recursive", asy
   equal(execution.stats.allocatedBytes, 40);
 });
 
+Deno.test("materializes a recursive function captured by a nested closure", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "count",
+    value: surface.lambda("remaining", {
+      kind: "if",
+      condition: surface.equal(
+        surface.name("remaining"),
+        surface.integer(0),
+      ),
+      consequent: surface.integer(42),
+      alternate: {
+        kind: "let-rec",
+        name: "continue",
+        value: surface.lambda(
+          "ignored",
+          surface.apply(
+            surface.name("count"),
+            surface.binary(
+              FunctionalBinaryOperator.Subtract,
+              surface.name("remaining"),
+              surface.integer(1),
+            ),
+          ),
+        ),
+        body: surface.apply(
+          surface.name("continue"),
+          surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME),
+        ),
+      },
+    }),
+    body: surface.apply(surface.name("count"), surface.integer(4)),
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+});
+
 Deno.test("saturated numeric tail recursion uses an uncurried constant-space worker", async () => {
   const execution = await runCompiledWasm(singleDefinitionModule({
     kind: "let-rec",
