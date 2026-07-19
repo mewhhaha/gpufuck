@@ -11,6 +11,10 @@ import {
   fuelInstrumentedWasm,
 } from "./wasm_artifacts.ts";
 import {
+  functionalRuntimeTypeDescriptor,
+  functionalRuntimeTypeDescriptorKey,
+} from "./host_specialization.ts";
+import {
   functionalEntryName,
   functionalHostOperationError,
   FunctionalWasmBoundaryError,
@@ -454,12 +458,19 @@ export async function runFunctionalWasmModuleAsync(
           );
           throw new FunctionalWasmSuspension(pending);
         }
-        records.push({
-          field,
-          argument: stableArgument,
-          result: copyFunctionalWasmHostValue(returned),
-        });
-        return returned;
+        let stableResult: FunctionalWasmHostValue;
+        try {
+          stableResult = copyFunctionalWasmHostValue(returned);
+        } catch (cause) {
+          throw functionalHostOperationError(
+            module,
+            capability.name,
+            declaration.name,
+            cause,
+          );
+        }
+        records.push({ field, argument: stableArgument, result: stableResult });
+        return stableResult;
       };
     }
   }
@@ -526,6 +537,11 @@ function sameFunctionalWasmHostValue(
   if (left.kind === "resource" && right.kind === "resource") {
     return left.id === right.id;
   }
+  if (left.kind === "erased" && right.kind === "erased") {
+    return functionalRuntimeTypeDescriptorKey(left.type) ===
+        functionalRuntimeTypeDescriptorKey(right.type) &&
+      sameFunctionalWasmHostValue(left.value, right.value);
+  }
   if (left.kind === "bytes" && right.kind === "bytes") {
     if (left.value.length !== right.value.length) return false;
     return left.value.every((value, index) => value === right.value[index]);
@@ -567,7 +583,7 @@ function copyFunctionalWasmHostValue(
       readonly kind: "aggregate";
       readonly value: Extract<
         FunctionalWasmHostValue,
-        { readonly kind: "tuple" | "array" | "slice" | "constructor" }
+        { readonly kind: "tuple" | "array" | "slice" | "constructor" | "erased" }
       >;
       readonly childCount: number;
     };
@@ -598,6 +614,12 @@ function copyFunctionalWasmHostValue(
           name: frame.value.name,
           fields: children,
         });
+      } else if (frame.value.kind === "erased") {
+        copiedValues.push({
+          kind: "erased",
+          type: functionalRuntimeTypeDescriptor(frame.value.type),
+          value: children[0]!,
+        });
       } else {
         copiedValues.push({ kind: frame.value.kind, values: children });
       }
@@ -611,7 +633,7 @@ function copyFunctionalWasmHostValue(
     }
     if (
       current.kind !== "tuple" && current.kind !== "array" && current.kind !== "slice" &&
-      current.kind !== "constructor"
+      current.kind !== "constructor" && current.kind !== "erased"
     ) {
       copiedValues.push({ ...current });
       continue;
@@ -620,7 +642,11 @@ function copyFunctionalWasmHostValue(
       throw new TypeError(`functional WASM async snapshot contains a cyclic ${current.kind} value`);
     }
     activeValues.add(current);
-    const children = current.kind === "constructor" ? current.fields : current.values;
+    const children = current.kind === "constructor"
+      ? current.fields
+      : current.kind === "erased"
+      ? [current.value]
+      : current.values;
     pending.push({
       kind: "aggregate",
       value: current,

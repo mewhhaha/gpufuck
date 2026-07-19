@@ -343,15 +343,12 @@ function parseType(node: BabaRuleCursor, offsets: BabaUtf8ByteOffsets): GleamFun
     };
   }
   if (type.name === "tuple_type") {
+    const valuesNode = babaOptionalRuleField(type, "values");
     return {
       kind: "tuple",
-      values: [
-        parseType(babaRequiredRuleField(type, "first"), offsets),
-        parseType(babaRequiredRuleField(type, "second"), offsets),
-        ...babaRuleFieldArray(type, "rest").map((tail) =>
-          parseType(babaRequiredRuleField(tail, "value"), offsets)
-        ),
-      ],
+      values: valuesNode === null
+        ? []
+        : listRules(valuesNode).map((value) => parseType(value, offsets)),
       span,
     };
   }
@@ -383,15 +380,12 @@ function parseBlock(
   offsets: BabaUtf8ByteOffsets,
 ): GleamFunctionalExpression {
   const entries = babaRuleFieldArray(node, "entries");
-  const result = babaChildRule(entries.at(-1)!);
-  if (result.name !== "expression_statement") {
-    throw new GleamFunctionalSyntaxError(
-      offsets.span(result.span),
-      "A Gleam block must end with an expression.",
-    );
-  }
-  let expression = parseExpression(babaRequiredRuleField(result, "value"), offsets);
-  for (let index = entries.length - 2; index >= 0; index--) {
+  const finalStatement = babaChildRule(entries.at(-1)!);
+  const hasResult = finalStatement.name === "expression_statement";
+  let expression: GleamFunctionalExpression = hasResult
+    ? parseExpression(babaRequiredRuleField(finalStatement, "value"), offsets)
+    : { kind: "unit", span: offsets.span(finalStatement.span) };
+  for (let index = entries.length - (hasResult ? 2 : 1); index >= 0; index--) {
     const entry = entries[index]!;
     const statement = babaChildRule(entry);
     if (statement.name === "expression_statement") {
@@ -426,14 +420,23 @@ function parseBlock(
       span: offsets.span({ start: entry.span.start, end: node.span.end }),
     };
     const target = parseExpression(babaRequiredRuleField(statement, "value"), offsets);
-    expression = target.kind === "call"
-      ? { ...target, arguments: [...target.arguments, positionalCallArgument(callback)] }
-      : {
+    if (target.kind === "call") {
+      const arguments_ = [...target.arguments];
+      const firstLabeledArgument = arguments_.findIndex((argument) => argument.label !== null);
+      arguments_.splice(
+        firstLabeledArgument < 0 ? arguments_.length : firstLabeledArgument,
+        0,
+        positionalCallArgument(callback),
+      );
+      expression = { ...target, arguments: arguments_ };
+    } else {
+      expression = {
         kind: "call",
         callee: target,
         arguments: [positionalCallArgument(callback)],
         span: offsets.span(statement.span),
       };
+    }
   }
   return { ...expression, span: offsets.span(node.span) };
 }
@@ -556,18 +559,35 @@ function parseExpression(
         span: offsets.span(expression.span),
       };
     }
-    case "tuple_expression":
+    case "tuple_expression": {
+      const valuesNode = babaOptionalRuleField(expression, "values");
       return {
         kind: "tuple",
-        values: [
-          parseExpression(babaRequiredRuleField(expression, "first"), offsets),
-          parseExpression(babaRequiredRuleField(expression, "second"), offsets),
-          ...babaRuleFieldArray(expression, "rest").map((tail) =>
-            parseExpression(babaRequiredRuleField(tail, "value"), offsets)
-          ),
-        ],
+        values: valuesNode === null
+          ? []
+          : listRules(valuesNode).map((value) => parseExpression(value, offsets)),
         span: offsets.span(expression.span),
       };
+    }
+    case "assert_expression": {
+      const span = offsets.span(expression.span);
+      return {
+        kind: "case",
+        subjects: [parseExpression(babaRequiredRuleField(expression, "value"), offsets)],
+        arms: [{
+          patterns: [{ kind: "boolean", value: true, span }],
+          guard: null,
+          body: { kind: "unit", span },
+          span,
+        }, {
+          patterns: [{ kind: "discard", span }],
+          guard: null,
+          body: { kind: "panic", message: null, span },
+          span,
+        }],
+        span,
+      };
+    }
     case "list_expression": {
       const entriesNode = babaOptionalRuleField(expression, "entries");
       const values: GleamFunctionalExpression[] = [];
@@ -621,7 +641,7 @@ function parseExpression(
         kind: "panic",
         message: message === null
           ? null
-          : parseStringToken(babaRequiredTokenField(message, "value"), offsets),
+          : parseExpression(babaRequiredRuleField(message, "value"), offsets),
         span: offsets.span(expression.span),
       };
     }
@@ -655,9 +675,25 @@ function parseStringToken(
   offsets: BabaUtf8ByteOffsets,
 ): Extract<GleamFunctionalExpression, { readonly kind: "string" }> {
   try {
+    const jsonString = token.text.replace(
+      /(^|[^\\])((?:\\\\)*)\\u\{([0-9A-Fa-f]{1,6})\}/g,
+      (_escape, prefix: string, escapedPairs: string, hex: string) => {
+        const codePoint = Number.parseInt(hex, 16);
+        if (codePoint > 0x10ffff || codePoint >= 0xd800 && codePoint <= 0xdfff) {
+          throw new RangeError(`invalid Unicode codepoint U+${hex.toUpperCase()}`);
+        }
+        if (codePoint <= 0xffff) {
+          return `${prefix}${escapedPairs}\\u${codePoint.toString(16).padStart(4, "0")}`;
+        }
+        const scalar = codePoint - 0x10000;
+        const high = 0xd800 + (scalar >> 10);
+        const low = 0xdc00 + (scalar & 0x3ff);
+        return `${prefix}${escapedPairs}\\u${high.toString(16)}\\u${low.toString(16)}`;
+      },
+    );
     return {
       kind: "string",
-      value: JSON.parse(token.text) as string,
+      value: JSON.parse(jsonString) as string,
       span: offsets.span(token.span),
     };
   } catch (cause) {
@@ -759,18 +795,16 @@ function parsePattern(
       }
       return result;
     }
-    case "tuple_pattern":
+    case "tuple_pattern": {
+      const valuesNode = babaOptionalRuleField(pattern, "values");
       return {
         kind: "tuple",
-        values: [
-          parsePattern(babaRequiredRuleField(pattern, "first"), offsets),
-          parsePattern(babaRequiredRuleField(pattern, "second"), offsets),
-          ...babaRuleFieldArray(pattern, "rest").map((tail) =>
-            parsePattern(babaRequiredRuleField(tail, "value"), offsets)
-          ),
-        ],
+        values: valuesNode === null
+          ? []
+          : listRules(valuesNode).map((value) => parsePattern(value, offsets)),
         span,
       };
+    }
     case "unit_pattern":
       return { kind: "unit", span };
     case "integer_pattern":
@@ -865,10 +899,10 @@ function parseBitArrayExpression(
     options: parseBitArrayOptions(segment, offsets),
     span: offsets.span(segment.span),
   }));
-  const bytes = staticBitArrayBytes(segments);
-  return bytes === null
+  const literal = staticBitArrayLiteral(segments);
+  return literal === null
     ? { kind: "bit-array-build", segments, span: offsets.span(node.span) }
-    : { kind: "bit-array", bytes, span: offsets.span(node.span) };
+    : { kind: "bit-array", ...literal, span: offsets.span(node.span) };
 }
 
 function parseBitArrayPattern(
@@ -881,10 +915,10 @@ function parseBitArrayPattern(
     options: parseBitArrayOptions(segment, offsets),
     span: offsets.span(segment.span),
   }));
-  const bytes = staticBitArrayBytes(segments);
-  return bytes === null
+  const literal = staticBitArrayLiteral(segments);
+  return literal === null
     ? { kind: "bit-array-segments", segments, span: offsets.span(node.span) }
-    : { kind: "bit-array", bytes, span: offsets.span(node.span) };
+    : { kind: "bit-array", ...literal, span: offsets.span(node.span) };
 }
 
 function parseBitArrayOptions(
@@ -894,60 +928,96 @@ function parseBitArrayOptions(
   const optionsNode = babaOptionalRuleField(segment, "options");
   if (optionsNode === null) return [];
   return listRules(optionsNode).map((option) => {
-    const argumentsNode = babaOptionalRuleField(option, "arguments");
+    const value = option.name === "bit_array_segment_option" ? babaChildRule(option) : option;
+    if (value.name === "bit_array_segment_size") {
+      const sign = babaOptionalTokenField(value, "sign") === null ? 1 : -1;
+      const span = offsets.span(value.span);
+      return {
+        name: "size",
+        arguments: [{
+          kind: "integer" as const,
+          value: sign * parseIntegerToken(babaRequiredTokenField(value, "value").text),
+          span,
+        }],
+        span,
+      };
+    }
+    const argumentsNode = babaOptionalRuleField(value, "arguments");
     const valuesNode = argumentsNode === null
       ? null
       : babaOptionalRuleField(argumentsNode, "values");
     return {
-      name: babaRequiredTokenField(option, "name").text,
+      name: babaRequiredTokenField(value, "name").text,
       arguments: valuesNode === null
         ? []
         : listRules(valuesNode).map((argument) =>
           parseExpression(babaRequiredRuleField(babaChildRule(argument), "value"), offsets)
         ),
-      span: offsets.span(option.span),
+      span: offsets.span(value.span),
     };
   });
 }
 
-function staticBitArrayBytes(
+function staticBitArrayLiteral(
   segments: readonly GleamFunctionalBitArraySegment<
     GleamFunctionalExpression | GleamFunctionalPattern
   >[],
-): Uint8Array | null {
-  const bytes: number[] = [];
-  for (const segment of segments) {
-    const [encoding] = segment.options;
-    if (segment.value.kind === "string") {
-      if (segment.options.length !== 1 || encoding?.name !== "utf8") {
-        throw new GleamFunctionalSyntaxError(
-          encoding?.span ?? segment.span,
-          "A portable Gleam bit-array string segment must use the utf8 encoding.",
-        );
-      }
-      bytes.push(...new TextEncoder().encode(segment.value.value));
-      continue;
-    }
-    if (segment.value.kind !== "integer") return null;
-    if (segment.options.length > 1 || encoding !== undefined && encoding.name !== "int") {
+): { readonly bytes: Uint8Array; readonly bitLength: number } | null {
+  const maximumBitLength = 1_000_000;
+  const bits: number[] = [];
+  const appendInteger = (integer: number, bitLength: number): void => {
+    if (bitLength < 0) {
       throw new GleamFunctionalSyntaxError(
-        encoding?.span ?? segment.span,
-        `A portable Gleam bit-array integer segment supports only int encoding; received ${
-          encoding?.name ?? "multiple options"
+        segments[0]?.span ?? { startByte: 0, endByte: 0 },
+        `A static Gleam bit-array segment cannot have negative size ${bitLength}.`,
+      );
+    }
+    if (bits.length + bitLength > maximumBitLength) {
+      throw new GleamFunctionalSyntaxError(
+        segments[0]?.span ?? { startByte: 0, endByte: 0 },
+        `A static Gleam bit array cannot exceed ${maximumBitLength} bits; received at least ${
+          bits.length + bitLength
         }.`,
       );
     }
-    const byte = segment.value.value;
-    if (byte >= 0 && byte <= 255) {
-      bytes.push(byte);
+    if (bitLength === 0) return;
+    const value = BigInt.asUintN(bitLength, BigInt(integer));
+    for (let index = bitLength - 1; index >= 0; index--) {
+      bits.push(Number(value >> BigInt(index) & 1n));
+    }
+  };
+  for (const segment of segments) {
+    if (segment.value.kind === "string") {
+      if (segment.options.length !== 1 || segment.options[0]?.name !== "utf8") {
+        throw new GleamFunctionalSyntaxError(
+          segment.options[0]?.span ?? segment.span,
+          "A portable Gleam bit-array string segment must use the utf8 encoding.",
+        );
+      }
+      for (const byte of new TextEncoder().encode(segment.value.value)) appendInteger(byte, 8);
       continue;
     }
-    throw new GleamFunctionalSyntaxError(
-      segment.value.span,
-      `A portable Gleam bit-array byte must be within 0..255; received ${byte}.`,
-    );
+    if (segment.value.kind !== "integer") return null;
+    let bitLength = 8;
+    for (const option of segment.options) {
+      if (option.name === "int") continue;
+      if (
+        option.name === "size" && option.arguments.length === 1 &&
+        option.arguments[0]?.kind === "integer"
+      ) {
+        bitLength = option.arguments[0].value;
+        continue;
+      }
+      return null;
+    }
+    appendInteger(segment.value.value, bitLength);
   }
-  return new Uint8Array(bytes);
+  const bytes = new Uint8Array(Math.ceil(bits.length / 8));
+  for (const [index, bit] of bits.entries()) {
+    const byteIndex = index >> 3;
+    bytes[byteIndex] = bytes[byteIndex]! | bit << (7 - (index & 7));
+  }
+  return { bytes, bitLength: bits.length };
 }
 
 function parseIntegerToken(value: string): number {

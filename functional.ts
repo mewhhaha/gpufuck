@@ -188,6 +188,7 @@ export {
 export {
   FUNCTIONAL_ARRAY_TYPE_NAME,
   FUNCTIONAL_BYTES_TYPE_NAME,
+  FUNCTIONAL_ERASED_TYPE_NAME,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
   FUNCTIONAL_RESOURCE_TYPE_PREFIX,
@@ -208,6 +209,7 @@ export {
   type FunctionalWasmLiteral,
 } from "./src/functional/host_contract.ts";
 export type {
+  FunctionalRuntimeTypeDescriptor,
   FunctionalWasmAsyncHostOperation,
   FunctionalWasmAsyncInit,
   FunctionalWasmBoundaryDiagnosticCode,
@@ -224,6 +226,21 @@ export type {
   FunctionalWasmRuntimeErrorDetails,
   FunctionalWasmRuntimeFaultKind,
 } from "./src/functional/wasm_contract.ts";
+export {
+  appendFunctionalBitBuffers,
+  type FunctionalBitBuffer,
+  functionalBitBuffer,
+  functionalBitBufferFromHostValue,
+  functionalBitBufferHostValue,
+  functionalBitBufferStartsWith,
+  sliceFunctionalBitBuffer,
+} from "./src/functional/bit_buffer.ts";
+export { FunctionalOpaqueResourceTable } from "./src/functional/opaque_resource.ts";
+export {
+  functionalRuntimeTypeDescriptor,
+  functionalRuntimeTypeDescriptorKey,
+  specializeFunctionalHostOperation,
+} from "./src/functional/host_specialization.ts";
 export {
   buildFunctionalSurfaceModule,
   type FunctionalSurfaceCaseArm,

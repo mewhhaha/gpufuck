@@ -65,7 +65,9 @@ deno task check:gleam-stdlib
 
 `check:gleam-stdlib` accepts an existing checkout as its first argument. The checkout must be at the
 commit recorded by the tool, so the result cannot silently change with upstream `main`. It compiles
-all 19 package modules together and can take roughly 20–30 seconds on the GPU used for development.
+all 19 package modules and all 1,521 JavaScript-targeted tests in bounded batches, then executes the
+444 tests whose reachable definitions need no Gleam runtime adapter. The current local run takes
+roughly 90 seconds on the GPU used for development.
 
 `deno task test` uses `deno test --parallel` with `DENO_JOBS=2`. GPU tests are not ordinary
 millisecond unit tests: some deliberately force workspace growth, single-transition dispatches,

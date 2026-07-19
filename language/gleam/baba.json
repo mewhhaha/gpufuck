@@ -2,19 +2,23 @@
   "parser": {
     "resolutions": [
       {
-        "conflict": "c_ba64ceec2a6426d8",
+        "conflict": "c_af02c2a476b50550",
         "prefer": "shift"
       },
       {
-        "conflict": "c_f64192c4725ec1d6",
+        "conflict": "c_a1050b74ab9e6972",
         "prefer": "shift"
       },
       {
-        "conflict": "c_ae389804341a9dbf",
+        "conflict": "c_ca454579fc02763b",
         "prefer": "shift"
       },
       {
-        "conflict": "c_24b553d21a6afa80",
+        "conflict": "c_a55b8378405500f6",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_7f9a9a30bf433d4c",
         "prefer": "shift"
       }
     ]

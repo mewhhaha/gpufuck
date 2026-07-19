@@ -54,6 +54,29 @@ Deno.test("desugars Gleam pipelines in source order", async () => {
   deepStrictEqual(evaluation, { kind: "integer", value: 42 });
 });
 
+Deno.test("compares the completed Gleam pipeline result", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "pipeline_comparison",
+    `
+fn increment(value: Int) -> Int {
+  value + 1
+}
+
+pub fn main() -> Int {
+  assert 40
+    |> increment
+    |> increment
+    == 42
+  42
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+});
+
 Deno.test("evaluates Gleam float arithmetic with native f64 operators", async () => {
   const frontend = lowerGleamFunctionalSource(
     "float_arithmetic",
@@ -101,6 +124,20 @@ Deno.test("preserves UTF-8 Gleam string literals through WASM", async () => {
   deepStrictEqual(await evaluateWasm(frontend.lowered), {
     kind: "text",
     value: "Zażółć 🦆",
+  });
+});
+
+Deno.test("distinguishes Gleam Unicode escapes from escaped backslashes", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "string_escapes",
+    `pub fn main() -> String { "\\u{1F986}" <> "\\\\u{41}" }\n`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluateWasm(frontend.lowered), {
+    kind: "text",
+    value: "🦆\\u{41}",
   });
 });
 
@@ -347,6 +384,132 @@ pub fn main() -> Int {
   deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
 });
 
+Deno.test("keeps nested Gleam constructor recursion stack safe", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "nested_tail_recursion",
+    `
+fn repeat(value, count, values) {
+  case count <= 0 {
+    True -> values
+    False -> repeat(value, count - 1, [value, ..values])
+  }
+}
+
+fn count(values, total) {
+  case values {
+    [] -> total
+    [Ok(_), ..rest] -> count(rest, total + 1)
+    [Error(_), ..rest] -> count(rest, total + 1)
+  }
+}
+
+pub fn main() -> Int {
+  repeat(Ok(1), 100_000, [])
+  |> count(0)
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(
+    await evaluateWasm(frontend.lowered),
+    { kind: "integer", value: 100_000 },
+  );
+});
+
+Deno.test("keeps multiple-subject Gleam recursion stack safe", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "multiple_subject_tail_recursion",
+    `
+fn repeat(value, count, values) {
+  case count <= 0 {
+    True -> values
+    False -> repeat(value, count - 1, [value, ..values])
+  }
+}
+
+fn count_pairs(left, right, total) {
+  case left, right {
+    [], _ -> total
+    _, [] -> total
+    [_, ..left_rest], [_, ..right_rest] ->
+      count_pairs(left_rest, right_rest, total + 1)
+  }
+}
+
+pub fn main() -> Int {
+  let values = repeat(0, 100_000, [])
+  count_pairs(values, values, 0)
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(
+    await evaluateWasm(frontend.lowered),
+    { kind: "integer", value: 100_000 },
+  );
+});
+
+Deno.test("keeps guarded Gleam constructor recursion stack safe", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "guarded_tail_recursion",
+    `
+fn repeat(value, count, values) {
+  case count <= 0 {
+    True -> values
+    False -> repeat(value, count - 1, [value, ..values])
+  }
+}
+
+fn contains(values, expected) {
+  case values {
+    [] -> False
+    [first, ..] if first == expected -> True
+    [_, ..rest] -> contains(rest, expected)
+  }
+}
+
+pub fn main() -> Bool {
+  repeat(0, 100_000, [])
+  |> contains(1)
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluateWasm(frontend.lowered), { kind: "boolean", value: false });
+});
+
+Deno.test("keeps recursive names outside exact-list pattern bindings", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "exact_list_binding_scope",
+    `
+fn last(values) {
+  case values {
+    [] -> Error(Nil)
+    [last] -> Ok(last)
+    [_, ..rest] -> last(rest)
+  }
+}
+
+pub fn main() -> Int {
+  case last([1, 2, 42]) {
+    Ok(value) -> value
+    Error(_) -> 0
+  }
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluateWasm(frontend.lowered), { kind: "integer", value: 42 });
+});
+
 Deno.test("desugars use bindings and function captures to ordinary callbacks", async () => {
   const frontend = lowerGleamFunctionalSource(
     "callbacks",
@@ -385,6 +548,23 @@ fn middle(value: #(Int, Int, Int)) -> Int {
 
 pub fn main() -> Int {
   middle(#(1, 42, 3))
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+});
+
+Deno.test("lowers zero and one element Gleam tuples", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "small_tuples",
+    `
+pub fn main() -> Int {
+  let assert #() = #()
+  let assert #(value) = #(42)
+  value
 }
 `,
   );
@@ -535,13 +715,34 @@ Deno.test("reports Gleam panic messages as located runtime faults", async () => 
   }
 });
 
+Deno.test("evaluates a dynamic Gleam panic message before the outer panic", async () => {
+  const frontend = lowerGleamFunctionalSource(
+    "panic/dynamic",
+    `pub fn main() -> Int { panic as panic as "inner panic" }\n`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+  const { compiler } = gleamRuntime();
+  const compilation = await compiler.compileModule(frontend.lowered.module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    await rejects(
+      () => runFunctionalWasmModule(compilation.module),
+      /inner panic/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("constructs and exactly matches portable Gleam bit arrays", async () => {
   const frontend = lowerGleamFunctionalSource(
     "bit_arrays",
     `
 pub fn main() -> Int {
-  case <<"duck":utf8, 42:int>> {
-    <<"duck":utf8, 42:int>> -> 42
+  case <<"duck":utf8, -1:7, 0:1, 42:int>> {
+    <<"duck":utf8, 127:7, 0:1, 42:int>> -> 42
     _ -> 0
   }
 }
@@ -562,6 +763,17 @@ Deno.test("rejects unsupported Gleam bit-array segment encodings", () => {
   ok(!frontend.ok);
   if (frontend.ok) return;
   match(frontend.diagnostics[0].message, /supports only|must use the utf8 encoding/);
+});
+
+Deno.test("rejects negative static Gleam bit-array segment sizes", () => {
+  const frontend = lowerGleamFunctionalSource(
+    "bit_arrays",
+    `pub fn main() { <<1:-1>> }\n`,
+  );
+
+  ok(!frontend.ok);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /cannot have negative size -1/);
 });
 
 Deno.test("merges Gleam externals from one host module into one capability", async () => {

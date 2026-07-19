@@ -390,7 +390,7 @@ class FunctionalWasmCompiler {
         if (declaration.kind === "value") {
           requireFirstOrderFunctionalWasmType(
             module,
-            concreteFunctionalType(declaration.type),
+            concreteFunctionalType(declaration.representation ?? declaration.type),
             `host value ${JSON.stringify(`${capability.name}.${declaration.name}`)}`,
           );
         } else {
@@ -400,7 +400,9 @@ class FunctionalWasmCompiler {
           ) {
             requireFirstOrderFunctionalWasmType(
               module,
-              concreteFunctionalType(declaration.parameter),
+              concreteFunctionalType(
+                declaration.parameterRepresentation ?? declaration.parameter,
+              ),
               `host operation ${
                 JSON.stringify(`${capability.name}.${declaration.name}`)
               } parameter`,
@@ -408,7 +410,7 @@ class FunctionalWasmCompiler {
           }
           requireFirstOrderFunctionalWasmType(
             module,
-            concreteFunctionalType(declaration.result),
+            concreteFunctionalType(declaration.resultRepresentation ?? declaration.result),
             `host operation ${JSON.stringify(`${capability.name}.${declaration.name}`)} result`,
           );
         }
@@ -423,10 +425,14 @@ class FunctionalWasmCompiler {
             module: hostImportModule(capability.name),
             name: declaration.name,
             typeIndex: declaration.kind === "value"
-              ? this.functionTypeIndex([], [wasmValueType(declaration.type)])
+              ? this.functionTypeIndex([], [
+                wasmValueType(declaration.representation ?? declaration.type),
+              ])
               : this.functionTypeIndex(
-                [wasmValueType(declaration.parameter)],
-                [wasmValueType(declaration.result)],
+                [wasmValueType(
+                  declaration.parameterRepresentation ?? declaration.parameter,
+                )],
+                [wasmValueType(declaration.resultRepresentation ?? declaration.result)],
               ),
           });
         }
@@ -931,9 +937,15 @@ class FunctionalWasmCompiler {
           } omitted its import`,
         );
       }
-      this.emitHostArgument(instructions, field.declaration.parameter);
+      this.emitHostArgument(
+        instructions,
+        field.declaration.parameterRepresentation ?? field.declaration.parameter,
+      );
       instructions.call(field.importIndex);
-      this.emitHostResult(instructions, field.declaration.result);
+      this.emitHostResult(
+        instructions,
+        field.declaration.resultRepresentation ?? field.declaration.result,
+      );
       this.#indirectFunctions[field.closureSlot] = functionBody(
         FunctionalWasmFunctionType.ClosureCall,
         instructions,
@@ -999,7 +1011,10 @@ class FunctionalWasmCompiler {
         );
       }
       instructions.call(field.importIndex);
-      this.emitHostResult(instructions, field.declaration.type);
+      this.emitHostResult(
+        instructions,
+        field.declaration.representation ?? field.declaration.type,
+      );
       return;
     }
     if (field.closureSlot === undefined) {
@@ -4633,6 +4648,59 @@ class FunctionalWasmCompiler {
       instructions.emit(0x0b);
       return;
     }
+    if (node.tag === FunctionalCoreTag.Let) {
+      const virtualValue = this.virtualLambda(node.child0, environment) ??
+        (this.scalarSpecializationEnabled()
+          ? this.virtualConstructor(node.child0, environment)
+          : undefined);
+      if (virtualValue !== undefined) {
+        this.compileTailPosition(
+          instructions,
+          node.child1,
+          [virtualValue, ...environment],
+          loop,
+          parameterLocals,
+          binderDepth + 1,
+          loopBranchDepth,
+          resultBranchDepth,
+          resultKind,
+        );
+        return;
+      }
+      const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+        this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0);
+      if (eager) this.compileExpression(instructions, node.child0, environment);
+      else this.compileLazyValue(instructions, node.child0, environment);
+      const value = instructions.addLocal(WasmValueType.I64);
+      instructions.localSet(value);
+      this.compileTailPosition(
+        instructions,
+        node.child1,
+        [{ kind: eager ? "i64-value" : "i64-local", index: value }, ...environment],
+        loop,
+        parameterLocals,
+        binderDepth + 1,
+        loopBranchDepth,
+        resultBranchDepth,
+        resultKind,
+      );
+      return;
+    }
+    if (node.tag === FunctionalCoreTag.Case) {
+      this.compileTailCase(
+        instructions,
+        node,
+        nodeIndex,
+        environment,
+        loop,
+        parameterLocals,
+        binderDepth,
+        loopBranchDepth,
+        resultBranchDepth,
+        resultKind,
+      );
+      return;
+    }
 
     if (resultKind === "integer") {
       this.compileIntegerExpression(instructions, nodeIndex, environment);
@@ -4640,6 +4708,190 @@ class FunctionalWasmCompiler {
       this.compileExpression(instructions, nodeIndex, environment);
     }
     instructions.branch(resultBranchDepth);
+  }
+
+  compileTailCase(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+    loop: FunctionalFunctionShape,
+    parameterLocals: readonly (number | undefined)[],
+    binderDepth: number,
+    loopBranchDepth: number,
+    resultBranchDepth: number,
+    resultKind: "value" | "integer",
+  ): void {
+    const virtualConstructor = this.scalarSpecializationEnabled()
+      ? this.virtualConstructor(node.child0, environment)
+      : undefined;
+    if (virtualConstructor !== undefined) {
+      this.compileKnownTailCaseArm(
+        instructions,
+        node.child1,
+        virtualConstructor,
+        environment,
+        nodeIndex,
+        loop,
+        parameterLocals,
+        binderDepth,
+        loopBranchDepth,
+        resultBranchDepth,
+        resultKind,
+      );
+      return;
+    }
+    this.compileExpression(instructions, node.child0, environment);
+    instructions.emit(0xa7);
+    const constructor = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(constructor);
+    this.compileTailCaseArms(
+      instructions,
+      node.child1,
+      constructor,
+      environment,
+      nodeIndex,
+      loop,
+      parameterLocals,
+      binderDepth,
+      loopBranchDepth,
+      resultBranchDepth,
+      resultKind,
+    );
+  }
+
+  compileKnownTailCaseArm(
+    instructions: WasmInstructions,
+    firstArmIndex: number,
+    constructor: VirtualConstructor,
+    environment: FunctionalEnvironment,
+    caseNodeIndex: number,
+    loop: FunctionalFunctionShape,
+    parameterLocals: readonly (number | undefined)[],
+    binderDepth: number,
+    loopBranchDepth: number,
+    resultBranchDepth: number,
+    resultKind: "value" | "integer",
+  ): void {
+    const arity = this.#module.constructorArities[constructor.constructorIndex];
+    if (arity === undefined || constructor.arguments.length !== arity) {
+      throw new Error(
+        `functional WASM known constructor ${constructor.constructorIndex} at core node ${caseNodeIndex} has ${constructor.arguments.length} fields; expected ${
+          String(arity)
+        }`,
+      );
+    }
+    const fields = constructor.arguments.map((argument) =>
+      this.compileExpressionBinding(instructions, argument, constructor.environment)
+    );
+    let armIndex = firstArmIndex;
+    while (armIndex !== FUNCTIONAL_NO_INDEX) {
+      const arm = this.node(armIndex);
+      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+        throw new Error(
+          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
+        );
+      }
+      if (arm.payload === constructor.constructorIndex) {
+        let bodyNode = arm.child0;
+        let armEnvironment = [...environment];
+        for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
+          const binding = this.node(bodyNode);
+          if (binding.tag !== FunctionalCoreTag.PatternBind) {
+            throw new Error(
+              `functional WASM case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
+            );
+          }
+          armEnvironment = [fields[arity - bindingIndex - 1]!, ...armEnvironment];
+          bodyNode = binding.child0;
+        }
+        this.compileTailPosition(
+          instructions,
+          bodyNode,
+          armEnvironment,
+          loop,
+          parameterLocals,
+          binderDepth + arity,
+          loopBranchDepth,
+          resultBranchDepth,
+          resultKind,
+        );
+        return;
+      }
+      armIndex = arm.child1;
+    }
+    throw new Error(
+      `functional WASM case at core node ${caseNodeIndex} has no arm for known constructor ${constructor.constructorIndex}`,
+    );
+  }
+
+  compileTailCaseArms(
+    instructions: WasmInstructions,
+    armIndex: number,
+    constructor: number,
+    environment: FunctionalEnvironment,
+    caseNodeIndex: number,
+    loop: FunctionalFunctionShape,
+    parameterLocals: readonly (number | undefined)[],
+    binderDepth: number,
+    loopBranchDepth: number,
+    resultBranchDepth: number,
+    resultKind: "value" | "integer",
+  ): void {
+    let currentArmIndex = armIndex;
+    let openArmCount = 0;
+    while (currentArmIndex !== FUNCTIONAL_NO_INDEX) {
+      const arm = this.node(currentArmIndex);
+      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+        throw new Error(
+          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${currentArmIndex}; expected a case arm`,
+        );
+      }
+      const arity = this.#module.constructorArities[arm.payload];
+      if (arity === undefined) {
+        throw new Error(
+          `functional WASM case arm ${currentArmIndex} refers to missing constructor ${arm.payload}`,
+        );
+      }
+      instructions.localGet(constructor);
+      instructions.i32Load(4);
+      instructions.i32Const(arm.payload);
+      instructions.emit(0x46, 0x04, 0x40);
+      let bodyNode = arm.child0;
+      let armEnvironment = [...environment];
+      for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
+        const binding = this.node(bodyNode);
+        if (binding.tag !== FunctionalCoreTag.PatternBind) {
+          throw new Error(
+            `functional WASM case arm ${currentArmIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
+          );
+        }
+        instructions.localGet(constructor);
+        instructions.i64Load(
+          OBJECT_HEADER_BYTE_LENGTH + (arity - bindingIndex - 1) * VALUE_BYTE_LENGTH,
+        );
+        const field = instructions.addLocal(WasmValueType.I64);
+        instructions.localSet(field);
+        armEnvironment = [{ kind: "i64-local", index: field }, ...armEnvironment];
+        bodyNode = binding.child0;
+      }
+      this.compileTailPosition(
+        instructions,
+        bodyNode,
+        armEnvironment,
+        loop,
+        parameterLocals,
+        binderDepth + arity,
+        loopBranchDepth + openArmCount + 1,
+        resultBranchDepth + openArmCount + 1,
+        resultKind,
+      );
+      instructions.emit(0x05);
+      openArmCount++;
+      currentArmIndex = arm.child1;
+    }
+    instructions.emit(0x00);
+    for (let index = 0; index < openArmCount; index++) instructions.emit(0x0b);
   }
 
   lambdaCaptureEnvironment(

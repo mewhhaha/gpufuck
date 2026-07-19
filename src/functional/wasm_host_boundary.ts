@@ -1,4 +1,5 @@
 import {
+  FUNCTIONAL_ERASED_TYPE_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
   type FunctionalHostScalarType,
   type FunctionalHostType,
@@ -13,6 +14,7 @@ import type {
   FunctionalWasmRuntimeErrorDetails,
 } from "./wasm_contract.ts";
 import { locateFunctionalSpan } from "./diagnostics.ts";
+import { functionalRuntimeTypeDescriptorKey } from "./host_specialization.ts";
 import { WasmValueType } from "./wasm_binary.ts";
 import {
   WASM_FAULT_BLACKHOLE,
@@ -25,6 +27,7 @@ import {
 } from "./wasm_runtime_binary.ts";
 import {
   concreteFunctionalType,
+  decodeFunctionalWasmBoxedValue,
   decodeFunctionalWasmValue,
   describeFunctionalType,
   encodeFunctionalWasmValue,
@@ -421,18 +424,14 @@ export function functionalWasmImports(
         }
         capabilityImports[declaration.name] = () => {
           try {
-            if (
-              declaration.type.kind === "tuple" ||
-              declaration.type.kind === "named"
-            ) {
-              return encodeFunctionalWasmValue(
-                requireInstance(),
-                module,
-                concreteFunctionalType(declaration.type),
-                binding,
-              );
-            }
-            return hostValueAsNumber(binding, declaration.type, key);
+            return encodeHostValue(
+              requireInstance(),
+              module,
+              declaration.type,
+              declaration.representation ?? declaration.type,
+              binding,
+              key,
+            );
           } catch (cause) {
             if (cause instanceof FunctionalWasmBoundaryError) throw cause;
             throw invalidFunctionalWasmInit(
@@ -455,30 +454,25 @@ export function functionalWasmImports(
         );
       }
       capabilityImports[declaration.name] = (argument: number | bigint) => {
-        const hostArgument = declaration.parameter.kind === "tuple" ||
-            declaration.parameter.kind === "named"
-          ? decodeFunctionalWasmValue(
-            requireInstance(),
-            module,
-            concreteFunctionalType(declaration.parameter),
-            argument,
-            2_047,
-          )
-          : hostValueFromNative(argument, declaration.parameter);
+        const parameterRepresentation = declaration.parameterRepresentation ??
+          declaration.parameter;
+        const hostArgument = decodeHostValue(
+          requireInstance(),
+          module,
+          declaration.parameter,
+          parameterRepresentation,
+          argument,
+        );
         try {
           const result = binding(hostArgument);
-          if (
-            declaration.result.kind === "tuple" ||
-            declaration.result.kind === "named"
-          ) {
-            return encodeFunctionalWasmValue(
-              requireInstance(),
-              module,
-              concreteFunctionalType(declaration.result),
-              result,
-            );
-          }
-          return hostValueAsNumber(result, declaration.result, key);
+          return encodeHostValue(
+            requireInstance(),
+            module,
+            declaration.result,
+            declaration.resultRepresentation ?? declaration.result,
+            result,
+            key,
+          );
         } catch (cause) {
           if (cause instanceof FunctionalWasmSuspension) throw cause;
           if (cause instanceof FunctionalWasmRuntimeError) throw cause;
@@ -493,6 +487,77 @@ export function functionalWasmImports(
     }
   }
   return bridge(imports);
+}
+
+function decodeHostValue(
+  instance: WebAssembly.Instance,
+  module: GpuFunctionalModule,
+  semanticType: FunctionalHostType,
+  representation: FunctionalHostType,
+  value: number | bigint,
+): FunctionalWasmHostValue {
+  if (isErasedRepresentation(representation)) {
+    const type = concreteFunctionalType(semanticType);
+    return {
+      kind: "erased",
+      type,
+      value: decodeFunctionalWasmBoxedValue(instance, module, type, value, 2_047),
+    };
+  }
+  return representation.kind === "tuple" || representation.kind === "named"
+    ? decodeFunctionalWasmValue(
+      instance,
+      module,
+      concreteFunctionalType(representation),
+      value,
+      2_047,
+    )
+    : hostValueFromNative(value, representation);
+}
+
+function encodeHostValue(
+  instance: WebAssembly.Instance,
+  module: GpuFunctionalModule,
+  semanticType: FunctionalHostType,
+  representation: FunctionalHostType,
+  value: FunctionalWasmHostValue,
+  key: string,
+): number | bigint {
+  if (isErasedRepresentation(representation)) {
+    if (value.kind !== "erased") {
+      throw new TypeError(
+        `functional WASM erased host value ${
+          JSON.stringify(key)
+        } expected erased; received ${value.kind}`,
+      );
+    }
+    const expected = concreteFunctionalType(semanticType);
+    if (
+      functionalRuntimeTypeDescriptorKey(value.type) !==
+        functionalRuntimeTypeDescriptorKey(expected)
+    ) {
+      throw new TypeError(
+        `functional WASM erased host value ${JSON.stringify(key)} has descriptor ${
+          describeFunctionalType(value.type)
+        }; expected ${describeFunctionalType(expected)}`,
+      );
+    }
+    return encodeFunctionalWasmValue(instance, module, expected, value.value);
+  }
+  if (representation.kind === "tuple" || representation.kind === "named") {
+    return encodeFunctionalWasmValue(
+      instance,
+      module,
+      concreteFunctionalType(representation),
+      value,
+    );
+  }
+  return hostValueAsNumber(value, representation, key);
+}
+
+function isErasedRepresentation(type: FunctionalHostType): boolean {
+  return type.kind === "named" && type.name === FUNCTIONAL_ERASED_TYPE_NAME &&
+    type.arguments.length === 0;
 }
 
 function hostValueFromNative(

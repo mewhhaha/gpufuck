@@ -586,19 +586,62 @@ export function decodeFunctionalWasmValue(
   rawResult: number | bigint,
   maximumResultNodes: number,
 ): FunctionalWasmValue {
+  return decodeFunctionalWasmValueWithScalarRepresentation(
+    instance,
+    module,
+    type,
+    rawResult,
+    maximumResultNodes,
+    "native",
+  );
+}
+
+export function decodeFunctionalWasmBoxedValue(
+  instance: WebAssembly.Instance,
+  module: GpuFunctionalModule,
+  type: FunctionalType,
+  rawResult: number | bigint,
+  maximumResultNodes: number,
+): FunctionalWasmValue {
+  return decodeFunctionalWasmValueWithScalarRepresentation(
+    instance,
+    module,
+    type,
+    rawResult,
+    maximumResultNodes,
+    "boxed",
+  );
+}
+
+function decodeFunctionalWasmValueWithScalarRepresentation(
+  instance: WebAssembly.Instance,
+  module: GpuFunctionalModule,
+  type: FunctionalType,
+  rawResult: number | bigint,
+  maximumResultNodes: number,
+  scalarRepresentation: "native" | "boxed",
+): FunctionalWasmValue {
   if (!Number.isSafeInteger(maximumResultNodes) || maximumResultNodes < 1) {
     throw new RangeError(
       `functional WASM maximumResultNodes must be a positive safe integer; received ${maximumResultNodes}`,
     );
   }
-  if (type.kind === "integer") return { kind: "integer", value: Number(rawResult) | 0 };
-  if (type.kind === "signed-integer-64") {
+  if (scalarRepresentation === "native" && type.kind === "integer") {
+    return { kind: "integer", value: Number(rawResult) | 0 };
+  }
+  if (scalarRepresentation === "native" && type.kind === "signed-integer-64") {
     return { kind: "signed-integer-64", value: BigInt(rawResult) };
   }
-  if (type.kind === "float-32") return { kind: "float-32", value: Number(rawResult) };
-  if (type.kind === "float-64") return { kind: "float-64", value: Number(rawResult) };
-  if (type.kind === "boolean") return { kind: "boolean", value: Number(rawResult) !== 0 };
-  if (type.kind === "unit") return { kind: "unit" };
+  if (scalarRepresentation === "native" && type.kind === "float-32") {
+    return { kind: "float-32", value: Number(rawResult) };
+  }
+  if (scalarRepresentation === "native" && type.kind === "float-64") {
+    return { kind: "float-64", value: Number(rawResult) };
+  }
+  if (scalarRepresentation === "native" && type.kind === "boolean") {
+    return { kind: "boolean", value: Number(rawResult) !== 0 };
+  }
+  if (scalarRepresentation === "native" && type.kind === "unit") return { kind: "unit" };
   if (type.kind === "function") {
     throw new TypeError(
       `functional WASM cannot decode function result ${describeFunctionalType(type)}`,

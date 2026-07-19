@@ -20,6 +20,7 @@
 "|>" @operator
 "||" @operator
 "}" @punctuation.bracket
+(assert_expression "assert" @keyword)
 (body_function_declaration "fn" @keyword)
 (case_expression "case" @keyword)
 (case_guard "if" @keyword)
@@ -52,7 +53,6 @@
 (source_type) @type
 (function_type) @type
 (tuple_type) @type
-(tuple_type_tail) @type
 (named_type) @type
 (type_arguments) @type
 (type_list) @type

@@ -1,5 +1,9 @@
-import type { EncodedFunctionalModule } from "../functional/abi.ts";
 import {
+  type EncodedFunctionalModule,
+  FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+} from "../functional/abi.ts";
+import {
+  createFunctionalModuleArtifact,
   FunctionalLinkError,
   type LinkedFunctionalModule,
   linkFunctionalModules,
@@ -118,9 +122,43 @@ export function lowerGleamFunctionalSources(
   }
 
   try {
+    const entryModule = modules.find((module) => module.name === entry.module);
+    const entryDeclaration = entryModule?.declarations.find((declaration) =>
+      declaration.public && declaration.name === entry.exportName
+    );
+    const invokesZeroArgumentFunction = entryDeclaration?.kind === "function" &&
+      entryDeclaration.parameters.length === 0;
+    const entryArtifact = invokesZeroArgumentFunction
+      ? createFunctionalModuleArtifact({
+        name: "$gleam/entry",
+        definitions: [{
+          name: "main",
+          parameters: [],
+          annotation: null,
+          body: {
+            kind: "apply",
+            callee: { kind: "name", name: "sourceEntry" },
+            argument: { kind: "name", name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME },
+          },
+        }],
+        typeDeclarations: [],
+        imports: [{
+          name: "sourceEntry",
+          fromModule: entry.module,
+          exportName: entry.exportName,
+        }],
+        exports: [{ name: "main", definition: "main" }],
+        sourceByteLength: 0,
+        options: {},
+      })
+      : null;
     const linked = linkFunctionalModules(
-      [gleamFunctionalPreludeArtifact(), ...loweredModules.map((lowered) => lowered.artifact)],
-      entry,
+      [
+        gleamFunctionalPreludeArtifact(),
+        ...loweredModules.map((lowered) => lowered.artifact),
+        ...(entryArtifact === null ? [] : [entryArtifact]),
+      ],
+      entryArtifact === null ? entry : { module: entryArtifact.name, exportName: "main" },
     );
     return {
       ok: true,

@@ -77,6 +77,8 @@ export type FunctionalWasmHostOperation = (
   argument: FunctionalWasmHostValue,
 ) => FunctionalWasmHostValue;
 
+export type FunctionalRuntimeTypeDescriptor = FunctionalType;
+
 export type FunctionalWasmAsyncHostOperation = (
   argument: FunctionalWasmHostValue,
 ) => FunctionalWasmHostValue | PromiseLike<FunctionalWasmHostValue>;
@@ -93,6 +95,11 @@ export type FunctionalWasmHostValue =
   | { readonly kind: "array"; readonly values: readonly FunctionalWasmHostValue[] }
   | { readonly kind: "slice"; readonly values: readonly FunctionalWasmHostValue[] }
   | { readonly kind: "resource"; readonly id: number }
+  | {
+    readonly kind: "erased";
+    readonly type: FunctionalRuntimeTypeDescriptor;
+    readonly value: FunctionalWasmHostValue;
+  }
   | {
     readonly kind: "tuple";
     readonly values: readonly [FunctionalWasmHostValue, FunctionalWasmHostValue];

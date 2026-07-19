@@ -3,6 +3,16 @@
 All notable changes to gpufuck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.0 - 2026-07-19
+
+- Expanded the Baba-based Gleam frontend to compile all 1,521 pinned JavaScript-targeted stdlib
+  tests and execute the 444 tests whose reachable definitions require no runtime adapter.
+- Added linked-definition elimination and tail-position constructor-case lowering to reduce emitted
+  Wasm while retaining reachable `Init` capabilities and rewritten module-boundary representations.
+- Added specialized polymorphic host operations, semantic-to-runtime representation contracts,
+  checked erased values with runtime type descriptors, opaque resource tables, and portable
+  bit-precise buffers.
+
 ## 0.2.0 - 2026-07-19
 
 - Added first-class static text and bytes, structural equality, and explicit located runtime faults

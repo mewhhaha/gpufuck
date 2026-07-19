@@ -23,12 +23,14 @@ import {
 import {
   FUNCTIONAL_ARRAY_TYPE_NAME,
   FUNCTIONAL_BYTES_TYPE_NAME,
+  FUNCTIONAL_ERASED_TYPE_NAME,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_INIT_TYPE_NAME,
   FUNCTIONAL_RESOURCE_TYPE_PREFIX,
   FUNCTIONAL_SLICE_TYPE_NAME,
   FUNCTIONAL_TEXT_TYPE_NAME,
   FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
+  functionalHostFieldRepresentationType,
   functionalHostFieldType,
   type FunctionalSurfaceModuleOptions,
   normalizeFunctionalHostCapabilities,
@@ -211,7 +213,8 @@ export function buildFunctionalSurfaceModule(
       declaredName === "$UnitType" || declaredName === "$TupleType" ||
       declaredName === FUNCTIONAL_THUNK_TYPE_NAME ||
       declaredName === FUNCTIONAL_INIT_TYPE_NAME || declaredName === FUNCTIONAL_TEXT_TYPE_NAME ||
-      declaredName === FUNCTIONAL_BYTES_TYPE_NAME || declaredName === FUNCTIONAL_ARRAY_TYPE_NAME ||
+      declaredName === FUNCTIONAL_BYTES_TYPE_NAME || declaredName === FUNCTIONAL_ERASED_TYPE_NAME ||
+      declaredName === FUNCTIONAL_ARRAY_TYPE_NAME ||
       declaredName === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME ||
       declaredName === FUNCTIONAL_SLICE_TYPE_NAME ||
       declaredName.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
@@ -500,6 +503,7 @@ function collectBoundaryTypeNames(
     if (schema.kind === "named") {
       if (
         schema.name === FUNCTIONAL_TEXT_TYPE_NAME || schema.name === FUNCTIONAL_BYTES_TYPE_NAME ||
+        schema.name === FUNCTIONAL_ERASED_TYPE_NAME ||
         schema.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME ||
         schema.name === FUNCTIONAL_ARRAY_TYPE_NAME || schema.name === FUNCTIONAL_SLICE_TYPE_NAME ||
         schema.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
@@ -594,7 +598,10 @@ function collectBoundaryTypeNames(
   };
   for (const definition of definitions) visitExpression(definition.body);
   for (const capability of capabilities) {
-    for (const field of capability.fields) visit(functionalHostFieldType(field));
+    for (const field of capability.fields) {
+      visit(functionalHostFieldType(field));
+      visit(functionalHostFieldRepresentationType(field));
+    }
   }
   return names;
 }

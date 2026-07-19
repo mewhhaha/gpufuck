@@ -828,9 +828,16 @@ initializer binds that definition's global slot directly to the declared capabil
 placeholder body is unreachable in a valid emitted module. This keeps host identity out of the GPU
 IR while avoiding implicit `Init` threading through every source function.
 
-Each operation declares concrete input/output types, purity, and sync or suspending execution. Pure
-intrinsics such as byte length or indexing may lower entirely into the module. Other operations
+Each operation declares semantic input/output types, purity, and sync or suspending execution.
+Polymorphic declarations are specialized to concrete substitutions before module construction.
+Optional representation schemas decouple that semantic contract from the Wasm boundary: opaque types
+can use resource handles, while erased values carry a checked canonical runtime type descriptor.
+Pure intrinsics such as byte length or indexing may lower entirely into the module. Other operations
 become Wasm imports under a capability-qualified namespace.
+
+Bit-precise buffers remain ordinary first-order values represented as `(Bytes, bitLength)`. This
+keeps padding validation and bit counts explicit without introducing a language-specific primitive
+or changing the Wasm object ABI.
 
 `FunctionalHostOwnership` records bounded-borrow, frozen-shareable, ownership-transfer, and unique
 contracts. The host adapter verifies the selected representation and lifetime. The source frontend
@@ -940,12 +947,14 @@ rows, associated results, recursive capability evidence, and rank-2 checking wit
 PureScript compatibility. Together they distinguish a usable source adapter from a
 backend-representation experiment.
 
-Gleam compatibility is checked in two directions. A pinned upstream task parses, lowers,
-GPU-typechecks, and links all 19 unmodified modules in Gleam's `stdlib` package, then executes a
-host-independent harness. A differential test compares gpufuck Wasm results with the official Gleam
+Gleam compatibility is checked in two directions. A pinned upstream task discovers all 1,521
+JavaScript-targeted tests, parses and lowers their 19 unmodified `stdlib` modules, GPU-compiles the
+tests in bounded batches, and executes the 444 tests whose reachable definitions need no Gleam
+runtime adapter. A differential test compares gpufuck Wasm results with the official Gleam
 JavaScript backend. This establishes complete compile coverage for that pinned package revision, not
-complete runtime parity: bit-array matching and runtime-backed externals still require host
-implementations, and the adapter does not implement Gleam's package manager or Gleam/OTP.
+complete runtime parity: generic opaque runtime values, bit-array matching, and JavaScript externals
+still require host implementations, and the adapter does not implement Gleam's package manager or
+Gleam/OTP.
 
 The old Brainfuck compiler remains only as historical and benchmark context. Its instruction format
 is not an intermediate representation for other languages.
@@ -1182,6 +1191,7 @@ allocations, and thunk forces separately.
 | Effects                   | `src/functional/effect_core.ts`, `effect_core_lowering.ts`, `effect_lowering.ts`                            |
 | Comptime                  | `src/functional/comptime.ts`, `comptime_constant.ts`, `comptime_ir.ts`, `partial_evaluation.ts`             |
 | Compiled module/evaluator | `src/functional/compiler_module.ts`, `evaluator.ts`                                                         |
+| Host contracts/runtime    | `src/functional/host_contract.ts`, `host_specialization.ts`, `opaque_resource.ts`, `bit_buffer.ts`          |
 | Wasm analyses             | `src/functional/wasm_function_analysis.ts`, `wasm_capture_analysis.ts`, `wasm_lambda_sets.ts`               |
 | Wasm emission/runtime     | `src/functional/wasm_codegen.ts`, `wasm_binary.ts`, `wasm_structural_equality.ts`, `wasm_runtime_binary.ts` |
 | Wasm boundary/execution   | `src/functional/wasm_value_codec.ts`, `wasm_host_boundary.ts`, `wasm_execution.ts`                          |

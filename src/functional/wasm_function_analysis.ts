@@ -187,6 +187,48 @@ export class FunctionalWasmFunctionAnalysis {
       return false;
     }
     const node = this.#node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.PatternBind) {
+      return this.#containsNonTailSelfReference(
+        node.child0,
+        functionShape,
+        binderDepth + 1,
+      );
+    }
+    if (node.tag === FunctionalCoreTag.Let || node.tag === FunctionalCoreTag.LetRec) {
+      return this.#containsSelfReference(
+        node.child0,
+        functionShape,
+        binderDepth + (node.tag === FunctionalCoreTag.LetRec ? 1 : 0),
+        "any",
+      ) || this.#containsNonTailSelfReference(
+        node.child1,
+        functionShape,
+        binderDepth + 1,
+      );
+    }
+    if (node.tag === FunctionalCoreTag.Case) {
+      return this.#containsSelfReference(
+        node.child0,
+        functionShape,
+        binderDepth,
+        "any",
+      ) || this.#containsNonTailSelfReference(
+        node.child1,
+        functionShape,
+        binderDepth,
+      );
+    }
+    if (node.tag === FunctionalCoreTag.CaseArm) {
+      return this.#containsNonTailSelfReference(
+        node.child0,
+        functionShape,
+        binderDepth,
+      ) || node.child1 !== FUNCTIONAL_NO_INDEX && this.#containsNonTailSelfReference(
+            node.child1,
+            functionShape,
+            binderDepth,
+          );
+    }
     if (node.tag !== FunctionalCoreTag.If) {
       return this.#containsSelfReference(
         nodeIndex,
@@ -419,8 +461,29 @@ export class FunctionalWasmFunctionAnalysis {
           scope,
         );
       case FunctionalCoreTag.Case:
+        return this.#containsSelfReference(
+          node.child0,
+          functionShape,
+          binderDepth,
+          scope,
+        ) || this.#containsSelfReference(
+          node.child1,
+          functionShape,
+          binderDepth,
+          scope,
+        );
       case FunctionalCoreTag.CaseArm:
-        return true;
+        return this.#containsSelfReference(
+          node.child0,
+          functionShape,
+          binderDepth,
+          scope,
+        ) || node.child1 !== FUNCTIONAL_NO_INDEX && this.#containsSelfReference(
+              node.child1,
+              functionShape,
+              binderDepth,
+              scope,
+            );
     }
   }
 
@@ -431,6 +494,20 @@ export class FunctionalWasmFunctionAnalysis {
   ): boolean {
     if (this.tailArguments(nodeIndex, loop, binderDepth) !== undefined) return true;
     const node = this.#node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.PatternBind) {
+      return this.#containsTailCall(node.child0, loop, binderDepth + 1);
+    }
+    if (node.tag === FunctionalCoreTag.Let || node.tag === FunctionalCoreTag.LetRec) {
+      return this.#containsTailCall(node.child1, loop, binderDepth + 1);
+    }
+    if (node.tag === FunctionalCoreTag.Case) {
+      return this.#containsTailCall(node.child1, loop, binderDepth);
+    }
+    if (node.tag === FunctionalCoreTag.CaseArm) {
+      return this.#containsTailCall(node.child0, loop, binderDepth) ||
+        node.child1 !== FUNCTIONAL_NO_INDEX &&
+          this.#containsTailCall(node.child1, loop, binderDepth);
+    }
     if (node.tag === FunctionalCoreTag.If) {
       return this.#containsTailCall(node.child1, loop, binderDepth) ||
         this.#containsTailCall(node.child2, loop, binderDepth);

@@ -45,7 +45,7 @@ Compilation requires Deno 2.9 or newer, Deno's unstable WebGPU API, and a WebGPU
 the host.
 
 ```sh
-deno add jsr:@mewhhaha/gpufuck@^0.2.0
+deno add jsr:@mewhhaha/gpufuck@^0.3.0
 ```
 
 Enable WebGPU in `deno.json`:
@@ -227,9 +227,18 @@ IR can encode `EncodedFunctionalModule` directly.
 Host operations normally arrive through an explicit `Init` value. A frontend can instead bind a
 top-level definition directly to one capability field with `hostDefinitions`. This is useful for
 source languages whose annotated external functions are ordinary names rather than explicit entry
-parameters. The declaration still owns the operation's concrete parameter/result schemas, purity,
+parameters. The declaration still owns the operation's semantic parameter/result schemas, purity,
 execution mode, and ownership contracts; the runner still requires the corresponding implementation
 in `options.init`.
+
+Polymorphic foreign declarations are specialized before module construction with
+`specializeFunctionalHostOperation()`. The specialization substitutes every declared type parameter
+with a concrete runtime descriptor. An operation may independently select `parameterRepresentation`
+and `resultRepresentation`: this lets an opaque source type use a named resource handle, or lets a
+specialized generic value cross as `FunctionalHostTypes.erased` while the callback receives its
+checked semantic descriptor. Representation selection changes only the Wasm boundary; GPU inference
+continues to see the source-level type. Specialized import names include a canonical descriptor
+suffix, so distinct instantiations cannot collide inside one capability.
 
 The GPU resolves portable lexical names, global definitions, constructors, dependencies, recursive
 SCCs, annotations, and case coverage. A frontend must still reject constructs whose meaning belongs
@@ -340,10 +349,10 @@ algebraic-effect program with `lowerFunctionalEffectProgram()` or submit verifie
 `compileEffectModule()`.
 
 At the Wasm boundary, an optional `Init` value carries declared host values and operations. Each
-operation has a concrete parameter and result type and may be synchronous or suspending. Suspending
-operations use `runFunctionalWasmModuleAsync()`, which resumes through bounded deterministic replay;
-the synchronous runner rejects them. Both runners accept an `AbortSignal`. The async runner races
-each suspension against that signal, releases the invocation arena before waiting, and can reuse the
+operation has a concrete specialization and may be synchronous or suspending. Suspending operations
+use `runFunctionalWasmModuleAsync()`, which resumes through bounded deterministic replay; the
+synchronous runner rejects them. Both runners accept an `AbortSignal`. The async runner races each
+suspension against that signal, releases the invocation arena before waiting, and can reuse the
 compiled module after cancellation.
 
 `FunctionalHostOwnership` describes transfer, unique, bounded-borrow, and frozen-shareable contracts
@@ -432,9 +441,13 @@ Direct execution accepts one concrete first-order argument and result, or an `In
 Scalars use native Wasm values where possible. Structured values use `FunctionalWasmValueAbi` v1,
 whose public representation has eight-byte values and sixteen-byte aligned object headers.
 
-Higher-order closures cannot cross the public boundary. Text, bytes, arrays, slices, and nominal
-resource handles are available through `FunctionalHostTypes`. Decode limits bound structured
-results, and cyclic public results are rejected.
+Higher-order closures cannot cross the public boundary. Text, bytes, arrays, slices, erased values,
+and nominal resource handles are available through `FunctionalHostTypes`. Erased callbacks receive
+the value together with a canonical `FunctionalRuntimeTypeDescriptor`; returning a mismatched
+descriptor fails at the boundary. `FunctionalOpaqueResourceTable` provides checked u32 handles for
+adapter-owned values. Bit-precise buffers use the portable `(Bytes, bitLength)` schema from
+`FunctionalHostTypes.bitBuffer`, so they need no language-specific Wasm object kind. Decode limits
+bound structured results, and cyclic public results are rejected.
 
 If an application instantiates emitted bytes without gpufuck's runners, it receives native Wasm
 traps. Generated modules export fault evidence so another runtime adapter can translate failures in
@@ -484,7 +497,7 @@ lowering techniques, not complete compatibility with their source languages.
 
 | Frontend                                                | Boundary demonstrated                                                    |
 | ------------------------------------------------------- | ------------------------------------------------------------------------ |
-| [Gleam](examples/gleam-functional/README.md)            | Strict inference, all 19 stdlib modules, and differential JS parity      |
+| [Gleam](examples/gleam-functional/README.md)            | Strict inference, pinned stdlib compile coverage, and scalar JS parity   |
 | [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, moves, borrows, and rejected mutation |
 | [Haskell](examples/haskell-functional/README.md)        | Laziness, inference, dictionaries, GADTs, and recursive data             |
 | [OCaml](examples/ocaml-functional/README.md)            | Sequential scope, explicit recursion, variants, and lists                |

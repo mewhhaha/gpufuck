@@ -1,6 +1,7 @@
 import { deepStrictEqual, equal, ok, rejects, throws } from "node:assert/strict";
 
 import {
+  appendFunctionalBitBuffers,
   beginFunctionalWasmArena,
   buildFunctionalSurfaceModule,
   compileFunctionalModuleToWasm,
@@ -12,13 +13,20 @@ import {
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
+  functionalBitBuffer,
+  functionalBitBufferFromHostValue,
+  functionalBitBufferHostValue,
+  functionalBitBufferStartsWith,
   FunctionalEvaluationMode,
   FunctionalEvaluationProfile,
+  type FunctionalHostType,
   FunctionalHostTypes,
   FunctionalLinkError,
   type FunctionalModuleArtifact,
   FunctionalNumericConversion,
+  FunctionalOpaqueResourceTable,
   FunctionalPersistentSharing,
+  functionalRuntimeTypeDescriptorKey,
   type FunctionalSurfaceExpression,
   type FunctionalType,
   type FunctionalTypeSchema,
@@ -43,6 +51,8 @@ import {
   resetFunctionalWasmScratch,
   runFunctionalWasmModule,
   runFunctionalWasmModuleAsync,
+  sliceFunctionalBitBuffer,
+  specializeFunctionalHostOperation,
   surface,
   withFunctionalWasmArena,
 } from "../functional.ts";
@@ -2082,6 +2092,342 @@ Deno.test("calls aggregate host operations through the shared WebAssembly value 
   }
 });
 
+Deno.test("specializes a generic host operation and carries erased runtime type evidence", async () => {
+  const operation = specializeFunctionalHostOperation({
+    kind: "operation",
+    name: "increment",
+    purity: "pure",
+    typeParameters: ["value"],
+    parameter: { kind: "parameter", name: "value" },
+    result: { kind: "parameter", name: "value" },
+    parameterRepresentation: FunctionalHostTypes.erased,
+    resultRepresentation: FunctionalHostTypes.erased,
+  }, { value: { kind: "integer" } });
+  const booleanOperation = specializeFunctionalHostOperation({
+    ...operation,
+    name: "increment",
+    typeParameters: ["value"],
+    parameter: { kind: "parameter", name: "value" },
+    result: { kind: "parameter", name: "value" },
+  }, { value: { kind: "boolean" } });
+  ok(operation.name !== booleanOperation.name);
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["increment"],
+          body: surface.apply(surface.name("increment"), surface.integer(41)),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    { hostCapabilities: [{ name: "Generic", fields: [operation] }] },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("specialized generic host operation did not compile");
+  try {
+    await rejects(
+      () =>
+        runFunctionalWasmModule(compilation.module, {
+          init: {
+            Generic: {
+              [operation.name]: () => ({
+                kind: "erased",
+                type: { kind: "boolean" },
+                value: { kind: "boolean", value: true },
+              }),
+            },
+          },
+        }),
+      /descriptor boolean; expected integer/,
+    );
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      init: {
+        Generic: {
+          [operation.name]: (argument) => {
+            if (argument.kind !== "erased" || argument.value.kind !== "integer") {
+              throw new TypeError(
+                `generic increment expected erased integer; received ${argument.kind}`,
+              );
+            }
+            equal(functionalRuntimeTypeDescriptorKey(argument.type), '{"kind":"integer"}');
+            equal(argument.value.value, 41);
+            return {
+              kind: "erased",
+              type: argument.type,
+              value: { kind: "integer", value: argument.value.value + 1 },
+            };
+          },
+        },
+      },
+    });
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects incomplete generic host operation specializations", () => {
+  const operation = {
+    kind: "operation",
+    name: "choose",
+    purity: "pure",
+    typeParameters: ["left", "right"],
+    parameter: { kind: "parameter", name: "left" },
+    result: { kind: "parameter", name: "right" },
+  } as const;
+  throws(
+    () => specializeFunctionalHostOperation(operation, { left: { kind: "integer" } }),
+    /specialization omits "right"/,
+  );
+  throws(
+    () =>
+      specializeFunctionalHostOperation(operation, {
+        left: { kind: "integer" },
+        right: { kind: "boolean" },
+        extra: { kind: "unit" },
+      }),
+    /specialization supplies unknown "extra"/,
+  );
+  throws(
+    () =>
+      specializeFunctionalHostOperation({
+        ...operation,
+        typeParameters: ["left", "left"],
+      }, { left: { kind: "integer" } }),
+    /repeats a type parameter.*\["left","left"\]/,
+  );
+  const inherited = Object.create({ left: { kind: "integer" } }) as Record<
+    string,
+    FunctionalHostType
+  >;
+  inherited.right = { kind: "boolean" };
+  throws(
+    () => specializeFunctionalHostOperation(operation, inherited),
+    /specialization omits "left"/,
+  );
+});
+
+Deno.test("rejects an unspecialized generic operation at the module boundary", () => {
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: surface.integer(0) }],
+        [],
+        "main",
+        0,
+        {
+          hostCapabilities: [{
+            name: "Generic",
+            fields: [{
+              kind: "operation",
+              name: "identity",
+              purity: "pure",
+              typeParameters: ["value"],
+              parameter: { kind: "parameter", name: "value" },
+              result: { kind: "parameter", name: "value" },
+            }],
+          }],
+        },
+      ),
+    /Generic\.identity.*remains polymorphic.*specialize it before module construction/,
+  );
+});
+
+Deno.test("rejects ABI-incompatible host representations before module construction", () => {
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: surface.integer(0) }],
+        [],
+        "main",
+        0,
+        {
+          hostCapabilities: [{
+            name: "Invalid",
+            fields: [{
+              kind: "value",
+              name: "pair",
+              type: {
+                kind: "tuple",
+                values: [{ kind: "integer" }, { kind: "integer" }],
+              },
+              representation: FunctionalHostTypes.text,
+            }],
+          }],
+        },
+      ),
+    /representation.*not ABI-compatible.*semantic type/,
+  );
+});
+
+Deno.test("reports malformed host type shapes at the capability boundary", () => {
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: surface.integer(0) }],
+        [],
+        "main",
+        0,
+        {
+          hostCapabilities: [{
+            name: "Invalid",
+            fields: [{
+              kind: "value",
+              name: "broken",
+              type: {
+                kind: "named",
+                name: "Broken",
+                arguments: null,
+              } as unknown as FunctionalHostType,
+            }],
+          }],
+        },
+      ),
+    /Invalid.*broken.*named type arguments must be an array; received null/,
+  );
+});
+
+Deno.test("maps opaque semantic values onto checked resource handles", async () => {
+  const resources = new FunctionalOpaqueResourceTable<number>("test.counter");
+  const opaqueType = { kind: "named", name: "Counter", arguments: [] } as const;
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["create", "read"],
+          body: surface.apply(
+            surface.name("read"),
+            surface.apply(surface.name("create"), surface.name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME)),
+          ),
+        }],
+      },
+    }],
+    [{ name: "Counter", parameters: [], constructors: [] }],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Opaque",
+        fields: [{
+          kind: "operation",
+          name: "create",
+          purity: "pure",
+          parameter: { kind: "unit" },
+          result: opaqueType,
+          resultRepresentation: resources.type,
+        }, {
+          kind: "operation",
+          name: "read",
+          purity: "pure",
+          parameter: opaqueType,
+          parameterRepresentation: resources.type,
+          result: { kind: "integer" },
+        }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("opaque resource representation did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      init: {
+        Opaque: {
+          create: () => resources.insert(42),
+          read: (argument) => {
+            if (argument.kind !== "resource") {
+              throw new TypeError(`opaque read expected resource; received ${argument.kind}`);
+            }
+            return { kind: "integer", value: resources.get(argument) };
+          },
+        },
+      },
+    });
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects stale opaque resource handles", () => {
+  const resources = new FunctionalOpaqueResourceTable<number>("test.counter");
+  const resource = resources.insert(42);
+  equal(resources.take(resource), 42);
+  throws(() => resources.get(resource), /test\.counter.*no live handle 1/);
+  throws(() => resources.drop(resource), /test\.counter.*no live handle 1/);
+});
+
+Deno.test("round-trips a non-byte-aligned bit buffer through the portable tuple ABI", async () => {
+  const buffer = functionalBitBuffer(
+    new Uint8Array([0b1010_1010, 0b1111_1111, 0b1111_1111]),
+    11,
+  );
+  deepStrictEqual([...buffer.bytes], [0b1010_1010, 0b1110_0000]);
+  const prefix = sliceFunctionalBitBuffer(buffer, 0, 5);
+  const suffix = sliceFunctionalBitBuffer(buffer, 5, 11);
+  deepStrictEqual(appendFunctionalBitBuffers(prefix, suffix), buffer);
+  equal(functionalBitBufferStartsWith(buffer, prefix), true);
+  equal(
+    functionalBitBufferStartsWith(
+      buffer,
+      functionalBitBuffer(new Uint8Array([0b0010_0000]), 3),
+    ),
+    false,
+  );
+  const value = functionalBitBufferHostValue(buffer);
+  deepStrictEqual(functionalBitBufferFromHostValue(value), buffer);
+
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["bits"],
+          body: surface.name("bits"),
+        }],
+      },
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Bits",
+        fields: [{ kind: "value", name: "bits", type: FunctionalHostTypes.bitBuffer }],
+      }],
+    },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("bit buffer boundary did not compile");
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      init: { Bits: { bits: value } },
+    });
+    deepStrictEqual(functionalBitBufferFromHostValue(execution.value), buffer);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("direct execution rejects suspending host operations with the async runner name", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
@@ -2303,7 +2649,7 @@ Deno.test("async replay snapshots deeply nested host results without using the c
   }
 });
 
-Deno.test("async replay reports cyclic host results as host-operation failures", async () => {
+Deno.test("async replay reports cyclic sync and promised results as host-operation failures", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
       name: "main",
@@ -2345,24 +2691,24 @@ Deno.test("async replay reports cyclic host results as host-operation failures",
   const result: FunctionalWasmValue = { kind: "array", values };
   values.push(result);
   try {
-    await rejects(
-      () =>
-        runFunctionalWasmModuleAsync(compilation.module, {
-          init: {
-            Environment: {
-              build: () => Promise.resolve(result),
+    for (const build of [() => result, () => Promise.resolve(result)]) {
+      await rejects(
+        () =>
+          runFunctionalWasmModuleAsync(compilation.module, {
+            init: {
+              Environment: { build },
             },
-          },
-        }),
-      (error) => {
-        ok(error instanceof FunctionalWasmRuntimeError);
-        equal(error.kind, "host-operation");
-        equal(error.capability, "Environment");
-        equal(error.operation, "build");
-        ok(error.message.includes("cyclic array value"));
-        return true;
-      },
-    );
+          }),
+        (error) => {
+          ok(error instanceof FunctionalWasmRuntimeError);
+          equal(error.kind, "host-operation");
+          equal(error.capability, "Environment");
+          equal(error.operation, "build");
+          ok(error.message.includes("cyclic array value"));
+          return true;
+        },
+      );
+    }
   } finally {
     compilation.module.destroy();
   }
@@ -2737,6 +3083,138 @@ Deno.test("validated module artifacts detach nested frontend state", () => {
     throw new Error(`module artifact snapshot returned ${snapshotBody?.kind ?? "no body"}`);
   }
   equal(snapshotBody.value, 1);
+});
+
+Deno.test("eliminates definitions unreachable from the linked entry", () => {
+  const linked = linkFunctionalModules([{
+    name: "application",
+    definitions: [
+      { name: "main", parameters: [], annotation: null, body: surface.integer(42) },
+      {
+        name: "unusedHost",
+        parameters: [],
+        annotation: {
+          kind: "function",
+          parameter: { kind: "integer" },
+          result: { kind: "integer" },
+        },
+        body: { kind: "runtime-fault", message: "unused host operation" },
+      },
+      { name: "unused", parameters: [], annotation: null, body: surface.name("unusedHost") },
+    ],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "main", definition: "main" }],
+    sourceByteLength: 0,
+    options: {
+      hostCapabilities: [{
+        name: "Unused",
+        fields: [{
+          kind: "operation",
+          name: "call",
+          purity: "pure",
+          parameter: { kind: "integer" },
+          result: { kind: "integer" },
+        }],
+      }],
+      hostDefinitions: [{ definition: "unusedHost", capability: "Unused", field: "call" }],
+    },
+  }], { module: "application", exportName: "main" });
+
+  equal(linked.module.definitionCount, 1);
+  equal(linked.module.nodeCount, 1);
+  deepStrictEqual(linked.module.hostCapabilities, []);
+});
+
+Deno.test("retains Init capabilities used by a linked entry", async () => {
+  const linked = linkFunctionalModules([{
+    name: "application",
+    definitions: [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["answer"],
+          body: surface.name("answer"),
+        }],
+      },
+    }],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "main", definition: "main" }],
+    sourceByteLength: 0,
+    options: {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{ kind: "value", name: "answer", type: { kind: "integer" } }],
+      }],
+    },
+  }], { module: "application", exportName: "main" });
+
+  equal(linked.module.hostCapabilities?.length, 1);
+  const compilation = await functionalWasmRuntime().compiler.compileModule(linked.module);
+  if (!compilation.ok) {
+    throw new Error(
+      `linked Init capability did not compile: ${JSON.stringify(compilation.diagnostics)}`,
+    );
+  }
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      init: { Environment: { answer: { kind: "integer", value: 42 } } },
+    });
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rewrites semantic and representation types through module linking", () => {
+  const token = { kind: "named", name: "Token", arguments: [] } as const;
+  const linked = linkFunctionalModules([{
+    name: "application",
+    definitions: [{
+      name: "main",
+      parameters: ["init"],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.name("init"),
+        arms: [{
+          constructor: FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+          binders: ["token"],
+          body: surface.integer(0),
+        }],
+      },
+    }],
+    typeDeclarations: [{
+      name: "Token",
+      parameters: [],
+      constructors: [{ name: "Token", fields: [] }],
+    }],
+    imports: [],
+    exports: [{ name: "main", definition: "main" }],
+    sourceByteLength: 0,
+    options: {
+      hostCapabilities: [{
+        name: "Environment",
+        fields: [{
+          kind: "value",
+          name: "token",
+          type: token,
+          representation: token,
+        }],
+      }],
+    },
+  }], { module: "application", exportName: "main" });
+
+  const field = linked.module.hostCapabilities?.[0]?.fields[0];
+  if (field?.kind !== "value") throw new Error("linked Token capability is missing");
+  deepStrictEqual(field.type, { kind: "named", name: "application::Token", arguments: [] });
+  deepStrictEqual(field.representation, field.type);
 });
 
 Deno.test("links typed imports and exports from separately prepared functional modules", async () => {

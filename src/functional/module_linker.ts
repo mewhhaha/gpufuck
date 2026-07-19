@@ -9,6 +9,7 @@ import type {
   FunctionalHostCapabilityDeclaration,
   FunctionalSurfaceModuleOptions,
 } from "./host_contract.ts";
+import { FUNCTIONAL_INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
 import {
   buildFunctionalSurfaceModule,
   type FunctionalSurfaceCaseArm,
@@ -480,11 +481,29 @@ export function linkFunctionalModules(
         name: capability.name,
         fields: capability.fields.map((field) =>
           field.kind === "value"
-            ? { ...field, type: rewriteSchema(field.type, availableTypeNames)! }
+            ? {
+              ...field,
+              type: rewriteSchema(field.type, availableTypeNames)!,
+              ...(field.representation === undefined ? {} : {
+                representation: rewriteSchema(field.representation, availableTypeNames)!,
+              }),
+            }
             : {
               ...field,
               parameter: rewriteSchema(field.parameter, availableTypeNames)!,
               result: rewriteSchema(field.result, availableTypeNames)!,
+              ...(field.parameterRepresentation === undefined ? {} : {
+                parameterRepresentation: rewriteSchema(
+                  field.parameterRepresentation,
+                  availableTypeNames,
+                )!,
+              }),
+              ...(field.resultRepresentation === undefined ? {} : {
+                resultRepresentation: rewriteSchema(
+                  field.resultRepresentation,
+                  availableTypeNames,
+                )!,
+              }),
             }
         ),
       };
@@ -530,14 +549,40 @@ export function linkFunctionalModules(
       }`,
     });
   }
+  const reachability = analyzeLinkedDefinitionReachability(linkedDefinitions, [
+    entryDefinition,
+    ...linkedWasmExports.map((exported) => exported.definition),
+  ]);
+  const reachableDefinitions = linkedDefinitions.filter((definition) =>
+    reachability.definitionNames.has(definition.name)
+  );
+  const reachableHostDefinitions = linkedHostDefinitions.filter((binding) =>
+    reachability.definitionNames.has(binding.definition)
+  );
+  const reachableHostFields = new Map<string, Set<string>>();
+  for (const binding of reachableHostDefinitions) {
+    const fields = reachableHostFields.get(binding.capability) ?? new Set<string>();
+    fields.add(binding.field);
+    reachableHostFields.set(binding.capability, fields);
+  }
+  const reachableCapabilities = reachability.usesHostInit
+    ? capabilities
+    : capabilities.flatMap((capability) => {
+      const fields = reachableHostFields.get(capability.name);
+      if (fields === undefined) return [];
+      return [{
+        name: capability.name,
+        fields: capability.fields.filter((field) => fields.has(field.name)),
+      }];
+    });
   const module = buildFunctionalSurfaceModule(
-    linkedDefinitions,
+    reachableDefinitions,
     linkedTypes,
     entryDefinition,
     sourceBase,
     {
-      hostCapabilities: capabilities,
-      hostDefinitions: linkedHostDefinitions,
+      hostCapabilities: reachableCapabilities,
+      hostDefinitions: reachableHostDefinitions,
       evaluationProfile: evaluationProfile ?? FunctionalEvaluationProfile.StrictEager,
       wasmExports: linkedWasmExports,
     },
@@ -546,6 +591,82 @@ export function linkFunctionalModules(
     module: { ...module, sources: Object.freeze(sources) },
     sources: Object.freeze(sources),
   };
+}
+
+function analyzeLinkedDefinitionReachability(
+  definitions: readonly FunctionalSurfaceDefinition[],
+  roots: readonly string[],
+): {
+  readonly definitionNames: ReadonlySet<string>;
+  readonly usesHostInit: boolean;
+} {
+  const definitionsByName = new Map(definitions.map((definition) => [definition.name, definition]));
+  const reachable = new Set<string>();
+  const pending = [...roots];
+  let usesHostInit = false;
+  while (pending.length > 0) {
+    const definitionName = pending.pop()!;
+    if (reachable.has(definitionName)) continue;
+    const definition = definitionsByName.get(definitionName);
+    if (definition === undefined) continue;
+    reachable.add(definitionName);
+    const expressions: FunctionalSurfaceExpression[] = [definition.body];
+    while (expressions.length > 0) {
+      const expression = expressions.pop()!;
+      switch (expression.kind) {
+        case "name":
+          if (expression.name === FUNCTIONAL_INIT_CONSTRUCTOR_NAME) usesHostInit = true;
+          if (definitionsByName.has(expression.name) && !reachable.has(expression.name)) {
+            pending.push(expression.name);
+          }
+          break;
+        case "text-append":
+        case "bytes-append":
+        case "binary":
+          expressions.push(expression.left, expression.right);
+          break;
+        case "apply":
+          expressions.push(expression.callee, expression.argument);
+          break;
+        case "lambda":
+          expressions.push(expression.body);
+          break;
+        case "let":
+        case "let-rec":
+          expressions.push(expression.value, expression.body);
+          break;
+        case "let-rec-group":
+          expressions.push(expression.body, ...expression.bindings.map((binding) => binding.body));
+          break;
+        case "if":
+          expressions.push(expression.condition, expression.consequent, expression.alternate);
+          break;
+        case "unary":
+        case "numeric-convert":
+          expressions.push(expression.value);
+          break;
+        case "case":
+          if (
+            expression.arms.some((arm) => arm.constructor === FUNCTIONAL_INIT_CONSTRUCTOR_NAME)
+          ) {
+            usesHostInit = true;
+          }
+          expressions.push(expression.value, ...expression.arms.map((arm) => arm.body));
+          break;
+        case "integer":
+        case "signed-integer-64":
+        case "float-32":
+        case "float-64":
+        case "whole-number-f64":
+        case "boolean":
+        case "text":
+        case "bytes":
+        case "runtime-fault":
+          break;
+      }
+    }
+  }
+  return { definitionNames: reachable, usesHostInit };
 }
 
 function rewriteExpression(

@@ -11,6 +11,7 @@ export const FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME = "$FunctionalWholeNumberF64"
 export const FUNCTIONAL_ARRAY_TYPE_NAME = "$FunctionalArray";
 export const FUNCTIONAL_SLICE_TYPE_NAME = "$FunctionalSlice";
 export const FUNCTIONAL_RESOURCE_TYPE_PREFIX = "$FunctionalResource:";
+export const FUNCTIONAL_ERASED_TYPE_NAME = "$FunctionalErased";
 
 export const FunctionalHostTypes: Readonly<{
   readonly text: FunctionalTypeSchema;
@@ -19,6 +20,8 @@ export const FunctionalHostTypes: Readonly<{
   readonly array: (element: FunctionalTypeSchema) => FunctionalTypeSchema;
   readonly slice: (element: FunctionalTypeSchema) => FunctionalTypeSchema;
   readonly resource: (name: string) => FunctionalTypeSchema;
+  readonly erased: FunctionalTypeSchema;
+  readonly bitBuffer: FunctionalTypeSchema;
 }> = Object.freeze({
   text: Object.freeze({ kind: "named", name: FUNCTIONAL_TEXT_TYPE_NAME, arguments: [] }),
   bytes: Object.freeze({ kind: "named", name: FUNCTIONAL_BYTES_TYPE_NAME, arguments: [] }),
@@ -49,6 +52,16 @@ export const FunctionalHostTypes: Readonly<{
       arguments: Object.freeze([]),
     });
   },
+  erased: Object.freeze({ kind: "named", name: FUNCTIONAL_ERASED_TYPE_NAME, arguments: [] }),
+  bitBuffer: Object.freeze({
+    kind: "tuple",
+    values: Object.freeze(
+      [
+        Object.freeze({ kind: "named", name: FUNCTIONAL_BYTES_TYPE_NAME, arguments: [] }),
+        Object.freeze({ kind: "integer" }),
+      ] as const,
+    ),
+  }),
 });
 
 export type FunctionalHostScalarType =
@@ -86,6 +99,7 @@ export interface FunctionalHostValueDeclaration {
   readonly kind: "value";
   readonly name: string;
   readonly type: FunctionalHostType;
+  readonly representation?: FunctionalHostType;
   readonly ownership?: "frozen-shareable" | "ownership-transfer";
   readonly wasmLiteral?: FunctionalWasmLiteral;
 }
@@ -101,6 +115,9 @@ export interface FunctionalHostOperationDeclaration {
   readonly execution?: "synchronous" | "suspending";
   readonly parameter: FunctionalHostType;
   readonly result: FunctionalHostType;
+  readonly typeParameters?: readonly string[];
+  readonly parameterRepresentation?: FunctionalHostType;
+  readonly resultRepresentation?: FunctionalHostType;
   readonly parameterOwnership?: "bounded-borrow" | "ownership-transfer";
   readonly resultOwnership?: "frozen-shareable" | "ownership-transfer" | "unique";
   readonly wasmIntrinsic?: FunctionalWasmIntrinsic;
@@ -180,10 +197,26 @@ export function normalizeFunctionalHostCapabilities(
       }
       fieldNames.add(field.name);
       if (field.kind === "value") {
+        const typeParameters = new Set<string>();
         requireHostType(
           field.type,
           `capability ${JSON.stringify(declaration.name)} value ${JSON.stringify(field.name)}`,
+          typeParameters,
         );
+        if (field.representation !== undefined) {
+          requireHostType(
+            field.representation,
+            `capability ${JSON.stringify(declaration.name)} value ${
+              JSON.stringify(field.name)
+            } representation`,
+            typeParameters,
+          );
+          requireCompatibleRepresentation(
+            field.type,
+            field.representation,
+            `capability ${JSON.stringify(declaration.name)} value ${JSON.stringify(field.name)}`,
+          );
+        }
         if (
           field.ownership !== undefined && field.ownership !== "frozen-shareable" &&
           field.ownership !== "ownership-transfer"
@@ -213,6 +246,9 @@ export function normalizeFunctionalHostCapabilities(
         return Object.freeze({
           ...field,
           type: Object.freeze({ ...field.type }),
+          ...(field.representation === undefined
+            ? {}
+            : { representation: Object.freeze({ ...field.representation }) }),
           ...(wasmLiteral === undefined ? {} : { wasmLiteral }),
         });
       }
@@ -258,6 +294,10 @@ export function normalizeFunctionalHostCapabilities(
         }
         requireWasmIntrinsicSignature(field, declaration.name);
       }
+      const typeParameters = normalizeTypeParameters(
+        field.typeParameters,
+        `${declaration.name}.${field.name}`,
+      );
       if (
         field.parameterOwnership !== undefined &&
         field.parameterOwnership !== "bounded-borrow" &&
@@ -283,17 +323,60 @@ export function normalizeFunctionalHostCapabilities(
         requireHostType(
           field.parameter,
           `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} parameter`,
+          typeParameters,
         );
       }
       requireHostType(
         field.result,
         `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} result`,
+        typeParameters,
       );
+      if (field.parameterRepresentation !== undefined) {
+        requireHostType(
+          field.parameterRepresentation,
+          `operation ${
+            JSON.stringify(`${declaration.name}.${field.name}`)
+          } parameter representation`,
+          typeParameters,
+        );
+        requireCompatibleRepresentation(
+          field.parameter,
+          field.parameterRepresentation,
+          `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} parameter`,
+        );
+      }
+      if (field.resultRepresentation !== undefined) {
+        requireHostType(
+          field.resultRepresentation,
+          `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} result representation`,
+          typeParameters,
+        );
+        requireCompatibleRepresentation(
+          field.result,
+          field.resultRepresentation,
+          `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} result`,
+        );
+      }
+      if (typeParameters.size !== 0) {
+        throw new Error(
+          `functional host operation ${
+            JSON.stringify(`${declaration.name}.${field.name}`)
+          } remains polymorphic over ${
+            JSON.stringify([...typeParameters])
+          }; specialize it before module construction`,
+        );
+      }
       return Object.freeze({
         ...field,
         execution: field.execution ?? "synchronous",
         parameter: Object.freeze({ ...field.parameter }),
         result: Object.freeze({ ...field.result }),
+        ...(field.parameterRepresentation === undefined
+          ? {}
+          : { parameterRepresentation: Object.freeze({ ...field.parameterRepresentation }) }),
+        ...(field.resultRepresentation === undefined
+          ? {}
+          : { resultRepresentation: Object.freeze({ ...field.resultRepresentation }) }),
       });
     });
     return Object.freeze({ name: declaration.name, fields: Object.freeze(fields) });
@@ -440,6 +523,17 @@ export function functionalHostFieldType(
   };
 }
 
+export function functionalHostFieldRepresentationType(
+  field: FunctionalHostFieldDeclaration,
+): FunctionalTypeSchema {
+  if (field.kind === "value") return field.representation ?? field.type;
+  return {
+    kind: "function",
+    parameter: field.parameterRepresentation ?? field.parameter,
+    result: field.resultRepresentation ?? field.result,
+  };
+}
+
 function requireName(name: string, location: string): void {
   if (typeof name !== "string" || name.length === 0) {
     throw new Error(
@@ -448,25 +542,128 @@ function requireName(name: string, location: string): void {
   }
 }
 
-function requireHostType(type: FunctionalHostType, location: string, depth = 0): void {
+function requireHostType(
+  type: FunctionalHostType,
+  location: string,
+  typeParameters: ReadonlySet<string>,
+  depth = 0,
+): void {
   if (depth > 64) throw new RangeError(`functional host ${location} exceeds type depth 64`);
+  if (type === null || typeof type !== "object" || typeof type.kind !== "string") {
+    throw new TypeError(
+      `functional host ${location} must be a type object; received ${JSON.stringify(type)}`,
+    );
+  }
   if (
     type?.kind === "integer" || type?.kind === "signed-integer-64" ||
     type?.kind === "float-32" || type?.kind === "float-64" ||
     type?.kind === "boolean" || type?.kind === "unit"
   ) return;
   if (type?.kind === "tuple") {
-    requireHostType(type.values[0], location, depth + 1);
-    requireHostType(type.values[1], location, depth + 1);
+    if (!Array.isArray(type.values) || type.values.length !== 2) {
+      throw new TypeError(
+        `functional host ${location} tuple must contain exactly two values; received ${
+          JSON.stringify(type.values)
+        }`,
+      );
+    }
+    requireHostType(type.values[0], location, typeParameters, depth + 1);
+    requireHostType(type.values[1], location, typeParameters, depth + 1);
     return;
   }
   if (type?.kind === "named") {
-    for (const argument of type.arguments) requireHostType(argument, location, depth + 1);
+    requireName(type.name, `${location} named type`);
+    if (!Array.isArray(type.arguments)) {
+      throw new TypeError(
+        `functional host ${location} named type arguments must be an array; received ${
+          JSON.stringify(type.arguments)
+        }`,
+      );
+    }
+    for (const argument of type.arguments) {
+      requireHostType(argument, location, typeParameters, depth + 1);
+    }
     return;
+  }
+  if (type?.kind === "parameter") {
+    requireName(type.name, `${location} type parameter`);
+    if (typeParameters.has(type.name)) return;
   }
   throw new Error(
     `functional host ${location} must be a concrete first-order type; received ${
       JSON.stringify(type)
     }`,
   );
+}
+
+function normalizeTypeParameters(
+  parameters: readonly string[] | undefined,
+  operation: string,
+): ReadonlySet<string> {
+  if (parameters === undefined) return new Set();
+  if (!Array.isArray(parameters)) {
+    throw new TypeError(
+      `functional host operation ${JSON.stringify(operation)} typeParameters must be an array`,
+    );
+  }
+  const names = new Set<string>();
+  for (const [index, parameter] of parameters.entries()) {
+    requireName(parameter, `operation ${JSON.stringify(operation)} type parameter ${index}`);
+    if (names.has(parameter)) {
+      throw new Error(
+        `functional host operation ${JSON.stringify(operation)} repeats type parameter ${
+          JSON.stringify(parameter)
+        }`,
+      );
+    }
+    names.add(parameter);
+  }
+  return names;
+}
+
+function requireCompatibleRepresentation(
+  semantic: FunctionalHostType,
+  representation: FunctionalHostType,
+  location: string,
+): void {
+  if (sameHostType(semantic, representation)) return;
+  if (
+    representation.kind === "named" && representation.name === FUNCTIONAL_ERASED_TYPE_NAME &&
+    representation.arguments.length === 0
+  ) return;
+  if (
+    semantic.kind === "named" && representation.kind === "named" &&
+    representation.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX) &&
+    representation.arguments.length === 0
+  ) return;
+  throw new Error(
+    `functional host ${location} representation ${
+      JSON.stringify(representation)
+    } is not ABI-compatible with semantic type ${JSON.stringify(semantic)}`,
+  );
+}
+
+function sameHostType(left: FunctionalHostType, right: FunctionalHostType): boolean {
+  if (left.kind !== right.kind) return false;
+  switch (left.kind) {
+    case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+    case "boolean":
+    case "unit":
+      return true;
+    case "parameter":
+      return right.kind === "parameter" && left.name === right.name;
+    case "tuple":
+      return right.kind === "tuple" && sameHostType(left.values[0], right.values[0]) &&
+        sameHostType(left.values[1], right.values[1]);
+    case "named":
+      return right.kind === "named" && left.name === right.name &&
+        left.arguments.length === right.arguments.length &&
+        left.arguments.every((argument, index) => sameHostType(argument, right.arguments[index]!));
+    case "function":
+    case "forall":
+      return false;
+  }
 }

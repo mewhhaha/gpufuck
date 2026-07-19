@@ -492,6 +492,7 @@ function functionalValueFromWasm(
       case "array":
       case "slice":
       case "resource":
+      case "erased":
         throw new TypeError(`functional evaluator cannot expose ${value.kind} boundary values`);
     }
   };

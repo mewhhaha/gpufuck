@@ -137,7 +137,7 @@ export type LiteralKind =
   | "let"
   | "use"
   | "<-"
-  | "|>"
+  | "assert"
   | "||"
   | "&&"
   | "=="
@@ -150,6 +150,7 @@ export type LiteralKind =
   | "<="
   | ">"
   | ">="
+  | "|>"
   | "+."
   | "-."
   | "+"
@@ -274,7 +275,6 @@ export type RuleName =
   | "source_type"
   | "function_type"
   | "tuple_type"
-  | "tuple_type_tail"
   | "named_type"
   | "type_arguments"
   | "type_list"
@@ -285,8 +285,7 @@ export type RuleName =
   | "let_binding"
   | "use_binding"
   | "expr"
-  | "pipeline"
-  | "pipeline_tail"
+  | "assert_expression"
   | "logical_or"
   | "logical_or_tail"
   | "logical_and"
@@ -307,6 +306,8 @@ export type RuleName =
   | "le"
   | "gt"
   | "ge"
+  | "pipeline"
+  | "pipeline_tail"
   | "additive"
   | "additive_tail"
   | "additive_op"
@@ -350,7 +351,6 @@ export type RuleName =
   | "field_access"
   | "lambda_expression"
   | "tuple_expression"
-  | "tuple_expression_tail"
   | "list_expression"
   | "list_expression_entries"
   | "list_expression_entry_tail"
@@ -364,6 +364,8 @@ export type RuleName =
   | "bit_array_segment_options"
   | "bit_array_segment_option_tail"
   | "bit_array_segment_option"
+  | "named_bit_array_segment_option"
+  | "bit_array_segment_size"
   | "group_expression"
   | "unit_expression"
   | "string_expression"
@@ -394,7 +396,6 @@ export type RuleName =
   | "spread_list_pattern"
   | "value_list_pattern"
   | "tuple_pattern"
-  | "tuple_pattern_tail"
   | "unit_pattern"
   | "integer_pattern"
   | "float_pattern"
@@ -697,15 +698,7 @@ export interface FunctionTypeCursor extends RuleCursorBase<"function_type"> {
 }
 
 export interface TupleTypeCursor extends RuleCursorBase<"tuple_type"> {
-  field(name: "first"): SourceTypeCursor;
-  field(name: "rest"): ReadonlyArray<TupleTypeTailCursor>;
-  field(name: "second"): SourceTypeCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface TupleTypeTailCursor extends RuleCursorBase<"tuple_type_tail"> {
-  field(name: "value"): SourceTypeCursor;
+  field(name: "values"): TypeListCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -769,15 +762,8 @@ export interface UseBindingCursor extends RuleCursorBase<"use_binding"> {
 export interface ExprCursor extends RuleCursorBase<"expr"> {
 }
 
-export interface PipelineCursor extends RuleCursorBase<"pipeline"> {
-  field(name: "left"): LogicalOrCursor;
-  field(name: "rest"): ReadonlyArray<PipelineTailCursor>;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface PipelineTailCursor extends RuleCursorBase<"pipeline_tail"> {
-  field(name: "right"): LogicalOrCursor;
+export interface AssertExpressionCursor extends RuleCursorBase<"assert_expression"> {
+  field(name: "value"): ExprCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -832,7 +818,7 @@ export interface NeCursor extends RuleCursorBase<"ne"> {
 }
 
 export interface ComparisonCursor extends RuleCursorBase<"comparison"> {
-  field(name: "left"): AdditiveCursor;
+  field(name: "left"): PipelineCursor;
   field(name: "rest"): ReadonlyArray<ComparisonTailCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -840,7 +826,7 @@ export interface ComparisonCursor extends RuleCursorBase<"comparison"> {
 
 export interface ComparisonTailCursor extends RuleCursorBase<"comparison_tail"> {
   field(name: "op"): ComparisonOpCursor;
-  field(name: "right"): AdditiveCursor;
+  field(name: "right"): PipelineCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -870,6 +856,19 @@ export interface GtCursor extends RuleCursorBase<"gt"> {
 }
 
 export interface GeCursor extends RuleCursorBase<"ge"> {
+}
+
+export interface PipelineCursor extends RuleCursorBase<"pipeline"> {
+  field(name: "left"): AdditiveCursor;
+  field(name: "rest"): ReadonlyArray<PipelineTailCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface PipelineTailCursor extends RuleCursorBase<"pipeline_tail"> {
+  field(name: "right"): AdditiveCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface AdditiveCursor extends RuleCursorBase<"additive"> {
@@ -1022,7 +1021,7 @@ export interface PanicExpressionCursor extends RuleCursorBase<"panic_expression"
 }
 
 export interface PanicMessageCursor extends RuleCursorBase<"panic_message"> {
-  field(name: "value"): TokenCursor<"named", "STRING">;
+  field(name: "value"): CallCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1097,15 +1096,7 @@ export interface LambdaExpressionCursor extends RuleCursorBase<"lambda_expressio
 }
 
 export interface TupleExpressionCursor extends RuleCursorBase<"tuple_expression"> {
-  field(name: "first"): ExprCursor;
-  field(name: "rest"): ReadonlyArray<TupleExpressionTailCursor>;
-  field(name: "second"): ExprCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface TupleExpressionTailCursor extends RuleCursorBase<"tuple_expression_tail"> {
-  field(name: "value"): ExprCursor;
+  field(name: "values"): ExpressionListCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1184,8 +1175,18 @@ export interface BitArraySegmentOptionTailCursor extends RuleCursorBase<"bit_arr
 }
 
 export interface BitArraySegmentOptionCursor extends RuleCursorBase<"bit_array_segment_option"> {
+}
+
+export interface NamedBitArraySegmentOptionCursor extends RuleCursorBase<"named_bit_array_segment_option"> {
   field(name: "arguments"): CallArgumentsCursor | null;
   field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface BitArraySegmentSizeCursor extends RuleCursorBase<"bit_array_segment_size"> {
+  field(name: "sign"): TokenCursor<"literal", "-"> | null;
+  field(name: "value"): TokenCursor<"named", "INTEGER">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1342,15 +1343,7 @@ export interface ValueListPatternCursor extends RuleCursorBase<"value_list_patte
 }
 
 export interface TuplePatternCursor extends RuleCursorBase<"tuple_pattern"> {
-  field(name: "first"): PatternCursor;
-  field(name: "rest"): ReadonlyArray<TuplePatternTailCursor>;
-  field(name: "second"): PatternCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface TuplePatternTailCursor extends RuleCursorBase<"tuple_pattern_tail"> {
-  field(name: "value"): PatternCursor;
+  field(name: "values"): PatternListCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1489,7 +1482,6 @@ export type AnyRuleCursor =
   | SourceTypeCursor
   | FunctionTypeCursor
   | TupleTypeCursor
-  | TupleTypeTailCursor
   | NamedTypeCursor
   | TypeArgumentsCursor
   | TypeListCursor
@@ -1500,8 +1492,7 @@ export type AnyRuleCursor =
   | LetBindingCursor
   | UseBindingCursor
   | ExprCursor
-  | PipelineCursor
-  | PipelineTailCursor
+  | AssertExpressionCursor
   | LogicalOrCursor
   | LogicalOrTailCursor
   | LogicalAndCursor
@@ -1522,6 +1513,8 @@ export type AnyRuleCursor =
   | LeCursor
   | GtCursor
   | GeCursor
+  | PipelineCursor
+  | PipelineTailCursor
   | AdditiveCursor
   | AdditiveTailCursor
   | AdditiveOpCursor
@@ -1565,7 +1558,6 @@ export type AnyRuleCursor =
   | FieldAccessCursor
   | LambdaExpressionCursor
   | TupleExpressionCursor
-  | TupleExpressionTailCursor
   | ListExpressionCursor
   | ListExpressionEntriesCursor
   | ListExpressionEntryTailCursor
@@ -1579,6 +1571,8 @@ export type AnyRuleCursor =
   | BitArraySegmentOptionsCursor
   | BitArraySegmentOptionTailCursor
   | BitArraySegmentOptionCursor
+  | NamedBitArraySegmentOptionCursor
+  | BitArraySegmentSizeCursor
   | GroupExpressionCursor
   | UnitExpressionCursor
   | StringExpressionCursor
@@ -1609,7 +1603,6 @@ export type AnyRuleCursor =
   | SpreadListPatternCursor
   | ValueListPatternCursor
   | TuplePatternCursor
-  | TuplePatternTailCursor
   | UnitPatternCursor
   | IntegerPatternCursor
   | FloatPatternCursor

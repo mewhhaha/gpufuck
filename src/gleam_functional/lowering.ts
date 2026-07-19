@@ -85,12 +85,18 @@ const GLEAM_BIT_ARRAY_VALUE = "$GleamBitArrayValue";
 const GLEAM_RESULT_TYPE = "$GleamResult";
 const GLEAM_RESULT_OK = "Ok";
 const GLEAM_RESULT_ERROR = "Error";
+const GLEAM_TUPLE_ZERO_TYPE = "$GleamTupleZero";
+const GLEAM_TUPLE_ZERO_VALUE = "$GleamTupleZeroValue";
+const GLEAM_TUPLE_ONE_TYPE = "$GleamTupleOne";
+const GLEAM_TUPLE_ONE_VALUE = "$GleamTupleOneValue";
 export const GLEAM_FUNCTIONAL_PRELUDE_MODULE = "$gleam/prelude";
 const TUPLE_OWNER = "$TupleType";
 const GLEAM_TEXT_INTRINSIC_CAPABILITY = "$GleamTextIntrinsics";
 const GLEAM_BIT_PATTERN_CAPABILITY = "$GleamBitPatternIntrinsics";
+const GLEAM_BIT_ARRAY_INTRINSIC_CAPABILITY = "$GleamBitArrayIntrinsics";
 const GLEAM_TEXT_BYTE_LENGTH = "$gleam_text_byte_length";
 const GLEAM_TEXT_BYTE_SLICE = "$gleam_text_byte_slice";
+const GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT = "$gleam_bit_array_from_utf8_codepoint";
 
 const binaryOperators: Readonly<Record<string, FunctionalBinaryOperator>> = {
   "==": FunctionalBinaryOperator.StructuralEqual,
@@ -213,6 +219,8 @@ export function gleamFunctionalPreludeArtifact(): FunctionalModuleArtifact {
       gleamListDeclaration(0),
       gleamBitArrayDeclaration(0),
       gleamResultDeclaration(0),
+      gleamTupleZeroDeclaration(0),
+      gleamTupleOneDeclaration(0),
     ],
     imports: [],
     exports: [],
@@ -220,6 +228,8 @@ export function gleamFunctionalPreludeArtifact(): FunctionalModuleArtifact {
       { name: "List", declaration: GLEAM_LIST_TYPE },
       { name: "BitArray", declaration: GLEAM_BIT_ARRAY_TYPE },
       { name: "Result", declaration: GLEAM_RESULT_TYPE },
+      { name: "TupleZero", declaration: GLEAM_TUPLE_ZERO_TYPE },
+      { name: "TupleOne", declaration: GLEAM_TUPLE_ONE_TYPE },
     ],
     constructorExports: [
       { name: "ListNil", constructor: GLEAM_LIST_NIL },
@@ -227,6 +237,8 @@ export function gleamFunctionalPreludeArtifact(): FunctionalModuleArtifact {
       { name: "BitArray", constructor: GLEAM_BIT_ARRAY_VALUE },
       { name: "Ok", constructor: GLEAM_RESULT_OK },
       { name: "Error", constructor: GLEAM_RESULT_ERROR },
+      { name: "TupleZero", constructor: GLEAM_TUPLE_ZERO_VALUE },
+      { name: "TupleOne", constructor: GLEAM_TUPLE_ONE_VALUE },
     ],
     sourceByteLength: 0,
     options: { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
@@ -364,6 +376,18 @@ class GleamFunctionalLowering {
       span,
     });
     this.#constructorsByOwner.set(GLEAM_RESULT_TYPE, [GLEAM_RESULT_OK, GLEAM_RESULT_ERROR]);
+    this.#constructors.set(GLEAM_TUPLE_ZERO_VALUE, {
+      owner: GLEAM_TUPLE_ZERO_TYPE,
+      fields: [],
+      span,
+    });
+    this.#constructorsByOwner.set(GLEAM_TUPLE_ZERO_TYPE, [GLEAM_TUPLE_ZERO_VALUE]);
+    this.#constructors.set(GLEAM_TUPLE_ONE_VALUE, {
+      owner: GLEAM_TUPLE_ONE_TYPE,
+      fields: [null],
+      span,
+    });
+    this.#constructorsByOwner.set(GLEAM_TUPLE_ONE_TYPE, [GLEAM_TUPLE_ONE_VALUE]);
   }
 
   private indexDeclarations(): void {
@@ -461,6 +485,16 @@ class GleamFunctionalLowering {
         fromModule: GLEAM_FUNCTIONAL_PRELUDE_MODULE,
         exportName: "Result",
       },
+      {
+        name: GLEAM_TUPLE_ZERO_TYPE,
+        fromModule: GLEAM_FUNCTIONAL_PRELUDE_MODULE,
+        exportName: "TupleZero",
+      },
+      {
+        name: GLEAM_TUPLE_ONE_TYPE,
+        fromModule: GLEAM_FUNCTIONAL_PRELUDE_MODULE,
+        exportName: "TupleOne",
+      },
     ];
     const constructors: NonNullable<FunctionalModuleArtifact["constructorImports"]>[number][] = [
       {
@@ -483,6 +517,16 @@ class GleamFunctionalLowering {
         name: GLEAM_RESULT_ERROR,
         fromModule: GLEAM_FUNCTIONAL_PRELUDE_MODULE,
         exportName: "Error",
+      },
+      {
+        name: GLEAM_TUPLE_ZERO_VALUE,
+        fromModule: GLEAM_FUNCTIONAL_PRELUDE_MODULE,
+        exportName: "TupleZero",
+      },
+      {
+        name: GLEAM_TUPLE_ONE_VALUE,
+        fromModule: GLEAM_FUNCTIONAL_PRELUDE_MODULE,
+        exportName: "TupleOne",
       },
     ];
     const localNames = new Set(this.#declarations.keys());
@@ -713,7 +757,9 @@ class GleamFunctionalLowering {
     if (declaration.result !== null) this.#typeResolver.lower(declaration.result);
     return {
       name: declaration.name,
-      parameters: declaration.parameters.map((parameter) => parameter.name),
+      parameters: declaration.parameters.length === 0
+        ? ["$gleam_unit_parameter"]
+        : declaration.parameters.map((parameter) => parameter.name),
       annotation: hasCompleteAnnotation
         ? declaredFunctionType(declaration, this.#typeResolver)
         : null,
@@ -745,12 +791,14 @@ class GleamFunctionalLowering {
     );
     const result = this.#typeResolver.lower(declaration.result);
     if (
-      external.target !== "javascript" || declaration.parameters.length === 0 ||
-      parameters.some(schemaContainsParameter) || schemaContainsParameter(result)
+      external.target !== "javascript" || parameters.some(schemaContainsParameter) ||
+      schemaContainsParameter(result)
     ) {
       return [{
         name: declaration.name,
-        parameters: declaration.parameters.map((parameter) => parameter.name),
+        parameters: declaration.parameters.length === 0
+          ? ["$gleam_unit_parameter"]
+          : declaration.parameters.map((parameter) => parameter.name),
         annotation: declaredFunctionType(declaration, this.#typeResolver),
         body: {
           kind: "runtime-fault",
@@ -760,7 +808,9 @@ class GleamFunctionalLowering {
         span: declaration.span,
       }];
     }
-    const hostParameter = nestedTupleSchema(parameters);
+    const hostParameter = parameters.length === 0
+      ? { kind: "unit" as const }
+      : nestedTupleSchema(parameters);
     const hostDefinition = `$gleam_external:${declaration.name}`;
     const capability = `GleamExternal:${external.module}`;
     const fields = this.#externalCapabilities.get(capability) ?? new Map();
@@ -788,9 +838,13 @@ class GleamFunctionalLowering {
       capability,
       field: operation.name,
     });
-    const parameterValues = declaration.parameters.map((parameter) =>
-      name(parameter.name, parameter.span)
-    );
+    const parameterValues = declaration.parameters.length === 0
+      ? [{
+        kind: "name" as const,
+        name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+        span: declaration.span,
+      }]
+      : declaration.parameters.map((parameter) => name(parameter.name, parameter.span));
     return [{
       name: hostDefinition,
       parameters: [],
@@ -803,11 +857,17 @@ class GleamFunctionalLowering {
       span: declaration.span,
     }, {
       name: declaration.name,
-      parameters: declaration.parameters.map((parameter) => parameter.name),
+      parameters: declaration.parameters.length === 0
+        ? ["$gleam_unit_parameter"]
+        : declaration.parameters.map((parameter) => parameter.name),
       annotation: declaredFunctionType(declaration, this.#typeResolver),
       body: applyMany(
         name(hostDefinition, declaration.span),
-        [nestedTupleExpression(parameterValues, declaration.span)],
+        [
+          parameters.length === 0
+            ? parameterValues[0]!
+            : nestedTupleExpression(parameterValues, declaration.span),
+        ],
         declaration.span,
       ),
       span: declaration.span,
@@ -845,22 +905,26 @@ class GleamFunctionalLowering {
       case "string":
         return { kind: "text", value: expression.value, span: expression.span };
       case "bit-array":
-        return bitArrayExpression(expression.bytes, expression.span);
+        return bitArrayExpression(expression.bytes, expression.bitLength, expression.span);
       case "bit-array-build":
-        throw new GleamFunctionalLoweringError(
-          expression.span,
-          "Dynamic Gleam bit-array construction has not been lowered.",
-        );
+        return this.lowerBitArrayBuild(expression);
       case "panic":
-        if (expression.message !== null && expression.message.kind !== "string") {
-          throw new GleamFunctionalLoweringError(
-            expression.message.span,
-            "A Gleam panic message must be a static string for the portable functional runtime.",
-          );
+        if (expression.message === null || expression.message.kind === "string") {
+          return {
+            kind: "runtime-fault",
+            message: expression.message?.value ?? "Gleam panic",
+            span: expression.span,
+          };
         }
         return {
-          kind: "runtime-fault",
-          message: expression.message?.value ?? "Gleam panic",
+          kind: "let",
+          name: this.discardName(),
+          value: this.lowerExpression(expression.message),
+          body: {
+            kind: "runtime-fault",
+            message: "Gleam panic",
+            span: expression.span,
+          },
           span: expression.span,
         };
       case "unit":
@@ -912,6 +976,16 @@ class GleamFunctionalLowering {
         };
       }
       case "tuple": {
+        if (expression.values.length === 0) {
+          return name(GLEAM_TUPLE_ZERO_VALUE, expression.span);
+        }
+        if (expression.values.length === 1) {
+          return applyMany(
+            name(GLEAM_TUPLE_ONE_VALUE, expression.span),
+            [this.lowerExpression(expression.values[0]!)],
+            expression.span,
+          );
+        }
         let result = this.lowerExpression(expression.values.at(-1)!);
         for (let index = expression.values.length - 2; index >= 0; index--) {
           result = applyMany(
@@ -941,6 +1015,14 @@ class GleamFunctionalLowering {
       }
       case "lambda": {
         let result = this.lowerExpression(expression.body);
+        if (expression.parameters.length === 0) {
+          return {
+            kind: "lambda",
+            parameter: `$gleam_unit_${this.#discardIndex++}`,
+            body: result,
+            span: expression.span,
+          };
+        }
         for (let index = expression.parameters.length - 1; index >= 0; index--) {
           result = {
             kind: "lambda",
@@ -956,6 +1038,13 @@ class GleamFunctionalLowering {
           return this.lowerRecordUpdate(expression);
         }
         const arguments_ = this.orderedCallArguments(expression);
+        if (arguments_.length === 0) {
+          return applyMany(
+            this.lowerExpression(expression.callee),
+            [{ kind: "name", name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, span: expression.span }],
+            expression.span,
+          );
+        }
         const captures = arguments_.filter((argument) => argument.kind === "capture");
         if (captures.length === 0) {
           return applyMany(
@@ -1320,13 +1409,33 @@ class GleamFunctionalLowering {
         );
       }
     }
-    if (expression.subjects.length !== 1 || expression.arms.some((arm) => arm.guard !== null)) {
+    const hasGuards = expression.arms.some((arm) => arm.guard !== null);
+    if (expression.subjects.length > 1) {
+      return this.lowerCase({
+        kind: "case",
+        subjects: [{ kind: "tuple", values: expression.subjects, span: expression.span }],
+        arms: expression.arms.map((arm) => ({
+          ...arm,
+          patterns: [{ kind: "tuple", values: arm.patterns, span: arm.span }],
+        })),
+        span: expression.span,
+      });
+    }
+    if (expression.subjects.length !== 1) {
       return this.lowerSequentialCase(expression);
     }
     const subject = this.lowerExpression(expression.subjects[0]!);
     const patterns = expression.arms.map((arm) => arm.patterns[0]!);
-    if (patterns.every((pattern) => isScalarPattern(pattern))) {
+    if (!hasGuards && patterns.every((pattern) => isScalarPattern(pattern))) {
       return this.lowerScalarCase(subject, expression.arms, expression.span);
+    }
+    if (hasGuards) {
+      const guardedCase = this.lowerConstructorDecisionCase(
+        subject,
+        expression.arms,
+        expression.span,
+      );
+      return guardedCase ?? this.lowerSequentialCase(expression);
     }
     const hasNestedConstructorPattern = patterns.some((pattern) => {
       if (pattern.kind === "variable" || pattern.kind === "discard") return false;
@@ -1338,12 +1447,109 @@ class GleamFunctionalLowering {
         argument.kind !== "variable" && argument.kind !== "discard"
       );
     });
-    if (hasNestedConstructorPattern) return this.lowerSequentialCase(expression);
+    if (hasNestedConstructorPattern) {
+      const nestedCase = this.lowerConstructorDecisionCase(
+        subject,
+        expression.arms,
+        expression.span,
+      );
+      if (nestedCase !== null) return nestedCase;
+      return this.lowerSequentialCase(expression);
+    }
     return {
       kind: "case",
       value: subject,
       arms: this.lowerConstructorArms(expression.arms),
       span: expression.span,
+    };
+  }
+
+  private lowerConstructorDecisionCase(
+    subject: FunctionalSurfaceExpression,
+    arms: Extract<GleamFunctionalExpression, { readonly kind: "case" }>["arms"],
+    span: FunctionalSpan,
+  ): FunctionalSurfaceExpression | null {
+    const patterns = arms.map((arm) => arm.patterns[0]!);
+    const normalizedPatterns = patterns.map(unaliasedPattern);
+    const refutable = normalizedPatterns.filter((pattern) => !isIrrefutablePattern(pattern));
+    if (refutable.length === 0) return null;
+    if (
+      refutable.some((pattern) =>
+        pattern.kind !== "constructor" && pattern.kind !== "list-cons" &&
+        pattern.kind !== "list-nil" && pattern.kind !== "tuple" && pattern.kind !== "unit"
+      )
+    ) return null;
+    const normalizedConstructors = refutable.map((pattern) =>
+      this.normalizeConstructorPattern(pattern)
+    );
+    const owner = this.#constructors.get(normalizedConstructors[0]!.constructor)?.owner;
+    if (
+      owner === undefined ||
+      normalizedConstructors.some((pattern) =>
+        this.#constructors.get(pattern.constructor)?.owner !== owner
+      )
+    ) return null;
+    const constructors = this.#constructorsByOwner.get(owner);
+    if (constructors === undefined) return null;
+
+    const subjectName = `$gleam_case_${this.#discardIndex++}`;
+    const loweredArms = constructors.map((constructor) => {
+      const shape = this.#constructors.get(constructor)!;
+      const binders = shape.fields.map(() => this.discardName());
+      let body: FunctionalSurfaceExpression = {
+        kind: "runtime-fault",
+        message: "unreachable exhaustive Gleam constructor case",
+        span,
+      };
+      for (let index = arms.length - 1; index >= 0; index--) {
+        const sourcePattern = patterns[index]!;
+        const pattern = normalizedPatterns[index]!;
+        let nestedPatterns: readonly GleamFunctionalPattern[];
+        if (isIrrefutablePattern(pattern)) {
+          nestedPatterns = shape.fields.map(() => ({ kind: "discard", span: pattern.span }));
+        } else {
+          const normalized = this.normalizeConstructorPattern(pattern);
+          if (normalized.constructor !== constructor) continue;
+          nestedPatterns = normalized.arguments;
+        }
+        const arm = arms[index]!;
+        let success = this.lowerExpression(arm.body);
+        if (arm.guard !== null) {
+          success = {
+            kind: "if",
+            condition: this.lowerExpression(arm.guard),
+            consequent: success,
+            alternate: body,
+            span: arm.span,
+          };
+        }
+        if (sourcePattern.kind === "variable") {
+          success = {
+            kind: "let",
+            name: sourcePattern.name,
+            value: name(subjectName, sourcePattern.span),
+            body: success,
+            span: sourcePattern.span,
+          };
+        } else if (sourcePattern.kind === "alias") {
+          success = {
+            kind: "let",
+            name: sourcePattern.name,
+            value: name(subjectName, sourcePattern.span),
+            body: success,
+            span: sourcePattern.span,
+          };
+        }
+        body = this.lowerPatternSequence(binders, nestedPatterns, success, body);
+      }
+      return { constructor, binders, body, span };
+    });
+    return {
+      kind: "let",
+      name: subjectName,
+      value: subject,
+      body: { kind: "case", value: name(subjectName, span), arms: loweredArms, span },
+      span,
     };
   }
 
@@ -1483,6 +1689,11 @@ class GleamFunctionalLowering {
   ): FunctionalSurfaceExpression {
     let result = success;
     for (let index = patterns.length - 1; index >= 0; index--) {
+      if (!isIrrefutablePattern(patterns[index]!)) continue;
+      result = this.lowerPattern(subjects[index]!, patterns[index]!, result, failure);
+    }
+    for (let index = patterns.length - 1; index >= 0; index--) {
+      if (isIrrefutablePattern(patterns[index]!)) continue;
       result = this.lowerPattern(subjects[index]!, patterns[index]!, result, failure);
     }
     return result;
@@ -1500,13 +1711,14 @@ class GleamFunctionalLowering {
     }
     if (pattern.kind === "discard") return success;
     if (pattern.kind === "alias") {
-      return {
+      const aliasedSuccess: FunctionalSurfaceExpression = {
         kind: "let",
         name: pattern.name,
         value: subject,
-        body: this.lowerPattern(subjectName, pattern.pattern, success, failure),
+        body: success,
         span: pattern.span,
       };
+      return this.lowerPattern(subjectName, pattern.pattern, aliasedSuccess, failure);
     }
     if (pattern.kind === "string-prefix") {
       return this.lowerStringPrefixPattern(subjectName, pattern, success, failure);
@@ -1735,6 +1947,62 @@ class GleamFunctionalLowering {
       }],
       span: pattern.span,
     };
+  }
+
+  private lowerBitArrayBuild(
+    expression: Extract<GleamFunctionalExpression, { readonly kind: "bit-array-build" }>,
+  ): FunctionalSurfaceExpression {
+    const segment = expression.segments[0];
+    if (
+      expression.segments.length !== 1 || segment === undefined ||
+      segment.options.length !== 1 || segment.options[0]?.name !== "utf8_codepoint" ||
+      segment.options[0].arguments.length !== 0
+    ) {
+      throw new GleamFunctionalLoweringError(
+        expression.span,
+        "A dynamic Gleam bit array currently requires one utf8_codepoint segment.",
+      );
+    }
+
+    const parameter = wholeNumberF64Type();
+    const result = { kind: "named" as const, name: GLEAM_BIT_ARRAY_TYPE, arguments: [] };
+    if (!this.#externalCapabilities.has(GLEAM_BIT_ARRAY_INTRINSIC_CAPABILITY)) {
+      this.#externalCapabilities.set(
+        GLEAM_BIT_ARRAY_INTRINSIC_CAPABILITY,
+        new Map([["fromUtf8Codepoint", {
+          kind: "operation",
+          name: "fromUtf8Codepoint",
+          purity: "pure",
+          parameter,
+          result,
+        }]]),
+      );
+      this.#hostDefinitions.push({
+        definition: GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT,
+        capability: GLEAM_BIT_ARRAY_INTRINSIC_CAPABILITY,
+        field: "fromUtf8Codepoint",
+      });
+      const definitionSpan = {
+        startByte: this.module.span.endByte,
+        endByte: this.module.span.endByte,
+      };
+      this.#intrinsicDefinitions.push({
+        name: GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT,
+        parameters: [],
+        annotation: { kind: "function", parameter, result },
+        body: {
+          kind: "runtime-fault",
+          message: "unbound Gleam utf8_codepoint bit-array construction",
+          span: definitionSpan,
+        },
+        span: definitionSpan,
+      });
+    }
+    return applyMany(
+      name(GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT, expression.span),
+      [this.lowerExpression(segment.value)],
+      expression.span,
+    );
   }
 
   private registerTextIntrinsics(): void {
@@ -2000,6 +2268,12 @@ class GleamFunctionalLowering {
       return { constructor: GLEAM_LIST_CONS, arguments: [pattern.head, pattern.tail] };
     }
     if (pattern.kind === "tuple") {
+      if (pattern.values.length === 0) {
+        return { constructor: GLEAM_TUPLE_ZERO_VALUE, arguments: [] };
+      }
+      if (pattern.values.length === 1) {
+        return { constructor: GLEAM_TUPLE_ONE_VALUE, arguments: [pattern.values[0]!] };
+      }
       return {
         constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
         arguments: nestedTuplePatternArguments(pattern),
@@ -2181,6 +2455,16 @@ class GleamTypeResolver {
       case "parameter":
         return substitutions.get(type.name) ?? { kind: "parameter", name: type.name };
       case "tuple": {
+        if (type.values.length === 0) {
+          return { kind: "named", name: GLEAM_TUPLE_ZERO_TYPE, arguments: [] };
+        }
+        if (type.values.length === 1) {
+          return {
+            kind: "named",
+            name: GLEAM_TUPLE_ONE_TYPE,
+            arguments: [this.lower(type.values[0]!, substitutions, aliasStack)],
+          };
+        }
         let result = this.lower(type.values.at(-1)!, substitutions, aliasStack);
         for (let index = type.values.length - 2; index >= 0; index--) {
           result = {
@@ -2192,7 +2476,9 @@ class GleamTypeResolver {
       }
       case "function":
         return curryType(
-          type.parameters.map((parameter) => this.lower(parameter, substitutions, aliasStack)),
+          type.parameters.length === 0
+            ? [{ kind: "unit" }]
+            : type.parameters.map((parameter) => this.lower(parameter, substitutions, aliasStack)),
           this.lower(type.result, substitutions, aliasStack),
         );
       case "named": {
@@ -2314,9 +2600,9 @@ function declaredFunctionType(
   ) {
     return null;
   }
-  const parameters = declaration.parameters.map((parameter) =>
-    typeResolver.lower(parameter.annotation!)
-  );
+  const parameters = declaration.parameters.length === 0
+    ? [{ kind: "unit" as const }]
+    : declaration.parameters.map((parameter) => typeResolver.lower(parameter.annotation!));
   const functionType = curryType(parameters, typeResolver.lower(declaration.result));
   const typeParameters: string[] = [];
   const seen = new Set<string>();
@@ -2463,7 +2749,7 @@ function nestedTuplePatternArguments(
       span: pattern.span,
     };
   }
-  return [pattern.values[0], tail];
+  return [pattern.values[0]!, tail];
 }
 
 function isScalarPattern(pattern: GleamFunctionalPattern): boolean {
@@ -2501,7 +2787,7 @@ function scalarPatternValue(
   if (pattern.kind === "string") {
     return { kind: "text", value: pattern.value, span: pattern.span };
   }
-  return bitArrayExpression(pattern.bytes, pattern.span);
+  return bitArrayExpression(pattern.bytes, pattern.bitLength, pattern.span);
 }
 
 function applyMany(
@@ -2522,13 +2808,14 @@ function name(value: string, span: FunctionalSpan): FunctionalSurfaceExpression 
 
 function bitArrayExpression(
   bytes: Uint8Array,
+  bitLength: number,
   span: FunctionalSpan,
 ): FunctionalSurfaceExpression {
   return applyMany(
     name(GLEAM_BIT_ARRAY_VALUE, span),
     [
       { kind: "bytes", value: bytes, span },
-      { kind: "whole-number-f64", value: bytes.byteLength * 8, span },
+      { kind: "whole-number-f64", value: bitLength, span },
     ],
     span,
   );
@@ -2601,6 +2888,30 @@ function gleamResultDeclaration(sourceByteLength: number): FunctionalSurfaceType
         fields: [{ name: "value", type: { kind: "parameter", name: "error" }, span }],
       },
     ],
+  };
+}
+
+function gleamTupleZeroDeclaration(sourceByteLength: number): FunctionalSurfaceTypeDeclaration {
+  const span = { startByte: sourceByteLength, endByte: sourceByteLength };
+  return {
+    name: GLEAM_TUPLE_ZERO_TYPE,
+    parameters: [],
+    span,
+    constructors: [{ name: GLEAM_TUPLE_ZERO_VALUE, fields: [], span }],
+  };
+}
+
+function gleamTupleOneDeclaration(sourceByteLength: number): FunctionalSurfaceTypeDeclaration {
+  const span = { startByte: sourceByteLength, endByte: sourceByteLength };
+  return {
+    name: GLEAM_TUPLE_ONE_TYPE,
+    parameters: ["value"],
+    span,
+    constructors: [{
+      name: GLEAM_TUPLE_ONE_VALUE,
+      fields: [{ name: "value", type: { kind: "parameter", name: "value" }, span }],
+      span,
+    }],
   };
 }
 
