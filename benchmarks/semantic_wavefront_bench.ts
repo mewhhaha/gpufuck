@@ -2,7 +2,7 @@ import { deepStrictEqual } from "node:assert/strict";
 
 import { requestWebGpuDevice } from "../functional.ts";
 import {
-  GpuSemanticDefinitionWavefrontPrototype,
+  GpuSemanticDefinitionWavefrontScheduler,
   scheduleSemanticDefinitionWavefronts,
   type SemanticDefinitionDependencyGraph,
 } from "../src/semantic/definition_wavefront.ts";
@@ -12,15 +12,15 @@ const expected = scheduleSemanticDefinitionWavefronts(graph);
 const batchGraphs = Array.from({ length: 256 }, () => graph);
 const residentRepetitions = 64;
 const device = await requestWebGpuDevice();
-const prototype = await GpuSemanticDefinitionWavefrontPrototype.create(device);
-const residentPlan = prototype.prepareBatch(batchGraphs);
+const scheduler = await GpuSemanticDefinitionWavefrontScheduler.create(device);
+const residentPlan = await scheduler.prepareBatch(batchGraphs);
 globalThis.addEventListener("unload", () => {
   residentPlan.destroy();
   device.destroy();
 }, { once: true });
 
-deepStrictEqual((await prototype.schedule(graph)).componentWaves, expected.componentWaves);
-for (const schedule of await prototype.scheduleBatch(batchGraphs)) {
+deepStrictEqual((await scheduler.schedule(graph)).componentWaves, expected.componentWaves);
+for (const schedule of await scheduler.scheduleBatch(batchGraphs)) {
   deepStrictEqual(schedule.componentWaves, expected.componentWaves);
 }
 
@@ -28,8 +28,8 @@ Deno.bench("schedule 128 definition components on CPU", () => {
   scheduleSemanticDefinitionWavefronts(graph);
 });
 
-Deno.bench("prototype 128 definition component wavefronts on GPU", async () => {
-  await prototype.schedule(graph);
+Deno.bench("schedule and read back 128 definition components on GPU", async () => {
+  await scheduler.schedule(graph);
 });
 
 Deno.bench("schedule 256 independent graphs on CPU", () => {
@@ -37,7 +37,7 @@ Deno.bench("schedule 256 independent graphs on CPU", () => {
 });
 
 Deno.bench("schedule 256 independent graphs in one GPU dispatch", async () => {
-  await prototype.scheduleBatch(batchGraphs);
+  await scheduler.scheduleBatch(batchGraphs);
 });
 
 Deno.bench("schedule 64 batches of 256 graphs on CPU", () => {

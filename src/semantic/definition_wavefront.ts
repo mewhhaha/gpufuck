@@ -6,6 +6,7 @@ const GPU_UNSCHEDULED_WAVE = 0;
 const WORKGROUP_SIZE = 64;
 const MAXIMUM_GRAPH_COMPONENTS = 256;
 const MAXIMUM_GRAPH_EDGES = 256;
+const MAXIMUM_RESIDENT_REPETITIONS = 256;
 const GRAPH_DESCRIPTOR_WORDS = 2;
 
 export interface SemanticDefinitionComponent {
@@ -22,6 +23,21 @@ export interface SemanticDefinitionDependencyGraph {
 export interface SemanticDefinitionWavefrontSchedule {
   readonly componentWaves: readonly number[];
   readonly wavefronts: readonly (readonly number[])[];
+}
+
+interface PackedSemanticDefinitionGraphs {
+  readonly dependencyCounts: Uint32Array;
+  readonly dependentOffsets: Uint32Array;
+  readonly dependents: Uint32Array;
+  readonly graphDescriptors: Uint32Array;
+  readonly componentOffsets: Uint32Array;
+  readonly componentCount: number;
+  readonly edgeCount: number;
+}
+
+interface SemanticDefinitionGraphBatchShape {
+  readonly componentCount: number;
+  readonly edgeCount: number;
 }
 
 export function semanticDefinitionDependencyGraph(
@@ -66,7 +82,7 @@ export function scheduleSemanticDefinitionWavefronts(
   return wavefrontSchedule(componentWaves);
 }
 
-export class GpuSemanticDefinitionWavefrontPrototype {
+export class GpuSemanticDefinitionWavefrontScheduler {
   readonly #device: GPUDevice;
   readonly #schedule: GPUComputePipeline;
   readonly #bindings: GPUBindGroupLayout;
@@ -81,16 +97,16 @@ export class GpuSemanticDefinitionWavefrontPrototype {
     this.#bindings = bindings;
   }
 
-  static async create(device: GPUDevice): Promise<GpuSemanticDefinitionWavefrontPrototype> {
+  static async create(device: GPUDevice): Promise<GpuSemanticDefinitionWavefrontScheduler> {
     const shader = device.createShaderModule({
-      label: "semantic definition wavefront prototype",
+      label: "semantic definition wavefront scheduler",
       code: SEMANTIC_DEFINITION_WAVEFRONT_SHADER,
     });
     const diagnostics = await shader.getCompilationInfo();
     const errors = diagnostics.messages.filter((message) => message.type === "error");
     if (errors.length !== 0) {
       throw new Error(
-        `WebGPU rejected the semantic definition wavefront prototype:\n${
+        `WebGPU rejected the semantic definition wavefront scheduler:\n${
           errors.map((error) => `${error.lineNum}:${error.linePos}: ${error.message}`).join("\n")
         }`,
       );
@@ -115,7 +131,7 @@ export class GpuSemanticDefinitionWavefrontPrototype {
       compute: { module: shader, entryPoint: "schedule_wavefronts" },
     };
     const schedule = await device.createComputePipelineAsync(descriptor);
-    return new GpuSemanticDefinitionWavefrontPrototype(device, schedule, bindings);
+    return new GpuSemanticDefinitionWavefrontScheduler(device, schedule, bindings);
   }
 
   async schedule(
@@ -129,7 +145,7 @@ export class GpuSemanticDefinitionWavefrontPrototype {
     graphs: readonly SemanticDefinitionDependencyGraph[],
   ): Promise<readonly SemanticDefinitionWavefrontSchedule[]> {
     if (graphs.length === 0) return [];
-    const plan = this.prepareBatch(graphs);
+    const plan = await this.prepareBatch(graphs);
     try {
       return await plan.scheduleAndReadback();
     } finally {
@@ -137,24 +153,14 @@ export class GpuSemanticDefinitionWavefrontPrototype {
     }
   }
 
-  prepareBatch(
+  async prepareBatch(
     graphs: readonly SemanticDefinitionDependencyGraph[],
-  ): GpuSemanticDefinitionWavefrontPlan {
-    if (graphs.length === 0) {
-      throw new Error("GPU semantic wavefront plans require at least one dependency graph");
-    }
-    const workgroups = Math.ceil(graphs.length / WORKGROUP_SIZE);
-    if (workgroups > this.#device.limits.maxComputeWorkgroupsPerDimension) {
-      throw new Error(
-        `GPU semantic wavefront batch needs ${workgroups} workgroups for ${graphs.length} graphs but the device permits ${this.#device.limits.maxComputeWorkgroupsPerDimension} workgroups per dispatch`,
-      );
-    }
-    return GpuSemanticDefinitionWavefrontPlan.create(
+  ): Promise<GpuSemanticDefinitionWavefrontPlan> {
+    return await GpuSemanticDefinitionWavefrontPlan.create(
       this.#device,
       this.#schedule,
       this.#bindings,
       graphs,
-      workgroups,
     );
   }
 }
@@ -170,6 +176,8 @@ export class GpuSemanticDefinitionWavefrontPlan {
   readonly #componentCounts: Uint32Array;
   readonly #workgroups: number;
   readonly #buffers: GPUBuffer[];
+  #activeOperations = 0;
+  #destroyRequested = false;
   #destroyed = false;
 
   private constructor(
@@ -196,74 +204,182 @@ export class GpuSemanticDefinitionWavefrontPlan {
     this.#buffers = buffers;
   }
 
-  static create(
+  static async create(
     device: GPUDevice,
     pipeline: GPUComputePipeline,
     bindings: GPUBindGroupLayout,
     graphs: readonly SemanticDefinitionDependencyGraph[],
-    workgroups: number,
-  ): GpuSemanticDefinitionWavefrontPlan {
-    const packed = packComponentGraphBatch(graphs);
+  ): Promise<GpuSemanticDefinitionWavefrontPlan> {
+    if (graphs.length === 0) {
+      throw new Error("GPU semantic wavefront plans require at least one dependency graph");
+    }
+    const workgroups = Math.ceil(graphs.length / WORKGROUP_SIZE);
+    if (workgroups > device.limits.maxComputeWorkgroupsPerDimension) {
+      throw new Error(
+        `GPU semantic wavefront batch needs ${workgroups} workgroups for ${graphs.length} graphs but the device permits ${device.limits.maxComputeWorkgroupsPerDimension} workgroups per dispatch`,
+      );
+    }
+    const shape = validateSemanticDefinitionGraphBatch(graphs);
+    assertWavefrontStorageCapacity(device.limits, graphs.length, shape);
+    const packed = packComponentGraphBatch(graphs, shape);
     const buffers: GPUBuffer[] = [];
-    const initialDependencyCounts = storageBuffer(
-      device,
-      "semantic wavefront initial dependency counts",
-      packed.dependencyCounts,
-      buffers,
-      GPUBufferUsage.COPY_SRC,
-    );
-    const dependencyCounts = storageBuffer(
-      device,
-      "semantic wavefront dependency counts",
-      new Uint32Array(packed.dependencyCounts.length),
-      buffers,
-    );
-    const dependentOffsets = storageBuffer(
-      device,
-      "semantic wavefront dependent offsets",
-      packed.dependentOffsets,
-      buffers,
-    );
-    const dependents = storageBuffer(
-      device,
-      "semantic wavefront dependents",
-      packed.dependents,
-      buffers,
-    );
-    const componentWaves = storageBuffer(
-      device,
-      "semantic wavefront results",
-      new Uint32Array(Math.max(1, packed.componentCount)),
-      buffers,
-      GPUBufferUsage.COPY_SRC,
-    );
-    const graphDescriptors = storageBuffer(
-      device,
-      "semantic wavefront graph descriptors",
-      packed.graphDescriptors,
-      buffers,
-    );
-    const bindGroup = device.createBindGroup({
-      layout: bindings,
-      entries: [dependencyCounts, dependentOffsets, dependents, componentWaves, graphDescriptors]
-        .map((buffer, binding) => ({ binding, resource: { buffer } })),
-    });
-    return new GpuSemanticDefinitionWavefrontPlan(
-      device,
-      pipeline,
-      bindGroup,
-      initialDependencyCounts,
-      dependencyCounts,
-      componentWaves,
-      packed.componentOffsets,
-      Uint32Array.from(graphs, (graph) => graph.components.length),
-      workgroups,
-      buffers,
-    );
+    device.pushErrorScope("validation");
+    device.pushErrorScope("out-of-memory");
+    let plan: GpuSemanticDefinitionWavefrontPlan | undefined;
+    let allocationCause: unknown;
+    try {
+      const initialDependencyCounts = storageBuffer(
+        device,
+        "semantic wavefront initial dependency counts",
+        packed.dependencyCounts,
+        buffers,
+        GPUBufferUsage.COPY_SRC,
+      );
+      const dependencyCounts = device.createBuffer({
+        label: "semantic wavefront dependency counts",
+        size: packed.dependencyCounts.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      buffers.push(dependencyCounts);
+      const dependentOffsets = storageBuffer(
+        device,
+        "semantic wavefront dependent offsets",
+        packed.dependentOffsets,
+        buffers,
+      );
+      const dependents = storageBuffer(
+        device,
+        "semantic wavefront dependents",
+        packed.dependents,
+        buffers,
+      );
+      const componentWaves = device.createBuffer({
+        label: "semantic wavefront results",
+        size: Math.max(1, packed.componentCount) * Uint32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+      });
+      buffers.push(componentWaves);
+      const graphDescriptors = storageBuffer(
+        device,
+        "semantic wavefront graph descriptors",
+        packed.graphDescriptors,
+        buffers,
+      );
+      const bindGroup = device.createBindGroup({
+        layout: bindings,
+        entries: [dependencyCounts, dependentOffsets, dependents, componentWaves, graphDescriptors]
+          .map((buffer, binding) => ({ binding, resource: { buffer } })),
+      });
+      plan = new GpuSemanticDefinitionWavefrontPlan(
+        device,
+        pipeline,
+        bindGroup,
+        initialDependencyCounts,
+        dependencyCounts,
+        componentWaves,
+        packed.componentOffsets,
+        Uint32Array.from(graphs, (graph) => graph.components.length),
+        workgroups,
+        buffers,
+      );
+    } catch (cause) {
+      allocationCause = cause;
+    }
+    const outOfMemoryPromise = device.popErrorScope();
+    const validationPromise = device.popErrorScope();
+    let outOfMemory: GPUError | null;
+    let validation: GPUError | null;
+    try {
+      [outOfMemory, validation] = await Promise.all([
+        outOfMemoryPromise,
+        validationPromise,
+      ]);
+    } catch (scopeCause) {
+      plan?.destroy();
+      if (plan === undefined) destroyBuffers(buffers);
+      throw scopeCause;
+    }
+    if (allocationCause !== undefined || outOfMemory !== null || validation !== null) {
+      plan?.destroy();
+      if (plan === undefined) destroyBuffers(buffers);
+      const evidence = validation?.message ?? outOfMemory?.message ?? String(allocationCause);
+      throw new Error(
+        `could not prepare GPU semantic wavefront plan for ${graphs.length} graphs, ${packed.componentCount} components, and ${packed.edgeCount} edges: ${evidence}`,
+        allocationCause === undefined ? undefined : { cause: allocationCause },
+      );
+    }
+    if (plan === undefined) {
+      destroyBuffers(buffers);
+      throw new Error(
+        `GPU semantic wavefront allocation completed without a plan for ${graphs.length} graphs`,
+      );
+    }
+    return plan;
   }
 
-  encodeSchedule(commands: GPUCommandEncoder): void {
+  async execute(repetitions = 1): Promise<void> {
     this.#requireActive();
+    if (
+      !Number.isSafeInteger(repetitions) || repetitions < 1 ||
+      repetitions > MAXIMUM_RESIDENT_REPETITIONS
+    ) {
+      throw new RangeError(
+        `GPU semantic wavefront execution repetitions must be an integer from 1 through ${MAXIMUM_RESIDENT_REPETITIONS}; received ${repetitions}`,
+      );
+    }
+    await this.#runOperation(async () => {
+      const commands = this.#device.createCommandEncoder({
+        label: repetitions === 1
+          ? "semantic definition wavefront schedule"
+          : `semantic definition wavefront schedule (${repetitions} repetitions)`,
+      });
+      for (let repetition = 0; repetition < repetitions; repetition++) {
+        this.#encodeSchedule(commands);
+      }
+      this.#device.queue.submit([commands.finish()]);
+      await this.#device.queue.onSubmittedWorkDone();
+    });
+  }
+
+  async scheduleAndReadback(): Promise<readonly SemanticDefinitionWavefrontSchedule[]> {
+    this.#requireActive();
+    return await this.#runOperation(async () => {
+      const readback = this.#device.createBuffer({
+        label: "semantic wavefront readback",
+        size: this.componentWavesBuffer.size,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      try {
+        const commands = this.#device.createCommandEncoder({
+          label: "semantic definition wavefront schedule and readback",
+        });
+        this.#encodeSchedule(commands);
+        commands.copyBufferToBuffer(
+          this.componentWavesBuffer,
+          0,
+          readback,
+          0,
+          this.componentWavesBuffer.size,
+        );
+        this.#device.queue.submit([commands.finish()]);
+        await readback.mapAsync(GPUMapMode.READ);
+        const encodedWaves = new Uint32Array(readback.getMappedRange().slice(0));
+        readback.unmap();
+        return this.#decodeSchedules(encodedWaves);
+      } finally {
+        readback.destroy();
+      }
+    });
+  }
+
+  destroy(): void {
+    if (this.#destroyRequested || this.#destroyed) return;
+    this.#destroyRequested = true;
+    if (this.#activeOperations !== 0) return;
+    this.#destroyBuffers();
+  }
+
+  #encodeSchedule(commands: GPUCommandEncoder): void {
     commands.copyBufferToBuffer(
       this.#initialDependencyCounts,
       0,
@@ -275,55 +391,17 @@ export class GpuSemanticDefinitionWavefrontPlan {
     dispatch(commands, this.#pipeline, this.#bindGroup, this.#workgroups);
   }
 
-  async execute(repetitions = 1): Promise<void> {
-    this.#requireActive();
-    if (!Number.isInteger(repetitions) || repetitions < 1) {
-      throw new Error(
-        `GPU semantic wavefront execution repetitions must be a positive integer, received ${repetitions}`,
-      );
-    }
-    const commands = this.#device.createCommandEncoder({
-      label: repetitions === 1
-        ? "semantic definition wavefront schedule"
-        : `semantic definition wavefront schedule (${repetitions} repetitions)`,
-    });
-    for (let repetition = 0; repetition < repetitions; repetition++) {
-      this.encodeSchedule(commands);
-    }
-    this.#device.queue.submit([commands.finish()]);
-    await this.#device.queue.onSubmittedWorkDone();
-  }
-
-  async scheduleAndReadback(): Promise<readonly SemanticDefinitionWavefrontSchedule[]> {
-    this.#requireActive();
-    const readback = this.#device.createBuffer({
-      label: "semantic wavefront readback",
-      size: this.componentWavesBuffer.size,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
+  async #runOperation<Result>(operation: () => Promise<Result>): Promise<Result> {
+    this.#activeOperations += 1;
     try {
-      const commands = this.#device.createCommandEncoder({
-        label: "semantic definition wavefront schedule and readback",
-      });
-      this.encodeSchedule(commands);
-      commands.copyBufferToBuffer(
-        this.componentWavesBuffer,
-        0,
-        readback,
-        0,
-        this.componentWavesBuffer.size,
-      );
-      this.#device.queue.submit([commands.finish()]);
-      await readback.mapAsync(GPUMapMode.READ);
-      const encodedWaves = new Uint32Array(readback.getMappedRange().slice(0));
-      readback.unmap();
-      return this.#decodeSchedules(encodedWaves);
+      return await operation();
     } finally {
-      readback.destroy();
+      this.#activeOperations -= 1;
+      if (this.#activeOperations === 0 && this.#destroyRequested) this.#destroyBuffers();
     }
   }
 
-  destroy(): void {
+  #destroyBuffers(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
     for (const buffer of this.#buffers) buffer.destroy();
@@ -334,8 +412,9 @@ export class GpuSemanticDefinitionWavefrontPlan {
     for (let graph = 0; graph < this.#componentCounts.length; graph++) {
       const start = this.#componentOffsets[graph]!;
       const end = start + this.#componentCounts[graph]!;
-      const graphWaves = [...encodedWaves.subarray(start, end)].map((wave) =>
-        wave === GPU_UNSCHEDULED_WAVE ? NO_WAVE : wave - 1
+      const graphWaves = Array.from(
+        encodedWaves.subarray(start, end),
+        (wave) => wave === GPU_UNSCHEDULED_WAVE ? NO_WAVE : wave - 1,
       );
       const incomplete = graphWaves.findIndex((wave) => wave === NO_WAVE);
       if (incomplete !== -1) {
@@ -349,7 +428,7 @@ export class GpuSemanticDefinitionWavefrontPlan {
   }
 
   #requireActive(): void {
-    if (!this.#destroyed) return;
+    if (!this.#destroyRequested && !this.#destroyed) return;
     throw new Error("GPU semantic wavefront plan cannot be used after destroy()");
   }
 }
@@ -493,67 +572,195 @@ function coreChildren(node: LazuliCoreNode): readonly number[] {
   }
 }
 
-function packComponentGraphBatch(graphs: readonly SemanticDefinitionDependencyGraph[]): {
-  readonly dependencyCounts: Uint32Array;
-  readonly dependentOffsets: Uint32Array;
-  readonly dependents: Uint32Array;
-  readonly graphDescriptors: Uint32Array;
-  readonly componentOffsets: Uint32Array;
-  readonly componentCount: number;
-} {
-  const dependencyCounts: number[] = [];
-  const dependentOffsets: number[] = [];
-  const dependents: number[] = [];
+function packComponentGraphBatch(
+  graphs: readonly SemanticDefinitionDependencyGraph[],
+  shape: SemanticDefinitionGraphBatchShape,
+): PackedSemanticDefinitionGraphs {
+  const dependencyCounts = new Uint32Array(Math.max(1, shape.componentCount));
+  const dependentOffsets = new Uint32Array(shape.componentCount + 1);
+  const dependents = new Uint32Array(Math.max(1, shape.edgeCount));
   const graphDescriptors = new Uint32Array(graphs.length * GRAPH_DESCRIPTOR_WORDS);
   const componentOffsets = new Uint32Array(graphs.length);
+  let componentOffset = 0;
   for (const [graphIndex, graph] of graphs.entries()) {
-    const componentOffset = dependencyCounts.length;
-    const componentCount = graph.components.length;
-    let edgeCount = 0;
-    if (componentCount > MAXIMUM_GRAPH_COMPONENTS) {
-      throw new Error(
-        `GPU semantic wavefront graph ${graphIndex} has ${componentCount} components but the bounded kernel supports at most ${MAXIMUM_GRAPH_COMPONENTS}`,
-      );
-    }
     componentOffsets[graphIndex] = componentOffset;
-    const componentDependents = graph.components.map(() => [] as number[]);
     for (const [componentIndex, component] of graph.components.entries()) {
-      dependencyCounts.push(component.dependencies.length);
+      dependencyCounts[componentOffset + componentIndex] = component.dependencies.length;
       for (const dependency of component.dependencies) {
-        if (!Number.isInteger(dependency) || dependency < 0 || dependency >= componentCount) {
-          throw new Error(
-            `GPU semantic wavefront graph ${graphIndex} component ${componentIndex} depends on component ${dependency} beyond ${componentCount} components`,
-          );
-        }
-        componentDependents[dependency]!.push(componentOffset + componentIndex);
-        edgeCount += 1;
+        dependentOffsets[componentOffset + dependency + 1]! += 1;
       }
-    }
-    if (edgeCount > MAXIMUM_GRAPH_EDGES) {
-      throw new Error(
-        `GPU semantic wavefront graph ${graphIndex} has ${edgeCount} dependency edges but the bounded kernel supports at most ${MAXIMUM_GRAPH_EDGES}`,
-      );
-    }
-    for (const targets of componentDependents) {
-      dependentOffsets.push(dependents.length);
-      dependents.push(...targets);
     }
     const descriptorOffset = graphIndex * GRAPH_DESCRIPTOR_WORDS;
     graphDescriptors[descriptorOffset] = componentOffset;
-    graphDescriptors[descriptorOffset + 1] = componentCount;
+    graphDescriptors[descriptorOffset + 1] = graph.components.length;
+    componentOffset += graph.components.length;
+  }
+  for (let component = 1; component < dependentOffsets.length; component++) {
+    dependentOffsets[component]! += dependentOffsets[component - 1]!;
+  }
+  const nextDependent = dependentOffsets.slice(0, -1);
+  componentOffset = 0;
+  for (const graph of graphs) {
+    for (const [componentIndex, component] of graph.components.entries()) {
+      for (const dependency of component.dependencies) {
+        const source = componentOffset + dependency;
+        dependents[nextDependent[source]!] = componentOffset + componentIndex;
+        nextDependent[source]! += 1;
+      }
+    }
+    componentOffset += graph.components.length;
   }
   return {
-    dependencyCounts: Uint32Array.from(dependencyCounts.length === 0 ? [0] : dependencyCounts),
-    dependentOffsets: Uint32Array.from([...dependentOffsets, dependents.length]),
-    dependents: Uint32Array.from(dependents.length === 0 ? [0] : dependents),
+    dependencyCounts,
+    dependentOffsets,
+    dependents,
     graphDescriptors,
     componentOffsets,
-    componentCount: dependencyCounts.length,
+    componentCount: shape.componentCount,
+    edgeCount: shape.edgeCount,
   };
 }
 
+function validateSemanticDefinitionGraphBatch(
+  graphs: readonly SemanticDefinitionDependencyGraph[],
+): SemanticDefinitionGraphBatchShape {
+  let componentCount = 0;
+  let edgeCount = 0;
+  for (const [graphIndex, graph] of graphs.entries()) {
+    if (graph.components.length > MAXIMUM_GRAPH_COMPONENTS) {
+      throw new Error(
+        `GPU semantic wavefront graph ${graphIndex} has ${graph.components.length} components but the bounded kernel supports at most ${MAXIMUM_GRAPH_COMPONENTS}`,
+      );
+    }
+    const graphEdgeCount = validateSemanticDefinitionGraph(graph, graphIndex);
+    if (graphEdgeCount > MAXIMUM_GRAPH_EDGES) {
+      throw new Error(
+        `GPU semantic wavefront graph ${graphIndex} has ${graphEdgeCount} dependency edges but the bounded kernel supports at most ${MAXIMUM_GRAPH_EDGES}`,
+      );
+    }
+    componentCount = checkedWavefrontCount(
+      "GPU semantic wavefront component count",
+      componentCount,
+      graph.components.length,
+    );
+    edgeCount = checkedWavefrontCount(
+      "GPU semantic wavefront dependency edge count",
+      edgeCount,
+      graphEdgeCount,
+    );
+  }
+  return { componentCount, edgeCount };
+}
+
+function validateSemanticDefinitionGraph(
+  graph: SemanticDefinitionDependencyGraph,
+  graphIndex: number,
+): number {
+  if (!Number.isSafeInteger(graph.definitionCount) || graph.definitionCount < 0) {
+    throw new RangeError(
+      `GPU semantic wavefront graph ${graphIndex} has invalid definition count ${graph.definitionCount}`,
+    );
+  }
+  if (graph.componentByDefinition.length !== graph.definitionCount) {
+    throw new Error(
+      `GPU semantic wavefront graph ${graphIndex} maps ${graph.componentByDefinition.length} definitions but declares ${graph.definitionCount}`,
+    );
+  }
+  const seenDefinitions = new Set<number>();
+  let edgeCount = 0;
+  for (const [componentIndex, component] of graph.components.entries()) {
+    if (component.definitions.length === 0) {
+      throw new Error(
+        `GPU semantic wavefront graph ${graphIndex} component ${componentIndex} has no definitions`,
+      );
+    }
+    for (const definition of component.definitions) {
+      if (
+        !Number.isSafeInteger(definition) || definition < 0 ||
+        definition >= graph.definitionCount
+      ) {
+        throw new Error(
+          `GPU semantic wavefront graph ${graphIndex} component ${componentIndex} contains definition ${definition} beyond ${graph.definitionCount} definitions`,
+        );
+      }
+      if (seenDefinitions.has(definition)) {
+        throw new Error(
+          `GPU semantic wavefront graph ${graphIndex} reuses definition ${definition} in component ${componentIndex}`,
+        );
+      }
+      if (graph.componentByDefinition[definition] !== componentIndex) {
+        throw new Error(
+          `GPU semantic wavefront graph ${graphIndex} maps definition ${definition} to component ${
+            graph.componentByDefinition[definition]
+          } instead of ${componentIndex}`,
+        );
+      }
+      seenDefinitions.add(definition);
+    }
+    const seenDependencies = new Set<number>();
+    for (const dependency of component.dependencies) {
+      if (
+        !Number.isSafeInteger(dependency) || dependency < 0 ||
+        dependency >= graph.components.length
+      ) {
+        throw new Error(
+          `GPU semantic wavefront graph ${graphIndex} component ${componentIndex} depends on component ${dependency} beyond ${graph.components.length} components`,
+        );
+      }
+      if (dependency === componentIndex) {
+        throw new Error(
+          `GPU semantic wavefront graph ${graphIndex} component ${componentIndex} depends on itself after SCC planning`,
+        );
+      }
+      if (seenDependencies.has(dependency)) {
+        throw new Error(
+          `GPU semantic wavefront graph ${graphIndex} component ${componentIndex} repeats dependency ${dependency}`,
+        );
+      }
+      seenDependencies.add(dependency);
+      edgeCount += 1;
+    }
+  }
+  if (seenDefinitions.size !== graph.definitionCount) {
+    throw new Error(
+      `GPU semantic wavefront graph ${graphIndex} assigns ${seenDefinitions.size} of ${graph.definitionCount} definitions to components`,
+    );
+  }
+  return edgeCount;
+}
+
+function assertWavefrontStorageCapacity(
+  limits: GPUSupportedLimits,
+  graphCount: number,
+  shape: SemanticDefinitionGraphBatchShape,
+): void {
+  const regions = [
+    ["dependency counts", Math.max(1, shape.componentCount)],
+    ["dependent offsets", shape.componentCount + 1],
+    ["dependents", Math.max(1, shape.edgeCount)],
+    ["component waves", Math.max(1, shape.componentCount)],
+    ["graph descriptors", graphCount * GRAPH_DESCRIPTOR_WORDS],
+  ] as const;
+  for (const [name, wordLength] of regions) {
+    const bytes = wordLength * Uint32Array.BYTES_PER_ELEMENT;
+    if (bytes <= limits.maxBufferSize && bytes <= limits.maxStorageBufferBindingSize) continue;
+    throw new RangeError(
+      `GPU semantic wavefront ${name} require ${bytes} bytes; device limits are maxBufferSize=${limits.maxBufferSize}, maxStorageBufferBindingSize=${limits.maxStorageBufferBindingSize}`,
+    );
+  }
+}
+
+function checkedWavefrontCount(name: string, left: number, right: number): number {
+  const count = left + right;
+  if (!Number.isSafeInteger(count) || count > NO_WAVE) {
+    throw new RangeError(`${name} cannot be represented as a u32: ${left} + ${right}`);
+  }
+  return count;
+}
+
 function wavefrontSchedule(componentWaves: readonly number[]): SemanticDefinitionWavefrontSchedule {
-  const waveCount = componentWaves.length === 0 ? 0 : Math.max(...componentWaves) + 1;
+  let waveCount = 0;
+  for (const wave of componentWaves) waveCount = Math.max(waveCount, wave + 1);
   const wavefronts = Array.from({ length: waveCount }, () => [] as number[]);
   for (const [component, wave] of componentWaves.entries()) wavefronts[wave]!.push(component);
   return Object.freeze({
@@ -577,6 +784,10 @@ function storageBuffer(
   buffers.push(buffer);
   if (words.byteLength !== 0) device.queue.writeBuffer(buffer, 0, Uint32Array.from(words));
   return buffer;
+}
+
+function destroyBuffers(buffers: readonly GPUBuffer[]): void {
+  for (const buffer of buffers) buffer.destroy();
 }
 
 function dispatch(
