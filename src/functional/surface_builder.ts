@@ -2,6 +2,7 @@ import {
   type EncodedFunctionalModule,
   FUNCTIONAL_CONSTRUCTOR_WORD_LENGTH,
   FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
+  FUNCTIONAL_MAXIMUM_EXPRESSION_NODES,
   FUNCTIONAL_MODULE_ABI_VERSION,
   FUNCTIONAL_NO_INDEX,
   FUNCTIONAL_NODE_WORD_LENGTH,
@@ -60,6 +61,11 @@ const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
 
 interface SurfaceTypeTraversal {
   readonly activeTypes: WeakSet<object>;
+  remainingNodes: number;
+}
+
+interface SurfaceExpressionTraversal {
+  readonly activeExpressions: WeakSet<object>;
   remainingNodes: number;
 }
 
@@ -639,55 +645,90 @@ function collectBoundaryTypeNames(
   return names;
 }
 
-function expressionFeatureMask(expression: FunctionalSurfaceExpression): number {
-  switch (expression.kind) {
-    case "name":
-      return expression.name === FUNCTIONAL_THUNK_CONSTRUCTOR_NAME
-        ? SURFACE_FEATURE_EXPLICIT_THUNK
-        : 0;
-    case "lambda":
-      return expressionFeatureMask(expression.body);
-    case "let":
-    case "let-rec":
-      return expressionFeatureMask(expression.value) |
-        expressionFeatureMask(expression.body);
-    case "let-rec-group":
-      return expression.bindings.reduce(
-        (features, binding) => features | expressionFeatureMask(binding.body),
-        SURFACE_FEATURE_RECURSIVE_GROUP | expressionFeatureMask(expression.body),
-      );
-    case "if":
-      return expressionFeatureMask(expression.condition) |
-        expressionFeatureMask(expression.consequent) |
-        expressionFeatureMask(expression.alternate);
-    case "apply":
-    case "binary":
-    case "text-append":
-    case "bytes-append":
-      return expressionFeatureMask(
-        expression.kind === "apply" ? expression.callee : expression.left,
-      ) |
-        expressionFeatureMask(
-          expression.kind === "apply" ? expression.argument : expression.right,
+function expressionFeatureMask(
+  expression: FunctionalSurfaceExpression,
+  depth = 0,
+  traversal: SurfaceExpressionTraversal = {
+    activeExpressions: new WeakSet(),
+    remainingNodes: FUNCTIONAL_MAXIMUM_EXPRESSION_NODES,
+  },
+): number {
+  if (depth > MAXIMUM_SURFACE_TYPE_DEPTH) {
+    throw new RangeError(
+      `functional surface expression exceeds depth ${MAXIMUM_SURFACE_TYPE_DEPTH}`,
+    );
+  }
+  if (traversal.remainingNodes === 0) {
+    throw new RangeError(
+      `functional surface expression exceeds ${FUNCTIONAL_MAXIMUM_EXPRESSION_NODES} nodes`,
+    );
+  }
+  traversal.remainingNodes -= 1;
+  if (
+    expression === null || typeof expression !== "object" ||
+    typeof expression.kind !== "string"
+  ) {
+    throw new TypeError("functional surface expression must be an object with a kind");
+  }
+  if (traversal.activeExpressions.has(expression)) {
+    throw new TypeError("functional surface expression contains a structural cycle");
+  }
+  const nested = (child: FunctionalSurfaceExpression): number =>
+    expressionFeatureMask(child, depth + 1, traversal);
+  traversal.activeExpressions.add(expression);
+  try {
+    switch (expression.kind) {
+      case "name":
+        return expression.name === FUNCTIONAL_THUNK_CONSTRUCTOR_NAME
+          ? SURFACE_FEATURE_EXPLICIT_THUNK
+          : 0;
+      case "lambda":
+        return nested(expression.body);
+      case "let":
+      case "let-rec":
+        return nested(expression.value) | nested(expression.body);
+      case "let-rec-group":
+        return expression.bindings.reduce(
+          (features, binding) => features | nested(binding.body),
+          SURFACE_FEATURE_RECURSIVE_GROUP | nested(expression.body),
         );
-    case "unary":
-    case "numeric-convert":
-      return expressionFeatureMask(expression.value);
-    case "case":
-      return expression.arms.reduce(
-        (features, arm) => features | expressionFeatureMask(arm.body),
-        expressionFeatureMask(expression.value),
-      );
-    case "integer":
-    case "signed-integer-64":
-    case "float-32":
-    case "float-64":
-    case "whole-number-f64":
-    case "boolean":
-    case "text":
-    case "bytes":
-    case "runtime-fault":
-      return 0;
+      case "if":
+        return nested(expression.condition) |
+          nested(expression.consequent) |
+          nested(expression.alternate);
+      case "apply":
+        return nested(expression.callee) | nested(expression.argument);
+      case "binary":
+      case "text-append":
+      case "bytes-append":
+        return nested(expression.left) | nested(expression.right);
+      case "unary":
+      case "numeric-convert":
+        return nested(expression.value);
+      case "case":
+        return expression.arms.reduce(
+          (features, arm) => features | nested(arm.body),
+          nested(expression.value),
+        );
+      case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
+      case "whole-number-f64":
+      case "boolean":
+      case "text":
+      case "bytes":
+      case "runtime-fault":
+        return 0;
+      default:
+        throw new TypeError(
+          `functional surface expression has unsupported kind ${
+            JSON.stringify((expression as { readonly kind: unknown }).kind)
+          }`,
+        );
+    }
+  } finally {
+    traversal.activeExpressions.delete(expression);
   }
 }
 
@@ -775,17 +816,31 @@ class SurfaceExpressionEncoder {
     parent: number,
     span: FunctionalSpan | undefined,
   ): number {
-    const parameter = parameters[parameterIndex];
-    if (parameter === undefined) return this.emit(body, parent);
-    const node = this.reserveNode(
-      FunctionalExpressionTag.Lambda,
-      this.symbols.intern(parameter),
-      parent,
-      span,
-    );
-    const child = this.emitParameters(parameters, parameterIndex + 1, body, node, span);
-    this.setChildren(node, [child]);
-    return node;
+    let firstParameter = FUNCTIONAL_NO_INDEX;
+    let previousParameter = FUNCTIONAL_NO_INDEX;
+    let parameterParent = parent;
+    for (let index = parameterIndex; index < parameters.length; index += 1) {
+      const parameter = parameters[index];
+      if (parameter === undefined) {
+        throw new Error(`functional surface definition omitted parameter ${index}`);
+      }
+      const node = this.reserveNode(
+        FunctionalExpressionTag.Lambda,
+        this.symbols.intern(parameter),
+        parameterParent,
+        span,
+      );
+      if (firstParameter === FUNCTIONAL_NO_INDEX) firstParameter = node;
+      if (previousParameter !== FUNCTIONAL_NO_INDEX) {
+        this.setChildren(previousParameter, [node]);
+      }
+      previousParameter = node;
+      parameterParent = node;
+    }
+    const bodyNode = this.emit(body, parameterParent);
+    if (previousParameter === FUNCTIONAL_NO_INDEX) return bodyNode;
+    this.setChildren(previousParameter, [bodyNode]);
+    return firstParameter;
   }
 
   private emit(expression: FunctionalSurfaceExpression, parent: number): number {
@@ -1056,18 +1111,31 @@ class SurfaceExpressionEncoder {
     armIndex: number,
     parent: number,
   ): number {
-    const arm = arms[armIndex];
-    if (arm === undefined) return FUNCTIONAL_NO_INDEX;
-    const node = this.reserveNode(
-      FunctionalExpressionTag.CaseArm,
-      this.symbols.intern(arm.constructor),
-      parent,
-      arm.span,
-    );
-    const body = this.emitPatternBindings(arm.binders, arm.body, node);
-    const nextArm = this.emitCaseArms(arms, armIndex + 1, node);
-    this.setChildren(node, [body, nextArm]);
-    return node;
+    let firstArm = FUNCTIONAL_NO_INDEX;
+    let previousArm = FUNCTIONAL_NO_INDEX;
+    let previousBody = FUNCTIONAL_NO_INDEX;
+    let armParent = parent;
+    for (let index = armIndex; index < arms.length; index += 1) {
+      const arm = arms[index];
+      if (arm === undefined) throw new Error(`functional surface case omitted arm ${index}`);
+      const node = this.reserveNode(
+        FunctionalExpressionTag.CaseArm,
+        this.symbols.intern(arm.constructor),
+        armParent,
+        arm.span,
+      );
+      if (firstArm === FUNCTIONAL_NO_INDEX) firstArm = node;
+      if (previousArm !== FUNCTIONAL_NO_INDEX) {
+        this.setChildren(previousArm, [previousBody, node]);
+      }
+      previousArm = node;
+      previousBody = this.emitPatternBindings(arm.binders, arm.body, node);
+      armParent = node;
+    }
+    if (previousArm !== FUNCTIONAL_NO_INDEX) {
+      this.setChildren(previousArm, [previousBody, FUNCTIONAL_NO_INDEX]);
+    }
+    return firstArm;
   }
 
   private emitPatternBindings(
@@ -1125,6 +1193,11 @@ class SurfaceExpressionEncoder {
     span?: FunctionalSpan,
   ): number {
     const node = this.nodeCount;
+    if (node >= FUNCTIONAL_MAXIMUM_EXPRESSION_NODES) {
+      throw new RangeError(
+        `functional surface module exceeds ${FUNCTIONAL_MAXIMUM_EXPRESSION_NODES} expression nodes`,
+      );
+    }
     this.words.push(
       tag,
       span?.startByte ?? 0,

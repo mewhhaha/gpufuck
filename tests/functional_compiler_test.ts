@@ -16,6 +16,7 @@ import {
   type FunctionalIncrementalCache,
   type FunctionalModuleArtifact,
   FunctionalNodeWord,
+  type FunctionalSurfaceExpression,
   FunctionalTypecheckingProfile,
   type FunctionalTypeSchema,
   FunctionalWasmIntrinsic,
@@ -90,6 +91,91 @@ Deno.test("surface type schemas bound expansion of structurally shared annotatio
       ),
     /definition 0 annotation exceeds 4096 type nodes/,
   );
+});
+
+Deno.test("surface expressions reject structural cycles before encoding", () => {
+  const cyclicExpression = {
+    kind: "let",
+    name: "cycle",
+    value: surface.integer(0),
+    body: undefined,
+  } as unknown as { body: FunctionalSurfaceExpression } & FunctionalSurfaceExpression;
+  cyclicExpression.body = cyclicExpression;
+
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: cyclicExpression }],
+        [],
+        "main",
+        0,
+      ),
+    /surface expression contains a structural cycle/,
+  );
+});
+
+Deno.test("surface expressions bound expansion of structurally shared trees", () => {
+  let sharedExpression: FunctionalSurfaceExpression = surface.integer(1);
+  for (let depth = 0; depth < 16; depth += 1) {
+    sharedExpression = surface.binary(
+      FunctionalBinaryOperator.Add,
+      sharedExpression,
+      sharedExpression,
+    );
+  }
+
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: sharedExpression }],
+        [],
+        "main",
+        0,
+      ),
+    /surface expression exceeds 65536 nodes/,
+  );
+});
+
+Deno.test("surface encoding handles wide parameter lists without host recursion", () => {
+  const parameterCount = 2_048;
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: Array.from({ length: parameterCount }, (_, index) => `value${index}`),
+      annotation: null,
+      body: surface.integer(0),
+    }],
+    [],
+    "main",
+    0,
+  );
+
+  equal(module.nodeCount, parameterCount + 1);
+});
+
+Deno.test("surface encoding handles wide case lists without host recursion", () => {
+  const armCount = 2_048;
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: {
+        kind: "case",
+        value: surface.integer(0),
+        arms: Array.from({ length: armCount }, (_, index) => ({
+          constructor: `Constructor${index}`,
+          binders: [],
+          body: surface.integer(index),
+        })),
+      },
+    }],
+    [],
+    "main",
+    0,
+  );
+
+  equal(module.nodeCount, 2 + armCount * 2);
 });
 
 function functionalRuntime(): FunctionalRuntime {
