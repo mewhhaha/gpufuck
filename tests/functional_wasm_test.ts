@@ -5263,6 +5263,315 @@ Deno.test("saturated constructors allocate their result without staged closures"
   equal(execution.stats.allocatedBytes, 56);
 });
 
+Deno.test("strict case rebuilding reuses a uniquely consumed constructor", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "original",
+    value: functionalPair(surface.integer(20), surface.integer(22)),
+    body: {
+      kind: "case",
+      value: surface.name("original"),
+      arms: [{
+        constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        binders: ["left", "right"],
+        body: functionalPair(
+          surface.binary(
+            FunctionalBinaryOperator.Add,
+            surface.name("left"),
+            surface.integer(1),
+          ),
+          surface.name("right"),
+        ),
+      }],
+    },
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, {
+    kind: "tuple",
+    values: [
+      { kind: "integer", value: 21 },
+      { kind: "integer", value: 22 },
+    ],
+  });
+  equal(execution.stats.allocatedBytes, 56);
+});
+
+Deno.test("owned exports keep strict constructor rebuilding on fresh allocations", async () => {
+  const encoded = singleDefinitionModule({
+    kind: "let",
+    name: "original",
+    value: functionalPair(surface.integer(20), surface.integer(22)),
+    body: {
+      kind: "case",
+      value: surface.name("original"),
+      arms: [{
+        constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        binders: ["left", "right"],
+        body: functionalPair(
+          surface.binary(
+            FunctionalBinaryOperator.Add,
+            surface.name("left"),
+            surface.integer(1),
+          ),
+          surface.name("right"),
+        ),
+      }],
+    },
+  }, FunctionalEvaluationProfile.StrictEager);
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  if (!compilation.ok) throw new Error("owned constructor-rebuild fixture did not compile");
+  try {
+    const plan = await planFunctionalModuleStorage(compilation.module);
+    const storageCore = {
+      persistentSharing: FunctionalPersistentSharing.ExplicitReferenceCounting,
+      operations: [
+        { kind: "declare" as const, value: "frontend-owned", lifetime: "owned" as const },
+        ...plan.core.operations,
+      ],
+    };
+    const bytes = await compileFunctionalModuleToWasm(compilation.module, {
+      storageCore,
+      ownedTypeExports: [{
+        name: "pair",
+        storageValue: "frontend-owned",
+        type: {
+          kind: "tuple",
+          values: [{ kind: "integer" }, { kind: "integer" }],
+        },
+      }],
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const initialize = instance.exports.initialize;
+    const main = instance.exports.main;
+    const heapTop = instance.exports.heapTop;
+    ok(typeof initialize === "function");
+    ok(typeof main === "function");
+    ok(heapTop instanceof WebAssembly.Global);
+    initialize();
+    const heapBeforeMain = Number(heapTop.value);
+    main();
+    equal(Number(heapTop.value) - heapBeforeMain, 64);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("strict case rebuilding preserves a constructor that remains aliased", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "original",
+    value: functionalPair(surface.integer(20), surface.integer(22)),
+    body: {
+      kind: "let",
+      name: "rebuilt",
+      value: {
+        kind: "case",
+        value: surface.name("original"),
+        arms: [{
+          constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+          binders: ["left", "right"],
+          body: functionalPair(
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("left"),
+              surface.integer(1),
+            ),
+            surface.name("right"),
+          ),
+        }],
+      },
+      body: {
+        kind: "case",
+        value: surface.name("original"),
+        arms: [{
+          constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+          binders: ["originalLeft", "originalRight"],
+          body: {
+            kind: "case",
+            value: surface.name("rebuilt"),
+            arms: [{
+              constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+              binders: ["rebuiltLeft", "rebuiltRight"],
+              body: surface.binary(
+                FunctionalBinaryOperator.Add,
+                surface.name("originalLeft"),
+                surface.name("rebuiltLeft"),
+              ),
+            }],
+          },
+        }],
+      },
+    },
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 41 });
+  equal(execution.stats.allocatedBytes, 88);
+});
+
+Deno.test("strict mutually exclusive rebuilds consume one constructor per path", async () => {
+  const rebuild = (increment: number): FunctionalSurfaceExpression => ({
+    kind: "case",
+    value: surface.name("original"),
+    arms: [{
+      constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+      binders: ["left", "right"],
+      body: functionalPair(
+        surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("left"),
+          surface.integer(increment),
+        ),
+        surface.name("right"),
+      ),
+    }],
+  });
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "original",
+    value: functionalPair(surface.integer(20), surface.integer(22)),
+    body: {
+      kind: "if",
+      condition: surface.boolean(false),
+      consequent: rebuild(1),
+      alternate: rebuild(2),
+    },
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, {
+    kind: "tuple",
+    values: [
+      { kind: "integer", value: 22 },
+      { kind: "integer", value: 22 },
+    ],
+  });
+  equal(execution.stats.allocatedBytes, 56);
+});
+
+Deno.test("lazy constructor rebuilding retains immutable source allocations", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "original",
+    value: functionalPair(surface.integer(20), surface.integer(22)),
+    body: {
+      kind: "case",
+      value: surface.name("original"),
+      arms: [{
+        constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        binders: ["left", "right"],
+        body: functionalPair(
+          surface.binary(
+            FunctionalBinaryOperator.Add,
+            surface.name("left"),
+            surface.integer(1),
+          ),
+          surface.name("right"),
+        ),
+      }],
+    },
+  }));
+
+  deepStrictEqual(execution.value, {
+    kind: "tuple",
+    values: [
+      { kind: "integer", value: 21 },
+      { kind: "integer", value: 22 },
+    ],
+  });
+  equal(execution.stats.allocatedBytes, 120);
+});
+
+Deno.test("strict rebuilding allocates when constructor layouts differ", async () => {
+  const pair = surface.apply(
+    surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+    surface.integer(20),
+    surface.integer(22),
+  );
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: {
+        kind: "let",
+        name: "original",
+        value: pair,
+        body: {
+          kind: "case",
+          value: surface.name("original"),
+          arms: [{
+            constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+            binders: ["left", "right"],
+            body: surface.apply(surface.name("Box"), surface.name("left")),
+          }],
+        },
+      },
+    }],
+    [{
+      name: "Boxed",
+      parameters: [],
+      constructors: [{
+        name: "Box",
+        fields: [{ name: "value", type: { kind: "integer" } }],
+      }],
+    }],
+    "main",
+    0,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
+  const execution = await runCompiledWasm(module);
+
+  deepStrictEqual(execution.value, {
+    kind: "constructor",
+    name: "Box",
+    fields: [{ kind: "integer", value: 20 }],
+  });
+  equal(execution.stats.allocatedBytes, 80);
+});
+
+Deno.test("strict rebuilding keeps long unique constructor chains constant-space", async () => {
+  const rebuildCount = 128;
+  let body: FunctionalSurfaceExpression = surface.name(`pair${rebuildCount}`);
+  for (let index = rebuildCount; index > 0; index -= 1) {
+    const previous = `pair${index - 1}`;
+    body = {
+      kind: "let",
+      name: `pair${index}`,
+      value: {
+        kind: "case",
+        value: surface.name(previous),
+        arms: [{
+          constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+          binders: ["left", "right"],
+          body: functionalPair(
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("left"),
+              surface.integer(1),
+            ),
+            surface.name("right"),
+          ),
+        }],
+      },
+      body,
+    };
+  }
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "pair0",
+    value: functionalPair(surface.integer(0), surface.integer(42)),
+    body,
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, {
+    kind: "tuple",
+    values: [
+      { kind: "integer", value: rebuildCount },
+      { kind: "integer", value: 42 },
+    ],
+  });
+  equal(execution.stats.allocatedBytes, 56);
+});
+
 Deno.test("partially applied constructors retain callable staged closures", async () => {
   const execution = await runCompiledWasm(singleDefinitionModule({
     kind: "let",
@@ -5449,6 +5758,13 @@ function singleDefinitionModule(
     0,
     { evaluationProfile },
   );
+}
+
+function functionalPair(
+  left: FunctionalSurfaceExpression,
+  right: FunctionalSurfaceExpression,
+): FunctionalSurfaceExpression {
+  return surface.apply(surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME), left, right);
 }
 
 function hostInitModule(

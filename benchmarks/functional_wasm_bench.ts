@@ -1,8 +1,11 @@
 import {
   buildFunctionalSurfaceModule,
   compileFunctionalModuleToWasm,
+  FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FunctionalBinaryOperator,
+  FunctionalEvaluationProfile,
   type FunctionalSurfaceDefinition,
+  type FunctionalSurfaceExpression,
   GpuFunctionalCompiler,
   requestWebGpuDevice,
   runFunctionalWasmModule,
@@ -163,6 +166,8 @@ const higherOrderModule = buildFunctionalSurfaceModule(
 );
 const directModule = buildFunctionalSurfaceModule(directDefinitions, [], "main", 0);
 const tailWorkerModule = buildFunctionalSurfaceModule(tailWorkerDefinitions, [], "main", 0);
+const uniqueRebuildModule = constructorRebuildModule(128, "consume-once");
+const aliasedRebuildModule = constructorRebuildModule(128, "retain-alias");
 const device = await requestWebGpuDevice();
 const compiler = await GpuFunctionalCompiler.create(device);
 const higherOrderCompilation = await compiler.compileModule(higherOrderModule);
@@ -186,10 +191,41 @@ if (!tailWorkerCompilation.ok) {
     `tail-worker WASM benchmark did not compile: ${tailWorkerCompilation.diagnostics[0].message}`,
   );
 }
+const uniqueRebuildCompilation = await compiler.compileModule(uniqueRebuildModule);
+if (!uniqueRebuildCompilation.ok) {
+  higherOrderCompilation.module.destroy();
+  directCompilation.module.destroy();
+  tailWorkerCompilation.module.destroy();
+  throw new Error(
+    `unique-rebuild WASM benchmark did not compile: ${
+      uniqueRebuildCompilation.diagnostics[0].message
+    }`,
+  );
+}
+const aliasedRebuildCompilation = await compiler.compileModule(aliasedRebuildModule);
+if (!aliasedRebuildCompilation.ok) {
+  higherOrderCompilation.module.destroy();
+  directCompilation.module.destroy();
+  tailWorkerCompilation.module.destroy();
+  uniqueRebuildCompilation.module.destroy();
+  throw new Error(
+    `aliased-rebuild WASM benchmark did not compile: ${
+      aliasedRebuildCompilation.diagnostics[0].message
+    }`,
+  );
+}
 
 const higherOrderBytes = await compileFunctionalModuleToWasm(higherOrderCompilation.module);
 const directBytes = await compileFunctionalModuleToWasm(directCompilation.module);
 const tailWorkerBytes = await compileFunctionalModuleToWasm(tailWorkerCompilation.module);
+const uniqueRebuildBytes = await compileFunctionalModuleToWasm(uniqueRebuildCompilation.module);
+if (!WebAssembly.validate(uniqueRebuildBytes)) {
+  throw new Error("unique-rebuild benchmark emitted invalid WASM");
+}
+const aliasedRebuildBytes = await compileFunctionalModuleToWasm(aliasedRebuildCompilation.module);
+if (!WebAssembly.validate(aliasedRebuildBytes)) {
+  throw new Error("aliased-rebuild benchmark emitted invalid WASM");
+}
 const higherOrderWasm = new WebAssembly.Module(higherOrderBytes);
 const directWasm = new WebAssembly.Module(directBytes);
 const tailWorkerWasm = new WebAssembly.Module(tailWorkerBytes);
@@ -203,11 +239,31 @@ if (
 ) {
   throw new Error("cached runner warmup returned the wrong value");
 }
+const uniqueRebuildWarmup = await runFunctionalWasmModule(uniqueRebuildCompilation.module);
+if (
+  uniqueRebuildWarmup.value.kind !== "tuple" ||
+  uniqueRebuildWarmup.value.values[0].kind !== "integer" ||
+  uniqueRebuildWarmup.value.values[0].value !== 128 ||
+  uniqueRebuildWarmup.stats.allocatedBytes !== 56
+) {
+  throw new Error("unique-rebuild runner warmup returned the wrong value or allocation count");
+}
+const aliasedRebuildWarmup = await runFunctionalWasmModule(aliasedRebuildCompilation.module);
+if (
+  aliasedRebuildWarmup.value.kind !== "tuple" ||
+  aliasedRebuildWarmup.value.values[0].kind !== "integer" ||
+  aliasedRebuildWarmup.value.values[0].value !== 128 ||
+  aliasedRebuildWarmup.stats.allocatedBytes !== 4_152
+) {
+  throw new Error("aliased-rebuild runner warmup returned the wrong value or allocation count");
+}
 
 globalThis.addEventListener("unload", () => {
   higherOrderCompilation.module.destroy();
   directCompilation.module.destroy();
   tailWorkerCompilation.module.destroy();
+  uniqueRebuildCompilation.module.destroy();
+  aliasedRebuildCompilation.module.destroy();
   device.destroy();
 }, { once: true });
 
@@ -228,6 +284,40 @@ Deno.bench("compile and emit WebAssembly: higher-order loop", async () => {
   }
 });
 
+Deno.bench("compile and emit WebAssembly: unique constructor rebuild chain", async () => {
+  const compilation = await compiler.compileModule(uniqueRebuildModule);
+  if (!compilation.ok) {
+    throw new Error(
+      `unique-rebuild WASM benchmark did not compile: ${compilation.diagnostics[0].message}`,
+    );
+  }
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    if (!WebAssembly.validate(bytes)) {
+      throw new Error("unique-rebuild benchmark emitted invalid WASM");
+    }
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.bench("compile and emit WebAssembly: aliased constructor rebuild chain", async () => {
+  const compilation = await compiler.compileModule(aliasedRebuildModule);
+  if (!compilation.ok) {
+    throw new Error(
+      `aliased-rebuild WASM benchmark did not compile: ${compilation.diagnostics[0].message}`,
+    );
+  }
+  try {
+    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    if (!WebAssembly.validate(bytes)) {
+      throw new Error("aliased-rebuild benchmark emitted invalid WASM");
+    }
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.bench("reuse emitted WebAssembly: lambda-set specialized higher-order loop", async () => {
   const bytes = await compileFunctionalModuleToWasm(higherOrderCompilation.module);
   if (!WebAssembly.validate(bytes)) throw new Error("higher-order benchmark emitted invalid WASM");
@@ -241,6 +331,20 @@ Deno.bench("reuse emitted WebAssembly: direct loop", async () => {
 Deno.bench("reuse emitted WebAssembly: uncurried numeric tail worker", async () => {
   const bytes = await compileFunctionalModuleToWasm(tailWorkerCompilation.module);
   if (!WebAssembly.validate(bytes)) throw new Error("tail-worker benchmark emitted invalid WASM");
+});
+
+Deno.bench("reuse emitted WebAssembly: unique constructor rebuild chain", async () => {
+  const bytes = await compileFunctionalModuleToWasm(uniqueRebuildCompilation.module);
+  if (!WebAssembly.validate(bytes)) {
+    throw new Error("unique-rebuild benchmark emitted invalid WASM");
+  }
+});
+
+Deno.bench("reuse emitted WebAssembly: aliased constructor rebuild chain", async () => {
+  const bytes = await compileFunctionalModuleToWasm(aliasedRebuildCompilation.module);
+  if (!WebAssembly.validate(bytes)) {
+    throw new Error("aliased-rebuild benchmark emitted invalid WASM");
+  }
 });
 
 Deno.bench("run WebAssembly: lambda-set specialized higher-order loop", () => {
@@ -266,6 +370,26 @@ Deno.bench("run WebAssembly: cached artifact with fresh instance", async () => {
   }
 });
 
+Deno.bench("run WebAssembly: unique constructor rebuild chain", async () => {
+  const execution = await runFunctionalWasmModule(uniqueRebuildCompilation.module);
+  if (
+    execution.value.kind !== "tuple" || execution.value.values[0].kind !== "integer" ||
+    execution.value.values[0].value !== 128 || execution.stats.allocatedBytes !== 56
+  ) {
+    throw new Error("unique-rebuild benchmark returned the wrong value or allocation count");
+  }
+});
+
+Deno.bench("run WebAssembly: aliased constructor rebuild chain", async () => {
+  const execution = await runFunctionalWasmModule(aliasedRebuildCompilation.module);
+  if (
+    execution.value.kind !== "tuple" || execution.value.values[0].kind !== "integer" ||
+    execution.value.values[0].value !== 128 || execution.stats.allocatedBytes !== 4_152
+  ) {
+    throw new Error("aliased-rebuild benchmark returned the wrong value or allocation count");
+  }
+});
+
 Deno.bench("run WebAssembly: warm uncurried numeric tail worker", () => {
   const result = tailWorkerWarmMain();
   if (result !== EXPECTED_RESULT) {
@@ -281,6 +405,75 @@ function runBenchmarkModule(module: WebAssembly.Module, context: string): void {
   if (result !== EXPECTED_RESULT) {
     throw new Error(`${context} benchmark returned ${result}; expected ${EXPECTED_RESULT}`);
   }
+}
+
+function constructorRebuildModule(
+  rebuildCount: number,
+  aliasing: "consume-once" | "retain-alias",
+) {
+  const pair = (
+    left: FunctionalSurfaceExpression,
+    right: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression =>
+    surface.apply(surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME), left, right);
+  let body: FunctionalSurfaceExpression = surface.name(`pair${rebuildCount}`);
+  for (let index = rebuildCount; index > 0; index -= 1) {
+    const previous = `pair${index - 1}`;
+    if (aliasing === "retain-alias") {
+      body = {
+        kind: "let",
+        name: `observed${index}`,
+        value: {
+          kind: "case",
+          value: surface.name(previous),
+          arms: [{
+            constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+            binders: ["left", "right"],
+            body: surface.name("left"),
+          }],
+        },
+        body,
+      };
+    }
+    body = {
+      kind: "let",
+      name: `pair${index}`,
+      value: {
+        kind: "case",
+        value: surface.name(previous),
+        arms: [{
+          constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+          binders: ["left", "right"],
+          body: pair(
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("left"),
+              surface.integer(1),
+            ),
+            surface.name("right"),
+          ),
+        }],
+      },
+      body,
+    };
+  }
+  return buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: {
+        kind: "let",
+        name: "pair0",
+        value: pair(surface.integer(0), surface.integer(42)),
+        body,
+      },
+    }],
+    [],
+    "main",
+    0,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
 }
 
 function controlFlowBaseline(): Uint8Array<ArrayBuffer> {

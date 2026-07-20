@@ -164,6 +164,12 @@ export {
   planFunctionalStorageReuse,
 } from "./src/functional/storage_reuse_plan.ts";
 export {
+  type FunctionalUniqueOwnershipOptions,
+  type FunctionalUniqueOwnershipRelease,
+  type FunctionalUniqueOwnershipResolution,
+  resolveFunctionalUniqueOwnership,
+} from "./src/functional/storage_ownership_resolution.ts";
+export {
   type FunctionalWasmAsyncRunOptions,
   type FunctionalWasmExecution,
   type FunctionalWasmRunOptions,

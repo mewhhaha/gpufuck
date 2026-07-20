@@ -3,6 +3,16 @@
 All notable changes to gpufuck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Added conservative unique-ownership resolution for complete immutable Storage Core traces,
+  including transitive last-use releases, escaping graphs, and exact-size reuse planning.
+- Added resolved-Core uniqueness and path-liveness analysis that reuses compatible strict
+  constructor allocations in Wasm while retaining fresh allocation for aliases, lazy values, owned
+  exports, captures, and layout changes.
+- Hardened Component Model WIT generation against identifier collisions, malformed resources, empty
+  variants, and cyclic or excessively deep type schemas.
+
 ## 0.3.0 - 2026-07-19
 
 - Expanded the Baba-based Gleam frontend to compile all 1,521 pinned JavaScript-targeted stdlib

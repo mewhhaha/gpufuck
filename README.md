@@ -405,6 +405,23 @@ matches a last release with a later allocation only when their declared byte len
 It is a planning boundary, not an unsound promise that arbitrary Core values are unique. Frontends
 must still provide the Storage Core ownership evidence that makes a release legal.
 
+`resolveFunctionalUniqueOwnership()` fills in final releases for a complete strict Storage Core
+trace under the `reject` sharing policy. It waits for the final recorded use of every child in an
+owned immutable graph, while `escapingValues` and references from non-owned values conservatively
+keep their whole graph alive. The resolved trace can feed `planFunctionalStorageReuse()` so a later
+exact-size allocation can reuse a released block. This is currently proof and planning: it does not
+rewrite arbitrary Wasm allocation sites, and an omitted `use` is not inferred from ordinary
+Functional Core.
+
+The Wasm backend separately derives a narrow reuse proof directly from resolved Core. In a fully
+strict module, a constructor result created inside the invocation can be rewritten in place when
+every possible path consumes it at most once as a case scrutinee, no other alias remains, and the
+replacement constructor has the same field count. The fields are read and all replacement values are
+evaluated before the header or payload is overwritten. Lazy boundaries, captures, host values, owned
+exports, repeated sequential uses, and layout changes retain fresh allocation. This backend
+optimization needs no frontend annotations and does not weaken the explicit Storage Core contract
+for externally owned graphs.
+
 `functionalWitWorld()` derives an optional WebAssembly Component Model world from public exports,
 host capabilities, resources, and concrete ADTs. `compileFunctionalComponentBoundary()` returns the
 WIT together with the ordinary core Wasm bytes; a component toolchain can componentize those bytes.

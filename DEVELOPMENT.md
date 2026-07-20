@@ -230,6 +230,7 @@ Relevant seams:
   facts consumed by emission;
 - `wasm_function_analysis.ts`: function shapes, reachability, tail calls, numeric folds;
 - `wasm_capture_analysis.ts`: lexical captures and environment layout;
+- `wasm_unique_reuse_analysis.ts`: strict constructor origins and path-sensitive final case uses;
 - `wasm_lambda_sets.ts`: finite callee-set analysis and specialization limits;
 - `wasm_codegen.ts`: orchestration and expression emission;
 - `wasm_host_emitter.ts`: built-in host-buffer literals and intrinsic emission;

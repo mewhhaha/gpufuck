@@ -737,13 +737,25 @@ generation:
 Releasing an owned root retires its outgoing ownership edges recursively. Explicitly retained or
 multiply owned descendants remain active until their last root or owner releases them.
 
-[`storage_reuse_plan.ts`](src/functional/storage_reuse_plan.ts) adds an optional Perceus-style
-planning step for strict owned traces. After Storage Core verification, it computes exact reference
-counts and pairs a last release with a later same-sized declaration. It does not yet rewrite general
-Core allocation sites: safe in-place mutation also needs explicit control-flow liveness and a
-runtime pointer identity, neither of which can be inferred from a bare type. This boundary follows
-the ordering in Perceus—precise release evidence first, reuse second—without claiming cycle
-collection or uniqueness that the frontend did not prove.
+[`storage_ownership_resolution.ts`](src/functional/storage_ownership_resolution.ts) derives final
+root releases from a complete linear trace under the no-sharing policy. A root stays live until the
+final recorded use of every transitively owned child. Explicit escapes and references held by
+non-owned values keep the whole graph alive. After Storage Core verification,
+[`storage_reuse_plan.ts`](src/functional/storage_reuse_plan.ts) computes exact reference counts and
+pairs a last release with a later same-sized declaration. These optional Perceus-style passes
+provide proof and planning for strict owned traces; they do not yet rewrite general Core allocation
+sites.
+
+[`wasm_unique_reuse_analysis.ts`](src/functional/wasm_unique_reuse_analysis.ts) supplies the
+narrower proof used by Wasm emission. It identifies constructor results that are fresh in the
+current invocation, follows de Bruijn binders in resolved Core, and computes the maximum number of
+consuming case uses on any control-flow path. Mutually exclusive arms contribute their maximum
+rather than their sum. A lambda capture or any non-case reference invalidates the proof. When the
+selected case returns a constructor with the same field count, code generation loads the old fields,
+evaluates all new fields, and only then rewrites the header and payload at the old pointer.
+Different layouts, lazy modules, owned exports, and ambiguous origins use the allocator. This
+boundary follows the ordering in Perceus—precise release evidence first, reuse second—without
+claiming cycle collection or uniqueness that was not proved.
 
 Failures carry `F6001`–`F6006`, the failing operation, an optional semantic Core node, and the names
 that violated the invariant. `planFunctionalModuleStorage()` returns the derived operations and

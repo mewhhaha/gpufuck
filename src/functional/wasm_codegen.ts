@@ -86,6 +86,7 @@ import {
   createFunctionalWasmBackendPlan,
   type FunctionalWasmBackendPlan,
 } from "./wasm_backend_plan.ts";
+import type { FunctionalWasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
 
 const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
@@ -128,11 +129,24 @@ interface StaticRecursiveFunction {
   readonly inlineAtSoleCall: boolean;
 }
 
+interface UniqueConstructorSource {
+  readonly kind: "unique-constructor";
+  readonly index: number;
+  readonly fieldCount: number;
+  readonly reusableCases: ReadonlySet<number>;
+}
+
+interface ConstructorReuseTarget {
+  readonly pointer: number;
+  readonly fieldCount: number;
+}
+
 type FunctionalBinding =
   | ValueSource
   | VirtualLambda
   | VirtualConstructor
-  | StaticRecursiveFunction;
+  | StaticRecursiveFunction
+  | UniqueConstructorSource;
 
 // A missing source preserves de Bruijn depth for a binding that this closure does not capture.
 type FunctionalEnvironment = readonly (FunctionalBinding | undefined)[];
@@ -198,6 +212,7 @@ class FunctionalWasmCompiler {
   readonly #nodes: readonly FunctionalCoreNode[];
   readonly #captureAnalysis: FunctionalWasmCaptureAnalysis;
   readonly #functionAnalysis: FunctionalWasmFunctionAnalysis;
+  readonly #uniqueReuseAnalysis: FunctionalWasmUniqueReuseAnalysis;
   readonly #storageDecisions: ReadonlyMap<string, FunctionalStorageDecision>;
   readonly #indirectFunctions: (WasmFunctionBody | undefined)[] = [];
   readonly #lambdaSlots: (number | undefined)[];
@@ -273,6 +288,7 @@ class FunctionalWasmCompiler {
       ]),
     );
     this.#functionAnalysis = plan.functionAnalysis;
+    this.#uniqueReuseAnalysis = plan.uniqueReuseAnalysis;
     this.#lambdaSlots = Array.from({ length: nodes.length }, () => undefined);
     for (const [nodeIndex, node] of nodes.entries()) {
       if (node.tag === FunctionalCoreTag.LetRec) {
@@ -1002,6 +1018,7 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     nodeIndex: number,
     environment: FunctionalEnvironment,
+    constructorReuse?: ConstructorReuseTarget,
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
@@ -1094,16 +1111,22 @@ class FunctionalWasmCompiler {
         this.compileLambda(instructions, nodeIndex, environment);
         return;
       case FunctionalCoreTag.Apply:
-        this.compileApply(instructions, node, environment, nodeIndex);
+        this.compileApply(
+          instructions,
+          node,
+          environment,
+          nodeIndex,
+          constructorReuse,
+        );
         return;
       case FunctionalCoreTag.Let:
-        this.compileLet(instructions, node, environment);
+        this.compileLet(instructions, node, environment, constructorReuse);
         return;
       case FunctionalCoreTag.LetRec:
         this.compileLetRec(instructions, node, environment, nodeIndex);
         return;
       case FunctionalCoreTag.If:
-        this.compileIf(instructions, node, environment);
+        this.compileIf(instructions, node, environment, constructorReuse);
         return;
       case FunctionalCoreTag.Unary:
         this.compileUnary(instructions, node, environment, nodeIndex);
@@ -1120,7 +1143,13 @@ class FunctionalWasmCompiler {
         );
         return;
       case FunctionalCoreTag.Case:
-        this.compileCase(instructions, node, environment, nodeIndex);
+        this.compileCase(
+          instructions,
+          node,
+          environment,
+          nodeIndex,
+          constructorReuse,
+        );
         return;
       case FunctionalCoreTag.CaseArm:
       case FunctionalCoreTag.PatternBind:
@@ -1225,6 +1254,7 @@ class FunctionalWasmCompiler {
     node: FunctionalCoreNode,
     environment: FunctionalEnvironment,
     nodeIndex: number,
+    constructorReuse?: ConstructorReuseTarget,
   ): void {
     const uncurriedApplication = this.uncurriedApplication(
       nodeIndex,
@@ -1265,6 +1295,7 @@ class FunctionalWasmCompiler {
           instructions,
           constructorApplication.constructorIndex,
           fields,
+          constructorReuse,
         );
       } else {
         this.emitClosure(
@@ -2126,13 +2157,14 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
     environment: FunctionalEnvironment,
+    constructorReuse?: ConstructorReuseTarget,
   ): void {
     const virtualValue = this.virtualLambda(node.child0, environment);
     if (virtualValue !== undefined) {
       this.compileExpression(instructions, node.child1, [
         virtualValue,
         ...environment,
-      ]);
+      ], constructorReuse);
       return;
     }
     const virtualConstructor = this.scalarSpecializationEnabled()
@@ -2142,7 +2174,7 @@ class FunctionalWasmCompiler {
       this.compileExpression(instructions, node.child1, [
         virtualConstructor,
         ...environment,
-      ]);
+      ], constructorReuse);
       return;
     }
     const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
@@ -2155,13 +2187,30 @@ class FunctionalWasmCompiler {
     }
     const value = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(value);
+    const fieldCount = eager &&
+        this.#module.evaluationProfile === FunctionalEvaluationProfile.StrictEager &&
+        !this.#hasLazyEvaluationBoundary && !this.#ownedRuntimeEnabled
+      ? this.#uniqueReuseAnalysis.uniqueConstructorFieldCount(node.child0)
+      : undefined;
+    const reusableCases = fieldCount === undefined
+      ? undefined
+      : this.#uniqueReuseAnalysis.reusableCases(node.child1, 0);
+    const binding: FunctionalBinding = fieldCount !== undefined && reusableCases !== undefined
+      ? {
+        kind: "unique-constructor",
+        index: value,
+        fieldCount,
+        reusableCases,
+      }
+      : { kind: eager ? "i64-value" : "i64-local", index: value };
     this.compileExpression(
       instructions,
       node.child1,
       [
-        { kind: eager ? "i64-value" : "i64-local", index: value },
+        binding,
         ...environment,
       ],
+      constructorReuse,
     );
   }
 
@@ -2262,12 +2311,13 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     node: FunctionalCoreNode,
     environment: FunctionalEnvironment,
+    constructorReuse?: ConstructorReuseTarget,
   ): void {
     this.compileBooleanExpression(instructions, node.child0, environment);
     instructions.emit(0x04, WasmValueType.I64);
-    this.compileExpression(instructions, node.child1, environment);
+    this.compileExpression(instructions, node.child1, environment, constructorReuse);
     instructions.emit(0x05);
-    this.compileExpression(instructions, node.child2, environment);
+    this.compileExpression(instructions, node.child2, environment, constructorReuse);
     instructions.emit(0x0b);
   }
 
@@ -3193,6 +3243,7 @@ class FunctionalWasmCompiler {
     node: FunctionalCoreNode,
     environment: FunctionalEnvironment,
     nodeIndex: number,
+    constructorReuse?: ConstructorReuseTarget,
   ): void {
     const virtualConstructor = this.scalarSpecializationEnabled()
       ? this.virtualConstructor(node.child0, environment)
@@ -3204,19 +3255,41 @@ class FunctionalWasmCompiler {
         virtualConstructor,
         environment,
         nodeIndex,
+        "value",
+        constructorReuse,
       );
       return;
     }
-    this.compileExpression(instructions, node.child0, environment);
-    instructions.emit(0xa7);
+    const scrutineeNode = this.node(node.child0);
+    const scrutinee = scrutineeNode.tag === FunctionalCoreTag.Local
+      ? this.localSource(environment, scrutineeNode.payload, node.child0)
+      : undefined;
     const constructor = instructions.addLocal(WasmValueType.I32);
-    instructions.localSet(constructor);
+    let resultReuse = constructorReuse;
+    if (
+      scrutinee?.kind === "unique-constructor" &&
+      scrutinee.reusableCases.has(nodeIndex)
+    ) {
+      this.#runtimeEmitter.emitFuelCharge(instructions, node.child0);
+      instructions.localGet(scrutinee.index);
+      instructions.emit(0xa7);
+      instructions.localSet(constructor);
+      resultReuse = {
+        pointer: constructor,
+        fieldCount: scrutinee.fieldCount,
+      };
+    } else {
+      this.compileExpression(instructions, node.child0, environment);
+      instructions.emit(0xa7);
+      instructions.localSet(constructor);
+    }
     this.compileCaseArm(
       instructions,
       node.child1,
       constructor,
       environment,
       nodeIndex,
+      resultReuse,
     );
   }
 
@@ -3227,6 +3300,7 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     caseNodeIndex: number,
     resultKind: "value" | "integer" = "value",
+    constructorReuse?: ConstructorReuseTarget,
   ): void {
     const arity = this.#module.constructorArities[constructor.constructorIndex];
     if (arity === undefined || constructor.arguments.length !== arity) {
@@ -3275,7 +3349,12 @@ class FunctionalWasmCompiler {
         if (resultKind === "integer") {
           this.compileIntegerExpression(instructions, bodyNode, armEnvironment);
         } else {
-          this.compileExpression(instructions, bodyNode, armEnvironment);
+          this.compileExpression(
+            instructions,
+            bodyNode,
+            armEnvironment,
+            constructorReuse,
+          );
         }
         return;
       }
@@ -3323,6 +3402,7 @@ class FunctionalWasmCompiler {
     constructor: number,
     environment: FunctionalEnvironment,
     caseNodeIndex: number,
+    constructorReuse?: ConstructorReuseTarget,
   ): void {
     let currentArmIndex = armIndex;
     let openArmCount = 0;
@@ -3365,7 +3445,12 @@ class FunctionalWasmCompiler {
         ];
         bodyNode = binding.child0;
       }
-      this.compileExpression(instructions, bodyNode, armEnvironment);
+      this.compileExpression(
+        instructions,
+        bodyNode,
+        armEnvironment,
+        constructorReuse,
+      );
       instructions.emit(0x05);
       openArmCount += 1;
       currentArmIndex = arm.child1;
@@ -3939,13 +4024,26 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     constructorIndex: number,
     fields: readonly FunctionalBinding[],
+    reuse?: ConstructorReuseTarget,
   ): void {
-    const pointer = this.allocateObject(
+    const reusesAllocation = reuse?.fieldCount === fields.length;
+    const pointer = reusesAllocation ? reuse.pointer : this.allocateObject(
       instructions,
       CONSTRUCTOR_OBJECT_KIND,
       constructorIndex,
       fields.length,
     );
+    if (reusesAllocation) {
+      instructions.localGet(pointer);
+      instructions.i32Const(CONSTRUCTOR_OBJECT_KIND);
+      instructions.i32Store(0);
+      instructions.localGet(pointer);
+      instructions.i32Const(constructorIndex);
+      instructions.i32Store(4);
+      instructions.localGet(pointer);
+      instructions.i32Const(fields.length);
+      instructions.i32Store(8);
+    }
     for (const [index, source] of fields.entries()) {
       instructions.localGet(pointer);
       this.emitBinding(instructions, source);
@@ -3989,6 +4087,7 @@ class FunctionalWasmCompiler {
     switch (source.kind) {
       case "i64-local":
       case "i64-value":
+      case "unique-constructor":
         instructions.localGet(source.index);
         return;
       case "i32-integer":

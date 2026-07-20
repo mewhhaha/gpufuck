@@ -11,12 +11,14 @@ import { FunctionalWasmFunctionAnalysis } from "./wasm_function_analysis.ts";
 import type { FunctionalStoragePlan } from "./storage_contract.ts";
 import { createFunctionalStoragePlan } from "./storage_plan.ts";
 import { requireFirstOrderFunctionalWasmType } from "./wasm_value_codec.ts";
+import { FunctionalWasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
 
 export interface FunctionalWasmBackendPlan {
   readonly module: GpuFunctionalModule;
   readonly nodes: readonly FunctionalCoreNode[];
   readonly captureAnalysis: FunctionalWasmCaptureAnalysis;
   readonly functionAnalysis: FunctionalWasmFunctionAnalysis;
+  readonly uniqueReuseAnalysis: FunctionalWasmUniqueReuseAnalysis;
   readonly storage: FunctionalStoragePlan;
   readonly entry: FunctionalWasmEntry;
   readonly compactScalarEligible: boolean;
@@ -52,6 +54,7 @@ export function createFunctionalWasmBackendPlan(
     nodes,
     captureAnalysis,
     functionAnalysis: new FunctionalWasmFunctionAnalysis(nodes, module.definitionRoots),
+    uniqueReuseAnalysis: new FunctionalWasmUniqueReuseAnalysis(module, nodes),
     storage,
     entry,
     compactScalarEligible,
