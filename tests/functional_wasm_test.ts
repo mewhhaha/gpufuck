@@ -98,6 +98,18 @@ Deno.test("runtime type descriptor construction rejects cyclic schemas before su
   );
 });
 
+Deno.test("runtime type descriptors bound expansion of structurally shared schemas", () => {
+  let sharedType: FunctionalType = { kind: "integer" };
+  for (let depth = 0; depth < 13; depth += 1) {
+    sharedType = { kind: "tuple", values: [sharedType, sharedType] };
+  }
+
+  throws(
+    () => functionalRuntimeTypeDescriptorKey(sharedType),
+    /runtime type exceeds 4096 nodes/,
+  );
+});
+
 let runtime: FunctionalWasmRuntime | undefined;
 
 Deno.test.beforeAll(async () => {

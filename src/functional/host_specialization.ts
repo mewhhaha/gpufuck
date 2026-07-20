@@ -2,6 +2,14 @@ import type { FunctionalType, FunctionalTypeSchema } from "./abi.ts";
 import type { FunctionalHostOperationDeclaration, FunctionalHostType } from "./host_contract.ts";
 import type { FunctionalRuntimeTypeDescriptor } from "./wasm_contract.ts";
 
+const MAXIMUM_RUNTIME_TYPE_DEPTH = 64;
+const MAXIMUM_RUNTIME_TYPE_NODES = 4_096;
+
+interface RuntimeTypeTraversal {
+  readonly activeTypes: WeakSet<object>;
+  remainingNodes: number;
+}
+
 export function specializeFunctionalHostOperation(
   operation: FunctionalHostOperationDeclaration,
   substitutions: Readonly<Record<string, FunctionalHostType>>,
@@ -97,14 +105,14 @@ export function functionalRuntimeTypeDescriptor(
   substitutions: Readonly<Record<string, FunctionalHostType>> = {},
 ): FunctionalRuntimeTypeDescriptor {
   const type = substituteType(schema, substitutions);
-  requireRuntimeType(type, "$", 0, new WeakSet());
+  requireRuntimeType(type, "$", 0, runtimeTypeTraversal());
   return type as FunctionalType;
 }
 
 export function functionalRuntimeTypeDescriptorKey(
   descriptor: FunctionalRuntimeTypeDescriptor,
 ): string {
-  requireRuntimeType(descriptor, "$", 0, new WeakSet());
+  requireRuntimeType(descriptor, "$", 0, runtimeTypeTraversal());
   return JSON.stringify(runtimeTypeKeyValue(descriptor));
 }
 
@@ -113,16 +121,21 @@ function substituteType(
   substitutions: Readonly<Record<string, FunctionalHostType>>,
   path = "$",
   depth = 0,
-  activeTypes: WeakSet<object> = new WeakSet(),
+  traversal: RuntimeTypeTraversal = runtimeTypeTraversal(),
 ): FunctionalHostType {
-  if (depth > 64) throw new RangeError(`functional type schema exceeds depth 64 at ${path}`);
+  if (depth > MAXIMUM_RUNTIME_TYPE_DEPTH) {
+    throw new RangeError(
+      `functional type schema exceeds depth ${MAXIMUM_RUNTIME_TYPE_DEPTH} at ${path}`,
+    );
+  }
+  consumeRuntimeTypeNode(traversal, "functional type schema", path);
   if (schema === null || typeof schema !== "object" || typeof schema.kind !== "string") {
     throw new TypeError(`functional type schema is malformed at ${path}`);
   }
-  if (activeTypes.has(schema)) {
+  if (traversal.activeTypes.has(schema)) {
     throw new TypeError(`functional type schema contains a structural cycle at ${path}`);
   }
-  activeTypes.add(schema);
+  traversal.activeTypes.add(schema);
   try {
     switch (schema.kind) {
       case "integer":
@@ -153,8 +166,8 @@ function substituteType(
         return {
           kind: "tuple",
           values: [
-            substituteType(schema.values[0], substitutions, `${path}.0`, depth + 1, activeTypes),
-            substituteType(schema.values[1], substitutions, `${path}.1`, depth + 1, activeTypes),
+            substituteType(schema.values[0], substitutions, `${path}.0`, depth + 1, traversal),
+            substituteType(schema.values[1], substitutions, `${path}.1`, depth + 1, traversal),
           ],
         };
       case "named":
@@ -173,7 +186,7 @@ function substituteType(
               substitutions,
               `${path}.arguments[${index}]`,
               depth + 1,
-              activeTypes,
+              traversal,
             )
           ),
         };
@@ -185,14 +198,14 @@ function substituteType(
             substitutions,
             `${path}.parameter`,
             depth + 1,
-            activeTypes,
+            traversal,
           ),
           result: substituteType(
             schema.result,
             substitutions,
             `${path}.result`,
             depth + 1,
-            activeTypes,
+            traversal,
           ),
         };
       case "forall":
@@ -205,7 +218,7 @@ function substituteType(
         );
     }
   } finally {
-    activeTypes.delete(schema);
+    traversal.activeTypes.delete(schema);
   }
 }
 
@@ -213,13 +226,18 @@ function requireRuntimeType(
   type: FunctionalTypeSchema,
   path: string,
   depth: number,
-  activeTypes: WeakSet<object>,
+  traversal: RuntimeTypeTraversal,
 ): void {
-  if (depth > 64) throw new RangeError(`functional runtime type exceeds depth 64 at ${path}`);
+  if (depth > MAXIMUM_RUNTIME_TYPE_DEPTH) {
+    throw new RangeError(
+      `functional runtime type exceeds depth ${MAXIMUM_RUNTIME_TYPE_DEPTH} at ${path}`,
+    );
+  }
+  consumeRuntimeTypeNode(traversal, "functional runtime type", path);
   if (type === null || typeof type !== "object" || typeof type.kind !== "string") {
     throw new TypeError(`functional runtime type is malformed at ${path}`);
   }
-  if (activeTypes.has(type)) {
+  if (traversal.activeTypes.has(type)) {
     throw new TypeError(`functional runtime type contains a structural cycle at ${path}`);
   }
   if (type.kind === "function") {
@@ -232,12 +250,12 @@ function requireRuntimeType(
     if (!Array.isArray(type.values) || type.values.length !== 2) {
       throw new TypeError(`functional runtime tuple type needs two values at ${path}`);
     }
-    activeTypes.add(type);
+    traversal.activeTypes.add(type);
     try {
-      requireRuntimeType(type.values[0], `${path}.0`, depth + 1, activeTypes);
-      requireRuntimeType(type.values[1], `${path}.1`, depth + 1, activeTypes);
+      requireRuntimeType(type.values[0], `${path}.0`, depth + 1, traversal);
+      requireRuntimeType(type.values[1], `${path}.1`, depth + 1, traversal);
     } finally {
-      activeTypes.delete(type);
+      traversal.activeTypes.delete(type);
     }
     return;
   }
@@ -248,13 +266,13 @@ function requireRuntimeType(
     if (!Array.isArray(type.arguments)) {
       throw new TypeError(`functional runtime named type needs arguments at ${path}`);
     }
-    activeTypes.add(type);
+    traversal.activeTypes.add(type);
     try {
       for (const [index, argument] of type.arguments.entries()) {
-        requireRuntimeType(argument, `${path}.arguments[${index}]`, depth + 1, activeTypes);
+        requireRuntimeType(argument, `${path}.arguments[${index}]`, depth + 1, traversal);
       }
     } finally {
-      activeTypes.delete(type);
+      traversal.activeTypes.delete(type);
     }
     return;
   }
@@ -267,6 +285,26 @@ function requireRuntimeType(
       JSON.stringify((type as { kind: unknown }).kind)
     } at ${path}`,
   );
+}
+
+function runtimeTypeTraversal(): RuntimeTypeTraversal {
+  return {
+    activeTypes: new WeakSet(),
+    remainingNodes: MAXIMUM_RUNTIME_TYPE_NODES,
+  };
+}
+
+function consumeRuntimeTypeNode(
+  traversal: RuntimeTypeTraversal,
+  description: string,
+  path: string,
+): void {
+  if (traversal.remainingNodes === 0) {
+    throw new RangeError(
+      `${description} exceeds ${MAXIMUM_RUNTIME_TYPE_NODES} nodes at ${path}`,
+    );
+  }
+  traversal.remainingNodes -= 1;
 }
 
 function runtimeTypeKeyValue(type: FunctionalRuntimeTypeDescriptor): unknown {
