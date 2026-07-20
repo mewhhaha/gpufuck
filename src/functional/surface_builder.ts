@@ -56,16 +56,11 @@ export type {
 
 const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
 const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
-const MAXIMUM_SURFACE_STRUCTURE_DEPTH = 512;
+const MAXIMUM_SURFACE_TYPE_DEPTH = 512;
 const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
 
 interface SurfaceTypeTraversal {
   readonly activeTypes: WeakSet<object>;
-  remainingNodes: number;
-}
-
-interface SurfaceExpressionTraversal {
-  readonly activeExpressions: WeakSet<object>;
   remainingNodes: number;
 }
 
@@ -273,9 +268,9 @@ function requireSurfaceTypeSchema(
     remainingNodes: MAXIMUM_SURFACE_TYPE_NODES,
   },
 ): void {
-  if (depth > MAXIMUM_SURFACE_STRUCTURE_DEPTH) {
+  if (depth > MAXIMUM_SURFACE_TYPE_DEPTH) {
     throw new RangeError(
-      `functional surface ${location} exceeds type depth ${MAXIMUM_SURFACE_STRUCTURE_DEPTH}`,
+      `functional surface ${location} exceeds type depth ${MAXIMUM_SURFACE_TYPE_DEPTH}`,
     );
   }
   if (traversal.remainingNodes === 0) {
@@ -651,71 +646,84 @@ function collectBoundaryTypeNames(
   return names;
 }
 
-function expressionFeatureMask(
-  expression: FunctionalSurfaceExpression,
-  depth = 0,
-  traversal: SurfaceExpressionTraversal = {
-    activeExpressions: new WeakSet(),
-    remainingNodes: FUNCTIONAL_MAXIMUM_EXPRESSION_NODES,
-  },
-): number {
-  if (depth > MAXIMUM_SURFACE_STRUCTURE_DEPTH) {
-    throw new RangeError(
-      `functional surface expression exceeds depth ${MAXIMUM_SURFACE_STRUCTURE_DEPTH}`,
-    );
-  }
-  if (traversal.remainingNodes === 0) {
-    throw new RangeError(
-      `functional surface expression exceeds ${FUNCTIONAL_MAXIMUM_EXPRESSION_NODES} nodes`,
-    );
-  }
-  traversal.remainingNodes -= 1;
-  if (
-    expression === null || typeof expression !== "object" ||
-    typeof expression.kind !== "string"
-  ) {
-    throw new TypeError("functional surface expression must be an object with a kind");
-  }
-  if (traversal.activeExpressions.has(expression)) {
-    throw new TypeError("functional surface expression contains a structural cycle");
-  }
-  const nested = (child: FunctionalSurfaceExpression): number =>
-    expressionFeatureMask(child, depth + 1, traversal);
-  traversal.activeExpressions.add(expression);
-  try {
-    switch (expression.kind) {
+function expressionFeatureMask(expression: FunctionalSurfaceExpression): number {
+  const activeExpressions = new WeakSet<object>();
+  const pending: {
+    readonly expression: FunctionalSurfaceExpression;
+    readonly exiting: boolean;
+  }[] = [{ expression, exiting: false }];
+  let remainingNodes = FUNCTIONAL_MAXIMUM_EXPRESSION_NODES;
+  let features = 0;
+  while (pending.length !== 0) {
+    const current = pending.pop();
+    if (current === undefined) continue;
+    if (current.exiting) {
+      activeExpressions.delete(current.expression);
+      continue;
+    }
+    if (remainingNodes === 0) {
+      throw new RangeError(
+        `functional surface expression exceeds ${FUNCTIONAL_MAXIMUM_EXPRESSION_NODES} nodes`,
+      );
+    }
+    remainingNodes -= 1;
+    const nested = current.expression;
+    if (
+      nested === null || typeof nested !== "object" ||
+      typeof nested.kind !== "string"
+    ) {
+      throw new TypeError("functional surface expression must be an object with a kind");
+    }
+    if (activeExpressions.has(nested)) {
+      throw new TypeError("functional surface expression contains a structural cycle");
+    }
+    activeExpressions.add(nested);
+    pending.push({ expression: nested, exiting: true });
+    const visit = (child: FunctionalSurfaceExpression): void => {
+      pending.push({ expression: child, exiting: false });
+    };
+    switch (nested.kind) {
       case "name":
-        return expression.name === FUNCTIONAL_THUNK_CONSTRUCTOR_NAME
-          ? SURFACE_FEATURE_EXPLICIT_THUNK
-          : 0;
+        if (nested.name === FUNCTIONAL_THUNK_CONSTRUCTOR_NAME) {
+          features |= SURFACE_FEATURE_EXPLICIT_THUNK;
+        }
+        break;
       case "lambda":
-        return nested(expression.body);
+        visit(nested.body);
+        break;
       case "let":
       case "let-rec":
-        return nested(expression.value) | nested(expression.body);
+        visit(nested.body);
+        visit(nested.value);
+        break;
       case "let-rec-group":
-        return expression.bindings.reduce(
-          (features, binding) => features | nested(binding.body),
-          SURFACE_FEATURE_RECURSIVE_GROUP | nested(expression.body),
-        );
+        features |= SURFACE_FEATURE_RECURSIVE_GROUP;
+        visit(nested.body);
+        for (const binding of nested.bindings) visit(binding.body);
+        break;
       case "if":
-        return nested(expression.condition) |
-          nested(expression.consequent) |
-          nested(expression.alternate);
+        visit(nested.alternate);
+        visit(nested.consequent);
+        visit(nested.condition);
+        break;
       case "apply":
-        return nested(expression.callee) | nested(expression.argument);
+        visit(nested.argument);
+        visit(nested.callee);
+        break;
       case "binary":
       case "text-append":
       case "bytes-append":
-        return nested(expression.left) | nested(expression.right);
+        visit(nested.right);
+        visit(nested.left);
+        break;
       case "unary":
       case "numeric-convert":
-        return nested(expression.value);
+        visit(nested.value);
+        break;
       case "case":
-        return expression.arms.reduce(
-          (features, arm) => features | nested(arm.body),
-          nested(expression.value),
-        );
+        for (const arm of nested.arms) visit(arm.body);
+        visit(nested.value);
+        break;
       case "integer":
       case "signed-integer-64":
       case "float-32":
@@ -725,17 +733,16 @@ function expressionFeatureMask(
       case "text":
       case "bytes":
       case "runtime-fault":
-        return 0;
+        break;
       default:
         throw new TypeError(
           `functional surface expression has unsupported kind ${
-            JSON.stringify((expression as { readonly kind: unknown }).kind)
+            JSON.stringify((nested as { readonly kind: unknown }).kind)
           }`,
         );
     }
-  } finally {
-    traversal.activeExpressions.delete(expression);
   }
+  return features;
 }
 
 function boundaryTypeDeclaration(
