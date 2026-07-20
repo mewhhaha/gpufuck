@@ -30,6 +30,9 @@ export async function compileFunctionalModuleToWasm(
   module: GpuFunctionalModule,
   options: FunctionalWasmCompilationOptions = {},
 ): Promise<Uint8Array<ArrayBuffer>> {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("functional WASM compilation options must be an object");
+  }
   if (options.storageCore !== undefined || options.ownedTypeExports !== undefined) {
     return compileFunctionalWasmArtifact(
       module,

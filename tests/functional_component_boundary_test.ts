@@ -2,6 +2,7 @@ import { equal, match, rejects, throws } from "node:assert/strict";
 
 import {
   compileFunctionalComponentBoundary,
+  compileFunctionalModuleToWasm,
   FUNCTIONAL_RESOURCE_TYPE_PREFIX,
   type FunctionalHostCapabilityDeclaration,
   FunctionalHostTypes,
@@ -222,6 +223,22 @@ Deno.test("component compilation validates WIT before reading GPU core nodes", a
   await rejects(
     () => compileFunctionalComponentBoundary(module),
     /WIT boundaries require concrete monomorphized types/,
+  );
+  equal(coreNodeReads, 0);
+});
+
+Deno.test("WASM compilation rejects malformed options before reading GPU core nodes", async () => {
+  let coreNodeReads = 0;
+  const module = boundaryModule({
+    readCoreNodes: () => {
+      coreNodeReads += 1;
+      return Promise.resolve([]);
+    },
+  });
+
+  await rejects(
+    () => compileFunctionalModuleToWasm(module, null as unknown as {}),
+    /WASM compilation options must be an object/,
   );
   equal(coreNodeReads, 0);
 });
