@@ -4,6 +4,8 @@ import type {
   FunctionalSurfaceRecursiveBinding,
 } from "./surface_contract.ts";
 
+const MAXIMUM_RECURSIVE_GROUP_CAPTURES = 512;
+
 interface RecursiveGroupElaboration {
   readonly definitions: FunctionalSurfaceDefinition[];
   readonly globalNames: Set<string>;
@@ -151,6 +153,11 @@ function elaborateRecursiveGroup(
     }
   }
   const captureNames = [...captures].sort();
+  if (captureNames.length > MAXIMUM_RECURSIVE_GROUP_CAPTURES) {
+    throw new RangeError(
+      `functional recursive group captures ${captureNames.length} lexical names; maximum is ${MAXIMUM_RECURSIVE_GROUP_CAPTURES}`,
+    );
+  }
   const generatedNames = new Map<string, string>();
   const groupId = elaboration.nextGroupId++;
   for (const binding of bindings) {

@@ -178,6 +178,43 @@ Deno.test("surface encoding handles wide case lists without host recursion", () 
   equal(module.nodeCount, 2 + armCount * 2);
 });
 
+Deno.test("surface validation bounds application chains created by recursive-group lifting", () => {
+  const captureCount = 513;
+  const parameters = Array.from({ length: captureCount }, (_, index) => `capture${index}`);
+
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{
+          name: "main",
+          parameters,
+          annotation: null,
+          body: {
+            kind: "let-rec-group",
+            bindings: [{
+              name: "choice",
+              parameters: [],
+              body: {
+                kind: "case",
+                value: surface.integer(0),
+                arms: parameters.map((parameter, index) => ({
+                  constructor: `Constructor${index}`,
+                  binders: [],
+                  body: surface.name(parameter),
+                })),
+              },
+            }],
+            body: surface.name("choice"),
+          },
+        }],
+        [],
+        "main",
+        0,
+      ),
+    /recursive group captures 513 lexical names; maximum is 512/,
+  );
+});
+
 function functionalRuntime(): FunctionalRuntime {
   if (runtime === undefined) throw new Error("functional test runtime was not initialized");
   return runtime;

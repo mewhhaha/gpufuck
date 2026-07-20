@@ -56,7 +56,7 @@ export type {
 
 const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
 const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
-const MAXIMUM_SURFACE_TYPE_DEPTH = 512;
+const MAXIMUM_SURFACE_STRUCTURE_DEPTH = 512;
 const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
 
 interface SurfaceTypeTraversal {
@@ -115,6 +115,9 @@ export function buildFunctionalSurfaceModule(
   const elaboratedDefinitions = surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP
     ? elaborateFunctionalRecursiveGroups(definitions)
     : definitions;
+  if ((surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP) !== 0) {
+    for (const definition of elaboratedDefinitions) expressionFeatureMask(definition.body);
+  }
   const evaluationProfile = options.evaluationProfile ?? FunctionalEvaluationProfile.StrictEager;
   requireEvaluationProfile(evaluationProfile, "functional surface module");
   const hostCapabilities = normalizeFunctionalHostCapabilities(options.hostCapabilities);
@@ -267,9 +270,9 @@ function requireSurfaceTypeSchema(
     remainingNodes: MAXIMUM_SURFACE_TYPE_NODES,
   },
 ): void {
-  if (depth > MAXIMUM_SURFACE_TYPE_DEPTH) {
+  if (depth > MAXIMUM_SURFACE_STRUCTURE_DEPTH) {
     throw new RangeError(
-      `functional surface ${location} exceeds type depth ${MAXIMUM_SURFACE_TYPE_DEPTH}`,
+      `functional surface ${location} exceeds type depth ${MAXIMUM_SURFACE_STRUCTURE_DEPTH}`,
     );
   }
   if (traversal.remainingNodes === 0) {
@@ -653,9 +656,9 @@ function expressionFeatureMask(
     remainingNodes: FUNCTIONAL_MAXIMUM_EXPRESSION_NODES,
   },
 ): number {
-  if (depth > MAXIMUM_SURFACE_TYPE_DEPTH) {
+  if (depth > MAXIMUM_SURFACE_STRUCTURE_DEPTH) {
     throw new RangeError(
-      `functional surface expression exceeds depth ${MAXIMUM_SURFACE_TYPE_DEPTH}`,
+      `functional surface expression exceeds depth ${MAXIMUM_SURFACE_STRUCTURE_DEPTH}`,
     );
   }
   if (traversal.remainingNodes === 0) {
