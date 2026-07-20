@@ -282,7 +282,11 @@ function freeNames(
       case "signed-integer-64":
       case "float-32":
       case "float-64":
+      case "whole-number-f64":
       case "boolean":
+      case "text":
+      case "bytes":
+      case "runtime-fault":
         return;
       case "name":
         if (!scope.has(nested.name)) names.add(nested.name);
@@ -322,6 +326,8 @@ function freeNames(
         visit(nested.value, scope);
         return;
       case "binary":
+      case "text-append":
+      case "bytes-append":
         visit(nested.left, scope);
         visit(nested.right, scope);
         return;

@@ -102,6 +102,48 @@ Deno.test("mutually recursive local functions retain lexical captures", async ()
   }
 });
 
+Deno.test("recursive groups retain captures used by buffer operations", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: {
+        kind: "let",
+        name: "prefix",
+        value: surface.text("GPU"),
+        body: {
+          kind: "let-rec-group",
+          bindings: [{
+            name: "message",
+            parameters: [],
+            body: {
+              kind: "text-append",
+              left: surface.name("prefix"),
+              right: surface.text("!"),
+            },
+          }],
+          body: surface.name("message"),
+        },
+      },
+    }],
+    [],
+    "main",
+    0,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
+
+  const compilation = await functionalCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "text", value: "GPU!" });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("storage planning separates static, scalar-local, and recursive closures", async () => {
   const encoded = buildFunctionalSurfaceModule(
     [{
