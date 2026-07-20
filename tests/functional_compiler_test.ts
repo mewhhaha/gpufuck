@@ -17,6 +17,7 @@ import {
   type FunctionalModuleArtifact,
   FunctionalNodeWord,
   FunctionalTypecheckingProfile,
+  type FunctionalTypeSchema,
   FunctionalWasmIntrinsic,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
@@ -50,6 +51,45 @@ Deno.test.beforeAll(async () => {
 Deno.test.afterAll(() => {
   runtime?.device.destroy();
   runtime = undefined;
+});
+
+Deno.test("surface type schemas reject structural cycles before encoding", () => {
+  const typeArguments: FunctionalTypeSchema[] = [];
+  const cyclicType = {
+    kind: "named",
+    name: "Cycle",
+    arguments: typeArguments,
+  } as FunctionalTypeSchema;
+  typeArguments.push(cyclicType);
+
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: cyclicType, body: surface.integer(0) }],
+        [],
+        "main",
+        0,
+      ),
+    /definition 0 annotation contains a structural type cycle/,
+  );
+});
+
+Deno.test("surface type schemas bound expansion of structurally shared annotations", () => {
+  let sharedType: FunctionalTypeSchema = { kind: "integer" };
+  for (let depth = 0; depth < 13; depth += 1) {
+    sharedType = { kind: "tuple", values: [sharedType, sharedType] };
+  }
+
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: sharedType, body: surface.integer(0) }],
+        [],
+        "main",
+        0,
+      ),
+    /definition 0 annotation exceeds 4096 type nodes/,
+  );
 });
 
 function functionalRuntime(): FunctionalRuntime {

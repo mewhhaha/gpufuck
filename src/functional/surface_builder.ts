@@ -55,6 +55,13 @@ export type {
 
 const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
 const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
+const MAXIMUM_SURFACE_TYPE_DEPTH = 512;
+const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
+
+interface SurfaceTypeTraversal {
+  readonly activeTypes: WeakSet<object>;
+  remainingNodes: number;
+}
 
 export function functionalThunkType(value: FunctionalTypeSchema): FunctionalTypeSchema {
   return {
@@ -71,6 +78,30 @@ export function buildFunctionalSurfaceModule(
   sourceByteLength: number,
   options: FunctionalSurfaceModuleOptions = {},
 ): EncodedFunctionalModule {
+  for (const [definitionIndex, definition] of definitions.entries()) {
+    if (definition.annotation !== null) {
+      requireSurfaceTypeSchema(
+        definition.annotation,
+        `definition ${definitionIndex} annotation`,
+      );
+    }
+  }
+  for (const [typeIndex, declaration] of typeDeclarations.entries()) {
+    for (const [constructorIndex, constructor] of declaration.constructors.entries()) {
+      for (const [fieldIndex, field] of constructor.fields.entries()) {
+        requireSurfaceTypeSchema(
+          field.type,
+          `type ${typeIndex} constructor ${constructorIndex} field ${fieldIndex}`,
+        );
+      }
+      if (constructor.result !== undefined) {
+        requireSurfaceTypeSchema(
+          constructor.result,
+          `type ${typeIndex} constructor ${constructorIndex} result`,
+        );
+      }
+    }
+  }
   let surfaceFeatures = 0;
   for (const definition of definitions) {
     surfaceFeatures |= expressionFeatureMask(definition.body);
@@ -219,6 +250,117 @@ export function buildFunctionalSurfaceModule(
       })),
     })),
   };
+}
+
+function requireSurfaceTypeSchema(
+  schema: FunctionalTypeSchema,
+  location: string,
+  depth = 0,
+  traversal: SurfaceTypeTraversal = {
+    activeTypes: new WeakSet(),
+    remainingNodes: MAXIMUM_SURFACE_TYPE_NODES,
+  },
+): void {
+  if (depth > MAXIMUM_SURFACE_TYPE_DEPTH) {
+    throw new RangeError(
+      `functional surface ${location} exceeds type depth ${MAXIMUM_SURFACE_TYPE_DEPTH}`,
+    );
+  }
+  if (traversal.remainingNodes === 0) {
+    throw new RangeError(
+      `functional surface ${location} exceeds ${MAXIMUM_SURFACE_TYPE_NODES} type nodes`,
+    );
+  }
+  traversal.remainingNodes -= 1;
+  if (schema === null || typeof schema !== "object" || typeof schema.kind !== "string") {
+    throw new TypeError(`functional surface ${location} must be a type object`);
+  }
+  if (traversal.activeTypes.has(schema)) {
+    throw new TypeError(`functional surface ${location} contains a structural type cycle`);
+  }
+  switch (schema.kind) {
+    case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+    case "boolean":
+    case "unit":
+      return;
+    case "parameter":
+      if (typeof schema.name !== "string" || schema.name.length === 0) {
+        throw new TypeError(`functional surface ${location} has an unnamed type parameter`);
+      }
+      return;
+    case "tuple":
+      if (!Array.isArray(schema.values) || schema.values.length !== 2) {
+        throw new TypeError(`functional surface ${location} tuple must contain two values`);
+      }
+      traversal.activeTypes.add(schema);
+      try {
+        requireSurfaceTypeSchema(schema.values[0], location, depth + 1, traversal);
+        requireSurfaceTypeSchema(schema.values[1], location, depth + 1, traversal);
+      } finally {
+        traversal.activeTypes.delete(schema);
+      }
+      return;
+    case "named":
+      if (typeof schema.name !== "string" || schema.name.length === 0) {
+        throw new TypeError(`functional surface ${location} has an unnamed named type`);
+      }
+      if (!Array.isArray(schema.arguments)) {
+        throw new TypeError(`functional surface ${location} named type arguments must be an array`);
+      }
+      traversal.activeTypes.add(schema);
+      try {
+        for (const argument of schema.arguments) {
+          requireSurfaceTypeSchema(argument, location, depth + 1, traversal);
+        }
+      } finally {
+        traversal.activeTypes.delete(schema);
+      }
+      return;
+    case "function":
+      traversal.activeTypes.add(schema);
+      try {
+        requireSurfaceTypeSchema(schema.parameter, location, depth + 1, traversal);
+        requireSurfaceTypeSchema(schema.result, location, depth + 1, traversal);
+      } finally {
+        traversal.activeTypes.delete(schema);
+      }
+      return;
+    case "forall": {
+      if (!Array.isArray(schema.parameters) || schema.parameters.length === 0) {
+        throw new TypeError(`functional surface ${location} forall needs type parameters`);
+      }
+      const parameters = new Set<string>();
+      for (const [parameterIndex, parameter] of schema.parameters.entries()) {
+        if (typeof parameter !== "string" || parameter.length === 0) {
+          throw new TypeError(
+            `functional surface ${location} forall parameter ${parameterIndex} must be named`,
+          );
+        }
+        if (parameters.has(parameter)) {
+          throw new TypeError(
+            `functional surface ${location} repeats forall parameter ${JSON.stringify(parameter)}`,
+          );
+        }
+        parameters.add(parameter);
+      }
+      traversal.activeTypes.add(schema);
+      try {
+        requireSurfaceTypeSchema(schema.body, location, depth + 1, traversal);
+      } finally {
+        traversal.activeTypes.delete(schema);
+      }
+      return;
+    }
+    default:
+      throw new TypeError(
+        `functional surface ${location} has unsupported type kind ${
+          JSON.stringify((schema as { readonly kind: unknown }).kind)
+        }`,
+      );
+  }
 }
 
 function normalizeHostDefinitions(
