@@ -75,6 +75,20 @@ Deno.test("surface type schemas reject structural cycles before encoding", () =>
   );
 });
 
+Deno.test("surface module construction rejects malformed options at its boundary", () => {
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: surface.integer(0) }],
+        [],
+        "main",
+        0,
+        null as unknown as {},
+      ),
+    /surface module options must be an object/,
+  );
+});
+
 Deno.test("surface type schemas bound expansion of structurally shared annotations", () => {
   let sharedType: FunctionalTypeSchema = { kind: "integer" };
   for (let depth = 0; depth < 13; depth += 1) {

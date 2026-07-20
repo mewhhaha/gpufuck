@@ -84,6 +84,9 @@ export function buildFunctionalSurfaceModule(
   sourceByteLength: number,
   options: FunctionalSurfaceModuleOptions = {},
 ): EncodedFunctionalModule {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("functional surface module options must be an object");
+  }
   for (const [definitionIndex, definition] of definitions.entries()) {
     if (definition.annotation !== null) {
       requireSurfaceTypeSchema(
