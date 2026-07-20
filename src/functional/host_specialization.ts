@@ -97,14 +97,14 @@ export function functionalRuntimeTypeDescriptor(
   substitutions: Readonly<Record<string, FunctionalHostType>> = {},
 ): FunctionalRuntimeTypeDescriptor {
   const type = substituteType(schema, substitutions);
-  requireRuntimeType(type, "$", 0);
+  requireRuntimeType(type, "$", 0, new WeakSet());
   return type as FunctionalType;
 }
 
 export function functionalRuntimeTypeDescriptorKey(
   descriptor: FunctionalRuntimeTypeDescriptor,
 ): string {
-  requireRuntimeType(descriptor, "$", 0);
+  requireRuntimeType(descriptor, "$", 0, new WeakSet());
   return JSON.stringify(runtimeTypeKeyValue(descriptor));
 }
 
@@ -154,10 +154,18 @@ function substituteType(
   }
 }
 
-function requireRuntimeType(type: FunctionalTypeSchema, path: string, depth: number): void {
+function requireRuntimeType(
+  type: FunctionalTypeSchema,
+  path: string,
+  depth: number,
+  activeTypes: WeakSet<object>,
+): void {
   if (depth > 64) throw new RangeError(`functional runtime type exceeds depth 64 at ${path}`);
   if (type === null || typeof type !== "object" || typeof type.kind !== "string") {
     throw new TypeError(`functional runtime type is malformed at ${path}`);
+  }
+  if (activeTypes.has(type)) {
+    throw new TypeError(`functional runtime type contains a structural cycle at ${path}`);
   }
   if (type.kind === "function") {
     throw new TypeError(`functional runtime type contains a function at ${path}`);
@@ -169,8 +177,13 @@ function requireRuntimeType(type: FunctionalTypeSchema, path: string, depth: num
     if (!Array.isArray(type.values) || type.values.length !== 2) {
       throw new TypeError(`functional runtime tuple type needs two values at ${path}`);
     }
-    requireRuntimeType(type.values[0], `${path}.0`, depth + 1);
-    requireRuntimeType(type.values[1], `${path}.1`, depth + 1);
+    activeTypes.add(type);
+    try {
+      requireRuntimeType(type.values[0], `${path}.0`, depth + 1, activeTypes);
+      requireRuntimeType(type.values[1], `${path}.1`, depth + 1, activeTypes);
+    } finally {
+      activeTypes.delete(type);
+    }
     return;
   }
   if (type.kind === "named") {
@@ -180,8 +193,13 @@ function requireRuntimeType(type: FunctionalTypeSchema, path: string, depth: num
     if (!Array.isArray(type.arguments)) {
       throw new TypeError(`functional runtime named type needs arguments at ${path}`);
     }
-    for (const [index, argument] of type.arguments.entries()) {
-      requireRuntimeType(argument, `${path}.arguments[${index}]`, depth + 1);
+    activeTypes.add(type);
+    try {
+      for (const [index, argument] of type.arguments.entries()) {
+        requireRuntimeType(argument, `${path}.arguments[${index}]`, depth + 1, activeTypes);
+      }
+    } finally {
+      activeTypes.delete(type);
     }
     return;
   }

@@ -67,6 +67,21 @@ interface FunctionalWasmRuntime {
   readonly evaluator: GpuFunctionalEvaluator;
 }
 
+Deno.test("runtime type descriptors reject structural cycles with their path", () => {
+  const typeArguments: FunctionalType[] = [];
+  const cyclicType = {
+    kind: "named",
+    name: "Cycle",
+    arguments: typeArguments,
+  } as FunctionalType;
+  typeArguments.push(cyclicType);
+
+  throws(
+    () => functionalRuntimeTypeDescriptorKey(cyclicType),
+    /structural cycle at \$\.arguments\[0\]/,
+  );
+});
+
 let runtime: FunctionalWasmRuntime | undefined;
 
 Deno.test.beforeAll(async () => {
