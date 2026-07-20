@@ -13,6 +13,14 @@ export const FUNCTIONAL_SLICE_TYPE_NAME = "$FunctionalSlice";
 export const FUNCTIONAL_RESOURCE_TYPE_PREFIX = "$FunctionalResource:";
 export const FUNCTIONAL_ERASED_TYPE_NAME = "$FunctionalErased";
 
+const MAXIMUM_HOST_TYPE_DEPTH = 64;
+const MAXIMUM_HOST_TYPE_NODES = 4_096;
+
+interface HostTypeTraversal {
+  readonly activeTypes: WeakSet<object>;
+  remainingNodes: number;
+}
+
 export const FunctionalHostTypes: Readonly<{
   readonly text: FunctionalTypeSchema;
   readonly bytes: FunctionalTypeSchema;
@@ -547,19 +555,36 @@ function requireHostType(
   location: string,
   typeParameters: ReadonlySet<string>,
   depth = 0,
+  traversal: HostTypeTraversal = {
+    activeTypes: new WeakSet(),
+    remainingNodes: MAXIMUM_HOST_TYPE_NODES,
+  },
 ): void {
-  if (depth > 64) throw new RangeError(`functional host ${location} exceeds type depth 64`);
+  if (depth > MAXIMUM_HOST_TYPE_DEPTH) {
+    throw new RangeError(
+      `functional host ${location} exceeds type depth ${MAXIMUM_HOST_TYPE_DEPTH}`,
+    );
+  }
+  if (traversal.remainingNodes === 0) {
+    throw new RangeError(
+      `functional host ${location} exceeds ${MAXIMUM_HOST_TYPE_NODES} type nodes`,
+    );
+  }
+  traversal.remainingNodes -= 1;
   if (type === null || typeof type !== "object" || typeof type.kind !== "string") {
     throw new TypeError(
       `functional host ${location} must be a type object; received ${JSON.stringify(type)}`,
     );
   }
   if (
-    type?.kind === "integer" || type?.kind === "signed-integer-64" ||
-    type?.kind === "float-32" || type?.kind === "float-64" ||
-    type?.kind === "boolean" || type?.kind === "unit"
+    type.kind === "integer" || type.kind === "signed-integer-64" ||
+    type.kind === "float-32" || type.kind === "float-64" ||
+    type.kind === "boolean" || type.kind === "unit"
   ) return;
-  if (type?.kind === "tuple") {
+  if (traversal.activeTypes.has(type)) {
+    throw new TypeError(`functional host ${location} contains a structural type cycle`);
+  }
+  if (type.kind === "tuple") {
     if (!Array.isArray(type.values) || type.values.length !== 2) {
       throw new TypeError(
         `functional host ${location} tuple must contain exactly two values; received ${
@@ -567,11 +592,16 @@ function requireHostType(
         }`,
       );
     }
-    requireHostType(type.values[0], location, typeParameters, depth + 1);
-    requireHostType(type.values[1], location, typeParameters, depth + 1);
+    traversal.activeTypes.add(type);
+    try {
+      requireHostType(type.values[0], location, typeParameters, depth + 1, traversal);
+      requireHostType(type.values[1], location, typeParameters, depth + 1, traversal);
+    } finally {
+      traversal.activeTypes.delete(type);
+    }
     return;
   }
-  if (type?.kind === "named") {
+  if (type.kind === "named") {
     requireName(type.name, `${location} named type`);
     if (!Array.isArray(type.arguments)) {
       throw new TypeError(
@@ -580,18 +610,23 @@ function requireHostType(
         }`,
       );
     }
-    for (const argument of type.arguments) {
-      requireHostType(argument, location, typeParameters, depth + 1);
+    traversal.activeTypes.add(type);
+    try {
+      for (const argument of type.arguments) {
+        requireHostType(argument, location, typeParameters, depth + 1, traversal);
+      }
+    } finally {
+      traversal.activeTypes.delete(type);
     }
     return;
   }
-  if (type?.kind === "parameter") {
+  if (type.kind === "parameter") {
     requireName(type.name, `${location} type parameter`);
     if (typeParameters.has(type.name)) return;
   }
   throw new Error(
-    `functional host ${location} must be a concrete first-order type; received ${
-      JSON.stringify(type)
+    `functional host ${location} must be a concrete first-order type; received kind ${
+      JSON.stringify(type.kind)
     }`,
   );
 }

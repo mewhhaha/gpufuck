@@ -2315,27 +2315,39 @@ Deno.test("rejects ABI-incompatible host representations before module construct
 Deno.test("reports malformed host type shapes at the capability boundary", () => {
   throws(
     () =>
-      buildFunctionalSurfaceModule(
-        [{ name: "main", parameters: [], annotation: null, body: surface.integer(0) }],
-        [],
-        "main",
-        0,
-        {
-          hostCapabilities: [{
-            name: "Invalid",
-            fields: [{
-              kind: "value",
-              name: "broken",
-              type: {
-                kind: "named",
-                name: "Broken",
-                arguments: null,
-              } as unknown as FunctionalHostType,
-            }],
-          }],
-        },
-      ),
+      moduleWithHostValueType({
+        kind: "named",
+        name: "Broken",
+        arguments: null,
+      } as unknown as FunctionalHostType),
     /Invalid.*broken.*named type arguments must be an array; received null/,
+  );
+});
+
+Deno.test("rejects cyclic host types at the capability boundary", () => {
+  const typeArguments: FunctionalHostType[] = [];
+  const cyclicType = {
+    kind: "named",
+    name: "Cycle",
+    arguments: typeArguments,
+  } as FunctionalHostType;
+  typeArguments.push(cyclicType);
+
+  throws(
+    () => moduleWithHostValueType(cyclicType),
+    /Invalid.*broken.*contains a structural type cycle/,
+  );
+});
+
+Deno.test("bounds structurally shared host types at the capability boundary", () => {
+  let sharedType: FunctionalHostType = { kind: "integer" };
+  for (let depth = 0; depth < 13; depth += 1) {
+    sharedType = { kind: "tuple", values: [sharedType, sharedType] };
+  }
+
+  throws(
+    () => moduleWithHostValueType(sharedType),
+    /Invalid.*broken.*exceeds 4096 type nodes/,
   );
 });
 
@@ -5790,6 +5802,21 @@ function singleDefinitionModule(
     "main",
     0,
     { evaluationProfile },
+  );
+}
+
+function moduleWithHostValueType(type: FunctionalHostType): EncodedFunctionalModule {
+  return buildFunctionalSurfaceModule(
+    [{ name: "main", parameters: [], annotation: null, body: surface.integer(0) }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Invalid",
+        fields: [{ kind: "value", name: "broken", type }],
+      }],
+    },
   );
 }
 
