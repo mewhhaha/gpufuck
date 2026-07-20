@@ -26,6 +26,7 @@ import {
   FunctionalNumericConversion,
   FunctionalOpaqueResourceTable,
   FunctionalPersistentSharing,
+  functionalRuntimeTypeDescriptor,
   functionalRuntimeTypeDescriptorKey,
   type FunctionalSurfaceExpression,
   type FunctionalType,
@@ -79,6 +80,21 @@ Deno.test("runtime type descriptors reject structural cycles with their path", (
   throws(
     () => functionalRuntimeTypeDescriptorKey(cyclicType),
     /structural cycle at \$\.arguments\[0\]/,
+  );
+});
+
+Deno.test("runtime type descriptor construction rejects cyclic schemas before substitution", () => {
+  const typeArguments: FunctionalTypeSchema[] = [];
+  const cyclicSchema = {
+    kind: "named",
+    name: "Cycle",
+    arguments: typeArguments,
+  } as FunctionalTypeSchema;
+  typeArguments.push(cyclicSchema);
+
+  throws(
+    () => functionalRuntimeTypeDescriptor(cyclicSchema),
+    /type schema contains a structural cycle at \$\.arguments\[0\]/,
   );
 });
 

@@ -111,46 +111,101 @@ export function functionalRuntimeTypeDescriptorKey(
 function substituteType(
   schema: FunctionalTypeSchema,
   substitutions: Readonly<Record<string, FunctionalHostType>>,
+  path = "$",
+  depth = 0,
+  activeTypes: WeakSet<object> = new WeakSet(),
 ): FunctionalHostType {
-  switch (schema.kind) {
-    case "integer":
-    case "signed-integer-64":
-    case "float-32":
-    case "float-64":
-    case "boolean":
-    case "unit":
-      return { kind: schema.kind };
-    case "parameter": {
-      const replacement = substitutions[schema.name];
-      if (replacement === undefined) {
-        throw new Error(
-          `functional runtime type specialization leaves parameter ${JSON.stringify(schema.name)}`,
-        );
+  if (depth > 64) throw new RangeError(`functional type schema exceeds depth 64 at ${path}`);
+  if (schema === null || typeof schema !== "object" || typeof schema.kind !== "string") {
+    throw new TypeError(`functional type schema is malformed at ${path}`);
+  }
+  if (activeTypes.has(schema)) {
+    throw new TypeError(`functional type schema contains a structural cycle at ${path}`);
+  }
+  activeTypes.add(schema);
+  try {
+    switch (schema.kind) {
+      case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
+      case "boolean":
+      case "unit":
+        return { kind: schema.kind };
+      case "parameter": {
+        if (typeof schema.name !== "string" || schema.name.length === 0) {
+          throw new TypeError(`functional type parameter needs a name at ${path}`);
+        }
+        const replacement = substitutions[schema.name];
+        if (replacement === undefined) {
+          throw new Error(
+            `functional runtime type specialization leaves parameter ${
+              JSON.stringify(schema.name)
+            }`,
+          );
+        }
+        return replacement;
       }
-      return replacement;
+      case "tuple":
+        if (!Array.isArray(schema.values) || schema.values.length !== 2) {
+          throw new TypeError(`functional tuple type schema needs two values at ${path}`);
+        }
+        return {
+          kind: "tuple",
+          values: [
+            substituteType(schema.values[0], substitutions, `${path}.0`, depth + 1, activeTypes),
+            substituteType(schema.values[1], substitutions, `${path}.1`, depth + 1, activeTypes),
+          ],
+        };
+      case "named":
+        if (typeof schema.name !== "string" || schema.name.length === 0) {
+          throw new TypeError(`functional named type schema needs a name at ${path}`);
+        }
+        if (!Array.isArray(schema.arguments)) {
+          throw new TypeError(`functional named type schema needs arguments at ${path}`);
+        }
+        return {
+          kind: "named",
+          name: schema.name,
+          arguments: schema.arguments.map((argument, index) =>
+            substituteType(
+              argument,
+              substitutions,
+              `${path}.arguments[${index}]`,
+              depth + 1,
+              activeTypes,
+            )
+          ),
+        };
+      case "function":
+        return {
+          kind: "function",
+          parameter: substituteType(
+            schema.parameter,
+            substitutions,
+            `${path}.parameter`,
+            depth + 1,
+            activeTypes,
+          ),
+          result: substituteType(
+            schema.result,
+            substitutions,
+            `${path}.result`,
+            depth + 1,
+            activeTypes,
+          ),
+        };
+      case "forall":
+        throw new TypeError("functional runtime type descriptors cannot retain forall schemas");
+      default:
+        throw new TypeError(
+          `functional type schema has unsupported kind ${
+            JSON.stringify((schema as { readonly kind: unknown }).kind)
+          } at ${path}`,
+        );
     }
-    case "tuple":
-      return {
-        kind: "tuple",
-        values: [
-          substituteType(schema.values[0], substitutions),
-          substituteType(schema.values[1], substitutions),
-        ],
-      };
-    case "named":
-      return {
-        kind: "named",
-        name: schema.name,
-        arguments: schema.arguments.map((argument) => substituteType(argument, substitutions)),
-      };
-    case "function":
-      return {
-        kind: "function",
-        parameter: substituteType(schema.parameter, substitutions),
-        result: substituteType(schema.result, substitutions),
-      };
-    case "forall":
-      throw new TypeError("functional runtime type descriptors cannot retain forall schemas");
+  } finally {
+    activeTypes.delete(schema);
   }
 }
 
