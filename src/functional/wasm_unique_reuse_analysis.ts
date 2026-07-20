@@ -1,6 +1,8 @@
 import { FUNCTIONAL_NO_INDEX, FunctionalCoreTag } from "./abi.ts";
 import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
 
+const MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH = 256;
+
 interface LocalConsumption {
   readonly valid: boolean;
   readonly maximumPerPath: number;
@@ -25,7 +27,7 @@ export class FunctionalWasmUniqueReuseAnalysis {
   }
 
   reusableCases(nodeIndex: number, localDepth: number): ReadonlySet<number> | undefined {
-    const consumption = this.#localConsumption(nodeIndex, localDepth, false);
+    const consumption = this.#localConsumption(nodeIndex, localDepth, false, 0);
     if (
       !consumption.valid || consumption.maximumPerPath > 1 ||
       consumption.caseNodes.size === 0
@@ -33,7 +35,8 @@ export class FunctionalWasmUniqueReuseAnalysis {
     return consumption.caseNodes;
   }
 
-  uniqueConstructorFieldCount(nodeIndex: number): number | undefined {
+  uniqueConstructorFieldCount(nodeIndex: number, analysisDepth = 0): number | undefined {
+    if (analysisDepth > MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH) return undefined;
     const cached = this.#resultFieldCounts[nodeIndex];
     if (cached !== undefined) return cached === null ? undefined : cached;
 
@@ -44,19 +47,20 @@ export class FunctionalWasmUniqueReuseAnalysis {
       fieldCount = constructor.fieldCount;
     } else if (node.tag === FunctionalCoreTag.If) {
       fieldCount = matchingFieldCount(
-        this.uniqueConstructorFieldCount(node.child1),
-        this.uniqueConstructorFieldCount(node.child2),
+        this.uniqueConstructorFieldCount(node.child1, analysisDepth + 1),
+        this.uniqueConstructorFieldCount(node.child2, analysisDepth + 1),
       );
     } else if (node.tag === FunctionalCoreTag.Let) {
-      fieldCount = this.uniqueConstructorFieldCount(node.child1);
+      fieldCount = this.uniqueConstructorFieldCount(node.child1, analysisDepth + 1);
     } else if (node.tag === FunctionalCoreTag.Case) {
-      fieldCount = this.#caseArmFieldCount(node.child1);
+      fieldCount = this.#caseArmFieldCount(node.child1, analysisDepth + 1);
     }
     this.#resultFieldCounts[nodeIndex] = fieldCount ?? null;
     return fieldCount;
   }
 
-  #caseArmFieldCount(firstArm: number): number | undefined {
+  #caseArmFieldCount(firstArm: number, analysisDepth: number): number | undefined {
+    if (analysisDepth > MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH) return undefined;
     let armIndex = firstArm;
     let fieldCount: number | undefined;
     let sawArm = false;
@@ -72,7 +76,7 @@ export class FunctionalWasmUniqueReuseAnalysis {
         if (binding.tag !== FunctionalCoreTag.PatternBind) return undefined;
         bodyNode = binding.child0;
       }
-      const armFieldCount = this.uniqueConstructorFieldCount(bodyNode);
+      const armFieldCount = this.uniqueConstructorFieldCount(bodyNode, analysisDepth + 1);
       if (armFieldCount === undefined) return undefined;
       fieldCount = fieldCount === undefined
         ? armFieldCount
@@ -91,6 +95,7 @@ export class FunctionalWasmUniqueReuseAnalysis {
     let base = this.#node(baseNode);
     while (base.tag === FunctionalCoreTag.Apply) {
       fieldCount += 1;
+      if (fieldCount > MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH) return undefined;
       baseNode = base.child0;
       base = this.#node(baseNode);
     }
@@ -104,7 +109,11 @@ export class FunctionalWasmUniqueReuseAnalysis {
     nodeIndex: number,
     localDepth: number,
     insideLambda: boolean,
+    analysisDepth: number,
   ): LocalConsumption {
+    if (analysisDepth > MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH) {
+      return { valid: false, maximumPerPath: 0, caseNodes: new Set() };
+    }
     const node = this.#node(nodeIndex);
     if (node.tag === FunctionalCoreTag.Local) {
       return node.payload === localDepth
@@ -126,39 +135,59 @@ export class FunctionalWasmUniqueReuseAnalysis {
         return EMPTY_CONSUMPTION;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
-        return this.#localConsumption(node.child0, localDepth, insideLambda);
+        return this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1);
       case FunctionalCoreTag.Apply:
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
         return sequentialConsumption(
-          this.#localConsumption(node.child0, localDepth, insideLambda),
-          this.#localConsumption(node.child1, localDepth, insideLambda),
+          this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1),
+          this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
         );
       case FunctionalCoreTag.If:
         return sequentialConsumption(
-          this.#localConsumption(node.child0, localDepth, insideLambda),
+          this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1),
           alternativeConsumption(
-            this.#localConsumption(node.child1, localDepth, insideLambda),
-            this.#localConsumption(node.child2, localDepth, insideLambda),
+            this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
+            this.#localConsumption(node.child2, localDepth, insideLambda, analysisDepth + 1),
           ),
         );
       case FunctionalCoreTag.Lambda: {
-        const body = this.#localConsumption(node.child0, localDepth + 1, true);
+        const body = this.#localConsumption(
+          node.child0,
+          localDepth + 1,
+          true,
+          analysisDepth + 1,
+        );
         return body.maximumPerPath === 0 && body.valid
           ? body
           : { valid: false, maximumPerPath: 0, caseNodes: new Set() };
       }
       case FunctionalCoreTag.PatternBind:
-        return this.#localConsumption(node.child0, localDepth + 1, insideLambda);
+        return this.#localConsumption(
+          node.child0,
+          localDepth + 1,
+          insideLambda,
+          analysisDepth + 1,
+        );
       case FunctionalCoreTag.Let:
         return sequentialConsumption(
-          this.#localConsumption(node.child0, localDepth, insideLambda),
-          this.#localConsumption(node.child1, localDepth + 1, insideLambda),
+          this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1),
+          this.#localConsumption(
+            node.child1,
+            localDepth + 1,
+            insideLambda,
+            analysisDepth + 1,
+          ),
         );
       case FunctionalCoreTag.LetRec:
         return sequentialConsumption(
-          this.#localConsumption(node.child0, localDepth + 1, true),
-          this.#localConsumption(node.child1, localDepth + 1, insideLambda),
+          this.#localConsumption(node.child0, localDepth + 1, true, analysisDepth + 1),
+          this.#localConsumption(
+            node.child1,
+            localDepth + 1,
+            insideLambda,
+            analysisDepth + 1,
+          ),
         );
       case FunctionalCoreTag.Case: {
         const scrutinee = this.#node(node.child0);
@@ -169,18 +198,28 @@ export class FunctionalWasmUniqueReuseAnalysis {
             maximumPerPath: 1,
             caseNodes: new Set([nodeIndex]),
           }
-          : this.#localConsumption(node.child0, localDepth, insideLambda);
+          : this.#localConsumption(
+            node.child0,
+            localDepth,
+            insideLambda,
+            analysisDepth + 1,
+          );
         return sequentialConsumption(
           selected,
-          this.#localConsumption(node.child1, localDepth, insideLambda),
+          this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
         );
       }
       case FunctionalCoreTag.CaseArm: {
-        const current = this.#localConsumption(node.child0, localDepth, insideLambda);
+        const current = this.#localConsumption(
+          node.child0,
+          localDepth,
+          insideLambda,
+          analysisDepth + 1,
+        );
         if (node.child1 === FUNCTIONAL_NO_INDEX) return current;
         return alternativeConsumption(
           current,
-          this.#localConsumption(node.child1, localDepth, insideLambda),
+          this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
         );
       }
     }

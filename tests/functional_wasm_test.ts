@@ -5530,37 +5530,10 @@ Deno.test("strict rebuilding allocates when constructor layouts differ", async (
 
 Deno.test("strict rebuilding keeps long unique constructor chains constant-space", async () => {
   const rebuildCount = 128;
-  let body: FunctionalSurfaceExpression = surface.name(`pair${rebuildCount}`);
-  for (let index = rebuildCount; index > 0; index -= 1) {
-    const previous = `pair${index - 1}`;
-    body = {
-      kind: "let",
-      name: `pair${index}`,
-      value: {
-        kind: "case",
-        value: surface.name(previous),
-        arms: [{
-          constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
-          binders: ["left", "right"],
-          body: functionalPair(
-            surface.binary(
-              FunctionalBinaryOperator.Add,
-              surface.name("left"),
-              surface.integer(1),
-            ),
-            surface.name("right"),
-          ),
-        }],
-      },
-      body,
-    };
-  }
-  const execution = await runCompiledWasm(singleDefinitionModule({
-    kind: "let",
-    name: "pair0",
-    value: functionalPair(surface.integer(0), surface.integer(42)),
-    body,
-  }, FunctionalEvaluationProfile.StrictEager));
+  const execution = await runCompiledWasm(singleDefinitionModule(
+    strictPairRebuildChain(rebuildCount),
+    FunctionalEvaluationProfile.StrictEager,
+  ));
 
   deepStrictEqual(execution.value, {
     kind: "tuple",
@@ -5570,6 +5543,23 @@ Deno.test("strict rebuilding keeps long unique constructor chains constant-space
     ],
   });
   equal(execution.stats.allocatedBytes, 56);
+});
+
+Deno.test("strict rebuilding falls back beyond the bounded uniqueness analysis", async () => {
+  const rebuildCount = 300;
+  const execution = await runCompiledWasm(singleDefinitionModule(
+    strictPairRebuildChain(rebuildCount),
+    FunctionalEvaluationProfile.StrictEager,
+  ));
+
+  deepStrictEqual(execution.value, {
+    kind: "tuple",
+    values: [
+      { kind: "integer", value: rebuildCount },
+      { kind: "integer", value: 42 },
+    ],
+  });
+  ok(execution.stats.allocatedBytes > 56);
 });
 
 Deno.test("partially applied constructors retain callable staged closures", async () => {
@@ -5765,6 +5755,39 @@ function functionalPair(
   right: FunctionalSurfaceExpression,
 ): FunctionalSurfaceExpression {
   return surface.apply(surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME), left, right);
+}
+
+function strictPairRebuildChain(rebuildCount: number): FunctionalSurfaceExpression {
+  let body: FunctionalSurfaceExpression = surface.name(`pair${rebuildCount}`);
+  for (let index = rebuildCount; index > 0; index -= 1) {
+    body = {
+      kind: "let",
+      name: `pair${index}`,
+      value: {
+        kind: "case",
+        value: surface.name(`pair${index - 1}`),
+        arms: [{
+          constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+          binders: ["left", "right"],
+          body: functionalPair(
+            surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.name("left"),
+              surface.integer(1),
+            ),
+            surface.name("right"),
+          ),
+        }],
+      },
+      body,
+    };
+  }
+  return {
+    kind: "let",
+    name: "pair0",
+    value: functionalPair(surface.integer(0), surface.integer(42)),
+    body,
+  };
 }
 
 function hostInitModule(
