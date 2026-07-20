@@ -1,6 +1,8 @@
-import { match, throws } from "node:assert/strict";
+import { equal, match, rejects, throws } from "node:assert/strict";
 
 import {
+  compileFunctionalComponentBoundary,
+  FUNCTIONAL_RESOURCE_TYPE_PREFIX,
   type FunctionalHostCapabilityDeclaration,
   FunctionalHostTypes,
   functionalWitWorld,
@@ -67,6 +69,10 @@ Deno.test("WIT generation represents nested unit and escapes keyword identifiers
         name: "record",
         fields: [{ name: "type", type: { kind: "unit" } }],
       }],
+    }, {
+      name: "char",
+      parameters: [],
+      constructors: [{ name: "constructor", fields: [] }],
     }],
   });
 
@@ -75,13 +81,144 @@ Deno.test("WIT generation represents nested unit and escapes keyword identifiers
   match(wit, /enum gpufuck-unit \{ unit \}/);
   match(wit, /record %type \{/);
   match(wit, /%type: gpufuck-unit,/);
+  match(wit, /enum %char \{\s+%constructor,/);
   match(wit, /export main: func\(\) -> %type;/);
+});
+
+Deno.test("WIT generation keeps type and capability names in their WIT scopes", () => {
+  const module = boundaryModule({
+    entryType: { kind: "named", name: "FileSystem", arguments: [] },
+    typeDeclarations: [{
+      name: "FileSystem",
+      parameters: [],
+      constructors: [{ name: "FileSystem", fields: [] }],
+    }],
+    hostCapabilities: [{ name: "FileSystem", fields: [] }],
+  });
+
+  const wit = functionalWitWorld(module);
+
+  match(wit, /enum file-system \{/);
+  match(wit, /interface file-system \{/);
+  match(wit, /import file-system;/);
+});
+
+Deno.test("WIT generation rejects colliding record fields with both source names", () => {
+  const module = boundaryModule({
+    typeDeclarations: [{
+      name: "Pair",
+      parameters: [],
+      constructors: [{
+        name: "Pair",
+        fields: [
+          { name: "leftValue", type: { kind: "integer" } },
+          { name: "left-value", type: { kind: "integer" } },
+        ],
+      }],
+    }],
+  });
+
+  throws(
+    () => functionalWitWorld(module),
+    /Pair field "leftValue" and Pair field "left-value" both map to WIT identifier "left-value"/,
+  );
+});
+
+Deno.test("WIT generation rejects an export that collides with the entry export", () => {
+  const module = boundaryModule({
+    wasmExports: [{
+      name: "main",
+      definitionIndex: 0,
+      type: { kind: "integer" },
+    }],
+  });
+
+  throws(
+    () => functionalWitWorld(module),
+    /entry export "main" and export "main" both map to WIT identifier "main"/,
+  );
+});
+
+Deno.test("WIT generation rejects an empty algebraic type instead of emitting an empty variant", () => {
+  const module = boundaryModule({
+    typeDeclarations: [{ name: "Never", parameters: [], constructors: [] }],
+  });
+
+  throws(
+    () => functionalWitWorld(module),
+    /type "Never" has no constructors; WIT variants require at least one case/,
+  );
+});
+
+Deno.test("WIT generation reports malformed resource encodings", () => {
+  const malformedResource: GpuFunctionalModule["entryType"] = {
+    kind: "named",
+    name: `${FUNCTIONAL_RESOURCE_TYPE_PREFIX}%`,
+    arguments: [],
+  };
+
+  throws(
+    () => functionalWitWorld(boundaryModule({ entryType: malformedResource })),
+    /resource type .* has invalid percent encoding/,
+  );
+});
+
+Deno.test("WIT generation rejects cyclic type schemas without overflowing the host stack", () => {
+  const values: GpuFunctionalModule["entryType"][] = [];
+  const cyclicType = {
+    kind: "tuple",
+    values,
+  } as unknown as GpuFunctionalModule["entryType"];
+  values.push({ kind: "integer" }, cyclicType);
+
+  throws(
+    () => functionalWitWorld(boundaryModule({ entryType: cyclicType })),
+    /type schema contains a structural cycle/,
+  );
+});
+
+Deno.test("WIT generation rejects type schemas beyond its structural depth limit", () => {
+  let deeplyNestedType: GpuFunctionalModule["entryType"] = { kind: "integer" };
+  for (let depth = 0; depth < 514; depth += 1) {
+    deeplyNestedType = {
+      kind: "tuple",
+      values: [deeplyNestedType, { kind: "integer" }],
+    };
+  }
+
+  throws(
+    () => functionalWitWorld(boundaryModule({ entryType: deeplyNestedType })),
+    /type exceeds structural depth 512/,
+  );
+});
+
+Deno.test("component compilation validates WIT before reading GPU core nodes", async () => {
+  let coreNodeReads = 0;
+  const module = boundaryModule({
+    typeDeclarations: [{
+      name: "Box",
+      parameters: ["value"],
+      constructors: [{ name: "Box", fields: [] }],
+    }],
+    readCoreNodes: () => {
+      coreNodeReads += 1;
+      return Promise.resolve([]);
+    },
+  });
+
+  await rejects(
+    () => compileFunctionalComponentBoundary(module),
+    /WIT boundaries require concrete monomorphized types/,
+  );
+  equal(coreNodeReads, 0);
 });
 
 function boundaryModule(overrides: {
   readonly entryType?: GpuFunctionalModule["entryType"];
   readonly hostCapabilities?: readonly FunctionalHostCapabilityDeclaration[];
+  readonly readCoreNodes?: GpuFunctionalModule["readCoreNodes"];
   readonly typeDeclarations?: GpuFunctionalModule["typeDeclarations"];
+  readonly wasmExports?: GpuFunctionalModule["wasmExports"];
 }): GpuFunctionalModule {
   return {
     nodeBuffer: undefined as unknown as GPUBuffer,
@@ -103,10 +240,10 @@ function boundaryModule(overrides: {
     typeDeclarations: overrides.typeDeclarations ?? [],
     hostCapabilities: overrides.hostCapabilities ?? [],
     hostDefinitions: [],
-    wasmExports: [],
+    wasmExports: overrides.wasmExports ?? [],
     sources: [],
     evaluationProfile: "strict-eager-v1",
-    readCoreNodes: () => Promise.resolve([]),
+    readCoreNodes: overrides.readCoreNodes ?? (() => Promise.resolve([])),
     destroy: () => {},
   };
 }
