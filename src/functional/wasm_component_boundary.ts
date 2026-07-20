@@ -67,6 +67,23 @@ export function functionalWitWorld(
   module: GpuFunctionalModule,
   options: FunctionalComponentBoundaryOptions = {},
 ): string {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("functional component boundary options must be an object");
+  }
+  if (options.packageName !== undefined && typeof options.packageName !== "string") {
+    throw new TypeError(
+      `functional component package name must be a string; received ${
+        JSON.stringify(options.packageName)
+      }`,
+    );
+  }
+  if (options.worldName !== undefined && typeof options.worldName !== "string") {
+    throw new TypeError(
+      `functional component world name must be a string; received ${
+        JSON.stringify(options.worldName)
+      }`,
+    );
+  }
   const packageName = options.packageName ?? "gpufuck:compiled";
   if (!/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/.test(packageName)) {
     throw new TypeError(

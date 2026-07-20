@@ -41,6 +41,19 @@ Deno.test("WIT generation describes scalar exports and capability imports", () =
   match(wit, /export main: func\(argument-0: s32\) -> bool;/);
 });
 
+Deno.test("WIT generation rejects malformed boundary options with contract evidence", () => {
+  const module = boundaryModule({});
+
+  throws(
+    () => functionalWitWorld(module, null as unknown as {}),
+    /component boundary options must be an object/,
+  );
+  throws(
+    () => functionalWitWorld(module, { worldName: 42 as unknown as string }),
+    /component world name must be a string; received 42/,
+  );
+});
+
 Deno.test("WIT generation rejects generic boundary declarations with evidence", () => {
   const module = boundaryModule({
     typeDeclarations: [{
