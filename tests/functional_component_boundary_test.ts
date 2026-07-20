@@ -46,7 +46,7 @@ Deno.test("WIT generation rejects malformed boundary options with contract evide
   const module = boundaryModule({});
 
   throws(
-    () => functionalWitWorld(module, null as unknown as {}),
+    () => functionalWitWorld(module, null as never),
     /component boundary options must be an object/,
   );
   throws(
@@ -237,7 +237,7 @@ Deno.test("WASM compilation rejects malformed options before reading GPU core no
   });
 
   await rejects(
-    () => compileFunctionalModuleToWasm(module, null as unknown as {}),
+    () => compileFunctionalModuleToWasm(module, null as never),
     /WASM compilation options must be an object/,
   );
   equal(coreNodeReads, 0);

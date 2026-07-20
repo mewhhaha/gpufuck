@@ -83,7 +83,7 @@ Deno.test("surface module construction rejects malformed options at its boundary
         [],
         "main",
         0,
-        null as unknown as {},
+        null as never,
       ),
     /surface module options must be an object/,
   );
