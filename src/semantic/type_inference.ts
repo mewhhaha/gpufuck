@@ -630,6 +630,9 @@ class InferenceContext {
         case LazuliSurfaceTag.Float64:
         case LazuliSurfaceTag.WholeNumberF64:
         case LazuliSurfaceTag.Boolean:
+        case LazuliSurfaceTag.Text:
+        case LazuliSurfaceTag.Bytes:
+        case LazuliSurfaceTag.RuntimeFault:
           return;
         case LazuliSurfaceTag.Name: {
           if (boundSymbols.has(payload)) return;

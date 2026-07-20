@@ -8,6 +8,8 @@ import {
   type LazuliTypeDeclaration,
   requestWebGpuDevice,
 } from "../mod.ts";
+import { buildFunctionalSurfaceModule, surface } from "../functional.ts";
+import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { inferLazuliTypes } from "../src/lazuli/type_inference.ts";
 
@@ -129,6 +131,34 @@ const representativeCorpus = [
   ...successfulCorpus.slice(0, 8),
   ...singleFaultCorpus.slice(0, 8),
 ];
+
+Deno.test("host type inference treats runtime faults as dependency leaves", () => {
+  const module = buildFunctionalSurfaceModule(
+    [
+      {
+        name: "failure",
+        parameters: [],
+        annotation: null,
+        body: surface.runtimeFault("broken"),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: null,
+        body: surface.integer(42),
+      },
+    ],
+    [],
+    "main",
+    0,
+  );
+
+  const inference = inferLazuliTypes(semanticSurfaceFromModule(module));
+
+  ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
+  if (!inference.ok) return;
+  deepStrictEqual(inference.mainType, { kind: "integer" });
+});
 
 Deno.test("GPU type inference matches the host oracle for the 64-program successful corpus", async () => {
   equal(successfulCorpus.length, 64);
