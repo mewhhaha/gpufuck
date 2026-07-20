@@ -200,6 +200,41 @@ Deno.test("default comptime executes deep scalar recursion without GPU workspace
   ok(result.stats.evaluation.steps > 1_000);
 });
 
+Deno.test("fuel-instrumented comptime keeps constant branches coherent with reachable definitions", async () => {
+  const module: FunctionalComptimeModuleArtifact = {
+    name: "constant-branch-fuel",
+    definitions: [{
+      name: "discarded",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.runtimeFault("discarded branch executed"),
+    }, {
+      name: "answer",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: {
+        kind: "if",
+        condition: surface.boolean(true),
+        consequent: surface.integer(42),
+        alternate: surface.name("discarded"),
+      },
+    }],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "answer", definition: "answer", type: { kind: "integer" } }],
+    sourceByteLength: 80,
+  };
+
+  const result = await comptimeRuntime().executor.execute([module], {
+    maximumExecutionSteps: 100,
+  });
+
+  ok(result.ok, result.ok ? undefined : JSON.stringify(result));
+  if (!result.ok) return;
+  deepStrictEqual(result.exports[0]?.value, { kind: "integer", value: 42 });
+  ok(result.stats.evaluation.steps > 0);
+});
+
 Deno.test("compiled comptime functions reuse instrumented code and memoize constant arguments", async () => {
   const module: FunctionalComptimeModuleArtifact = {
     name: "reusable-comptime",

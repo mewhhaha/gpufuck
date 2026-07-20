@@ -81,6 +81,10 @@ import {
 } from "./wasm_owned_runtime.ts";
 import { FunctionalStorageClass, type FunctionalStorageDecision } from "./storage_contract.ts";
 import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
+import type {
+  FunctionalConstantResolver,
+  FunctionalWasmConstantAnalysis,
+} from "./wasm_constant_analysis.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import {
   createFunctionalWasmBackendPlan,
@@ -211,6 +215,7 @@ class FunctionalWasmCompiler {
   readonly #module: GpuFunctionalModule;
   readonly #nodes: readonly FunctionalCoreNode[];
   readonly #captureAnalysis: FunctionalWasmCaptureAnalysis;
+  readonly #constantAnalysis: FunctionalWasmConstantAnalysis;
   readonly #functionAnalysis: FunctionalWasmFunctionAnalysis;
   readonly #uniqueReuseAnalysis: FunctionalWasmUniqueReuseAnalysis;
   readonly #storageDecisions: ReadonlyMap<string, FunctionalStorageDecision>;
@@ -281,6 +286,7 @@ class FunctionalWasmCompiler {
       node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
     );
     this.#captureAnalysis = plan.captureAnalysis;
+    this.#constantAnalysis = plan.constantAnalysis;
     this.#storageDecisions = new Map(
       plan.storage.values.map((decision) => [
         `${decision.valueKind}:${decision.coreNode}`,
@@ -523,7 +529,9 @@ class FunctionalWasmCompiler {
       ...this.#module.wasmExports.flatMap((exported, index) =>
         directCallableFunctions[index] === undefined ? [exported.definitionIndex] : []
       ),
-    ]);
+    ], {
+      constantBranches: this.#instrumentedFuel ? "preserve" : "prune",
+    });
     for (const definitionIndex of this.#runtimeDefinitionIndices) {
       if (this.#hostDefinitionFields.has(definitionIndex)) continue;
       const rootNode = this.#module.definitionRoots[definitionIndex];
@@ -2180,6 +2188,18 @@ class FunctionalWasmCompiler {
     const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
       this.expressionIsWhnf(node.child0) ||
       this.immediatelyForcesLocal(node.child1, 0);
+    const constantValue = !this.#instrumentedFuel && eager
+      ? this.scalarConstantBinding(node.child0, environment)
+      : undefined;
+    if (constantValue !== undefined) {
+      this.compileExpression(
+        instructions,
+        node.child1,
+        [constantValue, ...environment],
+        constructorReuse,
+      );
+      return;
+    }
     if (eager) {
       this.compileExpression(instructions, node.child0, environment);
     } else {
@@ -2313,12 +2333,26 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
+    const selectedBranch = this.constantIfBranch(node, environment);
+    if (selectedBranch !== undefined) {
+      this.compileExpression(instructions, selectedBranch, environment, constructorReuse);
+      return;
+    }
     this.compileBooleanExpression(instructions, node.child0, environment);
     instructions.emit(0x04, WasmValueType.I64);
     this.compileExpression(instructions, node.child1, environment, constructorReuse);
     instructions.emit(0x05);
     this.compileExpression(instructions, node.child2, environment, constructorReuse);
     instructions.emit(0x0b);
+  }
+
+  constantIfBranch(
+    node: FunctionalCoreNode,
+    environment: FunctionalEnvironment,
+  ): number | undefined {
+    if (this.#instrumentedFuel) return undefined;
+    const condition = this.constantBooleanExpression(node.child0, environment);
+    return condition === undefined ? undefined : condition ? node.child1 : node.child2;
   }
 
   compileUnary(
@@ -2511,7 +2545,12 @@ class FunctionalWasmCompiler {
           "integer",
         );
         return;
-      case FunctionalCoreTag.If:
+      case FunctionalCoreTag.If: {
+        const selectedBranch = this.constantIfBranch(node, environment);
+        if (selectedBranch !== undefined) {
+          this.compileIntegerExpression(instructions, selectedBranch, environment);
+          return;
+        }
         this.compileBooleanExpression(instructions, node.child0, environment);
         instructions.emit(0x04, WasmValueType.I32);
         this.compileIntegerExpression(instructions, node.child1, environment);
@@ -2519,6 +2558,7 @@ class FunctionalWasmCompiler {
         this.compileIntegerExpression(instructions, node.child2, environment);
         instructions.emit(0x0b);
         return;
+      }
       case FunctionalCoreTag.Apply: {
         const application = this.uncurriedApplication(nodeIndex, environment);
         if (application !== undefined && this.canUseNativeIntegerWorker(application)) {
@@ -2679,7 +2719,12 @@ class FunctionalWasmCompiler {
           nodeIndex,
         );
         return;
-      case FunctionalCoreTag.If:
+      case FunctionalCoreTag.If: {
+        const selectedBranch = this.constantIfBranch(node, environment);
+        if (selectedBranch !== undefined) {
+          this.compileBooleanExpression(instructions, selectedBranch, environment);
+          return;
+        }
         this.compileBooleanExpression(instructions, node.child0, environment);
         instructions.emit(0x04, WasmValueType.I32);
         this.compileBooleanExpression(instructions, node.child1, environment);
@@ -2687,6 +2732,7 @@ class FunctionalWasmCompiler {
         this.compileBooleanExpression(instructions, node.child2, environment);
         instructions.emit(0x0b);
         return;
+      }
       case FunctionalCoreTag.Let: {
         const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
           this.expressionIsWhnf(node.child0) ||
@@ -2784,7 +2830,12 @@ class FunctionalWasmCompiler {
           "signed-integer-64",
         );
         return;
-      case FunctionalCoreTag.If:
+      case FunctionalCoreTag.If: {
+        const selectedBranch = this.constantIfBranch(node, environment);
+        if (selectedBranch !== undefined) {
+          this.compileSignedInteger64Expression(instructions, selectedBranch, environment);
+          return;
+        }
         this.compileBooleanExpression(instructions, node.child0, environment);
         instructions.emit(0x04, WasmValueType.I64);
         this.compileSignedInteger64Expression(
@@ -2800,6 +2851,7 @@ class FunctionalWasmCompiler {
         );
         instructions.emit(0x0b);
         return;
+      }
     }
     this.compileExpression(instructions, nodeIndex, environment);
     this.emitUnboxSignedInteger64(instructions);
@@ -2843,7 +2895,12 @@ class FunctionalWasmCompiler {
           "float-32",
         );
         return;
-      case FunctionalCoreTag.If:
+      case FunctionalCoreTag.If: {
+        const selectedBranch = this.constantIfBranch(node, environment);
+        if (selectedBranch !== undefined) {
+          this.compileFloat32Expression(instructions, selectedBranch, environment);
+          return;
+        }
         this.compileBooleanExpression(instructions, node.child0, environment);
         instructions.emit(0x04, WasmValueType.F32);
         this.compileFloat32Expression(instructions, node.child1, environment);
@@ -2851,6 +2908,7 @@ class FunctionalWasmCompiler {
         this.compileFloat32Expression(instructions, node.child2, environment);
         instructions.emit(0x0b);
         return;
+      }
     }
     this.compileExpression(instructions, nodeIndex, environment);
     this.emitUnboxFloat32(instructions);
@@ -2887,7 +2945,12 @@ class FunctionalWasmCompiler {
           "float-64",
         );
         return;
-      case FunctionalCoreTag.If:
+      case FunctionalCoreTag.If: {
+        const selectedBranch = this.constantIfBranch(node, environment);
+        if (selectedBranch !== undefined) {
+          this.compileFloat64Expression(instructions, selectedBranch, environment);
+          return;
+        }
         this.compileBooleanExpression(instructions, node.child0, environment);
         instructions.emit(0x04, WasmValueType.F64);
         this.compileFloat64Expression(instructions, node.child1, environment);
@@ -2895,6 +2958,7 @@ class FunctionalWasmCompiler {
         this.compileFloat64Expression(instructions, node.child2, environment);
         instructions.emit(0x0b);
         return;
+      }
     }
     this.compileExpression(instructions, nodeIndex, environment);
     this.emitUnboxFloat64(instructions);
@@ -2956,7 +3020,12 @@ class FunctionalWasmCompiler {
         this.compileWholeNumberF64Expression(instructions, node.child1, environment);
         this.emitNumericBinary(instructions, node.payload, nodeIndex);
         return;
-      case FunctionalCoreTag.If:
+      case FunctionalCoreTag.If: {
+        const selectedBranch = this.constantIfBranch(node, environment);
+        if (selectedBranch !== undefined) {
+          this.compileWholeNumberF64Expression(instructions, selectedBranch, environment);
+          return;
+        }
         this.compileBooleanExpression(instructions, node.child0, environment);
         instructions.emit(0x04, WasmValueType.F64);
         this.compileWholeNumberF64Expression(instructions, node.child1, environment);
@@ -2964,6 +3033,7 @@ class FunctionalWasmCompiler {
         this.compileWholeNumberF64Expression(instructions, node.child2, environment);
         instructions.emit(0x0b);
         return;
+      }
     }
     this.compileExpression(instructions, nodeIndex, environment);
     this.emitUnboxFloat64(instructions);
@@ -3707,6 +3777,23 @@ class FunctionalWasmCompiler {
     return boolean === undefined ? undefined : { kind: "i32-boolean-constant", literal: boolean };
   }
 
+  scalarConstantBinding(
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): ValueSource | undefined {
+    const constant = this.#constantAnalysis.scalar(
+      nodeIndex,
+      this.constantResolver(environment),
+    );
+    if (constant?.kind === "integer") {
+      return { kind: "i32-integer-constant", literal: constant.value };
+    }
+    if (constant?.kind === "boolean") {
+      return { kind: "i32-boolean-constant", literal: constant.value };
+    }
+    return undefined;
+  }
+
   emitThunkObject(
     instructions: WasmInstructions,
     slot: number,
@@ -3834,81 +3921,10 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     constantLocals: readonly number[] = [],
   ): number | undefined {
-    const node = this.node(nodeIndex);
-    switch (node.tag) {
-      case FunctionalCoreTag.Integer:
-        return node.payload | 0;
-      case FunctionalCoreTag.Local: {
-        if (node.payload < constantLocals.length) {
-          return constantLocals[constantLocals.length - node.payload - 1];
-        }
-        const source = environment[node.payload - constantLocals.length];
-        return source?.kind === "i32-integer-constant" ? source.literal : undefined;
-      }
-      case FunctionalCoreTag.Unary: {
-        if (node.payload !== FunctionalUnaryOperator.Negate) return undefined;
-        const operand = this.constantIntegerExpression(
-          node.child0,
-          environment,
-          constantLocals,
-        );
-        return operand === undefined ? undefined : Math.imul(operand, -1);
-      }
-      case FunctionalCoreTag.Binary: {
-        if (isComparisonOperator(node.payload)) return undefined;
-        const left = this.constantIntegerExpression(node.child0, environment, constantLocals);
-        const right = this.constantIntegerExpression(node.child1, environment, constantLocals);
-        if (left === undefined || right === undefined) return undefined;
-        if (node.payload === FunctionalBinaryOperator.Add) {
-          return (left + right) | 0;
-        }
-        if (node.payload === FunctionalBinaryOperator.Subtract) {
-          return (left - right) | 0;
-        }
-        if (node.payload === FunctionalBinaryOperator.Multiply) {
-          return Math.imul(left, right);
-        }
-        if (node.payload === FunctionalBinaryOperator.Divide && right !== 0) {
-          return Math.trunc(left / right) | 0;
-        }
-        if (
-          node.payload === FunctionalBinaryOperator.Remainder && right !== 0
-        ) {
-          return (left % right) | 0;
-        }
-        if (node.payload === FunctionalBinaryOperator.BitwiseAnd) {
-          return left & right;
-        }
-        if (node.payload === FunctionalBinaryOperator.BitwiseOr) {
-          return left | right;
-        }
-        if (node.payload === FunctionalBinaryOperator.BitwiseXor) {
-          return left ^ right;
-        }
-        if (node.payload === FunctionalBinaryOperator.ShiftLeft) {
-          return left << right;
-        }
-        if (node.payload === FunctionalBinaryOperator.ShiftRightUnsigned) {
-          return left >>> right;
-        }
-        return undefined;
-      }
-      case FunctionalCoreTag.If: {
-        const condition = this.constantBooleanExpression(
-          node.child0,
-          environment,
-          constantLocals,
-        );
-        if (condition === undefined) return undefined;
-        return this.constantIntegerExpression(
-          condition ? node.child1 : node.child2,
-          environment,
-          constantLocals,
-        );
-      }
-      default:
-        return undefined;
-    }
+    const constantResolver = this.constantResolver(environment, constantLocals);
+    return this.#instrumentedFuel
+      ? this.#constantAnalysis.integerWithoutLocalBindings(nodeIndex, constantResolver)
+      : this.#constantAnalysis.integer(nodeIndex, constantResolver);
   }
 
   constantBooleanExpression(
@@ -3916,51 +3932,32 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     constantLocals: readonly number[] = [],
   ): boolean | undefined {
-    const node = this.node(nodeIndex);
-    switch (node.tag) {
-      case FunctionalCoreTag.Boolean:
-        return node.payload !== 0;
-      case FunctionalCoreTag.Local: {
-        if (node.payload < constantLocals.length) return undefined;
-        const source = environment[node.payload - constantLocals.length];
-        return source?.kind === "i32-boolean-constant" ? source.literal : undefined;
+    const constantResolver = this.constantResolver(environment, constantLocals);
+    return this.#instrumentedFuel
+      ? this.#constantAnalysis.booleanWithoutLocalBindings(nodeIndex, constantResolver)
+      : this.#constantAnalysis.boolean(nodeIndex, constantResolver);
+  }
+
+  constantResolver(
+    environment: FunctionalEnvironment,
+    constantLocals: readonly number[] = [],
+  ): FunctionalConstantResolver {
+    return (localDepth) => {
+      if (localDepth < constantLocals.length) {
+        return {
+          kind: "integer",
+          value: constantLocals[constantLocals.length - localDepth - 1]!,
+        };
       }
-      case FunctionalCoreTag.Binary: {
-        if (!isComparisonOperator(node.payload)) return undefined;
-        const left = this.constantIntegerExpression(node.child0, environment, constantLocals);
-        const right = this.constantIntegerExpression(node.child1, environment, constantLocals);
-        if (left === undefined || right === undefined) return undefined;
-        if (node.payload === FunctionalBinaryOperator.Equal) {
-          return left === right;
-        }
-        if (node.payload === FunctionalBinaryOperator.NotEqual) {
-          return left !== right;
-        }
-        if (node.payload === FunctionalBinaryOperator.Less) return left < right;
-        if (node.payload === FunctionalBinaryOperator.LessEqual) {
-          return left <= right;
-        }
-        if (node.payload === FunctionalBinaryOperator.Greater) {
-          return left > right;
-        }
-        return left >= right;
+      const binding = environment[localDepth - constantLocals.length];
+      if (binding?.kind === "i32-integer-constant") {
+        return { kind: "integer", value: binding.literal };
       }
-      case FunctionalCoreTag.If: {
-        const condition = this.constantBooleanExpression(
-          node.child0,
-          environment,
-          constantLocals,
-        );
-        if (condition === undefined) return undefined;
-        return this.constantBooleanExpression(
-          condition ? node.child1 : node.child2,
-          environment,
-          constantLocals,
-        );
+      if (binding?.kind === "i32-boolean-constant") {
+        return { kind: "boolean", value: binding.literal };
       }
-      default:
-        return undefined;
-    }
+      return undefined;
+    };
   }
 
   calleeImmediatelyForcesArgument(nodeIndex: number): boolean {
@@ -4657,6 +4654,21 @@ class FunctionalWasmCompiler {
 
     const node = this.node(nodeIndex);
     if (node.tag === FunctionalCoreTag.If) {
+      const selectedBranch = this.constantIfBranch(node, environment);
+      if (selectedBranch !== undefined) {
+        this.compileTailPosition(
+          instructions,
+          selectedBranch,
+          environment,
+          loop,
+          parameterLocals,
+          binderDepth,
+          loopBranchDepth,
+          resultBranchDepth,
+          resultKind,
+        );
+        return;
+      }
       this.compileBooleanExpression(instructions, node.child0, environment);
       instructions.emit(0x04, 0x40);
       this.compileTailPosition(
@@ -4706,6 +4718,23 @@ class FunctionalWasmCompiler {
       }
       const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
         this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0);
+      const constantValue = !this.#instrumentedFuel && eager
+        ? this.scalarConstantBinding(node.child0, environment)
+        : undefined;
+      if (constantValue !== undefined) {
+        this.compileTailPosition(
+          instructions,
+          node.child1,
+          [constantValue, ...environment],
+          loop,
+          parameterLocals,
+          binderDepth + 1,
+          loopBranchDepth,
+          resultBranchDepth,
+          resultKind,
+        );
+        return;
+      }
       if (eager) this.compileExpression(instructions, node.child0, environment);
       else this.compileLazyValue(instructions, node.child0, environment);
       const value = instructions.addLocal(WasmValueType.I64);

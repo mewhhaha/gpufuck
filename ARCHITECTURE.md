@@ -610,7 +610,7 @@ global layout live in [`wasm_runtime_binary.ts`](src/functional/wasm_runtime_bin
 Backend analyses run in an order that exposes facts to later choices:
 
 1. Determine entry and explicit export signatures.
-2. Compute global definition reachability.
+2. Prove bounded scalar constants and prune unreachable conditional branches and definitions.
 3. Recognize function shapes, saturation, recursion, tail calls, and numeric folds.
 4. Compute lexical captures and environment layouts.
 5. Propagate lambda sets through values, calls, branches, recursion, and constructor fields.
@@ -639,9 +639,9 @@ Feature reachability also controls runtime support. A strict effect-free scalar 
 - unused fault globals and signatures;
 - zero-valued instrumentation exports.
 
-This is definition-level whole-program elimination plus runtime feature pruning. It is not a general
-SSA optimizer: nodes inside a reachable definition remain available to structured expression
-emission, and all submitted definitions were already typechecked.
+This is definition-level whole-program elimination, constant-condition branch pruning, and runtime
+feature pruning. It is not a general SSA optimizer: other nodes inside a reachable definition remain
+available to structured expression emission, and all submitted definitions were already typechecked.
 
 ### 10.3 Strict representation
 
@@ -1173,8 +1173,10 @@ and collection contract.
 ## 15. Limits and safety properties
 
 Current structural limits include 1 MiB of source evidence, 65,536 surface nodes, semantic depth
-512, constructor arity 256, and device-derived buffer maxima. Runtime and compile-time APIs add
-explicit fuel, heap, stack, dispatch, output-node, output-byte, output-depth, and suspension limits.
+512, constructor arity 256, and device-derived buffer maxima. Each optional Wasm constant proof
+inspects at most 4,096 nodes before preserving the runtime expression. Runtime and compile-time APIs
+add explicit fuel, heap, stack, dispatch, output-node, output-byte, output-depth, and suspension
+limits.
 
 These limits serve several purposes:
 

@@ -112,6 +112,7 @@
       "src/functional/wasm_arena.ts",
       "src/functional/wasm_artifacts.ts",
       "src/functional/wasm_capture_analysis.ts",
+      "src/functional/wasm_constant_analysis.ts",
       "src/functional/wasm_codegen.ts",
       "src/functional/wasm_backend_plan.ts",
       "src/functional/wasm_component_boundary.ts",

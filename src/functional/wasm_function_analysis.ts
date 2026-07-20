@@ -7,6 +7,10 @@ import {
   FunctionalUnaryOperator,
 } from "./abi.ts";
 import type { FunctionalCoreNode } from "./compiler_module.ts";
+import type {
+  FunctionalScalarConstant,
+  FunctionalWasmConstantAnalysis,
+} from "./wasm_constant_analysis.ts";
 
 type FunctionalNumericFoldOperator =
   | typeof FunctionalBinaryOperator.Add
@@ -41,6 +45,7 @@ export interface FunctionalNumericFold {
 export class FunctionalWasmFunctionAnalysis {
   readonly #nodes: readonly FunctionalCoreNode[];
   readonly #definitionRoots: readonly number[];
+  readonly #constantAnalysis: FunctionalWasmConstantAnalysis;
   readonly #functions = new Map<number, FunctionalFunctionShape>();
   readonly #loops = new Map<number, FunctionalFunctionShape>();
   readonly #numericFolds = new Map<number, FunctionalNumericFold>();
@@ -49,9 +54,14 @@ export class FunctionalWasmFunctionAnalysis {
     { readonly local: boolean; readonly definition: number | undefined }
   >();
 
-  constructor(nodes: readonly FunctionalCoreNode[], definitionRoots: readonly number[]) {
+  constructor(
+    nodes: readonly FunctionalCoreNode[],
+    definitionRoots: readonly number[],
+    constantAnalysis: FunctionalWasmConstantAnalysis,
+  ) {
     this.#nodes = nodes;
     this.#definitionRoots = definitionRoots;
+    this.#constantAnalysis = constantAnalysis;
     for (const node of nodes) {
       if (node.tag !== FunctionalCoreTag.LetRec) continue;
       this.#recursiveFunctions.set(node.child0, { local: true, definition: undefined });
@@ -77,7 +87,10 @@ export class FunctionalWasmFunctionAnalysis {
     return this.#numericFolds.get(lambdaNode);
   }
 
-  reachableDefinitions(rootDefinitions: readonly number[]): ReadonlySet<number> {
+  reachableDefinitions(
+    rootDefinitions: readonly number[],
+    options: { readonly constantBranches: "prune" | "preserve" },
+  ): ReadonlySet<number> {
     const definitions = new Set<number>();
     const visitedNodes = new Set<number>();
     const pendingDefinitions = [...rootDefinitions];
@@ -91,18 +104,65 @@ export class FunctionalWasmFunctionAnalysis {
         );
       }
       definitions.add(definition);
-      const pendingNodes = [rootNode];
+      const pendingNodes: {
+        readonly nodeIndex: number;
+        readonly environment: readonly (FunctionalScalarConstant | undefined)[];
+      }[] = [{ nodeIndex: rootNode, environment: [] }];
       while (pendingNodes.length > 0) {
-        const nodeIndex = pendingNodes.pop();
-        if (nodeIndex === undefined || visitedNodes.has(nodeIndex)) continue;
+        const pending = pendingNodes.pop();
+        if (pending === undefined || visitedNodes.has(pending.nodeIndex)) continue;
+        const { nodeIndex, environment } = pending;
         visitedNodes.add(nodeIndex);
         const node = this.#node(nodeIndex);
         if (node.tag === FunctionalCoreTag.Global) {
           pendingDefinitions.push(node.payload);
           continue;
         }
+        if (node.tag === FunctionalCoreTag.If) {
+          pendingNodes.push({ nodeIndex: node.child0, environment });
+          const condition = options.constantBranches === "prune"
+            ? this.#constantAnalysis.boolean(node.child0, environment)
+            : undefined;
+          if (condition === undefined) {
+            pendingNodes.push({ nodeIndex: node.child1, environment });
+            pendingNodes.push({ nodeIndex: node.child2, environment });
+          } else {
+            pendingNodes.push({
+              nodeIndex: condition ? node.child1 : node.child2,
+              environment,
+            });
+          }
+          continue;
+        }
+        if (node.tag === FunctionalCoreTag.Let) {
+          pendingNodes.push({ nodeIndex: node.child0, environment });
+          const valueNode = this.#node(node.child0);
+          const value = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+              valueNode.tag === FunctionalCoreTag.Integer ||
+              valueNode.tag === FunctionalCoreTag.Boolean
+            ? this.#constantAnalysis.scalar(node.child0, environment)
+            : undefined;
+          pendingNodes.push({
+            nodeIndex: node.child1,
+            environment: [value, ...environment],
+          });
+          continue;
+        }
+        if (node.tag === FunctionalCoreTag.LetRec) {
+          const recursiveEnvironment = [undefined, ...environment];
+          pendingNodes.push({ nodeIndex: node.child0, environment: recursiveEnvironment });
+          pendingNodes.push({ nodeIndex: node.child1, environment: recursiveEnvironment });
+          continue;
+        }
+        if (node.tag === FunctionalCoreTag.Lambda || node.tag === FunctionalCoreTag.PatternBind) {
+          pendingNodes.push({
+            nodeIndex: node.child0,
+            environment: [undefined, ...environment],
+          });
+          continue;
+        }
         for (const child of coreNodeChildren(node)) {
-          if (child !== FUNCTIONAL_NO_INDEX) pendingNodes.push(child);
+          if (child !== FUNCTIONAL_NO_INDEX) pendingNodes.push({ nodeIndex: child, environment });
         }
       }
     }

@@ -5686,6 +5686,246 @@ Deno.test("reports zero allocation for an immediate scalar entry", async () => {
   equal(execution.stats.allocatedBytes, 0);
 });
 
+Deno.test("constant conditions emit the selected branch and discard branch-only definitions", async () => {
+  const compileBody = async (
+    body: FunctionalSurfaceExpression,
+  ): Promise<Uint8Array<ArrayBuffer>> => {
+    const encoded = buildFunctionalSurfaceModule(
+      [{
+        name: "discarded",
+        parameters: [],
+        annotation: { kind: "integer" },
+        body: surface.runtimeFault("discarded branch executed"),
+      }, {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "integer" },
+        body,
+      }],
+      [],
+      "main",
+      0,
+      { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    );
+    const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+    if (!compilation.ok) {
+      throw new Error(
+        `constant branch fixture did not compile: ${JSON.stringify(compilation.diagnostics)}`,
+      );
+    }
+    try {
+      return await compileFunctionalModuleToWasm(compilation.module);
+    } finally {
+      compilation.module.destroy();
+    }
+  };
+
+  const selectedBranch = surface.integer(42);
+  const baseline = await compileBody(selectedBranch);
+  const candidates: readonly [string, FunctionalSurfaceExpression][] = [[
+    "literal true",
+    {
+      kind: "if",
+      condition: surface.boolean(true),
+      consequent: selectedBranch,
+      alternate: surface.name("discarded"),
+    },
+  ], [
+    "literal false",
+    {
+      kind: "if",
+      condition: surface.boolean(false),
+      consequent: surface.name("discarded"),
+      alternate: selectedBranch,
+    },
+  ], [
+    "strict local comparison",
+    {
+      kind: "let",
+      name: "enabled",
+      value: surface.binary(
+        FunctionalBinaryOperator.Less,
+        surface.integer(1),
+        surface.integer(2),
+      ),
+      body: {
+        kind: "if",
+        condition: surface.name("enabled"),
+        consequent: selectedBranch,
+        alternate: surface.name("discarded"),
+      },
+    },
+  ], [
+    "unsigned shift wraps to i32",
+    {
+      kind: "if",
+      condition: surface.binary(
+        FunctionalBinaryOperator.Equal,
+        surface.binary(
+          FunctionalBinaryOperator.ShiftRightUnsigned,
+          surface.integer(-1),
+          surface.integer(0),
+        ),
+        surface.integer(-1),
+      ),
+      consequent: selectedBranch,
+      alternate: surface.name("discarded"),
+    },
+  ]];
+
+  for (const [scenario, candidate] of candidates) {
+    const bytes = await compileBody(candidate);
+    deepStrictEqual(bytes, baseline, scenario);
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const main = instance.exports.main;
+    if (typeof main !== "function") throw new Error("constant branch fixture omitted main");
+    equal(main(), 42, scenario);
+  }
+});
+
+Deno.test("constant branch proofs fall back to runtime branching at their work limit", async () => {
+  let level: FunctionalSurfaceExpression[] = Array.from(
+    { length: 4_096 },
+    () => surface.integer(1),
+  );
+  while (level.length > 1) {
+    const nextLevel: FunctionalSurfaceExpression[] = [];
+    for (let index = 0; index < level.length; index += 2) {
+      nextLevel.push(surface.binary(
+        FunctionalBinaryOperator.Add,
+        level[index]!,
+        level[index + 1]!,
+      ));
+    }
+    level = nextLevel;
+  }
+  const sum = level[0];
+  if (sum === undefined) throw new Error("constant branch fixture omitted its sum");
+
+  const boundedBody: FunctionalSurfaceExpression = {
+    kind: "if",
+    condition: surface.binary(
+      FunctionalBinaryOperator.Greater,
+      sum,
+      surface.integer(0),
+    ),
+    consequent: surface.integer(42),
+    alternate: surface.integer(41),
+  };
+  const baseline = await runCompiledWasm(singleDefinitionModule(
+    surface.integer(42),
+    FunctionalEvaluationProfile.StrictEager,
+  ));
+  const bounded = await runCompiledWasm(singleDefinitionModule(
+    boundedBody,
+    FunctionalEvaluationProfile.StrictEager,
+  ));
+
+  deepStrictEqual(bounded.value, { kind: "integer", value: 42 });
+  ok(bounded.bytes.byteLength > baseline.bytes.byteLength);
+});
+
+Deno.test("constant branch pruning preserves a faulting condition", async () => {
+  const divisionByZero = surface.binary(
+    FunctionalBinaryOperator.Divide,
+    surface.integer(1),
+    surface.integer(0),
+  );
+  const module = singleDefinitionModule({
+    kind: "if",
+    condition: surface.binary(
+      FunctionalBinaryOperator.Equal,
+      divisionByZero,
+      surface.integer(0),
+    ),
+    consequent: surface.integer(42),
+    alternate: surface.integer(42),
+  }, FunctionalEvaluationProfile.StrictEager);
+
+  await rejects(
+    () => runCompiledWasm(module),
+    (error) => {
+      ok(error instanceof FunctionalWasmRuntimeError);
+      equal(error.code, "F3007");
+      equal(error.kind, "divide-by-zero");
+      return true;
+    },
+  );
+});
+
+Deno.test("constant branch pruning preserves both outcomes of a runtime condition", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["condition"],
+      annotation: {
+        kind: "function",
+        parameter: { kind: "boolean" },
+        result: { kind: "integer" },
+      },
+      body: {
+        kind: "if",
+        condition: surface.name("condition"),
+        consequent: surface.integer(1),
+        alternate: surface.integer(2),
+      },
+    }],
+    [],
+    "main",
+    0,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
+  const whenTrue = await runCompiledWasm(module, {
+    argument: { kind: "boolean", value: true },
+  });
+  const whenFalse = await runCompiledWasm(module, {
+    argument: { kind: "boolean", value: false },
+  });
+
+  deepStrictEqual(whenTrue.value, { kind: "integer", value: 1 });
+  deepStrictEqual(whenFalse.value, { kind: "integer", value: 2 });
+});
+
+Deno.test("constant branch pruning retains definitions behind lazy captured conditions", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "discarded",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.integer(41),
+    }, {
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: {
+        kind: "let",
+        name: "enabled",
+        value: surface.binary(
+          FunctionalBinaryOperator.Less,
+          surface.integer(1),
+          surface.integer(2),
+        ),
+        body: surface.apply(
+          surface.lambda("unused", {
+            kind: "if",
+            condition: surface.name("enabled"),
+            consequent: surface.integer(42),
+            alternate: surface.name("discarded"),
+          }),
+          surface.integer(0),
+        ),
+      },
+    }],
+    [],
+    "main",
+    0,
+  );
+
+  const execution = await runCompiledWasm(module);
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+});
+
 Deno.test("reuses immutable WebAssembly artifacts across fresh executions", async () => {
   const compilation = await functionalWasmRuntime().compiler.compileModule(
     singleDefinitionModule(surface.integer(42)),

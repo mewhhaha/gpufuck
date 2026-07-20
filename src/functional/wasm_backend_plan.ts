@@ -7,6 +7,7 @@ import {
 } from "./wasm_host_boundary.ts";
 import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
+import { FunctionalWasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { FunctionalWasmFunctionAnalysis } from "./wasm_function_analysis.ts";
 import type { FunctionalStoragePlan } from "./storage_contract.ts";
 import { createFunctionalStoragePlan } from "./storage_plan.ts";
@@ -17,6 +18,7 @@ export interface FunctionalWasmBackendPlan {
   readonly module: GpuFunctionalModule;
   readonly nodes: readonly FunctionalCoreNode[];
   readonly captureAnalysis: FunctionalWasmCaptureAnalysis;
+  readonly constantAnalysis: FunctionalWasmConstantAnalysis;
   readonly functionAnalysis: FunctionalWasmFunctionAnalysis;
   readonly uniqueReuseAnalysis: FunctionalWasmUniqueReuseAnalysis;
   readonly storage: FunctionalStoragePlan;
@@ -33,6 +35,7 @@ export function createFunctionalWasmBackendPlan(
   options: FunctionalWasmCompilationOptions,
 ): FunctionalWasmBackendPlan {
   const captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes);
+  const constantAnalysis = new FunctionalWasmConstantAnalysis(nodes);
   const storage = createFunctionalStoragePlan(module, nodes, captureAnalysis, {
     ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
   });
@@ -53,7 +56,12 @@ export function createFunctionalWasmBackendPlan(
     module,
     nodes,
     captureAnalysis,
-    functionAnalysis: new FunctionalWasmFunctionAnalysis(nodes, module.definitionRoots),
+    constantAnalysis,
+    functionAnalysis: new FunctionalWasmFunctionAnalysis(
+      nodes,
+      module.definitionRoots,
+      constantAnalysis,
+    ),
     uniqueReuseAnalysis: new FunctionalWasmUniqueReuseAnalysis(module, nodes),
     storage,
     entry,

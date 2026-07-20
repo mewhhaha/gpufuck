@@ -317,9 +317,10 @@ importers; an interface change invalidates the reverse dependency closure. Direc
 caches are available.
 
 Wasm emission performs whole-program definition reachability from `main` and every requested Wasm
-export. Unreachable definitions and unused runtime facilities are absent from the artifact. All
-submitted definitions are still resolved and typechecked before emission, so dead code does not hide
-source errors and early reachability is not currently a substitute for frontend dependency
+export. Proven constant conditions discard their unselected branch before reachability, so
+branch-only definitions and unused runtime facilities are absent from the artifact. All submitted
+definitions and branches are still resolved and typechecked before emission, so dead code does not
+hide source errors and early reachability is not currently a substitute for frontend dependency
 selection.
 
 ## Compile-time execution and type programming
@@ -568,6 +569,7 @@ Important current limits include:
 - source is capped at 1 MiB, surface trees at 65,536 nodes, semantic depth at 512, and constructor
   arity at 64;
 - compilation defaults to 1,000,000 persistent semantic transitions;
+- optional Wasm constant proofs preserve the runtime expression after 4,096 node inspections;
 - the type system is HM plus indexed results and annotated predicative rank-N boundaries;
 - native existential constructors, full dependent types, and impredicative inference are absent;
 - raw memory intrinsics, native SIMD, tracing GC, and a runtime borrow checker are outside
