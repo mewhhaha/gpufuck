@@ -321,6 +321,33 @@ Deno.test("GPU Effect Core rejects branches with different result types", async 
   if (!compilation.ok) equal(compilation.diagnostics[0].code, "F2102");
 });
 
+Deno.test("Effect Core bounds canonicalization of structurally shared operation types", async () => {
+  let sharedType: FunctionalEffectOperation["parameter"] = { kind: "integer" };
+  for (let depth = 0; depth < 13; depth += 1) {
+    sharedType = { kind: "tuple", values: [sharedType, sharedType] };
+  }
+  const module = effectModule(
+    { kind: "return", value: surface.integer(0), valueType: { kind: "integer" } },
+    [],
+    [],
+    [{
+      effect: "Reader",
+      name: "read",
+      parameter: sharedType,
+      result: { kind: "integer" },
+    }],
+  );
+
+  await rejects(
+    () =>
+      effectCoreRuntime().verifier.verify(module, {
+        maximumTransitions: 100,
+        maximumTransitionsPerDispatch: 100,
+      }),
+    /Effect Core Reader\.read parameter.*exceeds 4096 nodes/,
+  );
+});
+
 Deno.test("Effect Core rejects a source span outside its module boundary", async () => {
   const module = effectModule({
     kind: "return",

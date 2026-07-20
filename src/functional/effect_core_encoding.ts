@@ -1,6 +1,7 @@
 import {
   FUNCTIONAL_MAXIMUM_EXPRESSION_NODES,
   type FunctionalSpan,
+  type FunctionalType,
   type FunctionalTypeSchema,
 } from "./abi.ts";
 import type {
@@ -21,6 +22,7 @@ import {
   type FunctionalHostType,
   normalizeFunctionalHostCapabilities,
 } from "./host_contract.ts";
+import { functionalRuntimeTypeDescriptorKey } from "./host_specialization.ts";
 
 const MAXIMUM_EFFECT_CORE_OPERATIONS = 32;
 
@@ -295,30 +297,14 @@ class EffectCoreTypeTable {
   }
 }
 
-function typeKey(type: FunctionalTypeSchema, location: string, depth = 0): string {
-  if (depth > 64) throw new RangeError(`Functional Effect Core ${location} exceeds type depth 64`);
-  switch (type.kind) {
-    case "integer":
-    case "signed-integer-64":
-    case "float-32":
-    case "float-64":
-    case "boolean":
-    case "unit":
-      return type.kind;
-    case "tuple":
-      return `tuple(${typeKey(type.values[0], location, depth + 1)},${
-        typeKey(type.values[1], location, depth + 1)
-      })`;
-    case "named":
-      return `named(${JSON.stringify(type.name)}:${
-        type.arguments.map((argument) => typeKey(argument, location, depth + 1)).join(",")
-      })`;
-    case "parameter":
-    case "function":
-    case "forall":
-      throw new TypeError(
-        `Functional Effect Core ${location} must be a concrete first-order type; received ${type.kind}`,
-      );
+function typeKey(type: FunctionalTypeSchema, location: string): string {
+  try {
+    return functionalRuntimeTypeDescriptorKey(type as FunctionalType);
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    throw new TypeError(`Functional Effect Core ${location} has invalid type: ${message}`, {
+      cause,
+    });
   }
 }
 
