@@ -333,15 +333,13 @@ function emitAllocationByteLength(
   );
   instructions.emit(0x4b);
   instructions.localGet(pointer);
+  instructions.i32Load(12);
+  instructions.localGet(pointer);
   instructions.i32Load(8);
-  instructions.localSet(valueCount);
   instructions.localGet(kind);
   instructions.i32Const(FunctionalWasmValueAbi.objectKinds.thunk);
-  instructions.emit(0x46, 0x04, 0x40);
-  instructions.localGet(pointer);
-  instructions.i32Load(12);
+  instructions.emit(0x46, 0x1b);
   instructions.localSet(valueCount);
-  instructions.emit(0x0b);
   instructions.localGet(kind);
   instructions.i32Const(FunctionalWasmValueAbi.objectKinds.numeric);
   instructions.emit(0x46);
