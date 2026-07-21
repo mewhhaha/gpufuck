@@ -306,6 +306,9 @@ function emitAllocationByteLength(
   valueCount: number,
   byteLength: number,
 ): void {
+  const valueByteLength = instructions.addLocal(WasmValueType.I32);
+  const headerByteLength = instructions.addLocal(WasmValueType.I32);
+  const wideByteLength = instructions.addLocal(WasmValueType.I64);
   instructions.localGet(kind);
   instructions.i32Const(FUNCTIONAL_WASM_ALLOCATION_MAGIC);
   instructions.emit(0x46, 0x04, 0x40);
@@ -313,123 +316,67 @@ function emitAllocationByteLength(
   instructions.i32Load(4);
   instructions.localSet(byteLength);
   instructions.emit(0x05);
-
+  instructions.localGet(kind);
+  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.closure);
+  instructions.emit(0x6b);
+  instructions.i32Const(
+    FunctionalWasmValueAbi.objectKinds.resource -
+      FunctionalWasmValueAbi.objectKinds.closure,
+  );
+  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+  instructions.localGet(pointer);
+  instructions.i32Load(8);
+  instructions.localSet(valueCount);
   instructions.localGet(kind);
   instructions.i32Const(FunctionalWasmValueAbi.objectKinds.thunk);
   instructions.emit(0x46, 0x04, 0x40);
   instructions.localGet(pointer);
   instructions.i32Load(12);
   instructions.localSet(valueCount);
-  emitScaledObjectByteLength(
-    instructions,
-    valueCount,
-    THUNK_HEADER_BYTE_LENGTH,
-    byteLength,
-  );
-  instructions.emit(0x05);
-
-  instructions.localGet(pointer);
-  instructions.i32Load(8);
-  instructions.localSet(valueCount);
+  instructions.emit(0x0b);
+  instructions.localGet(kind);
+  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.numeric);
+  instructions.emit(0x46);
+  instructions.localGet(valueCount);
+  instructions.i32Const(1);
+  instructions.emit(0x47, 0x71);
+  instructions.localGet(kind);
+  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.resource);
+  instructions.emit(0x46);
+  instructions.localGet(valueCount);
+  instructions.i32Const(0);
+  instructions.emit(0x47, 0x71, 0x72, 0x04, 0x40, 0x00, 0x0b);
+  instructions.i32Const(1);
+  instructions.i32Const(VALUE_BYTE_LENGTH);
   instructions.localGet(kind);
   instructions.i32Const(FunctionalWasmValueAbi.objectKinds.text);
   instructions.emit(0x46);
   instructions.localGet(kind);
   instructions.i32Const(FunctionalWasmValueAbi.objectKinds.bytes);
-  instructions.emit(0x46, 0x72, 0x04, 0x40);
-  emitByteObjectByteLength(instructions, valueCount, byteLength);
-  instructions.emit(0x05);
-
+  instructions.emit(0x46, 0x72, 0x1b);
+  instructions.localSet(valueByteLength);
+  instructions.i32Const(THUNK_HEADER_BYTE_LENGTH);
+  instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+  instructions.localGet(kind);
+  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.thunk);
+  instructions.emit(0x46);
   instructions.localGet(kind);
   instructions.i32Const(FunctionalWasmValueAbi.objectKinds.numeric);
-  instructions.emit(0x46, 0x04, 0x40);
-  emitExpectedCount(instructions, valueCount, 1);
-  instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH + VALUE_BYTE_LENGTH);
+  instructions.emit(0x46, 0x72, 0x1b);
+  instructions.localSet(headerByteLength);
+  instructions.localGet(valueCount);
+  instructions.emit(0xad);
+  instructions.localGet(valueByteLength);
+  instructions.emit(0xad, 0x7e);
+  instructions.localGet(headerByteLength);
+  instructions.emit(0xad, 0x7c);
+  instructions.localTee(wideByteLength);
+  instructions.i64Const(BigInt(FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH));
+  instructions.emit(0x56, 0x04, 0x40, 0x00, 0x0b);
+  instructions.localGet(wideByteLength);
+  instructions.emit(0xa7);
   instructions.localSet(byteLength);
-  instructions.emit(0x05);
-
-  instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.resource);
-  instructions.emit(0x46, 0x04, 0x40);
-  emitExpectedCount(instructions, valueCount, 0);
-  instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
-  instructions.localSet(byteLength);
-  instructions.emit(0x05);
-
-  emitGraphObjectKindGuard(instructions, kind);
-  emitScaledObjectByteLength(
-    instructions,
-    valueCount,
-    OBJECT_HEADER_BYTE_LENGTH,
-    byteLength,
-  );
-  instructions.emit(0x0b, 0x0b, 0x0b, 0x0b, 0x0b);
-}
-
-function emitByteObjectByteLength(
-  instructions: WasmInstructions,
-  valueCount: number,
-  byteLength: number,
-): void {
-  instructions.localGet(valueCount);
-  instructions.i32Const(
-    FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - OBJECT_HEADER_BYTE_LENGTH,
-  );
-  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
-  instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
-  instructions.localGet(valueCount);
-  instructions.emit(0x6a);
-  instructions.localSet(byteLength);
-}
-
-function emitScaledObjectByteLength(
-  instructions: WasmInstructions,
-  valueCount: number,
-  headerByteLength: number,
-  byteLength: number,
-): void {
-  instructions.localGet(valueCount);
-  instructions.i32Const(
-    Math.floor(
-      (FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - headerByteLength) /
-        VALUE_BYTE_LENGTH,
-    ),
-  );
-  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
-  instructions.i32Const(headerByteLength);
-  instructions.localGet(valueCount);
-  instructions.i32Const(3);
-  instructions.emit(0x74, 0x6a);
-  instructions.localSet(byteLength);
-}
-
-function emitExpectedCount(
-  instructions: WasmInstructions,
-  valueCount: number,
-  expected: number,
-): void {
-  instructions.localGet(valueCount);
-  instructions.i32Const(expected);
-  instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
-}
-
-function emitGraphObjectKindGuard(
-  instructions: WasmInstructions,
-  kind: number,
-): void {
-  const graphKinds = [
-    FunctionalWasmValueAbi.objectKinds.closure,
-    FunctionalWasmValueAbi.objectKinds.constructor,
-    FunctionalWasmValueAbi.objectKinds.array,
-    FunctionalWasmValueAbi.objectKinds.slice,
-  ];
-  for (const [index, graphKind] of graphKinds.entries()) {
-    instructions.localGet(kind);
-    instructions.i32Const(graphKind);
-    instructions.emit(0x46);
-    if (index !== 0) instructions.emit(0x72);
-  }
-  instructions.emit(0x45, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x0b);
 }
 
 export function forceThunkFunction(): WasmFunctionBody {
