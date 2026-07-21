@@ -20,8 +20,6 @@ export const FunctionalWasmFunctionType = Object.freeze(
   } as const,
 );
 
-export const FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT = FunctionalWasmFunctionType.ThunkForce + 1;
-
 export interface WasmFunctionBody {
   readonly typeIndex: number;
   readonly localTypes: readonly number[];
@@ -40,6 +38,16 @@ export interface WasmFunctionType {
   readonly parameters: readonly number[];
   readonly results: readonly number[];
 }
+
+export const FUNCTIONAL_WASM_BASE_FUNCTION_TYPES: readonly WasmFunctionType[] = Object.freeze([
+  { parameters: [WasmValueType.I32], results: [WasmValueType.I32] },
+  { parameters: [], results: [WasmValueType.I64] },
+  { parameters: [WasmValueType.I32, WasmValueType.I64], results: [WasmValueType.I64] },
+  { parameters: [], results: [WasmValueType.I32] },
+  { parameters: [WasmValueType.I32], results: [WasmValueType.I64] },
+]);
+
+export const FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT = FUNCTIONAL_WASM_BASE_FUNCTION_TYPES.length;
 
 export class WasmInstructions {
   readonly bytes: number[] = [];
@@ -463,14 +471,9 @@ export function encodeCompactScalarWasmModule(
 }
 
 function wasmFunctionTypes(additionalFunctionTypes: readonly WasmFunctionType[]): number[][] {
-  return [
-    functionType([WasmValueType.I32], [WasmValueType.I32]),
-    functionType([], [WasmValueType.I64]),
-    functionType([WasmValueType.I32, WasmValueType.I64], [WasmValueType.I64]),
-    functionType([], [WasmValueType.I32]),
-    functionType([WasmValueType.I32], [WasmValueType.I64]),
-    ...additionalFunctionTypes.map((type) => functionType(type.parameters, type.results)),
-  ];
+  return [...FUNCTIONAL_WASM_BASE_FUNCTION_TYPES, ...additionalFunctionTypes].map((type) =>
+    functionType(type.parameters, type.results)
+  );
 }
 
 function functionType(parameters: readonly number[], results: readonly number[]): number[] {

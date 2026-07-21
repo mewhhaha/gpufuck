@@ -26,6 +26,7 @@ import {
   encodeCompactScalarWasmModule,
   encodeWasmModule,
   FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT,
+  FUNCTIONAL_WASM_BASE_FUNCTION_TYPES,
   FunctionalWasmFunctionType,
   type WasmFunctionBody,
   type WasmFunctionImport,
@@ -262,6 +263,12 @@ class FunctionalWasmCompiler {
     this.#module = module;
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
+    for (const [index, type] of FUNCTIONAL_WASM_BASE_FUNCTION_TYPES.entries()) {
+      this.#additionalFunctionTypeIndices.set(
+        `${type.parameters.join(",")}->${type.results.join(",")}`,
+        index,
+      );
+    }
     this.#instrumentedFuel = plan.instrumentedFuel;
     this.#runtimeEmitter = new FunctionalWasmRuntimeEmitter(nodes, {
       compactScalar,
