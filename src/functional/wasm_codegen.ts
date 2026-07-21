@@ -1285,6 +1285,13 @@ class FunctionalWasmCompiler {
       );
       const fields: ValueSource[] = [];
       for (const argument of constructorApplication.arguments) {
+        const constantField = this.#instrumentedFuel
+          ? undefined
+          : this.scalarConstantBinding(argument.node, environment);
+        if (constantField !== undefined) {
+          fields.push(constantField);
+          continue;
+        }
         this.compileApplicationArgument(
           instructions,
           argument,
@@ -4177,16 +4184,14 @@ class FunctionalWasmCompiler {
         this.emitEncodeInteger(instructions);
         return;
       case "i32-integer-constant":
-        instructions.i32Const(source.literal);
-        this.emitEncodeInteger(instructions);
+        instructions.i64Const((BigInt(source.literal) << 3n) | 1n);
         return;
       case "i32-boolean":
         instructions.localGet(source.index);
         this.emitEncodeBoolean(instructions);
         return;
       case "i32-boolean-constant":
-        instructions.i32Const(source.literal ? 1 : 0);
-        this.emitEncodeBoolean(instructions);
+        instructions.i64Const(source.literal ? 10n : 2n);
         return;
       case "i32-pointer":
         instructions.localGet(source.index);
