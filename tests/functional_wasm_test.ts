@@ -5496,6 +5496,74 @@ Deno.test("strict scalar tail loops omit the lazy WebAssembly runtime", async ()
   equal((execution.instance.exports.main as () => number)(), 4_138);
 });
 
+Deno.test("integerized comparison conditions preserve strict tail recursion", async () => {
+  const comparisonAsInteger: FunctionalSurfaceExpression = {
+    kind: "if",
+    condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+    consequent: surface.integer(1),
+    alternate: surface.integer(0),
+  };
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "count",
+    value: surface.lambda("remaining", {
+      kind: "if",
+      condition: surface.binary(
+        FunctionalBinaryOperator.NotEqual,
+        comparisonAsInteger,
+        surface.integer(0),
+      ),
+      consequent: surface.integer(42),
+      alternate: surface.apply(
+        surface.name("count"),
+        surface.binary(
+          FunctionalBinaryOperator.Subtract,
+          surface.name("remaining"),
+          surface.integer(1),
+        ),
+      ),
+    }),
+    body: surface.apply(surface.name("count"), surface.integer(4_096)),
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 0);
+});
+
+Deno.test("inverted integerized conditions preserve strict tail recursion", async () => {
+  const comparisonAsInvertedInteger: FunctionalSurfaceExpression = {
+    kind: "if",
+    condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+    consequent: surface.integer(0),
+    alternate: surface.integer(1),
+  };
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let-rec",
+    name: "count",
+    value: surface.lambda("remaining", {
+      kind: "if",
+      condition: surface.binary(
+        FunctionalBinaryOperator.Equal,
+        surface.integer(0),
+        comparisonAsInvertedInteger,
+      ),
+      consequent: surface.integer(42),
+      alternate: surface.apply(
+        surface.name("count"),
+        surface.binary(
+          FunctionalBinaryOperator.Subtract,
+          surface.name("remaining"),
+          surface.integer(1),
+        ),
+      ),
+    }),
+    body: surface.apply(surface.name("count"), surface.integer(4_096)),
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 0);
+});
+
 Deno.test("strict recursive workers embed fields from known constructor values", async () => {
   const configuration = surface.apply(
     surface.apply(

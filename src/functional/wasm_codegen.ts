@@ -2747,6 +2747,43 @@ class FunctionalWasmCompiler {
       }
       case FunctionalCoreTag.Binary:
         if (
+          !this.#instrumentedFuel &&
+          (node.payload === FunctionalBinaryOperator.Equal ||
+            node.payload === FunctionalBinaryOperator.NotEqual)
+        ) {
+          const left = this.node(node.child0);
+          const right = this.node(node.child1);
+          let integerBoolean: FunctionalCoreNode | undefined;
+          if (left.tag === FunctionalCoreTag.Integer && left.payload === 0) {
+            integerBoolean = right;
+          } else if (
+            right.tag === FunctionalCoreTag.Integer && right.payload === 0
+          ) {
+            integerBoolean = left;
+          }
+          if (integerBoolean?.tag === FunctionalCoreTag.If) {
+            const thenBranch = this.node(integerBoolean.child1);
+            const elseBranch = this.node(integerBoolean.child2);
+            if (
+              thenBranch.tag === FunctionalCoreTag.Integer &&
+              elseBranch.tag === FunctionalCoreTag.Integer &&
+              (thenBranch.payload === 0 || thenBranch.payload === 1) &&
+              thenBranch.payload + elseBranch.payload === 1
+            ) {
+              this.compileBooleanExpression(
+                instructions,
+                integerBoolean.child0,
+                environment,
+              );
+              const trueWhenCondition = node.payload === FunctionalBinaryOperator.NotEqual
+                ? thenBranch.payload === 1
+                : thenBranch.payload === 0;
+              if (!trueWhenCondition) instructions.emit(0x45);
+              return;
+            }
+          }
+        }
+        if (
           node.payload === FunctionalBinaryOperator.StructuralEqual ||
           node.payload === FunctionalBinaryOperator.StructuralNotEqual
         ) {
