@@ -2138,7 +2138,9 @@ class FunctionalWasmCompiler {
   virtualLambda(
     nodeIndex: number,
     environment: FunctionalEnvironment,
+    remainingDepth = 64,
   ): VirtualLambda | undefined {
+    if (remainingDepth === 0) return undefined;
     const node = this.node(nodeIndex);
     if (node.tag === FunctionalCoreTag.Lambda) {
       if (this.#recursiveLambdaOwners.has(nodeIndex)) return undefined;
@@ -2148,17 +2150,57 @@ class FunctionalWasmCompiler {
       const binding = environment[node.payload];
       return binding?.kind === "virtual-lambda" ? binding : undefined;
     }
-    if (
-      node.tag !== FunctionalCoreTag.Global ||
-      node.payload >= this.#module.definitionCount
-    ) {
-      return undefined;
+    if (node.tag === FunctionalCoreTag.Global) {
+      if (node.payload >= this.#module.definitionCount) return undefined;
+      const root = this.#module.definitionRoots[node.payload];
+      if (
+        root === undefined || this.node(root).tag !== FunctionalCoreTag.Lambda
+      ) return undefined;
+      return { kind: "virtual-lambda", node: root, environment: [] };
     }
-    const root = this.#module.definitionRoots[node.payload];
-    if (
-      root === undefined || this.node(root).tag !== FunctionalCoreTag.Lambda
-    ) return undefined;
-    return { kind: "virtual-lambda", node: root, environment: [] };
+    if (!this.#compactScalar || this.#instrumentedFuel) return undefined;
+    if (node.tag === FunctionalCoreTag.Let) {
+      const binding = this.staticBinding(
+        node.child0,
+        environment,
+        remainingDepth - 1,
+      );
+      return binding === undefined ? undefined : this.virtualLambda(
+        node.child1,
+        [binding, ...environment],
+        remainingDepth - 1,
+      );
+    }
+    if (node.tag === FunctionalCoreTag.Apply) {
+      const callee = this.virtualLambda(
+        node.child0,
+        environment,
+        remainingDepth - 1,
+      );
+      if (callee === undefined) return undefined;
+      const lambda = this.node(callee.node);
+      if (lambda.tag !== FunctionalCoreTag.Lambda) return undefined;
+      const argument = this.staticBinding(
+        node.child1,
+        environment,
+        remainingDepth - 1,
+      );
+      return argument === undefined ? undefined : this.virtualLambda(
+        lambda.child0,
+        [argument, ...callee.environment],
+        remainingDepth - 1,
+      );
+    }
+    if (node.tag === FunctionalCoreTag.If) {
+      const condition = this.constantBooleanExpression(node.child0, environment);
+      if (condition === undefined) return undefined;
+      return this.virtualLambda(
+        condition ? node.child1 : node.child2,
+        environment,
+        remainingDepth - 1,
+      );
+    }
+    return undefined;
   }
 
   compileLet(
@@ -3761,7 +3803,7 @@ class FunctionalWasmCompiler {
     environment: FunctionalEnvironment,
     remainingDepth: number,
   ): FunctionalBinding | undefined {
-    const lambda = this.virtualLambda(nodeIndex, environment);
+    const lambda = this.virtualLambda(nodeIndex, environment, remainingDepth);
     if (lambda !== undefined) return lambda;
     const constructor = this.virtualConstructor(
       nodeIndex,

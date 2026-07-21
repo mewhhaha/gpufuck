@@ -5231,6 +5231,37 @@ Deno.test("strict curried higher-order calls inline known functions into compact
   );
 });
 
+Deno.test("strict immediately consumed returned closures remain in compact WASM", async () => {
+  const execution = await runCompiledWasm(singleDefinitionModule({
+    kind: "let",
+    name: "makeAdder",
+    value: surface.lambda(
+      "amount",
+      surface.lambda(
+        "value",
+        surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.name("value"),
+          surface.name("amount"),
+        ),
+      ),
+    ),
+    body: {
+      kind: "let",
+      name: "addTwo",
+      value: surface.apply(surface.name("makeAdder"), surface.integer(2)),
+      body: surface.apply(surface.name("addTwo"), surface.integer(40)),
+    },
+  }, FunctionalEvaluationProfile.StrictEager));
+
+  deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  equal(execution.stats.allocatedBytes, 0);
+  deepStrictEqual(
+    WebAssembly.Module.exports(new WebAssembly.Module(execution.bytes)),
+    [{ name: "main", kind: "function" }],
+  );
+});
+
 Deno.test("dispatches branch-selected lambda sets with their own captures", async () => {
   const chooseFunction = (condition: boolean): FunctionalSurfaceExpression => ({
     kind: "let",
