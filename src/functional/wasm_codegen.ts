@@ -540,13 +540,10 @@ class FunctionalWasmCompiler {
     }
     this.compileHostOperationClosures();
     this.compileGlobalThunks();
-    const entryInstructions = new WasmInstructions(
-      this.#entry.parameter === undefined ? 0 : 1,
-    );
-    this.emitGlobalInitialization(entryInstructions);
-    this.emitEntryCall(entryInstructions);
     const scalarResult = functionalHostScalarType(this.#entry.result);
-    this.emitPublicResult(entryInstructions, this.#entry.result);
+    const initializeInstructions = new WasmInstructions(0);
+    this.emitGlobalInitialization(initializeInstructions);
+    initializeInstructions.i32Const(0);
     const callableFunctions = this.#module.wasmExports.map((exported, index) => {
       const direct = directCallableFunctions[index];
       if (direct !== undefined) return direct;
@@ -569,10 +566,16 @@ class FunctionalWasmCompiler {
     const entryResultType = scalarResult === undefined
       ? WasmValueType.I64
       : wasmValueType(scalarResult);
-    const initializeInstructions = new WasmInstructions(0);
-    this.emitGlobalInitialization(initializeInstructions);
-    initializeInstructions.i32Const(0);
     const initializeType = this.functionTypeIndex([], [WasmValueType.I32]);
+    const initializeFunctionIndex = this.indirectFunctionOffset() +
+      indirectFunctions.length + 1;
+    const entryInstructions = new WasmInstructions(
+      this.#entry.parameter === undefined ? 0 : 1,
+    );
+    entryInstructions.call(initializeFunctionIndex);
+    entryInstructions.emit(0x1a);
+    this.emitEntryCall(entryInstructions);
+    this.emitPublicResult(entryInstructions, this.#entry.result);
     const freeType = this.functionTypeIndex(
       [WasmValueType.I32, WasmValueType.I32],
       [],
