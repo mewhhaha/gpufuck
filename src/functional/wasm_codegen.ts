@@ -544,11 +544,18 @@ class FunctionalWasmCompiler {
     const initializeInstructions = new WasmInstructions(0);
     this.emitGlobalInitialization(initializeInstructions);
     initializeInstructions.i32Const(0);
+    const initializeFunctionIndex = this.indirectFunctionOffset() +
+      this.#indirectFunctions.length + 1;
     const callableFunctions = this.#module.wasmExports.map((exported, index) => {
       const direct = directCallableFunctions[index];
       if (direct !== undefined) return direct;
       const { parameters, result } = this.wasmExportSignature(exported);
-      return this.compileGeneralWasmExport(exported, parameters, result);
+      return this.compileGeneralWasmExport(
+        exported,
+        parameters,
+        result,
+        initializeFunctionIndex,
+      );
     });
     const indirectFunctions = this.#indirectFunctions.map((body, slot) => {
       if (body === undefined) {
@@ -567,8 +574,6 @@ class FunctionalWasmCompiler {
       ? WasmValueType.I64
       : wasmValueType(scalarResult);
     const initializeType = this.functionTypeIndex([], [WasmValueType.I32]);
-    const initializeFunctionIndex = this.indirectFunctionOffset() +
-      indirectFunctions.length + 1;
     const entryInstructions = new WasmInstructions(
       this.#entry.parameter === undefined ? 0 : 1,
     );
@@ -784,9 +789,11 @@ class FunctionalWasmCompiler {
     exported: FunctionalWasmExport,
     parameters: readonly FunctionalType[],
     result: FunctionalType,
+    initializeFunctionIndex: number,
   ): WasmFunctionBody {
     const instructions = new WasmInstructions(parameters.length);
-    this.emitGlobalInitialization(instructions);
+    instructions.call(initializeFunctionIndex);
+    instructions.emit(0x1a);
     this.emitGlobalReference(instructions, exported.definitionIndex);
     for (let index = 0; index < parameters.length; index += 1) {
       instructions.emit(0xa7);
