@@ -438,7 +438,7 @@ export function linkFunctionalModules(
         ),
         body: rewriteExpression(
           definition.body,
-          new Set(definition.parameters),
+          new Map(definition.parameters.map((parameter) => [parameter, 1])),
           definitionNames,
           importNames,
           constructorNames,
@@ -662,14 +662,14 @@ function analyzeLinkedDefinitionReachability(
 
 function rewriteExpression(
   expression: FunctionalSurfaceExpression,
-  bound: ReadonlySet<string>,
+  boundNames: Map<string, number>,
   definitions: ReadonlyMap<string, string>,
   imports: ReadonlyMap<string, string>,
   constructors: ReadonlyMap<string, string>,
   sourceBase: number,
 ): FunctionalSurfaceExpression {
-  const rewrite = (value: FunctionalSurfaceExpression, scope = bound) =>
-    rewriteExpression(value, scope, definitions, imports, constructors, sourceBase);
+  const rewrite = (value: FunctionalSurfaceExpression) =>
+    rewriteExpression(value, boundNames, definitions, imports, constructors, sourceBase);
   const span = offsetSpan(expression.span, sourceBase);
   switch (expression.kind) {
     case "integer":
@@ -685,52 +685,61 @@ function rewriteExpression(
     case "name":
       return {
         ...expression,
-        name: bound.has(expression.name)
+        name: boundNames.has(expression.name)
           ? expression.name
           : imports.get(expression.name) ?? definitions.get(expression.name) ??
             constructors.get(expression.name) ?? expression.name,
         span,
       };
     case "lambda": {
-      const scope = new Set(bound);
-      scope.add(expression.parameter);
-      return { ...expression, body: rewrite(expression.body, scope), span };
+      addBoundNames(boundNames, [expression.parameter]);
+      const body = rewrite(expression.body);
+      removeBoundNames(boundNames, [expression.parameter]);
+      return { ...expression, body, span };
     }
     case "let": {
-      const scope = new Set(bound);
-      scope.add(expression.name);
+      const value = rewrite(expression.value);
+      addBoundNames(boundNames, [expression.name]);
+      const body = rewrite(expression.body);
+      removeBoundNames(boundNames, [expression.name]);
       return {
         ...expression,
-        value: rewrite(expression.value),
-        body: rewrite(expression.body, scope),
+        value,
+        body,
         span,
       };
     }
     case "let-rec": {
-      const scope = new Set(bound);
-      scope.add(expression.name);
+      addBoundNames(boundNames, [expression.name]);
+      const value = rewrite(expression.value);
+      const body = rewrite(expression.body);
+      removeBoundNames(boundNames, [expression.name]);
       return {
         ...expression,
-        value: rewrite(expression.value, scope),
-        body: rewrite(expression.body, scope),
+        value,
+        body,
         span,
       };
     }
     case "let-rec-group": {
-      const scope = new Set(bound);
-      for (const binding of expression.bindings) scope.add(binding.name);
+      const bindingNames = expression.bindings.map((binding) => binding.name);
+      addBoundNames(boundNames, bindingNames);
+      const bindings = expression.bindings.map((binding) => {
+        addBoundNames(boundNames, binding.parameters);
+        const body = rewrite(binding.body);
+        removeBoundNames(boundNames, binding.parameters);
+        return {
+          ...binding,
+          body,
+          span: offsetSpan(binding.span, sourceBase),
+        };
+      });
+      const body = rewrite(expression.body);
+      removeBoundNames(boundNames, bindingNames);
       return {
         ...expression,
-        bindings: expression.bindings.map((binding) => {
-          const bindingScope = new Set(scope);
-          for (const parameter of binding.parameters) bindingScope.add(parameter);
-          return {
-            ...binding,
-            body: rewrite(binding.body, bindingScope),
-            span: offsetSpan(binding.span, sourceBase),
-          };
-        }),
-        body: rewrite(expression.body, scope),
+        bindings,
+        body,
         span,
       };
     }
@@ -767,7 +776,7 @@ function rewriteExpression(
         ...expression,
         value: rewrite(expression.value),
         arms: expression.arms.map((arm) =>
-          rewriteCaseArm(arm, bound, definitions, imports, constructors, sourceBase)
+          rewriteCaseArm(arm, boundNames, definitions, imports, constructors, sourceBase)
         ),
         span,
       };
@@ -776,20 +785,41 @@ function rewriteExpression(
 
 function rewriteCaseArm(
   arm: FunctionalSurfaceCaseArm,
-  bound: ReadonlySet<string>,
+  boundNames: Map<string, number>,
   definitions: ReadonlyMap<string, string>,
   imports: ReadonlyMap<string, string>,
   constructors: ReadonlyMap<string, string>,
   sourceBase: number,
 ): FunctionalSurfaceCaseArm {
-  const scope = new Set(bound);
-  for (const binder of arm.binders) scope.add(binder);
+  addBoundNames(boundNames, arm.binders);
+  const body = rewriteExpression(
+    arm.body,
+    boundNames,
+    definitions,
+    imports,
+    constructors,
+    sourceBase,
+  );
+  removeBoundNames(boundNames, arm.binders);
   return {
     ...arm,
     constructor: constructors.get(arm.constructor) ?? arm.constructor,
-    body: rewriteExpression(arm.body, scope, definitions, imports, constructors, sourceBase),
+    body,
     span: offsetSpan(arm.span, sourceBase),
   };
+}
+
+function addBoundNames(boundNames: Map<string, number>, names: readonly string[]): void {
+  for (const name of names) boundNames.set(name, (boundNames.get(name) ?? 0) + 1);
+}
+
+function removeBoundNames(boundNames: Map<string, number>, names: readonly string[]): void {
+  for (let index = names.length - 1; index >= 0; index -= 1) {
+    const name = names[index]!;
+    const count = boundNames.get(name)!;
+    if (count === 1) boundNames.delete(name);
+    else boundNames.set(name, count - 1);
+  }
 }
 
 function rewriteSchema(
