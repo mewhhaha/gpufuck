@@ -332,7 +332,7 @@ function emitAllocationByteLength(
     FunctionalWasmValueAbi.objectKinds.resource -
       FunctionalWasmValueAbi.objectKinds.closure,
   );
-  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x4b);
   instructions.localGet(pointer);
   instructions.i32Load(8);
   instructions.localSet(valueCount);
@@ -354,7 +354,7 @@ function emitAllocationByteLength(
   instructions.emit(0x46);
   instructions.localGet(valueCount);
   instructions.i32Const(0);
-  instructions.emit(0x47, 0x71, 0x72, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x47, 0x71, 0x72, 0x72);
   instructions.i32Const(1);
   instructions.i32Const(VALUE_BYTE_LENGTH);
   instructions.localGet(kind);
@@ -381,7 +381,7 @@ function emitAllocationByteLength(
   instructions.emit(0xad, 0x7c);
   instructions.localTee(wideByteLength);
   instructions.i64Const(BigInt(FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH));
-  instructions.emit(0x56, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x56, 0x72, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(wideByteLength);
   instructions.emit(0xa7);
   instructions.localSet(byteLength);
