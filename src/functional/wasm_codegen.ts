@@ -3892,9 +3892,11 @@ class FunctionalWasmCompiler {
     instructions.localGet(pointer);
     instructions.i32Const(slot);
     instructions.i32Store(8);
-    instructions.localGet(pointer);
-    instructions.i32Const(captures.length);
-    instructions.i32Store(12);
+    if (captures.length > 0) {
+      instructions.localGet(pointer);
+      instructions.i32Const(captures.length);
+      instructions.i32Store(12);
+    }
     for (const [index, source] of captures.entries()) {
       instructions.localGet(pointer);
       this.emitBinding(instructions, source);
