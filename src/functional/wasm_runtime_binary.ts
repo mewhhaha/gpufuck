@@ -40,8 +40,8 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   const nextTop = instructions.addLocal(WasmValueType.I32);
   const requiredPages = instructions.addLocal(WasmValueType.I32);
   const currentPages = instructions.addLocal(WasmValueType.I32);
-  emitNormalizeAllocationByteLength(instructions, 0);
   instructions.emit(0x02, 0x40);
+  emitNormalizeAllocationByteLength(instructions, 0, 0);
   instructions.globalGet(FunctionalWasmRuntimeGlobal.FreeListHead);
   instructions.localSet(currentFree);
   instructions.emit(0x02, 0x40, 0x03, 0x40);
@@ -217,12 +217,19 @@ export function freeFunction(typeIndex: number, heapStart: number): WasmFunction
 function emitNormalizeAllocationByteLength(
   instructions: WasmInstructions,
   byteLength: number,
+  outOfMemoryBranchDepth?: number,
 ): void {
   instructions.localGet(byteLength);
   instructions.i32Const(FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH);
-  instructions.emit(0x4b, 0x04, 0x40);
-  emitOutOfMemory(instructions);
-  instructions.emit(0x0b);
+  instructions.emit(0x4b);
+  if (outOfMemoryBranchDepth === undefined) {
+    instructions.emit(0x04, 0x40);
+    emitOutOfMemory(instructions);
+    instructions.emit(0x0b);
+  } else {
+    instructions.emit(0x0d);
+    instructions.unsigned(outOfMemoryBranchDepth);
+  }
   instructions.localGet(byteLength);
   instructions.i32Const(7);
   instructions.emit(0x6a);
