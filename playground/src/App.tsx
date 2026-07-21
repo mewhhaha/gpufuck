@@ -26,6 +26,7 @@ import {
   utf16IndexAtByte,
 } from "./compiler/presentation";
 import { loadExampleManifest, loadExampleSource, type LazuliExample } from "./examples";
+import { highlightLazuliSource } from "./lazuli-highlighting";
 
 type ExampleState =
   | { readonly kind: "loading" }
@@ -48,6 +49,7 @@ export function App() {
   const [result, setResult] = useState<ResultState>({ kind: "idle" });
   const sourceEditor = useRef<HTMLTextAreaElement>(null);
   const sourceGutter = useRef<HTMLDivElement>(null);
+  const sourceHighlight = useRef<HTMLPreElement>(null);
   const sourceLoadSequence = useRef(0);
   const working = result.kind === "working";
 
@@ -128,9 +130,13 @@ export function App() {
     void compileAndRun();
   }
 
-  function synchronizeGutterScroll(event: UIEvent<HTMLTextAreaElement>) {
+  function synchronizeEditorScroll(event: UIEvent<HTMLTextAreaElement>) {
     if (sourceGutter.current !== null) {
       sourceGutter.current.scrollTop = event.currentTarget.scrollTop;
+    }
+    if (sourceHighlight.current !== null) {
+      sourceHighlight.current.scrollTop = event.currentTarget.scrollTop;
+      sourceHighlight.current.scrollLeft = event.currentTarget.scrollLeft;
     }
   }
 
@@ -263,16 +269,30 @@ export function App() {
               <div ref={sourceGutter} className="editor-gutter" aria-hidden="true">
                 {lineNumbers}
               </div>
-              <TextArea
-                ref={sourceEditor}
-                aria-label="Lazuli source code"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onKeyDown={handleEditorKeyDown}
-                onScroll={synchronizeGutterScroll}
-              />
+              <div className="editor-code">
+                <pre ref={sourceHighlight} className="source-highlight" aria-hidden="true">
+                  {highlightLazuliSource(source).map((token) =>
+                    token.kind === "plain" ? (
+                      token.value
+                    ) : (
+                      <span className={`syntax-${token.kind}`} key={token.start}>
+                        {token.value}
+                      </span>
+                    ),
+                  )}
+                  {"\n"}
+                </pre>
+                <TextArea
+                  ref={sourceEditor}
+                  aria-label="Lazuli source code"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  onKeyDown={handleEditorKeyDown}
+                  onScroll={synchronizeEditorScroll}
+                />
+              </div>
             </TextField>
 
             <div className="editor-actions">
@@ -288,9 +308,20 @@ export function App() {
                 onClick={() => void compileAndRun()}
               >
                 <span>{working ? "Compiling…" : "Compile & run"}</span>
-                <span className="button-arrow" aria-hidden="true">
-                  →
-                </span>
+                <svg
+                  className="button-arrow"
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M17.25 8.25 21 12m0 0-3.75 3.75M21 12H3"
+                  />
+                </svg>
               </Button>
             </div>
           </div>
