@@ -8,7 +8,9 @@ import {
   LAZULI_NODE_WORD_LENGTH,
   LAZULI_TYPE_WORD_LENGTH,
   LazuliBinaryOperator,
+  LazuliConstructorWord,
   LazuliCoreTag,
+  LazuliTypeWord,
   LazuliUnaryOperator,
 } from "./abi.ts";
 import {
@@ -196,7 +198,8 @@ export const LazuliInferenceMetadataFailure = {
 
 /**
  * Binding 7 is an array of state records. Words through `ConstructorResultBase`
- * are immutable dispatch inputs; the shader initializes and owns the rest.
+ * and `IndexedMetadataFooterBase` are immutable dispatch inputs; the shader
+ * initializes and owns the other trailing words.
  *
  * Diagnostic payloads are durable workspace references/scalars:
  *
@@ -218,7 +221,7 @@ export const LazuliInferenceMetadataFailure = {
  * - L2104: `ErrorDetail` is the main symbol and `ErrorOperand0` is its inferred
  *   type root, or `LAZULI_NO_INDEX` when main has no definition.
  */
-export const LAZULI_INFERENCE_STATE_WORD_LENGTH = 72;
+export const LAZULI_INFERENCE_STATE_WORD_LENGTH = 73;
 export const LAZULI_INFERENCE_SCHEDULER_WORD_LENGTH = 1 +
   LAZULI_COMPILATION_STATE_WORD_LENGTH;
 export const LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH = LAZULI_INFERENCE_STATE_WORD_LENGTH +
@@ -300,6 +303,7 @@ export const LazuliInferenceStateWord = {
   IndexedEliminationAllowed: 69,
   IndexedEliminationRestrictionKind: 70,
   IndexedEliminationRestrictionSymbol: 71,
+  IndexedMetadataFooterBase: 72,
   /** @deprecated Alias retained for callers using the former reserved word. */
   Reserved0: 53,
   /** @deprecated Alias retained for callers using the former reserved word. */
@@ -322,6 +326,255 @@ export interface LazuliInferenceShaderMetadata {
   readonly constructorFieldCount: number;
   readonly constructorFieldOffsetsBase: number;
   readonly constructorResultBase: number;
+  readonly indexedMetadataFooterBase: number;
+}
+
+const INDEXED_METADATA_MAGIC = 0x4c5a4958;
+const INDEXED_METADATA_FOOTER_WORD_LENGTH = 8;
+const VALIDATION_RECORD_WORD_LENGTH = 6;
+
+const ValidationRecordWord = {
+  Context: 0,
+  StartByte: 1,
+  EndByte: 2,
+  Detail: 3,
+  Operand0: 4,
+  Operand1: 5,
+} as const;
+
+function prepareIndexedInferenceMetadata(
+  surface: EncodedLazuliSurface,
+  flattened: FlattenedLazuliTypeSchemas,
+): { readonly words: Uint32Array; readonly footerBase: number } {
+  const typeLookup = new Uint32Array(flattened.identifierNames.length);
+  typeLookup.fill(LAZULI_NO_INDEX);
+  for (let typeIndex = 0; typeIndex < surface.typeCount; typeIndex++) {
+    const symbol = surface.typeWords[typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.Symbol]!;
+    if (symbol < typeLookup.length && typeLookup[symbol] === LAZULI_NO_INDEX) {
+      typeLookup[symbol] = typeIndex;
+    }
+  }
+
+  const typeValidation = new Uint32Array(
+    surface.typeCount * VALIDATION_RECORD_WORD_LENGTH,
+  );
+  const writeFailure = (
+    records: Uint32Array,
+    index: number,
+    context: number,
+    startByte: number,
+    endByte: number,
+    detail: number,
+    operand0: number,
+    operand1: number,
+  ): void => {
+    const base = index * VALIDATION_RECORD_WORD_LENGTH;
+    records[base + ValidationRecordWord.Context] = context;
+    records[base + ValidationRecordWord.StartByte] = startByte;
+    records[base + ValidationRecordWord.EndByte] = endByte;
+    records[base + ValidationRecordWord.Detail] = detail;
+    records[base + ValidationRecordWord.Operand0] = operand0;
+    records[base + ValidationRecordWord.Operand1] = operand1;
+  };
+  for (let typeIndex = 0; typeIndex < surface.typeCount; typeIndex++) {
+    const typeBase = typeIndex * LAZULI_TYPE_WORD_LENGTH;
+    const symbol = surface.typeWords[typeBase + LazuliTypeWord.Symbol]!;
+    const startByte = surface.typeWords[typeBase + LazuliTypeWord.StartByte]!;
+    const endByte = surface.typeWords[typeBase + LazuliTypeWord.EndByte]!;
+    if (symbol < typeLookup.length && typeLookup[symbol] !== typeIndex) {
+      writeFailure(
+        typeValidation,
+        typeIndex,
+        LazuliInferenceMetadataFailure.DuplicateTypeName,
+        startByte,
+        endByte,
+        symbol,
+        typeLookup[symbol]!,
+        typeIndex,
+      );
+      continue;
+    }
+    const firstParameter = flattened.typeParameterOffsets[typeIndex]!;
+    const parameterEnd = flattened.typeParameterOffsets[typeIndex + 1]!;
+    const firstOccurrences = new Map<number, number>();
+    for (let offset = 0; offset < parameterEnd - firstParameter; offset++) {
+      const parameter = flattened.typeParameterSymbols[firstParameter + offset]!;
+      const firstOccurrence = firstOccurrences.get(parameter);
+      if (firstOccurrence !== undefined) {
+        writeFailure(
+          typeValidation,
+          typeIndex,
+          LazuliInferenceMetadataFailure.RepeatedTypeParameter,
+          startByte,
+          endByte,
+          symbol,
+          parameter,
+          offset,
+        );
+        break;
+      }
+      firstOccurrences.set(parameter, offset);
+    }
+  }
+
+  const schemaCount = flattened.schemaWords.length / LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+  const schemaParameterPositions = new Uint32Array(schemaCount);
+  schemaParameterPositions.fill(LAZULI_NO_INDEX);
+  const syntheticSchemaConstructors = new Uint32Array(schemaCount);
+  syntheticSchemaConstructors.fill(LAZULI_NO_INDEX);
+  const typesWithExplicitResults = new Uint32Array(surface.typeCount);
+  const schemaWord = (schemaIndex: number, word: number): number =>
+    flattened.schemaWords[schemaIndex * LAZULI_TYPE_SCHEMA_WORD_LENGTH + word]!;
+  const parameterNodes = (root: number): readonly number[] => {
+    const parameters: number[] = [];
+    const pending = [root];
+    while (pending.length !== 0) {
+      const schemaIndex = pending.pop()!;
+      if (
+        schemaWord(schemaIndex, LazuliTypeSchemaWord.Tag) === LazuliInferenceSchemaTag.Parameter
+      ) {
+        parameters.push(schemaIndex);
+      }
+      const children: number[] = [];
+      let child = schemaWord(schemaIndex, LazuliTypeSchemaWord.FirstChild);
+      while (child !== LAZULI_NO_INDEX) {
+        children.push(child);
+        child = schemaWord(child, LazuliTypeSchemaWord.NextSibling);
+      }
+      for (let index = children.length - 1; index >= 0; index--) pending.push(children[index]!);
+    }
+    return parameters;
+  };
+
+  const constructorValidation = new Uint32Array(
+    surface.constructorCount * VALIDATION_RECORD_WORD_LENGTH,
+  );
+  for (let constructorIndex = 0; constructorIndex < surface.constructorCount; constructorIndex++) {
+    const constructorBase = constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH;
+    const typeIndex = surface.constructorWords[
+      constructorBase + LazuliConstructorWord.Type
+    ]!;
+    const constructorSymbol = surface.constructorWords[
+      constructorBase + LazuliConstructorWord.Symbol
+    ]!;
+    const firstParameter = flattened.typeParameterOffsets[typeIndex]!;
+    const parameterEnd = flattened.typeParameterOffsets[typeIndex + 1]!;
+    const parameterPositions = new Map<number, number>();
+    for (let offset = 0; offset < parameterEnd - firstParameter; offset++) {
+      parameterPositions.set(flattened.typeParameterSymbols[firstParameter + offset]!, offset);
+    }
+    const firstField = flattened.constructorFieldOffsets[constructorIndex]!;
+    const fieldEnd = flattened.constructorFieldOffsets[constructorIndex + 1]!;
+    const fieldParameterNodes: number[] = [];
+    for (let field = firstField; field < fieldEnd; field++) {
+      fieldParameterNodes.push(...parameterNodes(flattened.constructorFieldRoots[field]!));
+    }
+    const resultRoot = flattened.constructorResultRoots[constructorIndex]!;
+    syntheticSchemaConstructors[resultRoot] = constructorIndex;
+    if (
+      schemaWord(resultRoot, LazuliTypeSchemaWord.StartByte) !== LAZULI_NO_INDEX ||
+      schemaWord(resultRoot, LazuliTypeSchemaWord.EndByte) !== LAZULI_NO_INDEX
+    ) {
+      typesWithExplicitResults[typeIndex] = 1;
+    }
+    const resultParameterNodes = parameterNodes(resultRoot);
+    const resultParameters = new Set<number>();
+    let failureWritten = false;
+    for (const schemaIndex of [...fieldParameterNodes, ...resultParameterNodes]) {
+      const parameter = schemaWord(schemaIndex, LazuliTypeSchemaWord.Symbol);
+      const position = parameterPositions.get(parameter);
+      if (position !== undefined) {
+        schemaParameterPositions[schemaIndex] = position;
+        continue;
+      }
+      writeFailure(
+        constructorValidation,
+        constructorIndex,
+        LazuliInferenceMetadataFailure.UndeclaredTypeParameter,
+        schemaWord(schemaIndex, LazuliTypeSchemaWord.StartByte),
+        schemaWord(schemaIndex, LazuliTypeSchemaWord.EndByte),
+        parameter,
+        typeIndex,
+        constructorSymbol,
+      );
+      failureWritten = true;
+      break;
+    }
+    if (failureWritten) continue;
+    const resultTag = schemaWord(resultRoot, LazuliTypeSchemaWord.Tag);
+    const resultSymbol = schemaWord(resultRoot, LazuliTypeSchemaWord.Symbol);
+    const declaredSymbol = surface.typeWords[
+      typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.Symbol
+    ]!;
+    let resultHeadIsValid = resultTag === LazuliInferenceSchemaTag.Named &&
+      resultSymbol === declaredSymbol;
+    if (typeIndex + 2 === surface.typeCount) {
+      resultHeadIsValid = resultTag === LazuliInferenceSchemaTag.Unit;
+    } else if (typeIndex + 1 === surface.typeCount) {
+      resultHeadIsValid = resultTag === LazuliInferenceSchemaTag.Tuple;
+    }
+    if (!resultHeadIsValid) {
+      writeFailure(
+        constructorValidation,
+        constructorIndex,
+        LazuliInferenceMetadataFailure.InvalidConstructorResult,
+        schemaWord(resultRoot, LazuliTypeSchemaWord.StartByte),
+        schemaWord(resultRoot, LazuliTypeSchemaWord.EndByte),
+        constructorIndex,
+        resultRoot,
+        declaredSymbol,
+      );
+      continue;
+    }
+    for (const schemaIndex of resultParameterNodes) {
+      resultParameters.add(schemaWord(schemaIndex, LazuliTypeSchemaWord.Symbol));
+    }
+    for (const schemaIndex of fieldParameterNodes) {
+      const parameter = schemaWord(schemaIndex, LazuliTypeSchemaWord.Symbol);
+      if (resultParameters.has(parameter)) continue;
+      writeFailure(
+        constructorValidation,
+        constructorIndex,
+        LazuliInferenceMetadataFailure.HiddenConstructorFieldParameter,
+        schemaWord(schemaIndex, LazuliTypeSchemaWord.StartByte),
+        schemaWord(schemaIndex, LazuliTypeSchemaWord.EndByte),
+        constructorIndex,
+        parameter,
+        resultRoot,
+      );
+      break;
+    }
+  }
+
+  const originalWordLength = flattened.metadataWords.length;
+  const typeLookupBase = originalWordLength;
+  const typeValidationBase = typeLookupBase + typeLookup.length;
+  const constructorValidationBase = typeValidationBase + typeValidation.length;
+  const schemaParameterPositionBase = constructorValidationBase + constructorValidation.length;
+  const syntheticSchemaConstructorBase = schemaParameterPositionBase +
+    schemaParameterPositions.length;
+  const typeExplicitResultBase = syntheticSchemaConstructorBase +
+    syntheticSchemaConstructors.length;
+  const footerBase = typeExplicitResultBase + typesWithExplicitResults.length;
+  const words = new Uint32Array(footerBase + INDEXED_METADATA_FOOTER_WORD_LENGTH);
+  words.set(flattened.metadataWords);
+  words.set(typeLookup, typeLookupBase);
+  words.set(typeValidation, typeValidationBase);
+  words.set(constructorValidation, constructorValidationBase);
+  words.set(schemaParameterPositions, schemaParameterPositionBase);
+  words.set(syntheticSchemaConstructors, syntheticSchemaConstructorBase);
+  words.set(typesWithExplicitResults, typeExplicitResultBase);
+  words.set([
+    INDEXED_METADATA_MAGIC,
+    typeLookupBase,
+    typeLookup.length,
+    typeValidationBase,
+    constructorValidationBase,
+    schemaParameterPositionBase,
+    syntheticSchemaConstructorBase,
+    typeExplicitResultBase,
+  ], footerBase);
+  return { words, footerBase };
 }
 
 /**
@@ -407,8 +660,9 @@ export function prepareLazuliInferenceShaderMetadata(
     );
   }
   const offset = (word: number): number => header[word] ?? 0;
+  const indexed = prepareIndexedInferenceMetadata(surface, flattened);
   return Object.freeze({
-    words: flattened.metadataWords,
+    words: indexed.words,
     identifierNames: flattened.identifierNames,
     parameterNames,
     schemaNodeCount: schemaCount,
@@ -425,6 +679,7 @@ export function prepareLazuliInferenceShaderMetadata(
       LazuliTypeSchemaMetadataWord.ConstructorFieldOffsetsOffset,
     ),
     constructorResultBase: offset(LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset),
+    indexedMetadataFooterBase: indexed.footerBase,
   });
 }
 
@@ -593,6 +848,7 @@ struct InferenceState {
   indexed_elimination_allowed: u32,
   indexed_elimination_restriction_kind: u32,
   indexed_elimination_restriction_symbol: u32,
+  indexed_metadata_footer_base: u32,
   previous_semantic_steps: u32,
   semantic: SemanticCompilationState,
 }
@@ -697,6 +953,25 @@ const SCHEMA_FORALL: u32 = 8u;
 const SCHEMA_SIGNED_INTEGER_64: u32 = 9u;
 const SCHEMA_FLOAT_32: u32 = 10u;
 const SCHEMA_FLOAT_64: u32 = 11u;
+
+const INDEXED_METADATA_MAGIC: u32 = ${INDEXED_METADATA_MAGIC}u;
+const INDEXED_METADATA_FOOTER_WORDS: u32 = ${INDEXED_METADATA_FOOTER_WORD_LENGTH}u;
+const VALIDATION_RECORD_WORDS: u32 = ${VALIDATION_RECORD_WORD_LENGTH}u;
+
+fn indexed_metadata_footer_base() -> u32 {
+  return state.indexed_metadata_footer_base;
+}
+
+fn indexed_metadata_is_available() -> bool {
+  return state.indexed_metadata_footer_base <= arrayLength(&schema_words) &&
+    INDEXED_METADATA_FOOTER_WORDS <=
+      arrayLength(&schema_words) - state.indexed_metadata_footer_base &&
+    schema_words[indexed_metadata_footer_base()] == INDEXED_METADATA_MAGIC;
+}
+
+fn indexed_metadata_base(word: u32) -> u32 {
+  return schema_words[indexed_metadata_footer_base() + word];
+}
 
 const TYPE_VARIABLE: u32 = 1u;
 const TYPE_GENERIC: u32 = 2u;
@@ -1162,6 +1437,7 @@ fn configure_unify_frame(frame: u32, left: u32, right: u32, start_byte: u32, end
   frame_set(frame, 2u, right);
   frame_set(frame, 3u, start_byte);
   frame_set(frame, 4u, end_byte);
+  frame_set(frame, 7u, NO_INDEX);
   frame_set(frame, 10u, FRAME_UNIFY);
 }
 
@@ -1169,6 +1445,22 @@ fn start_unify(expected: u32, received: u32, start_byte: u32, end_byte: u32) -> 
   let frame = push_work_frame(FRAME_UNIFY);
   if frame == NO_INDEX { return false; }
   configure_unify_frame(frame, expected, received, start_byte, end_byte);
+  return true;
+}
+
+fn start_application_unify(
+  callee: u32,
+  expected_function: u32,
+  fresh_result: u32,
+  start_byte: u32,
+  end_byte: u32,
+) -> bool {
+  // The result is allocated after callee and argument inference, so the older
+  // callee graph cannot contain it and does not need an occurs traversal.
+  let frame = push_work_frame(FRAME_UNIFY);
+  if frame == NO_INDEX { return false; }
+  configure_unify_frame(frame, callee, expected_function, start_byte, end_byte);
+  frame_set(frame, 7u, fresh_result);
   return true;
 }
 
@@ -1303,6 +1595,11 @@ fn unify_transition(frame: u32) {
         frame_get(frame, 3u), frame_get(frame, 4u), right, right, left);
       return;
     }
+    if right == frame_get(frame, 7u) {
+      type_set(right, 1u, left);
+      pop_work_frame();
+      return;
+    }
     if !start_occurs(right, left) { return; }
     frame_set(frame, 1u, 4u);
     return;
@@ -1344,12 +1641,16 @@ fn unify_transition(frame: u32) {
   if left_second != NO_INDEX && !require_frame_slots(1u) { return; }
   let start_byte = frame_get(frame, 3u);
   let end_byte = frame_get(frame, 4u);
+  let fresh_application_result = frame_get(frame, 7u);
   if left_second == NO_INDEX {
     configure_unify_frame(frame, left_first, right_first, start_byte, end_byte);
+    frame_set(frame, 7u, fresh_application_result);
   } else {
     configure_unify_frame(frame, left_second, right_second, start_byte, end_byte);
+    frame_set(frame, 7u, fresh_application_result);
     let first = push_work_frame(FRAME_UNIFY);
     configure_unify_frame(first, left_first, right_first, start_byte, end_byte);
+    frame_set(first, 7u, fresh_application_result);
   }
 }
 
@@ -2082,6 +2383,16 @@ fn start_find_type(symbol: u32) -> bool {
 }
 
 fn find_type_transition(frame: u32) {
+  if indexed_metadata_is_available() {
+    let symbol = frame_get(frame, 0u);
+    let count = indexed_metadata_base(2u);
+    state.returned_type = NO_INDEX;
+    if symbol < count {
+      state.returned_type = schema_words[indexed_metadata_base(1u) + symbol];
+    }
+    pop_work_frame();
+    return;
+  }
   let cursor = frame_get(frame, 1u);
   if cursor >= state.type_count {
     state.returned_type = NO_INDEX; pop_work_frame(); return;
@@ -2219,6 +2530,27 @@ fn schema_visit_transition(frame: u32) {
     pop_work_frame(); return;
   }
   if node.tag == SCHEMA_PARAMETER {
+    if indexed_metadata_is_available() {
+      let position = schema_words[indexed_metadata_base(5u) + frame_get(frame, 0u)];
+      if position != NO_INDEX {
+        if position >= state.work_aux {
+          report_metadata_diagnostic(
+            METADATA_INVALID_SCHEMA_CONVERSION, node.start_byte, node.end_byte,
+            frame_get(frame, 0u), node.payload, position);
+          return;
+        }
+        let address = temporary_base() + position * 2u;
+        if workspace[address] != node.payload {
+          report_metadata_diagnostic(
+            METADATA_INVALID_SCHEMA_CONVERSION, node.start_byte, node.end_byte,
+            frame_get(frame, 0u), node.payload, workspace[address]);
+          return;
+        }
+        attach_schema_type(parent, field, workspace[address + 1u], frame_get(frame, 9u));
+        pop_work_frame();
+        return;
+      }
+    }
     if start_mapping_lookup(node.payload, state.work_aux) { frame_set(frame, 3u, 1u); }
     return;
   }
@@ -2432,26 +2764,48 @@ fn start_case_coverage(type_index: u32, first_arm: u32) -> bool {
   if frame == NO_INDEX { return false; }
   frame_set(frame, 0u, type_index); frame_set(frame, 1u, 0u);
   frame_set(frame, 2u, first_arm); frame_set(frame, 3u, first_arm);
+  frame_set(frame, 4u, 0u);
   return true;
 }
 
 fn case_coverage_transition(frame: u32) {
   let type_index = frame_get(frame, 0u);
-  let offset = frame_get(frame, 1u);
   let declared = algebraic_type_record(type_index);
-  if offset >= declared.constructor_count {
-    state.returned_type = NO_INDEX; pop_work_frame(); return;
-  }
-  let constructor_index = declared.first_constructor + offset;
-  let arm = frame_get(frame, 3u);
-  if arm == NO_INDEX {
-    state.returned_type = constructor_record(constructor_index).symbol; pop_work_frame(); return;
-  }
-  if core_node(arm).payload == constructor_index {
-    frame_set(frame, 1u, offset + 1u); frame_set(frame, 3u, frame_get(frame, 2u));
+  let stage = frame_get(frame, 4u);
+  let cursor = frame_get(frame, 1u);
+  if stage == 0u {
+    if cursor >= declared.constructor_count {
+      frame_set(frame, 1u, 0u);
+      frame_set(frame, 4u, 1u);
+      return;
+    }
+    workspace[temporary_base() + cursor] = 0u;
+    frame_set(frame, 1u, cursor + 1u);
     return;
   }
-  frame_set(frame, 3u, core_node(arm).child1);
+  if stage == 1u {
+    let arm = frame_get(frame, 3u);
+    if arm == NO_INDEX {
+      frame_set(frame, 1u, 0u);
+      frame_set(frame, 4u, 2u);
+      return;
+    }
+    let constructor_index = core_node(arm).payload;
+    if constructor_index >= declared.first_constructor &&
+      constructor_index - declared.first_constructor < declared.constructor_count {
+      workspace[temporary_base() + constructor_index - declared.first_constructor] = 1u;
+    }
+    frame_set(frame, 3u, core_node(arm).child1);
+    return;
+  }
+  if cursor >= declared.constructor_count {
+    state.returned_type = NO_INDEX; pop_work_frame(); return;
+  }
+  let constructor_index = declared.first_constructor + cursor;
+  if workspace[temporary_base() + cursor] == 0u {
+    state.returned_type = constructor_record(constructor_index).symbol; pop_work_frame(); return;
+  }
+  frame_set(frame, 1u, cursor + 1u);
 }
 
 fn start_schema_parameter_check(root: u32, type_index: u32) -> bool {
@@ -3033,7 +3387,9 @@ fn expression_transition() {
     if !require_type_slots(1u) || !require_frame_slots(1u) { return; }
     let function_type = allocate_type(
       TYPE_FUNCTION, NO_INDEX, state.returned_type, frame_get(frame, 4u));
-    start_unify(frame_get(frame, 3u), function_type, node.start_byte, node.end_byte);
+    start_application_unify(
+      frame_get(frame, 3u), function_type, frame_get(frame, 4u),
+      node.start_byte, node.end_byte);
     frame_set(frame, 1u, 43u);
     return;
   }
@@ -3122,7 +3478,13 @@ fn expression_transition() {
   }
   if stage == 79u {
     if type_get(state.returned_type, 0u) == TYPE_NAMED {
-      frame_set(frame, 6u, type_get(state.returned_type, 1u));
+      let type_index = type_get(state.returned_type, 1u);
+      frame_set(frame, 6u, type_index);
+      if indexed_metadata_is_available() {
+        frame_set(frame, 1u, select(
+          81u, 83u, schema_words[indexed_metadata_base(7u) + type_index] != 0u));
+        return;
+      }
       frame_set(frame, 7u, 0u);
       frame_set(frame, 1u, 80u);
     } else {
@@ -3158,7 +3520,13 @@ fn expression_transition() {
     }
     let constructor_index = core_node(arm_index).payload;
     frame_set(frame, 5u, core_node(arm_index).child1);
-    frame_set(frame, 6u, constructor_record(constructor_index).type_index);
+    let type_index = constructor_record(constructor_index).type_index;
+    frame_set(frame, 6u, type_index);
+    if indexed_metadata_is_available() {
+      frame_set(frame, 1u, select(
+        81u, 83u, schema_words[indexed_metadata_base(7u) + type_index] != 0u));
+      return;
+    }
     frame_set(frame, 7u, 0u);
     frame_set(frame, 1u, 80u);
     return;
@@ -3734,6 +4102,23 @@ fn validation_transition() {
           index, constructor_count, parameter_count);
         return;
       }
+      if indexed_metadata_is_available() {
+        let record = indexed_metadata_base(3u) + index * VALIDATION_RECORD_WORDS;
+        let context = schema_words[record];
+        if context != 0u {
+          report_metadata_diagnostic(
+            context,
+            schema_words[record + 1u],
+            schema_words[record + 2u],
+            schema_words[record + 3u],
+            schema_words[record + 4u],
+            schema_words[record + 5u],
+          );
+          return;
+        }
+        state.cursor += 1u;
+        return;
+      }
       state.cursor0 = 0u; state.substage = 1u;
       return;
     }
@@ -3841,6 +4226,18 @@ fn validation_transition() {
     if state.substage == 0u {
       let synthetic_result_root = schema.start_byte == NO_INDEX && schema.end_byte == NO_INDEX;
       if synthetic_result_root {
+        if indexed_metadata_is_available() {
+          let constructor_index = schema_words[indexed_metadata_base(6u) + index];
+          if constructor_index == NO_INDEX {
+            report_metadata_diagnostic(
+              METADATA_INVALID_SCHEMA_SHAPE, schema.start_byte, schema.end_byte,
+              index, schema.tag, 0u);
+            return;
+          }
+          state.work_result = constructor_index;
+          state.substage = 4u;
+          return;
+        }
         state.work_result = NO_INDEX; state.cursor0 = 0u; state.substage = 3u; return;
       }
       if schema.start_byte > schema.end_byte {
@@ -3940,6 +4337,23 @@ fn validation_transition() {
     let field_count = constructor_metadata(index, 1u);
     let result_root = constructor_metadata(index, 2u);
     if state.substage == 0u {
+      if indexed_metadata_is_available() {
+        let record = indexed_metadata_base(4u) + index * VALIDATION_RECORD_WORDS;
+        let context = schema_words[record];
+        if context != 0u {
+          report_metadata_diagnostic(
+            context,
+            schema_words[record + 1u],
+            schema_words[record + 2u],
+            schema_words[record + 3u],
+            schema_words[record + 4u],
+            schema_words[record + 5u],
+          );
+          return;
+        }
+        state.cursor += 1u;
+        return;
+      }
       state.cursor0 = 0u; state.substage = 1u; return;
     }
     if state.substage == 2u {

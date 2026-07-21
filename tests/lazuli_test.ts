@@ -530,6 +530,27 @@ Deno.test("does not throw when source exceeds the generated parser capacity", ()
   match(parsing.diagnostics[0].message, /parser's capacity|memory pages/);
 });
 
+Deno.test("classifies the generated parser trace limit as bounded exhaustion", () => {
+  const size = 160;
+  const parameters = Array.from({ length: size }, (_, index) => `p${index}`);
+  let fieldType = parameters.at(-1)!;
+  for (let index = parameters.length - 2; index >= 0; index--) {
+    fieldType = `(${parameters[index]}, ${fieldType})`;
+  }
+  const fields = Array.from(
+    { length: size },
+    (_, index) => `f${index}: ${fieldType}`,
+  ).join(", ");
+  const parsing = parseLazuliSource(
+    `data Product ${parameters.join(" ")} = Product(${fields}); let main = 0;`,
+  );
+
+  equal(parsing.ok, false);
+  if (parsing.ok) return;
+  equal(parsing.diagnostics[0].code, "L1003");
+  match(parsing.diagnostics[0].message, /PARSER_TRACE_LIMIT/);
+});
+
 Deno.test("rejects reserved words as declaration names", () => {
   const parsing = parseLazuliSource("fn true = 42; fn main = true;");
 
@@ -1351,6 +1372,38 @@ Deno.test("resumes constructor arm search and pattern binding without forcing di
 
     ok(result.ok);
     deepStrictEqual(result.value, { kind: "integer", value: 42 });
+  });
+});
+
+Deno.test("dispatches wide constructor cases without arm-linear evaluator fuel", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const constructorCount = 256;
+    const constructors = Array.from(
+      { length: constructorCount },
+      (_, index) => `C${index}`,
+    ).join(" | ");
+    const arms = Array.from(
+      { length: constructorCount },
+      (_, index) => `| C${index} -> ${index}`,
+    ).join(" ");
+    const module = await compileModule(
+      runtime.compiler,
+      `data Wide = ${constructors}; fn main = case C255 of ${arms} end;`,
+    );
+    try {
+      const options = { maximumSteps: 128 } as const;
+      const scalar = await runtime.evaluator.evaluate(module, options);
+      const batch = await runtime.evaluator.evaluateBatch([module, module], options);
+
+      ok(scalar.ok);
+      if (scalar.ok) deepStrictEqual(scalar.value, { kind: "integer", value: 255 });
+      for (const result of batch) {
+        ok(result.ok);
+        if (result.ok) deepStrictEqual(result.value, { kind: "integer", value: 255 });
+      }
+    } finally {
+      module.destroy();
+    }
   });
 });
 

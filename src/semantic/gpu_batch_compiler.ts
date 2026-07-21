@@ -268,7 +268,12 @@ async function runPackedCompilation(
       createLazuliSymbolLookup(lane.surface),
       lane.symbolLookupBase * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
     );
-    metadataWords.set(lane.metadata.words, lane.metadataBase);
+    const relocatedMetadata = lane.metadata.words.slice();
+    for (let footerWord = 1; footerWord < 8; footerWord++) {
+      const index = lane.metadata.indexedMetadataFooterBase + footerWord;
+      relocatedMetadata[index] = relocatedMetadata[index]! + lane.metadataBase;
+    }
+    metadataWords.set(relocatedMetadata, lane.metadataBase);
     semanticStates.set(createSemanticState(lane), semanticStateByteOffset(laneIndex));
     inferenceStates.set(createBatchInferenceState(lane), inferenceStateByteOffset(laneIndex));
   }
@@ -695,6 +700,10 @@ function createBatchInferenceState(lane: BatchLane): Uint8Array {
     lane.metadata.constructorFieldOffsetsBase,
   );
   relocate(LazuliInferenceStateWord.ConstructorResultBase, lane.metadata.constructorResultBase);
+  relocate(
+    LazuliInferenceStateWord.IndexedMetadataFooterBase,
+    lane.metadata.indexedMetadataFooterBase,
+  );
   return state;
 }
 

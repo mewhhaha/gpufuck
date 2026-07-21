@@ -140,10 +140,10 @@ function typeNodeCount(type: LazuliType): number {
 }
 
 Deno.test("GPU inference keeps its ABI-v5 state prefix ahead of the scheduler envelope", () => {
-  equal(LAZULI_INFERENCE_STATE_WORD_LENGTH, 72);
-  equal(LazuliInferenceSchedulerWord.PreviousSemanticSteps, 72);
-  equal(LazuliInferenceSchedulerWord.SemanticState, 73);
-  equal(LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH, 97);
+  equal(LAZULI_INFERENCE_STATE_WORD_LENGTH, 73);
+  equal(LazuliInferenceSchedulerWord.PreviousSemanticSteps, 73);
+  equal(LazuliInferenceSchedulerWord.SemanticState, 74);
+  equal(LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH, 98);
 });
 
 Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel boundary", async () => {
@@ -198,6 +198,104 @@ Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel b
     );
     ok(recovered.ok);
     if (recovered.ok) recovered.module.destroy();
+  } finally {
+    device.destroy();
+  }
+});
+
+Deno.test("pathological type and case shapes stay within proportional compiler work", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const compile = async (source: string) => {
+      const parsed = parseLazuliSource(source);
+      if (!parsed.ok) throw new Error(parsed.diagnostics[0].message);
+      const observations: GpuLazuliCompilationDispatchObservation[] = [];
+      const result = await compiler.compile(
+        parsed.surface,
+        new TextEncoder().encode(source).byteLength,
+        { maximumSteps: 1_000_000, maximumStepsPerDispatch: 65_536 },
+        undefined,
+        { observeDispatch: (observation) => observations.push(observation) },
+      );
+      ok(result.ok, result.ok ? undefined : result.diagnostics[0].message);
+      if (result.ok) result.module.destroy();
+      const final = observations.at(-1);
+      ok(final !== undefined);
+      return final;
+    };
+    const genericProduct = (size: number, main: string) => {
+      const parameters = Array.from({ length: size }, (_, index) => `p${index}`);
+      const fields = parameters.map((parameter, index) => `f${index}: ${parameter}`).join(", ");
+      return `data Product ${parameters.join(" ")} = Product(${fields}); let main = ${main};`;
+    };
+    const productCase = (size: number) => {
+      const values = Array.from({ length: size }, (_, index) => index).join(" ");
+      const binders = Array.from({ length: size }, (_, index) => `x${index}`).join(", ");
+      return genericProduct(
+        size,
+        `case Product ${values} of | Product(${binders}) -> x0 end`,
+      );
+    };
+    const wideCase = (size: number) => {
+      const constructors = Array.from({ length: size }, (_, index) => `C${index}`).join(" | ");
+      const arms = Array.from({ length: size }, (_, index) => `| C${index} -> ${index}`).join(" ");
+      return `data Wide = ${constructors}; let main = case C0 of ${arms} end;`;
+    };
+
+    const annotations = Array.from(
+      { length: 128 },
+      (_, index) => `data Dummy${index} = DummyC${index};`,
+    ).join("") + "data Target = TargetC;" + Array.from(
+      { length: 128 },
+      (_, index) => `let value${index}: Target = TargetC;`,
+    ).join("") + "let main = TargetC;";
+    const annotationWork = await compile(annotations);
+    ok(annotationWork.inferenceTransitions < 20_000);
+
+    const genericWork = await compile(genericProduct(256, "0"));
+    ok(genericWork.inferenceTransitions < 5_000);
+
+    const smallPattern = await compile(productCase(128));
+    const largePattern = await compile(productCase(256));
+    ok(largePattern.inferenceTransitions <= smallPattern.inferenceTransitions * 2.2);
+
+    const nestedSize = 128;
+    const nestedParameters = Array.from(
+      { length: nestedSize },
+      (_, index) => `p${index}`,
+    );
+    let nestedField = nestedParameters.at(-1)!;
+    for (let index = nestedParameters.length - 2; index >= 0; index--) {
+      nestedField = `(${nestedParameters[index]}, ${nestedField})`;
+    }
+    const nestedFields = Array.from(
+      { length: nestedSize },
+      (_, index) => `f${index}: ${nestedField}`,
+    ).join(", ");
+    const nestedWork = await compile(
+      `data Product ${nestedParameters.join(" ")} = Product(${nestedFields}); let main = 0;`,
+    );
+    ok(nestedWork.inferenceTransitions < 150_000);
+
+    const gridSize = 160;
+    const gridParameters = Array.from({ length: gridSize }, (_, index) => `p${index}`);
+    const gridFields = gridParameters.map((parameter, index) => `f${index}: ${parameter}`).join(
+      ", ",
+    );
+    const gridConstructors = Array.from(
+      { length: gridSize },
+      (_, index) => `C${index}(${gridFields})`,
+    ).join(" | ");
+    const gridWork = await compile(
+      `data Grid ${gridParameters.join(" ")} = ${gridConstructors}; let main = 0;`,
+    );
+    ok(gridWork.inferenceTransitions < 250_000);
+
+    const smallCase = await compile(wideCase(128));
+    const largeCase = await compile(wideCase(256));
+    ok(largeCase.semanticSteps <= smallCase.semanticSteps * 2.2);
+    ok(largeCase.inferenceTransitions <= smallCase.inferenceTransitions * 2.2);
   } finally {
     device.destroy();
   }

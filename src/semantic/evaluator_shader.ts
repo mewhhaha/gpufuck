@@ -119,6 +119,8 @@ struct EvaluationState {
   result_top: u32,
   reify_field: u32,
   reify_remaining: u32,
+  case_dispatch_base: u32,
+  case_dispatch_capacity: u32,
 }
 
 struct WideBits {
@@ -339,6 +341,10 @@ fn definition_storage_index(index: u32) -> u32 {
 
 fn constructor_storage_index(index: u32) -> u32 {
   return evaluation.constructor_base + index;
+}
+
+fn case_dispatch_hash(first_arm: u32, constructor: u32) -> u32 {
+  return first_arm * 1664525u + constructor * 1013904223u;
 }
 
 fn heap_storage_index(index: u32) -> u32 {
@@ -2050,6 +2056,36 @@ fn match_case_arm() {
     );
     return;
   }
+  if evaluation.case_dispatch_capacity > 1u {
+    let mask = evaluation.case_dispatch_capacity - 1u;
+    var slot = case_dispatch_hash(evaluation.case_arm, evaluation.case_constructor) & mask;
+    var probes = 0u;
+    var matched_arm = NO_INDEX;
+    loop {
+      if probes >= evaluation.case_dispatch_capacity {
+        break;
+      }
+      let entry = value_nodes[evaluation.case_dispatch_base + slot];
+      if entry.tag == NO_INDEX {
+        break;
+      }
+      if entry.tag == evaluation.case_arm && entry.payload == evaluation.case_constructor {
+        matched_arm = entry.first_child;
+        break;
+      }
+      slot = (slot + 1u) & mask;
+      probes += 1u;
+    }
+    evaluation.case_arm = matched_arm;
+    if evaluation.case_arm == NO_INDEX {
+      fail(
+        FAULT_NON_EXHAUSTIVE_CASE,
+        evaluation.case_source_offset,
+        evaluation.case_constructor,
+      );
+      return;
+    }
+  }
   if !valid_node(evaluation.case_arm) {
     fail_bad_module(evaluation.case_arm);
     return;
@@ -2187,6 +2223,13 @@ fn initialize_evaluation() {
         evaluation.constructor_count,
         arrayLength(&constructors),
       ) ||
+      !region_fits(
+        evaluation.case_dispatch_base,
+        evaluation.case_dispatch_capacity,
+        arrayLength(&value_nodes),
+      ) ||
+      (evaluation.case_dispatch_capacity > 1u &&
+        (evaluation.case_dispatch_capacity & (evaluation.case_dispatch_capacity - 1u)) != 0u) ||
       (evaluation.constructor_count > 0u && evaluation.type_count == 0u) ||
       !region_fits(evaluation.heap_base, evaluation.heap_capacity, arrayLength(&heap)) ||
       !region_fits(

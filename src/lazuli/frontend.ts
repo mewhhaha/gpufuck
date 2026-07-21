@@ -344,6 +344,15 @@ function parseLazuliSourceWithOffsets(
       if (parsed.diagnostics.length === 0) {
         throw new Error("Lazuli parser failed without diagnostics.");
       }
+      const traceLimit = parsed.diagnostics.find((diagnostic) =>
+        diagnostic.code === "PARSER_TRACE_LIMIT"
+      );
+      if (traceLimit !== undefined) {
+        return failure(limitDiagnostic(
+          `${traceLimit.code}: ${traceLimit.message}`,
+          byteOffsets.span(traceLimit.span),
+        ));
+      }
       const diagnostics = parsed.diagnostics.map((diagnostic): LazuliDiagnostic => ({
         stage: "parse",
         code: "L1001",

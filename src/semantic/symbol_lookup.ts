@@ -9,12 +9,13 @@ import {
   LazuliTypeWord,
 } from "./abi.ts";
 
-export const LAZULI_SYMBOL_LOOKUP_WORD_LENGTH = 3;
+export const LAZULI_SYMBOL_LOOKUP_WORD_LENGTH = 4;
 
 export const LazuliSymbolLookupWord = {
   Definition: 0,
   Type: 1,
   Constructor: 2,
+  CaseNode: 3,
 } as const;
 
 export function createLazuliSymbolLookup(surface: EncodedLazuliSurface): Uint32Array {

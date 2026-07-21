@@ -104,7 +104,10 @@ async function runGpuLazuliTypeInferenceMachine(
     options.surface,
     flattenLazuliTypeSchemas(options.surface),
   );
-  options.mutateMetadataForTest?.(metadata.words);
+  if (options.mutateMetadataForTest !== undefined) {
+    options.mutateMetadataForTest(metadata.words);
+    metadata.words[metadata.indexedMetadataFooterBase] = 0;
+  }
   let layout: WorkspaceLayout;
   try {
     assertStorageSize(

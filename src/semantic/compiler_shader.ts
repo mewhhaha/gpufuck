@@ -103,6 +103,7 @@ struct SymbolLookup {
   definition: u32,
   algebraic_type: u32,
   constructor: u32,
+  case_node: u32,
 }
 
 struct CompilationState {
@@ -141,7 +142,7 @@ struct CompilationState {
 }
 
 @group(0) @binding(0)
-var<storage, read> surface_nodes: array<SurfaceNode>;
+var<storage, read_write> surface_nodes: array<SurfaceNode>;
 
 @group(0) @binding(1)
 var<storage, read> definitions: array<Definition>;
@@ -159,7 +160,7 @@ var<storage, read_write> core_nodes: array<CoreNode>;
 var<storage, read_write> compilation_states: array<CompilationState>;
 
 @group(0) @binding(6)
-var<storage, read> symbol_lookups: array<SymbolLookup>;
+var<storage, read_write> symbol_lookups: array<SymbolLookup>;
 
 var<private> state: CompilationState;
 
@@ -236,7 +237,6 @@ const PHASE_RESOLVE_CONSTRUCTOR_NAME: u32 = 15u;
 const PHASE_RESOLVE_CASE_CONSTRUCTOR: u32 = 16u;
 const PHASE_COUNT_PATTERN_BINDERS: u32 = 17u;
 const PHASE_FIND_CASE_PARENT: u32 = 18u;
-const PHASE_FIND_EARLIER_CASE_ARM: u32 = 19u;
 
 fn region_fits(base: u32, count: u32, length: u32) -> bool {
   return base <= length && count <= length - base;
@@ -761,30 +761,23 @@ fn find_case_parent() {
   }
   let parent = surface_nodes[state.surface_node_base + state.resolution_parent];
   if parent.tag == SURFACE_CASE {
-    state.secondary_cursor = parent.child1;
-    state.phase = PHASE_FIND_EARLIER_CASE_ARM;
-    return;
-  }
-  state.resolution_parent = parent.parent;
-}
-
-fn find_earlier_case_arm() {
-  if state.secondary_cursor == state.resolution_node ||
-    state.secondary_cursor >= state.node_count {
+    surface_nodes[state.surface_node_base + state.resolution_node].parent =
+      state.resolution_parent;
+    let lookup_address = state.symbol_lookup_base + state.resolution_symbol;
+    if symbol_lookups[lookup_address].case_node == state.resolution_parent {
+      let surface_node = surface_nodes[state.surface_node_base + state.resolution_node];
+      report_diagnostic(
+        ERROR_DUPLICATE_CASE_ARM,
+        surface_node.start_byte,
+        state.resolution_symbol,
+      );
+      return;
+    }
+    symbol_lookups[lookup_address].case_node = state.resolution_parent;
     write_lowered_node();
     return;
   }
-  let arm = surface_nodes[state.surface_node_base + state.secondary_cursor];
-  if arm.payload == state.resolution_symbol {
-    let surface_node = surface_nodes[state.surface_node_base + state.resolution_node];
-    report_diagnostic(
-      ERROR_DUPLICATE_CASE_ARM,
-      surface_node.start_byte,
-      state.resolution_symbol,
-    );
-    return;
-  }
-  state.secondary_cursor = arm.child1;
+  state.resolution_parent = parent.parent;
 }
 
 fn advance_compilation() {
@@ -839,9 +832,6 @@ fn advance_compilation() {
     }
     case PHASE_FIND_CASE_PARENT: {
       find_case_parent();
-    }
-    case PHASE_FIND_EARLIER_CASE_ARM: {
-      find_earlier_case_arm();
     }
     default: {
       report_invalid_surface(ERROR_INVALID_COUNTS, state.phase);

@@ -4,6 +4,7 @@ import {
   LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
   LAZULI_NO_INDEX,
   LAZULI_NODE_BYTE_LENGTH,
+  LazuliCoreTag,
 } from "./abi.ts";
 import type { LazuliType, LazuliTypeDeclaration, LazuliTypeSchema } from "./abi.ts";
 import type { GpuLazuliModule } from "./compiler_module.ts";
@@ -13,7 +14,8 @@ const HEAP_SLOT_BYTE_LENGTH = 32;
 const STACK_FRAME_BYTE_LENGTH = 32;
 const INPUT_NODE_BYTE_LENGTH = 16;
 const RESULT_NODE_BYTE_LENGTH = 16;
-const EVALUATION_STATE_WORD_LENGTH = 51;
+const CASE_DISPATCH_WORD_LENGTH = 4;
+const EVALUATION_STATE_WORD_LENGTH = 53;
 const EVALUATION_STATE_BYTE_LENGTH = EVALUATION_STATE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
 
 const HARD_MAXIMUM_STEPS = 1_000_000;
@@ -104,6 +106,8 @@ const EvaluationStateWord = {
   ResultTop: 48,
   ReifyField: 49,
   ReifyRemaining: 50,
+  CaseDispatchBase: 51,
+  CaseDispatchCapacity: 52,
 } as const;
 
 export interface LazuliEvaluationOptions {
@@ -327,6 +331,7 @@ interface EvaluationBufferBases {
   readonly global: number;
   readonly input: number;
   readonly result: number;
+  readonly caseDispatch: number;
 }
 
 interface BatchEvaluationLane extends EvaluationBufferBases {
@@ -337,6 +342,7 @@ interface BatchEvaluationLane extends EvaluationBufferBases {
   readonly encodedInput: EncodedInput | undefined;
   readonly inputValue: LazuliInputValue | undefined;
   readonly outputType: LazuliType;
+  readonly caseDispatchWords: Uint32Array<ArrayBuffer>;
 }
 
 type NumericEvaluationOption =
@@ -1080,6 +1086,68 @@ function checkedByteLength(count: number, elementByteLength: number): number | n
   return Number.isSafeInteger(byteLength) ? byteLength : null;
 }
 
+function createEmptyCaseDispatch(): Uint32Array<ArrayBuffer> {
+  return new Uint32Array([
+    LAZULI_NO_INDEX,
+    LAZULI_NO_INDEX,
+    LAZULI_NO_INDEX,
+    LAZULI_NO_INDEX,
+  ]);
+}
+
+function caseDispatchHash(firstArm: number, constructor: number): number {
+  return (Math.imul(firstArm, 1_664_525) + Math.imul(constructor, 1_013_904_223)) >>> 0;
+}
+
+async function createCaseDispatchIndex(
+  module: GpuLazuliModule,
+): Promise<Uint32Array<ArrayBuffer>> {
+  const nodes = await module.readCoreNodes();
+  const entries: {
+    readonly firstArm: number;
+    readonly constructor: number;
+    readonly arm: number;
+  }[] = [];
+  for (const node of nodes) {
+    if (node.tag !== LazuliCoreTag.Case || node.child1 === LAZULI_NO_INDEX) continue;
+    const firstArm = node.child1;
+    let arm = firstArm;
+    let traversed = 0;
+    while (arm !== LAZULI_NO_INDEX) {
+      if (arm >= nodes.length || traversed >= nodes.length) return createEmptyCaseDispatch();
+      const armNode = nodes[arm];
+      if (armNode === undefined || armNode.tag !== LazuliCoreTag.CaseArm) {
+        return createEmptyCaseDispatch();
+      }
+      entries.push({ firstArm, constructor: armNode.payload, arm });
+      arm = armNode.child1;
+      traversed++;
+    }
+  }
+  if (entries.length === 0) return createEmptyCaseDispatch();
+
+  let capacity = 2;
+  while (capacity < entries.length * 2) capacity *= 2;
+  const words = new Uint32Array(capacity * CASE_DISPATCH_WORD_LENGTH);
+  words.fill(LAZULI_NO_INDEX);
+  const mask = capacity - 1;
+  for (const entry of entries) {
+    let slot = caseDispatchHash(entry.firstArm, entry.constructor) & mask;
+    while (words[slot * CASE_DISPATCH_WORD_LENGTH] !== LAZULI_NO_INDEX) {
+      const base = slot * CASE_DISPATCH_WORD_LENGTH;
+      if (words[base] === entry.firstArm && words[base + 1] === entry.constructor) {
+        return createEmptyCaseDispatch();
+      }
+      slot = (slot + 1) & mask;
+    }
+    const base = slot * CASE_DISPATCH_WORD_LENGTH;
+    words[base] = entry.firstArm;
+    words[base + 1] = entry.constructor;
+    words[base + 2] = entry.arm;
+  }
+  return words;
+}
+
 function boundedOption(
   name: NumericEvaluationOption,
   provided: number | undefined,
@@ -1097,6 +1165,7 @@ function createInitialEvaluationState(
   module: GpuLazuliModule,
   limits: EvaluationLimits,
   encodedInput: EncodedInput | undefined,
+  caseDispatchCapacity: number,
   bases?: EvaluationBufferBases,
 ): ArrayBuffer {
   const initialState = new ArrayBuffer(EVALUATION_STATE_BYTE_LENGTH);
@@ -1124,6 +1193,11 @@ function createInitialEvaluationState(
   setInitialStateWord(EvaluationStateWord.ResultForm, optionsResultForm(limits));
   setInitialStateWord(EvaluationStateWord.ResultBase, encodedInput?.nodeCount ?? 0);
   setInitialStateWord(EvaluationStateWord.ResultCapacity, limits.resultNodes);
+  setInitialStateWord(
+    EvaluationStateWord.CaseDispatchBase,
+    (encodedInput?.nodeCount ?? 0) + limits.resultNodes,
+  );
+  setInitialStateWord(EvaluationStateWord.CaseDispatchCapacity, caseDispatchCapacity);
   if (bases !== undefined) {
     setInitialStateWord(EvaluationStateWord.NodeBase, bases.node);
     setInitialStateWord(EvaluationStateWord.DefinitionBase, bases.definition);
@@ -1133,6 +1207,7 @@ function createInitialEvaluationState(
     setInitialStateWord(EvaluationStateWord.GlobalBase, bases.global);
     setInitialStateWord(EvaluationStateWord.InputBase, bases.input);
     setInitialStateWord(EvaluationStateWord.ResultBase, bases.result);
+    setInitialStateWord(EvaluationStateWord.CaseDispatchBase, bases.caseDispatch);
   }
   return initialState;
 }
@@ -1864,13 +1939,16 @@ export class GpuLazuliEvaluator {
     }
 
     const limits = this.#evaluationLimits(module, options);
+    const caseDispatchWords = await createCaseDispatchIndex(module);
+    const caseDispatchCapacity = caseDispatchWords.length / CASE_DISPATCH_WORD_LENGTH;
     const maximumModuleBindingSize = this.#device.limits.maxStorageBufferBindingSize;
 
     const heapBufferByteLength = limits.heapSlots * HEAP_SLOT_BYTE_LENGTH;
     const stackBufferByteLength = limits.stackFrames * STACK_FRAME_BYTE_LENGTH;
     const globalBufferByteLength = module.definitionCount * Uint32Array.BYTES_PER_ELEMENT;
     const inputNodeCount = inputEncoding?.nodeCount ?? 0;
-    const inputBufferByteLength = (inputNodeCount + limits.resultNodes) * INPUT_NODE_BYTE_LENGTH;
+    const inputBufferByteLength = (inputNodeCount + limits.resultNodes + caseDispatchCapacity) *
+      INPUT_NODE_BYTE_LENGTH;
     const resultBufferByteLength = limits.resultNodes * RESULT_NODE_BYTE_LENGTH;
     if (
       globalBufferByteLength > maximumModuleBindingSize ||
@@ -1885,11 +1963,16 @@ export class GpuLazuliEvaluator {
       inputBufferByteLength > this.#device.limits.maxBufferSize
     ) {
       throw new RangeError(
-        `Lazuli evaluation values require ${inputBufferByteLength} bytes for ${inputNodeCount} input nodes and ${limits.resultNodes} result nodes, beyond maxBufferSize=${this.#device.limits.maxBufferSize} or maxStorageBufferBindingSize=${maximumModuleBindingSize}`,
+        `Lazuli evaluation values require ${inputBufferByteLength} bytes for ${inputNodeCount} input nodes, ${limits.resultNodes} result nodes, and ${caseDispatchCapacity} case dispatch entries, beyond maxBufferSize=${this.#device.limits.maxBufferSize} or maxStorageBufferBindingSize=${maximumModuleBindingSize}`,
       );
     }
 
-    const initialState = createInitialEvaluationState(module, limits, inputEncoding);
+    const initialState = createInitialEvaluationState(
+      module,
+      limits,
+      inputEncoding,
+      caseDispatchCapacity,
+    );
 
     let heapBuffer: GPUBuffer | undefined;
     let stackBuffer: GPUBuffer | undefined;
@@ -1941,6 +2024,11 @@ export class GpuLazuliEvaluator {
           size: inputBufferByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
+        this.#device.queue.writeBuffer(
+          inputBuffer,
+          (inputNodeCount + limits.resultNodes) * INPUT_NODE_BYTE_LENGTH,
+          caseDispatchWords,
+        );
         if (inputEncoding !== undefined) {
           this.#device.queue.writeBuffer(inputBuffer, 0, inputEncoding.words);
         }
@@ -2276,6 +2364,10 @@ export class GpuLazuliEvaluator {
       );
     }
 
+    const caseDispatchIndexes = await Promise.all(
+      preparedLanes.map((lane) => createCaseDispatchIndex(lane.module)),
+    );
+
     let totalNodes = 0;
     let totalDefinitions = 0;
     let totalConstructors = 0;
@@ -2284,7 +2376,9 @@ export class GpuLazuliEvaluator {
     let totalGlobals = 0;
     let totalInputs = 0;
     let totalResultNodes = 0;
-    const lanes: BatchEvaluationLane[] = preparedLanes.map((lane) => {
+    let totalCaseDispatchEntries = 0;
+    const lanes: BatchEvaluationLane[] = preparedLanes.map((lane, laneIndex) => {
+      const caseDispatchWords = caseDispatchIndexes[laneIndex]!;
       const batchLane: BatchEvaluationLane = {
         ...lane,
         node: totalNodes,
@@ -2295,6 +2389,8 @@ export class GpuLazuliEvaluator {
         global: totalGlobals,
         input: totalInputs,
         result: totalResultNodes,
+        caseDispatch: totalCaseDispatchEntries,
+        caseDispatchWords,
       };
       totalNodes = checkedAggregateCount(
         "node",
@@ -2342,6 +2438,12 @@ export class GpuLazuliEvaluator {
         "result node",
         totalResultNodes,
         lane.limits.resultNodes,
+        lane.resultIndex,
+      );
+      totalCaseDispatchEntries = checkedAggregateCount(
+        "case dispatch entry",
+        totalCaseDispatchEntries,
+        caseDispatchWords.length / CASE_DISPATCH_WORD_LENGTH,
         lane.resultIndex,
       );
       return batchLane;
@@ -2414,8 +2516,8 @@ export class GpuLazuliEvaluator {
       maximumBindingByteLength,
     );
     const valueByteLength = checkedAggregateByteLength(
-      "input and result nodes",
-      totalInputs + totalResultNodes,
+      "input, result, and case dispatch nodes",
+      totalInputs + totalResultNodes + totalCaseDispatchEntries,
       INPUT_NODE_BYTE_LENGTH,
       INPUT_NODE_BYTE_LENGTH,
       maximumBufferByteLength,
@@ -2428,15 +2530,28 @@ export class GpuLazuliEvaluator {
         aggregateInputWords.set(lane.encodedInput.words, lane.input * 4);
       }
     }
+    for (const lane of lanes) {
+      aggregateInputWords.set(
+        lane.caseDispatchWords,
+        (totalInputs + totalResultNodes + lane.caseDispatch) * CASE_DISPATCH_WORD_LENGTH,
+      );
+    }
 
     const initialStates = new Uint8Array(stateByteLength);
     for (const [laneIndex, lane] of lanes.entries()) {
       initialStates.set(
         new Uint8Array(
-          createInitialEvaluationState(lane.module, lane.limits, lane.encodedInput, {
-            ...lane,
-            result: totalInputs + lane.result,
-          }),
+          createInitialEvaluationState(
+            lane.module,
+            lane.limits,
+            lane.encodedInput,
+            lane.caseDispatchWords.length / CASE_DISPATCH_WORD_LENGTH,
+            {
+              ...lane,
+              result: totalInputs + lane.result,
+              caseDispatch: totalInputs + totalResultNodes + lane.caseDispatch,
+            },
+          ),
         ),
         laneIndex * EVALUATION_STATE_BYTE_LENGTH,
       );
@@ -2510,9 +2625,7 @@ export class GpuLazuliEvaluator {
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
         this.#device.queue.writeBuffer(stateBuffer, 0, initialStates);
-        if (totalInputs > 0) {
-          this.#device.queue.writeBuffer(inputBuffer, 0, aggregateInputWords);
-        }
+        this.#device.queue.writeBuffer(inputBuffer, 0, aggregateInputWords);
 
         bindGroup = this.#device.createBindGroup({
           label: "Lazuli batch evaluator bindings",

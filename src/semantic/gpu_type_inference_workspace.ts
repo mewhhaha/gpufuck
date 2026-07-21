@@ -294,6 +294,7 @@ export function createInitialState(
     metadata.constructorFieldOffsetsBase,
   );
   set(LazuliInferenceStateWord.ConstructorResultBase, metadata.constructorResultBase);
+  set(LazuliInferenceStateWord.IndexedMetadataFooterBase, metadata.indexedMetadataFooterBase);
   set(LazuliInferenceStateWord.UntouchableTypeCutoff, LAZULI_NO_INDEX);
   set(LazuliInferenceStateWord.IndexedEliminationAllowed, 1);
   set(LazuliInferenceStateWord.IndexedEliminationRestrictionSymbol, LAZULI_NO_INDEX);
