@@ -32,12 +32,16 @@
       "examples/ocaml-functional/*.trace.md",
       "examples/onesubml-functional/*.trace.md",
       "examples/rust-functional/*.trace.md",
+      "playground",
       ".claude"
     ],
     "lineWidth": 100,
     "indentWidth": 2,
     "semiColons": true,
     "singleQuote": false
+  },
+  "lint": {
+    "exclude": ["playground"]
   },
   "publish": {
     "include": [
@@ -194,6 +198,7 @@
     "generate:gleam": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@5.1.0/cli language/gleam/grammar.baba --metadata language/gleam/baba.json --out language/gleam/generated --name gleam-functional --root module --target wasm",
     "generate:purescript": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@5.1.0/cli language/purescript/grammar.baba --metadata language/purescript/baba.json --out language/purescript/generated --name purescript-profile --root module --target wasm",
     "check": "deno check mod.ts functional.ts core.ts wasm.ts comptime.ts effects.ts type_services.ts gleam_functional.ts haskell_functional.ts ocaml_functional.ts onesubml_functional.ts purescript_type_profile.ts rust_functional.ts cli.ts gleam_functional_cli.ts haskell_functional_cli.ts lazuli_cli.ts ocaml_functional_cli.ts onesubml_functional_cli.ts rust_functional_cli.ts benchmarks/*.ts examples/functional-ir/*.ts examples/lazuli-brainfuck/*.ts examples/purescript-functional/*.ts examples/type-programming/*.ts tests/*.ts tools/*.ts",
+    "build:browser-demo": "cd playground && npm run build",
     "fmt": "deno fmt --check",
     "lint": "deno lint",
     "run:lazuli": "deno run --allow-read lazuli_cli.ts run",
@@ -209,6 +214,7 @@
     "run:rust-functional": "deno run --allow-read rust_functional_cli.ts run",
     "run:zig-comptime": "deno run --allow-read examples/type-programming/zig_comptime.ts",
     "run:zig-reflection": "deno run --allow-read examples/type-programming/zig_reflection.ts",
+    "serve:browser-demo": "cd playground && npm run dev",
     "trace:haskell-functional": "deno run --allow-read --allow-write haskell_functional_cli.ts trace",
     "trace:gleam-functional": "deno run --allow-read --allow-write gleam_functional_cli.ts trace",
     "trace:ocaml-functional": "deno run --allow-read --allow-write ocaml_functional_cli.ts trace",

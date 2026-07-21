@@ -824,9 +824,9 @@ fn numeric_type_index_for_unary(operation: u32) -> u32 {
 }
 
 fn numeric_operator_is_comparison(operation: u32) -> bool {
-  return operation >= 1u && operation <= 40u && (operation - 1u) % 10u < 6u ||
-    operation >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
-      operation <= BINARY_GREATER_EQUAL_WHOLE_NUMBER_F64;
+  return (operation >= 1u && operation <= 40u && (operation - 1u) % 10u < 6u) ||
+    (operation >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
+      operation <= BINARY_GREATER_EQUAL_WHOLE_NUMBER_F64);
 }
 
 fn operator_is_structural_equality(operation: u32) -> bool {

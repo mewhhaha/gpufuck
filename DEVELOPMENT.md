@@ -23,6 +23,23 @@ Optional tools:
 No dependency installation step is needed. Deno resolves the pinned imports in `deno.json` and
 `deno.lock`.
 
+## Browser playground
+
+Build the static GitHub Pages artifact and serve it from a local secure-context exception at
+`http://127.0.0.1:8000`:
+
+```sh
+deno task build:browser-demo
+deno task serve:browser-demo
+```
+
+The separate `playground/` package uses Vite, React 19, the React Compiler, TypeScript 7, oxlint,
+oxfmt, and `@comp0/react`. Its build copies the generated Baba parser module, parser plan, and
+Lazuli examples into `playground/public/generated/`, then emits the static site to
+`playground/dist/`. The Pages workflow verifies and deploys that directory on every push to `main`.
+Browser parsing must call `initializeLazuliParser()` with asset URLs before it uses the otherwise
+synchronous Lazuli frontend; Deno continues to load the same assets directly from disk.
+
 ## Repository map
 
 | Path                                                                  | Responsibility                                                                               |
@@ -34,6 +51,7 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 | `src/lazuli/`                                                         | Thin Lazuli compatibility adapters                                                           |
 | `language/lazuli/`                                                    | Baba grammar and generated parser/editor artifacts                                           |
 | `examples/functional-ir/`                                             | Direct target-API examples                                                                   |
+| `playground/`                                                         | Vite React WebGPU compiler playground published through GitHub Pages                         |
 | `examples/*-functional/`                                              | Independent source-language frontend examples and traces                                     |
 | `src/gleam_functional/`                                               | Repository-only Gleam parser, strict lowering, module artifacts, and trace adapter           |
 | `src/purescript_profile/`                                             | Repository-only stress profile for rows, capabilities, associated types, and rank-2 checking |

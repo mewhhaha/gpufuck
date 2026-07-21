@@ -21,6 +21,12 @@ resolved Functional Core
 portable WebAssembly
 ```
 
+Try the complete path in the [browser playground](https://mewhhaha.github.io/gpufuck/). It loads the
+Lazuli example frontend, runs resolution and inference on the browser's WebGPU adapter, emits Wasm,
+executes `main`, and lets you download the artifact. Everything stays in the tab. WebGPU requires a
+secure context and a compatible browser and adapter; the page reports those capability failures
+before compilation.
+
 The portable language includes:
 
 - strict eager and lazy call-by-need evaluation;
@@ -533,9 +539,16 @@ const encoded = buildFunctionalSurfaceModule(
   { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
 );
 
-const wasmBytes = await compileFunctionalModuleToWasm(compilation.module, {
-  simd: "wasm-simd",
-});
+const compilation = await compiler.compileModule(encoded);
+if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+try {
+  const wasmBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    simd: "wasm-simd",
+  });
+  await WebAssembly.instantiate(wasmBytes);
+} finally {
+  compilation.module.destroy();
+}
 ```
 
 The default, or `simd: "portable-scalar"`, preserves the same API as ordinary algebraic values and
@@ -547,7 +560,9 @@ are boxed only when they cross an ordinary value boundary.
 Vectorization policy remains a frontend decision: a frontend decides whether a source loop may be
 rewritten as four-lane operations. The backend selects the scalar or native representation without
 changing checked Core semantics. A lazy boundary conservatively disables native SIMD for that module
-so an optimization cannot force an otherwise unused lane.
+so an optimization cannot force an otherwise unused lane. Module linking may qualify the canonical
+names without disabling recognition; frontends must not redefine those reserved names with different
+semantics.
 
 ## Wasm boundary
 

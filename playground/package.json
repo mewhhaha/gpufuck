@@ -1,0 +1,42 @@
+{
+  "name": "gpufuck-playground",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run prepare:assets && vite build",
+    "dev": "npm run prepare:assets && vite --host 127.0.0.1",
+    "format": "oxfmt --write --ignore-path .oxfmtignore \"**/*.{ts,tsx,js,json,css,html,md,yaml}\"",
+    "format:check": "oxfmt --check --ignore-path .oxfmtignore \"**/*.{ts,tsx,js,json,css,html,md,yaml}\"",
+    "lint": "oxlint -c oxlint.config.ts src scripts vite.config.ts --deny-warnings --report-unused-disable-directives",
+    "prepare:assets": "node scripts/prepare-assets.js",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc -p tsconfig.json",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "@comp0/react": "0.1.0-next.20",
+    "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@5.1.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@babel/core": "8.0.1",
+    "@rolldown/plugin-babel": "0.2.3",
+    "@types/babel__core": "7.20.5",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "@webgpu/types": "0.1.71",
+    "babel-plugin-react-compiler": "1.0.0",
+    "oxfmt": "0.59.0",
+    "oxlint": "1.74.0",
+    "typescript": "7.0.2",
+    "vite": "8.1.5"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "npm@11.6.2"
+}

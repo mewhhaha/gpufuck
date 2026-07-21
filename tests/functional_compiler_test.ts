@@ -1317,6 +1317,30 @@ Deno.test("preserves Lazuli compatibility across the functional module boundary"
   }
 });
 
+Deno.test("compiles Lazuli frontend output to executable Wasm", async () => {
+  const { compiler } = functionalRuntime();
+  const source = "fn main = 6 * 7;";
+  const parsing = parseLazuliSource(source);
+  ok(parsing.ok);
+  if (!parsing.ok) return;
+
+  const compilation = await compiler.compileModule(
+    lazuliSurfaceToFunctionalModule(
+      parsing.surface,
+      new TextEncoder().encode(source).byteLength,
+    ),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+    ok(WebAssembly.validate(execution.bytes));
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("reports functional diagnostic codes without frontend-specific prefixes", async () => {
   const { compiler } = functionalRuntime();
   const invalid = integerModule(42);

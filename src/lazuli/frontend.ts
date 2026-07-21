@@ -21,7 +21,7 @@ import {
   LazuliTypeWord,
   LazuliUnaryOperator,
 } from "./abi.ts";
-import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
+import { createParser, createParserAsync } from "@mewhhaha/baba/runtime/generated-wasm";
 
 type ParseResult = ReturnType<ReturnType<typeof createParser>["parse"]>;
 type AnyRuleCursor = Extract<ParseResult, { readonly ok: true }>["cursor"];
@@ -30,6 +30,10 @@ type LazuliParser = ReturnType<typeof createParser>;
 export interface ParsedLazuliSource {
   readonly sourceByteLength: number;
   readonly frontend: LazuliFrontendResult;
+}
+
+interface SynchronousFileReader {
+  readFileSync(path: string | URL): Uint8Array;
 }
 
 interface Utf16Span {
@@ -254,15 +258,48 @@ const reservedBuiltinDeclarationNames = new Set([
 ]);
 // Baba snapshots each cursor tape, so sequential parses do not retain Wasm-backed cursors.
 let lazuliParser: LazuliParser | undefined;
+let lazuliParserInitialization: Promise<LazuliParser> | undefined;
+
+/** Loads the generated Lazuli parser assets for runtimes without filesystem access. */
+export async function initializeLazuliParser(
+  parserModuleUrl: URL,
+  parserPlanUrl: URL,
+): Promise<void> {
+  if (lazuliParser !== undefined) return;
+
+  const initialization = lazuliParserInitialization ?? createParserAsync({
+    url: parserModuleUrl,
+    planUrl: parserPlanUrl,
+  });
+  lazuliParserInitialization = initialization;
+  try {
+    lazuliParser = await initialization;
+  } catch (cause) {
+    if (lazuliParserInitialization === initialization) {
+      lazuliParserInitialization = undefined;
+    }
+    throw new Error(
+      `could not initialize the Lazuli parser from ${parserModuleUrl.href} and ${parserPlanUrl.href}`,
+      { cause },
+    );
+  }
+}
 
 function getLazuliParser(): LazuliParser {
   if (lazuliParser !== undefined) return lazuliParser;
 
+  const fileReader = (globalThis as typeof globalThis & { Deno?: SynchronousFileReader }).Deno;
+  if (fileReader === undefined) {
+    throw new Error(
+      "the Lazuli parser is not initialized; call initializeLazuliParser() before parsing in a browser",
+    );
+  }
+
   lazuliParser = createParser({
-    bytes: Deno.readFileSync(
+    bytes: fileReader.readFileSync(
       new URL("../../language/lazuli/generated/wasm/parser.wasm", import.meta.url),
     ),
-    plan: Deno.readFileSync(
+    plan: fileReader.readFileSync(
       new URL("../../language/lazuli/generated/wasm/parser.plan", import.meta.url),
     ),
   });

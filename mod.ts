@@ -48,6 +48,6 @@ export {
   type LazuliRuntimeFault,
   type LazuliValue,
 } from "./src/lazuli/evaluator.ts";
-export { parseLazuliSource } from "./src/lazuli/frontend.ts";
+export { initializeLazuliParser, parseLazuliSource } from "./src/lazuli/frontend.ts";
 export { lazuliSurfaceToFunctionalModule } from "./src/lazuli/functional_adapter.ts";
 export { requestWebGpuDevice } from "./src/webgpu.ts";
