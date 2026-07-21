@@ -6,6 +6,7 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const generatedRoot = fileURLToPath(new URL("../public/generated/", import.meta.url));
 const sourceRoot = path.join(repositoryRoot, "examples", "lazuli");
 const massiveBindingCount = 2_048;
+const massiveBindingsPerDefinition = 128;
 const massiveSourceName = "massive-2048-bindings.laz";
 
 await rm(generatedRoot, { force: true, recursive: true });
@@ -38,16 +39,36 @@ for (const sourceName of sourceNames) {
   });
 }
 
-const massiveDefinitions = Array.from({ length: massiveBindingCount }, (_, index) => {
-  const name = `massive${index.toString().padStart(4, "0")}`;
-  if (index === 0) return `let ${name} = 1;`;
-  const previousName = `massive${(index - 1).toString().padStart(4, "0")}`;
-  return `let ${name} = ${previousName} + 1;`;
-});
+const massiveChunkDefinitions = [];
+for (
+  let firstBinding = 0;
+  firstBinding < massiveBindingCount;
+  firstBinding += massiveBindingsPerDefinition
+) {
+  const chunkIndex = firstBinding / massiveBindingsPerDefinition;
+  const chunkName = `massiveChunk${chunkIndex.toString().padStart(2, "0")}`;
+  const bindingCount = Math.min(massiveBindingsPerDefinition, massiveBindingCount - firstBinding);
+  const bindings = Array.from({ length: bindingCount }, (_, offset) => {
+    const index = firstBinding + offset;
+    const name = `massive${index.toString().padStart(4, "0")}`;
+    if (index === 0) return `  let ${name} = 1 in`;
+    const previousName =
+      offset === 0
+        ? `massiveChunk${(chunkIndex - 1).toString().padStart(2, "0")}`
+        : `massive${(index - 1).toString().padStart(4, "0")}`;
+    return `  let ${name} = ${previousName} + 1 in`;
+  });
+  const lastBinding = firstBinding + bindingCount - 1;
+  massiveChunkDefinitions.push(
+    [`fn ${chunkName} =`, ...bindings, `  massive${lastBinding.toString().padStart(4, "0")};`].join(
+      "\n",
+    ),
+  );
+}
 const massiveSource = [
-  `-- Generated browser stress example with ${massiveBindingCount.toLocaleString("en-US")} dependent bindings.`,
-  ...massiveDefinitions,
-  `fn main = massive${(massiveBindingCount - 1).toString().padStart(4, "0")};`,
+  `-- Generated browser stress example with ${massiveBindingCount.toLocaleString("en-US")} dependent local bindings.`,
+  ...massiveChunkDefinitions,
+  `fn main = massiveChunk${(massiveChunkDefinitions.length - 1).toString().padStart(2, "0")};`,
   "",
 ].join("\n");
 await writeFile(path.join(generatedRoot, "sources", massiveSourceName), massiveSource);
