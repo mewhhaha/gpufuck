@@ -109,6 +109,8 @@ export interface FunctionalModuleArtifact {
   readonly options: FunctionalSurfaceModuleOptions;
 }
 
+const snapshottedFunctionalModules = new WeakSet<FunctionalModuleArtifact>();
+
 export type FunctionalLinkedSource = FunctionalSourceRange;
 
 export interface LinkedFunctionalModule {
@@ -220,26 +222,19 @@ export function createFunctionalModuleArtifact(
       }`,
     }, cause);
   }
-  return Object.freeze({
-    ...snapshot,
-    definitions: Object.freeze(snapshot.definitions),
-    typeDeclarations: Object.freeze(snapshot.typeDeclarations),
-    imports: Object.freeze(snapshot.imports),
-    exports: Object.freeze(snapshot.exports),
-    ...(snapshot.typeImports === undefined
-      ? {}
-      : { typeImports: Object.freeze(snapshot.typeImports) }),
-    ...(snapshot.constructorImports === undefined
-      ? {}
-      : { constructorImports: Object.freeze(snapshot.constructorImports) }),
-    ...(snapshot.typeExports === undefined
-      ? {}
-      : { typeExports: Object.freeze(snapshot.typeExports) }),
-    ...(snapshot.constructorExports === undefined
-      ? {}
-      : { constructorExports: Object.freeze(snapshot.constructorExports) }),
-    options: Object.freeze(snapshot.options),
-  });
+  const pendingObjects: object[] = [snapshot];
+  const frozenObjects = new Set<object>();
+  while (pendingObjects.length > 0) {
+    const current = pendingObjects.pop()!;
+    if (frozenObjects.has(current)) continue;
+    frozenObjects.add(current);
+    for (const child of Object.values(current)) {
+      if (child !== null && typeof child === "object") pendingObjects.push(child);
+    }
+    if (!ArrayBuffer.isView(current)) Object.freeze(current);
+  }
+  snapshottedFunctionalModules.add(snapshot);
+  return snapshot;
 }
 
 export function linkFunctionalModules(
@@ -255,7 +250,9 @@ export function linkFunctionalModules(
   }
   const modules = new Map<string, FunctionalModuleArtifact>();
   for (const candidate of artifacts) {
-    const artifact = createFunctionalModuleArtifact(candidate);
+    const artifact = snapshottedFunctionalModules.has(candidate)
+      ? candidate
+      : createFunctionalModuleArtifact(candidate);
     if (modules.has(artifact.name)) {
       throw new FunctionalLinkError({
         code: "F4002",

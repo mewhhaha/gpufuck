@@ -118,10 +118,6 @@ export class GpuLazuliSemanticCompiler {
     signal: AbortSignal | undefined,
     instrumentation?: LazuliSemanticCompilationInstrumentation,
   ): Promise<LazuliCompileResult> {
-    const surfaceNodeBytes = encodeWords(surface.nodeWords);
-    const definitionBytes = encodeWords(surface.definitionWords);
-    const typeBytes = encodeWords(surface.typeWords);
-    const constructorBytes = encodeWords(surface.constructorWords);
     const initialState = new ArrayBuffer(LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH);
     const initialStateView = new DataView(initialState);
     initialStateView.setUint32(StateWord.NodeCount * 4, surface.nodeCount, true);
@@ -204,10 +200,10 @@ export class GpuLazuliSemanticCompiler {
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
 
-        this.#device.queue.writeBuffer(surfaceNodeBuffer, 0, surfaceNodeBytes);
-        this.#device.queue.writeBuffer(definitionBuffer, 0, definitionBytes);
-        this.#device.queue.writeBuffer(typeBuffer, 0, typeBytes);
-        this.#device.queue.writeBuffer(constructorBuffer, 0, constructorBytes);
+        writeWords(this.#device.queue, surfaceNodeBuffer, surface.nodeWords);
+        writeWords(this.#device.queue, definitionBuffer, surface.definitionWords);
+        writeWords(this.#device.queue, typeBuffer, surface.typeWords);
+        writeWords(this.#device.queue, constructorBuffer, surface.constructorWords);
         this.#device.queue.writeBuffer(stateBuffer, 0, initialState);
 
         bindGroup = this.#device.createBindGroup({
@@ -405,15 +401,10 @@ function storageBufferSize(recordCount: number, recordByteLength: number): numbe
   return Math.max(recordByteLength, recordCount * recordByteLength);
 }
 
-function encodeWords(words: Uint32Array): ArrayBuffer {
-  const bytes = new ArrayBuffer(Math.max(4, words.byteLength));
-  const view = new DataView(bytes);
-  for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
-    const word = words[wordIndex];
-    if (word === undefined) {
-      throw new Error(`missing Lazuli ABI word ${wordIndex}`);
-    }
-    view.setUint32(wordIndex * 4, word, true);
-  }
-  return bytes;
+function writeWords(queue: GPUQueue, buffer: GPUBuffer, words: Uint32Array): void {
+  if (words.byteLength === 0) return;
+  const transferableWords = words.buffer instanceof ArrayBuffer
+    ? new Uint32Array(words.buffer, words.byteOffset, words.length)
+    : words.slice();
+  queue.writeBuffer(buffer, 0, transferableWords);
 }

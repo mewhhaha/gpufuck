@@ -459,7 +459,16 @@ export async function createInferenceBuffers(
   options.device.pushErrorScope("validation");
   let initializationValidation: Promise<GPUError | null>;
   try {
-    options.device.queue.writeBuffer(metadataBuffer, 0, encodeWords(metadataWords));
+    if (metadataWords.byteLength > 0) {
+      const transferableWords = metadataWords.buffer instanceof ArrayBuffer
+        ? new Uint32Array(
+          metadataWords.buffer,
+          metadataWords.byteOffset,
+          metadataWords.length,
+        )
+        : metadataWords.slice();
+      options.device.queue.writeBuffer(metadataBuffer, 0, transferableWords);
+    }
     options.device.queue.writeBuffer(stateBuffer, 0, initialState);
     initializationValidation = options.device.popErrorScope();
   } catch (cause) {
@@ -1061,15 +1070,4 @@ export function assertStorageSize(
 
 function storageBytes(wordLength: number): number {
   return Math.max(WORD_BYTES, checkedProduct("storage buffer bytes", wordLength, WORD_BYTES));
-}
-
-function encodeWords(words: Uint32Array): ArrayBuffer {
-  const bytes = new ArrayBuffer(storageBytes(words.length));
-  const view = new DataView(bytes);
-  for (let index = 0; index < words.length; index++) {
-    const value = words[index];
-    if (value === undefined) throw new Error(`Lazuli metadata omitted word ${index}`);
-    view.setUint32(index * WORD_BYTES, value, true);
-  }
-  return bytes;
 }

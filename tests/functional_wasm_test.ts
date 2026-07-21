@@ -3620,7 +3620,7 @@ Deno.test("lazy callable exports retain the general WebAssembly runtime", async 
   }
 });
 
-Deno.test("validated module artifacts detach nested frontend state", () => {
+Deno.test("validated module artifacts detach and freeze expression records", () => {
   const body: { kind: "integer"; value: number } = { kind: "integer", value: 1 };
   const artifact: FunctionalModuleArtifact = {
     name: "application",
@@ -3641,6 +3641,8 @@ Deno.test("validated module artifacts detach nested frontend state", () => {
   if (snapshotBody?.kind !== "integer") {
     throw new Error(`module artifact snapshot returned ${snapshotBody?.kind ?? "no body"}`);
   }
+  equal(snapshotBody.value, 1);
+  throws(() => Object.assign(snapshotBody, { value: 3 }), TypeError);
   equal(snapshotBody.value, 1);
 });
 
