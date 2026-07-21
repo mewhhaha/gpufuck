@@ -165,6 +165,25 @@ Deno.test("reports an occurs-check failure for self-application", async () => {
   });
 });
 
+Deno.test("bounds diagnostics for exponentially shared inferred types and remains reusable", async () => {
+  await withLazuliRuntime(async ({ compiler }) => {
+    let nested = "x";
+    for (let depth = 0; depth < 20; depth++) nested = `duplicate (${nested})`;
+    const failed = await compiler.compile(
+      `let duplicate = value => (value, value); let bad = x => x (${nested}); let main = 0;`,
+    );
+
+    equal(failed.ok, false);
+    if (failed.ok) return;
+    equal(failed.diagnostics[0].code, "L2103");
+    ok(failed.diagnostics[0].message.length <= 9_000);
+
+    const recovered = await compiler.compile("let main = 42;");
+    ok(recovered.ok);
+    if (recovered.ok) recovered.module.destroy();
+  });
+});
+
 Deno.test("rejects a nonconcrete polymorphic main type", async () => {
   await withLazuliRuntime(async ({ compiler }) => {
     const compilation = await compiler.compile("let main = value => value;");
@@ -485,13 +504,18 @@ Deno.test("reports malformed syntax as a parse diagnostic", async () => {
   });
 });
 
-Deno.test("does not throw on deeply nested parser input", () => {
+Deno.test("reports deeply nested parser input deterministically", () => {
   const parentheses = "(".repeat(375);
-  const parsing = parseLazuliSource(`fn main = ${parentheses}0${")".repeat(375)};`);
+  const source = `fn main = ${parentheses}0${")".repeat(375)};`;
+  const results = Array.from({ length: 5 }, () => parseLazuliSource(source));
 
-  if (parsing.ok) return;
-  equal(parsing.diagnostics[0].code, "L1003");
-  match(parsing.diagnostics[0].message, /stack-safe limit/);
+  for (const parsing of results) {
+    equal(parsing.ok, false);
+    if (parsing.ok) return;
+    equal(parsing.diagnostics[0].code, "L1003");
+    match(parsing.diagnostics[0].message, /stack-safe limit/);
+  }
+  deepStrictEqual(results.slice(1), results.slice(0, -1));
 });
 
 Deno.test("does not throw when source exceeds the generated parser capacity", () => {
@@ -553,7 +577,7 @@ Deno.test("reports duplicate top-level definitions", async () => {
   });
 });
 
-Deno.test("rejects excessive serial semantic work at the compiler fuel limit", async () => {
+Deno.test("compiles a wide definition table within the default fuel limit", async () => {
   await withLazuliRuntime(async ({ compiler }) => {
     const definitions = Array.from(
       { length: 1_500 },
@@ -561,10 +585,8 @@ Deno.test("rejects excessive serial semantic work at the compiler fuel limit", a
     ).join("");
     const compilation = await compiler.compile(`${definitions}fn main=0;`);
 
-    equal(compilation.ok, false);
-    if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L1003");
-    match(compilation.diagnostics[0].message, /serial semantic transitions/);
+    ok(compilation.ok);
+    if (compilation.ok) compilation.module.destroy();
 
     const retry = await compiler.compile("fn main = 42;");
     ok(retry.ok);

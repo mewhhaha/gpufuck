@@ -45,6 +45,7 @@ import {
   prepareLazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
+import { createLazuliSymbolLookup, LAZULI_SYMBOL_LOOKUP_WORD_LENGTH } from "./symbol_lookup.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 const FAST_COMPLETION_MINIMUM_DISPATCH_QUANTUM = 4_096;
@@ -69,6 +70,7 @@ export interface BatchLane extends LazuliBatchCompilationInput {
   readonly definitionBase: number;
   readonly typeBase: number;
   readonly constructorBase: number;
+  readonly symbolLookupBase: number;
   readonly metadataBase: number;
   readonly workspaceBase: number;
   readonly outputBase: number;
@@ -248,6 +250,9 @@ async function runPackedCompilation(
   const definitionWords = new Uint32Array(totals.definitions * 4);
   const typeWords = new Uint32Array(totals.types * 5);
   const constructorWords = new Uint32Array(totals.constructors * 5);
+  const symbolLookupWords = new Uint32Array(
+    totals.symbols * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
+  );
   const metadataWords = new Uint32Array(totals.metadataWords);
   const semanticStates = new Uint8Array(
     lanes.length * LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
@@ -259,6 +264,10 @@ async function runPackedCompilation(
     definitionWords.set(lane.surface.definitionWords, lane.definitionBase * 4);
     typeWords.set(lane.surface.typeWords, lane.typeBase * 5);
     constructorWords.set(lane.surface.constructorWords, lane.constructorBase * 5);
+    symbolLookupWords.set(
+      createLazuliSymbolLookup(lane.surface),
+      lane.symbolLookupBase * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
+    );
     metadataWords.set(lane.metadata.words, lane.metadataBase);
     semanticStates.set(createSemanticState(lane), semanticStateByteOffset(laneIndex));
     inferenceStates.set(createBatchInferenceState(lane), inferenceStateByteOffset(laneIndex));
@@ -270,6 +279,7 @@ async function runPackedCompilation(
   let typeBuffer: GPUBuffer | undefined;
   let constructorBuffer: GPUBuffer | undefined;
   let semanticStateBuffer: GPUBuffer | undefined;
+  let symbolLookupBuffer: GPUBuffer | undefined;
   let metadataBuffer: GPUBuffer | undefined;
   let workspaceBuffer: GPUBuffer | undefined;
   let outputBuffer: GPUBuffer | undefined;
@@ -285,6 +295,7 @@ async function runPackedCompilation(
     typeBuffer = buffers.types;
     constructorBuffer = buffers.constructors;
     semanticStateBuffer = buffers.semanticStates;
+    symbolLookupBuffer = buffers.symbolLookups;
     metadataBuffer = buffers.metadata;
     workspaceBuffer = buffers.workspace;
     outputBuffer = buffers.output;
@@ -298,6 +309,9 @@ async function runPackedCompilation(
       device.queue.writeBuffer(constructorBuffer, 0, constructorWords);
     }
     device.queue.writeBuffer(semanticStateBuffer, 0, semanticStates);
+    if (symbolLookupWords.byteLength > 0) {
+      device.queue.writeBuffer(symbolLookupBuffer, 0, symbolLookupWords);
+    }
     device.queue.writeBuffer(metadataBuffer, 0, metadataWords);
     device.queue.writeBuffer(inferenceStateBuffer, 0, inferenceStates);
 
@@ -311,6 +325,7 @@ async function runPackedCompilation(
         { binding: 3, resource: { buffer: constructorBuffer } },
         { binding: 4, resource: { buffer: coreBuffer } },
         { binding: 5, resource: { buffer: semanticStateBuffer } },
+        { binding: 6, resource: { buffer: symbolLookupBuffer } },
       ],
     });
     const inferenceBindings = device.createBindGroup({
@@ -493,6 +508,7 @@ async function runPackedCompilation(
     typeBuffer?.destroy();
     constructorBuffer?.destroy();
     semanticStateBuffer?.destroy();
+    symbolLookupBuffer?.destroy();
     metadataBuffer?.destroy();
     workspaceBuffer?.destroy();
     outputBuffer?.destroy();
@@ -509,6 +525,7 @@ function prepareBatchLanes(
   let definitions = 0;
   let types = 0;
   let constructors = 0;
+  let symbols = 0;
   let metadataWords = 0;
   let workspaceWords = 0;
   let outputRecords = 0;
@@ -534,6 +551,7 @@ function prepareBatchLanes(
       definitionBase: definitions,
       typeBase: types,
       constructorBase: constructors,
+      symbolLookupBase: symbols,
       metadataBase: metadataWords,
       workspaceBase: workspaceWords,
       outputBase: outputRecords,
@@ -555,6 +573,7 @@ function prepareBatchLanes(
       constructors,
       input.surface.constructorCount,
     );
+    symbols = checkedSum("packed symbol count", symbols, input.surface.symbolNames.length);
     metadataWords = checkedSum("packed metadata words", metadataWords, metadata.words.length);
     workspaceWords = checkedSum(
       "packed workspace words",
@@ -578,6 +597,7 @@ function prepareBatchLanes(
   assertBatchStorage("definitions", definitions, 4, limits);
   assertBatchStorage("algebraic types", types, 5, limits);
   assertBatchStorage("constructors", constructors, 5, limits);
+  assertBatchStorage("symbol lookups", symbols, LAZULI_SYMBOL_LOOKUP_WORD_LENGTH, limits);
   assertStorageSize("packed inference metadata", metadataWords, limits);
   assertStorageSize("packed inference workspace", workspaceWords, limits);
   assertBatchStorage(
@@ -639,6 +659,8 @@ function createSemanticState(lane: BatchLane): Uint8Array {
   set(LazuliCompilationInternalStateWord.ConstructorBase, lane.constructorBase);
   set(LazuliCompilationInternalStateWord.CoreNodeBase, lane.nodeBase);
   set(LazuliCompilationInternalStateWord.InferenceOutputBase, lane.outputBase);
+  set(LazuliCompilationInternalStateWord.SymbolCount, lane.surface.symbolNames.length);
+  set(LazuliCompilationInternalStateWord.SymbolLookupBase, lane.symbolLookupBase);
   return bytes;
 }
 
@@ -692,6 +714,7 @@ interface BatchTotals {
   readonly definitions: number;
   readonly types: number;
   readonly constructors: number;
+  readonly symbols: number;
   readonly metadataWords: number;
   readonly workspaceWords: number;
   readonly outputRecords: number;
@@ -705,6 +728,7 @@ function batchTotals(lanes: readonly BatchLane[]): BatchTotals {
     definitions: last.definitionBase + last.surface.definitionCount,
     types: last.typeBase + last.surface.typeCount,
     constructors: last.constructorBase + last.surface.constructorCount,
+    symbols: last.symbolLookupBase + last.surface.symbolNames.length,
     metadataWords: last.metadataBase + last.metadata.words.length,
     workspaceWords: last.workspaceBase + last.localWorkspace.workspaceWordLength,
     outputRecords: last.outputBase + last.localWorkspace.outputCapacity,
@@ -719,6 +743,7 @@ interface BatchBuffers {
   readonly types: GPUBuffer;
   readonly constructors: GPUBuffer;
   readonly semanticStates: GPUBuffer;
+  readonly symbolLookups: GPUBuffer;
   readonly metadata: GPUBuffer;
   readonly workspace: GPUBuffer;
   readonly output: GPUBuffer;
@@ -782,6 +807,14 @@ async function allocateBatchBuffers(
         "Lazuli packed semantic states",
         lanes.length * LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
         GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+      ),
+      symbolLookups: create(
+        "Lazuli packed symbol lookups",
+        Math.max(
+          LAZULI_SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
+          totals.symbols * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
+        ),
+        GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
       ),
       metadata: create(
         "Lazuli packed inference metadata",

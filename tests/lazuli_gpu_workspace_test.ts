@@ -146,6 +146,63 @@ Deno.test("GPU inference keeps its ABI-v5 state prefix ahead of the scheduler en
   equal(LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH, 97);
 });
 
+Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel boundary", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const compileMissingMain = async (definitionCount: number, maximumSteps = 10_000_000) => {
+      const source = Array.from(
+        { length: definitionCount },
+        (_, index) => `let unused${index.toString(36)} = 0;`,
+      ).join("");
+      const parsed = parseLazuliSource(source);
+      ok(parsed.ok);
+      if (!parsed.ok) throw new Error("semantic scaling fixture did not parse");
+      const observations: GpuLazuliCompilationDispatchObservation[] = [];
+      const result = await compiler.compile(
+        parsed.surface,
+        source.length,
+        { maximumSteps, maximumStepsPerDispatch: 65_536 },
+        undefined,
+        { observeDispatch: (observation) => observations.push(observation) },
+      );
+      return { result, steps: observations.at(-1)?.semanticSteps ?? 0 };
+    };
+
+    const small = await compileMissingMain(256);
+    const large = await compileMissingMain(512);
+    equal(small.result.ok, false);
+    equal(large.result.ok, false);
+    if (small.result.ok || large.result.ok) return;
+    equal(small.result.diagnostics[0].code, "L2003");
+    equal(large.result.diagnostics[0].code, "L2003");
+    ok(small.steps > 0);
+    ok(large.steps <= small.steps * 2);
+
+    const exhausted = await compileMissingMain(512, large.steps - 1);
+    equal(exhausted.result.ok, false);
+    if (!exhausted.result.ok) equal(exhausted.result.diagnostics[0].code, "L1003");
+    const exact = await compileMissingMain(512, large.steps);
+    equal(exact.result.ok, false);
+    if (!exact.result.ok) equal(exact.result.diagnostics[0].code, "L2003");
+
+    const recoverySource = "let main = 42;";
+    const recovery = parseLazuliSource(recoverySource);
+    ok(recovery.ok);
+    if (!recovery.ok) return;
+    const recovered = await compiler.compile(
+      recovery.surface,
+      recoverySource.length,
+      { maximumSteps: 1_000_000, maximumStepsPerDispatch: 4_096 },
+      undefined,
+    );
+    ok(recovered.ok);
+    if (recovered.ok) recovered.module.destroy();
+  } finally {
+    device.destroy();
+  }
+});
+
 Deno.test("packed inference falls back only the exhausted lane", async () => {
   const device = await requestWebGpuDevice();
   try {

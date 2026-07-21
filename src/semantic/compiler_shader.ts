@@ -3,7 +3,7 @@ import { LAZULI_MAXIMUM_CONSTRUCTOR_ARITY } from "./abi.ts";
 export const LAZULI_COMPILATION_STATE_WORD_LENGTH = 24;
 export const LAZULI_COMPILATION_STATE_BYTE_LENGTH = LAZULI_COMPILATION_STATE_WORD_LENGTH *
   Uint32Array.BYTES_PER_ELEMENT;
-export const LAZULI_COMPILATION_INTERNAL_STATE_WORD_LENGTH = 30;
+export const LAZULI_COMPILATION_INTERNAL_STATE_WORD_LENGTH = 32;
 export const LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH =
   LAZULI_COMPILATION_INTERNAL_STATE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
 
@@ -41,6 +41,8 @@ export const LazuliCompilationInternalStateWord = {
   ConstructorBase: 27,
   CoreNodeBase: 28,
   InferenceOutputBase: 29,
+  SymbolCount: 30,
+  SymbolLookupBase: 31,
 } as const;
 
 export const LazuliCompilationStatus = {
@@ -97,6 +99,12 @@ struct CoreNode {
   evaluation_mode: u32,
 }
 
+struct SymbolLookup {
+  definition: u32,
+  algebraic_type: u32,
+  constructor: u32,
+}
+
 struct CompilationState {
   node_count: u32,
   definition_count: u32,
@@ -128,6 +136,8 @@ struct CompilationState {
   constructor_base: u32,
   core_node_base: u32,
   inference_output_base: u32,
+  symbol_count: u32,
+  symbol_lookup_base: u32,
 }
 
 @group(0) @binding(0)
@@ -147,6 +157,9 @@ var<storage, read_write> core_nodes: array<CoreNode>;
 
 @group(0) @binding(5)
 var<storage, read_write> compilation_states: array<CompilationState>;
+
+@group(0) @binding(6)
+var<storage, read> symbol_lookups: array<SymbolLookup>;
 
 var<private> state: CompilationState;
 
@@ -227,6 +240,10 @@ const PHASE_FIND_EARLIER_CASE_ARM: u32 = 19u;
 
 fn region_fits(base: u32, count: u32, length: u32) -> bool {
   return base <= length && count <= length - base;
+}
+
+fn symbol_lookup(symbol: u32) -> SymbolLookup {
+  return symbol_lookups[state.symbol_lookup_base + symbol];
 }
 
 fn report_diagnostic(code: u32, source: u32, detail: u32) {
@@ -313,14 +330,15 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         node.child2 == NO_INDEX;
     }
     case SURFACE_NAME: {
-      return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
+      return node.payload < state.symbol_count && node.child0 == NO_INDEX &&
+        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_LET, SURFACE_STRICT_LET: {
-      return required_child_is_valid(node_index, node.child0) &&
+      return node.payload < state.symbol_count && required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
     case SURFACE_LET_REC: {
-      return required_child_is_valid(node_index, node.child0) &&
+      return node.payload < state.symbol_count && required_child_is_valid(node_index, node.child0) &&
         surface_nodes[state.surface_node_base + node.child0].tag == SURFACE_LAMBDA &&
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
@@ -330,8 +348,8 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         required_child_is_valid(node_index, node.child2);
     }
     case SURFACE_LAMBDA: {
-      return required_child_is_valid(node_index, node.child0) && node.child1 == NO_INDEX &&
-        node.child2 == NO_INDEX;
+      return node.payload < state.symbol_count && required_child_is_valid(node_index, node.child0) &&
+        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_APPLY, SURFACE_STRICT_APPLY: {
       return required_child_is_valid(node_index, node.child0) &&
@@ -365,12 +383,12 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
     case SURFACE_CASE_ARM: {
-      return case_arm_parent_is_valid(node_index, node.parent) &&
+      return node.payload < state.symbol_count && case_arm_parent_is_valid(node_index, node.parent) &&
         required_child_is_valid(node_index, node.child0) &&
         optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
     case SURFACE_PATTERN_BIND: {
-      return pattern_bind_parent_is_valid(node_index, node.parent) &&
+      return node.payload < state.symbol_count && pattern_bind_parent_is_valid(node_index, node.parent) &&
         required_child_is_valid(node_index, node.child0) && node.child1 == NO_INDEX &&
         node.child2 == NO_INDEX;
     }
@@ -414,7 +432,9 @@ fn validate_counts() {
     !region_fits(state.core_node_base, state.node_count, arrayLength(&core_nodes)) ||
     !region_fits(state.definition_base, state.definition_count, arrayLength(&definitions)) ||
     !region_fits(state.algebraic_type_base, state.type_count, arrayLength(&algebraic_types)) ||
-    !region_fits(state.constructor_base, state.constructor_count, arrayLength(&constructors)) {
+    !region_fits(state.constructor_base, state.constructor_count, arrayLength(&constructors)) ||
+    !region_fits(state.symbol_lookup_base, state.symbol_count, arrayLength(&symbol_lookups)) ||
+    state.entry_symbol >= state.symbol_count {
     report_invalid_surface(ERROR_INVALID_COUNTS, 0u);
     return;
   }
@@ -449,7 +469,7 @@ fn validate_definition() {
   }
 
   let definition = definitions[state.definition_base + state.primary_cursor];
-  if definition.root_node >= state.node_count {
+  if definition.symbol >= state.symbol_count || definition.root_node >= state.node_count {
     report_invalid_surface(ERROR_INVALID_DEFINITION, state.primary_cursor);
     return;
   }
@@ -471,7 +491,8 @@ fn validate_type() {
   }
 
   let algebraic_type = algebraic_types[state.algebraic_type_base + state.primary_cursor];
-  if algebraic_type.start_byte > algebraic_type.end_byte ||
+  if algebraic_type.symbol >= state.symbol_count ||
+    algebraic_type.start_byte > algebraic_type.end_byte ||
     (state.primary_cursor > 0u &&
       algebraic_type.start_byte <
         algebraic_types[state.algebraic_type_base + state.primary_cursor - 1u].start_byte) ||
@@ -503,7 +524,7 @@ fn validate_constructor() {
   }
 
   let constructor = constructors[state.constructor_base + state.primary_cursor];
-  if constructor.type_index >= state.type_count {
+  if constructor.symbol >= state.symbol_count || constructor.type_index >= state.type_count {
     report_invalid_surface(ERROR_INVALID_CONSTRUCTOR, state.primary_cursor);
     return;
   }
@@ -528,18 +549,12 @@ fn find_duplicate_definition() {
     state.phase = PHASE_FIND_DUPLICATE_TYPE;
     return;
   }
-  if state.secondary_cursor >= state.primary_cursor {
-    state.primary_cursor += 1u;
-    state.secondary_cursor = 0u;
-    return;
-  }
-
   let definition = definitions[state.definition_base + state.primary_cursor];
-  if definitions[state.definition_base + state.secondary_cursor].symbol == definition.symbol {
+  if symbol_lookup(definition.symbol).definition != state.primary_cursor {
     report_diagnostic(ERROR_DUPLICATE_DEFINITION, definition.start_byte, definition.symbol);
     return;
   }
-  state.secondary_cursor += 1u;
+  state.primary_cursor += 1u;
 }
 
 fn find_duplicate_type() {
@@ -549,52 +564,28 @@ fn find_duplicate_type() {
     state.phase = PHASE_FIND_DUPLICATE_CONSTRUCTOR;
     return;
   }
-  if state.secondary_cursor >= state.primary_cursor {
-    state.primary_cursor += 1u;
-    state.secondary_cursor = 0u;
-    return;
-  }
-
   let algebraic_type = algebraic_types[state.algebraic_type_base + state.primary_cursor];
-  if algebraic_types[state.algebraic_type_base + state.secondary_cursor].symbol ==
-    algebraic_type.symbol {
+  if symbol_lookup(algebraic_type.symbol).algebraic_type != state.primary_cursor {
     report_diagnostic(ERROR_DUPLICATE_TYPE, algebraic_type.start_byte, algebraic_type.symbol);
     return;
   }
-  state.secondary_cursor += 1u;
+  state.primary_cursor += 1u;
 }
 
 fn find_duplicate_constructor() {
   if state.primary_cursor >= state.constructor_count {
-    state.secondary_cursor = 0u;
+    state.primary_cursor = 0u;
     state.phase = PHASE_FIND_ENTRY_DEFINITION;
     return;
   }
-  if state.secondary_cursor >= state.primary_cursor {
-    state.secondary_cursor = 0u;
-    state.phase = PHASE_FIND_DEFINITION_CONSTRUCTOR_COLLISION;
-    return;
-  }
-
   let constructor = constructors[state.constructor_base + state.primary_cursor];
-  if constructors[state.constructor_base + state.secondary_cursor].symbol == constructor.symbol {
+  let lookup = symbol_lookup(constructor.symbol);
+  if lookup.constructor != state.primary_cursor {
     report_diagnostic(ERROR_DUPLICATE_CONSTRUCTOR, constructor.start_byte, constructor.symbol);
     return;
   }
-  state.secondary_cursor += 1u;
-}
-
-fn find_definition_constructor_collision() {
-  if state.secondary_cursor >= state.definition_count {
-    state.primary_cursor += 1u;
-    state.secondary_cursor = 0u;
-    state.phase = PHASE_FIND_DUPLICATE_CONSTRUCTOR;
-    return;
-  }
-
-  let constructor = constructors[state.constructor_base + state.primary_cursor];
-  let definition = definitions[state.definition_base + state.secondary_cursor];
-  if definition.symbol == constructor.symbol {
+  if lookup.definition != NO_INDEX {
+    let definition = definitions[state.definition_base + lookup.definition];
     var conflict_start = constructor.start_byte;
     if definition.start_byte > conflict_start {
       conflict_start = definition.start_byte;
@@ -606,21 +597,18 @@ fn find_definition_constructor_collision() {
     );
     return;
   }
-  state.secondary_cursor += 1u;
+  state.primary_cursor += 1u;
 }
 
 fn find_entry_definition() {
-  if state.secondary_cursor >= state.definition_count {
+  let definition = symbol_lookup(state.entry_symbol).definition;
+  if definition == NO_INDEX {
     report_diagnostic(ERROR_MISSING_MAIN, NO_INDEX, state.entry_symbol);
     return;
   }
-  if definitions[state.definition_base + state.secondary_cursor].symbol == state.entry_symbol {
-    state.entry_definition = state.secondary_cursor;
-    state.primary_cursor = 0u;
-    state.phase = PHASE_LOWER_NODE;
-    return;
-  }
-  state.secondary_cursor += 1u;
+  state.entry_definition = definition;
+  state.primary_cursor = 0u;
+  state.phase = PHASE_LOWER_NODE;
 }
 
 fn write_lowered_node() {
@@ -712,53 +700,40 @@ fn resolve_local_name() {
 }
 
 fn resolve_global_name() {
-  if state.secondary_cursor >= state.definition_count {
-    state.secondary_cursor = 0u;
+  let definition = symbol_lookup(state.resolution_symbol).definition;
+  if definition == NO_INDEX {
     state.phase = PHASE_RESOLVE_CONSTRUCTOR_NAME;
     return;
   }
-  if definitions[state.definition_base + state.secondary_cursor].symbol ==
-    state.resolution_symbol {
-    state.core_tag = CORE_GLOBAL;
-    state.core_payload = state.secondary_cursor;
-    write_lowered_node();
-    return;
-  }
-  state.secondary_cursor += 1u;
+  state.core_tag = CORE_GLOBAL;
+  state.core_payload = definition;
+  write_lowered_node();
 }
 
 fn resolve_constructor_name() {
-  if state.secondary_cursor >= state.constructor_count {
+  let constructor = symbol_lookup(state.resolution_symbol).constructor;
+  if constructor == NO_INDEX {
     let surface_node = surface_nodes[state.surface_node_base + state.resolution_node];
     report_diagnostic(ERROR_UNKNOWN_NAME, surface_node.start_byte, state.resolution_symbol);
     return;
   }
-  if constructors[state.constructor_base + state.secondary_cursor].symbol ==
-    state.resolution_symbol {
-    state.core_tag = CORE_CONSTRUCTOR;
-    state.core_payload = state.secondary_cursor;
-    write_lowered_node();
-    return;
-  }
-  state.secondary_cursor += 1u;
+  state.core_tag = CORE_CONSTRUCTOR;
+  state.core_payload = constructor;
+  write_lowered_node();
 }
 
 fn resolve_case_constructor() {
-  if state.secondary_cursor >= state.constructor_count {
+  let constructor = symbol_lookup(state.resolution_symbol).constructor;
+  if constructor == NO_INDEX {
     let surface_node = surface_nodes[state.surface_node_base + state.resolution_node];
     report_diagnostic(ERROR_UNKNOWN_CASE_CONSTRUCTOR, surface_node.start_byte, state.resolution_symbol);
     return;
   }
-  if constructors[state.constructor_base + state.secondary_cursor].symbol ==
-    state.resolution_symbol {
-    state.core_payload = state.secondary_cursor;
-    state.resolution_child =
-      surface_nodes[state.surface_node_base + state.resolution_node].child0;
-    state.resolution_depth = 0u;
-    state.phase = PHASE_COUNT_PATTERN_BINDERS;
-    return;
-  }
-  state.secondary_cursor += 1u;
+  state.core_payload = constructor;
+  state.resolution_child =
+    surface_nodes[state.surface_node_base + state.resolution_node].child0;
+  state.resolution_depth = 0u;
+  state.phase = PHASE_COUNT_PATTERN_BINDERS;
 }
 
 fn count_pattern_binders() {
@@ -840,9 +815,6 @@ fn advance_compilation() {
     }
     case PHASE_FIND_DUPLICATE_CONSTRUCTOR: {
       find_duplicate_constructor();
-    }
-    case PHASE_FIND_DEFINITION_CONSTRUCTOR_COLLISION: {
-      find_definition_constructor_collision();
     }
     case PHASE_FIND_ENTRY_DEFINITION: {
       find_entry_definition();

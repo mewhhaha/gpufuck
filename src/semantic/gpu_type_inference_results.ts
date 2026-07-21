@@ -553,6 +553,8 @@ function formatWorkspaceType(
   surface: EncodedLazuliSurface,
   identifierNames: readonly string[],
 ): string {
+  const maximumCharacterLength = 4096;
+  const maximumNodeCount = 512;
   if (workspace === undefined) {
     throw new Error("GPU Lazuli type diagnostic omitted its workspace snapshot");
   }
@@ -587,6 +589,18 @@ function formatWorkspaceType(
     }
   };
   const names = new Map<number, string>();
+  let remainingCharacters = maximumCharacterLength;
+  let renderedNodes = 0;
+  const renderText = (text: string): string => {
+    if (remainingCharacters === 0) return "";
+    if (text.length <= remainingCharacters) {
+      remainingCharacters -= text.length;
+      return text;
+    }
+    const rendered = remainingCharacters === 1 ? "…" : `${text.slice(0, remainingCharacters - 1)}…`;
+    remainingCharacters = 0;
+    return rendered;
+  };
   const variableName = (typeIndex: number): string => {
     const existing = names.get(typeIndex);
     if (existing !== undefined) return existing;
@@ -598,32 +612,34 @@ function formatWorkspaceType(
     return name;
   };
   const format = (raw: number, nestedFunction: boolean): string => {
+    if (renderedNodes >= maximumNodeCount) return renderText("…");
+    renderedNodes += 1;
     const typeIndex = prune(raw);
     const kind = typeWord(typeIndex, 0);
     switch (kind) {
       case 1:
       case 2:
-        return variableName(typeIndex);
+        return renderText(variableName(typeIndex));
       case 3:
-        return identifierName(identifierNames, typeWord(typeIndex, 1));
+        return renderText(identifierName(identifierNames, typeWord(typeIndex, 1)));
       case 11:
-        return identifierName(identifierNames, typeWord(typeIndex, 1));
+        return renderText(identifierName(identifierNames, typeWord(typeIndex, 1)));
       case 4:
-        return "Int";
+        return renderText("Int");
       case 5:
-        return "Bool";
+        return renderText("Bool");
       case 6:
-        return "()";
+        return renderText("()");
       case 13:
-        return "I64";
+        return renderText("I64");
       case 14:
-        return "F32";
+        return renderText("F32");
       case 15:
-        return "F64";
+        return renderText("F64");
       case 7:
-        return `(${format(typeWord(typeIndex, 2), false)}, ${
+        return `${renderText("(")}${format(typeWord(typeIndex, 2), false)}${renderText(", ")}${
           format(typeWord(typeIndex, 3), false)
-        })`;
+        }${renderText(")")}`;
       case 8: {
         const typeDeclaration = typeWord(typeIndex, 1);
         const typeOffset = typeDeclaration * 5;
@@ -646,20 +662,26 @@ function formatWorkspaceType(
           arguments_.push(format(typeWord(list, 1), false));
           list = typeWord(list, 2);
         }
-        const name = symbolName(surface, symbol);
-        return arguments_.length === 0 ? name : `${name}[${arguments_.join(", ")}]`;
+        const name = renderText(symbolName(surface, symbol));
+        if (arguments_.length === 0) return name;
+        let renderedArguments = "";
+        for (const [index, argument] of arguments_.entries()) {
+          if (index !== 0) renderedArguments += renderText(", ");
+          renderedArguments += argument;
+        }
+        return `${name}${renderText("[")}${renderedArguments}${renderText("]")}`;
       }
       case 9: {
-        const rendered = `${format(typeWord(typeIndex, 2), true)} -> ${
+        const rendered = `${format(typeWord(typeIndex, 2), true)}${renderText(" -> ")}${
           format(
             typeWord(typeIndex, 3),
             false,
           )
         }`;
-        return nestedFunction ? `(${rendered})` : rendered;
+        return nestedFunction ? `${renderText("(")}${rendered}${renderText(")")}` : rendered;
       }
       case 12:
-        return `forall. ${format(typeWord(typeIndex, 2), false)}`;
+        return `${renderText("forall. ")}${format(typeWord(typeIndex, 2), false)}`;
       default:
         throw new Error(`GPU Lazuli diagnostic type ${typeIndex} has unknown kind ${kind}`);
     }

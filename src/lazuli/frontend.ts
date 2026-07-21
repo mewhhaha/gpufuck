@@ -27,6 +27,8 @@ type ParseResult = ReturnType<ReturnType<typeof createParser>["parse"]>;
 type AnyRuleCursor = Extract<ParseResult, { readonly ok: true }>["cursor"];
 type LazuliParser = ReturnType<typeof createParser>;
 
+const LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH = 256;
+
 export interface ParsedLazuliSource {
   readonly sourceByteLength: number;
   readonly frontend: LazuliFrontendResult;
@@ -630,9 +632,9 @@ function parenthesisDepthDiagnostic(
     }
     if (source[index] === "(") {
       depth++;
-      if (depth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+      if (depth > LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH) {
         return limitDiagnostic(
-          `Parenthesis depth is ${depth}; the ABI limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+          `Parenthesis depth is ${depth}; the parser's stack-safe limit is ${LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH} and the ABI limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
           byteOffsets.span({ start: index, end: index + 1 }),
         );
       }

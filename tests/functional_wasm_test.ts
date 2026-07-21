@@ -63,7 +63,10 @@ import {
 import { lowerHaskellFunctionalSource } from "../haskell_functional.ts";
 import { lowerOcamlFunctionalSource } from "../ocaml_functional.ts";
 import { lowerRustFunctionalSource } from "../rust_functional.ts";
-import { decodeFunctionalWasmValue } from "../src/functional/wasm_value_codec.ts";
+import {
+  decodeFunctionalWasmValue,
+  describeFunctionalType,
+} from "../src/functional/wasm_value_codec.ts";
 
 interface FunctionalWasmRuntime {
   readonly device: GPUDevice;
@@ -84,6 +87,18 @@ Deno.test("runtime type descriptors reject structural cycles with their path", (
     () => functionalRuntimeTypeDescriptorKey(cyclicType),
     /structural cycle at \$\.arguments\[0\]/,
   );
+});
+
+Deno.test("bounds descriptions of exponentially shared functional types", () => {
+  let type: FunctionalType = { kind: "integer" };
+  for (let depth = 0; depth < 20; depth++) {
+    type = { kind: "tuple", values: [type, type] };
+  }
+
+  const description = describeFunctionalType(type);
+
+  ok(description.length <= 4096);
+  ok(description.includes("…"));
 });
 
 Deno.test("runtime type descriptor construction rejects cyclic schemas before substitution", () => {
@@ -2292,6 +2307,10 @@ Deno.test("returns structured tuples through the stable WebAssembly aggregate AB
         ok(error instanceof FunctionalWasmRuntimeError);
         equal(error.code, "F3010");
         equal(error.kind, "result-too-large");
+        equal(
+          error.message,
+          "F3010: functional WASM result exceeded maximumResultNodes 2",
+        );
         return true;
       },
     );

@@ -27,6 +27,8 @@ const RESOURCE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.resource;
 const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
 const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
 const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
+const MAXIMUM_DESCRIBED_TYPE_CHARACTER_LENGTH = 4096;
+const MAXIMUM_DESCRIBED_TYPE_NODE_COUNT = 512;
 
 export type FunctionalWasmValue = FunctionalWasmHostValue;
 
@@ -66,42 +68,120 @@ export function forgetEncodedFunctionalWasmValue(
 }
 
 export function describeFunctionalType(type: FunctionalType): string {
-  switch (type.kind) {
-    case "integer":
-      return "integer";
-    case "signed-integer-64":
-      return "signed i64";
-    case "float-32":
-      return "f32";
-    case "float-64":
-      return "f64";
-    case "boolean":
-      return "boolean";
-    case "unit":
-      return "unit";
-    case "named":
-      if (type.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME) return "whole number (f64)";
-      if (type.name === FUNCTIONAL_TEXT_TYPE_NAME) return "text";
-      if (type.name === FUNCTIONAL_BYTES_TYPE_NAME) return "bytes";
-      if (type.name === FUNCTIONAL_ARRAY_TYPE_NAME) {
-        return `array(${type.arguments.map(describeFunctionalType).join(", ")})`;
+  type DescribeFrame =
+    | { readonly kind: "type"; readonly type: FunctionalType }
+    | { readonly kind: "text"; readonly text: string }
+    | { readonly kind: "leave"; readonly type: FunctionalType };
+  const frames: DescribeFrame[] = [{ kind: "type", type }];
+  const activeTypes = new Set<FunctionalType>();
+  const output: string[] = [];
+  let characterLength = 0;
+  let describedNodes = 0;
+  const append = (text: string): boolean => {
+    const available = MAXIMUM_DESCRIBED_TYPE_CHARACTER_LENGTH - characterLength;
+    if (text.length <= available) {
+      output.push(text);
+      characterLength += text.length;
+      return true;
+    }
+    if (available > 1) output.push(text.slice(0, available - 1));
+    if (available > 0) output.push("…");
+    characterLength = MAXIMUM_DESCRIBED_TYPE_CHARACTER_LENGTH;
+    return false;
+  };
+  const pushSeparatedTypes = (
+    types: readonly FunctionalType[],
+    opening: string,
+    closing: string,
+  ): void => {
+    frames.push({ kind: "text", text: closing });
+    for (let index = types.length - 1; index >= 0; index--) {
+      frames.push({ kind: "type", type: types[index]! });
+      if (index !== 0) frames.push({ kind: "text", text: ", " });
+    }
+    frames.push({ kind: "text", text: opening });
+  };
+  while (frames.length !== 0) {
+    const frame = frames.pop()!;
+    if (frame.kind === "text") {
+      if (!append(frame.text)) break;
+      continue;
+    }
+    if (frame.kind === "leave") {
+      activeTypes.delete(frame.type);
+      continue;
+    }
+    if (describedNodes >= MAXIMUM_DESCRIBED_TYPE_NODE_COUNT || activeTypes.has(frame.type)) {
+      if (!append("…")) break;
+      continue;
+    }
+    describedNodes += 1;
+    activeTypes.add(frame.type);
+    frames.push({ kind: "leave", type: frame.type });
+    switch (frame.type.kind) {
+      case "integer":
+        frames.push({ kind: "text", text: "integer" });
+        break;
+      case "signed-integer-64":
+        frames.push({ kind: "text", text: "signed i64" });
+        break;
+      case "float-32":
+        frames.push({ kind: "text", text: "f32" });
+        break;
+      case "float-64":
+        frames.push({ kind: "text", text: "f64" });
+        break;
+      case "boolean":
+        frames.push({ kind: "text", text: "boolean" });
+        break;
+      case "unit":
+        frames.push({ kind: "text", text: "unit" });
+        break;
+      case "named": {
+        if (frame.type.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME) {
+          frames.push({ kind: "text", text: "whole number (f64)" });
+          break;
+        }
+        if (frame.type.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+          frames.push({ kind: "text", text: "text" });
+          break;
+        }
+        if (frame.type.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+          frames.push({ kind: "text", text: "bytes" });
+          break;
+        }
+        if (frame.type.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
+          frames.push({
+            kind: "text",
+            text: `resource(${
+              decodeURIComponent(frame.type.name.slice(FUNCTIONAL_RESOURCE_TYPE_PREFIX.length))
+            })`,
+          });
+          break;
+        }
+        const name = frame.type.name === FUNCTIONAL_ARRAY_TYPE_NAME
+          ? "array"
+          : frame.type.name === FUNCTIONAL_SLICE_TYPE_NAME
+          ? "slice"
+          : frame.type.name;
+        if (frame.type.arguments.length === 0) {
+          frames.push({ kind: "text", text: name });
+          break;
+        }
+        pushSeparatedTypes(frame.type.arguments, `${name}(`, ")");
+        break;
       }
-      if (type.name === FUNCTIONAL_SLICE_TYPE_NAME) {
-        return `slice(${type.arguments.map(describeFunctionalType).join(", ")})`;
-      }
-      if (type.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
-        return `resource(${
-          decodeURIComponent(type.name.slice(FUNCTIONAL_RESOURCE_TYPE_PREFIX.length))
-        })`;
-      }
-      return type.arguments.length === 0
-        ? type.name
-        : `${type.name}(${type.arguments.map(describeFunctionalType).join(", ")})`;
-    case "tuple":
-      return `(${type.values.map(describeFunctionalType).join(", ")})`;
-    case "function":
-      return `${describeFunctionalType(type.parameter)} -> ${describeFunctionalType(type.result)}`;
+      case "tuple":
+        pushSeparatedTypes(frame.type.values, "(", ")");
+        break;
+      case "function":
+        frames.push({ kind: "type", type: frame.type.result });
+        frames.push({ kind: "text", text: " -> " });
+        frames.push({ kind: "type", type: frame.type.parameter });
+        break;
+    }
   }
+  return output.join("");
 }
 
 export function encodeFunctionalWasmValue(
@@ -782,9 +862,7 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     if (decodedNodes > maximumResultNodes) {
       throw new FunctionalWasmValueError(
         "result-too-large",
-        `functional WASM result exceeded maximumResultNodes ${maximumResultNodes} while decoding ${
-          describeFunctionalType(type)
-        }`,
+        `functional WASM result exceeded maximumResultNodes ${maximumResultNodes}`,
       );
     }
     const forced = forceValue(frame.rawValue) as bigint;

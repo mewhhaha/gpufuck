@@ -9,6 +9,7 @@ import {
 import {
   LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
   LAZULI_COMPILER_SHADER,
+  LazuliCompilationInternalStateWord as InternalStateWord,
   LazuliCompilationStateWord as StateWord,
   LazuliCompilationStatus as Status,
 } from "./compiler_shader.ts";
@@ -29,6 +30,7 @@ import { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
 import { runGpuLazuliCompilationInference } from "./gpu_type_inference_runner.ts";
 import type { GpuLazuliCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
 import { LAZULI_TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
+import { createLazuliSymbolLookup, LAZULI_SYMBOL_LOOKUP_WORD_LENGTH } from "./symbol_lookup.ts";
 
 export interface LazuliSemanticCompilationLimits {
   readonly maximumSteps: number;
@@ -137,6 +139,13 @@ export class GpuLazuliSemanticCompiler {
       limits.maximumStepsPerDispatch,
       true,
     );
+    initialStateView.setUint32(
+      InternalStateWord.SymbolCount * 4,
+      surface.symbolNames.length,
+      true,
+    );
+    initialStateView.setUint32(InternalStateWord.SymbolLookupBase * 4, 0, true);
+    const symbolLookupWords = createLazuliSymbolLookup(surface);
 
     let surfaceNodeBuffer: GPUBuffer | undefined;
     let coreNodeBuffer: GPUBuffer | undefined;
@@ -144,6 +153,7 @@ export class GpuLazuliSemanticCompiler {
     let typeBuffer: GPUBuffer | undefined;
     let constructorBuffer: GPUBuffer | undefined;
     let stateBuffer: GPUBuffer | undefined;
+    let symbolLookupBuffer: GPUBuffer | undefined;
     let bindGroup: GPUBindGroup | undefined;
     let nodeBufferTransferred = false;
     let definitionBufferTransferred = false;
@@ -160,6 +170,10 @@ export class GpuLazuliSemanticCompiler {
     const constructorByteLength = storageBufferSize(
       surface.constructorCount,
       LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+    );
+    const symbolLookupByteLength = storageBufferSize(
+      surface.symbolNames.length,
+      LAZULI_SYMBOL_LOOKUP_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT,
     );
     const allocationEvidence =
       `surface nodes=${surfaceNodeByteLength} bytes, core nodes=${surfaceNodeByteLength} bytes, definitions=${definitionByteLength} bytes, algebraic types=${typeByteLength} bytes, constructors=${constructorByteLength} bytes, state=${LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH} bytes`;
@@ -199,11 +213,17 @@ export class GpuLazuliSemanticCompiler {
           size: LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
+        symbolLookupBuffer = this.#device.createBuffer({
+          label: "Lazuli symbol lookup",
+          size: symbolLookupByteLength,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
+        });
 
         writeWords(this.#device.queue, surfaceNodeBuffer, surface.nodeWords);
         writeWords(this.#device.queue, definitionBuffer, surface.definitionWords);
         writeWords(this.#device.queue, typeBuffer, surface.typeWords);
         writeWords(this.#device.queue, constructorBuffer, surface.constructorWords);
+        writeWords(this.#device.queue, symbolLookupBuffer, symbolLookupWords);
         this.#device.queue.writeBuffer(stateBuffer, 0, initialState);
 
         bindGroup = this.#device.createBindGroup({
@@ -216,6 +236,7 @@ export class GpuLazuliSemanticCompiler {
             { binding: 3, resource: { buffer: constructorBuffer } },
             { binding: 4, resource: { buffer: coreNodeBuffer } },
             { binding: 5, resource: { buffer: stateBuffer } },
+            { binding: 6, resource: { buffer: symbolLookupBuffer } },
           ],
         });
       } catch (cause) {
@@ -250,7 +271,8 @@ export class GpuLazuliSemanticCompiler {
       if (
         surfaceNodeBuffer === undefined || coreNodeBuffer === undefined ||
         definitionBuffer === undefined || typeBuffer === undefined ||
-        constructorBuffer === undefined || stateBuffer === undefined || bindGroup === undefined
+        constructorBuffer === undefined || stateBuffer === undefined ||
+        symbolLookupBuffer === undefined || bindGroup === undefined
       ) {
         throw new Error(
           `WebGPU did not create Lazuli semantic compiler buffers and bindings (${allocationEvidence})`,
@@ -362,6 +384,7 @@ export class GpuLazuliSemanticCompiler {
       surfaceNodeBuffer?.destroy();
       typeBuffer?.destroy();
       stateBuffer?.destroy();
+      symbolLookupBuffer?.destroy();
       if (!nodeBufferTransferred) {
         coreNodeBuffer?.destroy();
       }
