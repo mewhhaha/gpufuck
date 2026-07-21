@@ -41,6 +41,7 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   const requiredPages = instructions.addLocal(WasmValueType.I32);
   const currentPages = instructions.addLocal(WasmValueType.I32);
   emitNormalizeAllocationByteLength(instructions, 0);
+  instructions.emit(0x02, 0x40);
   instructions.globalGet(FunctionalWasmRuntimeGlobal.FreeListHead);
   instructions.localSet(currentFree);
   instructions.emit(0x02, 0x40, 0x03, 0x40);
@@ -116,14 +117,12 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.emit(0x6a);
   instructions.localTee(nextTop);
   instructions.localGet(previousTop);
-  instructions.emit(0x49, 0x04, 0x40);
-  emitOutOfMemory(instructions);
-  instructions.emit(0x0b);
+  instructions.emit(0x49, 0x0d);
+  instructions.unsigned(0);
   instructions.localGet(nextTop);
   instructions.i32Const(FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH);
-  instructions.emit(0x4b, 0x04, 0x40);
-  emitOutOfMemory(instructions);
-  instructions.emit(0x0b);
+  instructions.emit(0x4b, 0x0d);
+  instructions.unsigned(0);
   instructions.localGet(nextTop);
   instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapCapacityByteLength);
   instructions.emit(0x4b, 0x04, 0x40);
@@ -143,9 +142,9 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.emit(0x6b);
   instructions.memoryGrow();
   instructions.i32Const(-1);
-  instructions.emit(0x46, 0x04, 0x40);
-  emitOutOfMemory(instructions);
-  instructions.emit(0x0b, 0x0b);
+  instructions.emit(0x46, 0x0d);
+  instructions.unsigned(2);
+  instructions.emit(0x0b);
   instructions.localGet(requiredPages);
   instructions.i32Const(16);
   instructions.emit(0x74);
@@ -155,6 +154,8 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.globalSet(FunctionalWasmRuntimeGlobal.HeapTop);
   emitInitializeAllocation(instructions, previousTop, 0);
   instructions.localGet(previousTop);
+  instructions.emit(0x0f, 0x0b);
+  emitOutOfMemory(instructions);
   return functionBody(FunctionalWasmFunctionType.Allocator, instructions, "allocator");
 }
 
