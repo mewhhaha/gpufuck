@@ -562,8 +562,7 @@ class FunctionalWasmCompiler {
       return body;
     });
     const forceValueInstructions = new WasmInstructions(1);
-    forceValueInstructions.localGet(0);
-    this.emitForceValue(forceValueInstructions);
+    this.emitForceValue(forceValueInstructions, 0);
     const forceValueType = this.functionTypeIndex([WasmValueType.I64], [
       WasmValueType.I64,
     ]);
@@ -3907,10 +3906,13 @@ class FunctionalWasmCompiler {
     instructions.emit(0xad);
   }
 
-  emitForceValue(instructions: WasmInstructions): void {
-    const value = instructions.addLocal(WasmValueType.I64);
+  emitForceValue(
+    instructions: WasmInstructions,
+    sourceLocal?: number,
+  ): void {
+    const value = sourceLocal ?? instructions.addLocal(WasmValueType.I64);
     const pointer = instructions.addLocal(WasmValueType.I32);
-    instructions.localSet(value);
+    if (sourceLocal === undefined) instructions.localSet(value);
     instructions.localGet(value);
     instructions.i64Const(7n);
     instructions.emit(0x83, 0x50, 0x04, WasmValueType.I64);
