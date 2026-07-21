@@ -281,10 +281,10 @@ function emitFreeBlockGuard(
   const end = instructions.addLocal(WasmValueType.I32);
   instructions.localGet(pointer);
   instructions.i32Const(7);
-  instructions.emit(0x71, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x71);
   instructions.localGet(pointer);
   instructions.i32Const(heapStart);
-  instructions.emit(0x49, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x49, 0x72, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(pointer);
   instructions.i32Load(0);
   instructions.i32Const(FUNCTIONAL_WASM_FREE_BLOCK_MAGIC);
@@ -293,19 +293,19 @@ function emitFreeBlockGuard(
   instructions.i32Load(4);
   instructions.localTee(byteLength);
   instructions.i32Const(FUNCTIONAL_WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
-  instructions.emit(0x49, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x49);
   instructions.localGet(byteLength);
   instructions.i32Const(7);
-  instructions.emit(0x71, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x71, 0x72, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(pointer);
   instructions.localGet(byteLength);
   instructions.emit(0x6a);
   instructions.localTee(end);
   instructions.localGet(pointer);
-  instructions.emit(0x49, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x49);
   instructions.localGet(end);
   instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapTop);
-  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x4b, 0x72, 0x04, 0x40, 0x00, 0x0b);
 }
 
 function emitAllocationByteLength(
