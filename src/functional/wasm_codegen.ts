@@ -88,9 +88,22 @@ import type {
 } from "./wasm_constant_analysis.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import {
+  FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
+  FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
+  FunctionalF32x4Definition,
+} from "./fixed_vector_contract.ts";
+import {
   createFunctionalWasmBackendPlan,
   type FunctionalWasmBackendPlan,
 } from "./wasm_backend_plan.ts";
+import {
+  f32x4ExtractedLane,
+  f32x4ReplacementLane,
+  FunctionalWasmSimdOpcode,
+  simdF32x4BinaryOpcode,
+  simdF32x4ComparisonOpcode,
+  simdFloat32Operator,
+} from "./wasm_simd.ts";
 import type { FunctionalWasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
 
 const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
@@ -148,6 +161,7 @@ interface ConstructorReuseTarget {
 
 type FunctionalBinding =
   | ValueSource
+  | { readonly kind: "v128-f32x4"; readonly index: number }
   | VirtualLambda
   | VirtualConstructor
   | StaticRecursiveFunction
@@ -176,6 +190,11 @@ interface UncurriedApplication {
   readonly staticEnvironment?: FunctionalEnvironment;
   readonly inlineAtSoleCall: boolean;
   readonly inlineVirtualBase: boolean;
+}
+
+interface NamedApplication {
+  readonly definition: string;
+  readonly arguments: readonly FunctionalCallArgument[];
 }
 
 interface UncurriedWorker {
@@ -224,6 +243,7 @@ class FunctionalWasmCompiler {
   readonly #lambdaSlots: (number | undefined)[];
   readonly #recursiveLambdaOwners = new Map<number, number>();
   readonly #uncurriedWorkers = new Map<string, UncurriedWorker>();
+  readonly #f32x4Workers = new Map<number, number>();
   readonly #nativeIntegerFunctionNodes = new Set<number>();
   readonly #staticEnvironmentIds = new WeakMap<object, number>();
   readonly #additionalFunctionTypes: WasmFunctionType[] = [];
@@ -240,6 +260,7 @@ class FunctionalWasmCompiler {
   readonly #compactScalar: boolean;
   readonly #hasLazyEvaluationBoundary: boolean;
   readonly #instrumentedFuel: boolean;
+  readonly #simdEnabled: boolean;
   readonly #runtimeEmitter: FunctionalWasmRuntimeEmitter;
   readonly #automaticArenaReset: boolean;
   readonly #compilationOptions: FunctionalWasmCompilationOptions;
@@ -292,6 +313,9 @@ class FunctionalWasmCompiler {
         node.tag === FunctionalCoreTag.Let) &&
       node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
     );
+    this.#simdEnabled = !plan.instrumentedFuel && plan.options.simd === "wasm-simd" &&
+      module.evaluationProfile === FunctionalEvaluationProfile.StrictEager &&
+      !this.#hasLazyEvaluationBoundary;
     this.#captureAnalysis = plan.captureAnalysis;
     this.#constantAnalysis = plan.constantAnalysis;
     this.#storageDecisions = new Map(
@@ -1046,6 +1070,21 @@ class FunctionalWasmCompiler {
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
+    if (this.#simdEnabled && node.tag === FunctionalCoreTag.Apply) {
+      const vectorKind = this.compileSimdVectorApplication(
+        instructions,
+        nodeIndex,
+        environment,
+      );
+      if (vectorKind === "f32x4") {
+        this.emitBoxF32x4(instructions);
+        return;
+      }
+      if (vectorKind === "mask32x4") {
+        this.emitBoxMask32x4(instructions);
+        return;
+      }
+    }
     switch (node.tag) {
       case FunctionalCoreTag.Integer:
         instructions.i64Const((BigInt(node.payload | 0) << 3n) | 1n);
@@ -2966,6 +3005,10 @@ class FunctionalWasmCompiler {
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
+    if (
+      this.#simdEnabled && node.tag === FunctionalCoreTag.Apply &&
+      this.compileSimdFloat32Application(instructions, nodeIndex, environment)
+    ) return;
     switch (node.tag) {
       case FunctionalCoreTag.Float32:
         instructions.f32Const(float32FromBits(node.payload));
@@ -3014,6 +3057,409 @@ class FunctionalWasmCompiler {
     }
     this.compileExpression(instructions, nodeIndex, environment);
     this.emitUnboxFloat32(instructions);
+  }
+
+  compileSimdVectorApplication(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): "f32x4" | "mask32x4" | undefined {
+    const application = this.namedApplication(nodeIndex);
+    if (application === undefined) return undefined;
+    const { definition, arguments: arguments_ } = application;
+    if (definition === FunctionalF32x4Definition.Splat && arguments_.length === 1) {
+      this.compileFloat32Expression(instructions, arguments_[0]!.node, environment);
+      instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
+      return "f32x4";
+    }
+    const binaryOpcode = simdF32x4BinaryOpcode(definition);
+    if (binaryOpcode !== undefined && arguments_.length === 2) {
+      this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
+      this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
+      instructions.simd(binaryOpcode);
+      return "f32x4";
+    }
+    const comparisonOpcode = simdF32x4ComparisonOpcode(definition);
+    if (comparisonOpcode !== undefined && arguments_.length === 2) {
+      this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
+      this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
+      instructions.simd(comparisonOpcode);
+      return "mask32x4";
+    }
+    if (definition === FunctionalF32x4Definition.Select && arguments_.length === 3) {
+      this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
+      this.compileF32x4Expression(instructions, arguments_[2]!.node, environment);
+      this.compileMask32x4Expression(instructions, arguments_[0]!.node, environment);
+      instructions.simd(FunctionalWasmSimdOpcode.V128BitSelect);
+      return "f32x4";
+    }
+    const replacementLane = f32x4ReplacementLane(definition);
+    if (replacementLane !== undefined && arguments_.length === 2) {
+      this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
+      this.compileFloat32Expression(instructions, arguments_[1]!.node, environment);
+      instructions.simd(FunctionalWasmSimdOpcode.F32x4ReplaceLane, replacementLane);
+      return "f32x4";
+    }
+    if (definition === FunctionalF32x4Definition.Map && arguments_.length === 2) {
+      return this.compileSimdMap(instructions, arguments_, environment) ? "f32x4" : undefined;
+    }
+    if (definition === FunctionalF32x4Definition.Zip && arguments_.length === 3) {
+      return this.compileSimdZip(instructions, arguments_, environment) ? "f32x4" : undefined;
+    }
+    return undefined;
+  }
+
+  compileSimdFloat32Application(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): boolean {
+    const application = this.namedApplication(nodeIndex);
+    if (application === undefined) return false;
+    const { definition, arguments: arguments_ } = application;
+    const extractedLane = f32x4ExtractedLane(definition);
+    if (extractedLane !== undefined && arguments_.length === 1) {
+      this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
+      instructions.simd(FunctionalWasmSimdOpcode.F32x4ExtractLane, extractedLane);
+      return true;
+    }
+    if (definition === FunctionalF32x4Definition.ReduceAdd && arguments_.length === 1) {
+      this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
+      const vector = instructions.addLocal(WasmValueType.V128);
+      instructions.localSet(vector);
+      this.emitExtractF32x4Lane(instructions, vector, 0);
+      this.emitExtractF32x4Lane(instructions, vector, 1);
+      instructions.emit(0x92);
+      this.emitExtractF32x4Lane(instructions, vector, 2);
+      this.emitExtractF32x4Lane(instructions, vector, 3);
+      instructions.emit(0x92, 0x92);
+      return true;
+    }
+    if (definition === FunctionalF32x4Definition.Fold && arguments_.length === 3) {
+      const combine = this.float32CombineOperator(arguments_[0]!.node, environment);
+      if (combine === undefined) return false;
+      const combineOpcode = numericBinaryOpcode(combine);
+      if (combineOpcode === undefined) return false;
+      this.compileFloat32Expression(instructions, arguments_[1]!.node, environment);
+      this.compileF32x4Expression(instructions, arguments_[2]!.node, environment);
+      const vector = instructions.addLocal(WasmValueType.V128);
+      instructions.localSet(vector);
+      for (let lane = 0; lane < 4; lane += 1) {
+        this.emitExtractF32x4Lane(instructions, vector, lane);
+        instructions.emit(combineOpcode);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  compileF32x4Expression(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const node = this.node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Local) {
+      const binding = environment[node.payload];
+      if (binding?.kind === "v128-f32x4") {
+        instructions.localGet(binding.index);
+        return;
+      }
+    }
+    if (node.tag === FunctionalCoreTag.Apply) {
+      const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
+      if (kind === "f32x4") return;
+    }
+    const constructor = this.constructorApplication(nodeIndex);
+    const f32x4Constructor = this.#module.constructorNames.indexOf(
+      FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
+    );
+    if (
+      constructor !== undefined && constructor.constructorIndex === f32x4Constructor &&
+      constructor.arguments.length === 4
+    ) {
+      this.compileFloat32Expression(instructions, constructor.arguments[0]!.node, environment);
+      instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
+      for (let lane = 1; lane < 4; lane += 1) {
+        this.compileFloat32Expression(instructions, constructor.arguments[lane]!.node, environment);
+        instructions.simd(FunctionalWasmSimdOpcode.F32x4ReplaceLane, lane);
+      }
+      return;
+    }
+    if (this.compileF32x4WorkerApplication(instructions, nodeIndex, environment)) return;
+    this.compileExpression(instructions, nodeIndex, environment);
+    this.emitUnboxF32x4(instructions);
+  }
+
+  compileF32x4WorkerApplication(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): boolean {
+    const application = this.uncurriedApplication(nodeIndex, environment);
+    if (
+      application === undefined || application.arguments.length !== 1 ||
+      application.functionShape.parameterCount !== 1 ||
+      application.staticEnvironment !== undefined ||
+      this.#recursiveLambdaOwners.has(application.functionShape.outerLambdaNode) ||
+      this.uncurriedWorkerHasEnvironmentParameter(
+        application.functionShape,
+        undefined,
+      ) ||
+      !this.isKnownF32x4Expression(application.arguments[0]!.node, environment)
+    ) return false;
+
+    const parameterBinding = { kind: "v128-f32x4" as const, index: 0 };
+    const bodyEnvironment = this.uncurriedBodyEnvironment(
+      application.functionShape,
+      [parameterBinding],
+      undefined,
+      undefined,
+      "worker",
+    );
+    if (!this.isKnownF32x4Expression(application.functionShape.bodyNode, bodyEnvironment)) {
+      return false;
+    }
+
+    let slot = this.#f32x4Workers.get(application.functionShape.outerLambdaNode);
+    if (slot === undefined) {
+      slot = this.reserveIndirectFunction();
+      this.#f32x4Workers.set(application.functionShape.outerLambdaNode, slot);
+      const workerInstructions = new WasmInstructions(1);
+      this.compileF32x4Expression(
+        workerInstructions,
+        application.functionShape.bodyNode,
+        bodyEnvironment,
+      );
+      this.#indirectFunctions[slot] = functionBody(
+        this.functionTypeIndex([WasmValueType.V128], [WasmValueType.V128]),
+        workerInstructions,
+        `F32x4 worker for lambda core node ${application.functionShape.outerLambdaNode}`,
+      );
+    }
+
+    this.compileF32x4Expression(instructions, application.arguments[0]!.node, environment);
+    instructions.call(this.indirectFunctionOffset() + slot);
+    this.#specializedCallSiteCount += 1;
+    return true;
+  }
+
+  isKnownF32x4Expression(
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): boolean {
+    const node = this.node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Local) {
+      return environment[node.payload]?.kind === "v128-f32x4";
+    }
+    const constructor = this.constructorApplication(nodeIndex);
+    if (
+      constructor !== undefined && constructor.arguments.length === 4 &&
+      this.#module.constructorNames[constructor.constructorIndex] ===
+        FUNCTIONAL_F32X4_CONSTRUCTOR_NAME
+    ) return true;
+    const application = this.namedApplication(nodeIndex);
+    if (application === undefined) return false;
+    const { definition, arguments: arguments_ } = application;
+    if (definition === FunctionalF32x4Definition.Splat) return arguments_.length === 1;
+    if (simdF32x4BinaryOpcode(definition) !== undefined) {
+      return arguments_.length === 2 &&
+        this.isKnownF32x4Expression(arguments_[0]!.node, environment) &&
+        this.isKnownF32x4Expression(arguments_[1]!.node, environment);
+    }
+    if (definition === FunctionalF32x4Definition.Select) {
+      return arguments_.length === 3 &&
+        this.isKnownMask32x4Expression(arguments_[0]!.node, environment) &&
+        this.isKnownF32x4Expression(arguments_[1]!.node, environment) &&
+        this.isKnownF32x4Expression(arguments_[2]!.node, environment);
+    }
+    return f32x4ReplacementLane(definition) !== undefined && arguments_.length === 2 &&
+      this.isKnownF32x4Expression(arguments_[0]!.node, environment);
+  }
+
+  isKnownMask32x4Expression(
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): boolean {
+    const application = this.namedApplication(nodeIndex);
+    if (
+      application === undefined || application.arguments.length !== 2 ||
+      simdF32x4ComparisonOpcode(application.definition) === undefined
+    ) return false;
+    return this.isKnownF32x4Expression(application.arguments[0]!.node, environment) &&
+      this.isKnownF32x4Expression(application.arguments[1]!.node, environment);
+  }
+
+  compileMask32x4Expression(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const node = this.node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Apply) {
+      const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
+      if (kind === "mask32x4") return;
+    }
+    this.compileExpression(instructions, nodeIndex, environment);
+    this.emitUnboxMask32x4(instructions);
+  }
+
+  compileSimdMap(
+    instructions: WasmInstructions,
+    arguments_: readonly FunctionalCallArgument[],
+    environment: FunctionalEnvironment,
+  ): boolean {
+    const transform = this.virtualLambda(arguments_[0]!.node, environment);
+    if (transform === undefined) return false;
+    const lambda = this.node(transform.node);
+    if (
+      lambda.tag !== FunctionalCoreTag.Lambda ||
+      !this.canVectorizeFloat32Expression(lambda.child0, 1)
+    ) return false;
+    this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
+    const vector = instructions.addLocal(WasmValueType.V128);
+    instructions.localSet(vector);
+    this.compileVectorizedFloat32Expression(instructions, lambda.child0, [vector]);
+    return true;
+  }
+
+  compileSimdZip(
+    instructions: WasmInstructions,
+    arguments_: readonly FunctionalCallArgument[],
+    environment: FunctionalEnvironment,
+  ): boolean {
+    const combine = this.virtualLambda(arguments_[0]!.node, environment);
+    if (combine === undefined) return false;
+    const outerLambda = this.node(combine.node);
+    if (outerLambda.tag !== FunctionalCoreTag.Lambda) return false;
+    const innerLambda = this.node(outerLambda.child0);
+    if (
+      innerLambda.tag !== FunctionalCoreTag.Lambda ||
+      !this.canVectorizeFloat32Expression(innerLambda.child0, 2)
+    ) return false;
+    this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
+    const left = instructions.addLocal(WasmValueType.V128);
+    instructions.localSet(left);
+    this.compileF32x4Expression(instructions, arguments_[2]!.node, environment);
+    const right = instructions.addLocal(WasmValueType.V128);
+    instructions.localSet(right);
+    this.compileVectorizedFloat32Expression(
+      instructions,
+      innerLambda.child0,
+      [right, left],
+    );
+    return true;
+  }
+
+  canVectorizeFloat32Expression(nodeIndex: number, parameterCount: number): boolean {
+    const node = this.node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Float32) return true;
+    if (node.tag === FunctionalCoreTag.Local) return node.payload < parameterCount;
+    if (node.tag === FunctionalCoreTag.Unary) {
+      return (node.payload === FunctionalUnaryOperator.NegateFloat32 ||
+        node.payload === FunctionalUnaryOperator.SquareRootFloat32) &&
+        this.canVectorizeFloat32Expression(node.child0, parameterCount);
+    }
+    return node.tag === FunctionalCoreTag.Binary &&
+      numericOperatorGroup(node.payload) === "float-32" &&
+      !isComparisonOperator(node.payload) &&
+      this.canVectorizeFloat32Expression(node.child0, parameterCount) &&
+      this.canVectorizeFloat32Expression(node.child1, parameterCount);
+  }
+
+  compileVectorizedFloat32Expression(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    parameters: readonly number[],
+  ): void {
+    const node = this.node(nodeIndex);
+    if (node.tag === FunctionalCoreTag.Float32) {
+      instructions.f32Const(float32FromBits(node.payload));
+      instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
+      return;
+    }
+    if (node.tag === FunctionalCoreTag.Local) {
+      const parameter = parameters[node.payload];
+      if (parameter === undefined) {
+        throw new Error(
+          `functional SIMD expression at core node ${nodeIndex} omitted vector parameter depth ${node.payload}`,
+        );
+      }
+      instructions.localGet(parameter);
+      return;
+    }
+    if (node.tag === FunctionalCoreTag.Unary) {
+      this.compileVectorizedFloat32Expression(instructions, node.child0, parameters);
+      instructions.simd(
+        node.payload === FunctionalUnaryOperator.NegateFloat32
+          ? FunctionalWasmSimdOpcode.F32x4Negate
+          : FunctionalWasmSimdOpcode.F32x4SquareRoot,
+      );
+      return;
+    }
+    if (node.tag === FunctionalCoreTag.Binary) {
+      this.compileVectorizedFloat32Expression(instructions, node.child0, parameters);
+      this.compileVectorizedFloat32Expression(instructions, node.child1, parameters);
+      const opcode = simdFloat32Operator(node.payload);
+      if (opcode === undefined) {
+        throw new Error(
+          `functional SIMD expression at core node ${nodeIndex} has unsupported operator ${node.payload}`,
+        );
+      }
+      instructions.simd(opcode);
+      return;
+    }
+    throw new Error(
+      `functional SIMD expression at core node ${nodeIndex} has unsupported tag ${node.tag}`,
+    );
+  }
+
+  float32CombineOperator(
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): number | undefined {
+    const combine = this.virtualLambda(nodeIndex, environment);
+    if (combine === undefined) return undefined;
+    const outerLambda = this.node(combine.node);
+    if (outerLambda.tag !== FunctionalCoreTag.Lambda) return undefined;
+    const innerLambda = this.node(outerLambda.child0);
+    if (innerLambda.tag !== FunctionalCoreTag.Lambda) return undefined;
+    const body = this.node(innerLambda.child0);
+    if (
+      body.tag !== FunctionalCoreTag.Binary ||
+      numericOperatorGroup(body.payload) !== "float-32" ||
+      isComparisonOperator(body.payload)
+    ) return undefined;
+    const left = this.node(body.child0);
+    const right = this.node(body.child1);
+    return left.tag === FunctionalCoreTag.Local && left.payload === 1 &&
+        right.tag === FunctionalCoreTag.Local && right.payload === 0
+      ? body.payload
+      : undefined;
+  }
+
+  namedApplication(nodeIndex: number): NamedApplication | undefined {
+    const reverseArguments: FunctionalCallArgument[] = [];
+    let baseNode = nodeIndex;
+    let node = this.node(baseNode);
+    while (node.tag === FunctionalCoreTag.Apply) {
+      reverseArguments.push({ node: node.child1, evaluationMode: node.evaluationMode });
+      baseNode = node.child0;
+      node = this.node(baseNode);
+    }
+    if (node.tag !== FunctionalCoreTag.Global) return undefined;
+    const definition = this.#module.definitionNames[node.payload];
+    if (definition === undefined) return undefined;
+    return { definition, arguments: Object.freeze(reverseArguments.reverse()) };
+  }
+
+  emitExtractF32x4Lane(
+    instructions: WasmInstructions,
+    vector: number,
+    lane: number,
+  ): void {
+    instructions.localGet(vector);
+    instructions.simd(FunctionalWasmSimdOpcode.F32x4ExtractLane, lane);
   }
 
   compileFloat64Expression(
@@ -4218,6 +4664,10 @@ class FunctionalWasmCompiler {
         instructions.localGet(0);
         instructions.i64Load(source.byteOffset);
         return;
+      case "v128-f32x4":
+        throw new Error(
+          `functional WASM attempted to box an internal F32x4 local ${source.index} outside a vector boundary`,
+        );
       case "virtual-lambda": {
         const lambda = this.node(source.node);
         if (lambda.tag !== FunctionalCoreTag.Lambda) {
@@ -4455,6 +4905,44 @@ class FunctionalWasmCompiler {
     instructions.emit(0xad);
   }
 
+  emitBoxF32x4(instructions: WasmInstructions): void {
+    const vector = instructions.addLocal(WasmValueType.V128);
+    instructions.localSet(vector);
+    const fields: ValueSource[] = [];
+    for (let lane = 0; lane < 4; lane += 1) {
+      this.emitExtractF32x4Lane(instructions, vector, lane);
+      this.emitBoxFloat32(instructions);
+      const field = instructions.addLocal(WasmValueType.I64);
+      instructions.localSet(field);
+      fields.push({ kind: "i64-local", index: field });
+    }
+    this.emitConstructor(
+      instructions,
+      this.requiredConstructorIndex(FUNCTIONAL_F32X4_CONSTRUCTOR_NAME),
+      fields,
+    );
+  }
+
+  emitBoxMask32x4(instructions: WasmInstructions): void {
+    const vector = instructions.addLocal(WasmValueType.V128);
+    instructions.localSet(vector);
+    const fields: ValueSource[] = [];
+    for (let lane = 0; lane < 4; lane += 1) {
+      instructions.localGet(vector);
+      instructions.simd(FunctionalWasmSimdOpcode.I32x4ExtractLane, lane);
+      instructions.emit(0x45, 0x45);
+      this.emitEncodeBoolean(instructions);
+      const field = instructions.addLocal(WasmValueType.I64);
+      instructions.localSet(field);
+      fields.push({ kind: "i64-local", index: field });
+    }
+    this.emitConstructor(
+      instructions,
+      this.requiredConstructorIndex(FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME),
+      fields,
+    );
+  }
+
   emitBoxFloat64(instructions: WasmInstructions): void {
     const value = instructions.addLocal(WasmValueType.F64);
     instructions.localSet(value);
@@ -4479,6 +4967,44 @@ class FunctionalWasmCompiler {
   emitUnboxFloat32(instructions: WasmInstructions): void {
     instructions.emit(0xa7);
     instructions.f32Load(OBJECT_HEADER_BYTE_LENGTH);
+  }
+
+  emitUnboxF32x4(instructions: WasmInstructions): void {
+    instructions.emit(0xa7);
+    const pointer = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(pointer);
+    for (let lane = 0; lane < 4; lane += 1) {
+      instructions.localGet(pointer);
+      instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH + lane * VALUE_BYTE_LENGTH);
+      this.emitUnboxFloat32(instructions);
+      if (lane === 0) instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
+      else instructions.simd(FunctionalWasmSimdOpcode.F32x4ReplaceLane, lane);
+    }
+  }
+
+  emitUnboxMask32x4(instructions: WasmInstructions): void {
+    instructions.emit(0xa7);
+    const pointer = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(pointer);
+    for (let lane = 0; lane < 4; lane += 1) {
+      instructions.localGet(pointer);
+      instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH + lane * VALUE_BYTE_LENGTH);
+      this.emitDecodeBoolean(instructions);
+      instructions.i32Const(-1);
+      instructions.emit(0x6c);
+      if (lane === 0) instructions.simd(FunctionalWasmSimdOpcode.I32x4Splat);
+      else instructions.simd(FunctionalWasmSimdOpcode.I32x4ReplaceLane, lane);
+    }
+  }
+
+  requiredConstructorIndex(name: string): number {
+    const constructor = this.#module.constructorNames.indexOf(name);
+    if (constructor >= 0) return constructor;
+    throw new Error(
+      `functional SIMD module omitted constructor ${
+        JSON.stringify(name)
+      } among ${this.#module.constructorCount} constructors`,
+    );
   }
 
   emitUnboxFloat64(instructions: WasmInstructions): void {

@@ -4,12 +4,17 @@ import {
   type GpuFunctionalModule,
 } from "./compiler_module.ts";
 import { compileFunctionalWasmArtifact, type FunctionalWasmArtifact } from "./wasm_codegen.ts";
+import { validateFunctionalWasmSimdMode } from "./wasm_backend_plan.ts";
 import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
 import { compileFunctionalWasmGc } from "./wasm_gc_codegen.ts";
 
 const MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS = 64;
 
 const wasmArtifactsByModule = new WeakMap<
+  GpuFunctionalModule,
+  Promise<FunctionalWasmArtifact>
+>();
+const simdWasmArtifactsByModule = new WeakMap<
   GpuFunctionalModule,
   Promise<FunctionalWasmArtifact>
 >();
@@ -41,6 +46,7 @@ export async function compileFunctionalModuleToWasm(
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("functional WASM compilation options must be an object");
   }
+  validateFunctionalWasmSimdMode(options.simd);
   const backend = options.backend ?? "linear-memory";
   if (backend !== "linear-memory" && backend !== "wasm-gc") {
     throw new TypeError(
@@ -50,14 +56,22 @@ export async function compileFunctionalModuleToWasm(
     );
   }
   if (backend === "wasm-gc") {
-    if (options.storageCore !== undefined || options.ownedTypeExports !== undefined) {
+    if (
+      options.storageCore !== undefined || options.ownedTypeExports !== undefined ||
+      options.simd !== undefined
+    ) {
       throw new TypeError(
-        "functional WasmGC compilation does not accept linear-memory storage options",
+        "functional WasmGC compilation does not accept linear-memory storage or SIMD options",
       );
     }
     return (await cachedFunctionalWasmGcArtifact(module)).bytes.slice();
   }
-  if (options.storageCore !== undefined || options.ownedTypeExports !== undefined) {
+  const customStorage = options.storageCore !== undefined ||
+    options.ownedTypeExports !== undefined;
+  if (options.simd === "wasm-simd" && !customStorage) {
+    return (await cachedFunctionalSimdWasmArtifact(module)).bytes.slice();
+  }
+  if (customStorage) {
     return compileFunctionalWasmArtifact(
       module,
       await module.readCoreNodes(),
@@ -68,83 +82,68 @@ export async function compileFunctionalModuleToWasm(
   return (await cachedFunctionalWasmArtifact(module)).bytes.slice();
 }
 
+async function cachedFunctionalSimdWasmArtifact(
+  module: GpuFunctionalModule,
+): Promise<FunctionalWasmArtifact> {
+  return await cachedModuleValue(
+    simdWasmArtifactsByModule,
+    module,
+    () =>
+      module.readCoreNodes().then((nodes) =>
+        compileFunctionalWasmArtifact(module, nodes, false, { simd: "wasm-simd" })
+      ),
+  );
+}
+
 export async function cachedFunctionalWasmGcArtifact(
   module: GpuFunctionalModule,
 ): Promise<{
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly nodes: readonly FunctionalCoreNode[];
 }> {
-  const cached = wasmGcArtifactsByModule.get(module);
-  if (cached !== undefined) return await cached;
-  const compilation = module.readCoreNodes().then((nodes) => ({
-    bytes: compileFunctionalWasmGc(module, nodes),
-    nodes,
-  }));
-  wasmGcArtifactsByModule.set(module, compilation);
-  try {
-    return await compilation;
-  } catch (error) {
-    if (wasmGcArtifactsByModule.get(module) === compilation) {
-      wasmGcArtifactsByModule.delete(module);
-    }
-    throw error;
-  }
+  return await cachedModuleValue(
+    wasmGcArtifactsByModule,
+    module,
+    () =>
+      module.readCoreNodes().then((nodes) => ({
+        bytes: compileFunctionalWasmGc(module, nodes),
+        nodes,
+      })),
+  );
 }
 
 export async function cachedFunctionalWasmArtifact(
   module: GpuFunctionalModule,
 ): Promise<FunctionalWasmArtifact> {
-  const cached = wasmArtifactsByModule.get(module);
-  if (cached !== undefined) return await cached;
-  const compilation = module.readCoreNodes().then((nodes) =>
-    compileFunctionalWasmArtifact(module, nodes)
+  return await cachedModuleValue(
+    wasmArtifactsByModule,
+    module,
+    () => module.readCoreNodes().then((nodes) => compileFunctionalWasmArtifact(module, nodes)),
   );
-  wasmArtifactsByModule.set(module, compilation);
-  try {
-    return await compilation;
-  } catch (error) {
-    if (wasmArtifactsByModule.get(module) === compilation) {
-      wasmArtifactsByModule.delete(module);
-    }
-    throw error;
-  }
 }
 
 export async function cachedExecutableWasm(
   module: GpuFunctionalModule,
 ): Promise<WebAssembly.Module> {
-  const cached = executableWasmByModule.get(module);
-  if (cached !== undefined) return await cached;
-  const compilation = cachedFunctionalWasmArtifact(module).then((artifact) =>
-    new WebAssembly.Module(artifact.bytes)
+  return await cachedModuleValue(
+    executableWasmByModule,
+    module,
+    () =>
+      cachedFunctionalWasmArtifact(module).then((artifact) =>
+        new WebAssembly.Module(artifact.bytes)
+      ),
   );
-  executableWasmByModule.set(module, compilation);
-  try {
-    return await compilation;
-  } catch (error) {
-    if (executableWasmByModule.get(module) === compilation) {
-      executableWasmByModule.delete(module);
-    }
-    throw error;
-  }
 }
 
 export async function fuelInstrumentedWasm(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
 ): Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }> {
-  const cached = instrumentedWasmByModule.get(module);
-  if (cached !== undefined) return await cached;
-  const compilation = sharedFuelInstrumentedWasm(module, nodes);
-  instrumentedWasmByModule.set(module, compilation);
-  try {
-    return await compilation;
-  } catch (error) {
-    if (instrumentedWasmByModule.get(module) === compilation) {
-      instrumentedWasmByModule.delete(module);
-    }
-    throw error;
-  }
+  return await cachedModuleValue(
+    instrumentedWasmByModule,
+    module,
+    () => sharedFuelInstrumentedWasm(module, nodes),
+  );
 }
 
 async function sharedFuelInstrumentedWasm(
@@ -186,34 +185,28 @@ async function resolvedCoreFingerprint(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
 ): Promise<string> {
-  const cached = resolvedCoreFingerprintByModule.get(module);
-  if (cached !== undefined) return await cached;
-  const fingerprint = sha256(JSON.stringify({
-    format: 1,
-    nodes,
-    definitionNames: module.definitionNames,
-    definitionRoots: module.definitionRoots,
-    constructorNames: module.constructorNames,
-    constructorArities: module.constructorArities,
-    entryDefinition: module.entryDefinition,
-    entryType: module.entryType,
-    entryEffects: module.entryEffects,
-    typeDeclarations: completeFunctionalTypeDeclarations(module),
-    hostCapabilities: module.hostCapabilities,
-    hostDefinitions: module.hostDefinitions,
-    wasmExports: module.wasmExports,
-    sources: module.sources,
-    evaluationProfile: module.evaluationProfile,
-  }));
-  resolvedCoreFingerprintByModule.set(module, fingerprint);
-  try {
-    return await fingerprint;
-  } catch (error) {
-    if (resolvedCoreFingerprintByModule.get(module) === fingerprint) {
-      resolvedCoreFingerprintByModule.delete(module);
-    }
-    throw error;
-  }
+  return await cachedModuleValue(
+    resolvedCoreFingerprintByModule,
+    module,
+    () =>
+      sha256(JSON.stringify({
+        format: 1,
+        nodes,
+        definitionNames: module.definitionNames,
+        definitionRoots: module.definitionRoots,
+        constructorNames: module.constructorNames,
+        constructorArities: module.constructorArities,
+        entryDefinition: module.entryDefinition,
+        entryType: module.entryType,
+        entryEffects: module.entryEffects,
+        typeDeclarations: completeFunctionalTypeDeclarations(module),
+        hostCapabilities: module.hostCapabilities,
+        hostDefinitions: module.hostDefinitions,
+        wasmExports: module.wasmExports,
+        sources: module.sources,
+        evaluationProfile: module.evaluationProfile,
+      })),
+  );
 }
 
 export async function functionalResolvedCoreFingerprint(
@@ -226,4 +219,21 @@ async function sha256(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function cachedModuleValue<Value>(
+  cache: WeakMap<GpuFunctionalModule, Promise<Value>>,
+  module: GpuFunctionalModule,
+  create: () => Promise<Value>,
+): Promise<Value> {
+  const cached = cache.get(module);
+  if (cached !== undefined) return await cached;
+  const pending = create();
+  cache.set(module, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    if (cache.get(module) === pending) cache.delete(module);
+    throw error;
+  }
 }

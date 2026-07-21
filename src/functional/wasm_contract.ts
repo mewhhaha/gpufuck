@@ -10,9 +10,11 @@ export interface FunctionalWasmOwnedTypeExport {
 }
 
 export type FunctionalWasmBackend = "linear-memory" | "wasm-gc";
+export type FunctionalWasmSimdMode = "portable-scalar" | "wasm-simd";
 
 export interface FunctionalWasmCompilationOptions {
   readonly backend?: FunctionalWasmBackend;
+  readonly simd?: FunctionalWasmSimdMode;
   readonly storageCore?: FunctionalStorageCoreProgram;
   readonly ownedTypeExports?: readonly FunctionalWasmOwnedTypeExport[];
 }

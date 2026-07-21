@@ -250,6 +250,7 @@ export type {
   FunctionalWasmRuntimeDiagnosticCode,
   FunctionalWasmRuntimeErrorDetails,
   FunctionalWasmRuntimeFaultKind,
+  FunctionalWasmSimdMode,
 } from "./src/functional/wasm_contract.ts";
 export {
   appendFunctionalBitBuffers,
@@ -277,6 +278,16 @@ export {
   functionalThunkType,
   surface,
 } from "./src/functional/surface_builder.ts";
+export {
+  FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
+  FUNCTIONAL_F32X4_TYPE_NAME,
+  FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+  FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+  FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
+  FUNCTIONAL_MASK32X4_TYPE_NAME,
+  functionalF32x4,
+  FunctionalF32x4Definition,
+} from "./src/functional/fixed_vector.ts";
 export { elaborateFunctionalRecursiveGroups } from "./src/functional/recursive_groups.ts";
 export {
   type FunctionalExistentialType,

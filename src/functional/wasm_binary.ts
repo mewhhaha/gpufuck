@@ -8,6 +8,7 @@ export const WasmValueType = {
   I64: 0x7e,
   F32: 0x7d,
   F64: 0x7c,
+  V128: 0x7b,
 } as const;
 
 export const FunctionalWasmFunctionType = Object.freeze(
@@ -69,6 +70,12 @@ export class WasmInstructions {
 
   emit(...bytes: number[]): void {
     this.bytes.push(...bytes);
+  }
+
+  simd(opcode: number, ...immediateBytes: number[]): void {
+    this.emit(0xfd);
+    this.unsigned(opcode);
+    this.emit(...immediateBytes);
   }
 
   unsigned(value: number): void {

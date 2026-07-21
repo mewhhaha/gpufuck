@@ -54,8 +54,8 @@ multiple languages can describe it without importing one frontend's syntax or po
 - Replacing source-language ownership, effect, or coherence checking.
 - Providing GHC, rustc, OCaml, or Zig compatibility from the target alone.
 - Dynamic Wasm linking or a public relocatable Wasm object format.
-- Mandating a tracing garbage collector, runtime borrow checker, unrestricted raw memory, or native
-  SIMD in Functional Core.
+- Mandating a tracing garbage collector, runtime borrow checker, unrestricted raw memory, or SIMD
+  primitives in Functional Core.
 - Impredicative inference, full dependent types, or unrestricted compile-time execution.
 - Executing generated Wasm on the GPU.
 
@@ -630,11 +630,12 @@ Backend analyses run in an order that exposes facts to later choices:
 1. Determine entry and explicit export signatures.
 2. Prove bounded scalar constants and prune unreachable conditional branches and definitions.
 3. Recognize function shapes, saturation, recursion, tail calls, and numeric folds.
-4. Compute lexical captures and environment layouts.
-5. Propagate lambda sets through values, calls, branches, recursion, and constructor fields.
-6. Select direct workers, finite direct dispatch, or general closures.
-7. Determine strict/lazy representation and runtime facilities required.
-8. Emit functions, runtime support, memory/table sections, imports, exports, and fault evidence.
+4. Recognize canonical fixed-vector operations and vectorizable higher-order expressions.
+5. Compute lexical captures and environment layouts.
+6. Propagate lambda sets through values, calls, branches, recursion, and constructor fields.
+7. Select direct workers, finite direct dispatch, or general closures.
+8. Determine strict/lazy representation and runtime facilities required.
+9. Emit functions, runtime support, memory/table sections, imports, exports, and fault evidence.
 
 Analysis consumes resolved indices. No pass performs string-based source name resolution.
 Constructing `FunctionalWasmBackendPlan` is the boundary between analysis and emission. It carries
@@ -675,6 +676,26 @@ workers:
 
 Boxing occurs at lazy, aggregate, higher-order, or public tagged-value boundaries. These decisions
 are made from checked Core types and evaluation modes, never from source spelling.
+
+#### Fixed-vector representation
+
+`fixed_vector_contract.ts` defines the reserved names shared by the surface library and backend.
+`fixed_vector.ts` defines `F32x4` and its mask as ordinary immutable four-field ADTs plus canonical
+surface definitions. Scalar inference, GPU evaluation, and default Wasm emission therefore need no
+vector-specific Core tags and provide the authoritative fallback semantics.
+
+The linear-memory backend can opt into native Wasm SIMD. In a fully strict module it recognizes the
+canonical arithmetic, comparison, selection, lane, reduction, `map`, `zip`, and `fold` definitions.
+Recognized chains remain as `v128` expressions, and eligible captureless single-vector functions
+receive private `v128 -> v128` workers. Boxing happens only when a vector reaches ordinary Core
+code. A module containing any lazy binding boundary conservatively retains scalar lowering because
+constructing a native vector would otherwise force all four lanes.
+
+The frontend still owns loop-vectorization legality and profitability. This backend recognition is a
+representation choice for operations the frontend has already selected; it does not infer aliasing,
+iteration counts, or floating-point reassociation from source loops. Native SIMD is also an explicit
+artifact option because Wasm engines without SIMD must be able to consume the portable scalar
+artifact.
 
 ### 10.4 Lazy call-by-need representation
 
@@ -1193,6 +1214,22 @@ emission instead of silently falling back to linear memory.
 **Revisit when:** host component boundaries and engine availability justify a shared ABI between the
 two memory models.
 
+### 14.13 Fixed vectors are a library contract with optional native lowering
+
+**Decision:** fixed `F32x4` values and masks are canonical immutable ADTs, while native Wasm SIMD is
+an explicit backend representation option for strict modules.
+
+**Why:** frontends and the GPU evaluator retain one portable semantic program, engines without SIMD
+retain a correct scalar artifact, and the Wasm backend can still keep recognized vector chains and
+workers unboxed.
+
+**Cost:** frontends must select vectorized operations explicitly, only the canonical four-lane
+Float32 family is recognized today, and any lazy binding boundary disables native lowering for the
+module.
+
+**Revisit when:** measurements justify more lane shapes or a typed vector IR shared by several
+backends without weakening portable fallback behavior.
+
 ## 15. Limits and safety properties
 
 Current structural limits include 1 MiB of source evidence, 65,536 surface nodes, semantic depth
@@ -1275,6 +1312,7 @@ allocations, and thunk forces separately.
 | Comptime                  | `src/functional/comptime.ts`, `comptime_constant.ts`, `comptime_ir.ts`, `partial_evaluation.ts`             |
 | Compiled module/evaluator | `src/functional/compiler_module.ts`, `evaluator.ts`                                                         |
 | Host contracts/runtime    | `src/functional/host_contract.ts`, `host_specialization.ts`, `opaque_resource.ts`, `bit_buffer.ts`          |
+| Fixed vectors             | `src/functional/fixed_vector_contract.ts`, `fixed_vector.ts`, `wasm_simd.ts`, `wasm_codegen.ts`             |
 | Wasm analyses             | `src/functional/wasm_backend_plan.ts`, `wasm_function_analysis.ts`, `wasm_capture_analysis.ts`              |
 | Wasm emission/runtime     | `src/functional/wasm_codegen.ts`, `wasm_binary.ts`, `wasm_structural_equality.ts`, `wasm_runtime_binary.ts` |
 | Wasm boundary/execution   | `src/functional/wasm_component_boundary.ts`, `wasm_value_codec.ts`, `wasm_execution.ts`                     |

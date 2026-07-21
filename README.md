@@ -27,6 +27,7 @@ The portable language includes:
 - `i32`, `i64`, `f32`, `f64`, portable f64-backed whole numbers, Boolean, unit, text and bytes,
   tuples, and nominal algebraic data;
 - immutable bindings, closures, higher-order functions, recursion, and pattern matching;
+- a scalar-correct fixed `F32x4` library with optional native Wasm SIMD lowering;
 - Hindley–Milner inference, indexed constructor results, and annotated predicative rank-N
   parameters;
 - typed static modules, incremental compilation, required compile-time execution, and optional
@@ -499,6 +500,55 @@ it. `arena.reset()` must run from the innermost arena outward and restores both 
 The older numeric scratch-mark functions remain as compatibility wrappers over the same arena
 implementation.
 
+## Fixed vectors and Wasm SIMD
+
+Frontends can lower source vector operations to the canonical immutable `F32x4` library. Include its
+declarations and definitions in the surface module, then use `functionalF32x4` to build exact lane
+operations:
+
+```ts
+const encoded = buildFunctionalSurfaceModule(
+  [
+    ...FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+    {
+      name: "main",
+      parameters: [],
+      annotation: { kind: "float-32" },
+      body: functionalF32x4.reduceAdd(
+        functionalF32x4.multiply(
+          functionalF32x4.make([
+            surface.float32(1),
+            surface.float32(2),
+            surface.float32(3),
+            surface.float32(4),
+          ]),
+          functionalF32x4.splat(surface.float32(2)),
+        ),
+      ),
+    },
+  ],
+  FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+  "main",
+  0,
+  { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+);
+
+const wasmBytes = await compileFunctionalModuleToWasm(compilation.module, {
+  simd: "wasm-simd",
+});
+```
+
+The default, or `simd: "portable-scalar"`, preserves the same API as ordinary algebraic values and
+runs on engines without Wasm SIMD. `simd: "wasm-simd"` recognizes arithmetic, comparisons, masks,
+selection, lane access, reductions, and vectorizable `map`, `zip`, and `fold` expressions. Strict
+vector chains and eligible captureless vector functions stay in `v128` locals and workers; values
+are boxed only when they cross an ordinary value boundary.
+
+Vectorization policy remains a frontend decision: a frontend decides whether a source loop may be
+rewritten as four-lane operations. The backend selects the scalar or native representation without
+changing checked Core semantics. A lazy boundary conservatively disables native SIMD for that module
+so an optimization cannot force an otherwise unused lane.
+
 ## Wasm boundary
 
 Direct execution accepts one concrete first-order argument and result, or an `Init -> result` entry.
@@ -596,8 +646,9 @@ Important current limits include:
 - optional Wasm constant proofs preserve the runtime expression after 4,096 node inspections;
 - the type system is HM plus indexed results and annotated predicative rank-N boundaries;
 - native existential constructors, full dependent types, and impredicative inference are absent;
-- raw memory intrinsics, native SIMD, a runtime borrow checker, and a mandatory tracing collector
-  are outside Functional Core;
+- unrestricted raw memory and SIMD primitives, a runtime borrow checker, and a mandatory tracing
+  collector are outside Functional Core; the fixed `F32x4` library is an immutable ADT convention
+  with opt-in Wasm SIMD lowering;
 - the default Wasm backend uses compact scalars or explicit linear memory; the opt-in WasmGC backend
   accepts pure closed modules and excludes host integration, public arguments, text, bytes, and
   owned Storage Core exports;

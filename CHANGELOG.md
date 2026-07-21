@@ -5,6 +5,9 @@ All notable changes to gpufuck are documented here. The project follows
 
 ## Unreleased
 
+- Added a portable immutable `F32x4` library and opt-in native Wasm SIMD lowering for arithmetic,
+  masks, lane operations, reductions, vectorizable higher-order operations, and private unboxed
+  vector workers, with automatic scalar fallback at lazy boundaries.
 - Expanded the experimental Haskell frontend with transparent type synonyms, `newtype`, Unicode
   `Char` and `String` literals, predicative rank-N signatures, and mutually recursive local groups.
 - Added an explicit, non-default WasmGC backend for pure closed Functional Core modules, including

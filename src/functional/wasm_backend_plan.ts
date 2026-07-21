@@ -34,6 +34,7 @@ export function createFunctionalWasmBackendPlan(
   instrumentedFuel: boolean,
   options: FunctionalWasmCompilationOptions,
 ): FunctionalWasmBackendPlan {
+  validateFunctionalWasmSimdMode(options.simd);
   const captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes);
   const constantAnalysis = new FunctionalWasmConstantAnalysis(nodes);
   const storage = createFunctionalStoragePlan(module, nodes, captureAnalysis, {
@@ -69,6 +70,21 @@ export function createFunctionalWasmBackendPlan(
     instrumentedFuel,
     options,
   });
+}
+
+export function validateFunctionalWasmSimdMode(
+  simd: FunctionalWasmCompilationOptions["simd"],
+): void {
+  if (
+    simd !== undefined && simd !== "portable-scalar" &&
+    simd !== "wasm-simd"
+  ) {
+    throw new TypeError(
+      `functional WASM SIMD mode must be portable-scalar or wasm-simd; received ${
+        JSON.stringify(simd)
+      }`,
+    );
+  }
 }
 
 function validateOwnedTypeExports(
