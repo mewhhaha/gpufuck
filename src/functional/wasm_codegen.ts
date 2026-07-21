@@ -4152,9 +4152,11 @@ class FunctionalWasmCompiler {
     instructions.localGet(pointer);
     instructions.i32Const(payload);
     instructions.i32Store(4);
-    instructions.localGet(pointer);
-    instructions.i32Const(valueCount);
-    instructions.i32Store(8);
+    if (valueCount > 0) {
+      instructions.localGet(pointer);
+      instructions.i32Const(valueCount);
+      instructions.i32Store(8);
+    }
     if (this.#ownedRuntimeEnabled) {
       instructions.localGet(pointer);
       instructions.i32Const(1);
