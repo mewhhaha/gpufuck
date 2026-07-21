@@ -5,6 +5,11 @@ All notable changes to gpufuck are documented here. The project follows
 
 ## Unreleased
 
+- Expanded the experimental Haskell frontend with transparent type synonyms, `newtype`, Unicode
+  `Char` and `String` literals, predicative rank-N signatures, and mutually recursive local groups.
+- Added an explicit, non-default WasmGC backend for pure closed Functional Core modules, including
+  typed algebraic values, closures, shared lazy thunks, recursive closure cycles, wide numerics,
+  bounded structured-result decoding, and blackhole diagnostics.
 - Added conservative unique-ownership resolution for complete immutable Storage Core traces,
   including transitive last-use releases, escaping graphs, and exact-size reuse planning.
 - Added resolved-Core uniqueness and path-liveness analysis that reuses compatible strict

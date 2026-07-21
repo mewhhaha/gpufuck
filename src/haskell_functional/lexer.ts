@@ -1,7 +1,13 @@
 import type { FunctionalSpan } from "../functional/abi.ts";
 import { HaskellFunctionalSyntaxError } from "./diagnostic.ts";
 
-export type HaskellFunctionalTokenKind = "identifier" | "integer" | "symbol" | "eof";
+export type HaskellFunctionalTokenKind =
+  | "identifier"
+  | "integer"
+  | "character"
+  | "string"
+  | "symbol"
+  | "eof";
 
 export interface HaskellFunctionalToken {
   readonly kind: HaskellFunctionalTokenKind;
@@ -33,6 +39,7 @@ const oneCharacterSymbols = new Set([
   ">",
   "_",
   "\\",
+  ".",
 ]);
 
 export function lexHaskellFunctionalSource(source: string): readonly HaskellFunctionalToken[] {
@@ -98,6 +105,41 @@ export function lexHaskellFunctionalSource(source: string): readonly HaskellFunc
       while (offset < source.length && isDigit(source.charCodeAt(offset))) offset++;
       pushToken("integer", start, offset);
       continue;
+    }
+    if (codeUnit === 0x22 || codeUnit === 0x27) {
+      const delimiter = codeUnit;
+      let terminated = false;
+      offset++;
+      let escaped = false;
+      while (offset < source.length) {
+        const literalCodeUnit = source.charCodeAt(offset);
+        if (!escaped && literalCodeUnit === delimiter) {
+          offset++;
+          pushToken(delimiter === 0x22 ? "string" : "character", start, offset);
+          terminated = true;
+          break;
+        }
+        if (!escaped && (literalCodeUnit === 0x0a || literalCodeUnit === 0x0d)) {
+          throw new HaskellFunctionalSyntaxError(
+            byteOffsets.span(start, offset),
+            `Haskell ${
+              delimiter === 0x22 ? "string" : "character"
+            } literal cannot contain a newline.`,
+          );
+        }
+        if (!escaped && literalCodeUnit === 0x5c) {
+          escaped = true;
+          offset++;
+          continue;
+        }
+        escaped = false;
+        offset++;
+      }
+      if (terminated) continue;
+      throw new HaskellFunctionalSyntaxError(
+        byteOffsets.span(start, source.length),
+        `Haskell ${delimiter === 0x22 ? "string" : "character"} literal is unterminated.`,
+      );
     }
 
     const pair = source.slice(offset, offset + 2);

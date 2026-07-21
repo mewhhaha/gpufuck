@@ -16,6 +16,7 @@ export type {
   HaskellFunctionalRecordField,
   HaskellFunctionalRecordPatternField,
   HaskellFunctionalType,
+  HaskellFunctionalTypeAliasDeclaration,
   HaskellFunctionalTypeDeclaration,
   HaskellFunctionalTypeSignature,
 } from "./src/haskell_functional/ast.ts";

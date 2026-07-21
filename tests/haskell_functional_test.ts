@@ -4,6 +4,7 @@ import {
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
+  runFunctionalWasmGcModule,
 } from "../functional.ts";
 import {
   type LoweredHaskellFunctionalProgram,
@@ -123,6 +124,78 @@ Deno.test("resolves first-order Haskell instances into explicit dictionary evide
   deepStrictEqual(evaluation, { kind: "integer", value: 42 });
 });
 
+Deno.test("runs expanded Haskell frontend constructs through GPU compilation and WasmGC", async () => {
+  const evaluation = await evaluateExample("examples/haskell-functional/frontend.hs");
+
+  deepStrictEqual(evaluation, { kind: "integer", value: 42 });
+});
+
+Deno.test("preserves Unicode code points in Haskell character and string literals", async () => {
+  const evaluation = await evaluateExample("examples/haskell-functional/unicode.hs");
+
+  deepStrictEqual(evaluation, { kind: "integer", value: 42 });
+});
+
+Deno.test("reports recursive Haskell type synonyms with the expansion path", () => {
+  const frontend = lowerHaskellFunctionalSource(`module AliasCycle where
+type First = Second
+type Second = First
+gpuMain :: First
+gpuMain = 42
+`);
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /type synonyms form a cycle: First -> Second -> First/);
+});
+
+Deno.test("reports an unknown type referenced only by an unused Haskell synonym", () => {
+  const frontend = lowerHaskellFunctionalSource(`module UnknownAliasType where
+type Broken = Missing
+gpuMain = 42
+`);
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /Type synonym "Broken" references unknown type "Missing"/);
+});
+
+Deno.test("reports a Haskell newtype with more than one field", () => {
+  const frontend = lowerHaskellFunctionalSource(`module InvalidNewtype where
+newtype Pair = Pair Int Int
+gpuMain = 42
+`);
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(
+    frontend.diagnostics[0].message,
+    /Newtype "Pair" must have exactly one constructor and one field/,
+  );
+});
+
+Deno.test("reports unsupported Haskell string escapes at the literal span", () => {
+  const frontend = lowerHaskellFunctionalSource(String.raw`module InvalidEscape where
+gpuMain = "\q"
+`);
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /string literal contains unsupported escape \\q/);
+});
+
+Deno.test("reports repeated explicit Haskell type parameters", () => {
+  const frontend = lowerHaskellFunctionalSource(`module RepeatedForall where
+identity :: forall a a. a -> a
+identity value = value
+gpuMain = identity 42
+`);
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /forall repeats type parameter "a"/);
+});
+
 Deno.test("reports a constrained Haskell call with no matching instance", () => {
   const frontend = lowerHaskellFunctionalSource(`module Missing where
 class Equal a where
@@ -202,6 +275,12 @@ async function evaluateExample(
     ) {
       throw new Error(`Haskell example ${JSON.stringify(path)} returned ${evaluation.value.kind}.`);
     }
+    const wasmExecution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(
+      wasmExecution.value,
+      evaluation.value,
+      `${path} returned different GPU and WasmGC values`,
+    );
     return evaluation.value;
   } finally {
     compilation.module.destroy();

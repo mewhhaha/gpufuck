@@ -5,6 +5,7 @@ import {
 } from "./compiler_module.ts";
 import { compileFunctionalWasmArtifact, type FunctionalWasmArtifact } from "./wasm_codegen.ts";
 import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
+import { compileFunctionalWasmGc } from "./wasm_gc_codegen.ts";
 
 const MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS = 64;
 
@@ -15,6 +16,13 @@ const wasmArtifactsByModule = new WeakMap<
 const executableWasmByModule = new WeakMap<
   GpuFunctionalModule,
   Promise<WebAssembly.Module>
+>();
+const wasmGcArtifactsByModule = new WeakMap<
+  GpuFunctionalModule,
+  Promise<{
+    readonly bytes: Uint8Array<ArrayBuffer>;
+    readonly nodes: readonly FunctionalCoreNode[];
+  }>
 >();
 const instrumentedWasmByModule = new WeakMap<
   GpuFunctionalModule,
@@ -33,6 +41,22 @@ export async function compileFunctionalModuleToWasm(
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("functional WASM compilation options must be an object");
   }
+  const backend = options.backend ?? "linear-memory";
+  if (backend !== "linear-memory" && backend !== "wasm-gc") {
+    throw new TypeError(
+      `functional WASM backend must be linear-memory or wasm-gc; received ${
+        JSON.stringify(backend)
+      }`,
+    );
+  }
+  if (backend === "wasm-gc") {
+    if (options.storageCore !== undefined || options.ownedTypeExports !== undefined) {
+      throw new TypeError(
+        "functional WasmGC compilation does not accept linear-memory storage options",
+      );
+    }
+    return (await cachedFunctionalWasmGcArtifact(module)).bytes.slice();
+  }
   if (options.storageCore !== undefined || options.ownedTypeExports !== undefined) {
     return compileFunctionalWasmArtifact(
       module,
@@ -42,6 +66,29 @@ export async function compileFunctionalModuleToWasm(
     ).bytes.slice();
   }
   return (await cachedFunctionalWasmArtifact(module)).bytes.slice();
+}
+
+export async function cachedFunctionalWasmGcArtifact(
+  module: GpuFunctionalModule,
+): Promise<{
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly nodes: readonly FunctionalCoreNode[];
+}> {
+  const cached = wasmGcArtifactsByModule.get(module);
+  if (cached !== undefined) return await cached;
+  const compilation = module.readCoreNodes().then((nodes) => ({
+    bytes: compileFunctionalWasmGc(module, nodes),
+    nodes,
+  }));
+  wasmGcArtifactsByModule.set(module, compilation);
+  try {
+    return await compilation;
+  } catch (error) {
+    if (wasmGcArtifactsByModule.get(module) === compilation) {
+      wasmGcArtifactsByModule.delete(module);
+    }
+    throw error;
+  }
 }
 
 export async function cachedFunctionalWasmArtifact(

@@ -1,7 +1,6 @@
 import type { FunctionalSpan } from "../functional/abi.ts";
 import type {
   HaskellFunctionalBinaryOperator,
-  HaskellFunctionalBinding,
   HaskellFunctionalCaseArm,
   HaskellFunctionalClassDeclaration,
   HaskellFunctionalConstructor,
@@ -14,6 +13,7 @@ import type {
   HaskellFunctionalRecordField,
   HaskellFunctionalRecordPatternField,
   HaskellFunctionalType,
+  HaskellFunctionalTypeAliasDeclaration,
   HaskellFunctionalTypeDeclaration,
   HaskellFunctionalTypeSignature,
 } from "./ast.ts";
@@ -104,7 +104,9 @@ class HaskellFunctionalParser {
   }
 
   private parseDeclaration(): HaskellFunctionalDeclaration {
-    if (this.checkText("data")) return this.parseTypeDeclaration();
+    if (this.checkText("data")) return this.parseTypeDeclaration("data");
+    if (this.checkText("newtype")) return this.parseTypeDeclaration("newtype");
+    if (this.checkText("type")) return this.parseTypeAliasDeclaration();
     if (this.checkText("class")) return this.parseClassDeclaration();
     if (this.checkText("instance")) return this.parseInstanceDeclaration();
     const name = this.expectLowerIdentifier("value name");
@@ -112,8 +114,10 @@ class HaskellFunctionalParser {
     return this.parseDefinition(name);
   }
 
-  private parseTypeDeclaration(): HaskellFunctionalTypeDeclaration {
-    const start = this.expectText("data");
+  private parseTypeDeclaration(
+    representation: HaskellFunctionalTypeDeclaration["representation"],
+  ): HaskellFunctionalTypeDeclaration {
+    const start = this.expectText(representation);
     const name = this.expectUpperIdentifier("type constructor name");
     const parameters: HaskellFunctionalToken[] = [];
     while (this.checkLowerIdentifier() && !this.checkText("where")) {
@@ -150,10 +154,27 @@ class HaskellFunctionalParser {
     }
     return {
       kind: "type",
+      representation,
       name: name.text,
       parameters: parameters.map((parameter) => parameter.text),
       constructors,
       span: combine(start.span, this.previous().span),
+    };
+  }
+
+  private parseTypeAliasDeclaration(): HaskellFunctionalTypeAliasDeclaration {
+    const start = this.expectText("type");
+    const name = this.expectUpperIdentifier("type synonym name");
+    const parameters: HaskellFunctionalToken[] = [];
+    while (this.checkLowerIdentifier()) parameters.push(this.advance());
+    this.expectText("=");
+    const target = this.parseType();
+    return {
+      kind: "type-alias",
+      name: name.text,
+      parameters: parameters.map((parameter) => parameter.text),
+      target,
+      span: combine(start.span, target.span),
     };
   }
 
@@ -214,27 +235,29 @@ class HaskellFunctionalParser {
   }
 
   private parseTypeSignature(name: HaskellFunctionalToken): HaskellFunctionalTypeSignature {
+    const quantifiedParameters = this.parseForallParameters();
     const constraints = [];
     const constraintStart = this.#position;
     const candidate = this.parseTypeApplication();
     if (this.consumeText("=>")) {
-      if (candidate.kind !== "named" || candidate.arguments.length !== 1) {
+      const parsedConstraints = constraintsFromType(candidate);
+      if (parsedConstraints === null) {
         throw this.syntax(
           name,
-          "Class constraints must apply one class to one type in this profile.",
+          "Class constraints must each apply one class to one type in this profile.",
         );
       }
-      const constrainedType = candidate.arguments[0];
-      if (constrainedType === undefined) throw new Error("Haskell constraint omitted its type.");
-      constraints.push({
-        className: candidate.name,
-        type: constrainedType,
-        span: candidate.span,
-      });
+      constraints.push(...parsedConstraints);
     } else {
       this.#position = constraintStart;
     }
-    const type = this.parseType();
+    const body = this.parseType();
+    const type: HaskellFunctionalType = quantifiedParameters.length === 0 ? body : {
+      kind: "forall",
+      parameters: quantifiedParameters.map((parameter) => parameter.text),
+      body,
+      span: combine(quantifiedParameters[0]?.span ?? body.span, body.span),
+    };
     return {
       kind: "signature",
       name: name.text,
@@ -393,6 +416,16 @@ class HaskellFunctionalParser {
   }
 
   private parseType(): HaskellFunctionalType {
+    const quantifiedParameters = this.parseForallParameters();
+    if (quantifiedParameters.length > 0) {
+      const body = this.parseType();
+      return {
+        kind: "forall",
+        parameters: quantifiedParameters.map((parameter) => parameter.text),
+        body,
+        span: combine(quantifiedParameters[0]?.span ?? body.span, body.span),
+      };
+    }
     const parameter = this.parseTypeApplication();
     if (!this.consumeText("->")) return parameter;
     const result = this.parseType();
@@ -441,6 +474,14 @@ class HaskellFunctionalParser {
 
     const name = this.expectKind("identifier", "type");
     if (name.text === "Int") return { kind: "integer", span: name.span };
+    if (name.text === "Char") return { kind: "character", span: name.span };
+    if (name.text === "String") {
+      return {
+        kind: "list",
+        value: { kind: "character", span: name.span },
+        span: name.span,
+      };
+    }
     if (name.text === "Bool") return { kind: "boolean", span: name.span };
     if (startsLowercase(name.text)) {
       return { kind: "parameter", name: name.text, span: name.span };
@@ -502,6 +543,27 @@ class HaskellFunctionalParser {
         throw this.syntax(integer, `Integer literal ${integer.text} is outside signed i32 range.`);
       }
       return { kind: "integer", value, span: integer.span };
+    }
+    if (this.checkKind("character")) {
+      const character = this.advance();
+      const values = decodeQuotedLiteral(character, "character");
+      const codePoints = [...values].map((value) => value.codePointAt(0));
+      if (codePoints.length !== 1 || codePoints[0] === undefined) {
+        throw this.syntax(character, "Haskell character literals must contain one character.");
+      }
+      return { kind: "character", value: codePoints[0], span: character.span };
+    }
+    if (this.checkKind("string")) {
+      const string = this.advance();
+      return {
+        kind: "string",
+        values: [...decodeQuotedLiteral(string, "string")].map((value) => {
+          const codePoint = value.codePointAt(0);
+          if (codePoint === undefined) throw new Error("Haskell string omitted a code point.");
+          return codePoint;
+        }),
+        span: string.span,
+      };
     }
     if (this.checkKind("identifier")) {
       const name = this.advance();
@@ -720,7 +782,7 @@ class HaskellFunctionalParser {
 
   private parseLetExpression(): HaskellFunctionalExpression {
     const start = this.expectText("let");
-    const bindings: HaskellFunctionalBinding[] = [];
+    const bindings: HaskellFunctionalDefinition[] = [];
     if (this.consumeText("{")) {
       while (!this.checkText("}")) {
         bindings.push(this.parseLetBinding());
@@ -749,17 +811,31 @@ class HaskellFunctionalParser {
     return { kind: "let", bindings, body, span: combine(start.span, body.span) };
   }
 
-  private parseLetBinding(): HaskellFunctionalBinding {
+  private parseLetBinding(): HaskellFunctionalDefinition {
     const name = this.expectLowerIdentifier("let binding name");
-    if (!this.checkText("=")) {
-      throw this.syntax(
-        this.current(),
-        "Local function bindings are outside this profile; bind an expression instead.",
-      );
+    return this.parseDefinition(name);
+  }
+
+  private parseForallParameters(): HaskellFunctionalToken[] {
+    if (!this.consumeText("forall")) return [];
+    const parameters: HaskellFunctionalToken[] = [];
+    const names = new Set<string>();
+    while (this.checkLowerIdentifier()) {
+      const parameter = this.advance();
+      if (names.has(parameter.text)) {
+        throw this.syntax(
+          parameter,
+          `Haskell forall repeats type parameter ${JSON.stringify(parameter.text)}.`,
+        );
+      }
+      names.add(parameter.text);
+      parameters.push(parameter);
     }
-    this.expectText("=");
-    const value = this.parseExpression();
-    return { name: name.text, value, span: combine(name.span, value.span) };
+    if (parameters.length === 0) {
+      throw this.syntax(this.current(), "Haskell forall requires at least one type parameter.");
+    }
+    this.expectText(".");
+    return parameters;
   }
 
   private startsTypeAtom(): boolean {
@@ -772,7 +848,7 @@ class HaskellFunctionalParser {
     if (this.atLayoutBoundary()) return false;
     if (
       this.checkKind("integer") || this.checkText("(") || this.checkText("[") ||
-      this.checkText("\\")
+      this.checkText("\\") || this.checkKind("character") || this.checkKind("string")
     ) return true;
     if (!this.checkKind("identifier")) return false;
     return !expressionTerminators.has(this.current().text);
@@ -886,6 +962,60 @@ class HaskellFunctionalParser {
 
 function combine(start: FunctionalSpan, end: FunctionalSpan): FunctionalSpan {
   return { startByte: start.startByte, endByte: end.endByte };
+}
+
+function constraintsFromType(
+  type: HaskellFunctionalType,
+): HaskellFunctionalTypeSignature["constraints"] | null {
+  if (type.kind === "named" && type.arguments.length === 1) {
+    const constrainedType = type.arguments[0];
+    if (constrainedType === undefined) throw new Error("Haskell constraint omitted its type.");
+    return [{ className: type.name, type: constrainedType, span: type.span }];
+  }
+  if (type.kind !== "tuple") return null;
+  const left = constraintsFromType(type.values[0]);
+  const right = constraintsFromType(type.values[1]);
+  return left === null || right === null ? null : [...left, ...right];
+}
+
+function decodeQuotedLiteral(
+  token: HaskellFunctionalToken,
+  description: "character" | "string",
+): string {
+  const contents = token.text.slice(1, -1);
+  let decoded = "";
+  for (let index = 0; index < contents.length; index++) {
+    const value = contents[index];
+    if (value !== "\\") {
+      decoded += value;
+      continue;
+    }
+    const escape = contents[++index];
+    const escaped = escape === "n"
+      ? "\n"
+      : escape === "r"
+      ? "\r"
+      : escape === "t"
+      ? "\t"
+      : escape === "0"
+      ? "\0"
+      : escape === "\\"
+      ? "\\"
+      : escape === '"'
+      ? '"'
+      : escape === "'"
+      ? "'"
+      : undefined;
+    if (escaped !== undefined) {
+      decoded += escaped;
+      continue;
+    }
+    throw new HaskellFunctionalSyntaxError(
+      token.span,
+      `Haskell ${description} literal contains unsupported escape \\${escape ?? ""}.`,
+    );
+  }
+  return decoded;
 }
 
 function startsUppercase(name: string): boolean {

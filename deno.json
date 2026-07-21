@@ -119,6 +119,9 @@
       "src/functional/wasm_contract.ts",
       "src/functional/wasm_execution.ts",
       "src/functional/wasm_function_analysis.ts",
+      "src/functional/wasm_gc_codegen.ts",
+      "src/functional/wasm_gc_contract.ts",
+      "src/functional/wasm_gc_execution.ts",
       "src/functional/wasm_host_boundary.ts",
       "src/functional/wasm_host_emitter.ts",
       "src/functional/wasm_lambda_sets.ts",
@@ -173,6 +176,7 @@
   },
   "tasks": {
     "bench:functional-comptime": "deno bench benchmarks/functional_comptime_bench.ts",
+    "bench:functional-wasm-gc": "deno bench benchmarks/functional_wasm_gc_bench.ts",
     "bench:functional-wasm": "deno bench benchmarks/functional_wasm_bench.ts",
     "bench:lazuli": "deno bench --allow-read=language/lazuli/generated benchmarks/lazuli_compiler_bench.ts",
     "bench:semantic-wavefront": "deno bench benchmarks/semantic_wavefront_bench.ts",

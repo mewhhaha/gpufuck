@@ -8,6 +8,7 @@ export interface HaskellFunctionalProgram {
 
 export type HaskellFunctionalDeclaration =
   | HaskellFunctionalTypeDeclaration
+  | HaskellFunctionalTypeAliasDeclaration
   | HaskellFunctionalTypeSignature
   | HaskellFunctionalDefinition
   | HaskellFunctionalClassDeclaration
@@ -31,9 +32,18 @@ export interface HaskellFunctionalInstanceDeclaration {
 
 export interface HaskellFunctionalTypeDeclaration {
   readonly kind: "type";
+  readonly representation: "data" | "newtype";
   readonly name: string;
   readonly parameters: readonly string[];
   readonly constructors: readonly HaskellFunctionalConstructor[];
+  readonly span: FunctionalSpan;
+}
+
+export interface HaskellFunctionalTypeAliasDeclaration {
+  readonly kind: "type-alias";
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly target: HaskellFunctionalType;
   readonly span: FunctionalSpan;
 }
 
@@ -82,6 +92,7 @@ export interface HaskellFunctionalGuardedBody {
 
 export type HaskellFunctionalType =
   | { readonly kind: "integer"; readonly span: FunctionalSpan }
+  | { readonly kind: "character"; readonly span: FunctionalSpan }
   | { readonly kind: "boolean"; readonly span: FunctionalSpan }
   | { readonly kind: "unit"; readonly span: FunctionalSpan }
   | { readonly kind: "list"; readonly value: HaskellFunctionalType; readonly span: FunctionalSpan }
@@ -102,10 +113,18 @@ export type HaskellFunctionalType =
     readonly parameter: HaskellFunctionalType;
     readonly result: HaskellFunctionalType;
     readonly span: FunctionalSpan;
+  }
+  | {
+    readonly kind: "forall";
+    readonly parameters: readonly string[];
+    readonly body: HaskellFunctionalType;
+    readonly span: FunctionalSpan;
   };
 
 export type HaskellFunctionalExpression =
   | { readonly kind: "integer"; readonly value: number; readonly span: FunctionalSpan }
+  | { readonly kind: "character"; readonly value: number; readonly span: FunctionalSpan }
+  | { readonly kind: "string"; readonly values: readonly number[]; readonly span: FunctionalSpan }
   | { readonly kind: "boolean"; readonly value: boolean; readonly span: FunctionalSpan }
   | { readonly kind: "unit"; readonly span: FunctionalSpan }
   | {
@@ -145,7 +164,7 @@ export type HaskellFunctionalExpression =
   }
   | {
     readonly kind: "let";
-    readonly bindings: readonly HaskellFunctionalBinding[];
+    readonly bindings: readonly HaskellFunctionalDefinition[];
     readonly body: HaskellFunctionalExpression;
     readonly span: FunctionalSpan;
   }
@@ -170,11 +189,7 @@ export type HaskellFunctionalExpression =
     readonly span: FunctionalSpan;
   };
 
-export interface HaskellFunctionalBinding {
-  readonly name: string;
-  readonly value: HaskellFunctionalExpression;
-  readonly span: FunctionalSpan;
-}
+export type HaskellFunctionalBinding = HaskellFunctionalDefinition;
 
 export interface HaskellFunctionalRecordField {
   readonly name: string;

@@ -179,6 +179,11 @@ export {
   runFunctionalWasmModuleAsync,
 } from "./src/functional/wasm_execution.ts";
 export {
+  type FunctionalWasmGcRunOptions,
+  runFunctionalWasmGcModule,
+} from "./src/functional/wasm_gc_execution.ts";
+export { FUNCTIONAL_WASM_GC_ABI_VERSION } from "./src/functional/wasm_gc_contract.ts";
+export {
   FunctionalWasmBoundaryError,
   FunctionalWasmRuntimeError,
 } from "./src/functional/wasm_host_boundary.ts";
@@ -231,6 +236,7 @@ export type {
   FunctionalRuntimeTypeDescriptor,
   FunctionalWasmAsyncHostOperation,
   FunctionalWasmAsyncInit,
+  FunctionalWasmBackend,
   FunctionalWasmBoundaryDiagnosticCode,
   FunctionalWasmBoundaryErrorDetails,
   FunctionalWasmBoundaryFaultKind,

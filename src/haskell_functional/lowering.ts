@@ -31,6 +31,7 @@ import type {
   HaskellFunctionalTypeSignature,
 } from "./ast.ts";
 import { HaskellFunctionalLoweringError } from "./diagnostic.ts";
+import { expandHaskellTypeAliases } from "./type_aliases.ts";
 
 export interface LoweredHaskellFunctionalProgram {
   readonly program: HaskellFunctionalProgram;
@@ -76,7 +77,7 @@ const binaryOperators: Readonly<Record<string, FunctionalBinaryOperator>> = {
 export function lowerHaskellFunctionalProgram(
   program: HaskellFunctionalProgram,
 ): LoweredHaskellFunctionalProgram {
-  return new HaskellFunctionalLowering(program).lower();
+  return new HaskellFunctionalLowering(expandHaskellTypeAliases(program), program).lower();
 }
 
 class HaskellFunctionalLowering {
@@ -92,7 +93,10 @@ class HaskellFunctionalLowering {
   #capabilityResolver: TypeCoreCapabilityResolver | null = null;
   #matchIndex = 0;
 
-  constructor(private readonly program: HaskellFunctionalProgram) {}
+  constructor(
+    private readonly program: HaskellFunctionalProgram,
+    private readonly sourceProgram: HaskellFunctionalProgram,
+  ) {}
 
   lower(): LoweredHaskellFunctionalProgram {
     this.indexImplicitDeclarations();
@@ -138,7 +142,7 @@ class HaskellFunctionalLowering {
     }
 
     return {
-      program: this.program,
+      program: this.sourceProgram,
       definitions,
       typeDeclarations,
       module: buildFunctionalSurfaceModule(
@@ -289,6 +293,8 @@ class HaskellFunctionalLowering {
           break;
         case "class":
           break;
+        case "type-alias":
+          throw new Error("Haskell type synonym reached semantic lowering before expansion.");
       }
     }
     this.#capabilityResolver = new TypeCoreCapabilityResolver(this.capabilityRules());
@@ -310,6 +316,17 @@ class HaskellFunctionalLowering {
       `type ${JSON.stringify(declaration.name)} parameters`,
     );
     const parameters = new Set(declaration.parameters);
+    if (
+      declaration.representation === "newtype" &&
+      (declaration.constructors.length !== 1 || declaration.constructors[0]?.fields.length !== 1)
+    ) {
+      throw new HaskellFunctionalLoweringError(
+        declaration.span,
+        `Newtype ${
+          JSON.stringify(declaration.name)
+        } must have exactly one constructor and one field.`,
+      );
+    }
     const recordConstructors = declaration.constructors.filter((constructor) => constructor.record);
     if (recordConstructors.length > 0 && declaration.constructors.length !== 1) {
       throw new HaskellFunctionalLoweringError(
@@ -432,7 +449,7 @@ class HaskellFunctionalLowering {
         span: declaration.span,
         fields: declaration.methods.map((method) => ({
           name: method.name,
-          type: lowerType(method.type),
+          type: lowerSignatureType(method.type),
           span: method.span,
         })),
       }],
@@ -453,7 +470,7 @@ class HaskellFunctionalLowering {
         annotation: {
           kind: "function",
           parameter: dictionaryType,
-          result: lowerType(method.type),
+          result: lowerSignatureType(method.type),
         },
         body: {
           kind: "case",
@@ -629,7 +646,7 @@ class HaskellFunctionalLowering {
       };
     }
     let annotation = annotationOverride ??
-      (signature === undefined ? null : lowerType(signature.type));
+      (signature === undefined ? null : lowerSignatureType(signature.type));
     for (let index = constraints.length - 1; index >= 0; index--) {
       const constraint = constraints[index];
       if (constraint === undefined || annotation === null) continue;
@@ -655,9 +672,29 @@ class HaskellFunctionalLowering {
   private lowerExpression(expression: HaskellFunctionalExpression): FunctionalSurfaceExpression {
     switch (expression.kind) {
       case "integer":
+      case "character":
       case "boolean":
       case "name":
-        return expression;
+        return expression.kind === "character"
+          ? { kind: "integer", value: expression.value, span: expression.span }
+          : expression;
+      case "string": {
+        let list: FunctionalSurfaceExpression = {
+          kind: "name",
+          name: HASKELL_LIST_NIL,
+          span: expression.span,
+        };
+        for (let index = expression.values.length - 1; index >= 0; index--) {
+          const value = expression.values[index];
+          if (value === undefined) throw new Error(`Haskell string omitted value ${index}.`);
+          list = apply(
+            { kind: "name", name: HASKELL_LIST_CONS, span: expression.span },
+            [{ kind: "integer", value, span: expression.span }, list],
+            expression.span,
+          );
+        }
+        return list;
+      }
       case "record":
         return this.lowerRecordExpression(expression);
       case "lambda": {
@@ -710,19 +747,10 @@ class HaskellFunctionalLowering {
           span: expression.span,
         };
       case "let": {
-        let body = this.lowerExpression(expression.body);
-        for (let index = expression.bindings.length - 1; index >= 0; index--) {
-          const binding = expression.bindings[index];
-          if (binding === undefined) throw new Error(`Haskell let omitted binding ${index}.`);
-          body = {
-            kind: "let",
-            name: binding.name,
-            value: this.lowerExpression(binding.value),
-            body,
-            span: combine(binding.span, expression.span),
-          };
-        }
-        return body;
+        return this.lowerRecursiveDefinitions(
+          expression.bindings,
+          this.lowerExpression(expression.body),
+        );
       }
       case "if":
         return {
@@ -1024,7 +1052,7 @@ class HaskellFunctionalLowering {
       };
     }
     if (result === null) return this.compilePatternLeaf(rows.slice(1));
-    result = this.lowerWhereDefinitions(row.whereDefinitions, result);
+    result = this.lowerRecursiveDefinitions(row.whereDefinitions, result);
     for (let index = row.bindings.length - 1; index >= 0; index--) {
       const binding = row.bindings[index];
       if (binding === undefined) throw new Error(`Haskell pattern omitted binding ${index}.`);
@@ -1039,10 +1067,11 @@ class HaskellFunctionalLowering {
     return result;
   }
 
-  private lowerWhereDefinitions(
+  private lowerRecursiveDefinitions(
     definitions: readonly HaskellFunctionalDefinition[],
     expression: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression {
+    if (definitions.length === 0) return expression;
     const groups = new Map<string, HaskellFunctionalDefinition[]>();
     for (const definition of definitions) {
       const equations = groups.get(definition.name) ?? [];
@@ -1061,16 +1090,14 @@ class HaskellFunctionalLowering {
       equations.push(definition);
       groups.set(definition.name, equations);
     }
-    let body = expression;
     const entries = [...groups.entries()];
-    for (let groupIndex = entries.length - 1; groupIndex >= 0; groupIndex--) {
-      const entry = entries[groupIndex];
+    const bindings = entries.map((entry, groupIndex) => {
       if (entry === undefined) throw new Error(`Haskell where block omitted group ${groupIndex}.`);
       const [name, equations] = entry;
       const first = equations[0];
       if (first === undefined) throw new Error(`Haskell where definition ${name} has no equation.`);
       const parameters = first.parameters.map((_, index) => `$whereArgument${groupIndex}_${index}`);
-      let value = this.compilePatternRows(
+      const body = this.compilePatternRows(
         equations.map((equation) => ({
           patterns: equation.parameters,
           alternatives: equation.alternatives,
@@ -1084,22 +1111,29 @@ class HaskellFunctionalLowering {
           span: first.span,
         })),
       );
-      if (value === null) {
+      if (body === null) {
         throw new HaskellFunctionalLoweringError(
           first.span,
           `Local definition ${name} is unreachable.`,
         );
       }
-      for (let index = parameters.length - 1; index >= 0; index--) {
-        const parameter = parameters[index];
-        if (parameter === undefined) throw new Error(`Haskell where parameter ${index} is absent.`);
-        value = { kind: "lambda", parameter, body: value, span: first.span };
-      }
-      body = parameters.length === 0
-        ? { kind: "let", name, value, body, span: first.span }
-        : { kind: "let-rec", name, value, body, span: first.span };
-    }
-    return body;
+      // Lifted groups are appended after source definitions; their synthetic definition spans must
+      // preserve that order, while the body nodes retain the original diagnostic locations.
+      const generatedSpan = {
+        startByte: this.program.span.endByte,
+        endByte: this.program.span.endByte,
+      };
+      return { name, parameters, body, span: generatedSpan };
+    });
+    return {
+      kind: "let-rec-group",
+      bindings,
+      body: expression,
+      span: combine(
+        definitions[0]?.span ?? this.program.span,
+        expression.span ?? this.program.span,
+      ),
+    };
   }
 
   private constructorPattern(pattern: HaskellFunctionalPattern): {
@@ -1186,6 +1220,7 @@ class HaskellFunctionalLowering {
 function lowerType(type: HaskellFunctionalType): FunctionalTypeSchema {
   switch (type.kind) {
     case "integer":
+    case "character":
     case "boolean":
     case "unit":
     case "list":
@@ -1194,6 +1229,7 @@ function lowerType(type: HaskellFunctionalType): FunctionalTypeSchema {
       if (type.kind === "list") {
         return { kind: "named", name: HASKELL_LIST_TYPE, arguments: [lowerType(type.value)] };
       }
+      if (type.kind === "character") return { kind: "integer" };
       return { kind: type.kind };
     case "tuple":
       return {
@@ -1212,7 +1248,17 @@ function lowerType(type: HaskellFunctionalType): FunctionalTypeSchema {
         parameter: lowerType(type.parameter),
         result: lowerType(type.result),
       };
+    case "forall":
+      return {
+        kind: "forall",
+        parameters: type.parameters,
+        body: lowerType(type.body),
+      };
   }
+}
+
+function lowerSignatureType(type: HaskellFunctionalType): FunctionalTypeSchema {
+  return lowerType(type.kind === "forall" ? type.body : type);
 }
 
 function requireDeclaredTypeParameters(
@@ -1222,6 +1268,7 @@ function requireDeclaredTypeParameters(
 ): void {
   switch (type.kind) {
     case "integer":
+    case "character":
     case "boolean":
     case "unit":
       return;
@@ -1248,6 +1295,12 @@ function requireDeclaredTypeParameters(
     case "function":
       requireDeclaredTypeParameters(type.parameter, parameters, declarationName);
       requireDeclaredTypeParameters(type.result, parameters, declarationName);
+      return;
+    case "forall": {
+      const nestedParameters = new Set(parameters);
+      for (const parameter of type.parameters) nestedParameters.add(parameter);
+      requireDeclaredTypeParameters(type.body, nestedParameters, declarationName);
+    }
   }
 }
 
@@ -1380,6 +1433,8 @@ function describeHaskellType(type: HaskellFunctionalType): string {
   switch (type.kind) {
     case "integer":
       return "Int";
+    case "character":
+      return "Char";
     case "boolean":
       return "Bool";
     case "unit":
@@ -1396,6 +1451,8 @@ function describeHaskellType(type: HaskellFunctionalType): string {
         : `${type.name} ${type.arguments.map(describeHaskellType).join(" ")}`;
     case "function":
       return `(${describeHaskellType(type.parameter)} -> ${describeHaskellType(type.result)})`;
+    case "forall":
+      return `(forall ${type.parameters.join(" ")}. ${describeHaskellType(type.body)})`;
   }
 }
 
@@ -1404,6 +1461,7 @@ function containsTypeParameter(type: HaskellFunctionalType): boolean {
     case "parameter":
       return true;
     case "integer":
+    case "character":
     case "boolean":
     case "unit":
       return false;
@@ -1415,6 +1473,8 @@ function containsTypeParameter(type: HaskellFunctionalType): boolean {
       return type.arguments.some(containsTypeParameter);
     case "function":
       return containsTypeParameter(type.parameter) || containsTypeParameter(type.result);
+    case "forall":
+      return true;
   }
 }
 
@@ -1427,6 +1487,7 @@ function substituteTypeParameter(
     case "parameter":
       return type.name === parameter ? { ...replacement, span: type.span } : type;
     case "integer":
+    case "character":
     case "boolean":
     case "unit":
       return type;
@@ -1453,15 +1514,21 @@ function substituteTypeParameter(
         parameter: substituteTypeParameter(type.parameter, parameter, replacement),
         result: substituteTypeParameter(type.result, parameter, replacement),
       };
+    case "forall":
+      return type.parameters.includes(parameter) ? type : {
+        ...type,
+        body: substituteTypeParameter(type.body, parameter, replacement),
+      };
   }
 }
 
 function capabilityTypePattern(type: HaskellFunctionalType): TypeCoreCapabilityTypePattern {
   switch (type.kind) {
     case "integer":
+    case "character":
     case "boolean":
     case "unit":
-      return { kind: type.kind };
+      return { kind: type.kind === "character" ? "integer" : type.kind };
     case "parameter":
       return { kind: "variable", name: type.name };
     case "list":
@@ -1490,6 +1557,8 @@ function capabilityTypePattern(type: HaskellFunctionalType): TypeCoreCapabilityT
         parameter: capabilityTypePattern(type.parameter),
         result: capabilityTypePattern(type.result),
       };
+    case "forall":
+      throw new Error("Haskell class capability types cannot contain forall.");
   }
 }
 
@@ -1500,9 +1569,10 @@ function typeCoreTypeValue(type: HaskellFunctionalType): TypeCoreValue {
 function typeCoreType(type: HaskellFunctionalType): TypeCoreType {
   switch (type.kind) {
     case "integer":
+    case "character":
     case "boolean":
     case "unit":
-      return { kind: type.kind };
+      return { kind: type.kind === "character" ? "integer" : type.kind };
     case "parameter":
       throw new Error(`Cannot convert type parameter ${type.name} to a closed Type Core value.`);
     case "list":
@@ -1528,10 +1598,13 @@ function typeCoreType(type: HaskellFunctionalType): TypeCoreType {
         parameter: typeCoreType(type.parameter),
         result: typeCoreType(type.result),
       };
+    case "forall":
+      throw new Error("Haskell class evidence cannot contain forall.");
   }
 }
 
 function firstFunctionParameter(type: HaskellFunctionalType): HaskellFunctionalType | null {
+  if (type.kind === "forall") return firstFunctionParameter(type.body);
   return type.kind === "function" ? type.parameter : null;
 }
 
@@ -1543,6 +1616,14 @@ function inferConcreteExpressionType(
   switch (expression.kind) {
     case "integer":
       return { kind: "integer", span: expression.span };
+    case "character":
+      return { kind: "character", span: expression.span };
+    case "string":
+      return {
+        kind: "list",
+        value: { kind: "character", span: expression.span },
+        span: expression.span,
+      };
     case "boolean":
       return { kind: "boolean", span: expression.span };
     case "unit":

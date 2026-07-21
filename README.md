@@ -149,6 +149,30 @@ try {
 `compileFunctionalModuleToWasm()` when the bytes need to be cached, shipped, or instantiated by a
 different runtime.
 
+The linear-memory backend remains the default. Pure, closed programs can explicitly use the
+engine-managed collector when the deployment engine implements the finalized WebAssembly GC
+extension:
+
+```ts
+import { compileFunctionalModuleToWasm, runFunctionalWasmGcModule } from "@mewhhaha/gpufuck";
+
+const bytes = await compileFunctionalModuleToWasm(compilation.module, {
+  backend: "wasm-gc",
+});
+const execution = await runFunctionalWasmGcModule(compilation.module);
+console.log(execution.value);
+```
+
+`wasm-gc` stores closures, shared thunks, recursive closure cycles, and algebraic fields in typed GC
+objects. Its runner decodes first-order scalar and structured results and applies the same bounded
+result policy as the default runner. It currently rejects effects and host capabilities, entry
+arguments, extra callable exports, text and bytes, integer division, trapping float-to-integer
+conversions, Storage Core manifests, and owned exports. An engine without WasmGC support receives a
+capability error during instantiation. The emitted `main` returns a typed GC reference, so use
+`runFunctionalWasmGcModule()` or the artifact's exported `value*` accessors at a raw JavaScript
+boundary. Raw consumers must check the exported `wasmGcAbiVersion` global against
+`FUNCTIONAL_WASM_GC_ABI_VERSION`.
+
 Reuse one `GpuFunctionalCompiler` for the lifetime of a device. Compiler creation includes shader
 and pipeline initialization; recreating it for every source defeats the intended batching and cache
 behavior.
@@ -539,7 +563,7 @@ lowering techniques, not complete compatibility with their source languages.
 | ------------------------------------------------------- | ------------------------------------------------------------------------ |
 | [Gleam](examples/gleam-functional/README.md)            | Strict inference, pinned stdlib compile coverage, and scalar JS parity   |
 | [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, moves, borrows, and rejected mutation |
-| [Haskell](examples/haskell-functional/README.md)        | Laziness, inference, dictionaries, GADTs, and recursive data             |
+| [Haskell](examples/haskell-functional/README.md)        | Laziness, rank-N types, dictionaries, GADTs, and recursive local groups  |
 | [OCaml](examples/ocaml-functional/README.md)            | Sequential scope, explicit recursion, variants, and lists                |
 | [1SubML](examples/onesubml-functional/README.md)        | Rank-N parameters, modules as records, and expression blocks             |
 | [Lazuli](examples/lazuli/)                              | Reference syntax, indexed proofs, host values, and laziness              |
@@ -572,8 +596,11 @@ Important current limits include:
 - optional Wasm constant proofs preserve the runtime expression after 4,096 node inspections;
 - the type system is HM plus indexed results and annotated predicative rank-N boundaries;
 - native existential constructors, full dependent types, and impredicative inference are absent;
-- raw memory intrinsics, native SIMD, tracing GC, and a runtime borrow checker are outside
-  Functional Core;
+- raw memory intrinsics, native SIMD, a runtime borrow checker, and a mandatory tracing collector
+  are outside Functional Core;
+- the default Wasm backend uses compact scalars or explicit linear memory; the opt-in WasmGC backend
+  accepts pure closed modules and excludes host integration, public arguments, text, bytes, and
+  owned Storage Core exports;
 - direct public Wasm boundaries exclude higher-order values and cyclic structured results;
 - async effects use deterministic replay rather than stackful continuations;
 - independently emitted Wasm objects and dynamic linking are not implemented.

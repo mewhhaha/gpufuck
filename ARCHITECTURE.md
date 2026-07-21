@@ -54,8 +54,8 @@ multiple languages can describe it without importing one frontend's syntax or po
 - Replacing source-language ownership, effect, or coherence checking.
 - Providing GHC, rustc, OCaml, or Zig compatibility from the target alone.
 - Dynamic Wasm linking or a public relocatable Wasm object format.
-- A tracing garbage collector, runtime borrow checker, unrestricted raw memory, or native SIMD in
-  Functional Core.
+- Mandating a tracing garbage collector, runtime borrow checker, unrestricted raw memory, or native
+  SIMD in Functional Core.
 - Impredicative inference, full dependent types, or unrestricted compile-time execution.
 - Executing generated Wasm on the GPU.
 
@@ -604,6 +604,24 @@ consumes that plan and emits expressions. Built-in host-buffer operations live i
 [`wasm_host_emitter.ts`](src/functional/wasm_host_emitter.ts); runtime functions and their shared
 global layout live in [`wasm_runtime_binary.ts`](src/functional/wasm_runtime_binary.ts) and
 [`wasm_runtime_layout.ts`](src/functional/wasm_runtime_layout.ts).
+
+The default backend uses compact scalar values or explicit linear-memory storage. The opt-in WasmGC
+backend in [`wasm_gc_codegen.ts`](src/functional/wasm_gc_codegen.ts) targets engines implementing
+the finalized [WebAssembly GC extension](https://webassembly.github.io/gc/core/). It consumes the
+same resolved Core and uses one recursive typed struct/array group for scalars, immutable algebraic
+values, closures, environments, and shared thunks. This permits cycles between recursive closures
+without a frontend root protocol. Lazy values carry unevaluated, evaluating, and evaluated states;
+forcing an evaluating thunk reports the same blackhole fault as the default runtime.
+
+Selection is explicit through `FunctionalWasmCompilationOptions.backend`; omission selects
+`linear-memory`. [`wasm_gc_execution.ts`](src/functional/wasm_gc_execution.ts) validates engine
+support, traverses the typed-reference result through generated accessors, rejects structural
+cycles, and bounds decoded nodes. The current public boundary is deliberately closed and first
+order: it accepts strict or lazy pure modules, closures and recursion internally, algebraic results,
+and portable scalar numerics. Effects, host fields, entry arguments, extra callable exports, text,
+bytes, integer operations needing fault-compatible division semantics, trapping float-to-integer
+conversions, Storage Core manifests, and owned exports remain on the default backend. Differential
+tests require every supported program to agree with that backend.
 
 ### 10.1 Analysis order
 
@@ -1157,7 +1175,7 @@ semantic program.
 
 **Revisit when:** the WebGPU/WGSL portability baseline exposes the required scalar operations.
 
-### 14.12 Explicit allocator, no tracing GC
+### 14.12 Explicit allocator by default; optional engine GC
 
 **Decision:** generated general Wasm uses an explicit arena/free-list runtime.
 
@@ -1167,8 +1185,13 @@ small pure programs. Strict scalar paths should not pay for it.
 **Cost:** long-lived allocation-heavy programs need frontend/runtime cooperation or a different
 memory strategy.
 
-**Revisit when:** a consumer workload requires long-lived cyclic heaps and can define a neutral root
-and collection contract.
+The optional WasmGC backend implements that different strategy without changing Functional Core or
+the default ABI. It relies on the engine to trace typed values, closure environments, shared thunks,
+and recursive closure cycles. Consumers opt in per artifact, and unsupported boundaries fail during
+emission instead of silently falling back to linear memory.
+
+**Revisit when:** host component boundaries and engine availability justify a shared ABI between the
+two memory models.
 
 ## 15. Limits and safety properties
 

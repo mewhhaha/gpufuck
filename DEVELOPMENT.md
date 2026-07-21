@@ -253,6 +253,7 @@ after a performance change:
 ```sh
 deno task bench:lazuli
 deno task bench:functional-wasm
+deno task bench:functional-wasm-gc
 deno task bench:functional-comptime
 deno task bench:semantic-wavefront
 deno task profile:lazuli-compiler

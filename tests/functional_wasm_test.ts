@@ -12,6 +12,7 @@ import {
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+  FUNCTIONAL_WASM_GC_ABI_VERSION,
   FunctionalBinaryOperator,
   functionalBitBuffer,
   functionalBitBufferFromHostValue,
@@ -34,6 +35,7 @@ import {
   FunctionalUnaryOperator,
   type FunctionalWasmAsyncInit,
   FunctionalWasmBoundaryError,
+  type FunctionalWasmCompilationOptions,
   type FunctionalWasmExecution,
   type FunctionalWasmInit,
   FunctionalWasmIntrinsic,
@@ -50,6 +52,7 @@ import {
   promoteFunctionalWasmArenaValueToParent,
   requestWebGpuDevice,
   resetFunctionalWasmScratch,
+  runFunctionalWasmGcModule,
   runFunctionalWasmModule,
   runFunctionalWasmModuleAsync,
   sliceFunctionalBitBuffer,
@@ -161,6 +164,8 @@ Deno.test("runs every checked-in Haskell program through GPU compilation and Web
       "records.hs",
       "pattern_guards.hs",
       "classes.hs",
+      "frontend.hs",
+      "unicode.hs",
     ]
   ) {
     const path = `examples/haskell-functional/${fileName}`;
@@ -193,6 +198,505 @@ Deno.test("runs every checked-in OCaml program through GPU compilation and WebAs
     120,
     factorialPath,
   );
+});
+
+Deno.test("WasmGC and linear memory execute the same nested algebraic Core", async () => {
+  const nestedPair = functionalPair(
+    functionalPair(surface.integer(40), surface.integer(1)),
+    surface.integer(1),
+  );
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "nested",
+    value: nestedPair,
+    body: {
+      kind: "case",
+      value: surface.name("nested"),
+      arms: [{
+        constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        binders: ["inner", "tail"],
+        body: {
+          kind: "case",
+          value: surface.name("inner"),
+          arms: [{
+            constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+            binders: ["left", "right"],
+            body: surface.binary(
+              FunctionalBinaryOperator.Add,
+              surface.binary(
+                FunctionalBinaryOperator.Add,
+                surface.name("left"),
+                surface.name("right"),
+              ),
+              surface.name("tail"),
+            ),
+          }],
+        },
+      }],
+    },
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("nested algebraic WasmGC case did not compile");
+
+  try {
+    const linearExecution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(linearExecution.value, { kind: "integer", value: 42 });
+    equal(
+      WebAssembly.Module.exports(new WebAssembly.Module(linearExecution.bytes)).find((entry) =>
+        entry.name === "valueKind"
+      ),
+      undefined,
+    );
+
+    const gcBytes = await compileFunctionalModuleToWasm(compilation.module, {
+      backend: "wasm-gc",
+    });
+    ok(WebAssembly.validate(gcBytes));
+    equal(
+      WebAssembly.Module.exports(new WebAssembly.Module(gcBytes)).find((entry) =>
+        entry.name === "valueKind"
+      )?.kind,
+      "function",
+    );
+    gcBytes[0] = 0xff;
+    const secondGcBytes = await compileFunctionalModuleToWasm(compilation.module, {
+      backend: "wasm-gc",
+    });
+    ok(WebAssembly.validate(secondGcBytes));
+    const gcExecution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(gcExecution.value, linearExecution.value);
+    equal(gcExecution.instance.exports.memory, undefined);
+    const wasmGcAbiVersion = gcExecution.instance.exports.wasmGcAbiVersion;
+    ok(wasmGcAbiVersion instanceof WebAssembly.Global);
+    equal(wasmGcAbiVersion.value, FUNCTIONAL_WASM_GC_ABI_VERSION);
+    await rejects(
+      () =>
+        compileFunctionalModuleToWasm(compilation.module, {
+          backend: "unknown",
+        } as unknown as FunctionalWasmCompilationOptions),
+      /backend must be linear-memory or wasm-gc; received "unknown"/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC preserves the full signed i32 range", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(
+      {
+        kind: "if",
+        condition: surface.boolean(true),
+        consequent: surface.integer(-2_147_483_648),
+        alternate: surface.integer(0),
+      },
+      FunctionalEvaluationProfile.StrictEager,
+    ),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("signed i32 WasmGC case did not compile");
+
+  try {
+    const execution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: -2_147_483_648 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC and linear memory agree on wide numeric primitives", async () => {
+  const expressions = [
+    surface.binary(
+      FunctionalBinaryOperator.AddSignedInteger64,
+      surface.signedInteger64(9_007_199_254_740_992n),
+      surface.signedInteger64(17n),
+    ),
+    surface.binary(
+      FunctionalBinaryOperator.MultiplyFloat32,
+      surface.float32(1.5),
+      surface.float32(4),
+    ),
+    surface.binary(
+      FunctionalBinaryOperator.DivideFloat64,
+      surface.float64(22),
+      surface.float64(7),
+    ),
+    surface.convert(
+      FunctionalNumericConversion.SignedInteger64ToFloat64,
+      surface.signedInteger64(42n),
+    ),
+  ];
+  for (const expression of expressions) {
+    const compilation = await functionalWasmRuntime().compiler.compileModule(
+      singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+    );
+    ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+    if (!compilation.ok) throw new Error("wide numeric WasmGC case did not compile");
+    try {
+      const linearExecution = await runFunctionalWasmModule(compilation.module);
+      const gcExecution = await runFunctionalWasmGcModule(compilation.module);
+      deepStrictEqual(gcExecution.value, linearExecution.value);
+    } finally {
+      compilation.module.destroy();
+    }
+  }
+});
+
+Deno.test("WasmGC executes strict higher-order closures", async () => {
+  const expression = surface.apply(
+    surface.lambda(
+      "value",
+      surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.name("value"),
+        surface.integer(1),
+      ),
+    ),
+    surface.integer(41),
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("strict WasmGC closure case did not compile");
+
+  try {
+    const execution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC executes a recursive strict global function", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "factorial",
+      parameters: [],
+      annotation: null,
+      body: surface.lambda("value", {
+        kind: "if",
+        condition: surface.binary(
+          FunctionalBinaryOperator.Equal,
+          surface.name("value"),
+          surface.integer(0),
+        ),
+        consequent: surface.integer(1),
+        alternate: surface.binary(
+          FunctionalBinaryOperator.Multiply,
+          surface.name("value"),
+          surface.apply(
+            surface.name("factorial"),
+            surface.binary(
+              FunctionalBinaryOperator.Subtract,
+              surface.name("value"),
+              surface.integer(1),
+            ),
+          ),
+        ),
+      }),
+    }, {
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.apply(surface.name("factorial"), surface.integer(5)),
+    }],
+    [],
+    "main",
+    0,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("recursive WasmGC global case did not compile");
+
+  try {
+    const execution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 120 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC rejects division until its wrapping semantics match", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(
+      surface.binary(
+        FunctionalBinaryOperator.Divide,
+        surface.integer(-2_147_483_648),
+        surface.integer(-1),
+      ),
+      FunctionalEvaluationProfile.StrictEager,
+    ),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("WasmGC division rejection case did not compile");
+
+  try {
+    await rejects(
+      () => compileFunctionalModuleToWasm(compilation.module, { backend: "wasm-gc" }),
+      /does not support binary operator 10 at core node \d+/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC evaluates and shares a lazy local once", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "shared",
+    value: surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.integer(40),
+      surface.integer(2),
+    ),
+    body: surface.binary(
+      FunctionalBinaryOperator.Add,
+      surface.name("shared"),
+      surface.name("shared"),
+    ),
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("lazy WasmGC sharing case did not compile");
+
+  try {
+    const execution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 84 });
+    equal(execution.stats.thunkEvaluations, 1);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC preserves lazy constructor fields inside strict Core", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "case",
+    value: {
+      kind: "apply",
+      callee: {
+        kind: "apply",
+        callee: surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+        argument: surface.integer(40),
+        argumentEvaluation: FunctionalEvaluationProfile.LazyCallByNeed,
+      },
+      argument: surface.integer(2),
+      argumentEvaluation: FunctionalEvaluationProfile.StrictEager,
+    },
+    arms: [{
+      constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+      binders: ["left", "right"],
+      body: surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.name("left"),
+        surface.name("right"),
+      ),
+    }],
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("lazy constructor field WasmGC case did not compile");
+
+  try {
+    const execution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+    equal(execution.stats.thunkEvaluations, 1);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC returns nested algebraic values through its public decoder", async () => {
+  const expression = functionalPair(
+    surface.integer(1),
+    functionalPair(surface.boolean(true), surface.integer(3)),
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("structured WasmGC result did not compile");
+
+  try {
+    const execution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(execution.value, {
+      kind: "tuple",
+      values: [
+        { kind: "integer", value: 1 },
+        {
+          kind: "tuple",
+          values: [
+            { kind: "boolean", value: true },
+            { kind: "integer", value: 3 },
+          ],
+        },
+      ],
+    });
+    await rejects(
+      () => runFunctionalWasmGcModule(compilation.module, { maximumResultNodes: 2 }),
+      (error: unknown) => {
+        ok(error instanceof FunctionalWasmRuntimeError);
+        equal(error.code, "F3010");
+        equal(error.kind, "result-too-large");
+        return true;
+      },
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC collects a recursive local closure cycle", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let-rec",
+    name: "sum",
+    value: surface.lambda("remaining", {
+      kind: "if",
+      condition: surface.equal(surface.name("remaining"), surface.integer(0)),
+      consequent: surface.integer(0),
+      alternate: surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.name("remaining"),
+        surface.apply(
+          surface.name("sum"),
+          surface.binary(
+            FunctionalBinaryOperator.Subtract,
+            surface.name("remaining"),
+            surface.integer(1),
+          ),
+        ),
+      ),
+    }),
+    body: surface.apply(surface.name("sum"), surface.integer(9)),
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("recursive local WasmGC closure did not compile");
+
+  try {
+    const execution = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 45 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC reports a recursively forced global thunk as a blackhole", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "loop",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.name("loop"),
+    }, {
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.name("loop"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    encoded,
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("WasmGC blackhole case did not compile");
+
+  try {
+    await rejects(
+      () => runFunctionalWasmGcModule(compilation.module),
+      (error: unknown) => {
+        ok(error instanceof FunctionalWasmRuntimeError);
+        equal(error.code, "F3005");
+        equal(error.kind, "blackhole");
+        return true;
+      },
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC reports a blackhole forced while decoding a lazy field", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "loop",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.name("loop"),
+    }, {
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: functionalPair(surface.name("loop"), surface.integer(1)),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("lazy-field WasmGC blackhole case did not compile");
+
+  try {
+    await rejects(
+      () => runFunctionalWasmGcModule(compilation.module),
+      (error: unknown) => {
+        ok(error instanceof FunctionalWasmRuntimeError);
+        equal(error.code, "F3005");
+        equal(error.kind, "blackhole");
+        return true;
+      },
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("WasmGC rejects an entry argument without changing the default backend", async () => {
+  const encoded = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["value"],
+      annotation: {
+        kind: "function",
+        parameter: { kind: "integer" },
+        result: { kind: "integer" },
+      },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("WasmGC entry-argument boundary did not compile");
+
+  try {
+    await rejects(
+      () => compileFunctionalModuleToWasm(compilation.module, { backend: "wasm-gc" }),
+      /requires a nullary first-order entry; definition 0 has a function type/,
+    );
+    const execution = await runFunctionalWasmModule(compilation.module, {
+      argument: { kind: "integer", value: 42 },
+    });
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("decodes scalar WebAssembly results with wrapping integer division", async () => {
