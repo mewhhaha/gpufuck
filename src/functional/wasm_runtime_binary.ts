@@ -397,8 +397,7 @@ export function forceThunkFunction(): WasmFunctionBody {
   instructions.emit(0x05);
   instructions.localGet(0);
   instructions.i32Load(4);
-  instructions.emit(0x45, 0x04, 0x40);
-  instructions.emit(0x05);
+  instructions.emit(0x04, 0x40);
   instructions.i32Const(WASM_FAULT_BLACKHOLE);
   instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFault);
   instructions.i32Const(-1);
