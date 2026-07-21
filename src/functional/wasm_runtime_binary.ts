@@ -117,11 +117,10 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.emit(0x6a);
   instructions.localTee(nextTop);
   instructions.localGet(previousTop);
-  instructions.emit(0x49, 0x0d);
-  instructions.unsigned(0);
+  instructions.emit(0x49);
   instructions.localGet(nextTop);
   instructions.i32Const(FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH);
-  instructions.emit(0x4b, 0x0d);
+  instructions.emit(0x4b, 0x72, 0x0d);
   instructions.unsigned(0);
   instructions.localGet(nextTop);
   instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapCapacityByteLength);
