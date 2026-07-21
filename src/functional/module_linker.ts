@@ -363,12 +363,6 @@ export function linkFunctionalModules(
       ) => [declaration.name, qualified(artifact.name, declaration.name)]),
     );
     const availableTypeNames = new Map(localTypeNames);
-    for (const module of modules.values()) {
-      for (const declaration of module.typeDeclarations) {
-        const linkedName = qualified(module.name, declaration.name);
-        availableTypeNames.set(linkedName, linkedName);
-      }
-    }
     for (const imported of artifact.imports) {
       const source = modules.get(imported.fromModule);
       if (source === undefined) continue;
