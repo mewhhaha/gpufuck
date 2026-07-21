@@ -1,5 +1,8 @@
 import { FunctionalBinaryOperator } from "./abi.ts";
-import { FunctionalF32x4Definition } from "./fixed_vector_contract.ts";
+import {
+  canonicalFunctionalFixedVectorName,
+  FunctionalF32x4Definition,
+} from "./fixed_vector_contract.ts";
 
 export const FunctionalWasmSimdOpcode = Object.freeze(
   {
@@ -22,7 +25,7 @@ export const FunctionalWasmSimdOpcode = Object.freeze(
 );
 
 export function simdF32x4BinaryOpcode(definition: string): number | undefined {
-  switch (definition) {
+  switch (canonicalFunctionalFixedVectorName(definition)) {
     case FunctionalF32x4Definition.Add:
       return FunctionalWasmSimdOpcode.F32x4Add;
     case FunctionalF32x4Definition.Subtract:
@@ -37,7 +40,7 @@ export function simdF32x4BinaryOpcode(definition: string): number | undefined {
 }
 
 export function simdF32x4ComparisonOpcode(definition: string): number | undefined {
-  switch (definition) {
+  switch (canonicalFunctionalFixedVectorName(definition)) {
     case FunctionalF32x4Definition.Equal:
       return FunctionalWasmSimdOpcode.F32x4Equal;
     case FunctionalF32x4Definition.Less:
@@ -48,7 +51,7 @@ export function simdF32x4ComparisonOpcode(definition: string): number | undefine
 }
 
 export function f32x4ReplacementLane(definition: string): number | undefined {
-  switch (definition) {
+  switch (canonicalFunctionalFixedVectorName(definition)) {
     case FunctionalF32x4Definition.ReplaceLane0:
       return 0;
     case FunctionalF32x4Definition.ReplaceLane1:
@@ -63,7 +66,7 @@ export function f32x4ReplacementLane(definition: string): number | undefined {
 }
 
 export function f32x4ExtractedLane(definition: string): number | undefined {
-  switch (definition) {
+  switch (canonicalFunctionalFixedVectorName(definition)) {
     case FunctionalF32x4Definition.ExtractLane0:
       return 0;
     case FunctionalF32x4Definition.ExtractLane1:

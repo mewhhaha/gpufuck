@@ -6,6 +6,7 @@ import {
 } from "./abi.ts";
 import type { FunctionalConstant } from "./comptime_contract.ts";
 import type { FunctionalDeepValue } from "./evaluator.ts";
+import { matchesFunctionalQualifiedName } from "./module_contract.ts";
 import type { TypeCoreType, TypeCoreValue } from "./type_core_contract.ts";
 import type {
   FunctionalSurfaceExpression,
@@ -431,7 +432,9 @@ export function functionalComptimeBytesFromConstant(constant: FunctionalConstant
   validateFunctionalConstant(constant);
   const bytes: number[] = [];
   let current = constant;
-  while (current.kind === "constructor" && comptimeConstructorMatches(current.name, BYTE_CONS)) {
+  while (
+    current.kind === "constructor" && matchesFunctionalQualifiedName(current.name, BYTE_CONS)
+  ) {
     if (current.fields.length !== 2) {
       throw new TypeError(
         `functional comptime string constructor ${
@@ -451,7 +454,7 @@ export function functionalComptimeBytesFromConstant(constant: FunctionalConstant
     current = current.fields[1]!;
   }
   if (
-    current.kind !== "constructor" || !comptimeConstructorMatches(current.name, BYTE_NIL) ||
+    current.kind !== "constructor" || !matchesFunctionalQualifiedName(current.name, BYTE_NIL) ||
     current.fields.length !== 0
   ) {
     throw new TypeError(
@@ -461,10 +464,6 @@ export function functionalComptimeBytesFromConstant(constant: FunctionalConstant
     );
   }
   return Uint8Array.from(bytes);
-}
-
-function comptimeConstructorMatches(actual: string, expected: string): boolean {
-  return actual === expected || actual.endsWith(`::${expected}`);
 }
 
 function typeTree(type: TypeCoreType): FunctionalConstant {

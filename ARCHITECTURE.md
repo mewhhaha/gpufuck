@@ -682,7 +682,8 @@ are made from checked Core types and evaluation modes, never from source spellin
 `fixed_vector_contract.ts` defines the reserved names shared by the surface library and backend.
 `fixed_vector.ts` defines `F32x4` and its mask as ordinary immutable four-field ADTs plus canonical
 surface definitions. Scalar inference, GPU evaluation, and default Wasm emission therefore need no
-vector-specific Core tags and provide the authoritative fallback semantics.
+vector-specific Core tags and provide the authoritative fallback semantics. The definitions are
+deeply immutable, and linker qualification preserves their reserved local names.
 
 The linear-memory backend can opt into native Wasm SIMD. In a fully strict module it recognizes the
 canonical arithmetic, comparison, selection, lane, reduction, `map`, `zip`, and `fold` definitions.

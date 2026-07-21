@@ -13,7 +13,9 @@ import {
 } from "../functional.ts";
 
 const OPERATION_COUNT = 4;
-const EXPECTED_RESULT = 10 + OPERATION_COUNT * 4;
+const SOURCE_ARGUMENT = 9;
+const ENCODED_ARGUMENT = (BigInt(SOURCE_ARGUMENT) << 3n) | 1n;
+const EXPECTED_RESULT = SOURCE_ARGUMENT + 2 + 3 + 4 + OPERATION_COUNT * 4;
 
 let vector: FunctionalSurfaceExpression = functionalF32x4.make([
   surface.convert(
@@ -64,8 +66,8 @@ const simdBytes = await compileFunctionalModuleToWasm(compilation.module, {
 });
 const portableMain = instantiateMain(portableBytes, "portable F32x4");
 const simdMain = instantiateMain(simdBytes, "native F32x4");
-requireExpectedResult(portableMain(9n), "portable F32x4");
-requireExpectedResult(simdMain(9n), "native F32x4");
+requireExpectedResult(portableMain(ENCODED_ARGUMENT), "portable F32x4");
+requireExpectedResult(simdMain(ENCODED_ARGUMENT), "native F32x4");
 
 globalThis.addEventListener("unload", () => {
   compilation.module.destroy();
@@ -87,11 +89,11 @@ Deno.bench("reuse emitted WebAssembly: native F32x4 chain", async () => {
 });
 
 Deno.bench("run WebAssembly: portable F32x4 chain", () => {
-  requireExpectedResult(portableMain(9n), "portable F32x4");
+  requireExpectedResult(portableMain(ENCODED_ARGUMENT), "portable F32x4");
 });
 
 Deno.bench("run WebAssembly: native F32x4 chain", () => {
-  requireExpectedResult(simdMain(9n), "native F32x4");
+  requireExpectedResult(simdMain(ENCODED_ARGUMENT), "native F32x4");
 });
 
 function instantiateMain(

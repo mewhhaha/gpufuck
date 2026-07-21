@@ -429,6 +429,18 @@ function vectorDefinition(
   annotation: FunctionalTypeSchema,
   body: FunctionalSurfaceExpression,
 ): FunctionalSurfaceDefinition {
+  // Native lowering trusts these reserved definitions, so their scalar bodies must not be mutable.
+  const pendingObjects: object[] = [body];
+  const frozenObjects = new Set<object>();
+  while (pendingObjects.length > 0) {
+    const current = pendingObjects.pop()!;
+    if (frozenObjects.has(current)) continue;
+    frozenObjects.add(current);
+    for (const child of Object.values(current)) {
+      if (child !== null && typeof child === "object") pendingObjects.push(child);
+    }
+    Object.freeze(current);
+  }
   return Object.freeze({ name, parameters: Object.freeze([...parameters]), annotation, body });
 }
 

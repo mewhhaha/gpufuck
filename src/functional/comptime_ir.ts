@@ -15,6 +15,7 @@ import {
   validateFunctionalConstant,
 } from "./comptime_constant.ts";
 import type { FunctionalConstant } from "./comptime_contract.ts";
+import { matchesFunctionalQualifiedName, unqualifiedFunctionalName } from "./module_contract.ts";
 import {
   createFunctionalModuleArtifact,
   type FunctionalModuleArtifact,
@@ -435,7 +436,7 @@ export function spliceFunctionalGeneratedDefinitions(
 
 function decodedExpression(constant: FunctionalConstant): FunctionalSurfaceExpression {
   const encoded = requiredConstructor(constant, "functional expression");
-  const name = unqualifiedConstructorName(encoded.name);
+  const name = unqualifiedFunctionalName(encoded.name);
   switch (name) {
     case EXPRESSION_INTEGER:
       return { kind: "integer", value: requiredNumber(encoded, name, "integer") };
@@ -671,7 +672,10 @@ function requiredConstructor(
       `functional generated IR ${expected} requires a constructor; received ${constant.kind}`,
     );
   }
-  if (expected !== "functional expression" && !constructorMatches(constant.name, expected)) {
+  if (
+    expected !== "functional expression" &&
+    !matchesFunctionalQualifiedName(constant.name, expected)
+  ) {
     throw new TypeError(
       `functional generated IR expected ${JSON.stringify(expected)}; received ${
         JSON.stringify(constant.name)
@@ -744,14 +748,6 @@ function requiredBoolean(
 }
 
 function isConstructor(constant: FunctionalConstant, expected: string): boolean {
-  return constant.kind === "constructor" && constructorMatches(constant.name, expected);
-}
-
-function constructorMatches(actual: string, expected: string): boolean {
-  return actual === expected || actual.endsWith(`::${expected}`);
-}
-
-function unqualifiedConstructorName(name: string): string {
-  const separator = name.lastIndexOf("::");
-  return separator < 0 ? name : name.slice(separator + 2);
+  return constant.kind === "constructor" &&
+    matchesFunctionalQualifiedName(constant.name, expected);
 }

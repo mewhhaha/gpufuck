@@ -88,6 +88,8 @@ import type {
 } from "./wasm_constant_analysis.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import {
+  canonicalFunctionalFixedVectorName,
+  correspondingFunctionalFixedVectorName,
   FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
   FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
   FunctionalF32x4Definition,
@@ -195,6 +197,29 @@ interface UncurriedApplication {
 interface NamedApplication {
   readonly definition: string;
   readonly arguments: readonly FunctionalCallArgument[];
+}
+
+interface CompiledSimdVector {
+  readonly kind: "f32x4" | "mask32x4";
+  readonly constructorName: string;
+}
+
+function compiledSimdVector(
+  definition: string,
+  kind: CompiledSimdVector["kind"],
+): CompiledSimdVector {
+  const constructorName = correspondingFunctionalFixedVectorName(
+    definition,
+    kind === "f32x4" ? FUNCTIONAL_F32X4_CONSTRUCTOR_NAME : FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
+  );
+  if (constructorName === undefined) {
+    throw new Error(
+      `functional SIMD definition ${
+        JSON.stringify(definition)
+      } is outside the fixed-vector contract`,
+    );
+  }
+  return { kind, constructorName };
 }
 
 interface UncurriedWorker {
@@ -1076,12 +1101,12 @@ class FunctionalWasmCompiler {
         nodeIndex,
         environment,
       );
-      if (vectorKind === "f32x4") {
-        this.emitBoxF32x4(instructions);
+      if (vectorKind?.kind === "f32x4") {
+        this.emitBoxF32x4(instructions, vectorKind.constructorName);
         return;
       }
-      if (vectorKind === "mask32x4") {
-        this.emitBoxMask32x4(instructions);
+      if (vectorKind?.kind === "mask32x4") {
+        this.emitBoxMask32x4(instructions, vectorKind.constructorName);
         return;
       }
     }
@@ -3063,48 +3088,53 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     nodeIndex: number,
     environment: FunctionalEnvironment,
-  ): "f32x4" | "mask32x4" | undefined {
+  ): CompiledSimdVector | undefined {
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return undefined;
     const { definition, arguments: arguments_ } = application;
-    if (definition === FunctionalF32x4Definition.Splat && arguments_.length === 1) {
+    const canonicalDefinition = canonicalFunctionalFixedVectorName(definition);
+    if (canonicalDefinition === FunctionalF32x4Definition.Splat && arguments_.length === 1) {
       this.compileFloat32Expression(instructions, arguments_[0]!.node, environment);
       instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
-      return "f32x4";
+      return compiledSimdVector(definition, "f32x4");
     }
     const binaryOpcode = simdF32x4BinaryOpcode(definition);
     if (binaryOpcode !== undefined && arguments_.length === 2) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
       instructions.simd(binaryOpcode);
-      return "f32x4";
+      return compiledSimdVector(definition, "f32x4");
     }
     const comparisonOpcode = simdF32x4ComparisonOpcode(definition);
     if (comparisonOpcode !== undefined && arguments_.length === 2) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
       instructions.simd(comparisonOpcode);
-      return "mask32x4";
+      return compiledSimdVector(definition, "mask32x4");
     }
-    if (definition === FunctionalF32x4Definition.Select && arguments_.length === 3) {
+    if (canonicalDefinition === FunctionalF32x4Definition.Select && arguments_.length === 3) {
       this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
       this.compileF32x4Expression(instructions, arguments_[2]!.node, environment);
       this.compileMask32x4Expression(instructions, arguments_[0]!.node, environment);
       instructions.simd(FunctionalWasmSimdOpcode.V128BitSelect);
-      return "f32x4";
+      return compiledSimdVector(definition, "f32x4");
     }
     const replacementLane = f32x4ReplacementLane(definition);
     if (replacementLane !== undefined && arguments_.length === 2) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       this.compileFloat32Expression(instructions, arguments_[1]!.node, environment);
       instructions.simd(FunctionalWasmSimdOpcode.F32x4ReplaceLane, replacementLane);
-      return "f32x4";
+      return compiledSimdVector(definition, "f32x4");
     }
-    if (definition === FunctionalF32x4Definition.Map && arguments_.length === 2) {
-      return this.compileSimdMap(instructions, arguments_, environment) ? "f32x4" : undefined;
+    if (canonicalDefinition === FunctionalF32x4Definition.Map && arguments_.length === 2) {
+      return this.compileSimdMap(instructions, arguments_, environment)
+        ? compiledSimdVector(definition, "f32x4")
+        : undefined;
     }
-    if (definition === FunctionalF32x4Definition.Zip && arguments_.length === 3) {
-      return this.compileSimdZip(instructions, arguments_, environment) ? "f32x4" : undefined;
+    if (canonicalDefinition === FunctionalF32x4Definition.Zip && arguments_.length === 3) {
+      return this.compileSimdZip(instructions, arguments_, environment)
+        ? compiledSimdVector(definition, "f32x4")
+        : undefined;
     }
     return undefined;
   }
@@ -3117,13 +3147,14 @@ class FunctionalWasmCompiler {
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return false;
     const { definition, arguments: arguments_ } = application;
+    const canonicalDefinition = canonicalFunctionalFixedVectorName(definition);
     const extractedLane = f32x4ExtractedLane(definition);
     if (extractedLane !== undefined && arguments_.length === 1) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       instructions.simd(FunctionalWasmSimdOpcode.F32x4ExtractLane, extractedLane);
       return true;
     }
-    if (definition === FunctionalF32x4Definition.ReduceAdd && arguments_.length === 1) {
+    if (canonicalDefinition === FunctionalF32x4Definition.ReduceAdd && arguments_.length === 1) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       const vector = instructions.addLocal(WasmValueType.V128);
       instructions.localSet(vector);
@@ -3135,7 +3166,7 @@ class FunctionalWasmCompiler {
       instructions.emit(0x92, 0x92);
       return true;
     }
-    if (definition === FunctionalF32x4Definition.Fold && arguments_.length === 3) {
+    if (canonicalDefinition === FunctionalF32x4Definition.Fold && arguments_.length === 3) {
       const combine = this.float32CombineOperator(arguments_[0]!.node, environment);
       if (combine === undefined) return false;
       const combineOpcode = numericBinaryOpcode(combine);
@@ -3168,15 +3199,14 @@ class FunctionalWasmCompiler {
     }
     if (node.tag === FunctionalCoreTag.Apply) {
       const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
-      if (kind === "f32x4") return;
+      if (kind?.kind === "f32x4") return;
     }
     const constructor = this.constructorApplication(nodeIndex);
-    const f32x4Constructor = this.#module.constructorNames.indexOf(
-      FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
-    );
     if (
-      constructor !== undefined && constructor.constructorIndex === f32x4Constructor &&
-      constructor.arguments.length === 4
+      constructor !== undefined && constructor.arguments.length === 4 &&
+      canonicalFunctionalFixedVectorName(
+          this.#module.constructorNames[constructor.constructorIndex]!,
+        ) === FUNCTIONAL_F32X4_CONSTRUCTOR_NAME
     ) {
       this.compileFloat32Expression(instructions, constructor.arguments[0]!.node, environment);
       instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
@@ -3255,19 +3285,21 @@ class FunctionalWasmCompiler {
     const constructor = this.constructorApplication(nodeIndex);
     if (
       constructor !== undefined && constructor.arguments.length === 4 &&
-      this.#module.constructorNames[constructor.constructorIndex] ===
-        FUNCTIONAL_F32X4_CONSTRUCTOR_NAME
+      canonicalFunctionalFixedVectorName(
+          this.#module.constructorNames[constructor.constructorIndex]!,
+        ) === FUNCTIONAL_F32X4_CONSTRUCTOR_NAME
     ) return true;
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return false;
     const { definition, arguments: arguments_ } = application;
-    if (definition === FunctionalF32x4Definition.Splat) return arguments_.length === 1;
+    const canonicalDefinition = canonicalFunctionalFixedVectorName(definition);
+    if (canonicalDefinition === FunctionalF32x4Definition.Splat) return arguments_.length === 1;
     if (simdF32x4BinaryOpcode(definition) !== undefined) {
       return arguments_.length === 2 &&
         this.isKnownF32x4Expression(arguments_[0]!.node, environment) &&
         this.isKnownF32x4Expression(arguments_[1]!.node, environment);
     }
-    if (definition === FunctionalF32x4Definition.Select) {
+    if (canonicalDefinition === FunctionalF32x4Definition.Select) {
       return arguments_.length === 3 &&
         this.isKnownMask32x4Expression(arguments_[0]!.node, environment) &&
         this.isKnownF32x4Expression(arguments_[1]!.node, environment) &&
@@ -3298,7 +3330,7 @@ class FunctionalWasmCompiler {
     const node = this.node(nodeIndex);
     if (node.tag === FunctionalCoreTag.Apply) {
       const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
-      if (kind === "mask32x4") return;
+      if (kind?.kind === "mask32x4") return;
     }
     this.compileExpression(instructions, nodeIndex, environment);
     this.emitUnboxMask32x4(instructions);
@@ -4905,7 +4937,7 @@ class FunctionalWasmCompiler {
     instructions.emit(0xad);
   }
 
-  emitBoxF32x4(instructions: WasmInstructions): void {
+  emitBoxF32x4(instructions: WasmInstructions, constructorName: string): void {
     const vector = instructions.addLocal(WasmValueType.V128);
     instructions.localSet(vector);
     const fields: ValueSource[] = [];
@@ -4918,12 +4950,12 @@ class FunctionalWasmCompiler {
     }
     this.emitConstructor(
       instructions,
-      this.requiredConstructorIndex(FUNCTIONAL_F32X4_CONSTRUCTOR_NAME),
+      this.requiredConstructorIndex(constructorName),
       fields,
     );
   }
 
-  emitBoxMask32x4(instructions: WasmInstructions): void {
+  emitBoxMask32x4(instructions: WasmInstructions, constructorName: string): void {
     const vector = instructions.addLocal(WasmValueType.V128);
     instructions.localSet(vector);
     const fields: ValueSource[] = [];
@@ -4938,7 +4970,7 @@ class FunctionalWasmCompiler {
     }
     this.emitConstructor(
       instructions,
-      this.requiredConstructorIndex(FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME),
+      this.requiredConstructorIndex(constructorName),
       fields,
     );
   }

@@ -8,8 +8,10 @@ import {
   FunctionalBinaryOperator,
   FunctionalEvaluationProfile,
   functionalF32x4,
+  FunctionalF32x4Definition,
   type FunctionalWasmCompilationOptions,
   GpuFunctionalCompiler,
+  linkFunctionalModules,
   requestWebGpuDevice,
   runFunctionalWasmModule,
   surface,
@@ -44,6 +46,115 @@ Deno.test("fixed F32x4 builders reject lanes outside the four-lane shape", () =>
     () => functionalF32x4.replaceLane(vector, 4, surface.float32(0)),
     /lane must be an integer within \[0, 3\]; received 4/,
   );
+});
+
+Deno.test("canonical fixed-vector definitions are deeply immutable", () => {
+  const definition = FUNCTIONAL_FIXED_VECTOR_DEFINITIONS.find((candidate) =>
+    candidate.name === FunctionalF32x4Definition.Add
+  );
+  if (definition === undefined) throw new Error("canonical F32x4 addition definition is missing");
+  throws(
+    () => {
+      (definition.body as { kind: string }).kind = "integer";
+    },
+    TypeError,
+  );
+  const body = definition.body;
+  if (body.kind !== "case") {
+    throw new Error(`canonical F32x4 addition has unexpected ${body.kind} body`);
+  }
+  throws(
+    () => {
+      (body.arms as unknown as unknown[]).push(body.arms[0]);
+    },
+    TypeError,
+  );
+});
+
+Deno.test("linked fixed-vector definitions retain native SIMD lowering", async () => {
+  const vector = functionalF32x4.make([
+    surface.float32(1),
+    surface.float32(2),
+    surface.float32(3),
+    surface.float32(4),
+  ]);
+  const linked = linkFunctionalModules([{
+    name: "vectors",
+    definitions: [
+      ...FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+      {
+        name: "identityMask",
+        parameters: ["mask"],
+        annotation: {
+          kind: "function",
+          parameter: functionalF32x4.maskType,
+          result: functionalF32x4.maskType,
+        },
+        body: surface.name("mask"),
+      },
+      {
+        name: "second",
+        parameters: ["ignored", "vector"],
+        annotation: {
+          kind: "function",
+          parameter: { kind: "integer" },
+          result: {
+            kind: "function",
+            parameter: functionalF32x4.type,
+            result: functionalF32x4.type,
+          },
+        },
+        body: surface.name("vector"),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "float-32" },
+        body: functionalF32x4.reduceAdd(
+          functionalF32x4.select(
+            surface.apply(
+              surface.name("identityMask"),
+              functionalF32x4.equal(vector, vector),
+            ),
+            surface.apply(
+              surface.name("second"),
+              surface.integer(0),
+              functionalF32x4.multiply(
+                vector,
+                functionalF32x4.splat(surface.float32(2)),
+              ),
+            ),
+            functionalF32x4.splat(surface.float32(0)),
+          ),
+        ),
+      },
+    ],
+    typeDeclarations: FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+    imports: [],
+    exports: [{
+      name: "main",
+      definition: "main",
+      type: { kind: "float-32" },
+    }],
+    sourceByteLength: 0,
+    options: { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  }], { module: "vectors", exportName: "main" });
+
+  const compilation = await functionalWasmCompiler().compileModule(linked.module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("linked functional fixed-vector module did not compile");
+  try {
+    const simdBytes = await compileFunctionalModuleToWasm(compilation.module, {
+      simd: "wasm-simd",
+    });
+    ok(simdBytes.includes(0xfd), "linked fixed-vector output omitted native SIMD instructions");
+    const { instance } = await WebAssembly.instantiate(simdBytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 20);
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", async () => {
