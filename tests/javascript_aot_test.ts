@@ -112,11 +112,11 @@ Deno.test("checks own properties without consulting the prototype chain", async 
 export function main() {
   const object = new Object();
   object.answer = 42;
-  return object.hasOwnProperty("answer") && !object.hasOwnProperty("missing");
+  return object.hasOwnProperty("answer") && !object.hasOwnProperty("missing") ? 42 : 0;
 }
 `);
 
-  deepStrictEqual(value, { kind: "boolean", value: true });
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
 Deno.test("coerces numeric literal property keys for static and runtime objects", async () => {
