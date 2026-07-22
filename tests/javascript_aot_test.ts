@@ -597,6 +597,24 @@ export function main() {
   deepStrictEqual(value, { kind: "boolean", value: true });
 });
 
+Deno.test("keeps arguments unmapped for a non-simple parameter list", async () => {
+  const value = await compileAndRun(
+    `
+function update(value = 0) {
+  arguments[0] = 42;
+  return value;
+}
+
+export function main() {
+  return update(1) === 1 ? 42 : 0;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
 Deno.test("exposes function length without counting a trailing comma", async () => {
   const value = await compileAndRun(`
 export function main() {
