@@ -1312,6 +1312,15 @@ class ConstSpecializationError extends Error {
   }
 }
 
+const descriptorValidationNone = 0;
+const descriptorValidationTypeCompatible = 1;
+const descriptorValidationShape = 2;
+const maximumRecursiveConstValidationStates = 64;
+type DescriptorValidationRequirement =
+  | typeof descriptorValidationNone
+  | typeof descriptorValidationTypeCompatible
+  | typeof descriptorValidationShape;
+
 function specializeConstDefinitions(
   definitions: readonly Definition[],
   constDefinitions: readonly ConstDefinition[],
@@ -1319,7 +1328,7 @@ function specializeConstDefinitions(
   symbols: SymbolInterner,
 ): readonly Definition[] {
   const templates = new Map<string, ConstDefinition>();
-  const descriptorSensitiveTemplates = new Set<string>();
+  const parameterNamesByTemplate = new Map<string, ReadonlySet<string>>();
   for (const definition of constDefinitions) {
     if (templates.has(definition.name.spelling)) {
       throw new ConstSpecializationError(
@@ -1327,11 +1336,101 @@ function specializeConstDefinitions(
         `Duplicate const declaration ${JSON.stringify(definition.name.spelling)}.`,
       );
     }
-    const parameterNames = validateConstParameter(definition);
-    if (expressionReferencesConstParameter(definition.body, parameterNames)) {
-      descriptorSensitiveTemplates.add(definition.name.spelling);
-    }
+    parameterNamesByTemplate.set(definition.name.spelling, validateConstParameter(definition));
     templates.set(definition.name.spelling, definition);
+  }
+  const descriptorValidationRequirements = new Map<string, DescriptorValidationRequirement>();
+  const validationDependencies = new Map<string, readonly string[]>();
+  const validationDependents = new Map<string, string[]>();
+  const pendingValidationRequirements: string[] = [];
+  for (const definition of constDefinitions) {
+    const parameterNames = parameterNamesByTemplate.get(definition.name.spelling);
+    if (parameterNames === undefined) {
+      throw new Error(`Const ${JSON.stringify(definition.name.spelling)} was not indexed.`);
+    }
+    const validation = descriptorValidationDependencies(
+      definition.body,
+      parameterNames,
+      templates,
+    );
+    validationDependencies.set(definition.name.spelling, [...validation.dependencies]);
+    if (validation.requirement !== descriptorValidationNone) {
+      descriptorValidationRequirements.set(definition.name.spelling, validation.requirement);
+      pendingValidationRequirements.push(definition.name.spelling);
+    }
+    for (const dependency of validation.dependencies) {
+      const dependents = validationDependents.get(dependency);
+      if (dependents === undefined) {
+        validationDependents.set(dependency, [definition.name.spelling]);
+      } else dependents.push(definition.name.spelling);
+    }
+  }
+  while (pendingValidationRequirements.length !== 0) {
+    const templateName = pendingValidationRequirements.pop();
+    if (templateName === undefined) {
+      throw new Error("Const descriptor validation traversal ended unexpectedly.");
+    }
+    const requirement = descriptorValidationRequirements.get(templateName);
+    if (requirement === undefined) {
+      throw new Error(`Const ${JSON.stringify(templateName)} has no validation requirement.`);
+    }
+    for (const dependent of validationDependents.get(templateName) ?? []) {
+      const existingRequirement = descriptorValidationRequirements.get(dependent) ??
+        descriptorValidationNone;
+      if (existingRequirement >= requirement) continue;
+      descriptorValidationRequirements.set(dependent, requirement);
+      pendingValidationRequirements.push(dependent);
+    }
+  }
+  const finishedTemplates: string[] = [];
+  const visitedTemplates = new Set<string>();
+  for (const templateName of templates.keys()) {
+    if (visitedTemplates.has(templateName)) continue;
+    const pending: Array<readonly [string, boolean]> = [[templateName, false]];
+    while (pending.length !== 0) {
+      const traversal = pending.pop();
+      if (traversal === undefined) {
+        throw new Error("Const validation dependency traversal ended unexpectedly.");
+      }
+      const [current, finishing] = traversal;
+      if (finishing) {
+        finishedTemplates.push(current);
+        continue;
+      }
+      if (visitedTemplates.has(current)) continue;
+      visitedTemplates.add(current);
+      pending.push([current, true]);
+      const dependencies = validationDependencies.get(current) ?? [];
+      for (let index = dependencies.length - 1; index >= 0; index--) {
+        const dependency = dependencies[index];
+        if (dependency !== undefined && !visitedTemplates.has(dependency)) {
+          pending.push([dependency, false]);
+        }
+      }
+    }
+  }
+  const recursiveValidationTemplates = new Set<string>();
+  const assignedTemplates = new Set<string>();
+  for (let index = finishedTemplates.length - 1; index >= 0; index--) {
+    const templateName = finishedTemplates[index];
+    if (templateName === undefined || assignedTemplates.has(templateName)) continue;
+    const component: string[] = [];
+    const pending = [templateName];
+    while (pending.length !== 0) {
+      const current = pending.pop();
+      if (current === undefined) {
+        throw new Error("Const validation component traversal ended unexpectedly.");
+      }
+      if (assignedTemplates.has(current)) continue;
+      assignedTemplates.add(current);
+      component.push(current);
+      for (const dependent of validationDependents.get(current) ?? []) pending.push(dependent);
+    }
+    const hasSelfDependency = component.length === 1 &&
+      (validationDependencies.get(templateName) ?? []).includes(templateName);
+    if (component.length > 1 || hasSelfDependency) {
+      for (const member of component) recursiveValidationTemplates.add(member);
+    }
   }
   const types = new Map(
     dataDeclarations.map((declaration) => [declaration.name.spelling, declaration]),
@@ -1346,7 +1445,74 @@ function specializeConstDefinitions(
   }
   const runtimeNames = new Set(definitions.map((definition) => definition.name.spelling));
   const specializations = new Map<string, Identifier>();
+  const validatedSpecializations = new Set<string>();
+  const expandedSpecializations = new Set<string>();
+  const recursiveValidationCounts = new Map<string, number>();
   const generated: Definition[] = [];
+  const pendingValidations: Array<{
+    readonly template: ConstDefinition;
+    readonly descriptors: ReadonlyMap<string, ConstDescriptor>;
+    readonly generatedIndex: number | null;
+  }> = [];
+  const descriptorShapeIds = new Map<string, number>([["hole", 0], ["type", 1]]);
+  const shapeValidationKeys = new WeakMap<
+    ConstDescriptor,
+    { readonly shapeId: number; readonly typeCompatible: boolean }
+  >();
+  const typeValidationKeys = new WeakMap<
+    ConstDescriptor,
+    { readonly shapeId: number; readonly typeCompatible: boolean }
+  >();
+  const descriptorValidationKey: (
+    descriptor: ConstDescriptor,
+    requirement: "type-compatible" | "shape",
+  ) => { readonly shapeId: number; readonly typeCompatible: boolean } = (
+    descriptor,
+    requirement,
+  ) => {
+    const cached = requirement === "type-compatible"
+      ? typeValidationKeys.get(descriptor)
+      : shapeValidationKeys.get(descriptor);
+    if (cached !== undefined) return cached;
+
+    let result: { readonly shapeId: number; readonly typeCompatible: boolean };
+    if (descriptor.kind === "hole") {
+      result = { shapeId: 0, typeCompatible: false };
+    } else if (descriptor.kind === "type") {
+      result = { shapeId: 1, typeCompatible: true };
+    } else if (descriptor.kind === "tuple") {
+      const first = descriptorValidationKey(descriptor.values[0], requirement);
+      const second = descriptorValidationKey(descriptor.values[1], requirement);
+      const typeCompatible = first.typeCompatible && second.typeCompatible;
+      const shape = JSON.stringify(["tuple", first.shapeId, second.shapeId]);
+      let shapeId = descriptorShapeIds.get(shape);
+      if (shapeId === undefined) {
+        shapeId = descriptorShapeIds.size;
+        descriptorShapeIds.set(shape, shapeId);
+      }
+      result = {
+        shapeId: requirement === "type-compatible" && typeCompatible ? 1 : shapeId,
+        typeCompatible,
+      };
+    } else {
+      const fields = descriptor.fields.map((field) =>
+        [
+          field.name.spelling,
+          descriptorValidationKey(field.value, requirement).shapeId,
+        ] as const
+      ).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+      const shape = JSON.stringify(["record", ...fields]);
+      let shapeId = descriptorShapeIds.get(shape);
+      if (shapeId === undefined) {
+        shapeId = descriptorShapeIds.size;
+        descriptorShapeIds.set(shape, shapeId);
+      }
+      result = { shapeId, typeCompatible: false };
+    }
+    if (requirement === "type-compatible") typeValidationKeys.set(descriptor, result);
+    else shapeValidationKeys.set(descriptor, result);
+    return result;
+  };
 
   const instantiate = (
     name: Identifier,
@@ -1376,15 +1542,38 @@ function specializeConstDefinitions(
     const resolvedArgument = argument === null
       ? null
       : resolveConstDescriptor(argument, descriptors, types);
-    const key = resolvedArgument === null || !descriptorSensitiveTemplates.has(name.spelling)
+    const templateDescriptors = new Map<string, ConstDescriptor>();
+    if (template.parameter !== null && resolvedArgument !== null) {
+      bindConstParameter(
+        template.name.spelling,
+        template.parameter,
+        resolvedArgument,
+        templateDescriptors,
+      );
+    }
+    const validationRequirement = descriptorValidationRequirements.get(name.spelling) ??
+      descriptorValidationNone;
+    let bindingsKey = "";
+    if (validationRequirement !== descriptorValidationNone) {
+      const validationMode = validationRequirement === descriptorValidationTypeCompatible
+        ? "type-compatible"
+        : "shape";
+      bindingsKey = [...templateDescriptors].map(([parameterName, descriptor]) => {
+        const descriptorKey = descriptorValidationKey(descriptor, validationMode);
+        return `${JSON.stringify(parameterName)}:${descriptorKey.shapeId}`;
+      }).sort().join(",");
+    }
+    const validationKey = resolvedArgument === null ||
+        validationRequirement === descriptorValidationNone
       ? name.spelling
-      : `${name.spelling}@${constDescriptorStructuralKey(resolvedArgument)}`;
-    let generatedName = specializations.get(key);
+      : `${name.spelling}@${bindingsKey}`;
+    let generatedName = specializations.get(name.spelling);
+    let generatedIndex: number | null = null;
     if (generatedName === undefined) {
       generatedName = { spelling: `$const$${specializations.size}`, span: template.name.span };
       symbols.intern(generatedName.spelling);
-      specializations.set(key, generatedName);
-      const generatedIndex = generated.length;
+      specializations.set(name.spelling, generatedName);
+      generatedIndex = generated.length;
       generated.push({
         name: generatedName,
         parameters: [],
@@ -1392,22 +1581,25 @@ function specializeConstDefinitions(
         body: { kind: "boolean", value: false, span: template.span },
         span: template.span,
       });
-      const templateDescriptors = new Map<string, ConstDescriptor>();
-      if (template.parameter !== null && resolvedArgument !== null) {
-        bindConstParameter(
-          template.name.spelling,
-          template.parameter,
-          resolvedArgument,
-          templateDescriptors,
-        );
+    }
+    if (!validatedSpecializations.has(validationKey)) {
+      if (
+        recursiveValidationTemplates.has(name.spelling) &&
+        expandedSpecializations.has(name.spelling)
+      ) {
+        const recursiveValidationCount = (recursiveValidationCounts.get(name.spelling) ?? 0) + 1;
+        if (recursiveValidationCount > maximumRecursiveConstValidationStates) {
+          throw new ConstSpecializationError(
+            span,
+            `Const ${
+              JSON.stringify(name.spelling)
+            } recursively produced ${recursiveValidationCount} distinct descriptor validation states; the limit is ${maximumRecursiveConstValidationStates}.`,
+          );
+        }
+        recursiveValidationCounts.set(name.spelling, recursiveValidationCount);
       }
-      generated[generatedIndex] = {
-        name: generatedName,
-        parameters: [],
-        annotation: null,
-        body: expand(template.body, templateDescriptors, new Set()),
-        span: template.span,
-      };
+      validatedSpecializations.add(validationKey);
+      pendingValidations.push({ template, descriptors: templateDescriptors, generatedIndex });
     }
     return { kind: "name", identifier: generatedName, span };
   };
@@ -1586,6 +1778,22 @@ function specializeConstDefinitions(
     const boundNames = new Set(definition.parameters.map((parameter) => parameter.spelling));
     return { ...definition, body: expand(definition.body, new Map(), boundNames) };
   });
+  let validationCursor = 0;
+  while (validationCursor < pendingValidations.length) {
+    const validation = pendingValidations[validationCursor];
+    if (validation === undefined) {
+      throw new Error(`Const validation ${validationCursor} was not queued.`);
+    }
+    validationCursor++;
+    const expandedBody = expand(validation.template.body, validation.descriptors, new Set());
+    if (validation.generatedIndex === null) continue;
+    const specialization = generated[validation.generatedIndex];
+    if (specialization === undefined) {
+      throw new Error(`Const specialization ${validation.generatedIndex} was not generated.`);
+    }
+    generated[validation.generatedIndex] = { ...specialization, body: expandedBody };
+    expandedSpecializations.add(validation.template.name.spelling);
+  }
   return [...expandedDefinitions, ...generated].sort((left, right) =>
     left.span.start - right.span.start || left.span.end - right.span.end
   );
@@ -1631,11 +1839,19 @@ function validateConstParameter(definition: ConstDefinition): ReadonlySet<string
   return names;
 }
 
-function expressionReferencesConstParameter(
+function descriptorValidationDependencies(
   expression: Expression,
   parameterNames: ReadonlySet<string>,
-): boolean {
-  if (parameterNames.size === 0) return false;
+  templates: ReadonlyMap<string, ConstDefinition>,
+): {
+  readonly requirement: DescriptorValidationRequirement;
+  readonly dependencies: ReadonlySet<string>;
+} {
+  const dependencies = new Set<string>();
+  if (parameterNames.size === 0) {
+    return { requirement: descriptorValidationNone, dependencies };
+  }
+  let requirement: DescriptorValidationRequirement = descriptorValidationNone;
   const pending = [expression];
   while (pending.length !== 0) {
     const current = pending.pop();
@@ -1645,12 +1861,25 @@ function expressionReferencesConstParameter(
       case "boolean":
       case "name":
         break;
-      case "const-instantiation":
-        if (
-          current.argument !== null &&
-          constDescriptorReferencesNames(current.argument, parameterNames)
-        ) return true;
+      case "const-instantiation": {
+        if (!constDescriptorReferencesNames(current.argument, parameterNames)) break;
+        const callee = templates.get(current.name.spelling);
+        if (callee === undefined || callee.parameter === null) break;
+        if (constDescriptorIsDirectParameterReference(current.argument, parameterNames)) {
+          if (callee.parameter.kind === "bind") dependencies.add(current.name.spelling);
+          else requirement = descriptorValidationShape;
+          break;
+        }
+        if (callee.parameter.kind !== "bind") requirement = descriptorValidationShape;
+        else {
+          dependencies.add(current.name.spelling);
+          if (!constDescriptorRequiresParameterAsType(current.argument, parameterNames)) break;
+          if (requirement === descriptorValidationNone) {
+            requirement = descriptorValidationTypeCompatible;
+          }
+        }
         break;
+      }
       case "record":
         for (const field of current.fields) pending.push(field.value);
         break;
@@ -1677,7 +1906,23 @@ function expressionReferencesConstParameter(
         break;
     }
   }
-  return false;
+  return { requirement, dependencies };
+}
+
+function constDescriptorIsDirectParameterReference(
+  descriptor: ConstDescriptor,
+  names: ReadonlySet<string>,
+): boolean {
+  return descriptor.kind === "type" && descriptor.type.kind === "named" &&
+    descriptor.type.arguments.length === 0 && names.has(descriptor.type.name);
+}
+
+function constDescriptorRequiresParameterAsType(
+  descriptor: ConstDescriptor,
+  names: ReadonlySet<string>,
+): boolean {
+  if (descriptor.kind !== "type") return false;
+  return sourceTypeReferencesNames(descriptor.type, names);
 }
 
 function constDescriptorReferencesNames(
@@ -1909,41 +2154,6 @@ function constDescriptorType(descriptor: ConstDescriptor): SourceType | null {
   const second = constDescriptorType(descriptor.values[1]);
   if (first === null || second === null) return null;
   return { kind: "tuple", values: [first, second], span: descriptor.span };
-}
-
-function constDescriptorStructuralKey(descriptor: ConstDescriptor): string {
-  if (descriptor.kind === "hole") return "hole";
-  if (descriptor.kind === "type") return `type(${typeStructuralKey(descriptor.type)})`;
-  if (descriptor.kind === "tuple") {
-    return `tuple(${constDescriptorStructuralKey(descriptor.values[0])},${
-      constDescriptorStructuralKey(descriptor.values[1])
-    })`;
-  }
-  const fields = descriptor.fields.map((field) =>
-    `${JSON.stringify(field.name.spelling)}:${constDescriptorStructuralKey(field.value)}`
-  ).sort();
-  return `record({${fields.join(",")}})`;
-}
-
-function typeStructuralKey(type: SourceType): string {
-  switch (type.kind) {
-    case "integer":
-      return "integer";
-    case "boolean":
-      return "boolean";
-    case "unit":
-      return "unit";
-    case "parameter":
-      return `parameter(${JSON.stringify(type.name)})`;
-    case "tuple":
-      return `tuple(${typeStructuralKey(type.values[0])},${typeStructuralKey(type.values[1])})`;
-    case "named":
-      return `named(${JSON.stringify(type.name)}:[${
-        type.arguments.map(typeStructuralKey).join(",")
-      }])`;
-    case "function":
-      return `function(${typeStructuralKey(type.parameter)},${typeStructuralKey(type.result)})`;
-  }
 }
 
 function summarizeDefinitions(

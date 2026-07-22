@@ -1907,6 +1907,82 @@ Deno.test("shares const specializations whose descriptors do not affect their bo
   });
 });
 
+Deno.test("shares descriptor-forwarding const bodies across distinct descriptors", () => {
+  const size = 64;
+  const declarations = Array.from(
+    { length: size },
+    (_, index) => `data T${index} = C${index};`,
+  ).join(" ");
+  let forwardedBody = "identity @descriptor 0";
+  let mainBody = `forwarded @T${size - 1}`;
+  for (let index = size - 2; index >= 0; index--) {
+    forwardedBody = `(identity @descriptor 0, ${forwardedBody})`;
+    mainBody = `(forwarded @T${index}, ${mainBody})`;
+  }
+  const parsing = parseLazuliSource(
+    `${declarations}
+     const identity descriptor = value => value;
+     const forwarded descriptor = ${forwardedBody};
+     let main = ${mainBody};`,
+  );
+
+  ok(parsing.ok);
+  if (!parsing.ok) return;
+  equal(parsing.surface.definitionCount, 3);
+  ok(parsing.surface.nodeCount < 1_000);
+});
+
+Deno.test("validates every descriptor when const bodies are shared", () => {
+  const parsing = parseLazuliSource(
+    `const choose (first, second) = value => value;
+     const forwarded descriptor = choose @descriptor;
+     let main = (forwarded @(Int, Bool) 0, forwarded @Int 0);`,
+  );
+
+  equal(parsing.ok, false);
+  if (!parsing.ok) {
+    match(parsing.diagnostics[0].message, /expects a tuple type descriptor/i);
+  }
+});
+
+Deno.test("expands long flat const dependency chains without call-stack growth", () => {
+  const size = 4_096;
+  const declarations = Array.from(
+    { length: size },
+    (_, index) => `const value${index} = ${index + 1 === size ? "0" : `value${index + 1}`};`,
+  ).join("\n");
+  const parsing = parseLazuliSource(`${declarations}\nlet main = value0;`);
+
+  ok(parsing.ok);
+  if (!parsing.ok) return;
+  equal(parsing.surface.definitionCount, size + 1);
+  equal(parsing.surface.nodeCount, size + 1);
+});
+
+Deno.test("erases recursive descriptor changes that cannot affect validation", () => {
+  const parsing = parseLazuliSource(
+    "const loop descriptor = loop @(descriptor, Int); let main = loop @Int;",
+  );
+
+  ok(parsing.ok);
+  if (!parsing.ok) return;
+  equal(parsing.surface.definitionCount, 2);
+  equal(parsing.surface.nodeCount, 2);
+});
+
+Deno.test("bounds recursively expanding const descriptor validation", () => {
+  const parsing = parseLazuliSource(
+    `const choose (first, second) = value => value;
+     const loop descriptor = (choose @descriptor 0, loop @(descriptor, descriptor));
+     let main = loop @(Int, Bool);`,
+  );
+
+  equal(parsing.ok, false);
+  if (!parsing.ok) {
+    match(parsing.diagnostics[0].message, /recursively produced 65 distinct descriptor/i);
+  }
+});
+
 Deno.test("destructures structured const descriptors and infers holes", async () => {
   await withLazuliRuntime(async (runtime) => {
     const result = await evaluateSource(

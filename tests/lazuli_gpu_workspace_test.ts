@@ -310,6 +310,20 @@ Deno.test("pathological type and case shapes stay within proportional compiler w
       }
       return `let shape = value => ${shape}; let consumeInt : ${integerType} -> Int = value => 0; let consumeBool : ${booleanType} -> Int = value => 0; let main = ${body};`;
     };
+    const distinctGenericAnnotation = (size: number) => {
+      let type = `p${size - 1}`;
+      let value = size % 2 === 0 ? "true" : `${size - 1}`;
+      for (let index = size - 2; index >= 0; index--) {
+        type = `(p${index}, ${type})`;
+        value = `(${index % 2 === 0 ? index : "true"}, ${value})`;
+      }
+      return `let identity : ${type} -> ${type} = value => value; let main = identity ${value};`;
+    };
+    const distinctNamedGenericApplication = (size: number) => {
+      const declared = Array.from({ length: size }, (_, index) => `d${index}`).join(" ");
+      const inferred = Array.from({ length: size }, (_, index) => `p${index}`).join(" ");
+      return `data Product ${declared} = Product; let consume : Product ${inferred} -> Int = value => 0; let main = consume Product;`;
+    };
 
     const annotations = Array.from(
       { length: 128 },
@@ -398,6 +412,19 @@ Deno.test("pathological type and case shapes stay within proportional compiler w
     ok(
       manyAlternatingApplications.inferenceTransitions <=
         fewAlternatingApplications.inferenceTransitions * 2.2,
+    );
+
+    const fewDistinctGenerics = await compile(distinctGenericAnnotation(64));
+    const manyDistinctGenerics = await compile(distinctGenericAnnotation(128));
+    ok(
+      manyDistinctGenerics.inferenceTransitions <=
+        fewDistinctGenerics.inferenceTransitions * 2.2,
+    );
+
+    const fewNamedGenerics = await compile(distinctNamedGenericApplication(128));
+    const manyNamedGenerics = await compile(distinctNamedGenericApplication(256));
+    ok(
+      manyNamedGenerics.inferenceTransitions <= fewNamedGenerics.inferenceTransitions * 2.2,
     );
   } finally {
     device.destroy();

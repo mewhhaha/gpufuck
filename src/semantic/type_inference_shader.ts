@@ -453,6 +453,46 @@ function prepareIndexedInferenceMetadata(
     return parameters;
   };
 
+  for (const root of flattened.definitionAnnotationRoots) {
+    if (root === LAZULI_NO_INDEX) continue;
+    const parameterPositions = new Map<number, number>();
+    const pending = [root];
+    while (pending.length !== 0) {
+      const schemaIndex = pending.pop();
+      if (schemaIndex === undefined) {
+        throw new Error("Lazuli definition annotation traversal ended unexpectedly.");
+      }
+      const tag = schemaWord(schemaIndex, LazuliTypeSchemaWord.Tag);
+      if (
+        tag === LazuliInferenceSchemaTag.Parameter || tag === LazuliInferenceSchemaTag.Forall
+      ) {
+        const parameter = schemaWord(schemaIndex, LazuliTypeSchemaWord.Symbol);
+        let position = parameterPositions.get(parameter);
+        if (position === undefined) {
+          position = parameterPositions.size;
+          parameterPositions.set(parameter, position);
+        }
+        schemaParameterPositions[schemaIndex] = position;
+      }
+      const children: number[] = [];
+      let child = schemaWord(schemaIndex, LazuliTypeSchemaWord.FirstChild);
+      while (child !== LAZULI_NO_INDEX) {
+        children.push(child);
+        child = schemaWord(child, LazuliTypeSchemaWord.NextSibling);
+      }
+      // Named schemas await each child; binary schemas push both onto the LIFO frame stack.
+      if (tag === LazuliInferenceSchemaTag.Named) {
+        for (let index = children.length - 1; index >= 0; index--) {
+          pending.push(children[index]!);
+        }
+      } else {
+        for (let index = 0; index < children.length; index++) {
+          pending.push(children[index]!);
+        }
+      }
+    }
+  }
+
   const constructorValidation = new Uint32Array(
     surface.constructorCount * VALIDATION_RECORD_WORD_LENGTH,
   );
@@ -1000,6 +1040,7 @@ const TYPE_INSTANTIATION_TOKEN: u32 = 17u;
 const TYPE_INSTANTIATION_ENTRY: u32 = 18u;
 const TYPE_LAZY_CONSTRUCTOR: u32 = 19u;
 const TYPE_APPLICATION_CACHE_TRIE: u32 = 20u;
+const TYPE_INSTANTIATION_BRANCH: u32 = 21u;
 const TYPE_RECORD_WORDS: u32 = 5u;
 const ENVIRONMENT_WORDS: u32 = ${LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH}u;
 const FRAME_WORDS: u32 = 12u;
@@ -1339,14 +1380,34 @@ fn allocate_type_instance(source: u32, mapping: u32, mode: u32, open_forall: u32
 }
 
 fn instantiation_replacement(source: u32, mapping: u32, mode: u32) -> u32 {
-  var entry = type_get(mapping, 1u);
-  loop {
-    if entry == NO_INDEX { break; }
-    if type_get(entry, 0u) != TYPE_INSTANTIATION_ENTRY { return NO_INDEX; }
-    if type_get(entry, 1u) == source { return type_get(entry, 2u); }
-    entry = type_get(entry, 3u);
+  let root = type_get(mapping, 1u);
+  if root == NO_INDEX {
+    if !require_type_slots(2u) { return NO_INDEX; }
+    var replacement = NO_INDEX;
+    if mode == 1u {
+      replacement = allocate_type(TYPE_RIGID, state.next_generic, state.current_level, NO_INDEX);
+      state.next_generic += 1u;
+    } else {
+      replacement = fresh_variable();
+      type_set(replacement, 3u, mapping);
+    }
+    let entry = allocate_type(TYPE_INSTANTIATION_ENTRY, source, replacement, NO_INDEX);
+    type_set(mapping, 1u, entry);
+    return replacement;
   }
-  if !require_type_slots(2u) { return NO_INDEX; }
+
+  var entry = root;
+  loop {
+    let kind = type_get(entry, 0u);
+    if kind == TYPE_INSTANTIATION_ENTRY { break; }
+    if kind != TYPE_INSTANTIATION_BRANCH { return NO_INDEX; }
+    let bit = (source >> type_get(entry, 1u)) & 1u;
+    entry = type_get(entry, 2u + bit);
+  }
+  let existing_source = type_get(entry, 1u);
+  if existing_source == source { return type_get(entry, 2u); }
+  if !require_type_slots(3u) { return NO_INDEX; }
+
   var replacement = NO_INDEX;
   if mode == 1u {
     replacement = allocate_type(TYPE_RIGID, state.next_generic, state.current_level, NO_INDEX);
@@ -1355,13 +1416,28 @@ fn instantiation_replacement(source: u32, mapping: u32, mode: u32) -> u32 {
     replacement = fresh_variable();
     type_set(replacement, 3u, mapping);
   }
-  let mapping_entry = allocate_type(
-    TYPE_INSTANTIATION_ENTRY,
-    source,
-    replacement,
-    type_get(mapping, 1u),
-  );
-  type_set(mapping, 1u, mapping_entry);
+  let mapping_entry = allocate_type(TYPE_INSTANTIATION_ENTRY, source, replacement, NO_INDEX);
+  let differing_bit = 31u - countLeadingZeros(source ^ existing_source);
+  var parent = mapping;
+  var parent_field = 1u;
+  var subtree = root;
+  // Branch bits strictly decrease, so lookup and insertion visit at most 32 branches.
+  loop {
+    if type_get(subtree, 0u) != TYPE_INSTANTIATION_BRANCH ||
+      type_get(subtree, 1u) <= differing_bit { break; }
+    parent = subtree;
+    parent_field = 2u + ((source >> type_get(subtree, 1u)) & 1u);
+    subtree = type_get(subtree, parent_field);
+  }
+  let source_bit = (source >> differing_bit) & 1u;
+  var zero_child = mapping_entry;
+  var one_child = subtree;
+  if source_bit != 0u {
+    zero_child = subtree;
+    one_child = mapping_entry;
+  }
+  let branch = allocate_type(TYPE_INSTANTIATION_BRANCH, differing_bit, zero_child, one_child);
+  type_set(parent, parent_field, branch);
   return replacement;
 }
 
@@ -2778,10 +2854,16 @@ fn schema_visit_transition(frame: u32) {
     if indexed_metadata_is_available() {
       let position = schema_words[indexed_metadata_base(5u) + frame_get(frame, 0u)];
       if position != NO_INDEX {
-        if position >= state.work_aux {
+        if position > state.work_aux {
           report_metadata_diagnostic(
             METADATA_INVALID_SCHEMA_CONVERSION, node.start_byte, node.end_byte,
             frame_get(frame, 0u), node.payload, position);
+          return;
+        }
+        if position == state.work_aux {
+          state.work_result = 0u;
+          state.returned_type = NO_INDEX;
+          frame_set(frame, 3u, 1u);
           return;
         }
         let address = temporary_base() + position * 2u;
@@ -2819,6 +2901,21 @@ fn schema_visit_transition(frame: u32) {
     return;
   }
   if node.tag == SCHEMA_FORALL {
+    if indexed_metadata_is_available() {
+      let position = schema_words[indexed_metadata_base(5u) + frame_get(frame, 0u)];
+      if position != NO_INDEX {
+        if position > state.work_aux {
+          report_metadata_diagnostic(
+            METADATA_INVALID_SCHEMA_CONVERSION, node.start_byte, node.end_byte,
+            frame_get(frame, 0u), node.payload, position);
+          return;
+        }
+        state.work_result = select(0u, 1u, position < state.work_aux);
+        state.returned_type = NO_INDEX;
+        frame_set(frame, 3u, 4u);
+        return;
+      }
+    }
     if start_mapping_lookup(node.payload, state.work_aux) { frame_set(frame, 3u, 4u); }
     return;
   }
