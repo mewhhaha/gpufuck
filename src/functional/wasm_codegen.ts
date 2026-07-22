@@ -337,6 +337,8 @@ class FunctionalWasmCompiler {
       emitEncodeBoolean: (instructions) => this.emitEncodeBoolean(instructions),
       emitEncodeInteger: (instructions) => this.emitEncodeInteger(instructions),
       emitForceValue: (instructions) => this.emitForceValue(instructions),
+      emitFuelChargeAmount: (instructions, amount, nodeIndex) =>
+        this.#runtimeEmitter.emitFuelChargeAmount(instructions, amount, nodeIndex),
       emitRuntimeFault: (instructions, fault) =>
         this.#runtimeEmitter.emitFault(instructions, fault, -1),
     });
@@ -994,7 +996,7 @@ class FunctionalWasmCompiler {
   emitHostFieldValue(instructions: WasmInstructions, field: HostField): void {
     if (field.declaration.kind === "value") {
       if (field.declaration.wasmLiteral !== undefined) {
-        this.#hostEmitter.emitLiteral(instructions, field.declaration.wasmLiteral);
+        this.#hostEmitter.emitLiteral(instructions, field.declaration.wasmLiteral, -1);
         return;
       }
       if (field.importIndex === undefined) {
@@ -1158,7 +1160,7 @@ class FunctionalWasmCompiler {
         };
         this.compileExpression(instructions, node.child0, environment);
         this.compileExpression(instructions, node.child1, environment);
-        this.#hostEmitter.emitBufferAppendValues(instructions, type);
+        this.#hostEmitter.emitBufferAppendValues(instructions, type, nodeIndex);
         return;
       }
       case FunctionalCoreTag.StoreNew:
@@ -1187,6 +1189,7 @@ class FunctionalWasmCompiler {
           node.tag === FunctionalCoreTag.Text
             ? { kind: "text", value: symbol }
             : { kind: "bytes", value: functionalBytesFromLiteralSymbol(symbol) },
+          nodeIndex,
         );
         return;
       }
@@ -2571,6 +2574,7 @@ class FunctionalWasmCompiler {
     const initial = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(initial);
     this.requireStoreLength(instructions, length, nodeIndex);
+    this.#runtimeEmitter.emitFuelChargeAmount(instructions, length, nodeIndex);
     const pointer = this.allocateStore(instructions, length);
     const cursor = instructions.addLocal(WasmValueType.I32);
     instructions.i32Const(0);
@@ -2684,6 +2688,7 @@ class FunctionalWasmCompiler {
       });
     }
 
+    this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
     const destination = this.allocateStore(instructions, currentLength);
     this.emitStoreCopy(instructions, destination, source, sourceLength);
     for (const update of evaluated) {
@@ -4220,6 +4225,8 @@ class FunctionalWasmCompiler {
       ),
       functionIndex,
       emitForceValue: (instructions) => this.emitForceValue(instructions),
+      emitFuelChargeAmount: (instructions, amount) =>
+        this.#runtimeEmitter.emitFuelChargeAmount(instructions, amount, -1),
     });
     return functionIndex;
   }

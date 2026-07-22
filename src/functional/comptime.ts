@@ -263,6 +263,7 @@ export class GpuFunctionalComptimeExecutor {
           resultForm: "deep" as const,
           maximumSteps: options.maximumExecutionSteps ?? DEFAULT_MAXIMUM_COMPTIME_STEPS,
           maximumResultNodes: limits.maximumOutputNodes,
+          maximumResultBytes: limits.maximumOutputBytes,
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         };
         const evaluations = gpuEvaluationRequested(options)
@@ -364,11 +365,17 @@ class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFu
     }
     const limits = comptimeLimits(options);
     const key = `${this.#fingerprint}:${maximumSteps}:${limits.maximumOutputNodes}:` +
+      `${limits.maximumOutputBytes}:` +
       new TextDecoder().decode(encodeFunctionalConstant(argument));
     let invocation = memoizedComptimeInvocations.get(key);
     const memoized = invocation !== undefined;
     if (invocation === undefined) {
-      invocation = this.#evaluate(argument, maximumSteps, limits.maximumOutputNodes);
+      invocation = this.#evaluate(
+        argument,
+        maximumSteps,
+        limits.maximumOutputNodes,
+        limits.maximumOutputBytes,
+      );
       memoizedComptimeInvocations.set(key, invocation);
       evictOldestComptimeInvocations();
     } else {
@@ -422,12 +429,14 @@ class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFu
     argument: FunctionalConstant,
     maximumSteps: number,
     maximumResultNodes: number,
+    maximumResultBytes: number,
   ): Promise<MemoizedComptimeInvocation> {
     const evaluation = await evaluateFunctionalModuleWithBoundedWasm(this.#module, {
       resultForm: "deep",
       input: argument,
       maximumSteps,
       maximumResultNodes,
+      maximumResultBytes,
     });
     if (!evaluation.ok) {
       return {

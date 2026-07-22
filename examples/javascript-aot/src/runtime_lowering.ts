@@ -1,6 +1,9 @@
 import {
   type EncodedFunctionalModule,
   FunctionalBinaryOperator,
+  FunctionalNumericConversion,
+  type FunctionalSourceType,
+  type FunctionalTypeSchema,
   FunctionalUnaryOperator,
 } from "../../../src/functional/abi.ts";
 import {
@@ -17,13 +20,14 @@ import type {
 } from "./ast.ts";
 import { JavaScriptAotLoweringError } from "./diagnostic.ts";
 import {
+  JAVASCRIPT_RUNTIME_ADD,
   JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT,
   JAVASCRIPT_RUNTIME_DEFINE_BINDING,
   JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED,
   JAVASCRIPT_RUNTIME_EMPTY_STATE,
   JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE,
-  JAVASCRIPT_RUNTIME_GLOBAL_OBJECT,
   JAVASCRIPT_RUNTIME_INITIALIZE_BINDING,
+  JAVASCRIPT_RUNTIME_IS_CALLABLE,
   JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT,
   JAVASCRIPT_RUNTIME_LOOKUP_BINDING,
   JAVASCRIPT_RUNTIME_OBJECT_KIND,
@@ -34,6 +38,8 @@ import {
   JAVASCRIPT_RUNTIME_STRICT_EQUAL,
   JAVASCRIPT_RUNTIME_THIS_VALUE,
   JAVASCRIPT_RUNTIME_TO_BOOLEAN,
+  JAVASCRIPT_RUNTIME_TO_NUMBER,
+  JAVASCRIPT_RUNTIME_TYPEOF,
   JAVASCRIPT_RUNTIME_WITH_GLOBAL_THIS,
   javascriptRuntimeSurface,
 } from "./runtime.ts";
@@ -48,6 +54,7 @@ export interface LoweredJavaScriptRuntimeModule {
 export interface JavaScriptRuntimeLoweringOptions {
   readonly runtimeFaultConstructors?: ReadonlyMap<string, string>;
   readonly callThisMode?: "strict" | "sloppy";
+  readonly entryThisMode?: "undefined" | "global";
 }
 
 type RuntimeExpressionContinuation = (
@@ -65,7 +72,10 @@ interface RuntimeFunction {
   readonly id: number;
   readonly name: string;
   readonly thisMode: "dynamic" | "lexical";
+  readonly strict: boolean;
+  readonly usesArguments: boolean;
   readonly parameters: readonly string[];
+  readonly functionLength: number;
   readonly body: readonly JavaScriptAotStatement[];
   readonly span: JavaScriptAotExpression["span"];
 }
@@ -92,11 +102,13 @@ const runtimeNumericOperators: Readonly<Partial<Record<string, FunctionalBinaryO
   ">": FunctionalBinaryOperator.GreaterFloat64,
   ">=": FunctionalBinaryOperator.GreaterEqualFloat64,
 };
+const JAVASCRIPT_RUNTIME_CALL_DISPATCH = "$javascript#dispatchCall";
 export function requiresJavaScriptRuntimeModel(sourceModule: JavaScriptAotModule): boolean {
   return sourceModule.declarations.some((declaration) =>
     declaration.kind === "constant"
       ? expressionRequiresRuntimeModel(declaration.value)
-      : declaration.body.some(statementRequiresRuntimeModel)
+      : declaration.requiresRuntimeModel === true ||
+        declaration.body.some(statementRequiresRuntimeModel)
   );
 }
 
@@ -109,19 +121,53 @@ export function lowerJavaScriptRuntimeModule(
   return lowering.lower();
 }
 
+export function validateJavaScriptRuntimeResolution(
+  sourceModule: JavaScriptAotModule,
+  entryName: string,
+): void {
+  new JavaScriptRuntimeLowering(sourceModule, entryName, {}).validateResolution();
+}
+
 class JavaScriptRuntimeLowering {
   #bindingIndex = 0;
   readonly #functions: RuntimeFunction[] = [];
   readonly #functionsBySyntax = new WeakMap<RuntimeFunctionSyntax, RuntimeFunction>();
+  readonly #usesSharedCallDispatcher: boolean;
+  readonly #usesFunctionLength: boolean;
+  readonly #maximumSourceCallArgumentCount: number;
 
   constructor(
     private readonly sourceModule: JavaScriptAotModule,
     private readonly entryName: string,
     private readonly options: JavaScriptRuntimeLoweringOptions,
-  ) {}
+  ) {
+    this.#usesSharedCallDispatcher = sourceModule.declarations.some((declaration) =>
+      declaration.kind === "constant"
+        ? runtimeExpressionNeedsSharedCallDispatcher(declaration.value)
+        : runtimeStatementsNeedSharedCallDispatcher(declaration.body)
+    );
+    this.#usesFunctionLength = sourceModule.declarations.some((declaration) =>
+      declaration.kind === "constant"
+        ? runtimeExpressionReadsProperty(declaration.value, "length")
+        : runtimeStatementsReadProperty(declaration.body, "length")
+    );
+    this.#maximumSourceCallArgumentCount = sourceModule.declarations.reduce(
+      (maximum, declaration) =>
+        Math.max(
+          maximum,
+          declaration.kind === "constant"
+            ? runtimeExpressionMaximumCallArgumentCount(declaration.value)
+            : runtimeStatementsMaximumCallArgumentCount(declaration.body),
+        ),
+      0,
+    );
+  }
 
-  lower(): LoweredJavaScriptRuntimeModule {
-    const entry = this.requireEntry();
+  validateResolution(): void {
+    this.validateEntryResolution(this.requireEntry());
+  }
+
+  private validateEntryResolution(entry: JavaScriptAotFunctionDeclaration): void {
     const unresolvedName = firstRuntimeUnresolvedName(entry);
     if (unresolvedName !== null) {
       throw new JavaScriptAotLoweringError(
@@ -129,12 +175,19 @@ class JavaScriptRuntimeLowering {
         `JavaScript runtime-model name ${JSON.stringify(unresolvedName.name)} is not declared.`,
       );
     }
-    this.prepareRuntimeFunctions(entry.body);
+  }
+
+  lower(): LoweredJavaScriptRuntimeModule {
+    const entry = this.requireEntry();
+    this.validateEntryResolution(entry);
+    this.prepareRuntimeProgram(entry.body);
     const entryResultKind = runtimeEntryResultKind(entry);
     const runtime = javascriptRuntimeSurface(this.sourceModule.span.endByte);
     const emptyState = reference(JAVASCRIPT_RUNTIME_EMPTY_STATE, entry.span);
     const initialState = this.extendFunctionStateWithDeclarations(
-      (this.options.callThisMode ?? "strict") === "sloppy"
+      (this.options.entryThisMode ??
+          ((this.options.callThisMode ?? "strict") === "sloppy" ? "global" : "undefined")) ===
+          "global"
         ? call(JAVASCRIPT_RUNTIME_WITH_GLOBAL_THIS, [emptyState], entry.span)
         : emptyState,
       entry.body,
@@ -162,7 +215,21 @@ class JavaScriptRuntimeLowering {
     functionDefinitions.sort((left, right) =>
       (left.span?.startByte ?? 0) - (right.span?.startByte ?? 0)
     );
-    const definitions = [entryDefinition, ...functionDefinitions, ...runtime.definitions];
+    const dispatcherDefinitions = this.#usesSharedCallDispatcher
+      ? [this.lowerRuntimeCallDispatcher({
+        startByte: this.sourceModule.span.endByte,
+        endByte: this.sourceModule.span.endByte,
+      })]
+      : [];
+    const sourceDefinitions = [entryDefinition, ...functionDefinitions];
+    sourceDefinitions.sort((left, right) =>
+      (left.span?.startByte ?? 0) - (right.span?.startByte ?? 0)
+    );
+    const definitions = [
+      ...sourceDefinitions,
+      ...dispatcherDefinitions,
+      ...runtime.definitions,
+    ];
     return {
       sourceModule: this.sourceModule,
       definitions,
@@ -183,7 +250,11 @@ class JavaScriptRuntimeLowering {
     const environmentName = this.freshName("capturedEnvironment");
     const bindingsName = this.freshName("functionBindings");
     const thisValueName = this.freshName("thisValue");
-    const argumentNames = runtimeFunction.parameters.map(() => this.freshName("argument"));
+    const argumentCountName = this.freshName("argumentCount");
+    const argumentNames = Array.from(
+      { length: this.maximumRuntimeArgumentCount() },
+      () => this.freshName("argument"),
+    );
     let state = call(Runtime.JAVASCRIPT_STATE, [
       reference(heapName, runtimeFunction.span),
       call(Runtime.JAVASCRIPT_EXECUTION_CONTEXT, [
@@ -194,6 +265,12 @@ class JavaScriptRuntimeLowering {
       ], runtimeFunction.span),
       reference(bindingsName, runtimeFunction.span),
     ], runtimeFunction.span);
+    state = this.defineRuntimeArgumentsBinding(
+      state,
+      runtimeFunction,
+      reference(argumentCountName, runtimeFunction.span),
+      argumentNames.map((name) => reference(name, runtimeFunction.span)),
+    );
     for (let index = 0; index < runtimeFunction.parameters.length; index++) {
       state = call(JAVASCRIPT_RUNTIME_DEFINE_BINDING, [
         state,
@@ -215,9 +292,12 @@ class JavaScriptRuntimeLowering {
         environmentName,
         bindingsName,
         thisValueName,
+        argumentCountName,
         ...argumentNames,
       ],
-      annotation: null,
+      annotation: this.#usesSharedCallDispatcher
+        ? runtimeFunctionType(this.maximumRuntimeArgumentCount(), runtimeFunction.span)
+        : null,
       body: this.initializeHoistedFunctions(
         runtimeFunction.body,
         0,
@@ -226,6 +306,109 @@ class JavaScriptRuntimeLowering {
       ),
       span: runtimeFunction.span,
     };
+  }
+
+  private defineRuntimeArgumentsBinding(
+    state: FunctionalSurfaceExpression,
+    runtimeFunction: RuntimeFunction,
+    argumentCount: FunctionalSurfaceExpression,
+    arguments_: readonly FunctionalSurfaceExpression[],
+  ): FunctionalSurfaceExpression {
+    if (!runtimeFunction.usesArguments || runtimeFunction.parameters.includes("arguments")) {
+      return state;
+    }
+    const span = runtimeFunction.span;
+    const stateName = this.freshName("argumentsState");
+    const heapName = this.freshName("argumentsHeap");
+    const contextName = this.freshName("argumentsContext");
+    const bindingsName = this.freshName("argumentsBindings");
+    const allocatedHeapName = this.freshName("allocatedArgumentsHeap");
+    const argumentsValueName = this.freshName("argumentsValue");
+    return letExpression(
+      stateName,
+      state,
+      match(reference(stateName, span), [{
+        constructor: Runtime.JAVASCRIPT_STATE,
+        binders: [heapName, contextName, bindingsName],
+        body: match(
+          call(JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT, [
+            reference(heapName, span),
+            reference(Runtime.JAVASCRIPT_VALUE_NULL, span),
+            reference(Runtime.JAVASCRIPT_OBJECT_ORDINARY, span),
+          ], span),
+          [{
+            constructor: Runtime.JAVASCRIPT_HEAP_ALLOCATION,
+            binders: [allocatedHeapName, argumentsValueName],
+            body: match(
+              reference(argumentsValueName, span),
+              this.expectObjectArms(span, (identity) => {
+                let argumentsHeap = call(JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED, [
+                  reference(allocatedHeapName, span),
+                  identity,
+                  call(Runtime.JAVASCRIPT_PROPERTY_KEY_STRING, [text("length", span)], span),
+                  call(Runtime.JAVASCRIPT_DATA_DESCRIPTOR, [
+                    call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
+                      {
+                        kind: "numeric-convert",
+                        conversion: FunctionalNumericConversion.SignedInteger32ToFloat64,
+                        value: argumentCount,
+                        span,
+                      },
+                    ], span),
+                    boolean(true, span),
+                    boolean(false, span),
+                    boolean(true, span),
+                  ], span),
+                ], span);
+                for (let index = 0; index < arguments_.length; index++) {
+                  argumentsHeap = conditional(
+                    binary(
+                      FunctionalBinaryOperator.Less,
+                      integer(index, span),
+                      argumentCount,
+                      span,
+                    ),
+                    call(JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED, [
+                      argumentsHeap,
+                      identity,
+                      call(
+                        Runtime.JAVASCRIPT_PROPERTY_KEY_STRING,
+                        [text(String(index), span)],
+                        span,
+                      ),
+                      call(Runtime.JAVASCRIPT_DATA_DESCRIPTOR, [
+                        arguments_[index]!,
+                        boolean(true, span),
+                        boolean(true, span),
+                        boolean(true, span),
+                      ], span),
+                    ], span),
+                    argumentsHeap,
+                    span,
+                  );
+                }
+                return call(JAVASCRIPT_RUNTIME_DEFINE_BINDING, [
+                  call(Runtime.JAVASCRIPT_STATE, [
+                    argumentsHeap,
+                    reference(contextName, span),
+                    reference(bindingsName, span),
+                  ], span),
+                  text("arguments", span),
+                  call(Runtime.JAVASCRIPT_BINDING_MUTABLE, [
+                    reference(argumentsValueName, span),
+                  ], span),
+                ], span);
+              }),
+              span,
+            ),
+            span,
+          }],
+          span,
+        ),
+        span,
+      }], span),
+      span,
+    );
   }
 
   private requireEntry(): JavaScriptAotFunctionDeclaration {
@@ -252,16 +435,30 @@ class JavaScriptRuntimeLowering {
         `JavaScript runtime entry ${JSON.stringify(this.entryName)} cannot require arguments.`,
       );
     }
-    const additionalDeclarations = this.sourceModule.declarations.filter((declaration) =>
-      declaration !== entry
+    const linkedStatements = this.sourceModule.declarations.flatMap(
+      (declaration): readonly JavaScriptAotStatement[] => {
+        if (declaration === entry) return [];
+        return declaration.kind === "function"
+          ? [{
+            kind: "function-declaration",
+            name: declaration.name,
+            parameters: declaration.parameters,
+            parameterLength: declaration.parameterLength ?? declaration.parameters.length,
+            ...(declaration.requiresRuntimeModel === true
+              ? { requiresRuntimeModel: true as const }
+              : {}),
+            body: declaration.body,
+            span: declaration.span,
+          }]
+          : [{
+            kind: "constant",
+            name: declaration.name,
+            value: declaration.value,
+            span: declaration.span,
+          }];
+      },
     );
-    if (additionalDeclarations.length !== 0) {
-      throw new JavaScriptAotLoweringError(
-        additionalDeclarations[0]!.span,
-        "JavaScript runtime-model lowering does not yet link additional top-level declarations.",
-      );
-    }
-    return entry;
+    return { ...entry, body: [...linkedStatements, ...entry.body] };
   }
 
   private extendFunctionStateWithDeclarations(
@@ -325,13 +522,7 @@ class JavaScriptRuntimeLowering {
     if (statement.kind !== "function-declaration") {
       return this.initializeHoistedFunctions(statements, index + 1, state, onReady);
     }
-    const runtimeFunction = this.registerRuntimeFunction(
-      statement,
-      statement.parameters,
-      statement.body,
-      statement.span,
-      "dynamic",
-    );
+    const runtimeFunction = this.preparedRuntimeFunction(statement);
     return this.allocateRuntimeFunction(
       runtimeFunction,
       state,
@@ -868,13 +1059,11 @@ class JavaScriptRuntimeLowering {
     }
     const propertyName = statement.target.kind === "property"
       ? statement.target.name
-      : statement.target.index.kind === "string"
-      ? statement.target.index.value
-      : null;
+      : literalPropertyName(statement.target.index);
     if (propertyName === null) {
       throw new JavaScriptAotLoweringError(
         statement.target.span,
-        "JavaScript runtime-model computed assignment currently requires a string literal key.",
+        "JavaScript runtime-model computed assignment currently requires a string or number literal key.",
       );
     }
     return this.lowerExpression(
@@ -1065,6 +1254,27 @@ class JavaScriptRuntimeLowering {
           }], expression.span);
         }
         return this.lookupBinding(state, expression.name, onValue, expression.span);
+      case "array":
+        return this.lowerObject(
+          {
+            kind: "object",
+            properties: [
+              ...expression.values.map((value, index) => ({
+                name: String(index),
+                value,
+                span: value.span,
+              })),
+              {
+                name: "length",
+                value: { kind: "number", value: expression.values.length, span: expression.span },
+                span: expression.span,
+              },
+            ],
+            span: expression.span,
+          },
+          state,
+          onValue,
+        );
       case "object":
         return this.lowerObject(expression, state, onValue);
       case "function":
@@ -1073,18 +1283,60 @@ class JavaScriptRuntimeLowering {
         return this.lowerCall(expression, state, onValue);
       case "new": {
         const faultMessage = this.options.runtimeFaultConstructors?.get(expression.constructor);
-        if (faultMessage === undefined) {
-          throw new JavaScriptAotLoweringError(
-            expression.span,
-            `JavaScript runtime-model construction with new ${expression.constructor} is not supported.`,
+        if (faultMessage !== undefined) {
+          return this.lowerArguments(
+            expression.arguments,
+            0,
+            state,
+            [],
+            () => runtimeFault(faultMessage, expression.span),
           );
         }
-        return this.lowerArguments(
-          expression.arguments,
-          0,
+        return this.lookupBinding(
           state,
-          [],
-          () => runtimeFault(faultMessage, expression.span),
+          expression.constructor,
+          (constructorState, constructor) =>
+            this.lowerArguments(
+              expression.arguments,
+              0,
+              constructorState,
+              [],
+              (argumentState, arguments_) => {
+                const emptyObject: Extract<JavaScriptAotExpression, { readonly kind: "object" }> = {
+                  kind: "object",
+                  properties: [],
+                  span: expression.span,
+                };
+                return this.lowerObject(
+                  emptyObject,
+                  argumentState,
+                  (objectState, objectValue) =>
+                    this.invokeRuntimeCallable(
+                      constructor,
+                      objectState,
+                      objectValue,
+                      arguments_,
+                      (returnState, returnValue) =>
+                        match(
+                          returnValue,
+                          primitiveOrObjectValueArms(
+                            this.freshName("constructorResult"),
+                            expression.span,
+                            () => onValue(returnState, objectValue),
+                            (identity) =>
+                              onValue(
+                                returnState,
+                                call(Runtime.JAVASCRIPT_VALUE_OBJECT, [identity], expression.span),
+                              ),
+                          ),
+                          expression.span,
+                        ),
+                      expression.span,
+                    ),
+                );
+              },
+            ),
+          expression.span,
         );
       }
       case "property":
@@ -1095,13 +1347,13 @@ class JavaScriptRuntimeLowering {
             this.readProperty(receiverState, receiver, expression.name, onValue, expression.span),
         );
       case "index": {
-        if (expression.index.kind !== "string") {
+        const propertyName = literalPropertyName(expression.index);
+        if (propertyName === null) {
           throw new JavaScriptAotLoweringError(
             expression.index.span,
-            "JavaScript runtime-model computed properties currently require a string literal key.",
+            "JavaScript runtime-model computed properties currently require a string or number literal key.",
           );
         }
-        const propertyName = expression.index.value;
         return this.lowerExpression(
           expression.value,
           state,
@@ -1151,11 +1403,6 @@ class JavaScriptRuntimeLowering {
         return this.lowerUnary(expression, state, onValue);
       case "binary":
         return this.lowerBinary(expression, state, onValue);
-      default:
-        throw new JavaScriptAotLoweringError(
-          expression.span,
-          `JavaScript ${expression.kind} expression is not yet supported by runtime-model lowering.`,
-        );
     }
   }
 
@@ -1164,13 +1411,7 @@ class JavaScriptRuntimeLowering {
     state: FunctionalSurfaceExpression,
     onValue: RuntimeExpressionContinuation,
   ): FunctionalSurfaceExpression {
-    const runtimeFunction = this.registerRuntimeFunction(
-      expression,
-      expression.parameters,
-      expression.body,
-      expression.span,
-      expression.thisMode,
-    );
+    const runtimeFunction = this.preparedRuntimeFunction(expression);
     if (expression.name !== null) {
       return this.allocateNamedRuntimeFunction(expression.name, runtimeFunction, state, onValue);
     }
@@ -1251,6 +1492,7 @@ class JavaScriptRuntimeLowering {
     body: readonly JavaScriptAotStatement[],
     span: JavaScriptAotExpression["span"],
     thisMode: "dynamic" | "lexical",
+    strict: boolean,
   ): RuntimeFunction {
     const registered = this.#functionsBySyntax.get(syntax);
     if (registered !== undefined) return registered;
@@ -1270,7 +1512,10 @@ class JavaScriptRuntimeLowering {
       id: this.#functions.length,
       name: `$javascript#runtimeFunction#${this.#functions.length}`,
       thisMode,
+      strict,
+      usesArguments: runtimeStatementsReferenceName(body, "arguments"),
       parameters,
+      functionLength: syntax.parameterLength ?? parameters.length,
       body,
       span,
     };
@@ -1279,100 +1524,128 @@ class JavaScriptRuntimeLowering {
     return runtimeFunction;
   }
 
-  private prepareRuntimeFunctions(statements: readonly JavaScriptAotStatement[]): void {
-    const visitExpression = (expression: JavaScriptAotExpression): void => {
+  private preparedRuntimeFunction(syntax: RuntimeFunctionSyntax): RuntimeFunction {
+    const runtimeFunction = this.#functionsBySyntax.get(syntax);
+    if (runtimeFunction !== undefined) return runtimeFunction;
+    throw new Error(
+      `JavaScript runtime function at bytes ${syntax.span.startByte}-${syntax.span.endByte} was not prepared.`,
+    );
+  }
+
+  private prepareRuntimeProgram(statements: readonly JavaScriptAotStatement[]): void {
+    const visitExpression = (expression: JavaScriptAotExpression, strict: boolean): void => {
       switch (expression.kind) {
         case "array":
-          for (const value of expression.values) visitExpression(value);
+          for (const value of expression.values) visitExpression(value, strict);
           return;
         case "object":
-          for (const property of expression.properties) visitExpression(property.value);
+          for (const property of expression.properties) visitExpression(property.value, strict);
           return;
-        case "function":
+        case "function": {
+          const functionStrict = strict || statementsUseStrictMode(expression.body);
           this.registerRuntimeFunction(
             expression,
             expression.parameters,
             expression.body,
             expression.span,
             expression.thisMode,
+            functionStrict,
           );
-          visitStatements(expression.body);
+          visitStatements(expression.body, functionStrict);
           return;
+        }
         case "unary":
         case "property":
-          visitExpression(expression.value);
+          visitExpression(expression.value, strict);
           return;
         case "binary":
-          visitExpression(expression.left);
-          visitExpression(expression.right);
+          visitExpression(expression.left, strict);
+          visitExpression(expression.right, strict);
           return;
         case "conditional":
-          visitExpression(expression.condition);
-          visitExpression(expression.consequent);
-          visitExpression(expression.alternate);
+          visitExpression(expression.condition, strict);
+          visitExpression(expression.consequent, strict);
+          visitExpression(expression.alternate, strict);
           return;
         case "call":
-          visitExpression(expression.callee);
-          for (const argument of expression.arguments) visitExpression(argument);
+          visitExpression(expression.callee, strict);
+          for (const argument of expression.arguments) visitExpression(argument, strict);
           return;
         case "new":
-          for (const argument of expression.arguments) visitExpression(argument);
+          for (const argument of expression.arguments) visitExpression(argument, strict);
           return;
         case "index":
-          visitExpression(expression.value);
-          visitExpression(expression.index);
+          visitExpression(expression.value, strict);
+          visitExpression(expression.index, strict);
           return;
         default:
           return;
       }
     };
-    const visitStatements = (nested: readonly JavaScriptAotStatement[]): void => {
+    const visitStatements = (
+      nested: readonly JavaScriptAotStatement[],
+      strict: boolean,
+    ): void => {
       for (const statement of nested) {
         switch (statement.kind) {
-          case "function-declaration":
+          case "function-declaration": {
+            const functionStrict = strict || statementsUseStrictMode(statement.body);
             this.registerRuntimeFunction(
               statement,
               statement.parameters,
               statement.body,
               statement.span,
               "dynamic",
+              functionStrict,
             );
-            visitStatements(statement.body);
+            visitStatements(statement.body, functionStrict);
             break;
+          }
           case "constant":
           case "mutable":
           case "assignment":
           case "return":
           case "throw":
           case "expression":
-            visitExpression(statement.value);
+            visitExpression(statement.value, strict);
             break;
           case "property-assignment":
-            visitExpression(statement.target);
-            visitExpression(statement.value);
+            visitExpression(statement.target, strict);
+            visitExpression(statement.value, strict);
             break;
           case "var":
             for (const declaration of statement.declarations) {
-              if (declaration.value !== null) visitExpression(declaration.value);
+              if (declaration.value !== null) visitExpression(declaration.value, strict);
             }
             break;
           case "if":
-            visitExpression(statement.condition);
-            visitStatements(statement.consequent);
-            if (statement.alternate !== null) visitStatements(statement.alternate);
+            visitExpression(statement.condition, strict);
+            visitStatements(statement.consequent, strict);
+            if (statement.alternate !== null) visitStatements(statement.alternate, strict);
             break;
           case "while":
-            visitExpression(statement.condition);
-            visitStatements(statement.body);
-            visitStatements(statement.continueBody);
+            visitExpression(statement.condition, strict);
+            visitStatements(statement.body, strict);
+            visitStatements(statement.continueBody, strict);
             break;
           case "block":
-            visitStatements(statement.statements);
+            visitStatements(statement.statements, strict);
             break;
           case "try":
-            visitStatements(statement.body);
-            if (statement.catchBody !== null) visitStatements(statement.catchBody);
-            if (statement.finallyBody !== null) visitStatements(statement.finallyBody);
+            if (statement.finallyBody !== null) {
+              throw new JavaScriptAotLoweringError(
+                statement.span,
+                "JavaScript runtime-model finally completion replacement is not yet supported.",
+              );
+            }
+            if (statement.catchBody === null) {
+              throw new JavaScriptAotLoweringError(
+                statement.span,
+                "JavaScript runtime-model try requires a catch clause.",
+              );
+            }
+            visitStatements(statement.body, strict);
+            visitStatements(statement.catchBody, strict);
             break;
           case "break":
           case "continue":
@@ -1380,7 +1653,7 @@ class JavaScriptRuntimeLowering {
         }
       }
     };
-    visitStatements(statements);
+    visitStatements(statements, (this.options.callThisMode ?? "strict") === "strict");
   }
 
   private allocateRuntimeFunction(
@@ -1423,14 +1696,40 @@ class JavaScriptRuntimeLowering {
           [{
             constructor: Runtime.JAVASCRIPT_HEAP_ALLOCATION,
             binders: [allocatedHeapName, allocatedValueName],
-            body: onValue(
-              call(Runtime.JAVASCRIPT_STATE, [
-                reference(allocatedHeapName, span),
-                reference(contextName, span),
-                reference(bindingsName, span),
-              ], span),
-              reference(allocatedValueName, span),
-            ),
+            body: this.#usesFunctionLength
+              ? match(
+                reference(allocatedValueName, span),
+                this.expectObjectArms(span, (identity) =>
+                  onValue(
+                    call(Runtime.JAVASCRIPT_STATE, [
+                      call(JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED, [
+                        reference(allocatedHeapName, span),
+                        identity,
+                        call(Runtime.JAVASCRIPT_PROPERTY_KEY_STRING, [text("length", span)], span),
+                        call(Runtime.JAVASCRIPT_DATA_DESCRIPTOR, [
+                          call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
+                            float64(runtimeFunction.functionLength, span),
+                          ], span),
+                          boolean(false, span),
+                          boolean(false, span),
+                          boolean(true, span),
+                        ], span),
+                      ], span),
+                      reference(contextName, span),
+                      reference(bindingsName, span),
+                    ], span),
+                    reference(allocatedValueName, span),
+                  )),
+                span,
+              )
+              : onValue(
+                call(Runtime.JAVASCRIPT_STATE, [
+                  reference(allocatedHeapName, span),
+                  reference(contextName, span),
+                  reference(bindingsName, span),
+                ], span),
+                reference(allocatedValueName, span),
+              ),
             span,
           }],
           span,
@@ -1448,6 +1747,296 @@ class JavaScriptRuntimeLowering {
   ): FunctionalSurfaceExpression {
     if (isRuntimeDefinePropertyCall(expression)) {
       return this.lowerDefinePropertyCall(expression, state, onValue);
+    }
+    if (expression.callee.kind === "property" && expression.callee.name === "bind") {
+      if (expression.arguments.length > 1) {
+        throw new JavaScriptAotLoweringError(
+          expression.span,
+          "JavaScript runtime-model Function.prototype.bind does not yet support bound arguments.",
+        );
+      }
+      return this.lowerExpression(
+        expression.callee.value,
+        state,
+        (calleeState, callee) =>
+          this.lowerArguments(
+            expression.arguments,
+            0,
+            calleeState,
+            [],
+            (argumentState, arguments_) =>
+              match(
+                callee,
+                this.expectObjectArms(expression.span, (identity) => {
+                  const stateName = this.freshName("bindState");
+                  const heapName = this.freshName("bindHeap");
+                  const contextName = this.freshName("bindContext");
+                  const bindingsName = this.freshName("bindBindings");
+                  const nextIdentityName = this.freshName("bindNextIdentity");
+                  const objectsName = this.freshName("bindObjects");
+                  const targetName = this.freshName("boundTarget");
+                  const realmName = this.freshName("boundRealm");
+                  const environmentName = this.freshName("boundEnvironment");
+                  const thisBindingName = this.freshName("boundThisBinding");
+                  const lexicalThisName = this.freshName("existingLexicalThis");
+                  const allocatedHeapName = this.freshName("boundCallableHeap");
+                  const allocatedValueName = this.freshName("boundCallableValue");
+                  const boundThis = arguments_[0] ??
+                    reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, expression.span);
+                  return letExpression(
+                    stateName,
+                    argumentState,
+                    match(reference(stateName, expression.span), [{
+                      constructor: Runtime.JAVASCRIPT_STATE,
+                      binders: [heapName, contextName, bindingsName],
+                      body: match(reference(heapName, expression.span), [{
+                        constructor: Runtime.JAVASCRIPT_HEAP,
+                        binders: [nextIdentityName, objectsName],
+                        body: match(
+                          call(JAVASCRIPT_RUNTIME_OBJECT_KIND, [
+                            reference(objectsName, expression.span),
+                            identity,
+                          ], expression.span),
+                          [{
+                            constructor: Runtime.JAVASCRIPT_OBJECT_ORDINARY,
+                            binders: [],
+                            body: runtimeFault(
+                              "JavaScript Function.prototype.bind receiver is not callable",
+                              expression.span,
+                            ),
+                            span: expression.span,
+                          }, {
+                            constructor: Runtime.JAVASCRIPT_OBJECT_CALLABLE,
+                            binders: [
+                              targetName,
+                              realmName,
+                              environmentName,
+                              thisBindingName,
+                            ],
+                            body: match(
+                              call(JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT, [
+                                reference(heapName, expression.span),
+                                reference(Runtime.JAVASCRIPT_VALUE_NULL, expression.span),
+                                call(Runtime.JAVASCRIPT_OBJECT_CALLABLE, [
+                                  reference(targetName, expression.span),
+                                  reference(realmName, expression.span),
+                                  reference(environmentName, expression.span),
+                                  match(reference(thisBindingName, expression.span), [{
+                                    constructor: Runtime.JAVASCRIPT_THIS_DYNAMIC,
+                                    binders: [],
+                                    body: call(
+                                      Runtime.JAVASCRIPT_THIS_LEXICAL,
+                                      [boundThis],
+                                      expression.span,
+                                    ),
+                                    span: expression.span,
+                                  }, {
+                                    constructor: Runtime.JAVASCRIPT_THIS_LEXICAL,
+                                    binders: [lexicalThisName],
+                                    body: call(Runtime.JAVASCRIPT_THIS_LEXICAL, [
+                                      reference(lexicalThisName, expression.span),
+                                    ], expression.span),
+                                    span: expression.span,
+                                  }], expression.span),
+                                ], expression.span),
+                              ], expression.span),
+                              [{
+                                constructor: Runtime.JAVASCRIPT_HEAP_ALLOCATION,
+                                binders: [allocatedHeapName, allocatedValueName],
+                                body: onValue(
+                                  call(Runtime.JAVASCRIPT_STATE, [
+                                    reference(allocatedHeapName, expression.span),
+                                    reference(contextName, expression.span),
+                                    reference(bindingsName, expression.span),
+                                  ], expression.span),
+                                  reference(allocatedValueName, expression.span),
+                                ),
+                                span: expression.span,
+                              }],
+                              expression.span,
+                            ),
+                            span: expression.span,
+                          }],
+                          expression.span,
+                        ),
+                        span: expression.span,
+                      }], expression.span),
+                      span: expression.span,
+                    }], expression.span),
+                    expression.span,
+                  );
+                }),
+                expression.span,
+              ),
+          ),
+      );
+    }
+    if (
+      expression.callee.kind === "property" &&
+      (expression.callee.name === "call" || expression.callee.name === "apply")
+    ) {
+      const method = expression.callee.name;
+      if (
+        method === "apply" && expression.arguments.length >= 2 &&
+        expression.arguments[1]!.kind !== "null" &&
+        !(expression.arguments[1]!.kind === "name" &&
+          expression.arguments[1]!.name === "undefined")
+      ) {
+        throw new JavaScriptAotLoweringError(
+          expression.arguments[1]!.span,
+          "JavaScript runtime-model Function.prototype.apply currently requires a nullish argument list.",
+        );
+      }
+      return this.lowerExpression(
+        expression.callee.value,
+        state,
+        (calleeState, callee) =>
+          this.lowerArguments(
+            expression.arguments,
+            0,
+            calleeState,
+            [],
+            (argumentState, arguments_) =>
+              this.invokeRuntimeCallable(
+                callee,
+                argumentState,
+                arguments_[0] ?? reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, expression.span),
+                method === "call" ? arguments_.slice(1) : [],
+                onValue,
+                expression.span,
+              ),
+          ),
+      );
+    }
+    if (
+      expression.callee.kind === "property" && expression.callee.name === "replace" &&
+      expression.callee.value.kind === "string"
+    ) {
+      if (expression.arguments.length !== 2 || expression.arguments[0]!.kind !== "string") {
+        throw new JavaScriptAotLoweringError(
+          expression.span,
+          "JavaScript runtime-model String.prototype.replace currently requires one literal search string and one replacement.",
+        );
+      }
+      const source = expression.callee.value.value;
+      const search = expression.arguments[0]!.value;
+      const matchIndex = source.indexOf(search);
+      return this.lowerExpression(
+        expression.callee.value,
+        state,
+        (receiverState, receiver) =>
+          this.lowerArguments(
+            expression.arguments,
+            0,
+            receiverState,
+            [],
+            (argumentState, arguments_) => {
+              if (matchIndex < 0) return onValue(argumentState, receiver);
+              const replacement = arguments_[1]!;
+              const prefix = source.slice(0, matchIndex);
+              const suffix = source.slice(matchIndex + search.length);
+              const replacedValue = (
+                nextState: FunctionalSurfaceExpression,
+                replacementText: FunctionalSurfaceExpression,
+              ) =>
+                onValue(
+                  nextState,
+                  call(Runtime.JAVASCRIPT_VALUE_STRING, [{
+                    kind: "text-append",
+                    left: text(prefix, expression.span),
+                    right: {
+                      kind: "text-append",
+                      left: replacementText,
+                      right: text(suffix, expression.span),
+                      span: expression.span,
+                    },
+                    span: expression.span,
+                  }], expression.span),
+                );
+              const replacementTextName = this.freshName("replacementText");
+              const replacementIdentityName = this.freshName("replacementFunction");
+              const invalidReplacement = runtimeFault(
+                "JavaScript String.prototype.replace replacement is neither callable nor a string",
+                expression.arguments[1]!.span,
+              );
+              return match(replacement, [{
+                constructor: Runtime.JAVASCRIPT_VALUE_STRING,
+                binders: [replacementTextName],
+                body: replacedValue(
+                  argumentState,
+                  reference(replacementTextName, expression.span),
+                ),
+                span: expression.span,
+              }, {
+                constructor: Runtime.JAVASCRIPT_VALUE_OBJECT,
+                binders: [replacementIdentityName],
+                body: this.invokeRuntimeCallable(
+                  call(Runtime.JAVASCRIPT_VALUE_OBJECT, [
+                    reference(replacementIdentityName, expression.span),
+                  ], expression.span),
+                  argumentState,
+                  reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, expression.span),
+                  [
+                    call(
+                      Runtime.JAVASCRIPT_VALUE_STRING,
+                      [text(search, expression.span)],
+                      expression.span,
+                    ),
+                    call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
+                      float64(matchIndex, expression.span),
+                    ], expression.span),
+                    call(
+                      Runtime.JAVASCRIPT_VALUE_STRING,
+                      [text(source, expression.span)],
+                      expression.span,
+                    ),
+                  ],
+                  (callbackState, callbackValue) => {
+                    const callbackTextName = this.freshName("replacementCallbackText");
+                    return match(
+                      callbackValue,
+                      valueCaseArms(
+                        Runtime.JAVASCRIPT_VALUE_STRING,
+                        callbackTextName,
+                        expression.span,
+                        (callbackText) => replacedValue(callbackState, callbackText),
+                        "JavaScript String.prototype.replace callback returned a non-string value",
+                      ),
+                      expression.span,
+                    );
+                  },
+                  expression.span,
+                ),
+                span: expression.span,
+              }, {
+                constructor: Runtime.JAVASCRIPT_VALUE_UNDEFINED,
+                binders: [],
+                body: invalidReplacement,
+                span: expression.span,
+              }, {
+                constructor: Runtime.JAVASCRIPT_VALUE_NULL,
+                binders: [],
+                body: invalidReplacement,
+                span: expression.span,
+              }, {
+                constructor: Runtime.JAVASCRIPT_VALUE_BOOLEAN,
+                binders: [this.freshName("replacementBoolean")],
+                body: invalidReplacement,
+                span: expression.span,
+              }, {
+                constructor: Runtime.JAVASCRIPT_VALUE_NUMBER,
+                binders: [this.freshName("replacementNumber")],
+                body: invalidReplacement,
+                span: expression.span,
+              }, {
+                constructor: Runtime.JAVASCRIPT_VALUE_SYMBOL,
+                binders: [this.freshName("replacementSymbol")],
+                body: invalidReplacement,
+                span: expression.span,
+              }], expression.span);
+            },
+          ),
+      );
     }
     if (expression.callee.kind === "property") {
       const callee = expression.callee;
@@ -1473,13 +2062,13 @@ class JavaScriptRuntimeLowering {
     }
     if (expression.callee.kind === "index") {
       const callee = expression.callee;
-      if (callee.index.kind !== "string") {
+      const propertyName = literalPropertyName(callee.index);
+      if (propertyName === null) {
         throw new JavaScriptAotLoweringError(
           callee.index.span,
-          "JavaScript runtime-model computed method calls currently require a string literal key.",
+          "JavaScript runtime-model computed method calls currently require a string or number literal key.",
         );
       }
-      const propertyName = callee.index.value;
       return this.lowerExpression(
         callee.value,
         state,
@@ -1503,32 +2092,14 @@ class JavaScriptRuntimeLowering {
     return this.lowerExpression(
       expression.callee,
       state,
-      (calleeState, callee) => {
-        if ((this.options.callThisMode ?? "strict") === "strict") {
-          return this.lowerCallArguments(
-            expression,
-            calleeState,
-            callee,
-            reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, expression.span),
-            onValue,
-          );
-        }
-        const stateName = this.freshName("sloppyCallState");
-        return letExpression(
-          stateName,
+      (calleeState, callee) =>
+        this.lowerCallArguments(
+          expression,
           calleeState,
-          this.lowerCallArguments(
-            expression,
-            reference(stateName, expression.span),
-            callee,
-            call(JAVASCRIPT_RUNTIME_GLOBAL_OBJECT, [
-              reference(stateName, expression.span),
-            ], expression.span),
-            onValue,
-          ),
-          expression.span,
-        );
-      },
+          callee,
+          reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, expression.span),
+          onValue,
+        ),
     );
   }
 
@@ -1844,6 +2415,13 @@ class JavaScriptRuntimeLowering {
     );
   }
 
+  private maximumRuntimeArgumentCount(): number {
+    return this.#functions.reduce(
+      (maximum, runtimeFunction) => Math.max(maximum, runtimeFunction.parameters.length),
+      this.#maximumSourceCallArgumentCount,
+    );
+  }
+
   private dispatchCall(
     target: FunctionalSurfaceExpression,
     heap: FunctionalSurfaceExpression,
@@ -1854,15 +2432,155 @@ class JavaScriptRuntimeLowering {
     arguments_: readonly FunctionalSurfaceExpression[],
     span: JavaScriptAotExpression["span"],
   ): FunctionalSurfaceExpression {
+    const maximumArgumentCount = this.maximumRuntimeArgumentCount();
+    const paddedArguments = Array.from(
+      { length: maximumArgumentCount },
+      (_, index) => arguments_[index] ?? reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, span),
+    );
+    if (!this.#usesSharedCallDispatcher) {
+      return this.buildRuntimeCallDispatch(
+        target,
+        heap,
+        realm,
+        environment,
+        bindings,
+        thisValue,
+        integer(arguments_.length, span),
+        paddedArguments,
+        span,
+      );
+    }
+    return call(JAVASCRIPT_RUNTIME_CALL_DISPATCH, [
+      target,
+      heap,
+      realm,
+      environment,
+      bindings,
+      thisValue,
+      integer(arguments_.length, span),
+      ...paddedArguments,
+    ], span);
+  }
+
+  private lowerRuntimeCallDispatcher(
+    span: JavaScriptAotExpression["span"],
+  ): FunctionalSurfaceDefinition {
+    const targetName = this.freshName("dispatchTarget");
+    const heapName = this.freshName("dispatchHeap");
+    const realmName = this.freshName("dispatchRealm");
+    const environmentName = this.freshName("dispatchEnvironment");
+    const bindingsName = this.freshName("dispatchBindings");
+    const thisValueName = this.freshName("dispatchThis");
+    const argumentCountName = this.freshName("dispatchArgumentCount");
+    const maximumArgumentCount = this.maximumRuntimeArgumentCount();
+    const argumentNames = Array.from(
+      { length: maximumArgumentCount },
+      () => this.freshName("dispatchArgument"),
+    );
+    return {
+      name: JAVASCRIPT_RUNTIME_CALL_DISPATCH,
+      parameters: [
+        targetName,
+        heapName,
+        realmName,
+        environmentName,
+        bindingsName,
+        thisValueName,
+        argumentCountName,
+        ...argumentNames,
+      ],
+      annotation: runtimeDispatcherType(maximumArgumentCount, span),
+      body: this.buildRuntimeCallDispatch(
+        reference(targetName, span),
+        reference(heapName, span),
+        reference(realmName, span),
+        reference(environmentName, span),
+        reference(bindingsName, span),
+        reference(thisValueName, span),
+        reference(argumentCountName, span),
+        argumentNames.map((name) => reference(name, span)),
+        span,
+      ),
+      span,
+    };
+  }
+
+  private buildRuntimeCallDispatch(
+    target: FunctionalSurfaceExpression,
+    heap: FunctionalSurfaceExpression,
+    realm: FunctionalSurfaceExpression,
+    environment: FunctionalSurfaceExpression,
+    bindings: FunctionalSurfaceExpression,
+    thisValue: FunctionalSurfaceExpression,
+    argumentCount: FunctionalSurfaceExpression,
+    arguments_: readonly FunctionalSurfaceExpression[],
+    span: JavaScriptAotExpression["span"],
+  ): FunctionalSurfaceExpression {
     let dispatch = runtimeFault(
       "JavaScript callable target is not registered in this module",
       span,
     );
     for (let index = this.#functions.length - 1; index >= 0; index--) {
       const runtimeFunction = this.#functions[index]!;
-      const parameters = runtimeFunction.parameters.map((_, parameterIndex) =>
-        arguments_[parameterIndex] ?? reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, span)
+      const parameters = Array.from(
+        { length: this.maximumRuntimeArgumentCount() },
+        (_, parameterIndex) =>
+          arguments_[parameterIndex] ?? reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, span),
       );
+      const globalThisName = this.freshName("sloppyGlobalThis");
+      const globalThisValue = match(realm, [{
+        constructor: Runtime.JAVASCRIPT_REALM,
+        binders: [globalThisName],
+        body: reference(globalThisName, span),
+        span,
+      }], span);
+      const booleanThisName = this.freshName("sloppyBooleanThis");
+      const numberThisName = this.freshName("sloppyNumberThis");
+      const stringThisName = this.freshName("sloppyStringThis");
+      const symbolThisName = this.freshName("sloppySymbolThis");
+      const objectThisName = this.freshName("sloppyObjectThis");
+      const targetThisValue = runtimeFunction.thisMode === "lexical" || runtimeFunction.strict
+        ? thisValue
+        : match(thisValue, [{
+          constructor: Runtime.JAVASCRIPT_VALUE_UNDEFINED,
+          binders: [],
+          body: globalThisValue,
+          span,
+        }, {
+          constructor: Runtime.JAVASCRIPT_VALUE_NULL,
+          binders: [],
+          body: globalThisValue,
+          span,
+        }, {
+          constructor: Runtime.JAVASCRIPT_VALUE_BOOLEAN,
+          binders: [booleanThisName],
+          body: call(
+            Runtime.JAVASCRIPT_VALUE_BOOLEAN,
+            [reference(booleanThisName, span)],
+            span,
+          ),
+          span,
+        }, {
+          constructor: Runtime.JAVASCRIPT_VALUE_NUMBER,
+          binders: [numberThisName],
+          body: call(Runtime.JAVASCRIPT_VALUE_NUMBER, [reference(numberThisName, span)], span),
+          span,
+        }, {
+          constructor: Runtime.JAVASCRIPT_VALUE_STRING,
+          binders: [stringThisName],
+          body: call(Runtime.JAVASCRIPT_VALUE_STRING, [reference(stringThisName, span)], span),
+          span,
+        }, {
+          constructor: Runtime.JAVASCRIPT_VALUE_SYMBOL,
+          binders: [symbolThisName],
+          body: call(Runtime.JAVASCRIPT_VALUE_SYMBOL, [reference(symbolThisName, span)], span),
+          span,
+        }, {
+          constructor: Runtime.JAVASCRIPT_VALUE_OBJECT,
+          binders: [objectThisName],
+          body: call(Runtime.JAVASCRIPT_VALUE_OBJECT, [reference(objectThisName, span)], span),
+          span,
+        }], span);
       dispatch = conditional(
         binary(
           FunctionalBinaryOperator.Equal,
@@ -1872,7 +2590,15 @@ class JavaScriptRuntimeLowering {
         ),
         call(
           runtimeFunction.name,
-          [heap, realm, environment, bindings, thisValue, ...parameters],
+          [
+            heap,
+            realm,
+            environment,
+            bindings,
+            targetThisValue,
+            argumentCount,
+            ...parameters,
+          ],
           span,
         ),
         dispatch,
@@ -2080,7 +2806,11 @@ class JavaScriptRuntimeLowering {
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
   ): FunctionalSurfaceExpression {
-    return match(
+    const complete = (
+      completedState: FunctionalSurfaceExpression,
+      value: FunctionalSurfaceExpression,
+    ) => call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [completedState, value], span);
+    const readCompletion = match(
       receiver,
       this.expectObjectArms(span, (identity) => {
         const stateName = this.freshName("propertyReadState");
@@ -2104,7 +2834,7 @@ class JavaScriptRuntimeLowering {
             [{
               constructor: Runtime.JAVASCRIPT_VALUE_MISSING,
               binders: [],
-              body: onValue(
+              body: complete(
                 reference(stateName, span),
                 reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, span),
               ),
@@ -2120,7 +2850,7 @@ class JavaScriptRuntimeLowering {
             }, {
               constructor: Runtime.JAVASCRIPT_VALUE_FOUND,
               binders: [propertyValueName],
-              body: onValue(
+              body: complete(
                 reference(stateName, span),
                 reference(propertyValueName, span),
               ),
@@ -2133,7 +2863,7 @@ class JavaScriptRuntimeLowering {
                 reference(stateName, span),
                 reference(getterReceiverName, span),
                 [],
-                onValue,
+                complete,
                 span,
               ),
               span,
@@ -2145,6 +2875,138 @@ class JavaScriptRuntimeLowering {
       }),
       span,
     );
+    return this.resumeExpressionCompletion(readCompletion, onValue, span);
+  }
+
+  private toRuntimePrimitive(
+    state: FunctionalSurfaceExpression,
+    value: FunctionalSurfaceExpression,
+    onPrimitive: RuntimeExpressionContinuation,
+    span: JavaScriptAotExpression["span"],
+  ): FunctionalSurfaceExpression {
+    const complete = (
+      completedState: FunctionalSurfaceExpression,
+      primitive: FunctionalSurfaceExpression,
+    ) => call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [completedState, primitive], span);
+    const conversion = match(
+      value,
+      primitiveOrObjectValueArms(
+        this.freshName("primitiveObjectIdentity"),
+        span,
+        (primitive) => complete(state, primitive),
+        (identity) => {
+          const receiver = call(Runtime.JAVASCRIPT_VALUE_OBJECT, [identity], span);
+          const tryToString = (nextState: FunctionalSurfaceExpression) =>
+            this.readProperty(
+              nextState,
+              receiver,
+              "toString",
+              (methodState, method) =>
+                this.invokeRuntimeMethodIfCallable(
+                  methodState,
+                  method,
+                  receiver,
+                  (resultState, result) =>
+                    this.acceptRuntimePrimitive(
+                      resultState,
+                      result,
+                      complete,
+                      () =>
+                        runtimeFault("JavaScript object did not produce a primitive value", span),
+                      span,
+                    ),
+                  (unavailableState) =>
+                    complete(
+                      unavailableState,
+                      call(Runtime.JAVASCRIPT_VALUE_STRING, [text("[object Object]", span)], span),
+                    ),
+                  span,
+                ),
+              span,
+            );
+          return this.readProperty(
+            state,
+            receiver,
+            "valueOf",
+            (methodState, method) =>
+              this.invokeRuntimeMethodIfCallable(
+                methodState,
+                method,
+                receiver,
+                (resultState, result) =>
+                  this.acceptRuntimePrimitive(
+                    resultState,
+                    result,
+                    complete,
+                    () => tryToString(resultState),
+                    span,
+                  ),
+                tryToString,
+                span,
+              ),
+            span,
+          );
+        },
+      ),
+      span,
+    );
+    return this.resumeExpressionCompletion(conversion, onPrimitive, span);
+  }
+
+  private acceptRuntimePrimitive(
+    state: FunctionalSurfaceExpression,
+    value: FunctionalSurfaceExpression,
+    onPrimitive: RuntimeExpressionContinuation,
+    onObject: () => FunctionalSurfaceExpression,
+    span: JavaScriptAotExpression["span"],
+  ): FunctionalSurfaceExpression {
+    return match(
+      value,
+      primitiveOrObjectValueArms(
+        this.freshName("nonPrimitiveObject"),
+        span,
+        (primitive) => onPrimitive(state, primitive),
+        onObject,
+      ),
+      span,
+    );
+  }
+
+  private invokeRuntimeMethodIfCallable(
+    state: FunctionalSurfaceExpression,
+    method: FunctionalSurfaceExpression,
+    receiver: FunctionalSurfaceExpression,
+    onResult: RuntimeExpressionContinuation,
+    onUnavailable: RuntimeStatementContinuation,
+    span: JavaScriptAotExpression["span"],
+  ): FunctionalSurfaceExpression {
+    const stateName = this.freshName("methodState");
+    const heapName = this.freshName("methodHeap");
+    const contextName = this.freshName("methodContext");
+    const bindingsName = this.freshName("methodBindings");
+    return letExpression(
+      stateName,
+      state,
+      match(reference(stateName, span), [{
+        constructor: Runtime.JAVASCRIPT_STATE,
+        binders: [heapName, contextName, bindingsName],
+        body: conditional(
+          call(JAVASCRIPT_RUNTIME_IS_CALLABLE, [reference(heapName, span), method], span),
+          this.invokeRuntimeCallable(
+            method,
+            reference(stateName, span),
+            receiver,
+            [],
+            onResult,
+            span,
+          ),
+          onUnavailable(reference(stateName, span)),
+          span,
+        ),
+        span,
+      }], span),
+      span,
+    );
   }
 
   private lowerUnary(
@@ -2152,6 +3014,33 @@ class JavaScriptRuntimeLowering {
     state: FunctionalSurfaceExpression,
     onValue: RuntimeExpressionContinuation,
   ): FunctionalSurfaceExpression {
+    if (expression.operator === "typeof") {
+      return this.lowerExpression(expression.value, state, (valueState, value) => {
+        const stateName = this.freshName("typeofState");
+        const heapName = this.freshName("typeofHeap");
+        const contextName = this.freshName("typeofContext");
+        const bindingsName = this.freshName("typeofBindings");
+        return letExpression(
+          stateName,
+          valueState,
+          match(reference(stateName, expression.span), [{
+            constructor: Runtime.JAVASCRIPT_STATE,
+            binders: [heapName, contextName, bindingsName],
+            body: onValue(
+              reference(stateName, expression.span),
+              call(Runtime.JAVASCRIPT_VALUE_STRING, [
+                call(JAVASCRIPT_RUNTIME_TYPEOF, [
+                  reference(heapName, expression.span),
+                  value,
+                ], expression.span),
+              ], expression.span),
+            ),
+            span: expression.span,
+          }], expression.span),
+          expression.span,
+        );
+      });
+    }
     if (expression.operator === "!") {
       return this.lowerExpression(expression.value, state, (valueState, value) =>
         onValue(
@@ -2167,22 +3056,48 @@ class JavaScriptRuntimeLowering {
         ));
     }
     if (expression.operator === "-" || expression.operator === "+") {
+      if (!this.#usesSharedCallDispatcher) {
+        return this.lowerExpression(
+          expression.value,
+          state,
+          (valueState, value) =>
+            this.expectNumber(value, expression.span, (number) =>
+              onValue(
+                valueState,
+                call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
+                  expression.operator === "+" ? number : {
+                    kind: "unary",
+                    operator: FunctionalUnaryOperator.NegateFloat64,
+                    value: number,
+                    span: expression.span,
+                  },
+                ], expression.span),
+              )),
+        );
+      }
       return this.lowerExpression(
         expression.value,
         state,
         (valueState, value) =>
-          this.expectNumber(value, expression.span, (number) =>
-            onValue(
-              valueState,
-              call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
-                expression.operator === "+" ? number : {
-                  kind: "unary",
-                  operator: FunctionalUnaryOperator.NegateFloat64,
-                  value: number,
-                  span: expression.span,
-                },
-              ], expression.span),
-            )),
+          this.toRuntimePrimitive(
+            valueState,
+            value,
+            (primitiveState, primitive) => {
+              const number = call(JAVASCRIPT_RUNTIME_TO_NUMBER, [primitive], expression.span);
+              return onValue(
+                primitiveState,
+                call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
+                  expression.operator === "+" ? number : {
+                    kind: "unary",
+                    operator: FunctionalUnaryOperator.NegateFloat64,
+                    value: number,
+                    span: expression.span,
+                  },
+                ], expression.span),
+              );
+            },
+            expression.span,
+          ),
       );
     }
     throw new JavaScriptAotLoweringError(
@@ -2285,6 +3200,43 @@ class JavaScriptRuntimeLowering {
           ),
       );
     }
+    if (expression.operator === "+") {
+      return this.lowerExpression(
+        expression.left,
+        state,
+        (leftState, left) =>
+          this.lowerExpression(
+            expression.right,
+            leftState,
+            (rightState, right) =>
+              this.#usesSharedCallDispatcher
+                ? this.toRuntimePrimitive(
+                  rightState,
+                  left,
+                  (leftPrimitiveState, leftPrimitive) =>
+                    this.toRuntimePrimitive(
+                      leftPrimitiveState,
+                      right,
+                      (rightPrimitiveState, rightPrimitive) =>
+                        onValue(
+                          rightPrimitiveState,
+                          call(
+                            JAVASCRIPT_RUNTIME_ADD,
+                            [leftPrimitive, rightPrimitive],
+                            expression.span,
+                          ),
+                        ),
+                      expression.right.span,
+                    ),
+                  expression.left.span,
+                )
+                : onValue(
+                  rightState,
+                  call(JAVASCRIPT_RUNTIME_ADD, [left, right], expression.span),
+                ),
+          ),
+      );
+    }
     const operator = runtimeNumericOperators[expression.operator];
     if (operator === undefined) {
       throw new JavaScriptAotLoweringError(
@@ -2294,28 +3246,82 @@ class JavaScriptRuntimeLowering {
         } is not yet supported by runtime-model lowering.`,
       );
     }
+    if (!this.#usesSharedCallDispatcher) {
+      return this.lowerExpression(
+        expression.left,
+        state,
+        (leftState, left) =>
+          this.expectNumber(
+            left,
+            expression.left.span,
+            (leftNumber) =>
+              this.lowerExpression(expression.right, leftState, (rightState, right) =>
+                this.expectNumber(right, expression.right.span, (rightNumber) => {
+                  const result = binary(operator, leftNumber, rightNumber, expression.span);
+                  const comparison = expression.operator === "<" || expression.operator === "<=" ||
+                    expression.operator === ">" || expression.operator === ">=";
+                  return onValue(
+                    rightState,
+                    call(
+                      comparison
+                        ? Runtime.JAVASCRIPT_VALUE_BOOLEAN
+                        : Runtime.JAVASCRIPT_VALUE_NUMBER,
+                      [result],
+                      expression.span,
+                    ),
+                  );
+                })),
+          ),
+      );
+    }
     return this.lowerExpression(
       expression.left,
       state,
       (leftState, left) =>
-        this.expectNumber(
-          left,
-          expression.left.span,
-          (leftNumber) =>
-            this.lowerExpression(expression.right, leftState, (rightState, right) =>
-              this.expectNumber(right, expression.right.span, (rightNumber) => {
-                const result = binary(operator, leftNumber, rightNumber, expression.span);
-                const comparison = expression.operator === "<" || expression.operator === "<=" ||
-                  expression.operator === ">" || expression.operator === ">=";
-                return onValue(
-                  rightState,
-                  call(
-                    comparison ? Runtime.JAVASCRIPT_VALUE_BOOLEAN : Runtime.JAVASCRIPT_VALUE_NUMBER,
-                    [result],
-                    expression.span,
-                  ),
-                );
-              })),
+        this.lowerExpression(
+          expression.right,
+          leftState,
+          (rightState, right) =>
+            this.toRuntimePrimitive(
+              rightState,
+              left,
+              (leftPrimitiveState, leftPrimitive) =>
+                this.toRuntimePrimitive(
+                  leftPrimitiveState,
+                  right,
+                  (rightPrimitiveState, rightPrimitive) => {
+                    const result = binary(
+                      operator,
+                      call(
+                        JAVASCRIPT_RUNTIME_TO_NUMBER,
+                        [leftPrimitive],
+                        expression.left.span,
+                      ),
+                      call(
+                        JAVASCRIPT_RUNTIME_TO_NUMBER,
+                        [rightPrimitive],
+                        expression.right.span,
+                      ),
+                      expression.span,
+                    );
+                    const comparison = expression.operator === "<" ||
+                      expression.operator === "<=" || expression.operator === ">" ||
+                      expression.operator === ">=";
+                    return onValue(
+                      rightPrimitiveState,
+                      call(
+                        comparison
+                          ? Runtime.JAVASCRIPT_VALUE_BOOLEAN
+                          : Runtime.JAVASCRIPT_VALUE_NUMBER,
+                        [result],
+                        expression.span,
+                      ),
+                    );
+                  },
+                  expression.right.span,
+                ),
+              expression.left.span,
+            ),
         ),
     );
   }
@@ -2581,6 +3587,448 @@ class JavaScriptRuntimeLowering {
   }
 }
 
+function runtimeStatementsReferenceName(
+  statements: readonly JavaScriptAotStatement[],
+  target: string,
+): boolean {
+  return statements.some((statement): boolean => {
+    switch (statement.kind) {
+      case "function-declaration":
+      case "break":
+      case "continue":
+        return false;
+      case "constant":
+      case "mutable":
+      case "return":
+      case "throw":
+      case "expression":
+        return runtimeExpressionReferencesName(statement.value, target);
+      case "assignment":
+        return statement.name === target ||
+          runtimeExpressionReferencesName(statement.value, target);
+      case "property-assignment":
+        return runtimeExpressionReferencesName(statement.target, target) ||
+          runtimeExpressionReferencesName(statement.value, target);
+      case "var":
+        return statement.declarations.some((declaration) =>
+          declaration.value !== null && runtimeExpressionReferencesName(declaration.value, target)
+        );
+      case "if":
+        return runtimeExpressionReferencesName(statement.condition, target) ||
+          runtimeStatementsReferenceName(statement.consequent, target) ||
+          statement.alternate !== null &&
+            runtimeStatementsReferenceName(statement.alternate, target);
+      case "while":
+        return runtimeExpressionReferencesName(statement.condition, target) ||
+          runtimeStatementsReferenceName(statement.body, target) ||
+          runtimeStatementsReferenceName(statement.continueBody, target);
+      case "block":
+        return runtimeStatementsReferenceName(statement.statements, target);
+      case "try":
+        return runtimeStatementsReferenceName(statement.body, target) ||
+          statement.catchBody !== null &&
+            runtimeStatementsReferenceName(statement.catchBody, target) ||
+          statement.finallyBody !== null &&
+            runtimeStatementsReferenceName(statement.finallyBody, target);
+    }
+  });
+}
+
+function runtimeExpressionReferencesName(
+  expression: JavaScriptAotExpression,
+  target: string,
+): boolean {
+  switch (expression.kind) {
+    case "name":
+      return expression.name === target;
+    case "function":
+      return false;
+    case "array":
+      return expression.values.some((value) => runtimeExpressionReferencesName(value, target));
+    case "object":
+      return expression.properties.some((property) =>
+        runtimeExpressionReferencesName(property.value, target)
+      );
+    case "unary":
+    case "property":
+      return runtimeExpressionReferencesName(expression.value, target);
+    case "binary":
+      return runtimeExpressionReferencesName(expression.left, target) ||
+        runtimeExpressionReferencesName(expression.right, target);
+    case "conditional":
+      return runtimeExpressionReferencesName(expression.condition, target) ||
+        runtimeExpressionReferencesName(expression.consequent, target) ||
+        runtimeExpressionReferencesName(expression.alternate, target);
+    case "call":
+      return runtimeExpressionReferencesName(expression.callee, target) ||
+        expression.arguments.some((argument) => runtimeExpressionReferencesName(argument, target));
+    case "new":
+      return expression.arguments.some((argument) =>
+        runtimeExpressionReferencesName(argument, target)
+      );
+    case "index":
+      return runtimeExpressionReferencesName(expression.value, target) ||
+        runtimeExpressionReferencesName(expression.index, target);
+    default:
+      return false;
+  }
+}
+
+function runtimeStatementsMaximumCallArgumentCount(
+  statements: readonly JavaScriptAotStatement[],
+): number {
+  let maximum = 0;
+  for (const statement of statements) {
+    switch (statement.kind) {
+      case "function-declaration":
+        maximum = Math.max(maximum, runtimeStatementsMaximumCallArgumentCount(statement.body));
+        break;
+      case "constant":
+      case "mutable":
+      case "return":
+      case "throw":
+      case "expression":
+        maximum = Math.max(maximum, runtimeExpressionMaximumCallArgumentCount(statement.value));
+        break;
+      case "assignment":
+        maximum = Math.max(maximum, runtimeExpressionMaximumCallArgumentCount(statement.value));
+        break;
+      case "property-assignment":
+        maximum = Math.max(
+          maximum,
+          runtimeExpressionMaximumCallArgumentCount(statement.target),
+          runtimeExpressionMaximumCallArgumentCount(statement.value),
+        );
+        break;
+      case "var":
+        for (const declaration of statement.declarations) {
+          if (declaration.value !== null) {
+            maximum = Math.max(
+              maximum,
+              runtimeExpressionMaximumCallArgumentCount(declaration.value),
+            );
+          }
+        }
+        break;
+      case "if":
+        maximum = Math.max(
+          maximum,
+          runtimeExpressionMaximumCallArgumentCount(statement.condition),
+          runtimeStatementsMaximumCallArgumentCount(statement.consequent),
+          statement.alternate === null
+            ? 0
+            : runtimeStatementsMaximumCallArgumentCount(statement.alternate),
+        );
+        break;
+      case "while":
+        maximum = Math.max(
+          maximum,
+          runtimeExpressionMaximumCallArgumentCount(statement.condition),
+          runtimeStatementsMaximumCallArgumentCount(statement.body),
+          runtimeStatementsMaximumCallArgumentCount(statement.continueBody),
+        );
+        break;
+      case "block":
+        maximum = Math.max(
+          maximum,
+          runtimeStatementsMaximumCallArgumentCount(statement.statements),
+        );
+        break;
+      case "try":
+        maximum = Math.max(
+          maximum,
+          runtimeStatementsMaximumCallArgumentCount(statement.body),
+          statement.catchBody === null
+            ? 0
+            : runtimeStatementsMaximumCallArgumentCount(statement.catchBody),
+          statement.finallyBody === null
+            ? 0
+            : runtimeStatementsMaximumCallArgumentCount(statement.finallyBody),
+        );
+        break;
+      case "break":
+      case "continue":
+        break;
+    }
+  }
+  return maximum;
+}
+
+function runtimeExpressionMaximumCallArgumentCount(expression: JavaScriptAotExpression): number {
+  switch (expression.kind) {
+    case "function":
+      return runtimeStatementsMaximumCallArgumentCount(expression.body);
+    case "array":
+      return Math.max(0, ...expression.values.map(runtimeExpressionMaximumCallArgumentCount));
+    case "object":
+      return Math.max(
+        0,
+        ...expression.properties.map((property) =>
+          runtimeExpressionMaximumCallArgumentCount(property.value)
+        ),
+      );
+    case "unary":
+    case "property":
+      return runtimeExpressionMaximumCallArgumentCount(expression.value);
+    case "binary":
+      return Math.max(
+        runtimeExpressionMaximumCallArgumentCount(expression.left),
+        runtimeExpressionMaximumCallArgumentCount(expression.right),
+      );
+    case "conditional":
+      return Math.max(
+        runtimeExpressionMaximumCallArgumentCount(expression.condition),
+        runtimeExpressionMaximumCallArgumentCount(expression.consequent),
+        runtimeExpressionMaximumCallArgumentCount(expression.alternate),
+      );
+    case "call":
+      return Math.max(
+        expression.arguments.length,
+        runtimeExpressionMaximumCallArgumentCount(expression.callee),
+        ...expression.arguments.map(runtimeExpressionMaximumCallArgumentCount),
+      );
+    case "new":
+      return Math.max(
+        expression.arguments.length,
+        ...expression.arguments.map(runtimeExpressionMaximumCallArgumentCount),
+      );
+    case "index":
+      return Math.max(
+        runtimeExpressionMaximumCallArgumentCount(expression.value),
+        runtimeExpressionMaximumCallArgumentCount(expression.index),
+      );
+    default:
+      return 0;
+  }
+}
+
+function runtimeStatementsReadProperty(
+  statements: readonly JavaScriptAotStatement[],
+  propertyName: string,
+): boolean {
+  return statements.some((statement): boolean => {
+    switch (statement.kind) {
+      case "function-declaration":
+        return runtimeStatementsReadProperty(statement.body, propertyName);
+      case "break":
+      case "continue":
+        return false;
+      case "constant":
+      case "mutable":
+      case "return":
+      case "throw":
+      case "expression":
+        return runtimeExpressionReadsProperty(statement.value, propertyName);
+      case "assignment":
+        return runtimeExpressionReadsProperty(statement.value, propertyName);
+      case "property-assignment":
+        return runtimeExpressionReadsProperty(statement.target, propertyName) ||
+          runtimeExpressionReadsProperty(statement.value, propertyName);
+      case "var":
+        return statement.declarations.some((declaration) =>
+          declaration.value !== null &&
+          runtimeExpressionReadsProperty(declaration.value, propertyName)
+        );
+      case "if":
+        return runtimeExpressionReadsProperty(statement.condition, propertyName) ||
+          runtimeStatementsReadProperty(statement.consequent, propertyName) ||
+          statement.alternate !== null &&
+            runtimeStatementsReadProperty(statement.alternate, propertyName);
+      case "while":
+        return runtimeExpressionReadsProperty(statement.condition, propertyName) ||
+          runtimeStatementsReadProperty(statement.body, propertyName) ||
+          runtimeStatementsReadProperty(statement.continueBody, propertyName);
+      case "block":
+        return runtimeStatementsReadProperty(statement.statements, propertyName);
+      case "try":
+        return runtimeStatementsReadProperty(statement.body, propertyName) ||
+          statement.catchBody !== null &&
+            runtimeStatementsReadProperty(statement.catchBody, propertyName) ||
+          statement.finallyBody !== null &&
+            runtimeStatementsReadProperty(statement.finallyBody, propertyName);
+    }
+  });
+}
+
+function runtimeExpressionReadsProperty(
+  expression: JavaScriptAotExpression,
+  propertyName: string,
+): boolean {
+  if (expression.kind === "property" && expression.name === propertyName) return true;
+  if (
+    expression.kind === "index" && expression.index.kind === "string" &&
+    expression.index.value === propertyName
+  ) return true;
+  switch (expression.kind) {
+    case "function":
+      return runtimeStatementsReadProperty(expression.body, propertyName);
+    case "array":
+      return expression.values.some((value) => runtimeExpressionReadsProperty(value, propertyName));
+    case "object":
+      return expression.properties.some((property) =>
+        runtimeExpressionReadsProperty(property.value, propertyName)
+      );
+    case "unary":
+    case "property":
+      return runtimeExpressionReadsProperty(expression.value, propertyName);
+    case "binary":
+      return runtimeExpressionReadsProperty(expression.left, propertyName) ||
+        runtimeExpressionReadsProperty(expression.right, propertyName);
+    case "conditional":
+      return runtimeExpressionReadsProperty(expression.condition, propertyName) ||
+        runtimeExpressionReadsProperty(expression.consequent, propertyName) ||
+        runtimeExpressionReadsProperty(expression.alternate, propertyName);
+    case "call":
+      return runtimeExpressionReadsProperty(expression.callee, propertyName) ||
+        expression.arguments.some((argument) =>
+          runtimeExpressionReadsProperty(argument, propertyName)
+        );
+    case "new":
+      return expression.arguments.some((argument) =>
+        runtimeExpressionReadsProperty(argument, propertyName)
+      );
+    case "index":
+      return runtimeExpressionReadsProperty(expression.value, propertyName) ||
+        runtimeExpressionReadsProperty(expression.index, propertyName);
+    default:
+      return false;
+  }
+}
+
+function runtimeStatementsNeedSharedCallDispatcher(
+  statements: readonly JavaScriptAotStatement[],
+): boolean {
+  return statements.some((statement): boolean => {
+    switch (statement.kind) {
+      case "function-declaration":
+        return runtimeStatementsNeedSharedCallDispatcher(statement.body);
+      case "break":
+      case "continue":
+        return false;
+      case "constant":
+      case "mutable":
+      case "return":
+      case "throw":
+      case "expression":
+        return runtimeExpressionNeedsSharedCallDispatcher(statement.value);
+      case "assignment":
+        return runtimeExpressionNeedsSharedCallDispatcher(statement.value);
+      case "property-assignment":
+        return runtimeExpressionNeedsSharedCallDispatcher(statement.target) ||
+          runtimeExpressionNeedsSharedCallDispatcher(statement.value);
+      case "var":
+        return statement.declarations.some((declaration) =>
+          declaration.value !== null &&
+          runtimeExpressionNeedsSharedCallDispatcher(declaration.value)
+        );
+      case "if":
+        return runtimeExpressionNeedsSharedCallDispatcher(statement.condition) ||
+          runtimeStatementsNeedSharedCallDispatcher(statement.consequent) ||
+          statement.alternate !== null &&
+            runtimeStatementsNeedSharedCallDispatcher(statement.alternate);
+      case "while":
+        return runtimeExpressionNeedsSharedCallDispatcher(statement.condition) ||
+          runtimeStatementsNeedSharedCallDispatcher(statement.body) ||
+          runtimeStatementsNeedSharedCallDispatcher(statement.continueBody);
+      case "block":
+        return runtimeStatementsNeedSharedCallDispatcher(statement.statements);
+      case "try":
+        return runtimeStatementsNeedSharedCallDispatcher(statement.body) ||
+          statement.catchBody !== null &&
+            runtimeStatementsNeedSharedCallDispatcher(statement.catchBody) ||
+          statement.finallyBody !== null &&
+            runtimeStatementsNeedSharedCallDispatcher(statement.finallyBody);
+    }
+  });
+}
+
+function runtimeExpressionNeedsSharedCallDispatcher(
+  expression: JavaScriptAotExpression,
+): boolean {
+  if (
+    expression.kind === "unary" &&
+    (expression.operator === "+" || expression.operator === "-") &&
+    (expression.value.kind === "property" || expression.value.kind === "index")
+  ) return true;
+  switch (expression.kind) {
+    case "function":
+      return runtimeStatementsNeedSharedCallDispatcher(expression.body);
+    case "array":
+      return expression.values.some(runtimeExpressionNeedsSharedCallDispatcher);
+    case "object":
+      return expression.properties.some((property) =>
+        property.name === "valueOf" || property.name === "toString" ||
+        runtimeExpressionNeedsSharedCallDispatcher(property.value)
+      );
+    case "unary":
+    case "property":
+      return runtimeExpressionNeedsSharedCallDispatcher(expression.value);
+    case "binary":
+      return runtimeExpressionNeedsSharedCallDispatcher(expression.left) ||
+        runtimeExpressionNeedsSharedCallDispatcher(expression.right);
+    case "conditional":
+      return runtimeExpressionNeedsSharedCallDispatcher(expression.condition) ||
+        runtimeExpressionNeedsSharedCallDispatcher(expression.consequent) ||
+        runtimeExpressionNeedsSharedCallDispatcher(expression.alternate);
+    case "call":
+      return runtimeExpressionNeedsSharedCallDispatcher(expression.callee) ||
+        expression.arguments.some(runtimeExpressionNeedsSharedCallDispatcher);
+    case "new":
+      return expression.arguments.some(runtimeExpressionNeedsSharedCallDispatcher);
+    case "index":
+      return runtimeExpressionNeedsSharedCallDispatcher(expression.value) ||
+        runtimeExpressionNeedsSharedCallDispatcher(expression.index);
+    default:
+      return false;
+  }
+}
+
+function runtimeFunctionType(
+  argumentCount: number,
+  span: JavaScriptAotExpression["span"],
+): FunctionalSourceType {
+  const named = (name: string): FunctionalTypeSchema => ({ kind: "named", name, arguments: [] });
+  return curriedRuntimeType([
+    named(Runtime.JAVASCRIPT_HEAP_TYPE),
+    named(Runtime.JAVASCRIPT_REALM_TYPE),
+    named(Runtime.JAVASCRIPT_ENVIRONMENT_TYPE),
+    named(Runtime.JAVASCRIPT_BINDING_STORE_TYPE),
+    named(Runtime.JAVASCRIPT_VALUE_TYPE),
+    { kind: "integer" },
+    ...Array.from({ length: argumentCount }, () => named(Runtime.JAVASCRIPT_VALUE_TYPE)),
+  ], span);
+}
+
+function runtimeDispatcherType(
+  argumentCount: number,
+  span: JavaScriptAotExpression["span"],
+): FunctionalSourceType {
+  const functionType = runtimeFunctionType(argumentCount, span);
+  const { startByte: _startByte, endByte: _endByte, ...result } = functionType;
+  return {
+    kind: "function",
+    parameter: { kind: "integer" },
+    result,
+    startByte: span.startByte,
+    endByte: span.endByte,
+  };
+}
+
+function curriedRuntimeType(
+  parameters: readonly FunctionalTypeSchema[],
+  span: JavaScriptAotExpression["span"],
+): FunctionalSourceType {
+  let type: FunctionalTypeSchema = {
+    kind: "named",
+    name: Runtime.JAVASCRIPT_COMPLETION_TYPE,
+    arguments: [],
+  };
+  for (let index = parameters.length - 1; index >= 0; index--) {
+    type = { kind: "function", parameter: parameters[index]!, result: type };
+  }
+  return { ...type, startByte: span.startByte, endByte: span.endByte };
+}
+
 function firstRuntimeUnresolvedName(
   entry: JavaScriptAotFunctionDeclaration,
 ): { readonly name: string; readonly span: JavaScriptAotExpression["span"] } | null {
@@ -2606,6 +4054,7 @@ function firstRuntimeUnresolvedName(
         return;
       case "function": {
         const functionNames = declaredRuntimeNames(expression.body, names);
+        functionNames.add("arguments");
         for (const parameter of expression.parameters) functionNames.add(parameter);
         if (expression.name !== null) functionNames.add(expression.name);
         visitStatements(expression.body, functionNames);
@@ -2652,6 +4101,7 @@ function firstRuntimeUnresolvedName(
         case "function-declaration": {
           const functionNames = declaredRuntimeNames(statement.body, names);
           functionNames.add(statement.name);
+          functionNames.add("arguments");
           for (const parameter of statement.parameters) functionNames.add(parameter);
           visitStatements(statement.body, functionNames);
           break;
@@ -2821,6 +4271,16 @@ function runtimeEntryResultKind(
   return resultKind;
 }
 
+function statementsUseStrictMode(statements: readonly JavaScriptAotStatement[]): boolean {
+  for (const statement of statements) {
+    if (statement.kind !== "expression" || statement.value.kind !== "string") return false;
+    if (statement.value.raw === '"use strict"' || statement.value.raw === "'use strict'") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function runtimeExpressionResultKind(
   expression: JavaScriptAotExpression,
   bindingKinds: ReadonlyMap<string, RuntimeEntryResultKind>,
@@ -2871,7 +4331,12 @@ function runtimeExpressionResultKind(
 
 function expressionRequiresRuntimeModel(expression: JavaScriptAotExpression): boolean {
   if (expression.kind === "name" && expression.name === "this") return true;
+  if (expression.kind === "name" && expression.name === "arguments") return true;
   if (expression.kind === "call" && isRuntimeDefinePropertyCall(expression)) return true;
+  if (
+    expression.kind === "binary" &&
+    (expression.operator === "same-value" || expression.operator === "not-same-value")
+  ) return true;
   if (
     expression.kind === "binary" &&
     (expression.operator === "===" || expression.operator === "!==" ||
@@ -2912,10 +4377,17 @@ function expressionRequiresRuntimeModel(expression: JavaScriptAotExpression): bo
   }
 }
 
+function literalPropertyName(expression: JavaScriptAotExpression): string | null {
+  return expression.kind === "string" || expression.kind === "number"
+    ? String(expression.value)
+    : null;
+}
+
 function statementRequiresRuntimeModel(statement: JavaScriptAotStatement): boolean {
   switch (statement.kind) {
     case "function-declaration":
-      return statement.body.some(statementRequiresRuntimeModel);
+      return statement.requiresRuntimeModel === true ||
+        statement.body.some(statementRequiresRuntimeModel);
     case "constant":
     case "mutable":
     case "assignment":
@@ -2975,6 +4447,41 @@ function valueCaseArms(
       span,
     };
   });
+}
+
+function primitiveOrObjectValueArms(
+  fieldName: string,
+  span: JavaScriptAotExpression["span"],
+  onPrimitive: (value: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
+  onObject: (identity: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
+): readonly FunctionalSurfaceCaseArm[] {
+  const primitiveConstructors = [
+    { name: Runtime.JAVASCRIPT_VALUE_UNDEFINED, carriesField: false },
+    { name: Runtime.JAVASCRIPT_VALUE_NULL, carriesField: false },
+    { name: Runtime.JAVASCRIPT_VALUE_BOOLEAN, carriesField: true },
+    { name: Runtime.JAVASCRIPT_VALUE_NUMBER, carriesField: true },
+    { name: Runtime.JAVASCRIPT_VALUE_STRING, carriesField: true },
+    { name: Runtime.JAVASCRIPT_VALUE_SYMBOL, carriesField: true },
+  ];
+  return [
+    ...primitiveConstructors.map(({ name, carriesField }) => {
+      const binders = carriesField ? [fieldName] : [];
+      return {
+        constructor: name,
+        binders,
+        body: onPrimitive(
+          carriesField ? call(name, [reference(fieldName, span)], span) : reference(name, span),
+        ),
+        span,
+      };
+    }),
+    {
+      constructor: Runtime.JAVASCRIPT_VALUE_OBJECT,
+      binders: [fieldName],
+      body: onObject(reference(fieldName, span)),
+      span,
+    },
+  ];
 }
 
 function reference(

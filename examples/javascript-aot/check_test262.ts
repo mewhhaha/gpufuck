@@ -8,16 +8,20 @@ import {
   parseTest262Metadata,
   type Test262ExecutionMode,
   test262ExecutionModes,
-  test262FrontendProbeSource,
+  type Test262Metadata,
 } from "./src/test262.ts";
 import { lowerTest262PositiveTest } from "./src/test262_harness.ts";
+import type {
+  Test262FrontendBatchRequest,
+  Test262FrontendBatchResponse,
+  Test262FrontendFileProbe,
+} from "./src/test262_scan.ts";
 
 const TEST262_REPOSITORY = "https://github.com/tc39/test262.git";
 const TEST262_COMMIT = "9e61c12835c5e4a3bdba93850427e6742c4f64c4";
 const PROBE_ENTRY = "__test262_main";
 const FAILURE_EXAMPLE_LIMIT = 20;
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
+const FRONTEND_BATCH_SIZE = 64;
 
 interface FrontendFailureExample {
   readonly path: string;
@@ -30,7 +34,7 @@ interface ReadyTest262Case {
   readonly absolutePath: string;
   readonly path: string;
   readonly mode: Test262ExecutionMode;
-  readonly metadata: ReturnType<typeof parseTest262Metadata>;
+  readonly metadata: Test262Metadata;
 }
 
 const suppliedCheckout = Deno.args[0];
@@ -85,99 +89,107 @@ try {
   const lowerFailureReasons = new Map<string, number>();
   const lowerFailureExamples = new Map<string, string>();
 
-  for (const absolutePath of paths) {
-    const relativePath = absolutePath.slice(checkout.length + 1);
-    const disposition = classifyTest262CoreTest(relativePath);
-    if (disposition.kind === "fixture") {
-      fixtureCount++;
-      continue;
-    }
-    if (disposition.kind === "excluded") {
-      dynamicCodeExclusionCount++;
-      continue;
-    }
-    applicableCount++;
-    if (reportProgress && applicableCount % 100 === 0) {
-      console.error(`Test262 frontend ${applicableCount}: ${relativePath}`);
-    }
-
-    const source = await Deno.readTextFile(absolutePath);
-    const metadata = parseTest262Metadata(relativePath, source);
-    const executionModes = test262ExecutionModes(metadata);
-    applicableExecutionCount += executionModes.length;
-    if (metadata.flags.includes("module")) moduleCount++;
-    if (metadata.flags.includes("async")) asyncCount++;
-    if (metadata.negative !== null) {
-      switch (metadata.negative.phase) {
-        case "parse":
-          negativeParseCount++;
-          break;
-        case "resolution":
-          negativeResolutionCount++;
-          break;
-        case "runtime":
-          negativeRuntimeCount++;
-          break;
+  for (let batchStart = 0; batchStart < paths.length; batchStart += FRONTEND_BATCH_SIZE) {
+    const batchEnd = Math.min(batchStart + FRONTEND_BATCH_SIZE, paths.length);
+    const probes = await probeFrontendBatchInProcess({
+      checkout,
+      absolutePaths: paths.slice(batchStart, batchEnd),
+      entryName: PROBE_ENTRY,
+    });
+    for (const probe of probes) {
+      if (probe.kind === "fixture") {
+        fixtureCount++;
+        continue;
       }
-      continue;
-    }
-    positiveCount++;
-
-    let readyModeCount = 0;
-    for (const mode of executionModes) {
-      const frontend = lowerTest262PositiveTest(
-        relativePath,
-        source,
-        metadata,
-        PROBE_ENTRY,
-        mode,
-      );
-      if (frontend.ok) {
-        frontendReadyCount++;
-        readyModeCount++;
-        readyCases.push({ absolutePath, path: relativePath, mode, metadata });
-        if (readyExamples.length < FAILURE_EXAMPLE_LIMIT) {
-          readyExamples.push(`${relativePath} [${mode}]`);
+      if (probe.kind === "excluded") {
+        dynamicCodeExclusionCount++;
+        continue;
+      }
+      applicableCount++;
+      applicableExecutionCount += probe.executionModes.length;
+      if (probe.metadata.flags.includes("module")) moduleCount++;
+      if (probe.metadata.flags.includes("async")) asyncCount++;
+      if (probe.metadata.negative !== null) {
+        switch (probe.metadata.negative.phase) {
+          case "parse":
+            negativeParseCount++;
+            break;
+          case "resolution":
+            negativeResolutionCount++;
+            break;
+          case "runtime":
+            negativeRuntimeCount++;
+            break;
         }
         continue;
       }
-      const diagnostic = frontend.diagnostics[0];
-      if (diagnostic.stage === "parse") {
-        parseUnsupportedCount++;
-        const token = /Unexpected token (.+?)\./.exec(diagnostic.message)?.[1] ?? "other";
-        parseFailureTokens.set(token, (parseFailureTokens.get(token) ?? 0) + 1);
-        const probeSource = test262FrontendProbeSource(source, metadata, PROBE_ENTRY, mode);
-        if (probeSource === null) {
+      positiveCount++;
+
+      let readyModeCount = 0;
+      for (const outcome of probe.outcomes) {
+        if (outcome.kind === "ready") {
+          frontendReadyCount++;
+          readyModeCount++;
+          readyCases.push({
+            absolutePath: probe.absolutePath,
+            path: probe.path,
+            mode: outcome.mode,
+            metadata: probe.metadata,
+          });
+          if (readyExamples.length < FAILURE_EXAMPLE_LIMIT) {
+            readyExamples.push(`${probe.path} [${outcome.mode}]`);
+          }
+          continue;
+        }
+        if (outcome.kind === "negative-ready") {
           throw new Error(
-            `Positive Test262 file ${JSON.stringify(relativePath)} produced no probe.`,
+            `Positive Test262 test ${JSON.stringify(probe.path)} produced a negative outcome.`,
           );
         }
-        const probeBytes = textEncoder.encode(probeSource);
-        const lexeme = textDecoder.decode(
-          probeBytes.subarray(diagnostic.span.startByte, diagnostic.span.endByte),
-        );
-        parseFailureLexemes.set(lexeme, (parseFailureLexemes.get(lexeme) ?? 0) + 1);
-        if (!parseFailureLexemeExamples.has(lexeme)) {
-          parseFailureLexemeExamples.set(lexeme, `${relativePath} [${mode}]`);
+        const diagnostic = outcome.diagnostic;
+        if (diagnostic.stage === "parse") {
+          parseUnsupportedCount++;
+          const token = /Unexpected token (.+?)\./.exec(diagnostic.message)?.[1] ?? "other";
+          parseFailureTokens.set(token, (parseFailureTokens.get(token) ?? 0) + 1);
+          if (outcome.lexeme === null) {
+            throw new Error(
+              `Test262 parse diagnostic ${diagnostic.code} for ${
+                JSON.stringify(probe.path)
+              } has no source lexeme.`,
+            );
+          }
+          parseFailureLexemes.set(
+            outcome.lexeme,
+            (parseFailureLexemes.get(outcome.lexeme) ?? 0) + 1,
+          );
+          if (!parseFailureLexemeExamples.has(outcome.lexeme)) {
+            parseFailureLexemeExamples.set(
+              outcome.lexeme,
+              `${probe.path} [${outcome.mode}]`,
+            );
+          }
+        } else {
+          lowerUnsupportedCount++;
+          const reason = normalizeLowerFailureReason(diagnostic.message);
+          lowerFailureReasons.set(reason, (lowerFailureReasons.get(reason) ?? 0) + 1);
+          if (!lowerFailureExamples.has(reason)) {
+            lowerFailureExamples.set(reason, `${probe.path} [${outcome.mode}]`);
+          }
         }
-      } else {
-        lowerUnsupportedCount++;
-        const reason = normalizeLowerFailureReason(diagnostic.message);
-        lowerFailureReasons.set(reason, (lowerFailureReasons.get(reason) ?? 0) + 1);
-        if (!lowerFailureExamples.has(reason)) {
-          lowerFailureExamples.set(reason, `${relativePath} [${mode}]`);
+        if (failureExamples.length < FAILURE_EXAMPLE_LIMIT) {
+          failureExamples.push({
+            path: probe.path,
+            mode: outcome.mode,
+            stage: diagnostic.stage,
+            message: diagnostic.message,
+          });
         }
       }
-      if (failureExamples.length < FAILURE_EXAMPLE_LIMIT) {
-        failureExamples.push({
-          path: relativePath,
-          mode,
-          stage: diagnostic.stage,
-          message: diagnostic.message,
-        });
-      }
+      if (readyModeCount === probe.executionModes.length) fullyReadyFileCount++;
     }
-    if (readyModeCount === executionModes.length) fullyReadyFileCount++;
+    if (reportProgress) {
+      console.error(`Test262 frontend paths ${batchEnd}/${paths.length}`);
+    }
   }
 
   const execution = await executeReadyCases(readyCases);
@@ -242,6 +254,100 @@ try {
   ));
 } finally {
   if (temporaryRoot !== null) await Deno.remove(temporaryRoot, { recursive: true });
+}
+
+async function probeFrontendBatchInProcess(
+  request: Test262FrontendBatchRequest,
+): Promise<readonly Test262FrontendFileProbe[]> {
+  const command = new Deno.Command(Deno.execPath(), {
+    args: [
+      "run",
+      "--v8-flags=--max-old-space-size=512",
+      "--allow-read",
+      new URL("./src/test262_scan_process.ts", import.meta.url).href,
+    ],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const process = command.spawn();
+  const writer = process.stdin.getWriter();
+  await writer.write(new TextEncoder().encode(JSON.stringify(request)));
+  await writer.close();
+  const output = await process.output();
+  if (!output.success) {
+    const stderr = new TextDecoder().decode(output.stderr).trim();
+    if (output.code === 133 && stderr.includes("heap limit")) {
+      if (request.absolutePaths.length > 1) {
+        const isolated: Test262FrontendFileProbe[] = [];
+        for (const absolutePath of request.absolutePaths) {
+          isolated.push(
+            ...await probeFrontendBatchInProcess({
+              ...request,
+              absolutePaths: [absolutePath],
+            }),
+          );
+        }
+        return isolated;
+      }
+      return [await heapLimitedFrontendProbe(request, request.absolutePaths[0]!)];
+    }
+    throw new Error(
+      `Test262 frontend subprocess failed with exit code ${output.code} for ${
+        JSON.stringify(request.absolutePaths[0])
+      } through ${JSON.stringify(request.absolutePaths.at(-1))}: ${stderr}`,
+    );
+  }
+  const response = JSON.parse(
+    new TextDecoder().decode(output.stdout),
+  ) as Test262FrontendBatchResponse;
+  if (response.ok) return response.probes;
+  throw new Error(`Test262 frontend subprocess failed: ${response.message}`, {
+    cause: response.stack,
+  });
+}
+
+async function heapLimitedFrontendProbe(
+  request: Test262FrontendBatchRequest,
+  absolutePath: string,
+): Promise<Test262FrontendFileProbe> {
+  const prefix = `${request.checkout}/`;
+  if (!absolutePath.startsWith(prefix)) {
+    throw new Error(
+      `Test262 path ${JSON.stringify(absolutePath)} is outside checkout ${
+        JSON.stringify(request.checkout)
+      }.`,
+    );
+  }
+  const path = absolutePath.slice(prefix.length);
+  const disposition = classifyTest262CoreTest(path);
+  if (disposition.kind === "fixture") return { kind: "fixture", absolutePath, path };
+  if (disposition.kind === "excluded") return { kind: "excluded", absolutePath, path };
+  const source = await Deno.readTextFile(absolutePath);
+  const metadata = parseTest262Metadata(path, source);
+  const executionModes = test262ExecutionModes(metadata);
+  const sourceByteLength = new TextEncoder().encode(source).byteLength;
+  return {
+    kind: "applicable",
+    absolutePath,
+    path,
+    metadata,
+    executionModes,
+    outcomes: executionModes.map((mode) => ({
+      kind: "unsupported",
+      mode,
+      diagnostic: {
+        stage: "lower",
+        code: "J1002",
+        module: path,
+        span: { startByte: 0, endByte: sourceByteLength },
+        message: `JavaScript AOT lowering for ${
+          JSON.stringify(path)
+        } exhausted the isolated Test262 worker heap.`,
+      },
+      lexeme: null,
+    })),
+  };
 }
 
 function normalizeLowerFailureReason(message: string): string {

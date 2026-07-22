@@ -15,6 +15,8 @@ export interface JavaScriptAotFunctionDeclaration {
   readonly exported: boolean;
   readonly name: string;
   readonly parameters: readonly string[];
+  readonly parameterLength?: number;
+  readonly requiresRuntimeModel?: true;
   readonly body: readonly JavaScriptAotStatement[];
   readonly span: FunctionalSpan;
 }
@@ -32,6 +34,8 @@ export type JavaScriptAotStatement =
     readonly kind: "function-declaration";
     readonly name: string;
     readonly parameters: readonly string[];
+    readonly parameterLength?: number;
+    readonly requiresRuntimeModel?: true;
     readonly body: readonly JavaScriptAotStatement[];
     readonly span: FunctionalSpan;
   }
@@ -149,7 +153,12 @@ export type JavaScriptAotStatement =
 
 export type JavaScriptAotExpression =
   | { readonly kind: "number"; readonly value: number; readonly span: FunctionalSpan }
-  | { readonly kind: "string"; readonly value: string; readonly span: FunctionalSpan }
+  | {
+    readonly kind: "string";
+    readonly value: string;
+    readonly raw: string | null;
+    readonly span: FunctionalSpan;
+  }
   | { readonly kind: "boolean"; readonly value: boolean; readonly span: FunctionalSpan }
   | { readonly kind: "null"; readonly span: FunctionalSpan }
   | { readonly kind: "name"; readonly name: string; readonly span: FunctionalSpan }
@@ -172,6 +181,7 @@ export type JavaScriptAotExpression =
     readonly name: string | null;
     readonly thisMode: "dynamic" | "lexical";
     readonly parameters: readonly string[];
+    readonly parameterLength?: number;
     readonly body: readonly JavaScriptAotStatement[];
     readonly span: FunctionalSpan;
   }

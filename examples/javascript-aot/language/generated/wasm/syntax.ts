@@ -112,15 +112,21 @@ export type AnyNamedTokenKind = NamedTokenKind extends never
 
 export type LiteralKind =
   | "export"
-  | "function"
-  | "("
-  | ")"
-  | ","
-  | "const"
-  | "="
-  | ";"
+  | "class"
   | "{"
   | "}"
+  | "("
+  | ")"
+  | "function"
+  | "async"
+  | ","
+  | "..."
+  | "["
+  | "]"
+  | ":"
+  | "="
+  | "const"
+  | ";"
   | "let"
   | "var"
   | "+="
@@ -137,6 +143,7 @@ export type LiteralKind =
   | "++"
   | "--"
   | "return"
+  | "yield"
   | "throw"
   | "break"
   | "continue"
@@ -149,7 +156,6 @@ export type LiteralKind =
   | "for"
   | "=>"
   | "?"
-  | ":"
   | "||"
   | "&&"
   | "|"
@@ -176,9 +182,8 @@ export type LiteralKind =
   | "~"
   | "typeof"
   | "void"
+  | "await"
   | "."
-  | "["
-  | "]"
   | "new"
   | "true"
   | "false"
@@ -245,9 +250,26 @@ export type RuleName =
   | "declaration"
   | "exported_declaration"
   | "exportable_declaration"
+  | "class_declaration"
+  | "class_body"
+  | "class_method"
+  | "generator_declaration"
+  | "async_function_declaration"
   | "function_declaration"
   | "parameter_list"
   | "parameter_list_tail"
+  | "parameter"
+  | "rest_parameter"
+  | "array_binding_parameter"
+  | "object_binding_parameter"
+  | "binding_name_list"
+  | "binding_name_list_tail"
+  | "object_binding_list"
+  | "object_binding_list_tail"
+  | "object_binding"
+  | "object_binding_alias"
+  | "default_parameter"
+  | "named_parameter"
   | "constant_declaration"
   | "block"
   | "statement"
@@ -280,6 +302,7 @@ export type RuleName =
   | "increment"
   | "decrement"
   | "return_statement"
+  | "yield_statement"
   | "throw_statement"
   | "break_statement"
   | "continue_statement"
@@ -356,6 +379,7 @@ export type RuleName =
   | "bitwise_not"
   | "typeof_expression"
   | "void_expression"
+  | "await_expression"
   | "call"
   | "postfix_operation"
   | "call_arguments"
@@ -371,6 +395,7 @@ export type RuleName =
   | "object_property_list"
   | "object_property_list_tail"
   | "object_property"
+  | "object_method"
   | "named_object_property"
   | "object_property_name"
   | "identifier_property_name"
@@ -435,6 +460,43 @@ export interface ExportedDeclarationCursor extends RuleCursorBase<"exported_decl
 export interface ExportableDeclarationCursor extends RuleCursorBase<"exportable_declaration"> {
 }
 
+export interface ClassDeclarationCursor extends RuleCursorBase<"class_declaration"> {
+  field(name: "body"): ClassBodyCursor;
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ClassBodyCursor extends RuleCursorBase<"class_body"> {
+  field(name: "methods"): ReadonlyArray<ClassMethodCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ClassMethodCursor extends RuleCursorBase<"class_method"> {
+  field(name: "body"): BlockCursor;
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "parameters"): ParameterListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface GeneratorDeclarationCursor extends RuleCursorBase<"generator_declaration"> {
+  field(name: "body"): BlockCursor;
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "parameters"): ParameterListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface AsyncFunctionDeclarationCursor extends RuleCursorBase<"async_function_declaration"> {
+  field(name: "body"): BlockCursor;
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "parameters"): ParameterListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface FunctionDeclarationCursor extends RuleCursorBase<"function_declaration"> {
   field(name: "body"): BlockCursor;
   field(name: "name"): TokenCursor<"named", "IDENT">;
@@ -444,7 +506,7 @@ export interface FunctionDeclarationCursor extends RuleCursorBase<"function_decl
 }
 
 export interface ParameterListCursor extends RuleCursorBase<"parameter_list"> {
-  field(name: "head"): TokenCursor<"named", "IDENT">;
+  field(name: "head"): ParameterCursor;
   field(name: "rest"): ParameterListTailCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -452,6 +514,79 @@ export interface ParameterListCursor extends RuleCursorBase<"parameter_list"> {
 
 export interface ParameterListTailCursor extends RuleCursorBase<"parameter_list_tail"> {
   field(name: "rest"): ParameterListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ParameterCursor extends RuleCursorBase<"parameter"> {
+}
+
+export interface RestParameterCursor extends RuleCursorBase<"rest_parameter"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ArrayBindingParameterCursor extends RuleCursorBase<"array_binding_parameter"> {
+  field(name: "bindings"): BindingNameListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ObjectBindingParameterCursor extends RuleCursorBase<"object_binding_parameter"> {
+  field(name: "bindings"): ObjectBindingListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface BindingNameListCursor extends RuleCursorBase<"binding_name_list"> {
+  field(name: "head"): TokenCursor<"named", "IDENT">;
+  field(name: "rest"): BindingNameListTailCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface BindingNameListTailCursor extends RuleCursorBase<"binding_name_list_tail"> {
+  field(name: "rest"): BindingNameListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ObjectBindingListCursor extends RuleCursorBase<"object_binding_list"> {
+  field(name: "head"): ObjectBindingCursor;
+  field(name: "rest"): ObjectBindingListTailCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ObjectBindingListTailCursor extends RuleCursorBase<"object_binding_list_tail"> {
+  field(name: "rest"): ObjectBindingListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ObjectBindingCursor extends RuleCursorBase<"object_binding"> {
+  field(name: "alias"): ObjectBindingAliasCursor | null;
+  field(name: "property"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ObjectBindingAliasCursor extends RuleCursorBase<"object_binding_alias"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface DefaultParameterCursor extends RuleCursorBase<"default_parameter"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "value"): ExprCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface NamedParameterCursor extends RuleCursorBase<"named_parameter"> {
+  field(name: "name"): TokenCursor<"named", "IDENT">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -593,6 +728,12 @@ export interface DecrementCursor extends RuleCursorBase<"decrement"> {
 }
 
 export interface ReturnStatementCursor extends RuleCursorBase<"return_statement"> {
+  field(name: "value"): ExprCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface YieldStatementCursor extends RuleCursorBase<"yield_statement"> {
   field(name: "value"): ExprCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -987,6 +1128,12 @@ export interface VoidExpressionCursor extends RuleCursorBase<"void_expression"> 
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface AwaitExpressionCursor extends RuleCursorBase<"await_expression"> {
+  field(name: "value"): UnaryCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface CallCursor extends RuleCursorBase<"call"> {
   field(name: "callee"): PrimaryCursor;
   field(name: "operations"): ReadonlyArray<PostfixOperationCursor>;
@@ -1074,6 +1221,14 @@ export interface ObjectPropertyListTailCursor extends RuleCursorBase<"object_pro
 export interface ObjectPropertyCursor extends RuleCursorBase<"object_property"> {
 }
 
+export interface ObjectMethodCursor extends RuleCursorBase<"object_method"> {
+  field(name: "body"): BlockCursor;
+  field(name: "name"): ObjectPropertyNameCursor;
+  field(name: "parameters"): ParameterListCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface NamedObjectPropertyCursor extends RuleCursorBase<"named_object_property"> {
   field(name: "name"): ObjectPropertyNameCursor;
   field(name: "value"): ExprCursor;
@@ -1149,9 +1304,26 @@ export type AnyRuleCursor =
   | DeclarationCursor
   | ExportedDeclarationCursor
   | ExportableDeclarationCursor
+  | ClassDeclarationCursor
+  | ClassBodyCursor
+  | ClassMethodCursor
+  | GeneratorDeclarationCursor
+  | AsyncFunctionDeclarationCursor
   | FunctionDeclarationCursor
   | ParameterListCursor
   | ParameterListTailCursor
+  | ParameterCursor
+  | RestParameterCursor
+  | ArrayBindingParameterCursor
+  | ObjectBindingParameterCursor
+  | BindingNameListCursor
+  | BindingNameListTailCursor
+  | ObjectBindingListCursor
+  | ObjectBindingListTailCursor
+  | ObjectBindingCursor
+  | ObjectBindingAliasCursor
+  | DefaultParameterCursor
+  | NamedParameterCursor
   | ConstantDeclarationCursor
   | BlockCursor
   | StatementCursor
@@ -1184,6 +1356,7 @@ export type AnyRuleCursor =
   | IncrementCursor
   | DecrementCursor
   | ReturnStatementCursor
+  | YieldStatementCursor
   | ThrowStatementCursor
   | BreakStatementCursor
   | ContinueStatementCursor
@@ -1260,6 +1433,7 @@ export type AnyRuleCursor =
   | BitwiseNotCursor
   | TypeofExpressionCursor
   | VoidExpressionCursor
+  | AwaitExpressionCursor
   | CallCursor
   | PostfixOperationCursor
   | CallArgumentsCursor
@@ -1275,6 +1449,7 @@ export type AnyRuleCursor =
   | ObjectPropertyListCursor
   | ObjectPropertyListTailCursor
   | ObjectPropertyCursor
+  | ObjectMethodCursor
   | NamedObjectPropertyCursor
   | ObjectPropertyNameCursor
   | IdentifierPropertyNameCursor
@@ -1330,6 +1505,7 @@ export type CursorParseResult<Root extends RuleCursor = RootCursor> =
     source: string;
     diagnostics: readonly ParseDiagnostic[];
   };
+
 export type ValidateParseResult =
   | {
     ok: true;

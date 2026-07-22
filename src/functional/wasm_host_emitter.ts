@@ -21,6 +21,7 @@ interface FunctionalWasmHostEmitterContext {
   emitEncodeBoolean(instructions: WasmInstructions): void;
   emitEncodeInteger(instructions: WasmInstructions): void;
   emitForceValue(instructions: WasmInstructions): void;
+  emitFuelChargeAmount(instructions: WasmInstructions, amount: number, nodeIndex: number): void;
   emitRuntimeFault(instructions: WasmInstructions, fault: number): void;
 }
 
@@ -52,6 +53,7 @@ export class FunctionalWasmHostEmitter {
       instructions.localGet(pointer);
       instructions.i32Load(8);
       instructions.localSet(length);
+      this.#context.emitFuelChargeAmount(instructions, length, -1);
       const resultKind = this.bufferObjectKind(resultType);
       const result = this.allocateBuffer(instructions, resultKind, length);
       instructions.localGet(result);
@@ -93,6 +95,7 @@ export class FunctionalWasmHostEmitter {
       instructions.emit(0x48, 0x04, 0x40);
       this.#context.emitRuntimeFault(instructions, WASM_FAULT_OUT_OF_BOUNDS);
       instructions.emit(0x0b);
+      this.#context.emitFuelChargeAmount(instructions, length, -1);
       const generator = this.objectPointer(instructions, second);
       const result = this.allocateBuffer(
         instructions,
@@ -143,6 +146,7 @@ export class FunctionalWasmHostEmitter {
       instructions.localGet(start);
       instructions.emit(0x6b);
       instructions.localSet(length);
+      this.#context.emitFuelChargeAmount(instructions, length, -1);
       const result = this.allocateBuffer(
         instructions,
         this.bufferObjectKind(bufferType),
@@ -165,11 +169,11 @@ export class FunctionalWasmHostEmitter {
 
     const right = this.bufferPointer(instructions, second, parameter.values[1]);
     if (intrinsic === FunctionalWasmIntrinsic.BufferAppend) {
-      this.emitBufferAppend(instructions, left, right, bufferType);
+      this.emitBufferAppend(instructions, left, right, bufferType, -1);
       return;
     }
     if (intrinsic === FunctionalWasmIntrinsic.BufferEqual) {
-      this.emitBufferEquality(instructions, left, right);
+      this.emitBufferEquality(instructions, left, right, -1);
       return;
     }
     intrinsic satisfies never;
@@ -182,11 +186,13 @@ export class FunctionalWasmHostEmitter {
       readonly kind: "bytes";
       readonly value: readonly number[] | Uint8Array;
     },
+    nodeIndex: number,
   ): void {
     const bytes = literal.kind === "text" ? new TextEncoder().encode(literal.value) : literal.value;
     const length = instructions.addLocal(WasmValueType.I32);
     instructions.i32Const(bytes.length);
     instructions.localSet(length);
+    this.#context.emitFuelChargeAmount(instructions, length, nodeIndex);
     const pointer = this.allocateBuffer(
       instructions,
       literal.kind === "text" ? TEXT_OBJECT_KIND : BYTES_OBJECT_KIND,
@@ -204,6 +210,7 @@ export class FunctionalWasmHostEmitter {
   emitBufferAppendValues(
     instructions: WasmInstructions,
     type: FunctionalHostType,
+    nodeIndex: number,
   ): void {
     const rightValue = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(rightValue);
@@ -211,7 +218,7 @@ export class FunctionalWasmHostEmitter {
     instructions.localSet(leftValue);
     const left = this.bufferPointer(instructions, leftValue, type);
     const right = this.bufferPointer(instructions, rightValue, type);
-    this.emitBufferAppend(instructions, left, right, type);
+    this.emitBufferAppend(instructions, left, right, type, nodeIndex);
   }
 
   private objectPointer(instructions: WasmInstructions, value: number): number {
@@ -336,6 +343,7 @@ export class FunctionalWasmHostEmitter {
     left: number,
     right: number,
     type: FunctionalHostType,
+    nodeIndex: number,
   ): void {
     const leftLength = instructions.addLocal(WasmValueType.I32);
     const rightLength = instructions.addLocal(WasmValueType.I32);
@@ -355,6 +363,7 @@ export class FunctionalWasmHostEmitter {
     instructions.emit(0x49, 0x04, 0x40);
     this.#context.emitRuntimeFault(instructions, WASM_FAULT_OUT_OF_MEMORY);
     instructions.emit(0x0b);
+    this.#context.emitFuelChargeAmount(instructions, length, nodeIndex);
     const result = this.allocateBuffer(
       instructions,
       this.bufferObjectKind(type),
@@ -386,6 +395,7 @@ export class FunctionalWasmHostEmitter {
     instructions: WasmInstructions,
     left: number,
     right: number,
+    nodeIndex: number,
   ): void {
     const length = instructions.addLocal(WasmValueType.I32);
     const index = instructions.addLocal(WasmValueType.I32);
@@ -401,6 +411,7 @@ export class FunctionalWasmHostEmitter {
     instructions.localSet(equal);
     instructions.localGet(equal);
     instructions.emit(0x04, 0x40);
+    this.#context.emitFuelChargeAmount(instructions, length, nodeIndex);
     instructions.emit(0x02, 0x40, 0x03, 0x40);
     instructions.localGet(index);
     instructions.localGet(length);

@@ -51,6 +51,34 @@ export class FunctionalWasmRuntimeEmitter {
     instructions.globalSet(stepsGlobal);
   }
 
+  emitFuelChargeAmount(
+    instructions: WasmInstructions,
+    amount: number,
+    nodeIndex: number,
+  ): void {
+    if (!this.#instrumentedFuel) return;
+    const fuel = this.compactGlobals.fuel;
+    const remainingFuelGlobal = this.#compactScalar
+      ? requiredCompactGlobal(fuel?.remaining, "remaining fuel")
+      : FunctionalWasmRuntimeGlobal.ComptimeFuel;
+    const stepsGlobal = this.#compactScalar
+      ? requiredCompactGlobal(fuel?.steps, "semantic steps")
+      : FunctionalWasmRuntimeGlobal.ComptimeSteps;
+    instructions.globalGet(remainingFuelGlobal);
+    instructions.localGet(amount);
+    instructions.emit(0x49, 0x04, 0x40);
+    this.emitFault(instructions, WASM_FAULT_OUT_OF_FUEL, nodeIndex);
+    instructions.emit(0x0b);
+    instructions.globalGet(remainingFuelGlobal);
+    instructions.localGet(amount);
+    instructions.emit(0x6b);
+    instructions.globalSet(remainingFuelGlobal);
+    instructions.globalGet(stepsGlobal);
+    instructions.localGet(amount);
+    instructions.emit(0x6a);
+    instructions.globalSet(stepsGlobal);
+  }
+
   emitFault(
     instructions: WasmInstructions,
     fault: number,

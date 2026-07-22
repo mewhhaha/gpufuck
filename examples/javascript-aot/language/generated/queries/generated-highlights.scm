@@ -7,6 +7,7 @@
 "," @punctuation.delimiter
 "--" @operator
 "." @punctuation.delimiter
+"..." @operator
 ":" @punctuation.delimiter
 "=>" @operator
 "?" @operator
@@ -18,8 +19,12 @@
 "||" @operator
 "}" @punctuation.bracket
 "~" @operator
+(async_function_declaration "async" @keyword)
+(async_function_declaration "function" @keyword)
+(await_expression "await" @keyword)
 (break_statement "break" @keyword)
 (catch_clause "catch" @keyword)
+(class_declaration "class" @keyword)
 (constant_declaration "const" @keyword)
 (constant_for_initializer "const" @keyword)
 (constant_statement "const" @keyword)
@@ -30,6 +35,7 @@
 (for_statement "for" @keyword)
 (function_declaration "function" @keyword)
 (function_expression "function" @keyword)
+(generator_declaration "function" @keyword)
 (if_statement "if" @keyword)
 (mutable_for_initializer "let" @keyword)
 (mutable_statement "let" @keyword)
@@ -42,6 +48,10 @@
 (var_statement "var" @keyword)
 (void_expression "void" @keyword)
 (while_statement "while" @keyword)
+(yield_statement "yield" @keyword)
+(class_declaration) @type
+(class_body) @type
+(class_method) @type
 (constant_declaration) @constant.builtin
 (constant_statement) @constant.builtin
 (constant_for_initializer) @constant.builtin
@@ -65,10 +75,19 @@
 (LINE_COMMENT) @comment
 (BLOCK_COMMENT) @comment
 (arrow_function parameter: (IDENT) @variable)
+(async_function_declaration name: (IDENT) @function)
 (catch_binding name: (IDENT) @variable)
+(class_declaration name: (IDENT) @type)
+(class_method name: (IDENT) @function)
+(default_parameter name: (IDENT) @variable)
 (function_declaration name: (IDENT) @function)
 (function_expression name: (IDENT) @function)
 (named_object_property name: (object_property_name) @variable.other.member)
+(named_parameter name: (IDENT) @variable)
+(object_binding_alias name: (IDENT) @variable)
+(object_binding property: (IDENT) @variable.other.member)
+(object_method name: (object_property_name) @function)
 (property_access name: (IDENT) @variable.other.member)
+(rest_parameter name: (IDENT) @variable)
 (shorthand_object_property name: (IDENT) @variable.other.member)
 (variable_declarator name: (IDENT) @variable)

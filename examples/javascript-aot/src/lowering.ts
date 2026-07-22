@@ -42,6 +42,7 @@ export interface JavaScriptAotLoweringOptions {
 interface JavaScriptAotBinding {
   readonly coreName: string;
   readonly functionArity: number | null;
+  readonly functionLength: number | null;
   readonly throwsAcrossCalls: boolean;
   readonly zeroArgumentApplication: boolean;
   readonly constantValue: JavaScriptAotExpression | null;
@@ -98,6 +99,7 @@ const JAVASCRIPT_BITWISE_OPERATORS = new Set<JavaScriptAotBinaryOperator>([
   "^",
   "|",
 ]);
+const JAVASCRIPT_AOT_MAXIMUM_TRY_CONTINUATION_DEPTH = 128;
 
 type JavaScriptAotEnvironment = ReadonlyMap<string, JavaScriptAotBinding>;
 type JavaScriptAotThrowContinuation = (
@@ -151,6 +153,7 @@ class JavaScriptAotLowering {
     readonly JavaScriptAotStatement[],
     ReadonlyMap<string, number>
   >();
+  #activeTryContinuations = 0;
 
   constructor(
     private readonly sourceModule: JavaScriptAotModule,
@@ -251,6 +254,9 @@ class JavaScriptAotLowering {
       this.#topLevelBindings.set(declaration.name, {
         coreName: declaration.name,
         functionArity: declaration.kind === "function" ? declaration.parameters.length : null,
+        functionLength: declaration.kind === "function"
+          ? declaration.parameterLength ?? declaration.parameters.length
+          : null,
         throwsAcrossCalls: declaration.kind === "function" &&
           statementsMayEscapeThrow(declaration.body),
         zeroArgumentApplication: declaration.kind === "function" &&
@@ -354,6 +360,7 @@ class JavaScriptAotLowering {
       functionEnvironment.set(parameter, {
         coreName,
         functionArity: null,
+        functionLength: null,
         throwsAcrossCalls: false,
         zeroArgumentApplication: false,
         constantValue: null,
@@ -381,6 +388,7 @@ class JavaScriptAotLowering {
       const binding = {
         coreName: this.freshBindingName(name),
         functionArity: null,
+        functionLength: null,
         throwsAcrossCalls: false,
         zeroArgumentApplication: false,
         constantValue: null,
@@ -480,6 +488,7 @@ class JavaScriptAotLowering {
       declarationEnvironment.set(declaration.name, {
         coreName,
         functionArity: declaration.parameters.length,
+        functionLength: declaration.parameterLength ?? declaration.parameters.length,
         throwsAcrossCalls: statementsMayEscapeThrow(declaration.body),
         zeroArgumentApplication: declaration.parameters.length === 0,
         constantValue: null,
@@ -640,6 +649,9 @@ class JavaScriptAotLowering {
           functionArity: declaration.value.kind === "function"
             ? declaration.value.parameters.length
             : null,
+          functionLength: declaration.value.kind === "function"
+            ? declaration.value.parameterLength ?? declaration.value.parameters.length
+            : null,
           throwsAcrossCalls: declaration.value.kind === "function" &&
             statementsMayEscapeThrow(declaration.value.body),
           zeroArgumentApplication: declaration.value.kind === "function" &&
@@ -740,15 +752,26 @@ class JavaScriptAotLowering {
       );
     }
     if (statement.kind === "try") {
-      return this.lowerTry(
-        statement,
-        environment,
-        continuation,
-        onThrow,
-        onReturn,
-        onBreak,
-        onContinue,
-      );
+      if (this.#activeTryContinuations === JAVASCRIPT_AOT_MAXIMUM_TRY_CONTINUATION_DEPTH) {
+        throw new JavaScriptAotLoweringError(
+          statement.span,
+          `JavaScript try continuation nesting exceeds the limit of ${JAVASCRIPT_AOT_MAXIMUM_TRY_CONTINUATION_DEPTH}.`,
+        );
+      }
+      this.#activeTryContinuations++;
+      try {
+        return this.lowerTry(
+          statement,
+          environment,
+          continuation,
+          onThrow,
+          onReturn,
+          onBreak,
+          onContinue,
+        );
+      } finally {
+        this.#activeTryContinuations--;
+      }
     }
     const truthiness = this.constantTruthiness(statement.condition, environment);
     if (truthiness !== null) {
@@ -902,6 +925,7 @@ class JavaScriptAotLowering {
       catchEnvironment.set(statement.catchName, {
         coreName,
         functionArity: null,
+        functionLength: null,
         throwsAcrossCalls: false,
         zeroArgumentApplication: false,
         constantValue,
@@ -1071,6 +1095,9 @@ class JavaScriptAotLowering {
     bodyEnvironment.set(statement.name, {
       coreName,
       functionArity: statement.value.kind === "function" ? statement.value.parameters.length : null,
+      functionLength: statement.value.kind === "function"
+        ? statement.value.parameterLength ?? statement.value.parameters.length
+        : null,
       throwsAcrossCalls: statement.value.kind === "function" &&
         statementsMayEscapeThrow(statement.value.body),
       zeroArgumentApplication: statement.value.kind === "function" &&
@@ -1144,6 +1171,7 @@ class JavaScriptAotLowering {
       loopEnvironment.set(name, {
         coreName,
         functionArity: null,
+        functionLength: null,
         throwsAcrossCalls: false,
         zeroArgumentApplication: false,
         constantValue: null,
@@ -1472,6 +1500,12 @@ class JavaScriptAotLowering {
           if (receiver?.kind === "string") {
             return { kind: "float-64", value: receiver.value.length, span: expression.span };
           }
+          if (expression.value.kind === "name") {
+            const functionLength = environment.get(expression.value.name)?.functionLength ?? null;
+            if (functionLength !== null) {
+              return { kind: "float-64", value: functionLength, span: expression.span };
+            }
+          }
         }
         {
           const shape = this.resolveObjectShape(expression.value, environment);
@@ -1518,13 +1552,13 @@ class JavaScriptAotLowering {
               : { kind: "text", value, span: expression.span };
           }
           if (
-            index?.kind === "string" &&
+            (index?.kind === "string" || index?.kind === "number") &&
             this.resolveObjectShape(expression.value, environment) !== null
           ) {
             return this.lowerExpression({
               kind: "property",
               value: expression.value,
-              name: index.value,
+              name: String(index.value),
               span: expression.span,
             }, environment);
           }
@@ -1569,6 +1603,7 @@ class JavaScriptAotLowering {
           rightEnvironment.set(leftName, {
             coreName: leftName,
             functionArity: null,
+            functionLength: null,
             throwsAcrossCalls: false,
             zeroArgumentApplication: false,
             constantValue: null,
@@ -1589,6 +1624,7 @@ class JavaScriptAotLowering {
                 completedEnvironment.set(rightName, {
                   coreName: rightName,
                   functionArity: null,
+                  functionLength: null,
                   throwsAcrossCalls: false,
                   zeroArgumentApplication: false,
                   constantValue: null,
@@ -1779,6 +1815,9 @@ class JavaScriptAotLowering {
         completedEnvironment.set(coreName, {
           coreName,
           functionArity: expression.kind === "function" ? expression.parameters.length : null,
+          functionLength: expression.kind === "function"
+            ? expression.parameterLength ?? expression.parameters.length
+            : null,
           throwsAcrossCalls: expression.kind === "function" &&
             statementsMayEscapeThrow(expression.body),
           zeroArgumentApplication: expression.kind === "function" &&
@@ -2152,6 +2191,7 @@ class JavaScriptAotLowering {
       functionEnvironment.set(expression.name, {
         coreName,
         functionArity: expression.parameters.length,
+        functionLength: expression.parameterLength ?? expression.parameters.length,
         throwsAcrossCalls: statementsMayEscapeThrow(expression.body),
         zeroArgumentApplication: expression.parameters.length === 0,
         constantValue: null,
@@ -2496,6 +2536,7 @@ class JavaScriptAotLowering {
         return {
           kind: "string",
           value: primitiveConstantToString(left) + primitiveConstantToString(right),
+          raw: null,
           span: expression.span,
         };
       }
@@ -2637,6 +2678,7 @@ class JavaScriptAotLowering {
     return {
       kind: "string",
       value: argument === null ? "" : primitiveConstantToString(argument),
+      raw: null,
       span: expression.span,
     };
   }

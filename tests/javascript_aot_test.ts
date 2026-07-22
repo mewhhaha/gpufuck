@@ -95,6 +95,25 @@ export function main() {
   deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
+Deno.test("coerces numeric literal property keys for static and runtime objects", async () => {
+  const staticValue = await compileAndRun(`
+export function main() {
+  const values = { 5: 42 };
+  return values[5];
+}
+`);
+  const runtimeValue = await compileAndRun(`
+export function main() {
+  const values = {};
+  values[5] = 42;
+  return values[5] + 0;
+}
+`);
+
+  deepStrictEqual(staticValue, { kind: "float-64", value: 42 });
+  deepStrictEqual(runtimeValue, { kind: "float-64", value: 42 });
+});
+
 Deno.test("invokes JavaScript accessors with their property receiver", async () => {
   const value = await compileAndRun(`
 export function main() {
@@ -247,6 +266,86 @@ export function main() {
   deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
+Deno.test("parses object method syntax into receiver-aware callable properties", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const counter = {
+    value: 40,
+    add(offset) { return this.value + offset; }
+  };
+  if (function() {} === function() {}) return 0;
+  return counter.add(2) + 0;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("applies callee strictness through Function.prototype call and apply", async () => {
+  const value = await compileAndRun(
+    `
+export function main() {
+  var global = this;
+  const strictThis = function() {
+    "use strict";
+    return this;
+  };
+  const sloppyThis = function() { return this; };
+  if (function() {} === function() {}) return false;
+  return strictThis.call(undefined) === undefined &&
+    sloppyThis.call(undefined) === global &&
+    strictThis.apply(null) === null &&
+    sloppyThis.apply() === global;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("binds this once while preserving the target function strictness", async () => {
+  const value = await compileAndRun(
+    `
+export function main() {
+  var global = this;
+  const strictThis = function() {
+    "use strict";
+    return this;
+  };
+  const sloppyThis = function() { return this; };
+  const object = {};
+  return strictThis.bind(null)() === null &&
+    sloppyThis.bind(undefined)() === global &&
+    strictThis.bind(object).call(global) === object;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("invokes a String replace callback with its callee strictness", async () => {
+  const value = await compileAndRun(
+    `
+export function main() {
+  let callbackThis = 0;
+  const replace = function(match) {
+    "use strict";
+    callbackThis = this;
+    return "a";
+  };
+  if (function() {} === function() {}) return false;
+  return "ab".replace("b", replace) === "aa" && callbackThis === undefined;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
 Deno.test("captures lexical this for a JavaScript arrow function", async () => {
   const value = await compileAndRun(`
 export function main() {
@@ -281,6 +380,19 @@ export function main() {
   );
 
   deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("binds the Realm global object as this for a strict Test262 script", async () => {
+  const value = await compileAndRun(
+    `
+export function main() {
+  return this !== undefined;
+}
+`,
+    { callThisMode: "strict", entryThisMode: "global" },
+  );
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
 });
 
 Deno.test("shares mutable binding cells between a closure and its caller", async () => {
@@ -359,6 +471,156 @@ export function main() {
   if (function() {} === function() {}) return 0;
   if (missing(1) !== true) return 0;
   return extra(42, 99) + 0;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("creates an arguments object with actual values and length", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const inspect = function(first) {
+    return arguments.length === 2 && arguments["0"] === first && arguments["1"] === 39;
+  };
+  if (function() {} === function() {}) return false;
+  return inspect(42, 39) === true;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("exposes function length without counting a trailing comma", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const pair = function(first, second,) { return first; };
+  if (function() {} === function() {}) return false;
+  return pair.length === 2;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("folds the length of a statically known function", async () => {
+  const value = await compileAndRun(`
+function pair(first, second) { return first; }
+function withDefault(first, second = 0) { return first; }
+export function main() { return pair.length + withDefault.length + 39; }
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("evaluates default parameters only for missing or undefined arguments", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  let defaults = 0;
+  const defaultValue = function() {
+    defaults = defaults + 1;
+    return 2;
+  };
+  const add = function(first, second = defaultValue()) {
+    "use strict";
+    return first + second;
+  };
+  const calculator = {
+    add(first, second = 2) { return first + second; }
+  };
+  if (function() {} === function() {}) return false;
+  return add.length === 1 &&
+    add(40, 1) === 41 &&
+    defaults === 0 &&
+    add(40, undefined) === 42 &&
+    defaults === 1 &&
+    calculator.add(40) === 42;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("binds object, array, and rest parameters from actual arguments", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const combine = function({ left, right: renamed }, [third, fourth]) {
+    return left + renamed + third + fourth;
+  };
+  const total = function(...values) {
+    return values.length === 3
+      ? values["0"] + values["1"] + values["2"]
+      : 0;
+  };
+  return combine({ left: 10, right: 20 }, [5, 7]) + total(10, 20, 12) - 42;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("constructs a top-level class and invokes its instance methods", async () => {
+  const value = await compileAndRun(`
+class Counter {
+  constructor(value = 40) {
+    this.value = value;
+  }
+
+  add(offset = 2) {
+    return this.value + offset;
+  }
+}
+
+export function main() {
+  const counter = new Counter();
+  return counter.add() + 0;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("resumes a straight-line generator through persistent iterator state", async () => {
+  const value = await compileAndRun(`
+function * sequence() {
+  yield 42;
+}
+
+function verify(iterator, first) {
+  const current = iterator.next();
+  if (first) {
+    if (current.done || current.value !== 42) return 0;
+    return verify(iterator, false);
+  }
+  return current.done ? 42 : 0;
+}
+
+export function main() {
+  return verify(sequence(), true) + 0;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("unwraps deterministic async values and invokes their then callback", async () => {
+  const value = await compileAndRun(`
+async function base() {
+  return 40;
+}
+
+async function answer() {
+  const value = await base();
+  return value + 2;
+}
+
+export function main() {
+  let observed = 0;
+  answer().then(function(value) {
+    observed = value;
+    return value;
+  });
+  return observed + 0;
 }
 `);
 
@@ -509,6 +771,27 @@ export function main() {
   deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
+Deno.test("rejects runtime-model finally before expanding callable dispatch", async () => {
+  await rejects(
+    () =>
+      compileAndRun(`
+export function main() {
+  const state = {};
+  state.answer = 0;
+  const read = function() {
+    try {
+      return 0;
+    } finally {
+      return 42;
+    }
+  };
+  return state.answer === 0 ? read() : 0;
+}
+`),
+    /runtime-model finally completion replacement is not yet supported/,
+  );
+});
+
 Deno.test("constructs standard JavaScript errors as catchable values", async () => {
   const value = await compileAndRun(`
 export function main() {
@@ -575,6 +858,51 @@ Deno.test("evaluates JavaScript strings and strict equality", async () => {
 export function main() {
   const bird = "🦆";
   return bird === "\\u{1f986}";
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("evaluates runtime typeof for ordinary and callable objects", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const object = {};
+  const callable = function() {};
+  return typeof object === "object" &&
+    typeof callable === "function" &&
+    typeof null === "object";
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("coerces dynamic primitive operands for arithmetic and string addition", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const values = { truth: true, left: "gpu", right: "fuck" };
+  if (function() {} === function() {}) return false;
+  return +values.truth + null === 1 && values.left + values.right === "gpufuck";
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("calls valueOf and toString in order for runtime numeric comparison", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  let accessed = false;
+  const left = {
+    valueOf: function() {
+      accessed = true;
+      return 3;
+    }
+  };
+  const right = { toString: function() { return 4; } };
+  if (function() {} === function() {}) return false;
+  return left < right && accessed;
 }
 `);
 
@@ -1234,6 +1562,91 @@ Deno.test("rejects a missing JavaScript semicolon without an ASI boundary", () =
   match(frontend.diagnostics[0].message, /Unexpected token \"return\"/);
 });
 
+Deno.test("bounds repeated JavaScript automatic semicolon insertion", () => {
+  const declarations = Array.from(
+    { length: 5 },
+    (_, index) => `let value${index} = ${index}`,
+  ).join("\n");
+  const frontend = lowerJavaScriptAotSource(
+    "automatic-semicolon-limit.mjs",
+    `export function main() {\n${declarations}\nreturn 0;\n}`,
+  );
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(
+    frontend.diagnostics[0].message,
+    /requires more than 4 automatic semicolon insertions/,
+  );
+});
+
+Deno.test("bounds JavaScript token streams before generated-parser work explodes", () => {
+  const declarations = Array.from(
+    { length: 1_700 },
+    (_, index) => `let value${index} = ${index};`,
+  ).join("");
+  const frontend = lowerJavaScriptAotSource(
+    "token-limit.mjs",
+    `export function main() { ${declarations} return 0; }`,
+  );
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /exceeds the 8192-token parser limit/);
+});
+
+Deno.test("JavaScript token limits do not reject a large literal", () => {
+  const literal = "x".repeat(20_000);
+  const module = parseJavaScriptAotModule(
+    "large-literal.mjs",
+    `export function main() { return "${literal}"; }`,
+  );
+
+  equal(module.declarations.length, 1);
+});
+
+Deno.test("bounds JavaScript source bytes before allocating parser state", () => {
+  const frontend = lowerJavaScriptAotSource(
+    "source-limit.mjs",
+    `/*${"x".repeat(256 * 1024)}*/`,
+  );
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /exceeds the 262144-byte source limit/);
+});
+
+Deno.test("JavaScript source bytes are accepted at the parser boundary", () => {
+  const prefix = 'export function main() { return "';
+  const suffix = '"; }';
+  const source = `${prefix}${"x".repeat(256 * 1024 - prefix.length - suffix.length)}${suffix}`;
+  const module = parseJavaScriptAotModule("source-boundary.mjs", source);
+
+  equal(module.declarations.length, 1);
+});
+
+Deno.test("bounds JavaScript delimiter nesting before parser recursion overflows", () => {
+  const frontend = lowerJavaScriptAotSource(
+    "delimiter-depth.mjs",
+    `export function main() { return ${"(".repeat(512)}0${")".repeat(512)}; }`,
+  );
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /exceeds the syntax nesting limit of 256/);
+});
+
+Deno.test("bounds JavaScript prefix operators before parser recursion overflows", () => {
+  const frontend = lowerJavaScriptAotSource(
+    "prefix-depth.mjs",
+    `export function main() { return ${"!".repeat(2_048)}true; }`,
+  );
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /exceeds the prefix-operator nesting limit of 256/);
+});
+
 Deno.test("hoists JavaScript var bindings and initializes them to undefined", async () => {
   const value = await compileAndRun(`
 export function main() {
@@ -1478,9 +1891,33 @@ Deno.test("runtime-model lowering joins sequential conditional expressions", () 
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
 });
 
+Deno.test("AOT lowering accepts try continuations at its recursion boundary", () => {
+  const frontend = lowerJavaScriptAotSource(
+    "try-continuation-boundary.mjs",
+    `export function main() { let value = 0; ${
+      "try { value += 1; } finally { value += 0; }".repeat(128)
+    } return value; }`,
+  );
+
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+});
+
+Deno.test("AOT lowering bounds sequential try continuation recursion", () => {
+  const frontend = lowerJavaScriptAotSource(
+    "try-continuation-limit.mjs",
+    `export function main() { let value = 0; ${
+      "try { value += 1; } finally { value += 0; }".repeat(129)
+    } return value; }`,
+  );
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /try continuation nesting exceeds the limit of 128/);
+});
+
 Deno.test("flat JavaScript declarations stop at the surface depth boundary", () => {
   const declarations = Array.from(
-    { length: 2_048 },
+    { length: 1_050 },
     (_, index) => `let value${index} = 0;`,
   ).join("");
   const frontend = lowerJavaScriptAotSource(
@@ -1495,10 +1932,13 @@ Deno.test("flat JavaScript declarations stop at the surface depth boundary", () 
 
 async function compileAndRun(
   source: string,
-  options: { readonly callThisMode?: "strict" | "sloppy" } = {},
+  options: {
+    readonly callThisMode?: "strict" | "sloppy";
+    readonly entryThisMode?: "undefined" | "global";
+  } = {},
 ) {
   let module;
-  if (options.callThisMode === "sloppy") {
+  if (options.callThisMode !== undefined || options.entryThisMode !== undefined) {
     module = lowerJavaScriptRuntimeModule(
       parseJavaScriptAotModule("test.mjs", source),
       "main",
