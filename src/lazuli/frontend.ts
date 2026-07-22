@@ -1319,6 +1319,7 @@ function specializeConstDefinitions(
   symbols: SymbolInterner,
 ): readonly Definition[] {
   const templates = new Map<string, ConstDefinition>();
+  const descriptorSensitiveTemplates = new Set<string>();
   for (const definition of constDefinitions) {
     if (templates.has(definition.name.spelling)) {
       throw new ConstSpecializationError(
@@ -1326,7 +1327,10 @@ function specializeConstDefinitions(
         `Duplicate const declaration ${JSON.stringify(definition.name.spelling)}.`,
       );
     }
-    validateConstParameter(definition);
+    const parameterNames = validateConstParameter(definition);
+    if (expressionReferencesConstParameter(definition.body, parameterNames)) {
+      descriptorSensitiveTemplates.add(definition.name.spelling);
+    }
     templates.set(definition.name.spelling, definition);
   }
   const types = new Map(
@@ -1372,7 +1376,7 @@ function specializeConstDefinitions(
     const resolvedArgument = argument === null
       ? null
       : resolveConstDescriptor(argument, descriptors, types);
-    const key = resolvedArgument === null
+    const key = resolvedArgument === null || !descriptorSensitiveTemplates.has(name.spelling)
       ? name.spelling
       : `${name.spelling}@${constDescriptorStructuralKey(resolvedArgument)}`;
     let generatedName = specializations.get(key);
@@ -1408,16 +1412,29 @@ function specializeConstDefinitions(
     return { kind: "name", identifier: generatedName, span };
   };
 
+  const withBoundNames = <T>(
+    boundNames: Set<string>,
+    names: readonly string[],
+    body: () => T,
+  ): T => {
+    const added: string[] = [];
+    for (const name of names) {
+      if (boundNames.has(name)) continue;
+      boundNames.add(name);
+      added.push(name);
+    }
+    try {
+      return body();
+    } finally {
+      for (const name of added) boundNames.delete(name);
+    }
+  };
+
   const expand = (
     expression: Expression,
     descriptors: ReadonlyMap<string, ConstDescriptor>,
-    boundNames: ReadonlySet<string>,
+    boundNames: Set<string>,
   ): Expression => {
-    const withBoundName = (name: string): ReadonlySet<string> => {
-      const next = new Set(boundNames);
-      next.add(name);
-      return next;
-    };
     switch (expression.kind) {
       case "integer":
       case "boolean":
@@ -1495,23 +1512,24 @@ function specializeConstDefinitions(
         return {
           ...expression,
           value: expand(expression.value, descriptors, boundNames),
-          body: expand(
-            expression.body,
-            descriptors,
-            withBoundName(expression.name.spelling),
+          body: withBoundNames(
+            boundNames,
+            [expression.name.spelling],
+            () => expand(expression.body, descriptors, boundNames),
           ),
         };
       case "let-rec": {
-        const recursiveNames = new Set(boundNames);
-        recursiveNames.add(expression.name.spelling);
-        recursiveNames.add(expression.parameter.spelling);
         return {
           ...expression,
-          value: expand(expression.value, descriptors, recursiveNames),
-          body: expand(
-            expression.body,
-            descriptors,
-            withBoundName(expression.name.spelling),
+          value: withBoundNames(
+            boundNames,
+            [expression.name.spelling, expression.parameter.spelling],
+            () => expand(expression.value, descriptors, boundNames),
+          ),
+          body: withBoundNames(
+            boundNames,
+            [expression.name.spelling],
+            () => expand(expression.body, descriptors, boundNames),
           ),
         };
       }
@@ -1525,10 +1543,10 @@ function specializeConstDefinitions(
       case "lambda":
         return {
           ...expression,
-          body: expand(
-            expression.body,
-            descriptors,
-            withBoundName(expression.parameter.spelling),
+          body: withBoundNames(
+            boundNames,
+            [expression.parameter.spelling],
+            () => expand(expression.body, descriptors, boundNames),
           ),
         };
       case "apply":
@@ -1550,9 +1568,15 @@ function specializeConstDefinitions(
           ...expression,
           scrutinee: expand(expression.scrutinee, descriptors, boundNames),
           arms: expression.arms.map((arm) => {
-            const armNames = new Set(boundNames);
-            for (const binder of arm.binders) armNames.add(binder.spelling);
-            return { ...arm, body: expand(arm.body, descriptors, armNames) };
+            const binderNames = arm.binders.map((binder) => binder.spelling);
+            return {
+              ...arm,
+              body: withBoundNames(
+                boundNames,
+                binderNames,
+                () => expand(arm.body, descriptors, boundNames),
+              ),
+            };
           }),
         };
     }
@@ -1567,9 +1591,9 @@ function specializeConstDefinitions(
   );
 }
 
-function validateConstParameter(definition: ConstDefinition): void {
-  if (definition.parameter === null) return;
+function validateConstParameter(definition: ConstDefinition): ReadonlySet<string> {
   const names = new Set<string>();
+  if (definition.parameter === null) return names;
   const pending = [definition.parameter];
   while (pending.length > 0) {
     const parameter = pending.pop();
@@ -1604,6 +1628,106 @@ function validateConstParameter(definition: ConstDefinition): void {
       pending.push(field.value);
     }
   }
+  return names;
+}
+
+function expressionReferencesConstParameter(
+  expression: Expression,
+  parameterNames: ReadonlySet<string>,
+): boolean {
+  if (parameterNames.size === 0) return false;
+  const pending = [expression];
+  while (pending.length !== 0) {
+    const current = pending.pop();
+    if (current === undefined) throw new Error("Const expression traversal ended unexpectedly.");
+    switch (current.kind) {
+      case "integer":
+      case "boolean":
+      case "name":
+        break;
+      case "const-instantiation":
+        if (
+          current.argument !== null &&
+          constDescriptorReferencesNames(current.argument, parameterNames)
+        ) return true;
+        break;
+      case "record":
+        for (const field of current.fields) pending.push(field.value);
+        break;
+      case "let":
+      case "let-rec":
+        pending.push(current.body, current.value);
+        break;
+      case "if":
+        pending.push(current.alternate, current.consequent, current.condition);
+        break;
+      case "lambda":
+      case "unary":
+        pending.push(current.body);
+        break;
+      case "apply":
+        pending.push(current.argument, current.callee);
+        break;
+      case "binary":
+        pending.push(current.right, current.left);
+        break;
+      case "case":
+        pending.push(current.scrutinee);
+        for (const arm of current.arms) pending.push(arm.body);
+        break;
+    }
+  }
+  return false;
+}
+
+function constDescriptorReferencesNames(
+  descriptor: ConstDescriptor,
+  names: ReadonlySet<string>,
+): boolean {
+  const pending = [descriptor];
+  while (pending.length !== 0) {
+    const current = pending.pop();
+    if (current === undefined) throw new Error("Const descriptor traversal ended unexpectedly.");
+    if (current.kind === "hole") continue;
+    if (current.kind === "tuple") {
+      pending.push(current.values[1], current.values[0]);
+      continue;
+    }
+    if (current.kind === "record") {
+      for (const field of current.fields) pending.push(field.value);
+      continue;
+    }
+    if (sourceTypeReferencesNames(current.type, names)) return true;
+  }
+  return false;
+}
+
+function sourceTypeReferencesNames(type: SourceType, names: ReadonlySet<string>): boolean {
+  const pending = [type];
+  while (pending.length !== 0) {
+    const current = pending.pop();
+    if (current === undefined) throw new Error("Const type traversal ended unexpectedly.");
+    switch (current.kind) {
+      case "integer":
+      case "boolean":
+      case "unit":
+        break;
+      case "parameter":
+        if (names.has(current.name)) return true;
+        break;
+      case "tuple":
+        pending.push(current.values[1], current.values[0]);
+        break;
+      case "named":
+        if (current.arguments.length === 0 && names.has(current.name)) return true;
+        for (const argument of current.arguments) pending.push(argument);
+        break;
+      case "function":
+        pending.push(current.result, current.parameter);
+        break;
+    }
+  }
+  return false;
 }
 
 function bindConstParameter(

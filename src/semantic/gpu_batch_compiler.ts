@@ -71,6 +71,7 @@ export interface BatchLane extends LazuliBatchCompilationInput {
   readonly typeBase: number;
   readonly constructorBase: number;
   readonly symbolLookupBase: number;
+  readonly symbolLookupWords: Uint32Array;
   readonly metadataBase: number;
   readonly workspaceBase: number;
   readonly outputBase: number;
@@ -251,7 +252,7 @@ async function runPackedCompilation(
   const typeWords = new Uint32Array(totals.types * 5);
   const constructorWords = new Uint32Array(totals.constructors * 5);
   const symbolLookupWords = new Uint32Array(
-    totals.symbols * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
+    totals.symbolLookupRecords * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
   );
   const metadataWords = new Uint32Array(totals.metadataWords);
   const semanticStates = new Uint8Array(
@@ -265,7 +266,7 @@ async function runPackedCompilation(
     typeWords.set(lane.surface.typeWords, lane.typeBase * 5);
     constructorWords.set(lane.surface.constructorWords, lane.constructorBase * 5);
     symbolLookupWords.set(
-      createLazuliSymbolLookup(lane.surface),
+      lane.symbolLookupWords,
       lane.symbolLookupBase * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
     );
     const relocatedMetadata = lane.metadata.words.slice();
@@ -530,7 +531,7 @@ function prepareBatchLanes(
   let definitions = 0;
   let types = 0;
   let constructors = 0;
-  let symbols = 0;
+  let symbolLookupRecords = 0;
   let metadataWords = 0;
   let workspaceWords = 0;
   let outputRecords = 0;
@@ -547,6 +548,7 @@ function prepareBatchLanes(
       limits,
       input.initialWorkspaceCapacities,
     );
+    const symbolLookupWords = createLazuliSymbolLookup(input.surface);
     const lane = {
       ...input,
       resultIndex,
@@ -556,7 +558,8 @@ function prepareBatchLanes(
       definitionBase: definitions,
       typeBase: types,
       constructorBase: constructors,
-      symbolLookupBase: symbols,
+      symbolLookupBase: symbolLookupRecords,
+      symbolLookupWords,
       metadataBase: metadataWords,
       workspaceBase: workspaceWords,
       outputBase: outputRecords,
@@ -578,7 +581,11 @@ function prepareBatchLanes(
       constructors,
       input.surface.constructorCount,
     );
-    symbols = checkedSum("packed symbol count", symbols, input.surface.symbolNames.length);
+    symbolLookupRecords = checkedSum(
+      "packed symbol lookup records",
+      symbolLookupRecords,
+      symbolLookupWords.length / LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
+    );
     metadataWords = checkedSum("packed metadata words", metadataWords, metadata.words.length);
     workspaceWords = checkedSum(
       "packed workspace words",
@@ -602,7 +609,12 @@ function prepareBatchLanes(
   assertBatchStorage("definitions", definitions, 4, limits);
   assertBatchStorage("algebraic types", types, 5, limits);
   assertBatchStorage("constructors", constructors, 5, limits);
-  assertBatchStorage("symbol lookups", symbols, LAZULI_SYMBOL_LOOKUP_WORD_LENGTH, limits);
+  assertBatchStorage(
+    "symbol lookups",
+    symbolLookupRecords,
+    LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
+    limits,
+  );
   assertStorageSize("packed inference metadata", metadataWords, limits);
   assertStorageSize("packed inference workspace", workspaceWords, limits);
   assertBatchStorage(
@@ -723,7 +735,7 @@ interface BatchTotals {
   readonly definitions: number;
   readonly types: number;
   readonly constructors: number;
-  readonly symbols: number;
+  readonly symbolLookupRecords: number;
   readonly metadataWords: number;
   readonly workspaceWords: number;
   readonly outputRecords: number;
@@ -737,7 +749,8 @@ function batchTotals(lanes: readonly BatchLane[]): BatchTotals {
     definitions: last.definitionBase + last.surface.definitionCount,
     types: last.typeBase + last.surface.typeCount,
     constructors: last.constructorBase + last.surface.constructorCount,
-    symbols: last.symbolLookupBase + last.surface.symbolNames.length,
+    symbolLookupRecords: last.symbolLookupBase +
+      last.symbolLookupWords.length / LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
     metadataWords: last.metadataBase + last.metadata.words.length,
     workspaceWords: last.workspaceBase + last.localWorkspace.workspaceWordLength,
     outputRecords: last.outputBase + last.localWorkspace.outputCapacity,
@@ -821,7 +834,7 @@ async function allocateBatchBuffers(
         "Lazuli packed symbol lookups",
         Math.max(
           LAZULI_SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
-          totals.symbols * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
+          totals.symbolLookupRecords * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
         ),
         GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
       ),

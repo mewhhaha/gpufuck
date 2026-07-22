@@ -343,10 +343,6 @@ fn constructor_storage_index(index: u32) -> u32 {
   return evaluation.constructor_base + index;
 }
 
-fn case_dispatch_hash(first_arm: u32, constructor: u32) -> u32 {
-  return first_arm * 1664525u + constructor * 1013904223u;
-}
-
 fn heap_storage_index(index: u32) -> u32 {
   return evaluation.heap_base + index;
 }
@@ -494,6 +490,35 @@ fn allocate_heap_slot(kind: u32, source_offset: u32) -> u32 {
   evaluation.allocations += 1u;
   heap[heap_storage_index(index)] = HeapSlot(kind, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
   return index;
+}
+
+fn environment_ancestor(index: u32, distance: u32) -> u32 {
+  if index == NO_INDEX { return NO_INDEX; }
+  let environment = heap[heap_storage_index(index)];
+  if distance == 1u { return environment.field0; }
+  if distance == 2u { return environment.field2; }
+  if distance == 4u { return environment.field3; }
+  if distance == 8u { return environment.reserved0; }
+  if distance == 16u { return environment.reserved1; }
+  return environment.state;
+}
+
+fn initialize_environment(index: u32, parent: u32, value: u32) {
+  let ancestor2 = environment_ancestor(parent, 1u);
+  let ancestor4 = environment_ancestor(ancestor2, 2u);
+  let ancestor8 = environment_ancestor(ancestor4, 4u);
+  let ancestor16 = environment_ancestor(ancestor8, 8u);
+  let ancestor32 = environment_ancestor(ancestor16, 16u);
+  heap[heap_storage_index(index)] = HeapSlot(
+    HEAP_ENVIRONMENT,
+    ancestor32,
+    parent,
+    value,
+    ancestor2,
+    ancestor4,
+    ancestor8,
+    ancestor16,
+  );
 }
 
 fn push_frame(frame: ContinuationFrame) -> bool {
@@ -805,8 +830,7 @@ fn evaluate_node() {
       if environment_index == NO_INDEX {
         return;
       }
-      heap[heap_storage_index(environment_index)].field0 = evaluation.environment;
-      heap[heap_storage_index(environment_index)].field1 = thunk_index;
+      initialize_environment(environment_index, evaluation.environment, thunk_index);
       evaluate_expression(node.child1, environment_index);
     }
     case TAG_LET_REC: {
@@ -830,8 +854,7 @@ fn evaluate_node() {
         return;
       }
 
-      heap[heap_storage_index(environment_index)].field0 = evaluation.environment;
-      heap[heap_storage_index(environment_index)].field1 = thunk_index;
+      initialize_environment(environment_index, evaluation.environment, thunk_index);
       heap[heap_storage_index(thunk_index)].state = THUNK_UNEVALUATED;
       heap[heap_storage_index(thunk_index)].field0 = node.child0;
       heap[heap_storage_index(thunk_index)].field1 = environment_index;
@@ -1002,32 +1025,42 @@ fn evaluate_node() {
         fail_bad_module(evaluation.expression);
         return;
       }
-      if evaluation.local_lookup_active == 0u {
-        evaluation.local_environment = evaluation.environment;
-        evaluation.local_depth = node.payload;
-        evaluation.local_lookup_active = 1u;
+      var environment = evaluation.environment;
+      var remaining = node.payload;
+      loop {
+        if remaining < 32u { break; }
+        if !valid_heap(environment) { fail_bad_module(environment); return; }
+        environment = environment_ancestor(environment, 32u);
+        remaining -= 32u;
       }
-      if !valid_heap(evaluation.local_environment) {
-        fail_bad_module(evaluation.local_environment);
+      if (remaining & 16u) != 0u {
+        if !valid_heap(environment) { fail_bad_module(environment); return; }
+        environment = environment_ancestor(environment, 16u);
+      }
+      if (remaining & 8u) != 0u {
+        if !valid_heap(environment) { fail_bad_module(environment); return; }
+        environment = environment_ancestor(environment, 8u);
+      }
+      if (remaining & 4u) != 0u {
+        if !valid_heap(environment) { fail_bad_module(environment); return; }
+        environment = environment_ancestor(environment, 4u);
+      }
+      if (remaining & 2u) != 0u {
+        if !valid_heap(environment) { fail_bad_module(environment); return; }
+        environment = environment_ancestor(environment, 2u);
+      }
+      if (remaining & 1u) != 0u {
+        if !valid_heap(environment) { fail_bad_module(environment); return; }
+        environment = environment_ancestor(environment, 1u);
+      }
+      if !valid_heap(environment) { fail_bad_module(environment); return; }
+      let environment_slot = heap[heap_storage_index(environment)];
+      if environment_slot.kind != HEAP_ENVIRONMENT || !valid_heap(environment_slot.field1) {
+        fail_bad_module(environment);
         return;
       }
-      let environment_slot = heap[heap_storage_index(evaluation.local_environment)];
-      if environment_slot.kind != HEAP_ENVIRONMENT {
-        fail_bad_module(evaluation.local_environment);
-        return;
-      }
-      if evaluation.local_depth == 0u {
-        if !valid_heap(environment_slot.field1) {
-          fail_bad_module(environment_slot.field1);
-          return;
-        }
-        evaluation.expression = environment_slot.field1;
-        evaluation.local_lookup_active = 0u;
-        evaluation.mode = MODE_ENTER_THUNK;
-        return;
-      }
-      evaluation.local_environment = environment_slot.field0;
-      evaluation.local_depth -= 1u;
+      evaluation.expression = environment_slot.field1;
+      evaluation.mode = MODE_ENTER_THUNK;
     }
     case TAG_GLOBAL: {
       if node.payload >= evaluation.definition_count ||
@@ -1290,8 +1323,7 @@ fn apply_to_thunk(argument_thunk: u32, source_offset: u32) {
   if call_environment == NO_INDEX {
     return;
   }
-  heap[heap_storage_index(call_environment)].field0 = closure.field1;
-  heap[heap_storage_index(call_environment)].field1 = argument_thunk;
+  initialize_environment(call_environment, closure.field1, argument_thunk);
   evaluate_expression(closure.field0, call_environment);
 }
 
@@ -1539,8 +1571,7 @@ fn return_from_expression() {
       if body_environment == NO_INDEX {
         return;
       }
-      heap[heap_storage_index(body_environment)].field0 = frame.field1;
-      heap[heap_storage_index(body_environment)].field1 = value_slot;
+      initialize_environment(body_environment, frame.field1, value_slot);
       evaluate_expression(frame.field0, body_environment);
     }
     case FRAME_STRICT_APPLY_CALLEE: {
@@ -2057,24 +2088,25 @@ fn match_case_arm() {
     return;
   }
   if evaluation.case_dispatch_capacity > 1u {
-    let mask = evaluation.case_dispatch_capacity - 1u;
-    var slot = case_dispatch_hash(evaluation.case_arm, evaluation.case_constructor) & mask;
-    var probes = 0u;
+    var lower = 0u;
+    var upper = evaluation.case_dispatch_capacity;
     var matched_arm = NO_INDEX;
     loop {
-      if probes >= evaluation.case_dispatch_capacity {
-        break;
+      if lower >= upper { break; }
+      let middle = lower + (upper - lower) / 2u;
+      let entry = value_nodes[evaluation.case_dispatch_base + middle];
+      if entry.tag < evaluation.case_arm ||
+        (entry.tag == evaluation.case_arm && entry.payload < evaluation.case_constructor) {
+        lower = middle + 1u;
+      } else {
+        upper = middle;
       }
-      let entry = value_nodes[evaluation.case_dispatch_base + slot];
-      if entry.tag == NO_INDEX {
-        break;
-      }
+    }
+    if lower < evaluation.case_dispatch_capacity {
+      let entry = value_nodes[evaluation.case_dispatch_base + lower];
       if entry.tag == evaluation.case_arm && entry.payload == evaluation.case_constructor {
         matched_arm = entry.first_child;
-        break;
       }
-      slot = (slot + 1u) & mask;
-      probes += 1u;
     }
     evaluation.case_arm = matched_arm;
     if evaluation.case_arm == NO_INDEX {
@@ -2160,8 +2192,7 @@ fn bind_case_field() {
   if environment_index == NO_INDEX {
     return;
   }
-  heap[heap_storage_index(environment_index)].field0 = evaluation.case_environment;
-  heap[heap_storage_index(environment_index)].field1 = field.field1;
+  initialize_environment(environment_index, evaluation.case_environment, field.field1);
   evaluation.case_environment = environment_index;
   evaluation.case_pattern = binding.child0;
   evaluation.case_field = field.field0;
@@ -2228,8 +2259,6 @@ fn initialize_evaluation() {
         evaluation.case_dispatch_capacity,
         arrayLength(&value_nodes),
       ) ||
-      (evaluation.case_dispatch_capacity > 1u &&
-        (evaluation.case_dispatch_capacity & (evaluation.case_dispatch_capacity - 1u)) != 0u) ||
       (evaluation.constructor_count > 0u && evaluation.type_count == 0u) ||
       !region_fits(evaluation.heap_base, evaluation.heap_capacity, arrayLength(&heap)) ||
       !region_fits(

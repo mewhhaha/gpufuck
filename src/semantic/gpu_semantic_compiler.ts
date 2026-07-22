@@ -172,8 +172,8 @@ export class GpuLazuliSemanticCompiler {
       LAZULI_CONSTRUCTOR_BYTE_LENGTH,
     );
     const symbolLookupByteLength = storageBufferSize(
-      surface.symbolNames.length,
-      LAZULI_SYMBOL_LOOKUP_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT,
+      symbolLookupWords.length,
+      Uint32Array.BYTES_PER_ELEMENT,
     );
     const allocationEvidence =
       `surface nodes=${surfaceNodeByteLength} bytes, core nodes=${surfaceNodeByteLength} bytes, definitions=${definitionByteLength} bytes, algebraic types=${typeByteLength} bytes, constructors=${constructorByteLength} bytes, state=${LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH} bytes`;

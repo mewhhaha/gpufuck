@@ -682,6 +682,42 @@ function formatWorkspaceType(
       }
       case 12:
         return `${renderText("forall. ")}${format(typeWord(typeIndex, 2), false)}`;
+      case 16:
+        return format(typeWord(typeIndex, 1), nestedFunction);
+      case 19: {
+        const typeDeclaration = typeWord(typeIndex, 1);
+        const symbol = surface.typeWords[typeDeclaration * 5];
+        if (symbol === undefined) {
+          throw new Error(
+            `GPU Lazuli diagnostic lazy constructor missing type declaration ${typeDeclaration}`,
+          );
+        }
+        const arguments_: string[] = [];
+        const remaining = typeWord(typeIndex, 2);
+        for (let index = 0; index < remaining; index++) {
+          arguments_.push(variableName(-((typeIndex + 1) * 1_000_000 + index)));
+        }
+        let list = typeWord(typeIndex, 3);
+        const seenLists = new Set<number>();
+        while (list !== LAZULI_NO_INDEX) {
+          if (seenLists.has(list) || typeWord(list, 0) !== 10) {
+            throw new Error(
+              `GPU Lazuli diagnostic lazy constructor ${typeIndex} has invalid argument list`,
+            );
+          }
+          seenLists.add(list);
+          arguments_.push(format(typeWord(list, 1), false));
+          list = typeWord(list, 2);
+        }
+        let renderedArguments = "";
+        for (const [index, argument] of arguments_.entries()) {
+          if (index !== 0) renderedArguments += renderText(", ");
+          renderedArguments += renderText(argument);
+        }
+        return `${renderText(symbolName(surface, symbol))}${renderText("[")}${renderedArguments}${
+          renderText("]")
+        }`;
+      }
       default:
         throw new Error(`GPU Lazuli diagnostic type ${typeIndex} has unknown kind ${kind}`);
     }

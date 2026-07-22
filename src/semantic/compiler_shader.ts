@@ -1,4 +1,5 @@
 import { LAZULI_MAXIMUM_CONSTRUCTOR_ARITY } from "./abi.ts";
+import { LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC } from "./symbol_lookup.ts";
 
 export const LAZULI_COMPILATION_STATE_WORD_LENGTH = 24;
 export const LAZULI_COMPILATION_STATE_BYTE_LENGTH = LAZULI_COMPILATION_STATE_WORD_LENGTH *
@@ -166,6 +167,7 @@ var<private> state: CompilationState;
 
 const NO_INDEX: u32 = 0xffffffffu;
 const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${LAZULI_MAXIMUM_CONSTRUCTOR_ARITY}u;
+const INDEXED_LOCAL_RESOLUTION_MAGIC: u32 = ${LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC}u;
 
 const STATUS_PENDING: u32 = 0u;
 const STATUS_OK: u32 = 1u;
@@ -244,6 +246,19 @@ fn region_fits(base: u32, count: u32, length: u32) -> bool {
 
 fn symbol_lookup(symbol: u32) -> SymbolLookup {
   return symbol_lookups[state.symbol_lookup_base + symbol];
+}
+
+fn indexed_local_resolutions_are_available() -> bool {
+  let header_index = state.symbol_lookup_base + state.symbol_count;
+  if header_index >= arrayLength(&symbol_lookups) { return false; }
+  let header = symbol_lookups[header_index];
+  return header.definition == INDEXED_LOCAL_RESOLUTION_MAGIC &&
+    header.algebraic_type == state.node_count &&
+    state.node_count < arrayLength(&symbol_lookups) - header_index;
+}
+
+fn indexed_local_resolution(node: u32) -> SymbolLookup {
+  return symbol_lookups[state.symbol_lookup_base + state.symbol_count + 1u + node];
 }
 
 fn report_diagnostic(code: u32, source: u32, detail: u32) {
@@ -649,12 +664,33 @@ fn lower_node() {
   } else if surface_node.tag == SURFACE_STRICT_APPLY {
     state.core_tag = SURFACE_APPLY;
   }
+  if surface_node.tag == SURFACE_LET || surface_node.tag == SURFACE_STRICT_LET {
+    state.core_payload = 1u;
+    if indexed_local_resolutions_are_available() {
+      state.core_payload = select(
+        0u,
+        1u,
+        indexed_local_resolution(state.primary_cursor).case_node != 0u,
+      );
+    }
+  }
   if surface_node.tag == SURFACE_NAME {
     state.resolution_node = state.primary_cursor;
+    state.resolution_symbol = surface_node.payload;
+    if indexed_local_resolutions_are_available() {
+      let resolution = indexed_local_resolution(state.primary_cursor);
+      if resolution.definition == CORE_LOCAL {
+        state.core_tag = CORE_LOCAL;
+        state.core_payload = resolution.algebraic_type;
+        write_lowered_node();
+        return;
+      }
+      state.phase = PHASE_RESOLVE_GLOBAL_NAME;
+      return;
+    }
     state.resolution_parent = surface_node.parent;
     state.resolution_child = state.primary_cursor;
     state.resolution_depth = 0u;
-    state.resolution_symbol = surface_node.payload;
     state.phase = PHASE_RESOLVE_LOCAL_NAME;
     return;
   }

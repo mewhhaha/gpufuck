@@ -16,6 +16,7 @@ import {
 import { GpuLazuliSemanticCompiler } from "../src/lazuli/gpu_semantic_compiler.ts";
 import { inferLazuliTypes } from "../src/lazuli/type_inference.ts";
 import {
+  LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
   LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
   LAZULI_INFERENCE_FRAME_WORD_LENGTH,
   LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
@@ -108,7 +109,7 @@ function shaderMinimumScratchCapacity(source: string): number {
   const parsing = parseLazuliSource(source);
   ok(parsing.ok);
   if (!parsing.ok) throw new Error("unreachable");
-  return parsing.surface.definitionCount * 8;
+  return parsing.surface.definitionCount * LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS;
 }
 
 function assertSuccessfulInference(
@@ -242,6 +243,73 @@ Deno.test("pathological type and case shapes stay within proportional compiler w
       const arms = Array.from({ length: size }, (_, index) => `| C${index} -> ${index}`).join(" ");
       return `data Wide = ${constructors}; let main = case C0 of ${arms} end;`;
     };
+    const deepLocalReferences = (size: number) => {
+      let body = Array.from({ length: size }, () => "outer").join(" + ");
+      for (let index = size - 1; index >= 0; index--) {
+        body = `let value${index} = ${index} in ${body}`;
+      }
+      return `let main = let outer = 1 in ${body};`;
+    };
+    const repeatedTupleParameter = (size: number) => {
+      let body = "value";
+      for (let index = 1; index < size; index++) body = `(value, ${body})`;
+      return `let shape = value => ${body}; let main = 0;`;
+    };
+    const repeatedWideScheme = (size: number) => {
+      let shape = "value";
+      for (let index = 1; index < size; index++) shape = `(value, ${shape})`;
+      let body = "0";
+      for (let index = size - 1; index >= 0; index--) {
+        body = `let value${index} = shape ${index} in ${body}`;
+      }
+      return `let shape = value => ${shape}; let main = ${body};`;
+    };
+    const repeatedPhantomConstructor = (size: number) => {
+      const parameters = Array.from({ length: size }, (_, index) => `p${index}`).join(" ");
+      let body = "0";
+      for (let index = size - 1; index >= 0; index--) {
+        body = `let value${index} = Phantom in ${body}`;
+      }
+      return `data Phantom ${parameters} = Phantom; let main = ${body};`;
+    };
+    const ignoredPhantomApplications = (size: number) => {
+      const parameters = Array.from({ length: size }, (_, index) => `p${index}`).join(" ");
+      let body = "0";
+      for (let index = size - 1; index >= 0; index--) {
+        body = `let value${index} = ignore Phantom in ${body}`;
+      }
+      return `data Phantom ${parameters} = Phantom; let ignore = value => 0; let main = ${body};`;
+    };
+    const repeatedConcreteWideApplication = (size: number) => {
+      let shape = "value";
+      let type = "Int";
+      for (let index = 1; index < size; index++) {
+        shape = `(value, ${shape})`;
+        type = `(Int, ${type})`;
+      }
+      let body = "0";
+      for (let index = size - 1; index >= 0; index--) {
+        body = `let value${index} = consume (shape ${index}) in ${body}`;
+      }
+      return `let shape = value => ${shape}; let consume : ${type} -> Int = value => 0; let main = ${body};`;
+    };
+    const alternatingConcreteWideApplication = (size: number) => {
+      let shape = "value";
+      let integerType = "Int";
+      let booleanType = "Bool";
+      for (let index = 1; index < size; index++) {
+        shape = `(value, ${shape})`;
+        integerType = `(Int, ${integerType})`;
+        booleanType = `(Bool, ${booleanType})`;
+      }
+      let body = "0";
+      for (let index = size - 1; index >= 0; index--) {
+        const value = index % 2 === 0 ? index : "true";
+        const consumer = index % 2 === 0 ? "consumeInt" : "consumeBool";
+        body = `let value${index} = ${consumer} (shape ${value}) in ${body}`;
+      }
+      return `let shape = value => ${shape}; let consumeInt : ${integerType} -> Int = value => 0; let consumeBool : ${booleanType} -> Int = value => 0; let main = ${body};`;
+    };
 
     const annotations = Array.from(
       { length: 128 },
@@ -296,6 +364,41 @@ Deno.test("pathological type and case shapes stay within proportional compiler w
     const largeCase = await compile(wideCase(256));
     ok(largeCase.semanticSteps <= smallCase.semanticSteps * 2.2);
     ok(largeCase.inferenceTransitions <= smallCase.inferenceTransitions * 2.2);
+
+    const shallowScope = await compile(deepLocalReferences(64));
+    const deepScope = await compile(deepLocalReferences(128));
+    ok(deepScope.semanticSteps <= shallowScope.semanticSteps * 2.2);
+    ok(deepScope.inferenceTransitions <= shallowScope.inferenceTransitions * 2.2);
+
+    const narrowRepeatedType = await compile(repeatedTupleParameter(64));
+    const wideRepeatedType = await compile(repeatedTupleParameter(128));
+    ok(wideRepeatedType.inferenceTransitions <= narrowRepeatedType.inferenceTransitions * 2.2);
+
+    const fewWideUses = await compile(repeatedWideScheme(32));
+    const manyWideUses = await compile(repeatedWideScheme(64));
+    ok(manyWideUses.inferenceTransitions <= fewWideUses.inferenceTransitions * 2.2);
+
+    const fewPhantomUses = await compile(repeatedPhantomConstructor(64));
+    const manyPhantomUses = await compile(repeatedPhantomConstructor(128));
+    ok(manyPhantomUses.inferenceTransitions <= fewPhantomUses.inferenceTransitions * 2.2);
+
+    const fewIgnoredPhantoms = await compile(ignoredPhantomApplications(64));
+    const manyIgnoredPhantoms = await compile(ignoredPhantomApplications(128));
+    ok(manyIgnoredPhantoms.inferenceTransitions <= fewIgnoredPhantoms.inferenceTransitions * 2.2);
+
+    const fewConcreteApplications = await compile(repeatedConcreteWideApplication(32));
+    const manyConcreteApplications = await compile(repeatedConcreteWideApplication(64));
+    ok(
+      manyConcreteApplications.inferenceTransitions <=
+        fewConcreteApplications.inferenceTransitions * 2.2,
+    );
+
+    const fewAlternatingApplications = await compile(alternatingConcreteWideApplication(32));
+    const manyAlternatingApplications = await compile(alternatingConcreteWideApplication(64));
+    ok(
+      manyAlternatingApplications.inferenceTransitions <=
+        fewAlternatingApplications.inferenceTransitions * 2.2,
+    );
   } finally {
     device.destroy();
   }

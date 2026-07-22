@@ -6,7 +6,12 @@ import {
   LAZULI_NODE_BYTE_LENGTH,
   LazuliCoreTag,
 } from "./abi.ts";
-import type { LazuliType, LazuliTypeDeclaration, LazuliTypeSchema } from "./abi.ts";
+import type {
+  LazuliConstructorDeclaration,
+  LazuliType,
+  LazuliTypeDeclaration,
+  LazuliTypeSchema,
+} from "./abi.ts";
 import type { GpuLazuliModule } from "./compiler_module.ts";
 import { LAZULI_EVALUATOR_SHADER } from "./evaluator_shader.ts";
 
@@ -360,13 +365,21 @@ interface EncodedInput {
 interface InputEncodingEntry {
   readonly value: unknown;
   readonly expectedType: LazuliType;
-  readonly path: readonly number[];
-  readonly ancestor: InputAncestor | undefined;
+  readonly path: InputPath | undefined;
 }
 
-interface InputAncestor {
-  readonly value: object;
-  readonly parent: InputAncestor | undefined;
+interface InputPath {
+  readonly parent: InputPath | undefined;
+  readonly field: number;
+}
+
+interface InputModuleIndex {
+  readonly types: ReadonlyMap<string, LazuliTypeDeclaration>;
+  readonly constructors: ReadonlyMap<
+    string,
+    { readonly owner: LazuliTypeDeclaration; readonly declaration: LazuliConstructorDeclaration }
+  >;
+  readonly constructorIndexes: ReadonlyMap<string, number>;
 }
 
 function badModuleFault(message: string): LazuliEvaluationResult {
@@ -406,17 +419,25 @@ function badInputFault(message: string, fieldPath: readonly number[]): LazuliEva
   };
 }
 
-function inputPath(path: readonly number[]): string {
-  return path.length === 0 ? "$" : `$${path.map((index) => `.fields[${index}]`).join("")}`;
+function materializeInputPath(path: InputPath | undefined): readonly number[] {
+  let length = 0;
+  for (let current = path; current !== undefined; current = current.parent) length++;
+  const fields = new Array<number>(length);
+  let index = length - 1;
+  for (let current = path; current !== undefined; current = current.parent) {
+    fields[index] = current.field;
+    index--;
+  }
+  return fields;
 }
 
-function hasInputAncestor(ancestor: InputAncestor | undefined, value: object): boolean {
-  let current = ancestor;
-  while (current !== undefined) {
-    if (current.value === value) return true;
-    current = current.parent;
-  }
-  return false;
+function inputPathText(path: InputPath | undefined): string {
+  const fields = materializeInputPath(path);
+  return fields.length === 0 ? "$" : `$${fields.map((index) => `.fields[${index}]`).join("")}`;
+}
+
+function badInputAtPath(message: string, path: InputPath | undefined): LazuliEvaluationResult {
+  return badInputFault(message, materializeInputPath(path));
 }
 
 function describeLazuliType(type: LazuliType): string {
@@ -451,21 +472,33 @@ function inputKind(value: unknown): string {
 }
 
 function typeMismatch(
-  path: readonly number[],
+  path: InputPath | undefined,
   expected: LazuliType,
   value: unknown,
 ): LazuliEvaluationResult {
-  return badInputFault(
-    `${inputPath(path)} must be ${describeLazuliType(expected)}; received ${inputKind(value)}`,
+  return badInputAtPath(
+    `${inputPathText(path)} must be ${describeLazuliType(expected)}; received ${inputKind(value)}`,
     path,
   );
 }
 
-function namedTypeDeclaration(
-  module: GpuLazuliModule,
-  name: string,
-): LazuliTypeDeclaration | undefined {
-  return module.typeDeclarations.find((declaration) => declaration.name === name);
+function createInputModuleIndex(module: GpuLazuliModule): InputModuleIndex {
+  const types = new Map<string, LazuliTypeDeclaration>();
+  const constructors = new Map<
+    string,
+    { readonly owner: LazuliTypeDeclaration; readonly declaration: LazuliConstructorDeclaration }
+  >();
+  for (const declaration of module.typeDeclarations) {
+    types.set(declaration.name, declaration);
+    for (const constructor of declaration.constructors) {
+      constructors.set(constructor.name, { owner: declaration, declaration: constructor });
+    }
+  }
+  const constructorIndexes = new Map<string, number>();
+  for (const [index, name] of module.constructorNames.entries()) {
+    constructorIndexes.set(name, index);
+  }
+  return { types, constructors, constructorIndexes };
 }
 
 function instantiateTypeSchema(
@@ -580,7 +613,7 @@ function matchConstructorResultSchema(
 }
 
 function expectedConstructorFieldTypes(
-  module: GpuLazuliModule,
+  inputIndex: InputModuleIndex,
   expectedType: LazuliType,
   constructorName: string,
 ): readonly LazuliType[] | undefined {
@@ -592,16 +625,17 @@ function expectedConstructorFieldTypes(
   }
   if (expectedType.kind !== "named") return undefined;
 
-  const declaration = namedTypeDeclaration(module, expectedType.name);
+  const declaration = inputIndex.types.get(expectedType.name);
   if (
     declaration === undefined || declaration.parameters.length !== expectedType.arguments.length
   ) {
     return undefined;
   }
-  const constructor = declaration.constructors.find((candidate) =>
-    candidate.name === constructorName
-  );
-  if (constructor === undefined) return undefined;
+  const indexedConstructor = inputIndex.constructors.get(constructorName);
+  if (indexedConstructor === undefined || indexedConstructor.owner !== declaration) {
+    return undefined;
+  }
+  const constructor = indexedConstructor.declaration;
 
   const parameters = new Map<string, LazuliType>();
   if (constructor.result === undefined) {
@@ -620,39 +654,42 @@ function expectedConstructorFieldTypes(
 }
 
 function constructorOwnerType(
-  module: GpuLazuliModule,
+  inputIndex: InputModuleIndex,
   constructorName: string,
 ): string | undefined {
-  return module.typeDeclarations.find((declaration) =>
-    declaration.constructors.some((constructor) => constructor.name === constructorName)
-  )?.name;
+  return inputIndex.constructors.get(constructorName)?.owner.name;
 }
 
 function validateInputValue(
-  module: GpuLazuliModule,
+  inputIndex: InputModuleIndex,
   input: LazuliInputValue,
   expectedType: LazuliType,
   enableCollectionSyntax: boolean,
 ): LazuliEvaluationResult | undefined {
-  const entries: InputEncodingEntry[] = [{
+  const pending: Array<InputEncodingEntry | { readonly leave: object }> = [{
     value: input,
     expectedType,
-    path: [],
-    ancestor: undefined,
+    path: undefined,
   }];
+  const activeValues = new Set<object>();
 
-  for (let inputIndex = 0; inputIndex < entries.length; inputIndex++) {
-    const entry = entries[inputIndex];
-    if (entry === undefined) throw new Error(`Lazuli input validator omitted node ${inputIndex}`);
+  while (pending.length !== 0) {
+    const entry = pending.pop();
+    if (entry === undefined) throw new Error("Lazuli input validator traversal ended unexpectedly");
+    if ("leave" in entry) {
+      activeValues.delete(entry.leave);
+      continue;
+    }
     const { value, expectedType, path } = entry;
     if (typeof value !== "object" || value === null) {
-      return badInputFault(`${inputPath(path)} must be a tagged Lazuli input value`, path);
+      return badInputAtPath(`${inputPathText(path)} must be a tagged Lazuli input value`, path);
     }
-    if (hasInputAncestor(entry.ancestor, value)) {
-      return badInputFault(`${inputPath(path)} contains a cyclic host value`, path);
+    if (activeValues.has(value)) {
+      return badInputAtPath(`${inputPathText(path)} contains a cyclic host value`, path);
     }
+    activeValues.add(value);
+    pending.push({ leave: value });
     const taggedValue = value as { readonly kind?: unknown };
-    const ancestor: InputAncestor = { value, parent: entry.ancestor };
 
     if (expectedType.kind === "integer") {
       if (taggedValue.kind !== "integer") return typeMismatch(path, expectedType, value);
@@ -661,8 +698,8 @@ function validateInputValue(
         typeof integerValue !== "number" || !Number.isInteger(integerValue) ||
         integerValue < -2_147_483_648 || integerValue > 2_147_483_647
       ) {
-        return badInputFault(
-          `${inputPath(path)}.value must be a signed i32; received ${integerValue}`,
+        return badInputAtPath(
+          `${inputPathText(path)}.value must be a signed i32; received ${integerValue}`,
           path,
         );
       }
@@ -675,8 +712,8 @@ function validateInputValue(
         typeof integerValue !== "bigint" || integerValue < -0x8000000000000000n ||
         integerValue > 0x7fffffffffffffffn
       ) {
-        return badInputFault(
-          `${inputPath(path)}.value must be a signed i64; received ${String(integerValue)}`,
+        return badInputAtPath(
+          `${inputPathText(path)}.value must be a signed i64; received ${String(integerValue)}`,
           path,
         );
       }
@@ -686,8 +723,8 @@ function validateInputValue(
       if (taggedValue.kind !== "float-32") return typeMismatch(path, expectedType, value);
       const floatValue = (value as { readonly value?: unknown }).value;
       if (typeof floatValue !== "number") {
-        return badInputFault(
-          `${inputPath(path)}.value must be an f32; received ${String(floatValue)}`,
+        return badInputAtPath(
+          `${inputPathText(path)}.value must be an f32; received ${String(floatValue)}`,
           path,
         );
       }
@@ -697,8 +734,8 @@ function validateInputValue(
       if (taggedValue.kind !== "boolean") return typeMismatch(path, expectedType, value);
       const booleanValue = (value as { readonly value?: unknown }).value;
       if (typeof booleanValue !== "boolean") {
-        return badInputFault(
-          `${inputPath(path)}.value must be Boolean; received ${booleanValue}`,
+        return badInputAtPath(
+          `${inputPathText(path)}.value must be Boolean; received ${booleanValue}`,
           path,
         );
       }
@@ -712,14 +749,20 @@ function validateInputValue(
       if (taggedValue.kind !== "tuple") return typeMismatch(path, expectedType, value);
       const values = (value as { readonly values?: unknown }).values;
       if (!Array.isArray(values) || values.length !== 2) {
-        return badInputFault(`${inputPath(path)}.values must contain exactly two values`, path);
+        return badInputAtPath(
+          `${inputPathText(path)}.values must contain exactly two values`,
+          path,
+        );
       }
-      for (const [fieldIndex, fieldType] of expectedType.values.entries()) {
-        entries.push({
+      for (let fieldIndex = expectedType.values.length - 1; fieldIndex >= 0; fieldIndex--) {
+        const fieldType = expectedType.values[fieldIndex];
+        if (fieldType === undefined) {
+          throw new Error(`Lazuli tuple type omitted field ${fieldIndex}`);
+        }
+        pending.push({
           value: values[fieldIndex],
           expectedType: fieldType,
-          path: [...path, fieldIndex],
-          ancestor,
+          path: { parent: path, field: fieldIndex },
         });
       }
       continue;
@@ -733,7 +776,10 @@ function validateInputValue(
     if (enableCollectionSyntax && expectedType.name === "Text" && taggedValue.kind === "text") {
       const textValue = (value as { readonly value?: unknown }).value;
       if (typeof textValue !== "string") {
-        return badInputFault(`${inputPath(path)}.value must be text; received ${textValue}`, path);
+        return badInputAtPath(
+          `${inputPathText(path)}.value must be text; received ${textValue}`,
+          path,
+        );
       }
       continue;
     }
@@ -741,20 +787,19 @@ function validateInputValue(
       const values = (value as { readonly values?: unknown }).values;
       const elementType = expectedType.arguments[0];
       if (!Array.isArray(values)) {
-        return badInputFault(`${inputPath(path)}.values must be an array`, path);
+        return badInputAtPath(`${inputPathText(path)}.values must be an array`, path);
       }
       if (elementType === undefined) {
-        return badInputFault(
-          `${inputPath(path)} cannot encode List without an inferred element type`,
+        return badInputAtPath(
+          `${inputPathText(path)} cannot encode List without an inferred element type`,
           path,
         );
       }
-      for (let valueIndex = 0; valueIndex < values.length; valueIndex++) {
-        entries.push({
+      for (let valueIndex = values.length - 1; valueIndex >= 0; valueIndex--) {
+        pending.push({
           value: values[valueIndex],
           expectedType: elementType,
-          path: [...path, valueIndex],
-          ancestor,
+          path: { parent: path, field: valueIndex },
         });
       }
       continue;
@@ -763,44 +808,47 @@ function validateInputValue(
 
     const constructorValue = value as { readonly name?: unknown; readonly fields?: unknown };
     if (typeof constructorValue.name !== "string") {
-      return badInputFault(`${inputPath(path)}.name must be a constructor name`, path);
+      return badInputAtPath(`${inputPathText(path)}.name must be a constructor name`, path);
     }
     if (!Array.isArray(constructorValue.fields)) {
-      return badInputFault(`${inputPath(path)}.fields must be an array`, path);
+      return badInputAtPath(`${inputPathText(path)}.fields must be an array`, path);
     }
-    const fieldTypes = expectedConstructorFieldTypes(module, expectedType, constructorValue.name);
+    const fieldTypes = expectedConstructorFieldTypes(
+      inputIndex,
+      expectedType,
+      constructorValue.name,
+    );
     if (fieldTypes === undefined) {
-      const ownerType = constructorOwnerType(module, constructorValue.name);
+      const ownerType = constructorOwnerType(inputIndex, constructorValue.name);
       const ownership = ownerType === undefined
         ? "is not declared by this module"
         : `belongs to ${ownerType}`;
-      return badInputFault(
-        `${inputPath(path)} constructor ${
+      return badInputAtPath(
+        `${inputPathText(path)} constructor ${
           JSON.stringify(constructorValue.name)
         } ${ownership}; expected ${describeLazuliType(expectedType)}`,
         path,
       );
     }
     if (constructorValue.fields.length !== fieldTypes.length) {
-      return badInputFault(
-        `${inputPath(path)} constructor ${
+      return badInputAtPath(
+        `${inputPathText(path)} constructor ${
           JSON.stringify(constructorValue.name)
         } expects ${fieldTypes.length} fields; received ${constructorValue.fields.length}`,
         path,
       );
     }
-    for (let fieldIndex = 0; fieldIndex < fieldTypes.length; fieldIndex++) {
+    for (let fieldIndex = fieldTypes.length - 1; fieldIndex >= 0; fieldIndex--) {
       const fieldType = fieldTypes[fieldIndex];
       if (fieldType === undefined) {
         throw new Error(
           `Lazuli input constructor ${constructorValue.name} omitted field type ${fieldIndex}`,
         );
       }
-      entries.push({
+      pending.push({
         value: constructorValue.fields[fieldIndex],
         expectedType: fieldType,
-        path: [...path, fieldIndex],
-        ancestor,
+        path: { parent: path, field: fieldIndex },
       });
     }
   }
@@ -826,6 +874,7 @@ function evaluationOutputType(module: GpuLazuliModule, hasInput: boolean): Lazul
 
 function encodeInputValue(
   module: GpuLazuliModule,
+  moduleIndex: InputModuleIndex,
   input: LazuliInputValue,
   expectedType: LazuliType,
   enableCollectionSyntax: boolean,
@@ -833,8 +882,7 @@ function encodeInputValue(
   const entries: InputEncodingEntry[] = [{
     value: input,
     expectedType,
-    path: [],
-    ancestor: undefined,
+    path: undefined,
   }];
   const words: number[] = [];
 
@@ -844,22 +892,23 @@ function encodeInputValue(
       throw new Error(`Lazuli input encoder omitted node ${inputIndex}`);
     }
     let value = entry.value;
-    const path = inputPath(entry.path);
     if (typeof value !== "object" || value === null) {
-      return badInputFault(`${path} must be a tagged Lazuli input value`, entry.path);
-    }
-    if (hasInputAncestor(entry.ancestor, value)) {
-      return badInputFault(`${path} contains a cyclic host value`, entry.path);
+      return badInputAtPath(
+        `${inputPathText(entry.path)} must be a tagged Lazuli input value`,
+        entry.path,
+      );
     }
 
-    const ancestorValue = value;
     let taggedValue = value as { readonly kind?: unknown };
     if (enableCollectionSyntax && taggedValue.kind === "text") {
       const textValue = (value as { readonly value?: unknown }).value;
       if (typeof textValue !== "string") {
-        return badInputFault(`${path}.value must be text; received ${textValue}`, entry.path);
+        return badInputAtPath(
+          `${inputPathText(entry.path)}.value must be text; received ${textValue}`,
+          entry.path,
+        );
       }
-      const expandedText = expandTextInput(module, textValue, entry.path);
+      const expandedText = expandTextInput(module, moduleIndex, textValue, entry.path);
       if ("ok" in expandedText) return expandedText;
       value = expandedText;
       taggedValue = expandedText;
@@ -867,9 +916,12 @@ function encodeInputValue(
     if (enableCollectionSyntax && taggedValue.kind === "list") {
       const listValues = (value as { readonly values?: unknown }).values;
       if (!Array.isArray(listValues)) {
-        return badInputFault(`${path}.values must be an array`, entry.path);
+        return badInputAtPath(
+          `${inputPathText(entry.path)}.values must be an array`,
+          entry.path,
+        );
       }
-      const expandedList = expandListInput(module, listValues, entry.path);
+      const expandedList = expandListInput(module, moduleIndex, listValues, entry.path);
       if ("ok" in expandedList) return expandedList;
       value = expandedList;
       taggedValue = expandedList;
@@ -881,7 +933,10 @@ function encodeInputValue(
     if (taggedValue.kind === "tuple") {
       const tupleValues = (value as { readonly values?: unknown }).values;
       if (!Array.isArray(tupleValues) || tupleValues.length !== 2) {
-        return badInputFault(`${path}.values must contain exactly two values`, entry.path);
+        return badInputAtPath(
+          `${inputPathText(entry.path)}.values must contain exactly two values`,
+          entry.path,
+        );
       }
       value = { kind: "constructor", name: "$Tuple", fields: tupleValues };
       taggedValue = value as { readonly kind?: unknown };
@@ -893,8 +948,8 @@ function encodeInputValue(
         typeof integerValue !== "number" || !Number.isInteger(integerValue) ||
         integerValue < -2_147_483_648 || integerValue > 2_147_483_647
       ) {
-        return badInputFault(
-          `${path}.value must be a signed i32; received ${integerValue}`,
+        return badInputAtPath(
+          `${inputPathText(entry.path)}.value must be a signed i32; received ${integerValue}`,
           entry.path,
         );
       }
@@ -910,8 +965,10 @@ function encodeInputValue(
         typeof integerValue !== "bigint" || integerValue < -0x8000000000000000n ||
         integerValue > 0x7fffffffffffffffn
       ) {
-        return badInputFault(
-          `${path}.value must be a signed i64; received ${String(integerValue)}`,
+        return badInputAtPath(
+          `${inputPathText(entry.path)}.value must be a signed i64; received ${
+            String(integerValue)
+          }`,
           entry.path,
         );
       }
@@ -925,8 +982,8 @@ function encodeInputValue(
     if (taggedValue.kind === "float-32") {
       const floatValue = (value as { readonly value?: unknown }).value;
       if (typeof floatValue !== "number") {
-        return badInputFault(
-          `${path}.value must be an f32; received ${String(floatValue)}`,
+        return badInputAtPath(
+          `${inputPathText(entry.path)}.value must be an f32; received ${String(floatValue)}`,
           entry.path,
         );
       }
@@ -939,7 +996,10 @@ function encodeInputValue(
     if (taggedValue.kind === "boolean") {
       const booleanValue = (value as { readonly value?: unknown }).value;
       if (typeof booleanValue !== "boolean") {
-        return badInputFault(`${path}.value must be Boolean; received ${booleanValue}`, entry.path);
+        return badInputAtPath(
+          `${inputPathText(entry.path)}.value must be Boolean; received ${booleanValue}`,
+          entry.path,
+        );
       }
       words[wordOffset] = VALUE_BOOLEAN;
       words[wordOffset + 1] = booleanValue ? 1 : 0;
@@ -948,7 +1008,10 @@ function encodeInputValue(
       continue;
     }
     if (taggedValue.kind !== "constructor") {
-      return badInputFault(`${path}.kind is not a supported Lazuli input kind`, entry.path);
+      return badInputAtPath(
+        `${inputPathText(entry.path)}.kind is not a supported Lazuli input kind`,
+        entry.path,
+      );
     }
 
     const constructorValue = value as {
@@ -956,42 +1019,49 @@ function encodeInputValue(
       readonly fields?: unknown;
     };
     if (typeof constructorValue.name !== "string") {
-      return badInputFault(`${path}.name must be a constructor name`, entry.path);
+      return badInputAtPath(
+        `${inputPathText(entry.path)}.name must be a constructor name`,
+        entry.path,
+      );
     }
-    const constructorIndex = module.constructorNames.indexOf(constructorValue.name);
-    if (constructorIndex < 0) {
-      return badInputFault(
-        `${path} names unknown constructor ${JSON.stringify(constructorValue.name)}`,
+    const constructorIndex = moduleIndex.constructorIndexes.get(constructorValue.name);
+    if (constructorIndex === undefined) {
+      return badInputAtPath(
+        `${inputPathText(entry.path)} names unknown constructor ${
+          JSON.stringify(constructorValue.name)
+        }`,
         entry.path,
       );
     }
     if (!Array.isArray(constructorValue.fields)) {
-      return badInputFault(`${path}.fields must be an array`, entry.path);
+      return badInputAtPath(
+        `${inputPathText(entry.path)}.fields must be an array`,
+        entry.path,
+      );
     }
     const fieldTypes = expectedConstructorFieldTypes(
-      module,
+      moduleIndex,
       entry.expectedType,
       constructorValue.name,
     );
     if (fieldTypes === undefined || fieldTypes.length !== constructorValue.fields.length) {
-      return badInputFault(
-        `${path} constructor ${JSON.stringify(constructorValue.name)} cannot encode as ${
-          describeLazuliType(entry.expectedType)
-        }`,
+      return badInputAtPath(
+        `${inputPathText(entry.path)} constructor ${
+          JSON.stringify(constructorValue.name)
+        } cannot encode as ${describeLazuliType(entry.expectedType)}`,
         entry.path,
       );
     }
     const expectedArity = module.constructorArities[constructorIndex];
     if (constructorValue.fields.length !== expectedArity) {
-      return badInputFault(
-        `${path} constructor ${
+      return badInputAtPath(
+        `${inputPathText(entry.path)} constructor ${
           JSON.stringify(constructorValue.name)
         } expects ${expectedArity} fields; received ${constructorValue.fields.length}`,
         entry.path,
       );
     }
     const firstChild = constructorValue.fields.length === 0 ? LAZULI_NO_INDEX : entries.length;
-    const ancestor: InputAncestor = { value: ancestorValue, parent: entry.ancestor };
     for (let fieldIndex = 0; fieldIndex < constructorValue.fields.length; fieldIndex++) {
       const fieldType = fieldTypes[fieldIndex];
       if (fieldType === undefined) {
@@ -1000,8 +1070,7 @@ function encodeInputValue(
       entries.push({
         value: constructorValue.fields[fieldIndex],
         expectedType: fieldType,
-        path: [...entry.path, fieldIndex],
-        ancestor,
+        path: { parent: entry.path, field: fieldIndex },
       });
     }
     if (entries.length >= LAZULI_NO_INDEX) {
@@ -1018,18 +1087,19 @@ function encodeInputValue(
 
 function expandListInput(
   module: GpuLazuliModule,
+  inputIndex: InputModuleIndex,
   values: readonly LazuliInputValue[],
-  path: readonly number[],
+  path: InputPath | undefined,
 ): LazuliInputValue | LazuliEvaluationResult {
   const requiredConstructors = [
     ["Nil", 0],
     ["Cons", 2],
   ] as const;
   for (const [name, arity] of requiredConstructors) {
-    const index = module.constructorNames.indexOf(name);
-    if (index < 0 || module.constructorArities[index] !== arity) {
-      return badInputFault(
-        `${inputPath(path)} list requires constructor ${name} with arity ${arity}`,
+    const index = inputIndex.constructorIndexes.get(name);
+    if (index === undefined || module.constructorArities[index] !== arity) {
+      return badInputAtPath(
+        `${inputPathText(path)} list requires constructor ${name} with arity ${arity}`,
         path,
       );
     }
@@ -1046,8 +1116,9 @@ function expandListInput(
 
 function expandTextInput(
   module: GpuLazuliModule,
+  inputIndex: InputModuleIndex,
   text: string,
-  path: readonly number[],
+  path: InputPath | undefined,
 ): LazuliInputValue | LazuliEvaluationResult {
   const requiredConstructors = [
     ["Utf8", 1],
@@ -1055,10 +1126,10 @@ function expandTextInput(
     ["BytesCons", 2],
   ] as const;
   for (const [name, arity] of requiredConstructors) {
-    const index = module.constructorNames.indexOf(name);
-    if (index < 0 || module.constructorArities[index] !== arity) {
-      return badInputFault(
-        `${inputPath(path)} text requires constructor ${name} with arity ${arity}`,
+    const index = inputIndex.constructorIndexes.get(name);
+    if (index === undefined || module.constructorArities[index] !== arity) {
+      return badInputAtPath(
+        `${inputPathText(path)} text requires constructor ${name} with arity ${arity}`,
         path,
       );
     }
@@ -1095,10 +1166,6 @@ function createEmptyCaseDispatch(): Uint32Array<ArrayBuffer> {
   ]);
 }
 
-function caseDispatchHash(firstArm: number, constructor: number): number {
-  return (Math.imul(firstArm, 1_664_525) + Math.imul(constructor, 1_013_904_223)) >>> 0;
-}
-
 async function createCaseDispatchIndex(
   module: GpuLazuliModule,
 ): Promise<Uint32Array<ArrayBuffer>> {
@@ -1126,21 +1193,20 @@ async function createCaseDispatchIndex(
   }
   if (entries.length === 0) return createEmptyCaseDispatch();
 
-  let capacity = 2;
-  while (capacity < entries.length * 2) capacity *= 2;
-  const words = new Uint32Array(capacity * CASE_DISPATCH_WORD_LENGTH);
+  entries.sort((left, right) =>
+    left.firstArm - right.firstArm || left.constructor - right.constructor
+  );
+  const words = new Uint32Array(entries.length * CASE_DISPATCH_WORD_LENGTH);
   words.fill(LAZULI_NO_INDEX);
-  const mask = capacity - 1;
-  for (const entry of entries) {
-    let slot = caseDispatchHash(entry.firstArm, entry.constructor) & mask;
-    while (words[slot * CASE_DISPATCH_WORD_LENGTH] !== LAZULI_NO_INDEX) {
-      const base = slot * CASE_DISPATCH_WORD_LENGTH;
-      if (words[base] === entry.firstArm && words[base + 1] === entry.constructor) {
-        return createEmptyCaseDispatch();
-      }
-      slot = (slot + 1) & mask;
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!;
+    const previous = entries[index - 1];
+    if (
+      previous?.firstArm === entry.firstArm && previous.constructor === entry.constructor
+    ) {
+      return createEmptyCaseDispatch();
     }
-    const base = slot * CASE_DISPATCH_WORD_LENGTH;
+    const base = index * CASE_DISPATCH_WORD_LENGTH;
     words[base] = entry.firstArm;
     words[base + 1] = entry.constructor;
     words[base + 2] = entry.arm;
@@ -1682,6 +1748,11 @@ export class GpuLazuliEvaluator {
   readonly #maximumStackFrames: number;
   readonly #maximumResultNodes: number;
   readonly #enableCollectionSyntax: boolean;
+  readonly #inputModuleIndexes = new WeakMap<GpuLazuliModule, InputModuleIndex>();
+  readonly #caseDispatchIndexes = new WeakMap<
+    GpuLazuliModule,
+    Promise<Uint32Array<ArrayBuffer>>
+  >();
 
   private constructor(
     device: GPUDevice,
@@ -1831,6 +1902,29 @@ export class GpuLazuliEvaluator {
     };
   }
 
+  #inputModuleIndex(module: GpuLazuliModule): InputModuleIndex {
+    let index = this.#inputModuleIndexes.get(module);
+    if (index === undefined) {
+      index = createInputModuleIndex(module);
+      this.#inputModuleIndexes.set(module, index);
+    }
+    return index;
+  }
+
+  #caseDispatchIndex(module: GpuLazuliModule): Promise<Uint32Array<ArrayBuffer>> {
+    let index = this.#caseDispatchIndexes.get(module);
+    if (index !== undefined) return index;
+
+    index = createCaseDispatchIndex(module);
+    this.#caseDispatchIndexes.set(module, index);
+    index.catch(() => {
+      if (this.#caseDispatchIndexes.get(module) === index) {
+        this.#caseDispatchIndexes.delete(module);
+      }
+    });
+    return index;
+  }
+
   #evaluationLimits(
     module: GpuLazuliModule,
     options: LazuliEvaluationOptions,
@@ -1913,23 +2007,22 @@ export class GpuLazuliEvaluator {
 
     const inputType = options.input === undefined ? undefined : inputParameterType(module);
     if (inputType !== undefined && "ok" in inputType) return inputType;
-    if (options.input !== undefined && inputType !== undefined) {
-      const inputFault = validateInputValue(
-        module,
-        options.input,
-        inputType,
-        this.#enableCollectionSyntax,
-      );
-      if (inputFault !== undefined) return inputFault;
-    }
-    const outputType = evaluationOutputType(module, options.input !== undefined);
     let inputEncoding: EncodedInput | undefined;
     if (options.input !== undefined) {
       if (inputType === undefined || "ok" in inputType) {
         throw new Error("Lazuli evaluator omitted the main input type");
       }
+      const inputIndex = this.#inputModuleIndex(module);
+      const inputFault = validateInputValue(
+        inputIndex,
+        options.input,
+        inputType,
+        this.#enableCollectionSyntax,
+      );
+      if (inputFault !== undefined) return inputFault;
       const encodedInput = encodeInputValue(
         module,
+        inputIndex,
         options.input,
         inputType,
         this.#enableCollectionSyntax,
@@ -1937,9 +2030,10 @@ export class GpuLazuliEvaluator {
       if ("ok" in encodedInput) return encodedInput;
       inputEncoding = encodedInput;
     }
+    const outputType = evaluationOutputType(module, options.input !== undefined);
 
     const limits = this.#evaluationLimits(module, options);
-    const caseDispatchWords = await createCaseDispatchIndex(module);
+    const caseDispatchWords = await this.#caseDispatchIndex(module);
     const caseDispatchCapacity = caseDispatchWords.length / CASE_DISPATCH_WORD_LENGTH;
     const maximumModuleBindingSize = this.#device.limits.maxStorageBufferBindingSize;
 
@@ -2287,9 +2381,15 @@ export class GpuLazuliEvaluator {
         results[resultIndex] = inputType;
         continue;
       }
-      if (inputValue !== undefined && inputType !== undefined) {
+      const outputType = evaluationOutputType(module, inputValue !== undefined);
+      let inputEncoding: EncodedInput | undefined;
+      if (inputValue !== undefined) {
+        if (inputType === undefined || "ok" in inputType) {
+          throw new Error("Lazuli batch evaluator omitted a main input type");
+        }
+        const inputIndex = this.#inputModuleIndex(module);
         const inputFault = validateInputValue(
-          module,
+          inputIndex,
           inputValue,
           inputType,
           this.#enableCollectionSyntax,
@@ -2298,15 +2398,9 @@ export class GpuLazuliEvaluator {
           results[resultIndex] = inputFault;
           continue;
         }
-      }
-      const outputType = evaluationOutputType(module, inputValue !== undefined);
-      let inputEncoding: EncodedInput | undefined;
-      if (inputValue !== undefined) {
-        if (inputType === undefined || "ok" in inputType) {
-          throw new Error("Lazuli batch evaluator omitted a main input type");
-        }
         const encodedInput = encodeInputValue(
           module,
+          inputIndex,
           inputValue,
           inputType,
           this.#enableCollectionSyntax,
@@ -2365,7 +2459,7 @@ export class GpuLazuliEvaluator {
     }
 
     const caseDispatchIndexes = await Promise.all(
-      preparedLanes.map((lane) => createCaseDispatchIndex(lane.module)),
+      preparedLanes.map((lane) => this.#caseDispatchIndex(lane.module)),
     );
 
     let totalNodes = 0;

@@ -8,6 +8,7 @@ import {
   LazuliCoreTag,
   type LazuliEvaluationOptions,
   type LazuliEvaluationResult,
+  type LazuliInputValue,
   parseLazuliSource,
   requestWebGpuDevice,
 } from "../mod.ts";
@@ -333,6 +334,79 @@ Deno.test("accepts typed list input and deeply reifies the result", async () => 
       deepStrictEqual(result.value, {
         kind: "list",
         values: [{ kind: "integer", value: 20 }],
+      });
+    } finally {
+      module.destroy();
+    }
+  });
+});
+
+Deno.test("prepares large host inputs without repeated traversal", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const listModule = await compileModule(
+      runtime.compiler,
+      "let main : List Int -> Int = values => 42;",
+    );
+    try {
+      const largeList = Array.from(
+        { length: 4_096 },
+        (_, value) => ({ kind: "integer" as const, value }),
+      );
+      const listResult = await runtime.evaluator.evaluate(listModule, {
+        input: { kind: "list", values: largeList },
+        heapSlots: 20_000,
+      });
+      ok(listResult.ok);
+      if (listResult.ok) deepStrictEqual(listResult.value, { kind: "integer", value: 42 });
+    } finally {
+      listModule.destroy();
+    }
+  });
+});
+
+Deno.test("accepts a shared host input value outside its active ancestry", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const module = await compileModule(
+      runtime.compiler,
+      "data Box = Box(value: Int); let main : (Box, Box) -> Int = values => 42;",
+    );
+    try {
+      const shared = {
+        kind: "constructor" as const,
+        name: "Box",
+        fields: [{ kind: "integer" as const, value: 1 }],
+      };
+      const result = await runtime.evaluator.evaluate(module, {
+        input: { kind: "tuple", values: [shared, shared] },
+      });
+      ok(result.ok);
+      if (result.ok) deepStrictEqual(result.value, { kind: "integer", value: 42 });
+    } finally {
+      module.destroy();
+    }
+  });
+});
+
+Deno.test("rejects a cyclic host input value before GPU evaluation", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const module = await compileModule(
+      runtime.compiler,
+      "let main : List (List Int) -> Int = values => 42;",
+    );
+    try {
+      const cyclic = { kind: "list" as const, values: [] as LazuliInputValue[] };
+      cyclic.values.push(cyclic);
+      const result = await runtime.evaluator.evaluate(module, { input: cyclic });
+
+      equal(result.ok, false);
+      if (result.ok) return;
+      equal(result.fault.kind, "bad-input");
+      equal(result.fault.code, "L3009");
+      deepStrictEqual(result.stats, {
+        steps: 0,
+        allocations: 0,
+        peakStack: 0,
+        thunkEvaluations: 0,
       });
     } finally {
       module.destroy();
@@ -1357,6 +1431,26 @@ Deno.test("resumes deep lexical lookup at one transition per dispatch", async ()
   });
 });
 
+Deno.test("repeated deep lexical lookup uses proportional evaluator fuel", async () => {
+  await withLazuliRuntime(async (runtime) => {
+    const source = (size: number) => {
+      let body = Array.from({ length: size }, () => "outer").join(" + ");
+      for (let index = size - 1; index >= 0; index--) {
+        body = `let value${index} = ${index} in ${body}`;
+      }
+      return `let main = let outer = 1 in ${body};`;
+    };
+    const small = await evaluateSource(runtime, source(64));
+    const large = await evaluateSource(runtime, source(128));
+
+    ok(small.ok);
+    ok(large.ok);
+    if (!small.ok || !large.ok) return;
+    deepStrictEqual(large.value, { kind: "integer", value: 128 });
+    ok(large.stats.steps <= small.stats.steps * 2.2);
+  });
+});
+
 Deno.test("resumes constructor arm search and pattern binding without forcing discarded fields", async () => {
   await withLazuliRuntime(async (runtime) => {
     const result = await evaluateSource(
@@ -1390,6 +1484,12 @@ Deno.test("dispatches wide constructor cases without arm-linear evaluator fuel",
       runtime.compiler,
       `data Wide = ${constructors}; fn main = case C255 of ${arms} end;`,
     );
+    const readCoreNodes = module.readCoreNodes.bind(module);
+    let coreNodeReads = 0;
+    module.readCoreNodes = () => {
+      coreNodeReads++;
+      return readCoreNodes();
+    };
     try {
       const options = { maximumSteps: 128 } as const;
       const scalar = await runtime.evaluator.evaluate(module, options);
@@ -1401,6 +1501,7 @@ Deno.test("dispatches wide constructor cases without arm-linear evaluator fuel",
         ok(result.ok);
         if (result.ok) deepStrictEqual(result.value, { kind: "integer", value: 255 });
       }
+      equal(coreNodeReads, 1);
     } finally {
       module.destroy();
     }
@@ -1783,6 +1884,26 @@ Deno.test("specializes const values and erases forwarded type descriptors", asyn
 
     ok(result.ok);
     deepStrictEqual(result.value, { kind: "integer", value: 42 });
+  });
+});
+
+Deno.test("shares const specializations whose descriptors do not affect their bodies", async () => {
+  const source =
+    "const identity descriptor = value => value; let main = (identity @Int 1, identity @Bool true);";
+  const parsing = parseLazuliSource(source);
+  ok(parsing.ok);
+  if (!parsing.ok) return;
+  equal(parsing.surface.definitionCount, 2);
+
+  await withLazuliRuntime(async (runtime) => {
+    const result = await evaluateSource(runtime, source, { resultForm: "deep" });
+    ok(result.ok);
+    if (!result.ok) return;
+    deepStrictEqual(result.value, {
+      kind: "tuple",
+      fieldCount: 2,
+      fields: [{ kind: "integer", value: 1 }, { kind: "boolean", value: true }],
+    });
   });
 });
 

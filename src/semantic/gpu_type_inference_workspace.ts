@@ -12,6 +12,7 @@ import type {
   WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import {
+  LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
   LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
   LAZULI_INFERENCE_FRAME_WORD_LENGTH,
   LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
@@ -124,7 +125,11 @@ export function workspaceLayout(
   );
   const defaultScratchCapacity = checkedSum(
     "scratch arena capacity",
-    checkedProduct("definition scratch", surface.definitionCount, 8),
+    checkedProduct(
+      "definition scratch",
+      surface.definitionCount,
+      LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
+    ),
     Math.max(schemaScratchCapacity, inferredTypeTraversalCapacity),
   );
   const capacities = optionsWorkspaceCapacities(
@@ -136,7 +141,11 @@ export function workspaceLayout(
       scratch: defaultScratchCapacity,
       output: Math.min(defaultTypeCapacity, INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY),
     },
-    checkedProduct("minimum scratch arena capacity", surface.definitionCount, 8),
+    checkedProduct(
+      "minimum scratch arena capacity",
+      surface.definitionCount,
+      LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
+    ),
     overrides,
   );
   return createWorkspaceLayout(capacities, limits);

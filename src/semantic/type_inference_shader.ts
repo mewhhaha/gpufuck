@@ -89,17 +89,24 @@ export const LazuliInferenceInternalTypeKind = {
   SignedInteger64: 13,
   Float32: 14,
   Float64: 15,
+  Instance: 16,
+  InstantiationToken: 17,
+  InstantiationEntry: 18,
+  LazyConstructor: 19,
+  ApplicationCacheTrie: 20,
 } as const;
 
-export const LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH = 3;
+export const LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH = 4;
 export const LazuliInferenceEnvironmentWord = {
-  Symbol: 0,
-  Type: 1,
-  Parent: 2,
+  Type: 0,
+  Parent: 1,
+  Depth: 2,
+  Skip: 3,
 } as const;
 
 export const LAZULI_INFERENCE_FRAME_WORD_LENGTH = 12;
 export const LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH = 2;
+export const LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS = 10;
 export const LazuliInferenceFrameWord = {
   Node: 0,
   Stage: 1,
@@ -988,8 +995,13 @@ const TYPE_FORALL: u32 = 12u;
 const TYPE_SIGNED_INTEGER_64: u32 = 13u;
 const TYPE_FLOAT_32: u32 = 14u;
 const TYPE_FLOAT_64: u32 = 15u;
+const TYPE_INSTANCE: u32 = 16u;
+const TYPE_INSTANTIATION_TOKEN: u32 = 17u;
+const TYPE_INSTANTIATION_ENTRY: u32 = 18u;
+const TYPE_LAZY_CONSTRUCTOR: u32 = 19u;
+const TYPE_APPLICATION_CACHE_TRIE: u32 = 20u;
 const TYPE_RECORD_WORDS: u32 = 5u;
-const ENVIRONMENT_WORDS: u32 = 3u;
+const ENVIRONMENT_WORDS: u32 = ${LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH}u;
 const FRAME_WORDS: u32 = 12u;
 const REFINEMENT_WORDS: u32 = ${LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH}u;
 
@@ -1243,12 +1255,51 @@ fn scratch_set(vector: u32, index: u32, value: u32) {
   workspace[scratch_index(vector, index)] = value;
 }
 
+fn cached_application_result(definition: u32, argument: u32) -> u32 {
+  var node = scratch_get(8u, definition);
+  if node == NO_INDEX { return NO_INDEX; }
+  for (var remaining = 32u; remaining > 0u; remaining -= 1u) {
+    if node >= state.type_top || type_get(node, 0u) != TYPE_APPLICATION_CACHE_TRIE {
+      return NO_INDEX;
+    }
+    let bit = (argument >> (remaining - 1u)) & 1u;
+    node = type_get(node, 1u + bit);
+    if node == NO_INDEX { return NO_INDEX; }
+  }
+  if node >= state.type_top || type_get(node, 0u) != TYPE_APPLICATION_CACHE_TRIE {
+    return NO_INDEX;
+  }
+  return type_get(node, 3u);
+}
+
+fn cache_application_result(definition: u32, argument: u32, result: u32) -> bool {
+  if !require_type_slots(33u) { return false; }
+  var node = scratch_get(8u, definition);
+  if node == NO_INDEX {
+    node = allocate_type(TYPE_APPLICATION_CACHE_TRIE, NO_INDEX, NO_INDEX, NO_INDEX);
+    scratch_set(8u, definition, node);
+  }
+  for (var remaining = 32u; remaining > 0u; remaining -= 1u) {
+    let bit = (argument >> (remaining - 1u)) & 1u;
+    var child = type_get(node, 1u + bit);
+    if child == NO_INDEX {
+      child = allocate_type(TYPE_APPLICATION_CACHE_TRIE, NO_INDEX, NO_INDEX, NO_INDEX);
+      type_set(node, 1u + bit, child);
+    }
+    node = child;
+  }
+  type_set(node, 3u, result);
+  return true;
+}
+
 fn temporary_base() -> u32 {
-  return state.scratch_base + state.definition_count * 8u;
+  return state.scratch_base +
+    state.definition_count * ${LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
 }
 
 fn temporary_capacity() -> u32 {
-  return state.scratch_capacity - state.definition_count * 8u;
+  return state.scratch_capacity -
+    state.definition_count * ${LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
 }
 
 fn type_address(type_index: u32) -> u32 {
@@ -1281,6 +1332,129 @@ fn allocate_type(kind: u32, payload: u32, child0: u32, child1: u32) -> u32 {
 
 fn fresh_variable() -> u32 {
   return allocate_type(TYPE_VARIABLE, NO_INDEX, state.current_level, NO_INDEX);
+}
+
+fn allocate_type_instance(source: u32, mapping: u32, mode: u32, open_forall: u32) -> u32 {
+  return allocate_type(TYPE_INSTANCE, source, mapping, mode | (open_forall << 1u));
+}
+
+fn instantiation_replacement(source: u32, mapping: u32, mode: u32) -> u32 {
+  var entry = type_get(mapping, 1u);
+  loop {
+    if entry == NO_INDEX { break; }
+    if type_get(entry, 0u) != TYPE_INSTANTIATION_ENTRY { return NO_INDEX; }
+    if type_get(entry, 1u) == source { return type_get(entry, 2u); }
+    entry = type_get(entry, 3u);
+  }
+  if !require_type_slots(2u) { return NO_INDEX; }
+  var replacement = NO_INDEX;
+  if mode == 1u {
+    replacement = allocate_type(TYPE_RIGID, state.next_generic, state.current_level, NO_INDEX);
+    state.next_generic += 1u;
+  } else {
+    replacement = fresh_variable();
+    type_set(replacement, 3u, mapping);
+  }
+  let mapping_entry = allocate_type(
+    TYPE_INSTANTIATION_ENTRY,
+    source,
+    replacement,
+    type_get(mapping, 1u),
+  );
+  type_set(mapping, 1u, mapping_entry);
+  return replacement;
+}
+
+fn materialize_type_instance(index: u32) -> bool {
+  let source = type_get(index, 1u);
+  let mapping = type_get(index, 2u);
+  let options = type_get(index, 3u);
+  let mode = options & 1u;
+  let open_forall = options >> 1u;
+  let kind = type_get(source, 0u);
+
+  if kind == TYPE_VARIABLE && type_get(source, 1u) != NO_INDEX {
+    type_set(index, 1u, type_get(source, 1u));
+    return true;
+  }
+  if kind == TYPE_RIGID && type_get(source, 3u) != NO_INDEX {
+    type_set(index, 1u, type_get(source, 3u));
+    return true;
+  }
+  if kind == TYPE_FORALL && open_forall != 0u {
+    type_set(index, 1u, type_get(source, 2u));
+    return true;
+  }
+  if kind == TYPE_GENERIC || kind == TYPE_NAMED_GENERIC {
+    let replacement = instantiation_replacement(source, mapping, mode);
+    if replacement == NO_INDEX { return false; }
+    type_set(index, 0u, TYPE_VARIABLE);
+    type_set(index, 1u, replacement);
+    type_set(index, 2u, state.current_level);
+    type_set(index, 3u, NO_INDEX);
+    return true;
+  }
+
+  var first = NO_INDEX;
+  var second = NO_INDEX;
+  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+    first = type_get(source, 2u);
+    second = type_get(source, 3u);
+  } else if kind == TYPE_NAMED {
+    first = type_get(source, 2u);
+  } else if kind == TYPE_LIST {
+    first = type_get(source, 1u);
+    second = type_get(source, 2u);
+  } else {
+    type_set(index, 0u, TYPE_VARIABLE);
+    type_set(index, 1u, source);
+    type_set(index, 2u, state.current_level);
+    type_set(index, 3u, NO_INDEX);
+    return true;
+  }
+
+  let child_count = select(0u, select(1u, 2u, second != NO_INDEX), first != NO_INDEX);
+  if !require_type_slots(child_count) { return false; }
+  var first_instance = NO_INDEX;
+  var second_instance = NO_INDEX;
+  if first != NO_INDEX { first_instance = allocate_type_instance(first, mapping, mode, 0u); }
+  if second != NO_INDEX { second_instance = allocate_type_instance(second, mapping, mode, 0u); }
+  type_set(index, 0u, kind);
+  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+    type_set(index, 1u, type_get(source, 1u));
+    type_set(index, 2u, first_instance);
+    type_set(index, 3u, second_instance);
+  } else if kind == TYPE_NAMED {
+    type_set(index, 1u, type_get(source, 1u));
+    type_set(index, 2u, first_instance);
+    type_set(index, 3u, NO_INDEX);
+  } else {
+    type_set(index, 1u, first_instance);
+    type_set(index, 2u, second_instance);
+    type_set(index, 3u, NO_INDEX);
+  }
+  return true;
+}
+
+fn materialize_lazy_constructor(index: u32) -> bool {
+  let remaining = type_get(index, 2u);
+  if remaining == 0u {
+    type_set(index, 0u, TYPE_NAMED);
+    type_set(index, 2u, type_get(index, 3u));
+    type_set(index, 3u, NO_INDEX);
+    return true;
+  }
+  if !require_type_slots(2u) { return false; }
+  let argument = fresh_variable();
+  let arguments = allocate_type(TYPE_LIST, argument, type_get(index, 3u), NO_INDEX);
+  type_set(index, 2u, remaining - 1u);
+  type_set(index, 3u, arguments);
+  return true;
+}
+
+fn materialize_lazy_type(index: u32) -> bool {
+  if type_get(index, 0u) == TYPE_INSTANCE { return materialize_type_instance(index); }
+  return materialize_lazy_constructor(index);
 }
 
 fn require_frame_slots(count: u32) -> bool {
@@ -1374,6 +1548,10 @@ fn start_prune(type_index: u32) -> bool {
 
 fn prune_transition(frame: u32) {
   let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_INSTANCE {
+    materialize_type_instance(current);
+    return;
+  }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u));
     return;
@@ -1438,6 +1616,8 @@ fn configure_unify_frame(frame: u32, left: u32, right: u32, start_byte: u32, end
   frame_set(frame, 3u, start_byte);
   frame_set(frame, 4u, end_byte);
   frame_set(frame, 7u, NO_INDEX);
+  frame_set(frame, 8u, NO_INDEX);
+  frame_set(frame, 9u, NO_INDEX);
   frame_set(frame, 10u, FRAME_UNIFY);
 }
 
@@ -1452,15 +1632,17 @@ fn start_application_unify(
   callee: u32,
   expected_function: u32,
   fresh_result: u32,
+  fresh_callee_start: u32,
+  fresh_callee_end: u32,
   start_byte: u32,
   end_byte: u32,
 ) -> bool {
-  // The result is allocated after callee and argument inference, so the older
-  // callee graph cannot contain it and does not need an occurs traversal.
   let frame = push_work_frame(FRAME_UNIFY);
   if frame == NO_INDEX { return false; }
   configure_unify_frame(frame, callee, expected_function, start_byte, end_byte);
   frame_set(frame, 7u, fresh_result);
+  frame_set(frame, 8u, fresh_callee_start);
+  frame_set(frame, 9u, fresh_callee_end);
   return true;
 }
 
@@ -1503,6 +1685,10 @@ fn occurs_transition(frame: u32) {
 fn occurs_visit_transition(frame: u32) {
   if state.work_result != 0u { pop_work_frame(); return; }
   let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_INSTANCE || type_get(current, 0u) == TYPE_LAZY_CONSTRUCTOR {
+    materialize_lazy_type(current);
+    return;
+  }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u));
     return;
@@ -1577,11 +1763,30 @@ fn unify_transition(frame: u32) {
   if left == right { pop_work_frame(); return; }
   let left_kind = type_get(left, 0u);
   let right_kind = type_get(right, 0u);
+  if left_kind == TYPE_LAZY_CONSTRUCTOR {
+    materialize_lazy_constructor(left);
+    frame_set(frame, 1u, 0u);
+    return;
+  }
+  if right_kind == TYPE_LAZY_CONSTRUCTOR && left_kind != TYPE_VARIABLE {
+    materialize_lazy_constructor(right);
+    frame_set(frame, 1u, 0u);
+    return;
+  }
   if left_kind == TYPE_VARIABLE {
     if state.untouchable_type_cutoff != NO_INDEX && left < state.untouchable_type_cutoff {
       report_metadata_diagnostic(
         METADATA_UNTOUCHABLE_INDEXED_VARIABLE,
         frame_get(frame, 3u), frame_get(frame, 4u), left, left, right);
+      return;
+    }
+    // Variables created while inferring the callee cannot occur in the
+    // subsequently inferred argument graph.
+    if type_get(left, 3u) != NO_INDEX ||
+      (frame_get(frame, 8u) != NO_INDEX && left >= frame_get(frame, 8u) &&
+        left < frame_get(frame, 9u)) {
+      type_set(left, 1u, right);
+      pop_work_frame();
       return;
     }
     if !start_occurs(left, right) { return; }
@@ -1595,7 +1800,11 @@ fn unify_transition(frame: u32) {
         frame_get(frame, 3u), frame_get(frame, 4u), right, right, left);
       return;
     }
-    if right == frame_get(frame, 7u) {
+    // Argument variables and the result are newer than the callee graph, so
+    // linking them back to it cannot form a cycle.
+    if type_get(right, 3u) != NO_INDEX || right == frame_get(frame, 7u) ||
+      (frame_get(frame, 9u) != NO_INDEX && right >= frame_get(frame, 9u) &&
+        right < frame_get(frame, 7u)) {
       type_set(right, 1u, left);
       pop_work_frame();
       return;
@@ -1642,15 +1851,23 @@ fn unify_transition(frame: u32) {
   let start_byte = frame_get(frame, 3u);
   let end_byte = frame_get(frame, 4u);
   let fresh_application_result = frame_get(frame, 7u);
+  let fresh_callee_start = frame_get(frame, 8u);
+  let fresh_callee_end = frame_get(frame, 9u);
   if left_second == NO_INDEX {
     configure_unify_frame(frame, left_first, right_first, start_byte, end_byte);
     frame_set(frame, 7u, fresh_application_result);
+    frame_set(frame, 8u, fresh_callee_start);
+    frame_set(frame, 9u, fresh_callee_end);
   } else {
     configure_unify_frame(frame, left_second, right_second, start_byte, end_byte);
     frame_set(frame, 7u, fresh_application_result);
+    frame_set(frame, 8u, fresh_callee_start);
+    frame_set(frame, 9u, fresh_callee_end);
     let first = push_work_frame(FRAME_UNIFY);
     configure_unify_frame(first, left_first, right_first, start_byte, end_byte);
     frame_set(first, 7u, fresh_application_result);
+    frame_set(first, 8u, fresh_callee_start);
+    frame_set(first, 9u, fresh_callee_end);
   }
 }
 
@@ -1677,6 +1894,10 @@ fn generalize_transition(frame: u32) {
 
 fn generalize_visit_transition(frame: u32) {
   let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_INSTANCE || type_get(current, 0u) == TYPE_LAZY_CONSTRUCTOR {
+    materialize_lazy_type(current);
+    return;
+  }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
   }
@@ -1717,9 +1938,11 @@ fn assign_type_field(parent: u32, field: u32, value: u32) {
 }
 
 fn start_instantiate_mode(source: u32, mode: u32) -> bool {
+  if !require_type_slots(1u) { return false; }
   let frame = push_work_frame(FRAME_INSTANTIATE);
   if frame == NO_INDEX { return false; }
   frame_set(frame, 0u, source); frame_set(frame, 1u, 0u);
+  frame_set(frame, 3u, allocate_type(TYPE_INSTANTIATION_TOKEN, NO_INDEX, NO_INDEX, NO_INDEX));
   frame_set(frame, 4u, mode); frame_set(frame, 5u, 1u);
   state.work_result = 0u;
   return true;
@@ -1727,6 +1950,14 @@ fn start_instantiate_mode(source: u32, mode: u32) -> bool {
 
 fn start_instantiate(source: u32) -> bool {
   return start_instantiate_mode(source, 0u);
+}
+
+fn start_lazy_instantiate(source: u32) -> bool {
+  if !require_type_slots(2u) { return false; }
+  let mapping = allocate_type(TYPE_INSTANTIATION_TOKEN, NO_INDEX, NO_INDEX, NO_INDEX);
+  let instance = allocate_type_instance(source, mapping, 0u, 1u);
+  state.returned_type = instance;
+  return true;
 }
 
 fn configure_instantiate_visit(
@@ -1739,9 +1970,6 @@ fn configure_instantiate_visit(
 }
 
 fn instantiate_transition(frame: u32) {
-  if frame_get(frame, 1u) == 0u {
-    if !acquire_epoch(frame, 3u, 1u) { return; }
-  }
   configure_instantiate_visit(
     frame, frame_get(frame, 0u), NO_INDEX, 0u, frame_get(frame, 3u),
     frame_get(frame, 4u), frame_get(frame, 5u));
@@ -1754,6 +1982,10 @@ fn attach_instantiated(parent: u32, field: u32, replacement: u32) {
 
 fn instantiate_visit_transition(frame: u32) {
   let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_INSTANCE || type_get(current, 0u) == TYPE_LAZY_CONSTRUCTOR {
+    materialize_lazy_type(current);
+    return;
+  }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
   }
@@ -1773,18 +2005,8 @@ fn instantiate_visit_transition(frame: u32) {
     return;
   }
   if kind == TYPE_GENERIC || kind == TYPE_NAMED_GENERIC {
-    if type_get(current, 2u) == epoch {
-      attach_instantiated(parent, field, type_get(current, 3u)); pop_work_frame(); return;
-    }
-    if !require_type_slots(1u) { return; }
-    var replacement = NO_INDEX;
-    if frame_get(frame, 4u) == 1u {
-      replacement = allocate_type(TYPE_RIGID, state.next_generic, state.current_level, NO_INDEX);
-      state.next_generic += 1u;
-    } else {
-      replacement = fresh_variable();
-    }
-    type_set(current, 2u, epoch); type_set(current, 3u, replacement);
+    let replacement = instantiation_replacement(current, epoch, frame_get(frame, 4u));
+    if replacement == NO_INDEX { return; }
     state.work_result = 1u;
     attach_instantiated(parent, field, replacement); pop_work_frame(); return;
   }
@@ -1907,6 +2129,10 @@ fn configure_forall_search(frame: u32, type_index: u32) {
 fn forall_search_transition(frame: u32) {
   if state.work_result != 0u { pop_work_frame(); return; }
   let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_INSTANCE || type_get(current, 0u) == TYPE_LAZY_CONSTRUCTOR {
+    materialize_lazy_type(current);
+    return;
+  }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u));
     return;
@@ -1947,18 +2173,23 @@ fn start_local_scheme_lookup(depth: u32, environment: u32, node_index: u32) -> b
 
 fn local_lookup_transition(frame: u32) {
   if frame_get(frame, 1u) == 1u { pop_work_frame(); return; }
-  let entry = frame_get(frame, 2u);
+  var entry = frame_get(frame, 2u);
+  if entry == NO_INDEX {
+    invalid_input(ERROR_INVALID_SURFACE, frame_get(frame, 3u));
+    return;
+  }
+  let remaining = frame_get(frame, 0u);
+  let entry_depth = workspace[environment_address(entry) + 2u];
+  if remaining > entry_depth {
+    invalid_input(ERROR_INVALID_SURFACE, frame_get(frame, 3u));
+    return;
+  }
+  entry = environment_at_depth(entry, entry_depth - remaining);
   if entry == NO_INDEX {
     invalid_input(ERROR_INVALID_SURFACE, frame_get(frame, 3u));
     return;
   }
   let address = environment_address(entry);
-  let remaining = frame_get(frame, 0u);
-  if remaining > 0u {
-    frame_set(frame, 0u, remaining - 1u);
-    frame_set(frame, 2u, workspace[address + 1u]);
-    return;
-  }
   if frame_get(frame, 4u) != 0u {
     state.returned_type = workspace[address];
     pop_work_frame();
@@ -1985,6 +2216,7 @@ fn start_stable_concrete(type_index: u32) -> bool {
   let frame = push_work_frame(FRAME_CONCRETE);
   if frame == NO_INDEX { return false; }
   frame_set(frame, 0u, type_index); frame_set(frame, 1u, 0u); frame_set(frame, 2u, 1u);
+  state.work_aux = 0u;
   return true;
 }
 
@@ -2005,6 +2237,10 @@ fn concrete_transition(frame: u32) {
 fn concrete_visit_transition(frame: u32) {
   if state.work_result == 0u { pop_work_frame(); return; }
   let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_INSTANCE || type_get(current, 0u) == TYPE_LAZY_CONSTRUCTOR {
+    materialize_lazy_type(current);
+    return;
+  }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
   }
@@ -2014,6 +2250,7 @@ fn concrete_visit_transition(frame: u32) {
   }
   let epoch = frame_get(frame, 3u);
   if type_get(current, 4u) == epoch { pop_work_frame(); return; }
+  state.work_aux += 1u;
   let kind = type_get(current, 0u);
   if kind == TYPE_VARIABLE || kind == TYPE_GENERIC || kind == TYPE_RIGID ||
     kind == TYPE_NAMED_GENERIC || kind == TYPE_FORALL {
@@ -2173,6 +2410,10 @@ fn fully_zonked_transition(frame: u32) {
 fn fully_zonked_visit_transition(frame: u32) {
   if state.work_result != 0u { pop_work_frame(); return; }
   let current = frame_get(frame, 0u);
+  if type_get(current, 0u) == TYPE_INSTANCE || type_get(current, 0u) == TYPE_LAZY_CONSTRUCTOR {
+    materialize_lazy_type(current);
+    return;
+  }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
   }
@@ -2231,6 +2472,10 @@ fn rigidify_transition(frame: u32) {
 fn rigidify_visit_transition(frame: u32) {
   let current = frame_get(frame, 0u);
   let kind = type_get(current, 0u);
+  if kind == TYPE_INSTANCE || kind == TYPE_LAZY_CONSTRUCTOR {
+    materialize_lazy_type(current);
+    return;
+  }
   if kind == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 1u)); return;
   }
@@ -2673,6 +2918,25 @@ fn environment_address(index: u32) -> u32 {
   return state.environment_base + index * ENVIRONMENT_WORDS;
 }
 
+fn environment_at_depth(index: u32, target_depth: u32) -> u32 {
+  var current = index;
+  loop {
+    if current == NO_INDEX || current >= state.environment_top { return NO_INDEX; }
+    let address = environment_address(current);
+    let current_depth = workspace[address + 2u];
+    if current_depth == target_depth { return current; }
+    if current_depth < target_depth { return NO_INDEX; }
+    let skip = workspace[address + 3u];
+    if skip != NO_INDEX && skip < state.environment_top &&
+      workspace[environment_address(skip) + 2u] >= target_depth {
+      current = skip;
+    } else {
+      current = workspace[address + 1u];
+    }
+  }
+  return NO_INDEX;
+}
+
 fn allocate_environment(type_index: u32, parent: u32) -> u32 {
   if state.environment_top >= state.environment_capacity {
     exhausted(ERROR_ENVIRONMENT_ARENA_EXHAUSTED, state.environment_top + 1u);
@@ -2683,7 +2947,17 @@ fn allocate_environment(type_index: u32, parent: u32) -> u32 {
   let address = environment_address(result);
   workspace[address] = type_index;
   workspace[address + 1u] = parent;
-  workspace[address + 2u] = NO_INDEX;
+  if parent == NO_INDEX {
+    workspace[address + 2u] = 0u;
+    workspace[address + 3u] = NO_INDEX;
+    return result;
+  }
+  let depth = workspace[environment_address(parent) + 2u] + 1u;
+  let lowest_bit = depth & (~depth + 1u);
+  workspace[address + 2u] = depth;
+  // Clearing the lowest set bit gives each entry a skip link that supports
+  // logarithmic ancestor lookup while adding only one word per binding.
+  workspace[address + 3u] = environment_at_depth(parent, depth - lowest_bit);
   return result;
 }
 
@@ -2990,14 +3264,56 @@ fn expression_transition() {
         complete_expression(scheme);
         return;
       }
-      if start_instantiate(scheme) { frame_set(frame, 1u, 91u); }
+      if start_lazy_instantiate(scheme) { complete_expression(state.returned_type); }
       return;
     }
     if node.tag == TAG_CONSTRUCTOR {
+      let constructor = constructor_record(node.payload);
+      let parameter_count = type_metadata(constructor.type_index, 1u);
+      if constructor.arity == 0u && parameter_count > 0u &&
+        !constructor_result_is_explicit(node.payload) {
+        if !require_type_slots(1u) { return; }
+        complete_expression(allocate_type(
+          TYPE_LAZY_CONSTRUCTOR,
+          constructor.type_index,
+          parameter_count,
+          NO_INDEX,
+        ));
+        return;
+      }
       if start_constructor(node.payload, 1u, 0u) { frame_set(frame, 1u, 92u); }
       return;
     }
     if node.tag == TAG_LET {
+      let value = core_node(node.child0);
+      if node.payload == 0u && value.tag == TAG_CONSTRUCTOR {
+        if !require_environment_slots(1u) || !require_frame_slots(1u) { return; }
+        let body_environment = allocate_environment(0u, environment);
+        if state.status != STATUS_PENDING { return; }
+        frame_set(frame, 1u, 2u);
+        if push_expression(node.child1, body_environment) {
+          frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+        }
+        return;
+      }
+      if value.tag == TAG_GLOBAL {
+        let scheme = scratch_get(0u, value.payload);
+        if scheme == NO_INDEX { invalid_input(ERROR_INVALID_SURFACE, node.child0); return; }
+        if !require_environment_slots(1u) || !require_frame_slots(1u) { return; }
+        let body_environment = allocate_environment(scheme, environment);
+        if state.status != STATUS_PENDING { return; }
+        frame_set(frame, 1u, 2u);
+        if push_expression(node.child1, body_environment) {
+          frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+        }
+        return;
+      }
+      if value.tag == TAG_LOCAL {
+        if (start_local_scheme_lookup(value.payload, environment, node.child0)) {
+          frame_set(frame, 1u, 4u);
+        }
+        return;
+      }
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 1u);
       frame_set(frame, 9u, state.current_level);
@@ -3054,6 +3370,7 @@ fn expression_transition() {
     if node.tag == TAG_APPLY {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 40u);
+      frame_set(frame, 5u, state.type_top);
       push_expression(node.child0, environment);
       return;
     }
@@ -3134,7 +3451,7 @@ fn expression_transition() {
 
   if stage == 1u {
     state.current_level = frame_get(frame, 9u);
-    if type_kind_is_primitive(type_get(state.returned_type, 0u)) {
+    if node.payload == 0u || type_kind_is_primitive(type_get(state.returned_type, 0u)) {
       if !require_environment_slots(1u) || !require_frame_slots(1u) { return; }
       let body_environment = allocate_environment(state.returned_type, environment);
       if state.status != STATUS_PENDING { return; }
@@ -3148,6 +3465,16 @@ fn expression_transition() {
     return;
   }
   if stage == 3u {
+    if !require_environment_slots(1u) || !require_frame_slots(1u) { return; }
+    let body_environment = allocate_environment(state.returned_type, environment);
+    if state.status != STATUS_PENDING { return; }
+    frame_set(frame, 1u, 2u);
+    if push_expression(node.child1, body_environment) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 11u));
+    }
+    return;
+  }
+  if stage == 4u {
     if !require_environment_slots(1u) || !require_frame_slots(1u) { return; }
     let body_environment = allocate_environment(state.returned_type, environment);
     if state.status != STATUS_PENDING { return; }
@@ -3314,11 +3641,21 @@ fn expression_transition() {
   if stage == 40u {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 3u, state.returned_type);
+    frame_set(frame, 7u, state.type_top);
     frame_set(frame, 1u, 41u);
     push_expression(node.child1, environment);
     return;
   }
   if stage == 41u {
+    frame_set(frame, 8u, state.returned_type);
+    let callee_node = core_node(node.child0);
+    if frame_get(frame, 11u) == NO_INDEX && callee_node.tag == TAG_GLOBAL {
+      let cached_result = cached_application_result(callee_node.payload, state.returned_type);
+      if cached_result != NO_INDEX {
+        complete_expression(cached_result);
+        return;
+      }
+    }
     if frame_get(frame, 11u) != NO_INDEX {
       frame_set(frame, 4u, frame_get(frame, 11u));
     } else {
@@ -3389,11 +3726,49 @@ fn expression_transition() {
       TYPE_FUNCTION, NO_INDEX, state.returned_type, frame_get(frame, 4u));
     start_application_unify(
       frame_get(frame, 3u), function_type, frame_get(frame, 4u),
+      frame_get(frame, 5u), frame_get(frame, 7u),
       node.start_byte, node.end_byte);
     frame_set(frame, 1u, 43u);
     return;
   }
-  if stage == 43u { complete_expression(frame_get(frame, 4u)); return; }
+  if stage == 43u {
+    let callee_node = core_node(node.child0);
+    if frame_get(frame, 11u) == NO_INDEX && callee_node.tag == TAG_GLOBAL &&
+      scratch_get(9u, callee_node.payload) != frame_get(frame, 8u) {
+      if start_stable_concrete(frame_get(frame, 4u)) { frame_set(frame, 1u, 44u); }
+      return;
+    }
+    complete_expression(frame_get(frame, 4u));
+    return;
+  }
+  if stage == 44u {
+    if state.work_result != 0u && state.work_aux < 8u &&
+      type_get(frame_get(frame, 8u), 0u) == TYPE_LAZY_CONSTRUCTOR {
+      let callee_node = core_node(node.child0);
+      scratch_set(9u, callee_node.payload, frame_get(frame, 8u));
+      complete_expression(frame_get(frame, 4u));
+      return;
+    }
+    frame_set(frame, 6u, state.work_aux);
+    frame_set(frame, 9u, state.work_result);
+    if start_stable_concrete(frame_get(frame, 8u)) { frame_set(frame, 1u, 48u); }
+    return;
+  }
+  if stage == 48u {
+    let callee_node = core_node(node.child0);
+    if frame_get(frame, 9u) != 0u && state.work_result != 0u &&
+      (frame_get(frame, 6u) >= 8u || state.work_aux >= 8u) {
+      if !cache_application_result(
+        callee_node.payload,
+        frame_get(frame, 8u),
+        frame_get(frame, 4u),
+      ) { return; }
+    } else {
+      scratch_set(9u, callee_node.payload, frame_get(frame, 8u));
+    }
+    complete_expression(frame_get(frame, 4u));
+    return;
+  }
 
   if stage == 50u {
     let operand_type = frame_get(frame, 3u);
@@ -3977,7 +4352,8 @@ fn validation_transition() {
   let index = state.cursor;
   if section == 0u {
     let schema_length = arrayLength(&schema_words);
-    let scratch_required = state.definition_count * 8u;
+    let scratch_required =
+      state.definition_count * ${LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
     if state.maximum_transitions_per_dispatch == 0u ||
       !range_is_valid(state.semantic.phase, state.node_count, arrayLength(&core_nodes)) ||
       !range_is_valid(
@@ -4430,6 +4806,8 @@ fn validation_transition() {
     scratch_set(1u, index, NO_INDEX);
     scratch_set(2u, index, NO_INDEX);
     scratch_set(3u, index, 0u);
+    scratch_set(8u, index, NO_INDEX);
+    scratch_set(9u, index, NO_INDEX);
     state.cursor += 1u;
     return;
   }
