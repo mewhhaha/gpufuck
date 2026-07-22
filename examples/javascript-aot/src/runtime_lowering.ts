@@ -293,6 +293,7 @@ class JavaScriptRuntimeLowering {
     const environmentName = this.freshName("capturedEnvironment");
     const bindingsName = this.freshName("functionBindings");
     const thisValueName = this.freshName("thisValue");
+    const calleeName = this.freshName("callee");
     const argumentCountName = this.freshName("argumentCount");
     const argumentNames = Array.from(
       { length: this.maximumRuntimeArgumentCount() },
@@ -311,6 +312,7 @@ class JavaScriptRuntimeLowering {
     state = this.defineRuntimeArgumentsBinding(
       state,
       runtimeFunction,
+      reference(calleeName, runtimeFunction.span),
       reference(argumentCountName, runtimeFunction.span),
       argumentNames.map((name) => reference(name, runtimeFunction.span)),
     );
@@ -335,6 +337,7 @@ class JavaScriptRuntimeLowering {
         environmentName,
         bindingsName,
         thisValueName,
+        calleeName,
         argumentCountName,
         ...argumentNames,
       ],
@@ -354,6 +357,7 @@ class JavaScriptRuntimeLowering {
   private defineRuntimeArgumentsBinding(
     state: FunctionalSurfaceExpression,
     runtimeFunction: RuntimeFunction,
+    callee: FunctionalSurfaceExpression,
     argumentCount: FunctionalSurfaceExpression,
     arguments_: readonly FunctionalSurfaceExpression[],
   ): FunctionalSurfaceExpression {
@@ -402,6 +406,24 @@ class JavaScriptRuntimeLowering {
                     boolean(false, span),
                     boolean(true, span),
                   ], span),
+                ], span);
+                argumentsHeap = call(JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED, [
+                  argumentsHeap,
+                  identity,
+                  call(Runtime.JAVASCRIPT_PROPERTY_KEY_STRING, [text("callee", span)], span),
+                  runtimeFunction.strict
+                    ? call(Runtime.JAVASCRIPT_ACCESSOR_DESCRIPTOR, [
+                      reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, span),
+                      reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, span),
+                      boolean(false, span),
+                      boolean(false, span),
+                    ], span)
+                    : call(Runtime.JAVASCRIPT_DATA_DESCRIPTOR, [
+                      callee,
+                      boolean(true, span),
+                      boolean(false, span),
+                      boolean(true, span),
+                    ], span),
                 ], span);
                 for (let index = 0; index < arguments_.length; index++) {
                   argumentsHeap = conditional(
@@ -2822,6 +2844,7 @@ class JavaScriptRuntimeLowering {
                   body: this.resumeCall(
                     this.dispatchCall(
                       reference(targetName, span),
+                      call(Runtime.JAVASCRIPT_VALUE_OBJECT, [identity], span),
                       reference(heapName, span),
                       reference(capturedRealmName, span),
                       reference(capturedEnvironmentName, span),
@@ -2893,6 +2916,7 @@ class JavaScriptRuntimeLowering {
 
   private dispatchCall(
     target: FunctionalSurfaceExpression,
+    callee: FunctionalSurfaceExpression,
     heap: FunctionalSurfaceExpression,
     realm: FunctionalSurfaceExpression,
     environment: FunctionalSurfaceExpression,
@@ -2909,6 +2933,7 @@ class JavaScriptRuntimeLowering {
     if (!this.#usesSharedCallDispatcher) {
       return this.buildRuntimeCallDispatch(
         target,
+        callee,
         heap,
         realm,
         environment,
@@ -2921,6 +2946,7 @@ class JavaScriptRuntimeLowering {
     }
     return call(JAVASCRIPT_RUNTIME_CALL_DISPATCH, [
       target,
+      callee,
       heap,
       realm,
       environment,
@@ -2935,6 +2961,7 @@ class JavaScriptRuntimeLowering {
     span: JavaScriptAotExpression["span"],
   ): FunctionalSurfaceDefinition {
     const targetName = this.freshName("dispatchTarget");
+    const calleeName = this.freshName("dispatchCallee");
     const heapName = this.freshName("dispatchHeap");
     const realmName = this.freshName("dispatchRealm");
     const environmentName = this.freshName("dispatchEnvironment");
@@ -2950,6 +2977,7 @@ class JavaScriptRuntimeLowering {
       name: JAVASCRIPT_RUNTIME_CALL_DISPATCH,
       parameters: [
         targetName,
+        calleeName,
         heapName,
         realmName,
         environmentName,
@@ -2961,6 +2989,7 @@ class JavaScriptRuntimeLowering {
       annotation: runtimeDispatcherType(maximumArgumentCount, span),
       body: this.buildRuntimeCallDispatch(
         reference(targetName, span),
+        reference(calleeName, span),
         reference(heapName, span),
         reference(realmName, span),
         reference(environmentName, span),
@@ -2976,6 +3005,7 @@ class JavaScriptRuntimeLowering {
 
   private buildRuntimeCallDispatch(
     target: FunctionalSurfaceExpression,
+    callee: FunctionalSurfaceExpression,
     heap: FunctionalSurfaceExpression,
     realm: FunctionalSurfaceExpression,
     environment: FunctionalSurfaceExpression,
@@ -3065,6 +3095,7 @@ class JavaScriptRuntimeLowering {
             environment,
             bindings,
             targetThisValue,
+            callee,
             argumentCount,
             ...parameters,
           ],
@@ -4911,6 +4942,7 @@ function runtimeFunctionType(
     named(Runtime.JAVASCRIPT_REALM_TYPE),
     named(Runtime.JAVASCRIPT_ENVIRONMENT_TYPE),
     named(Runtime.JAVASCRIPT_BINDING_STORE_TYPE),
+    named(Runtime.JAVASCRIPT_VALUE_TYPE),
     named(Runtime.JAVASCRIPT_VALUE_TYPE),
     { kind: "integer" },
     ...Array.from({ length: argumentCount }, () => named(Runtime.JAVASCRIPT_VALUE_TYPE)),

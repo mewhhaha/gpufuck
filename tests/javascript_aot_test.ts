@@ -544,6 +544,23 @@ export function main() {
   deepStrictEqual(value, { kind: "boolean", value: true });
 });
 
+Deno.test("exposes the active callee on sloppy arguments objects", async () => {
+  const value = await compileAndRun(
+    `
+function inspect() {
+  return arguments.hasOwnProperty("callee") && arguments.callee === inspect;
+}
+
+export function main() {
+  return inspect() ? 42 : 0;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
 Deno.test("reflects sloppy parameter writes through mapped arguments", async () => {
   const value = await compileAndRun(
     `
