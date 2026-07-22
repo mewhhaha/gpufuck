@@ -328,7 +328,7 @@ function emitAllocationByteLength(
   instructions.i32Const(FunctionalWasmValueAbi.objectKinds.closure);
   instructions.emit(0x6b);
   instructions.i32Const(
-    FunctionalWasmValueAbi.objectKinds.resource -
+    FunctionalWasmValueAbi.objectKinds.store -
       FunctionalWasmValueAbi.objectKinds.closure,
   );
   instructions.emit(0x4b);

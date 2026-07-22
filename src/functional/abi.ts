@@ -116,6 +116,7 @@ export const FunctionalPrimitiveCapability = {
   ExplicitFault: "explicit-fault",
   StructuralEquality: "structural-equality",
   BufferAppend: "buffer-append",
+  Store: "store",
 } as const;
 
 export type FunctionalPrimitiveCapability =
@@ -139,6 +140,7 @@ export const FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES: readonly FunctionalPrimi
       FunctionalPrimitiveCapability.ExplicitFault,
       FunctionalPrimitiveCapability.StructuralEquality,
       FunctionalPrimitiveCapability.BufferAppend,
+      FunctionalPrimitiveCapability.Store,
     ] as const,
   );
 

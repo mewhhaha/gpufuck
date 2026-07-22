@@ -79,8 +79,8 @@ Smaller subpaths keep consumers from loading contracts they do not use:
 | `@mewhhaha/gpufuck/effects`       | Effect programs, Effect Core, and rows       |
 | `@mewhhaha/gpufuck/type-services` | Type programs, proofs, and capabilities      |
 
-The bundled Lazuli, Gleam, Haskell, OCaml, Rust, and 1SubML frontends are repository examples; they
-are not loaded by the published entry point.
+The bundled Lazuli, Gleam, Haskell, JavaScript AOT, OCaml, Rust, and 1SubML frontends are repository
+examples; they are not loaded by the published entry point.
 
 ### Machines without a GPU
 
@@ -624,17 +624,18 @@ reproducible benchmark tasks instead of publishing machine-independent speed cla
 The repository contains independent frontends that exercise the public target. They demonstrate
 lowering techniques, not complete compatibility with their source languages.
 
-| Frontend                                                | Boundary demonstrated                                                    |
-| ------------------------------------------------------- | ------------------------------------------------------------------------ |
-| [Gleam](examples/gleam-functional/README.md)            | Strict inference, pinned stdlib compile coverage, and scalar JS parity   |
-| [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, moves, borrows, and rejected mutation |
-| [Haskell](examples/haskell-functional/README.md)        | Laziness, rank-N types, dictionaries, GADTs, and recursive local groups  |
-| [OCaml](examples/ocaml-functional/README.md)            | Sequential scope, explicit recursion, variants, and lists                |
-| [1SubML](examples/onesubml-functional/README.md)        | Rank-N parameters, modules as records, and expression blocks             |
-| [Lazuli](examples/lazuli/)                              | Reference syntax, indexed proofs, host values, and laziness              |
-| [Functional IR](examples/functional-ir/README.md)       | Direct effects, host `Init`, comptime code generation, and type programs |
-| [Type programming](examples/type-programming/README.md) | Idris2-style indices and Zig-style reflection experiments                |
-| [PureScript profile](examples/purescript-functional/)   | Open rows, functional dependencies, composed evidence, and rank-2 types  |
+| Frontend                                                | Boundary demonstrated                                                              |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [Gleam](examples/gleam-functional/README.md)            | Strict inference, pinned stdlib compile coverage, and scalar JS parity             |
+| [JavaScript AOT](examples/javascript-aot/README.md)     | Baba parsing, control flow, lexical exceptions, strict f64 code, and rejected eval |
+| [Rust](examples/rust-functional/)                       | Enums, structs, generics, matches, moves, borrows, and rejected mutation           |
+| [Haskell](examples/haskell-functional/README.md)        | Laziness, rank-N types, dictionaries, GADTs, and recursive local groups            |
+| [OCaml](examples/ocaml-functional/README.md)            | Sequential scope, explicit recursion, variants, and lists                          |
+| [1SubML](examples/onesubml-functional/README.md)        | Rank-N parameters, modules as records, and expression blocks                       |
+| [Lazuli](examples/lazuli/)                              | Reference syntax, indexed proofs, host values, and laziness                        |
+| [Functional IR](examples/functional-ir/README.md)       | Direct effects, host `Init`, comptime code generation, and type programs           |
+| [Type programming](examples/type-programming/README.md) | Idris2-style indices and Zig-style reflection experiments                          |
+| [PureScript profile](examples/purescript-functional/)   | Open rows, functional dependencies, composed evidence, and rank-2 types            |
 
 Each source-language example has a trace task that writes the source, normalized surface, packed
 ABI, and GPU-resolved Core side by side. For example:

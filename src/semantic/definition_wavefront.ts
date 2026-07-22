@@ -557,6 +557,7 @@ function coreChildren(node: LazuliCoreNode): readonly number[] {
     case LazuliCoreTag.Lambda:
     case LazuliCoreTag.Unary:
     case LazuliCoreTag.NumericConvert:
+    case LazuliCoreTag.StoreLength:
     case LazuliCoreTag.PatternBind:
       return [node.child0];
     case LazuliCoreTag.Apply:
@@ -564,10 +565,14 @@ function coreChildren(node: LazuliCoreNode): readonly number[] {
     case LazuliCoreTag.LetRec:
     case LazuliCoreTag.Binary:
     case LazuliCoreTag.BufferAppend:
+    case LazuliCoreTag.StoreNew:
+    case LazuliCoreTag.StoreRead:
     case LazuliCoreTag.Case:
     case LazuliCoreTag.CaseArm:
       return [node.child0, node.child1];
     case LazuliCoreTag.If:
+    case LazuliCoreTag.StoreWrite:
+    case LazuliCoreTag.StoreGrow:
       return [node.child0, node.child1, node.child2];
   }
 }

@@ -175,6 +175,20 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
       return `${indent}(${expression.kind}\n${nested(expression.left)}\n${
         nested(expression.right)
       })`;
+    case "store-new":
+      return `${indent}(store-new\n${nested(expression.length)}\n${nested(expression.initial)})`;
+    case "store-length":
+      return `${indent}(store-length\n${nested(expression.store)})`;
+    case "store-read":
+      return `${indent}(store-read\n${nested(expression.store)}\n${nested(expression.index)})`;
+    case "store-write":
+      return `${indent}(store-write\n${nested(expression.store)}\n${nested(expression.index)}\n${
+        nested(expression.value)
+      })`;
+    case "store-grow":
+      return `${indent}(store-grow\n${nested(expression.store)}\n${nested(expression.length)}\n${
+        nested(expression.initial)
+      })`;
     case "numeric-convert":
       return `${indent}(convert${expression.conversion}\n${nested(expression.value)})`;
     case "case": {

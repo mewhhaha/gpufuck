@@ -1,0 +1,419 @@
+{
+  "format": "baba-wasm-abi",
+  "version": 1,
+  "targetKind": "javascript-hosted-core-wasm",
+  "parserPlan": {
+    "format": "baba-parser-plan",
+    "version": 1,
+    "runtimeMetadataVersion": 2,
+    "semantics": "baba-portable-v1",
+    "storage": "external-binary"
+  },
+  "runtimeImplementation": {
+    "format": "baba-runtime-implementation",
+    "version": 1,
+    "semantics": "baba-runtime-portable-v1",
+    "hash": "fnv1a64:9b25cc0c8ab36db3"
+  },
+  "core": {
+    "abiVersion": 7,
+    "memory": {
+      "export": "memory",
+      "pageBytes": 65536,
+      "maxPages": 65535,
+      "inputBase": "dynamic-after-load-plan"
+    },
+    "plan": {
+      "storage": "external-binary",
+      "moduleExport": "load_plan",
+      "path": "parser.plan",
+      "layout": "core-tables-plus-runtime-metadata"
+    },
+    "sourceEncoding": {
+      "kind": "utf16",
+      "value": 1,
+      "unitBytes": 2
+    },
+    "spanUnit": {
+      "kind": "utf16-code-units",
+      "value": 1
+    },
+    "ownership": {
+      "kind": "caller-managed-linear-memory",
+      "value": 1
+    },
+    "resultLifetime": {
+      "kind": "caller-owned-result-buffer",
+      "value": 1
+    },
+    "layouts": {
+      "lexResult": {
+        "i32Count": 2,
+        "bytes": 8,
+        "fields": [
+          "specIndex",
+          "end"
+        ]
+      },
+      "tokenRecord": {
+        "i32Count": 4,
+        "bytes": 16,
+        "fields": [
+          "specIndex",
+          "start",
+          "end",
+          "acceptingState"
+        ]
+      },
+      "parserSelection": {
+        "i32Count": 4,
+        "bytes": 16,
+        "fields": [
+          "checkedCandidateCount",
+          "selectedSpecIndex",
+          "selectedTerminal",
+          "encodedAction"
+        ]
+      },
+      "parseTraceResult": {
+        "i32Count": 6,
+        "bytes": 24,
+        "fields": [
+          "tokenRecordCount",
+          "traceActionCount",
+          "errorOffset",
+          "errorState",
+          "tokenReadCount",
+          "reserved"
+        ]
+      },
+      "parseCursorResult": {
+        "i32Count": 10,
+        "bytes": 40,
+        "fields": [
+          "tokenRecordCount",
+          "ruleRecordCount",
+          "childRefCount",
+          "fieldRecordCount",
+          "valueRecordCount",
+          "valueItemCount",
+          "rootRef",
+          "errorOffset",
+          "errorState",
+          "tokenReadCount"
+        ]
+      },
+      "cursorRuleRecord": {
+        "i32Count": 9,
+        "bytes": 36,
+        "fields": [
+          "ruleId",
+          "start",
+          "end",
+          "tokenStart",
+          "tokenEnd",
+          "childStart",
+          "childCount",
+          "fieldStart",
+          "fieldCount"
+        ]
+      },
+      "cursorFieldRecord": {
+        "i32Count": 2,
+        "bytes": 8,
+        "fields": [
+          "fieldId",
+          "valueId"
+        ]
+      },
+      "cursorValueRecord": {
+        "i32Count": 4,
+        "bytes": 16,
+        "fields": [
+          "kind",
+          "number",
+          "itemStart",
+          "itemCount"
+        ]
+      }
+    },
+    "exports": [
+      {
+        "name": "memory",
+        "kind": "memory"
+      },
+      {
+        "name": "lex_one",
+        "params": [
+          "sourcePtr",
+          "sourceLength",
+          "offset",
+          "resultPtr"
+        ],
+        "result": "matchedFlag"
+      },
+      {
+        "name": "parser_action",
+        "params": [
+          "state",
+          "terminal"
+        ],
+        "result": "encodedAction"
+      },
+      {
+        "name": "parser_actions",
+        "params": [
+          "state",
+          "terminal",
+          "actionPtr",
+          "actionCapacity"
+        ],
+        "result": "actionCountOrMinusOne"
+      },
+      {
+        "name": "parser_select_action",
+        "params": [
+          "state",
+          "acceptingState",
+          "fallbackSpecIndex",
+          "selectionPtr"
+        ],
+        "result": "selectionStatusOneSelectedZeroUnexpectedTwoMultipleChoicesMinusOneInvalid"
+      },
+      {
+        "name": "parse_trace",
+        "params": [
+          "sourcePtr",
+          "sourceLength",
+          "tokenPtr",
+          "tokenCapacity",
+          "tracePtr",
+          "traceCapacity",
+          "resultPtr",
+          "stackPtr",
+          "stackCapacity",
+          "preserveTrivia",
+          "maxTraceActions"
+        ],
+        "result": "traceStatusZeroOkOneUnexpectedTwoInternalFourTraceLimitFiveAmbiguous"
+      },
+      {
+        "name": "parse_cursor",
+        "params": [
+          "sourcePtr",
+          "sourceLength",
+          "tokenPtr",
+          "tokenCapacity",
+          "rulePtr",
+          "ruleCapacity",
+          "childPtr",
+          "childCapacity",
+          "fieldPtr",
+          "fieldCapacity",
+          "valuePtr",
+          "valueCapacity",
+          "valueItemPtr",
+          "valueItemCapacity",
+          "resultPtr",
+          "stateStackPtr",
+          "fragmentStackPtr",
+          "fragmentCapacity",
+          "preserveTrivia",
+          "maxTraceActions"
+        ],
+        "result": "cursorStatusZeroOkOneUnexpectedTwoInternalThreeCapacityFourTraceLimitFiveAmbiguous"
+      },
+      {
+        "name": "parser_goto",
+        "params": [
+          "state",
+          "nonterminal"
+        ],
+        "result": "stateOrMinusOne"
+      },
+      {
+        "name": "lex_all",
+        "params": [
+          "sourcePtr",
+          "sourceLength",
+          "mode",
+          "tokenPtr"
+        ],
+        "result": "tokenRecordCount"
+      },
+      {
+        "name": "load_plan",
+        "params": [
+          "planPtr",
+          "planLength"
+        ],
+        "result": "loadedFlag"
+      },
+      {
+        "name": "abi_version",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "plan_version",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "semantics_version",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "reset",
+        "params": [],
+        "result": "void"
+      },
+      {
+        "name": "plan_buffer_base",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "input_base",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "max_pages",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "source_encoding",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "span_unit",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "lex_result_i32_count",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "token_record_i32_count",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "host_ownership_model",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "result_lifetime_model",
+        "params": [],
+        "result": "i32"
+      }
+    ]
+  },
+  "adapter": {
+    "language": "typescript",
+    "handleCapability": {
+      "kind": "javascript-epoch-checked-object",
+      "value": 1
+    },
+    "sourceBuffer": {
+      "type": "WasmSourceBuffer",
+      "staleAfter": [
+        "reset",
+        "writeSource(different source)"
+      ]
+    },
+    "parseTraceInput": {
+      "type": "ParseTraceInput",
+      "staleAfter": [
+        "reset"
+      ]
+    }
+  },
+  "traceStatuses": {
+    "ok": 0,
+    "unexpected": 1,
+    "internal": 2,
+    "branchLimit": 3,
+    "traceLimit": 4,
+    "ambiguous": 5
+  },
+  "parserDiagnosticCodes": {
+    "parseLexicalError": 1,
+    "parseUnexpectedToken": 2,
+    "parseTrailingInput": 3,
+    "internalError": 5,
+    "traceLimit": 7,
+    "ambiguousParse": 8
+  },
+  "parserDiagnostics": {
+    "detailKinds": {
+      "none": 0,
+      "parserState": 1
+    },
+    "schemas": [
+      {
+        "name": "parseLexicalError",
+        "publicCode": "PARSE_LEXICAL_ERROR",
+        "runtimeCode": 1,
+        "detailKind": "none",
+        "detailKindId": 0,
+        "payloadFields": [
+          "found"
+        ]
+      },
+      {
+        "name": "parseUnexpectedToken",
+        "publicCode": "PARSE_UNEXPECTED_TOKEN",
+        "runtimeCode": 2,
+        "detailKind": "parser-state",
+        "detailKindId": 1,
+        "payloadFields": [
+          "expected",
+          "found"
+        ]
+      },
+      {
+        "name": "parseTrailingInput",
+        "publicCode": "PARSE_TRAILING_INPUT",
+        "runtimeCode": 3,
+        "detailKind": "parser-state",
+        "detailKindId": 1,
+        "payloadFields": [
+          "expected",
+          "found"
+        ]
+      },
+      {
+        "name": "internalError",
+        "publicCode": "PARSER_INTERNAL_ERROR",
+        "runtimeCode": 5,
+        "detailKind": "none",
+        "detailKindId": 0,
+        "payloadFields": []
+      },
+      {
+        "name": "traceLimit",
+        "publicCode": "PARSER_TRACE_LIMIT",
+        "runtimeCode": 7,
+        "detailKind": "none",
+        "detailKindId": 0,
+        "payloadFields": []
+      },
+      {
+        "name": "ambiguousParse",
+        "publicCode": "PARSER_AMBIGUOUS_PARSE",
+        "runtimeCode": 8,
+        "detailKind": "none",
+        "detailKindId": 0,
+        "payloadFields": []
+      }
+    ]
+  }
+}

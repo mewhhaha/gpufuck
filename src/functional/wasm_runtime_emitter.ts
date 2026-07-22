@@ -79,6 +79,10 @@ function compactRuntimeGlobals(
   const mayFault = instrumentedFuel || nodes.some((node) => {
     if (node.tag === FunctionalCoreTag.RuntimeFault) return true;
     if (node.tag === FunctionalCoreTag.BufferAppend) return true;
+    if (
+      node.tag === FunctionalCoreTag.StoreNew || node.tag === FunctionalCoreTag.StoreRead ||
+      node.tag === FunctionalCoreTag.StoreWrite || node.tag === FunctionalCoreTag.StoreGrow
+    ) return true;
     if (node.tag === FunctionalCoreTag.Binary) {
       return node.payload === FunctionalBinaryOperator.Divide ||
         node.payload === FunctionalBinaryOperator.DivideSignedInteger64 ||

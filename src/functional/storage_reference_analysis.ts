@@ -238,6 +238,7 @@ export function analyzeFunctionalStorageReferences(
         continue;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
+      case FunctionalCoreTag.StoreLength:
         pending.push({
           nodeIndex: node.child0,
           environment,
@@ -246,6 +247,26 @@ export function analyzeFunctionalStorageReferences(
         continue;
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
+      case FunctionalCoreTag.StoreNew:
+      case FunctionalCoreTag.StoreRead:
+        pending.push({
+          nodeIndex: node.child1,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        pending.push({
+          nodeIndex: node.child0,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
+      case FunctionalCoreTag.StoreWrite:
+      case FunctionalCoreTag.StoreGrow:
+        pending.push({
+          nodeIndex: node.child2,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
         pending.push({
           nodeIndex: node.child1,
           environment,

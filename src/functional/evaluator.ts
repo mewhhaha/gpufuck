@@ -264,7 +264,10 @@ async function inspectModuleNumericRequirements(
     ) boundedWasm = true;
     if (
       node.tag === FunctionalCoreTag.Text || node.tag === FunctionalCoreTag.Bytes ||
-      node.tag === FunctionalCoreTag.RuntimeFault || node.tag === FunctionalCoreTag.BufferAppend
+      node.tag === FunctionalCoreTag.RuntimeFault || node.tag === FunctionalCoreTag.BufferAppend ||
+      node.tag === FunctionalCoreTag.StoreNew || node.tag === FunctionalCoreTag.StoreLength ||
+      node.tag === FunctionalCoreTag.StoreRead || node.tag === FunctionalCoreTag.StoreWrite ||
+      node.tag === FunctionalCoreTag.StoreGrow
     ) {
       boundedWasm = true;
     }
@@ -288,7 +291,8 @@ async function inspectModuleNumericRequirements(
       ) signedInteger64 = true;
       if (
         node.payload >= FunctionalBinaryOperator.EqualFloat64 &&
-        node.payload <= FunctionalBinaryOperator.DivideFloat64
+          node.payload <= FunctionalBinaryOperator.DivideFloat64 ||
+        node.payload === FunctionalBinaryOperator.RemainderFloat64
       ) boundedWasm = true;
       if (
         node.payload >= FunctionalBinaryOperator.EqualWholeNumberF64 &&

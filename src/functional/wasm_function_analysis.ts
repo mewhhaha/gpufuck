@@ -213,6 +213,7 @@ export class FunctionalWasmFunctionAnalysis {
         return true;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
+      case FunctionalCoreTag.StoreLength:
         return this.canEvaluateEagerly(node.child0);
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
@@ -451,6 +452,7 @@ export class FunctionalWasmFunctionAnalysis {
         return false;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
+      case FunctionalCoreTag.StoreLength:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
@@ -460,6 +462,8 @@ export class FunctionalWasmFunctionAnalysis {
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
       case FunctionalCoreTag.Apply:
+      case FunctionalCoreTag.StoreNew:
+      case FunctionalCoreTag.StoreRead:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
@@ -472,6 +476,8 @@ export class FunctionalWasmFunctionAnalysis {
           scope,
         );
       case FunctionalCoreTag.If:
+      case FunctionalCoreTag.StoreWrite:
+      case FunctionalCoreTag.StoreGrow:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
@@ -817,6 +823,7 @@ function coreNodeChildren(node: FunctionalCoreNode): readonly number[] {
     case FunctionalCoreTag.Unary:
     case FunctionalCoreTag.NumericConvert:
     case FunctionalCoreTag.PatternBind:
+    case FunctionalCoreTag.StoreLength:
       return [node.child0];
     case FunctionalCoreTag.Apply:
     case FunctionalCoreTag.Let:
@@ -825,8 +832,12 @@ function coreNodeChildren(node: FunctionalCoreNode): readonly number[] {
     case FunctionalCoreTag.BufferAppend:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:
+    case FunctionalCoreTag.StoreNew:
+    case FunctionalCoreTag.StoreRead:
       return [node.child0, node.child1];
     case FunctionalCoreTag.If:
+    case FunctionalCoreTag.StoreWrite:
+    case FunctionalCoreTag.StoreGrow:
       return [node.child0, node.child1, node.child2];
   }
 }

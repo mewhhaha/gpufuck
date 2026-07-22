@@ -18,6 +18,8 @@ import {
 } from "./wasm_numeric.ts";
 import { functionalWasmEntry } from "./wasm_host_boundary.ts";
 import { FUNCTIONAL_WASM_GC_ABI_VERSION, FunctionalWasmGcValueKind } from "./wasm_gc_contract.ts";
+import { FUNCTIONAL_MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
+import { WASM_FAULT_OUT_OF_BOUNDS } from "./wasm_runtime_binary.ts";
 
 const VALUE_TYPE_INDEX = 0;
 const VALUE_FIELDS_TYPE_INDEX = 1;
@@ -39,7 +41,7 @@ const VALUE_FIELDS_FIELD = 6;
 
 interface GcFunctionBody {
   readonly typeIndex: number;
-  readonly localCount: number;
+  readonly localTypes: readonly ("value" | "fields" | "i32")[];
   readonly instructions: readonly number[];
 }
 
@@ -114,7 +116,7 @@ class GcCoreEmitter {
     this.emitExpression(entryRoot, []);
     const main: GcFunctionBody = {
       typeIndex: MAIN_TYPE_INDEX,
-      localCount: this.#instructions.localCount,
+      localTypes: this.#instructions.localTypes,
       instructions: this.#instructions.bytes,
     };
     const initialize = this.emitInitializeFunction();
@@ -251,6 +253,21 @@ class GcCoreEmitter {
         return;
       case FunctionalCoreTag.NumericConvert:
         this.emitNumericConversion(nodeIndex, node, environment);
+        return;
+      case FunctionalCoreTag.StoreNew:
+        this.emitStoreNew(nodeIndex, node, environment);
+        return;
+      case FunctionalCoreTag.StoreLength:
+        this.emitStoreLength(node, environment);
+        return;
+      case FunctionalCoreTag.StoreRead:
+        this.emitStoreRead(nodeIndex, node, environment);
+        return;
+      case FunctionalCoreTag.StoreWrite:
+        this.emitStoreWrite(nodeIndex, node, environment);
+        return;
+      case FunctionalCoreTag.StoreGrow:
+        this.emitStoreGrow(nodeIndex, node, environment);
         return;
       case FunctionalCoreTag.Case:
         this.emitCase(nodeIndex, node, environment);
@@ -519,7 +536,7 @@ class GcCoreEmitter {
       emitBody(captures);
       this.#workers[slot] = {
         typeIndex: CALL_TYPE_INDEX,
-        localCount: workerInstructions.localCount,
+        localTypes: workerInstructions.localTypes,
         instructions: workerInstructions.bytes,
       };
     } finally {
@@ -538,7 +555,7 @@ class GcCoreEmitter {
       }
       return {
         typeIndex: INITIALIZE_TYPE_INDEX,
-        localCount: initializeInstructions.localCount,
+        localTypes: initializeInstructions.localTypes,
         instructions: initializeInstructions.bytes,
       };
     } finally {
@@ -610,7 +627,7 @@ class GcCoreEmitter {
     instructions.end();
     return {
       typeIndex: FORCE_TYPE_INDEX,
-      localCount: instructions.localCount,
+      localTypes: instructions.localTypes,
       instructions: instructions.bytes,
     };
   }
@@ -848,6 +865,185 @@ class GcCoreEmitter {
     this.#instructions.f64Const(0);
   }
 
+  emitStoreNew(
+    nodeIndex: number,
+    node: FunctionalCoreNode,
+    environment: readonly number[],
+  ): void {
+    this.emitPayload(node.child0, environment);
+    const length = this.#instructions.addI32Local();
+    this.#instructions.localSet(length);
+    this.emitExpression(node.child1, environment);
+    const initial = this.#instructions.addValueLocal();
+    this.#instructions.localSet(initial);
+    this.requireStoreLength(length, nodeIndex);
+    this.#instructions.i32Const(FunctionalWasmGcValueKind.Store);
+    this.#instructions.i32Const(0);
+    this.emitEmptyNumericFields();
+    this.#instructions.localGet(initial);
+    this.#instructions.refAsNonNull();
+    this.#instructions.localGet(length);
+    this.#instructions.arrayNew();
+    this.#instructions.structNew();
+  }
+
+  emitStoreLength(node: FunctionalCoreNode, environment: readonly number[]): void {
+    this.emitExpression(node.child0, environment);
+    const store = this.#instructions.addValueLocal();
+    this.#instructions.localSet(store);
+    this.emitNumericValue("integer", () => {
+      this.#instructions.localGet(store);
+      this.#instructions.refAsNonNull();
+      this.#instructions.structGet(VALUE_FIELDS_FIELD);
+      this.#instructions.arrayLength();
+    });
+  }
+
+  emitStoreRead(
+    nodeIndex: number,
+    node: FunctionalCoreNode,
+    environment: readonly number[],
+  ): void {
+    this.emitExpression(node.child0, environment);
+    const store = this.#instructions.addValueLocal();
+    this.#instructions.localSet(store);
+    this.emitPayload(node.child1, environment);
+    const index = this.#instructions.addI32Local();
+    this.#instructions.localSet(index);
+    this.requireStoreIndex(store, index, nodeIndex);
+    this.#instructions.localGet(store);
+    this.#instructions.refAsNonNull();
+    this.#instructions.structGet(VALUE_FIELDS_FIELD);
+    this.#instructions.localGet(index);
+    this.#instructions.arrayGet();
+    this.#instructions.refAsNonNull();
+  }
+
+  emitStoreWrite(
+    nodeIndex: number,
+    node: FunctionalCoreNode,
+    environment: readonly number[],
+  ): void {
+    this.emitExpression(node.child0, environment);
+    const store = this.#instructions.addValueLocal();
+    this.#instructions.localSet(store);
+    this.emitPayload(node.child1, environment);
+    const index = this.#instructions.addI32Local();
+    this.#instructions.localSet(index);
+    this.emitExpression(node.child2, environment);
+    const value = this.#instructions.addValueLocal();
+    this.#instructions.localSet(value);
+    this.requireStoreIndex(store, index, nodeIndex);
+    const fields = this.cloneStoreFields(store, value);
+    this.#instructions.localGet(fields);
+    this.#instructions.refAsNonNull();
+    this.#instructions.localGet(index);
+    this.#instructions.localGet(value);
+    this.#instructions.refAsNonNull();
+    this.#instructions.arraySet();
+    this.emitStoreValue(fields);
+  }
+
+  emitStoreGrow(
+    nodeIndex: number,
+    node: FunctionalCoreNode,
+    environment: readonly number[],
+  ): void {
+    this.emitExpression(node.child0, environment);
+    const store = this.#instructions.addValueLocal();
+    this.#instructions.localSet(store);
+    this.emitPayload(node.child1, environment);
+    const newLength = this.#instructions.addI32Local();
+    this.#instructions.localSet(newLength);
+    this.emitExpression(node.child2, environment);
+    const initial = this.#instructions.addValueLocal();
+    this.#instructions.localSet(initial);
+    this.requireStoreLength(newLength, nodeIndex);
+    const oldLength = this.#instructions.addI32Local();
+    this.#instructions.localGet(store);
+    this.#instructions.refAsNonNull();
+    this.#instructions.structGet(VALUE_FIELDS_FIELD);
+    this.#instructions.arrayLength();
+    this.#instructions.localSet(oldLength);
+    this.#instructions.localGet(oldLength);
+    this.#instructions.localGet(newLength);
+    this.#instructions.emit(0x4b);
+    this.emitStoreFaultWhenTrue(nodeIndex);
+    const fields = this.#instructions.addFieldsLocal();
+    this.#instructions.localGet(initial);
+    this.#instructions.refAsNonNull();
+    this.#instructions.localGet(newLength);
+    this.#instructions.arrayNew();
+    this.#instructions.localSet(fields);
+    this.copyStoreFields(fields, store, oldLength);
+    this.emitStoreValue(fields);
+  }
+
+  requireStoreLength(length: number, nodeIndex: number): void {
+    this.#instructions.localGet(length);
+    this.#instructions.i32Const(FUNCTIONAL_MAXIMUM_STORE_LENGTH);
+    this.#instructions.emit(0x4b);
+    this.emitStoreFaultWhenTrue(nodeIndex);
+  }
+
+  requireStoreIndex(store: number, index: number, nodeIndex: number): void {
+    this.#instructions.localGet(index);
+    this.#instructions.localGet(store);
+    this.#instructions.refAsNonNull();
+    this.#instructions.structGet(VALUE_FIELDS_FIELD);
+    this.#instructions.arrayLength();
+    this.#instructions.emit(0x4f);
+    this.emitStoreFaultWhenTrue(nodeIndex);
+  }
+
+  emitStoreFaultWhenTrue(nodeIndex: number): void {
+    this.#instructions.ifVoid();
+    this.#instructions.i32Const(WASM_FAULT_OUT_OF_BOUNDS);
+    this.#instructions.globalSet(this.#module.definitionCount + 1);
+    this.#instructions.i32Const(nodeIndex);
+    this.#instructions.globalSet(this.#module.definitionCount + 2);
+    this.#instructions.unreachable();
+    this.#instructions.end();
+  }
+
+  cloneStoreFields(store: number, initial: number): number {
+    const length = this.#instructions.addI32Local();
+    this.#instructions.localGet(store);
+    this.#instructions.refAsNonNull();
+    this.#instructions.structGet(VALUE_FIELDS_FIELD);
+    this.#instructions.arrayLength();
+    this.#instructions.localSet(length);
+    const fields = this.#instructions.addFieldsLocal();
+    this.#instructions.localGet(initial);
+    this.#instructions.refAsNonNull();
+    this.#instructions.localGet(length);
+    this.#instructions.arrayNew();
+    this.#instructions.localSet(fields);
+    this.copyStoreFields(fields, store, length);
+    return fields;
+  }
+
+  copyStoreFields(destination: number, store: number, length: number): void {
+    this.#instructions.localGet(destination);
+    this.#instructions.refAsNonNull();
+    this.#instructions.i32Const(0);
+    this.#instructions.localGet(store);
+    this.#instructions.refAsNonNull();
+    this.#instructions.structGet(VALUE_FIELDS_FIELD);
+    this.#instructions.i32Const(0);
+    this.#instructions.localGet(length);
+    this.#instructions.arrayCopy();
+  }
+
+  emitStoreValue(fields: number): void {
+    this.#instructions.i32Const(FunctionalWasmGcValueKind.Store);
+    this.#instructions.i32Const(0);
+    this.emitEmptyNumericFields();
+    this.#instructions.localGet(fields);
+    this.#instructions.refAsNonNull();
+    this.#instructions.structNew();
+  }
+
   constructorArity(constructorIndex: number, nodeIndex: number): number {
     const arity = this.#module.constructorArities[constructorIndex];
     if (arity === undefined) {
@@ -871,7 +1067,7 @@ class GcCoreEmitter {
 
 class GcInstructions {
   readonly bytes: number[] = [];
-  localCount = 0;
+  readonly localTypes: ("value" | "fields" | "i32")[] = [];
   readonly #parameterCount: number;
 
   constructor(parameterCount = 0) {
@@ -879,8 +1075,20 @@ class GcInstructions {
   }
 
   addValueLocal(): number {
-    const index = this.#parameterCount + this.localCount;
-    this.localCount += 1;
+    const index = this.#parameterCount + this.localTypes.length;
+    this.localTypes.push("value");
+    return index;
+  }
+
+  addI32Local(): number {
+    const index = this.#parameterCount + this.localTypes.length;
+    this.localTypes.push("i32");
+    return index;
+  }
+
+  addFieldsLocal(): number {
+    const index = this.#parameterCount + this.localTypes.length;
+    this.localTypes.push("fields");
     return index;
   }
 
@@ -975,12 +1183,25 @@ class GcInstructions {
     );
   }
 
+  arrayNew(): void {
+    this.emit(0xfb, ...encodeUnsigned(6), ...encodeUnsigned(VALUE_FIELDS_TYPE_INDEX));
+  }
+
   arrayGet(): void {
     this.emit(0xfb, ...encodeUnsigned(11), ...encodeUnsigned(VALUE_FIELDS_TYPE_INDEX));
   }
 
   arraySet(): void {
     this.emit(0xfb, ...encodeUnsigned(14), ...encodeUnsigned(VALUE_FIELDS_TYPE_INDEX));
+  }
+
+  arrayCopy(): void {
+    this.emit(
+      0xfb,
+      ...encodeUnsigned(17),
+      ...encodeUnsigned(VALUE_FIELDS_TYPE_INDEX),
+      ...encodeUnsigned(VALUE_FIELDS_TYPE_INDEX),
+    );
   }
 
   arrayLength(): void {
@@ -1152,7 +1373,7 @@ function valueAccessorFunctions(): readonly GcFunctionBody[] {
     const instructions = new GcInstructions(1);
     instructions.localGet(0);
     instructions.structGet(fieldIndex);
-    return { typeIndex, localCount: 0, instructions: instructions.bytes };
+    return { typeIndex, localTypes: [], instructions: instructions.bytes };
   };
   const fieldCount = new GcInstructions(1);
   fieldCount.localGet(0);
@@ -1173,23 +1394,25 @@ function valueAccessorFunctions(): readonly GcFunctionBody[] {
     scalarField(VALUE_TO_F64_TYPE_INDEX, VALUE_F64_FIELD),
     {
       typeIndex: VALUE_TO_I32_TYPE_INDEX,
-      localCount: 0,
+      localTypes: [],
       instructions: fieldCount.bytes,
     },
     {
       typeIndex: VALUE_FIELD_TYPE_INDEX,
-      localCount: 0,
+      localTypes: [],
       instructions: field.bytes,
     },
   ];
 }
 
 function encodeFunctionBody(body: GcFunctionBody): number[] {
-  const encodedLocalGroups = body.localCount === 0 ? [] : [[
-    ...encodeUnsigned(body.localCount),
-    0x63,
-    ...encodeSigned(BigInt(VALUE_TYPE_INDEX)),
-  ]];
+  const encodedLocalGroups = body.localTypes.map((type) =>
+    type === "i32" ? [1, 0x7f] : [
+      1,
+      0x63,
+      ...encodeSigned(BigInt(type === "value" ? VALUE_TYPE_INDEX : VALUE_FIELDS_TYPE_INDEX)),
+    ]
+  );
   const contents = [...vector(encodedLocalGroups), ...body.instructions, 0x0b];
   return [...encodeUnsigned(contents.length), ...contents];
 }

@@ -10,6 +10,7 @@ import {
   encodeFunctionalWasmArenaValue,
   encodeFunctionalWasmOwnedValue,
   FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+  FUNCTIONAL_MAXIMUM_STORE_LENGTH,
   FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
   FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
   FUNCTIONAL_WASM_GC_ABI_VERSION,
@@ -317,6 +318,88 @@ Deno.test("WasmGC preserves the full signed i32 range", async () => {
   try {
     const execution = await runFunctionalWasmGcModule(compilation.module);
     deepStrictEqual(execution.value, { kind: "integer", value: -2_147_483_648 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("Store values preserve prior versions across linear-memory and WasmGC backends", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "original",
+    value: surface.storeNew(surface.integer(2), surface.integer(10)),
+    body: {
+      kind: "let",
+      name: "changed",
+      value: surface.storeWrite(
+        surface.name("original"),
+        surface.integer(0),
+        surface.integer(32),
+      ),
+      body: {
+        kind: "let",
+        name: "grown",
+        value: surface.storeGrow(
+          surface.name("changed"),
+          surface.integer(4),
+          surface.integer(5),
+        ),
+        body: surface.binary(
+          FunctionalBinaryOperator.Add,
+          surface.storeRead(surface.name("original"), surface.integer(0)),
+          surface.binary(
+            FunctionalBinaryOperator.Add,
+            surface.storeRead(surface.name("grown"), surface.integer(0)),
+            surface.storeLength(surface.name("grown")),
+          ),
+        ),
+      },
+    },
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("Store persistence case did not compile");
+
+  try {
+    const linear = await runFunctionalWasmModule(compilation.module);
+    const gc = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(linear.value, { kind: "integer", value: 46 });
+    deepStrictEqual(gc.value, linear.value);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("Store length limits fail consistently across linear-memory and WasmGC backends", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "store",
+    value: surface.storeNew(
+      surface.integer(FUNCTIONAL_MAXIMUM_STORE_LENGTH + 1),
+      surface.integer(0),
+    ),
+    body: surface.integer(42),
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("Store length limit case did not compile");
+
+  try {
+    for (const run of [runFunctionalWasmModule, runFunctionalWasmGcModule]) {
+      await rejects(
+        () => run(compilation.module),
+        (error: unknown) => {
+          ok(error instanceof FunctionalWasmRuntimeError);
+          equal(error.code, "F3103");
+          equal(error.kind, "out-of-bounds");
+          return true;
+        },
+      );
+    }
   } finally {
     compilation.module.destroy();
   }

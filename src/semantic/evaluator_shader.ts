@@ -301,6 +301,7 @@ const BINARY_MULTIPLY_FLOAT_32: u32 = ${LazuliBinaryOperator.MultiplyFloat32}u;
 const BINARY_DIVIDE_FLOAT_32: u32 = ${LazuliBinaryOperator.DivideFloat32}u;
 const BINARY_EQUAL_FLOAT_64: u32 = ${LazuliBinaryOperator.EqualFloat64}u;
 const BINARY_DIVIDE_FLOAT_64: u32 = ${LazuliBinaryOperator.DivideFloat64}u;
+const BINARY_REMAINDER_FLOAT_64: u32 = ${LazuliBinaryOperator.RemainderFloat64}u;
 const BINARY_REMAINDER_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.RemainderSignedInteger64}u;
 const BINARY_BITWISE_AND_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.BitwiseAndSignedInteger64}u;
 const BINARY_BITWISE_OR_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.BitwiseOrSignedInteger64}u;
@@ -559,7 +560,8 @@ fn valid_binary_operator(operator_code: u32) -> bool {
     (operator_code >= BINARY_EQUAL_SIGNED_INTEGER_64 &&
       operator_code <= BINARY_DIVIDE_FLOAT_64) ||
     (operator_code >= BINARY_REMAINDER &&
-      operator_code <= BINARY_SHIFT_RIGHT_UNSIGNED_SIGNED_INTEGER_64);
+      operator_code <= BINARY_SHIFT_RIGHT_UNSIGNED_SIGNED_INTEGER_64) ||
+    operator_code == BINARY_REMAINDER_FLOAT_64;
 }
 
 fn binary_value_tag(operator_code: u32) -> u32 {

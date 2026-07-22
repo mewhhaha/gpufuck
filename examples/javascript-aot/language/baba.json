@@ -1,0 +1,36 @@
+{
+  "parser": {
+    "resolutions": [
+      {
+        "conflict": "c_7d288a6e656dcd00",
+        "prefer": "shift"
+      },
+      {
+        "conflict": "c_8fdcc9bd4874c926",
+        "prefer": "reduce",
+        "reduce": "block = (statement)*"
+      },
+      {
+        "conflict": "c_02c6c39529c306a4",
+        "prefer": "reduce"
+      },
+      {
+        "conflict": "c_55398f757cbaf861",
+        "prefer": "reduce"
+      },
+      {
+        "conflict": "c_9563d40e2b6ff477",
+        "prefer": "reduce"
+      },
+      {
+        "conflict": "c_824338d2bf27715d",
+        "prefer": "reduce",
+        "reduce": "function_declaration = IDENT"
+      },
+      {
+        "conflict": "c_9a0440c3e95426cd",
+        "prefer": "shift"
+      }
+    ]
+  }
+}

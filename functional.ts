@@ -164,6 +164,11 @@ export {
   planFunctionalStorageReuse,
 } from "./src/functional/storage_reuse_plan.ts";
 export {
+  FUNCTIONAL_MAXIMUM_STORE_LENGTH,
+  FUNCTIONAL_STORE_TYPE_NAME,
+  functionalStoreType,
+} from "./src/functional/store_contract.ts";
+export {
   type FunctionalUniqueOwnershipOptions,
   type FunctionalUniqueOwnershipRelease,
   type FunctionalUniqueOwnershipResolution,

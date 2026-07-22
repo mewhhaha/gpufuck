@@ -260,7 +260,7 @@ function functionalWasmRuntimeErrorDetails(
       kind: "out-of-bounds",
       message: `functional WASM entry ${
         JSON.stringify(entryName)
-      } accessed a buffer outside its bounds`,
+      } used an invalid buffer or store bound`,
     };
   }
   if (faultCode === WASM_FAULT_EXPLICIT) {

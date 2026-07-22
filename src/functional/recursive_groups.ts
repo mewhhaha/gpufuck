@@ -36,7 +36,26 @@ export function elaborateFunctionalRecursiveGroups(
       elaboration,
     ),
   }));
-  return Object.freeze([...originals, ...elaboration.definitions]);
+  const generated = elaboration.definitions
+    .map((definition, index) => ({ definition, index }))
+    .sort((left, right) =>
+      (left.definition.span?.startByte ?? 0) -
+        (right.definition.span?.startByte ?? 0) || left.index - right.index
+    )
+    .map(({ definition }) => definition);
+  const merged: FunctionalSurfaceDefinition[] = [];
+  let generatedIndex = 0;
+  for (const original of originals) {
+    while (
+      generatedIndex < generated.length &&
+      (generated[generatedIndex]!.span?.startByte ?? 0) < (original.span?.startByte ?? 0)
+    ) {
+      merged.push(generated[generatedIndex++]!);
+    }
+    merged.push(original);
+  }
+  merged.push(...generated.slice(generatedIndex));
+  return Object.freeze(merged);
 }
 
 function elaborateExpression(
@@ -110,6 +129,34 @@ function elaborateExpression(
         ...expression,
         left: elaborate(expression.left),
         right: elaborate(expression.right),
+      };
+    case "store-new":
+      return {
+        ...expression,
+        length: elaborate(expression.length),
+        initial: elaborate(expression.initial),
+      };
+    case "store-length":
+      return { ...expression, store: elaborate(expression.store) };
+    case "store-read":
+      return {
+        ...expression,
+        store: elaborate(expression.store),
+        index: elaborate(expression.index),
+      };
+    case "store-write":
+      return {
+        ...expression,
+        store: elaborate(expression.store),
+        index: elaborate(expression.index),
+        value: elaborate(expression.value),
+      };
+    case "store-grow":
+      return {
+        ...expression,
+        store: elaborate(expression.store),
+        length: elaborate(expression.length),
+        initial: elaborate(expression.initial),
       };
     case "case":
       return {
@@ -266,6 +313,30 @@ function rewriteNames(
     case "text-append":
     case "bytes-append":
       return { ...expression, left: rewrite(expression.left), right: rewrite(expression.right) };
+    case "store-new":
+      return {
+        ...expression,
+        length: rewrite(expression.length),
+        initial: rewrite(expression.initial),
+      };
+    case "store-length":
+      return { ...expression, store: rewrite(expression.store) };
+    case "store-read":
+      return { ...expression, store: rewrite(expression.store), index: rewrite(expression.index) };
+    case "store-write":
+      return {
+        ...expression,
+        store: rewrite(expression.store),
+        index: rewrite(expression.index),
+        value: rewrite(expression.value),
+      };
+    case "store-grow":
+      return {
+        ...expression,
+        store: rewrite(expression.store),
+        length: rewrite(expression.length),
+        initial: rewrite(expression.initial),
+      };
     case "case":
       return {
         ...expression,
@@ -332,11 +403,32 @@ function freeNames(
       case "numeric-convert":
         visit(nested.value, scope);
         return;
+      case "store-length":
+        visit(nested.store, scope);
+        return;
       case "binary":
       case "text-append":
       case "bytes-append":
         visit(nested.left, scope);
         visit(nested.right, scope);
+        return;
+      case "store-new":
+        visit(nested.length, scope);
+        visit(nested.initial, scope);
+        return;
+      case "store-read":
+        visit(nested.store, scope);
+        visit(nested.index, scope);
+        return;
+      case "store-write":
+        visit(nested.store, scope);
+        visit(nested.index, scope);
+        visit(nested.value, scope);
+        return;
+      case "store-grow":
+        visit(nested.store, scope);
+        visit(nested.length, scope);
+        visit(nested.initial, scope);
         return;
       case "case":
         visit(nested.value, scope);

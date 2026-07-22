@@ -82,6 +82,7 @@ other fetches an upstream repository:
 ```sh
 deno task test:gleam-differential
 deno task check:gleam-stdlib
+deno task check:javascript-test262
 ```
 
 `check:gleam-stdlib` accepts an existing checkout as its first argument. The checkout must be at the
@@ -89,6 +90,17 @@ commit recorded by the tool, so the result cannot silently change with upstream 
 all 19 package modules and all 1,521 JavaScript-targeted tests in bounded batches, then executes the
 444 tests whose reachable definitions need no Gleam runtime adapter. The current local run takes
 roughly 90 seconds on the GPU used for development.
+
+`check:javascript-test262` pins the upstream Test262 checkout and inventories every standalone test
+under `test/language`. It excludes only the `eval` corpus required by dynamic source generation,
+which the AOT profile intentionally forbids. Its frontend-readiness counts are a development
+baseline, not conformance results: positive tests are wrapped with an AOT entry and negative tests
+remain pending until the runner can verify the specified parse, resolution, or runtime phase
+exactly. Every frontend-ready strict, non-strict, module, or raw mode is compiled as a fresh GPU
+artifact and executed independently. An existing checkout at the pinned commit may be passed as the
+first argument. The current pinned baseline is 1,970 successful adapted executions with no compiler
+or runtime failures; the runner reports the remaining parser, lowering, and negative-phase work
+separately rather than presenting that baseline as conformance.
 
 `deno task test` uses `deno test --parallel` with `DENO_JOBS=2`. GPU tests are not ordinary
 millisecond unit tests: some deliberately force workspace growth, single-transition dispatches,

@@ -21,7 +21,7 @@ export interface BabaTokenCursor {
 export class BabaUtf8ByteOffsets {
   readonly #offsets: Uint32Array;
 
-  constructor(source: string) {
+  constructor(private readonly source: string) {
     this.#offsets = new Uint32Array(source.length + 1);
     let byteOffset = 0;
     for (let index = 0; index < source.length; index++) {
@@ -45,6 +45,10 @@ export class BabaUtf8ByteOffsets {
       startByte: this.#offsets[span.start] ?? this.byteLength,
       endByte: this.#offsets[span.end] ?? this.byteLength,
     };
+  }
+
+  text(span: BabaUtf16Span): string {
+    return this.source.slice(span.start, span.end);
   }
 }
 

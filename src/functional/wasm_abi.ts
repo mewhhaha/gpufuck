@@ -1,4 +1,4 @@
-export const FUNCTIONAL_WASM_VALUE_ABI_VERSION = 1;
+export const FUNCTIONAL_WASM_VALUE_ABI_VERSION = 2;
 
 export interface FunctionalWasmValueAbiLayout {
   readonly version: number;
@@ -20,6 +20,7 @@ export interface FunctionalWasmValueAbiLayout {
     array: number;
     slice: number;
     resource: number;
+    store: number;
   }>;
   readonly numericKinds: Readonly<{
     signedInteger64: number;
@@ -55,6 +56,7 @@ export const FunctionalWasmValueAbi: FunctionalWasmValueAbiLayout = Object.freez
       array: 7,
       slice: 8,
       resource: 9,
+      store: 10,
     }),
     numericKinds: Object.freeze({
       signedInteger64: 1,

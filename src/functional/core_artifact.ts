@@ -118,6 +118,7 @@ function childReferences(
     case FunctionalCoreTag.Lambda:
     case FunctionalCoreTag.Unary:
     case FunctionalCoreTag.NumericConvert:
+    case FunctionalCoreTag.StoreLength:
     case FunctionalCoreTag.PatternBind:
       return [["child0", node.child0]];
     case FunctionalCoreTag.Apply:
@@ -125,10 +126,14 @@ function childReferences(
     case FunctionalCoreTag.LetRec:
     case FunctionalCoreTag.Binary:
     case FunctionalCoreTag.BufferAppend:
+    case FunctionalCoreTag.StoreNew:
+    case FunctionalCoreTag.StoreRead:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:
       return [["child0", node.child0], ["child1", node.child1]];
     case FunctionalCoreTag.If:
+    case FunctionalCoreTag.StoreWrite:
+    case FunctionalCoreTag.StoreGrow:
       return [["child0", node.child0], ["child1", node.child1], ["child2", node.child2]];
   }
 }
@@ -154,6 +159,11 @@ function isCoreTag(tag: number): boolean {
     case FunctionalCoreTag.Unary:
     case FunctionalCoreTag.Binary:
     case FunctionalCoreTag.BufferAppend:
+    case FunctionalCoreTag.StoreNew:
+    case FunctionalCoreTag.StoreLength:
+    case FunctionalCoreTag.StoreRead:
+    case FunctionalCoreTag.StoreWrite:
+    case FunctionalCoreTag.StoreGrow:
     case FunctionalCoreTag.NumericConvert:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:

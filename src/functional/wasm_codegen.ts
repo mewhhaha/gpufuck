@@ -62,6 +62,7 @@ import {
   WASM_FAULT_DIVIDE_BY_ZERO,
   WASM_FAULT_EXPLICIT,
   WASM_FAULT_INVALID_NUMERIC_CONVERSION,
+  WASM_FAULT_OUT_OF_BOUNDS,
 } from "./wasm_runtime_binary.ts";
 import { FunctionalWasmRuntimeEmitter } from "./wasm_runtime_emitter.ts";
 import { structuralEqualityFunction } from "./wasm_structural_equality.ts";
@@ -80,6 +81,7 @@ import {
   releaseOwnedValueFunction,
   retainOwnedValueFunction,
 } from "./wasm_owned_runtime.ts";
+import { FUNCTIONAL_MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
 import { FunctionalStorageClass, type FunctionalStorageDecision } from "./storage_contract.ts";
 import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
 import type {
@@ -112,6 +114,7 @@ const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
 const THUNK_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.thunk;
 const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
+const STORE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.store;
 const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
 const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
 const THUNK_HEADER_BYTE_LENGTH = 24;
@@ -1153,6 +1156,21 @@ class FunctionalWasmCompiler {
         this.#hostEmitter.emitBufferAppendValues(instructions, type);
         return;
       }
+      case FunctionalCoreTag.StoreNew:
+        this.compileStoreNew(instructions, node, nodeIndex, environment);
+        return;
+      case FunctionalCoreTag.StoreLength:
+        this.compileStoreLength(instructions, node, environment);
+        return;
+      case FunctionalCoreTag.StoreRead:
+        this.compileStoreRead(instructions, node, nodeIndex, environment);
+        return;
+      case FunctionalCoreTag.StoreWrite:
+        this.compileStoreWrite(instructions, node, nodeIndex, environment);
+        return;
+      case FunctionalCoreTag.StoreGrow:
+        this.compileStoreGrow(instructions, node, nodeIndex, environment);
+        return;
       case FunctionalCoreTag.Text:
       case FunctionalCoreTag.Bytes: {
         const symbol = this.#module.symbolNames[node.payload];
@@ -2537,6 +2555,230 @@ class FunctionalWasmCompiler {
     );
   }
 
+  compileStoreNew(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    this.compileIntegerExpression(instructions, node.child0, environment);
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(length);
+    this.compileExpression(instructions, node.child1, environment);
+    const initial = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(initial);
+    this.requireStoreLength(instructions, length, nodeIndex);
+    const pointer = this.allocateStore(instructions, length);
+    const cursor = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(cursor);
+    this.emitStoreFill(instructions, pointer, cursor, length, initial);
+    instructions.localGet(pointer);
+    instructions.emit(0xad);
+  }
+
+  compileStoreLength(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    environment: FunctionalEnvironment,
+  ): void {
+    const pointer = this.compileStorePointer(instructions, node.child0, environment);
+    instructions.localGet(pointer);
+    instructions.i32Load(8);
+    this.emitEncodeInteger(instructions);
+  }
+
+  compileStoreRead(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const pointer = this.compileStorePointer(instructions, node.child0, environment);
+    this.compileIntegerExpression(instructions, node.child1, environment);
+    const index = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(index);
+    this.requireStoreIndex(instructions, pointer, index, nodeIndex);
+    this.emitStoreElementAddress(instructions, pointer, index);
+    instructions.i64Load(0);
+  }
+
+  compileStoreWrite(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const source = this.compileStorePointer(instructions, node.child0, environment);
+    this.compileIntegerExpression(instructions, node.child1, environment);
+    const index = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(index);
+    this.compileExpression(instructions, node.child2, environment);
+    const value = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(value);
+    this.requireStoreIndex(instructions, source, index, nodeIndex);
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(source);
+    instructions.i32Load(8);
+    instructions.localSet(length);
+    const destination = this.allocateStore(instructions, length);
+    this.emitStoreCopy(instructions, destination, source, length);
+    this.emitStoreElementAddress(instructions, destination, index);
+    instructions.localGet(value);
+    instructions.i64Store(0);
+    instructions.localGet(destination);
+    instructions.emit(0xad);
+  }
+
+  compileStoreGrow(
+    instructions: WasmInstructions,
+    node: FunctionalCoreNode,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): void {
+    const source = this.compileStorePointer(instructions, node.child0, environment);
+    this.compileIntegerExpression(instructions, node.child1, environment);
+    const newLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(newLength);
+    this.compileExpression(instructions, node.child2, environment);
+    const initial = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(initial);
+    this.requireStoreLength(instructions, newLength, nodeIndex);
+    const oldLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(source);
+    instructions.i32Load(8);
+    instructions.localTee(oldLength);
+    instructions.localGet(newLength);
+    instructions.emit(0x4b, 0x04, 0x40);
+    this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, nodeIndex);
+    instructions.emit(0x0b);
+    const destination = this.allocateStore(instructions, newLength);
+    this.emitStoreCopy(instructions, destination, source, oldLength);
+    const cursor = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(oldLength);
+    instructions.localSet(cursor);
+    this.emitStoreFill(instructions, destination, cursor, newLength, initial);
+    instructions.localGet(destination);
+    instructions.emit(0xad);
+  }
+
+  compileStorePointer(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: FunctionalEnvironment,
+  ): number {
+    this.compileExpression(instructions, nodeIndex, environment);
+    instructions.emit(0xa7);
+    const pointer = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(pointer);
+    return pointer;
+  }
+
+  requireStoreLength(
+    instructions: WasmInstructions,
+    length: number,
+    nodeIndex: number,
+  ): void {
+    instructions.localGet(length);
+    instructions.i32Const(FUNCTIONAL_MAXIMUM_STORE_LENGTH);
+    instructions.emit(0x4b, 0x04, 0x40);
+    this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, nodeIndex);
+    instructions.emit(0x0b);
+  }
+
+  requireStoreIndex(
+    instructions: WasmInstructions,
+    pointer: number,
+    index: number,
+    nodeIndex: number,
+  ): void {
+    instructions.localGet(index);
+    instructions.localGet(pointer);
+    instructions.i32Load(8);
+    instructions.emit(0x4f, 0x04, 0x40);
+    this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, nodeIndex);
+    instructions.emit(0x0b);
+  }
+
+  allocateStore(instructions: WasmInstructions, length: number): number {
+    instructions.localGet(length);
+    instructions.i32Const(3);
+    instructions.emit(0x74);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.call(this.allocateFunctionIndex());
+    const pointer = instructions.addLocal(WasmValueType.I32);
+    instructions.localTee(pointer);
+    instructions.i32Const(STORE_OBJECT_KIND);
+    instructions.i32Store(0);
+    instructions.localGet(pointer);
+    instructions.i32Const(0);
+    instructions.i32Store(4);
+    instructions.localGet(pointer);
+    instructions.localGet(length);
+    instructions.i32Store(8);
+    if (this.#ownedRuntimeEnabled) {
+      instructions.localGet(pointer);
+      instructions.i32Const(1);
+      instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
+    }
+    return pointer;
+  }
+
+  emitStoreCopy(
+    instructions: WasmInstructions,
+    destination: number,
+    source: number,
+    length: number,
+  ): void {
+    instructions.localGet(destination);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(source);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(length);
+    instructions.i32Const(3);
+    instructions.emit(0x74);
+    instructions.memoryCopy();
+  }
+
+  emitStoreFill(
+    instructions: WasmInstructions,
+    pointer: number,
+    cursor: number,
+    end: number,
+    value: number,
+  ): void {
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(cursor);
+    instructions.localGet(end);
+    instructions.emit(0x4f);
+    instructions.branchIf(1);
+    this.emitStoreElementAddress(instructions, pointer, cursor);
+    instructions.localGet(value);
+    instructions.i64Store(0);
+    instructions.localGet(cursor);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(cursor);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+  }
+
+  emitStoreElementAddress(
+    instructions: WasmInstructions,
+    pointer: number,
+    index: number,
+  ): void {
+    instructions.localGet(pointer);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(index);
+    instructions.i32Const(3);
+    instructions.emit(0x74, 0x6a);
+  }
+
   compileIntegerExpression(
     instructions: WasmInstructions,
     nodeIndex: number,
@@ -3721,6 +3963,54 @@ class FunctionalWasmCompiler {
     operator: number,
     nodeIndex: number,
   ): void {
+    if (operator === FunctionalBinaryOperator.RemainderFloat64) {
+      const divisor = instructions.addLocal(WasmValueType.F64);
+      instructions.localSet(divisor);
+      const dividend = instructions.addLocal(WasmValueType.F64);
+      instructions.localSet(dividend);
+      instructions.localGet(divisor);
+      instructions.f64Const(0);
+      instructions.emit(0x61, 0x04, WasmValueType.F64);
+      instructions.f64Const(Number.NaN);
+      instructions.emit(0x05);
+      instructions.localGet(divisor);
+      instructions.localGet(divisor);
+      instructions.emit(0x61, 0x04, WasmValueType.F64);
+      instructions.localGet(divisor);
+      instructions.f64Const(0);
+      instructions.emit(0xa2);
+      instructions.f64Const(0);
+      instructions.emit(0x61, 0x04, WasmValueType.F64);
+      instructions.localGet(dividend);
+      instructions.localGet(divisor);
+      instructions.emit(0xa3, 0x9d);
+      instructions.localGet(divisor);
+      instructions.emit(0xa2);
+      instructions.localSet(divisor);
+      instructions.localGet(dividend);
+      instructions.localGet(divisor);
+      instructions.emit(0xa1);
+      instructions.localTee(divisor);
+      instructions.f64Const(0);
+      instructions.emit(0x61, 0x04, WasmValueType.F64);
+      instructions.f64Const(0);
+      instructions.localGet(dividend);
+      instructions.emit(0xa6, 0x05);
+      instructions.localGet(divisor);
+      instructions.emit(0x0b, 0x05);
+      instructions.localGet(dividend);
+      instructions.f64Const(0);
+      instructions.emit(0xa2);
+      instructions.f64Const(0);
+      instructions.emit(0x61, 0x04, WasmValueType.F64);
+      instructions.localGet(dividend);
+      instructions.emit(0x05);
+      instructions.f64Const(Number.NaN);
+      instructions.emit(0x0b, 0x0b, 0x05);
+      instructions.f64Const(Number.NaN);
+      instructions.emit(0x0b, 0x0b);
+      return;
+    }
     if (
       operator === FunctionalBinaryOperator.DivideWholeNumberF64 ||
       operator === FunctionalBinaryOperator.RemainderWholeNumberF64

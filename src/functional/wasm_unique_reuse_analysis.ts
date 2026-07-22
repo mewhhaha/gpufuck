@@ -135,15 +135,20 @@ export class FunctionalWasmUniqueReuseAnalysis {
         return EMPTY_CONSUMPTION;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
+      case FunctionalCoreTag.StoreLength:
         return this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1);
       case FunctionalCoreTag.Apply:
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
+      case FunctionalCoreTag.StoreNew:
+      case FunctionalCoreTag.StoreRead:
         return sequentialConsumption(
           this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1),
           this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
         );
       case FunctionalCoreTag.If:
+      case FunctionalCoreTag.StoreWrite:
+      case FunctionalCoreTag.StoreGrow:
         return sequentialConsumption(
           this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1),
           alternativeConsumption(

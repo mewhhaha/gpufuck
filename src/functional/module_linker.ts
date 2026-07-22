@@ -769,6 +769,38 @@ function rewriteExpression(
         right: rewrite(expression.right),
         span,
       };
+    case "store-new":
+      return {
+        ...expression,
+        length: rewrite(expression.length),
+        initial: rewrite(expression.initial),
+        span,
+      };
+    case "store-length":
+      return { ...expression, store: rewrite(expression.store), span };
+    case "store-read":
+      return {
+        ...expression,
+        store: rewrite(expression.store),
+        index: rewrite(expression.index),
+        span,
+      };
+    case "store-write":
+      return {
+        ...expression,
+        store: rewrite(expression.store),
+        index: rewrite(expression.index),
+        value: rewrite(expression.value),
+        span,
+      };
+    case "store-grow":
+      return {
+        ...expression,
+        store: rewrite(expression.store),
+        length: rewrite(expression.length),
+        initial: rewrite(expression.initial),
+        span,
+      };
     case "numeric-convert":
       return { ...expression, value: rewrite(expression.value), span };
     case "case":

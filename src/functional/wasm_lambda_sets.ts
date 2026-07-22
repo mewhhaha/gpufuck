@@ -177,12 +177,25 @@ export class FunctionalLambdaSetAnalysis {
         return;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
+      case FunctionalCoreTag.StoreLength:
         this.#visitExpression(node.child0, environment);
         return;
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
+      case FunctionalCoreTag.StoreNew:
         this.#visitExpression(node.child0, environment);
         this.#visitExpression(node.child1, environment);
+        return;
+      case FunctionalCoreTag.StoreRead:
+        this.#visitExpression(node.child0, environment);
+        this.#visitExpression(node.child1, environment);
+        this.#markIncomplete(this.#nodeVariable(nodeIndex));
+        return;
+      case FunctionalCoreTag.StoreWrite:
+      case FunctionalCoreTag.StoreGrow:
+        this.#visitExpression(node.child0, environment);
+        this.#visitExpression(node.child1, environment);
+        this.#visitExpression(node.child2, environment);
         return;
       case FunctionalCoreTag.Case:
         this.#visitExpression(node.child0, environment);

@@ -1,4 +1,4 @@
-import { LAZULI_MAXIMUM_CONSTRUCTOR_ARITY } from "./abi.ts";
+import { LAZULI_MAXIMUM_CONSTRUCTOR_ARITY, LazuliBinaryOperator, LazuliCoreTag } from "./abi.ts";
 import { LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC } from "./symbol_lookup.ts";
 
 export const LAZULI_COMPILATION_STATE_WORD_LENGTH = 24;
@@ -215,6 +215,11 @@ const SURFACE_BYTES: u32 = 24u;
 const SURFACE_RUNTIME_FAULT: u32 = 25u;
 const SURFACE_WHOLE_NUMBER_F64: u32 = 26u;
 const SURFACE_BUFFER_APPEND: u32 = 27u;
+const SURFACE_STORE_NEW: u32 = ${LazuliCoreTag.StoreNew}u;
+const SURFACE_STORE_LENGTH: u32 = ${LazuliCoreTag.StoreLength}u;
+const SURFACE_STORE_READ: u32 = ${LazuliCoreTag.StoreRead}u;
+const SURFACE_STORE_WRITE: u32 = ${LazuliCoreTag.StoreWrite}u;
+const SURFACE_STORE_GROW: u32 = ${LazuliCoreTag.StoreGrow}u;
 
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
@@ -383,8 +388,10 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_BINARY: {
-      let whole_number = node.payload >= 55u && node.payload <= 65u;
-      return node.payload >= 1u && node.payload <= 65u &&
+      let whole_number = node.payload >= ${LazuliBinaryOperator.EqualWholeNumberF64}u &&
+        node.payload <= ${LazuliBinaryOperator.RemainderWholeNumberF64}u;
+      return node.payload >= 1u &&
+        node.payload <= ${LazuliBinaryOperator.RemainderFloat64}u &&
         required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) &&
         select(node.child2 == NO_INDEX, node.child2 < state.type_count, whole_number);
@@ -392,6 +399,22 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     case SURFACE_BUFFER_APPEND: {
       return node.payload == 0u && required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) && node.child2 < state.type_count;
+    }
+    case SURFACE_STORE_NEW, SURFACE_STORE_READ: {
+      return node.payload < state.type_count &&
+        required_child_is_valid(node_index, node.child0) &&
+        required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
+    }
+    case SURFACE_STORE_LENGTH: {
+      return node.payload < state.type_count &&
+        required_child_is_valid(node_index, node.child0) &&
+        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
+    }
+    case SURFACE_STORE_WRITE, SURFACE_STORE_GROW: {
+      return node.payload < state.type_count &&
+        required_child_is_valid(node_index, node.child0) &&
+        required_child_is_valid(node_index, node.child1) &&
+        required_child_is_valid(node_index, node.child2);
     }
     case SURFACE_CASE: {
       return required_child_is_valid(node_index, node.child0) &&

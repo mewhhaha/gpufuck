@@ -406,10 +406,12 @@ function portableNode(
     ? module.definitionNames[node.payload]
     : node.tag === FunctionalCoreTag.Constructor || node.tag === FunctionalCoreTag.CaseArm
     ? module.constructorNames[node.payload]
+    : isStoreTag(node.tag)
+    ? module.typeNames[node.payload]
     : undefined;
   if (
     (node.tag === FunctionalCoreTag.Global || node.tag === FunctionalCoreTag.Constructor ||
-      node.tag === FunctionalCoreTag.CaseArm) && reference === undefined
+      node.tag === FunctionalCoreTag.CaseArm || isStoreTag(node.tag)) && reference === undefined
   ) {
     throw new Error(
       `incremental functional definition ${
@@ -472,6 +474,9 @@ function assembleCompiledCore(
   const definitionNames = encodedDefinitionNames(linked.module);
   const definitionIndices = new Map(definitionNames.map((name, index) => [name, index]));
   const constructorIndices = encodedConstructorNames(linked.module);
+  const typeIndices = new Map(
+    linked.module.typeDeclarations.map((type, index) => [type.name, index]),
+  );
   const sourceRanges = new Map(linked.sources.map((source) => [source.module, source]));
   const moduleNames = linked.sources.map((source) => source.module);
   const definitionWords = linked.module.definitionWords.slice();
@@ -506,6 +511,8 @@ function assembleCompiledCore(
         ? node.payload
         : node.tag === FunctionalCoreTag.Global
         ? definitionIndices.get(node.reference)
+        : isStoreTag(node.tag)
+        ? typeIndices.get(node.reference)
         : constructorIndices.get(node.reference);
       if (payload === undefined) {
         throw new Error(
@@ -760,7 +767,8 @@ function decodePortableDefinition(
   for (const [nodeIndex, node] of nodes.entries()) {
     if (
       (node.tag === FunctionalCoreTag.Global || node.tag === FunctionalCoreTag.Constructor ||
-        node.tag === FunctionalCoreTag.CaseArm) && node.reference === undefined
+        node.tag === FunctionalCoreTag.CaseArm || isStoreTag(node.tag)) &&
+      node.reference === undefined
     ) {
       throw new Error(
         `functional incremental cache entry ${key} definition ${definitionIndex} node ${nodeIndex} omits its symbolic reference`,
@@ -792,6 +800,7 @@ function portableChildValues(node: PortableCoreNode): readonly number[] {
     case FunctionalCoreTag.Unary:
     case FunctionalCoreTag.NumericConvert:
     case FunctionalCoreTag.PatternBind:
+    case FunctionalCoreTag.StoreLength:
       return [node.child0];
     case FunctionalCoreTag.Apply:
     case FunctionalCoreTag.Let:
@@ -800,12 +809,22 @@ function portableChildValues(node: PortableCoreNode): readonly number[] {
     case FunctionalCoreTag.BufferAppend:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:
+    case FunctionalCoreTag.StoreNew:
+    case FunctionalCoreTag.StoreRead:
       return [node.child0, node.child1];
     case FunctionalCoreTag.If:
+    case FunctionalCoreTag.StoreWrite:
+    case FunctionalCoreTag.StoreGrow:
       return [node.child0, node.child1, node.child2];
     default:
       throw new Error(`functional incremental cache contains unknown Core tag ${node.tag}`);
   }
+}
+
+function isStoreTag(tag: number): boolean {
+  return tag === FunctionalCoreTag.StoreNew || tag === FunctionalCoreTag.StoreLength ||
+    tag === FunctionalCoreTag.StoreRead || tag === FunctionalCoreTag.StoreWrite ||
+    tag === FunctionalCoreTag.StoreGrow;
 }
 
 function translateDiagnostics(

@@ -361,6 +361,12 @@ export function functionalConstantFromSurfaceExpression(
         functionalConstantFromSurfaceExpression(value.value),
         encodedCaseArms(value.arms),
       ]);
+    case "store-new":
+    case "store-length":
+    case "store-read":
+    case "store-write":
+    case "store-grow":
+      throw new Error("functional comptime IR cannot serialize invocation-arena Store operations");
   }
 }
 

@@ -25,8 +25,9 @@ export function numericOperatorGroup(operator: number): NumericPrimitiveKind {
     operator >= FunctionalBinaryOperator.EqualWholeNumberF64 &&
     operator <= FunctionalBinaryOperator.RemainderWholeNumberF64
   ) return "whole-number-f64";
+  if (operator === FunctionalBinaryOperator.RemainderFloat64) return "float-64";
   throw new RangeError(
-    `functional numeric operator must be within [1, 52] or [55, 65]; received ${operator}`,
+    `functional numeric operator must be within [1, 52], [55, 65], or 66; received ${operator}`,
   );
 }
 
@@ -48,6 +49,7 @@ export function numericBinaryOpcode(operator: number): number | undefined {
       return 0x81;
     case FunctionalBinaryOperator.DivideWholeNumberF64:
     case FunctionalBinaryOperator.RemainderWholeNumberF64:
+    case FunctionalBinaryOperator.RemainderFloat64:
       return undefined;
     case FunctionalBinaryOperator.BitwiseAndSignedInteger64:
       return 0x83;

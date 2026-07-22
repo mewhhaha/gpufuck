@@ -168,6 +168,7 @@ function numericTypeForBinaryOperator(operator: number): InferenceType {
   if (operator <= 40) return FLOAT_64;
   if (operator <= 46) return INTEGER;
   if (operator <= 52) return SIGNED_INTEGER_64;
+  if (operator === LazuliBinaryOperator.RemainderFloat64) return FLOAT_64;
   throw new Error(`Unsupported Lazuli binary operator ${operator}.`);
 }
 
@@ -670,11 +671,20 @@ class InferenceContext {
         case LazuliSurfaceTag.StrictApply:
         case LazuliSurfaceTag.Binary:
         case LazuliSurfaceTag.BufferAppend:
+        case LazuliSurfaceTag.StoreNew:
+        case LazuliSurfaceTag.StoreRead:
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), boundSymbols);
           return;
+        case LazuliSurfaceTag.StoreWrite:
+        case LazuliSurfaceTag.StoreGrow:
+          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
+          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), boundSymbols);
+          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2), boundSymbols);
+          return;
         case LazuliSurfaceTag.Unary:
         case LazuliSurfaceTag.NumericConvert:
+        case LazuliSurfaceTag.StoreLength:
           visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
           return;
         case LazuliSurfaceTag.Case: {
@@ -964,6 +974,71 @@ class InferenceContext {
         this.unify(operandType, right, span);
         return operandType;
       }
+      case LazuliSurfaceTag.StoreNew: {
+        const length = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          environment,
+          INTEGER,
+        );
+        this.unify(INTEGER, length, span);
+        const element = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          environment,
+        );
+        return this.storeType(nodeIndex, element, span);
+      }
+      case LazuliSurfaceTag.StoreLength: {
+        const element = this.inferenceVariable();
+        const storeType = this.storeType(nodeIndex, element, span);
+        const store = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          environment,
+          storeType,
+        );
+        this.unify(storeType, store, span);
+        return INTEGER;
+      }
+      case LazuliSurfaceTag.StoreRead: {
+        const element = this.inferenceVariable();
+        const storeType = this.storeType(nodeIndex, element, span);
+        const store = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          environment,
+          storeType,
+        );
+        const index = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          environment,
+          INTEGER,
+        );
+        this.unify(storeType, store, span);
+        this.unify(INTEGER, index, span);
+        return element;
+      }
+      case LazuliSurfaceTag.StoreWrite:
+      case LazuliSurfaceTag.StoreGrow: {
+        const element = this.inferenceVariable();
+        const storeType = this.storeType(nodeIndex, element, span);
+        const store = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          environment,
+          storeType,
+        );
+        const indexOrLength = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          environment,
+          INTEGER,
+        );
+        const value = this.inferNode(
+          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2),
+          environment,
+          element,
+        );
+        this.unify(storeType, store, span);
+        this.unify(INTEGER, indexOrLength, span);
+        this.unify(element, value, span);
+        return storeType;
+      }
       case LazuliSurfaceTag.NumericConvert: {
         const [source, result] = numericConversionTypes(payload);
         const value = this.inferNode(
@@ -991,6 +1066,20 @@ class InferenceContext {
       throw this.invalidTypeMetadata("expression references unknown named type", span);
     }
     return { kind: "named", name: declaration.name, arguments: [] };
+  }
+
+  private storeType(
+    nodeIndex: number,
+    element: InferenceType,
+    span: LazuliDiagnostic["span"],
+  ): InferenceType {
+    const declaration = this.#surface.typeDeclarations[
+      this.nodeWord(nodeIndex, LazuliSurfaceWord.Payload)
+    ];
+    if (declaration === undefined || declaration.parameters.length !== 1) {
+      throw this.invalidTypeMetadata("store expression references an invalid Store type", span);
+    }
+    return { kind: "named", name: declaration.name, arguments: [element] };
   }
 
   private inferCase(

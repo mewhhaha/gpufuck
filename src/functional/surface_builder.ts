@@ -44,6 +44,7 @@ import type {
   FunctionalSurfaceExpression,
   FunctionalSurfaceTypeDeclaration,
 } from "./surface_contract.ts";
+import { FUNCTIONAL_STORE_TYPE_NAME } from "./store_contract.ts";
 
 export type {
   FunctionalSurfaceCaseArm,
@@ -56,6 +57,7 @@ export type {
 
 const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
 const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
+const SURFACE_FEATURE_STORE = 1 << 2;
 const MAXIMUM_SURFACE_TYPE_DEPTH = 512;
 const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
 
@@ -144,6 +146,7 @@ export function buildFunctionalSurfaceModule(
       declaredName === FUNCTIONAL_INIT_TYPE_NAME || declaredName === FUNCTIONAL_TEXT_TYPE_NAME ||
       declaredName === FUNCTIONAL_BYTES_TYPE_NAME || declaredName === FUNCTIONAL_ERASED_TYPE_NAME ||
       declaredName === FUNCTIONAL_ARRAY_TYPE_NAME ||
+      declaredName === FUNCTIONAL_STORE_TYPE_NAME ||
       declaredName === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME ||
       declaredName === FUNCTIONAL_SLICE_TYPE_NAME ||
       declaredName.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
@@ -159,13 +162,14 @@ export function buildFunctionalSurfaceModule(
     hostCapabilities,
   );
   const usesExplicitThunk = (surfaceFeatures & SURFACE_FEATURE_EXPLICIT_THUNK) !== 0;
+  const usesStore = (surfaceFeatures & SURFACE_FEATURE_STORE) !== 0;
   const encodedTypeDeclarations = [
     ...typeDeclarations,
     ...[...boundaryTypeNames].sort().map((name) => boundaryTypeDeclaration(name, sourceByteLength)),
     ...(hostCapabilities.length === 0
       ? []
       : [hostInitTypeDeclaration(hostCapabilities, sourceByteLength)]),
-    ...primitiveTypeDeclarations(sourceByteLength, usesExplicitThunk),
+    ...primitiveTypeDeclarations(sourceByteLength, usesExplicitThunk, usesStore),
   ];
   const symbols = new SurfaceSymbolTable();
   for (const definition of elaboratedDefinitions) symbols.intern(definition.name);
@@ -716,6 +720,32 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
         visit(nested.right);
         visit(nested.left);
         break;
+      case "store-new":
+        features |= SURFACE_FEATURE_STORE;
+        visit(nested.initial);
+        visit(nested.length);
+        break;
+      case "store-length":
+        features |= SURFACE_FEATURE_STORE;
+        visit(nested.store);
+        break;
+      case "store-read":
+        features |= SURFACE_FEATURE_STORE;
+        visit(nested.index);
+        visit(nested.store);
+        break;
+      case "store-write":
+        features |= SURFACE_FEATURE_STORE;
+        visit(nested.value);
+        visit(nested.index);
+        visit(nested.store);
+        break;
+      case "store-grow":
+        features |= SURFACE_FEATURE_STORE;
+        visit(nested.initial);
+        visit(nested.length);
+        visit(nested.store);
+        break;
       case "unary":
       case "numeric-convert":
         visit(nested.value);
@@ -764,6 +794,7 @@ function boundaryTypeDeclaration(
 function primitiveTypeDeclarations(
   sourceByteLength: number,
   usesExplicitThunk: boolean,
+  usesStore: boolean,
 ): readonly FunctionalSurfaceTypeDeclaration[] {
   const span = { startByte: sourceByteLength, endByte: sourceByteLength };
   return [
@@ -776,6 +807,14 @@ function primitiveTypeDeclarations(
           fields: [{ name: "value", type: { kind: "parameter", name: "value" } as const, span }],
           span,
         }],
+        span,
+      }]
+      : []),
+    ...(usesStore
+      ? [{
+        name: FUNCTIONAL_STORE_TYPE_NAME,
+        parameters: ["element"],
+        constructors: [],
         span,
       }]
       : []),
@@ -1098,6 +1137,70 @@ class SurfaceExpressionEncoder {
           );
         return node;
       }
+      case "store-new": {
+        const node = this.reserveNode(
+          FunctionalExpressionTag.StoreNew,
+          this.requiredTypeIndex(FUNCTIONAL_STORE_TYPE_NAME),
+          parent,
+          expression.span,
+        );
+        this.setChildren(node, [
+          this.emit(expression.length, node),
+          this.emit(expression.initial, node),
+        ]);
+        return node;
+      }
+      case "store-length": {
+        const node = this.reserveNode(
+          FunctionalExpressionTag.StoreLength,
+          this.requiredTypeIndex(FUNCTIONAL_STORE_TYPE_NAME),
+          parent,
+          expression.span,
+        );
+        this.setChildren(node, [this.emit(expression.store, node)]);
+        return node;
+      }
+      case "store-read": {
+        const node = this.reserveNode(
+          FunctionalExpressionTag.StoreRead,
+          this.requiredTypeIndex(FUNCTIONAL_STORE_TYPE_NAME),
+          parent,
+          expression.span,
+        );
+        this.setChildren(node, [
+          this.emit(expression.store, node),
+          this.emit(expression.index, node),
+        ]);
+        return node;
+      }
+      case "store-write": {
+        const node = this.reserveNode(
+          FunctionalExpressionTag.StoreWrite,
+          this.requiredTypeIndex(FUNCTIONAL_STORE_TYPE_NAME),
+          parent,
+          expression.span,
+        );
+        this.setChildren(node, [
+          this.emit(expression.store, node),
+          this.emit(expression.index, node),
+          this.emit(expression.value, node),
+        ]);
+        return node;
+      }
+      case "store-grow": {
+        const node = this.reserveNode(
+          FunctionalExpressionTag.StoreGrow,
+          this.requiredTypeIndex(FUNCTIONAL_STORE_TYPE_NAME),
+          parent,
+          expression.span,
+        );
+        this.setChildren(node, [
+          this.emit(expression.store, node),
+          this.emit(expression.length, node),
+          this.emit(expression.initial, node),
+        ]);
+        return node;
+      }
       case "numeric-convert": {
         const node = this.reserveNode(
           FunctionalExpressionTag.NumericConvert,
@@ -1365,6 +1468,25 @@ export const surface: Readonly<{
     left: FunctionalSurfaceExpression,
     right: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression;
+  storeNew(
+    length: FunctionalSurfaceExpression,
+    initial: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
+  storeLength(store: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
+  storeRead(
+    store: FunctionalSurfaceExpression,
+    index: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
+  storeWrite(
+    store: FunctionalSurfaceExpression,
+    index: FunctionalSurfaceExpression,
+    value: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
+  storeGrow(
+    store: FunctionalSurfaceExpression,
+    length: FunctionalSurfaceExpression,
+    initial: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
 }> = {
   integer(value: number): FunctionalSurfaceExpression {
     return { kind: "integer", value };
@@ -1456,6 +1578,35 @@ export const surface: Readonly<{
       left,
       right,
     };
+  },
+  storeNew(
+    length: FunctionalSurfaceExpression,
+    initial: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression {
+    return { kind: "store-new", length, initial };
+  },
+  storeLength(store: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+    return { kind: "store-length", store };
+  },
+  storeRead(
+    store: FunctionalSurfaceExpression,
+    index: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression {
+    return { kind: "store-read", store, index };
+  },
+  storeWrite(
+    store: FunctionalSurfaceExpression,
+    index: FunctionalSurfaceExpression,
+    value: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression {
+    return { kind: "store-write", store, index, value };
+  },
+  storeGrow(
+    store: FunctionalSurfaceExpression,
+    length: FunctionalSurfaceExpression,
+    initial: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression {
+    return { kind: "store-grow", store, length, initial };
   },
   text(value: string): FunctionalSurfaceExpression {
     return { kind: "text", value };

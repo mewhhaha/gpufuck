@@ -468,6 +468,7 @@ function coreChildren(
     case FunctionalCoreTag.Unary:
     case FunctionalCoreTag.NumericConvert:
     case FunctionalCoreTag.PatternBind:
+    case FunctionalCoreTag.StoreLength:
       return [["child0", node.child0]];
     case FunctionalCoreTag.Apply:
     case FunctionalCoreTag.Let:
@@ -476,8 +477,12 @@ function coreChildren(
     case FunctionalCoreTag.BufferAppend:
     case FunctionalCoreTag.Case:
     case FunctionalCoreTag.CaseArm:
+    case FunctionalCoreTag.StoreNew:
+    case FunctionalCoreTag.StoreRead:
       return [["child0", node.child0], ["child1", node.child1]];
     case FunctionalCoreTag.If:
+    case FunctionalCoreTag.StoreWrite:
+    case FunctionalCoreTag.StoreGrow:
       return [["child0", node.child0], ["child1", node.child1], ["child2", node.child2]];
   }
 }

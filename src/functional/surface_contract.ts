@@ -23,6 +23,37 @@ export type FunctionalSurfaceExpression =
     readonly right: FunctionalSurfaceExpression;
     readonly span?: FunctionalSpan;
   }
+  | {
+    readonly kind: "store-new";
+    readonly length: FunctionalSurfaceExpression;
+    readonly initial: FunctionalSurfaceExpression;
+    readonly span?: FunctionalSpan;
+  }
+  | {
+    readonly kind: "store-length";
+    readonly store: FunctionalSurfaceExpression;
+    readonly span?: FunctionalSpan;
+  }
+  | {
+    readonly kind: "store-read";
+    readonly store: FunctionalSurfaceExpression;
+    readonly index: FunctionalSurfaceExpression;
+    readonly span?: FunctionalSpan;
+  }
+  | {
+    readonly kind: "store-write";
+    readonly store: FunctionalSurfaceExpression;
+    readonly index: FunctionalSurfaceExpression;
+    readonly value: FunctionalSurfaceExpression;
+    readonly span?: FunctionalSpan;
+  }
+  | {
+    readonly kind: "store-grow";
+    readonly store: FunctionalSurfaceExpression;
+    readonly length: FunctionalSurfaceExpression;
+    readonly initial: FunctionalSurfaceExpression;
+    readonly span?: FunctionalSpan;
+  }
   | { readonly kind: "name"; readonly name: string; readonly span?: FunctionalSpan }
   | {
     readonly kind: "lambda";

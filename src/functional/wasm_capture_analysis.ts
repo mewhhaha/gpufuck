@@ -40,6 +40,8 @@ export class FunctionalWasmCaptureAnalysis {
       case FunctionalCoreTag.Apply:
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
+      case FunctionalCoreTag.StoreNew:
+      case FunctionalCoreTag.StoreRead:
         depths = mergeLocalDepths(
           this.freeLocalDepths(node.child0),
           this.freeLocalDepths(node.child1),
@@ -47,6 +49,7 @@ export class FunctionalWasmCaptureAnalysis {
         break;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
+      case FunctionalCoreTag.StoreLength:
         depths = this.freeLocalDepths(node.child0);
         break;
       case FunctionalCoreTag.Let:
@@ -62,6 +65,8 @@ export class FunctionalWasmCaptureAnalysis {
         );
         break;
       case FunctionalCoreTag.If:
+      case FunctionalCoreTag.StoreWrite:
+      case FunctionalCoreTag.StoreGrow:
         depths = mergeLocalDepths(
           this.freeLocalDepths(node.child0),
           this.freeLocalDepths(node.child1),
@@ -101,13 +106,18 @@ export class FunctionalWasmCaptureAnalysis {
         return 0;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
+      case FunctionalCoreTag.StoreLength:
         return this.localReferenceCount(node.child0, localDepth);
       case FunctionalCoreTag.Apply:
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
+      case FunctionalCoreTag.StoreNew:
+      case FunctionalCoreTag.StoreRead:
         return this.localReferenceCount(node.child0, localDepth) +
           this.localReferenceCount(node.child1, localDepth);
       case FunctionalCoreTag.If:
+      case FunctionalCoreTag.StoreWrite:
+      case FunctionalCoreTag.StoreGrow:
         return this.localReferenceCount(node.child0, localDepth) +
           this.localReferenceCount(node.child1, localDepth) +
           this.localReferenceCount(node.child2, localDepth);
@@ -191,6 +201,7 @@ export class FunctionalWasmCaptureAnalysis {
         return false;
       case FunctionalCoreTag.Unary:
       case FunctionalCoreTag.NumericConvert:
+      case FunctionalCoreTag.StoreLength:
         return this.#containsUnsaturatedLocalReference(
           node.child0,
           localDepth,
@@ -200,6 +211,8 @@ export class FunctionalWasmCaptureAnalysis {
       case FunctionalCoreTag.Apply:
       case FunctionalCoreTag.Binary:
       case FunctionalCoreTag.BufferAppend:
+      case FunctionalCoreTag.StoreNew:
+      case FunctionalCoreTag.StoreRead:
         return this.#containsUnsaturatedLocalReference(
           node.child0,
           localDepth,
@@ -212,6 +225,8 @@ export class FunctionalWasmCaptureAnalysis {
           insideLambda,
         );
       case FunctionalCoreTag.If:
+      case FunctionalCoreTag.StoreWrite:
+      case FunctionalCoreTag.StoreGrow:
         return this.#containsUnsaturatedLocalReference(
           node.child0,
           localDepth,

@@ -1,4 +1,4 @@
-export const FUNCTIONAL_WASM_GC_ABI_VERSION = 1;
+export const FUNCTIONAL_WASM_GC_ABI_VERSION = 2;
 
 export const FunctionalWasmGcValueKind = {
   Integer: 0,
@@ -10,4 +10,5 @@ export const FunctionalWasmGcValueKind = {
   WholeNumberF64: 6,
   Closure: 7,
   Thunk: 8,
+  Store: 9,
 } as const;

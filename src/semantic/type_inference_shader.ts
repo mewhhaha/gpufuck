@@ -1098,6 +1098,7 @@ const BINARY_STRUCTURAL_NOT_EQUAL: u32 = ${LazuliBinaryOperator.StructuralNotEqu
 const BINARY_EQUAL_WHOLE_NUMBER_F64: u32 = ${LazuliBinaryOperator.EqualWholeNumberF64}u;
 const BINARY_GREATER_EQUAL_WHOLE_NUMBER_F64: u32 = ${LazuliBinaryOperator.GreaterEqualWholeNumberF64}u;
 const BINARY_REMAINDER_WHOLE_NUMBER_F64: u32 = ${LazuliBinaryOperator.RemainderWholeNumberF64}u;
+const BINARY_REMAINDER_FLOAT_64: u32 = ${LazuliBinaryOperator.RemainderFloat64}u;
 const TAG_CASE: u32 = ${LazuliCoreTag.Case}u;
 const TAG_CASE_ARM: u32 = ${LazuliCoreTag.CaseArm}u;
 const TAG_PATTERN_BIND: u32 = ${LazuliCoreTag.PatternBind}u;
@@ -1114,6 +1115,11 @@ const TAG_BYTES: u32 = ${LazuliCoreTag.Bytes}u;
 const TAG_RUNTIME_FAULT: u32 = ${LazuliCoreTag.RuntimeFault}u;
 const TAG_WHOLE_NUMBER_F64: u32 = ${LazuliCoreTag.WholeNumberF64}u;
 const TAG_BUFFER_APPEND: u32 = ${LazuliCoreTag.BufferAppend}u;
+const TAG_STORE_NEW: u32 = ${LazuliCoreTag.StoreNew}u;
+const TAG_STORE_LENGTH: u32 = ${LazuliCoreTag.StoreLength}u;
+const TAG_STORE_READ: u32 = ${LazuliCoreTag.StoreRead}u;
+const TAG_STORE_WRITE: u32 = ${LazuliCoreTag.StoreWrite}u;
+const TAG_STORE_GROW: u32 = ${LazuliCoreTag.StoreGrow}u;
 
 const OUTPUT_INTEGER: u32 = 1u;
 const OUTPUT_BOOLEAN: u32 = 2u;
@@ -1141,6 +1147,7 @@ fn numeric_type_index_for_operator(operation: u32) -> u32 {
   if operation <= 30u { return 4u; }
   if operation <= 40u { return 5u; }
   if operation <= 46u { return 0u; }
+  if operation == BINARY_REMAINDER_FLOAT_64 { return 5u; }
   return 3u;
 }
 
@@ -3515,6 +3522,19 @@ fn expression_transition() {
       }
       return;
     }
+    if node.tag == TAG_STORE_NEW {
+      if !require_frame_slots(1u) { return; }
+      frame_set(frame, 1u, 130u);
+      if push_expression(node.child0, environment) {
+        frame_set(state.frame_top - 1u, 11u, 0u);
+      }
+      return;
+    }
+    if node.tag == TAG_STORE_LENGTH || node.tag == TAG_STORE_READ ||
+      node.tag == TAG_STORE_WRITE || node.tag == TAG_STORE_GROW {
+      frame_set(frame, 1u, 140u);
+      return;
+    }
     if node.tag == TAG_NUMERIC_CONVERT {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 64u);
@@ -3939,6 +3959,103 @@ fn expression_transition() {
   }
   if stage == 65u {
     complete_expression(numeric_conversion_result(node.payload));
+    return;
+  }
+
+  if stage == 130u {
+    if start_unify(0u, state.returned_type, node.start_byte, node.end_byte) {
+      frame_set(frame, 1u, 131u);
+    }
+    return;
+  }
+  if stage == 131u {
+    if !require_frame_slots(1u) { return; }
+    frame_set(frame, 1u, 132u);
+    push_expression(node.child1, environment);
+    return;
+  }
+  if stage == 132u {
+    if !require_type_slots(1u) { return; }
+    frame_set(frame, 3u, allocate_type(TYPE_LIST, state.returned_type, NO_INDEX, NO_INDEX));
+    frame_set(frame, 1u, 133u);
+    return;
+  }
+  if stage == 133u {
+    if !require_type_slots(1u) { return; }
+    let store_type = allocate_type(TYPE_NAMED, node.payload, frame_get(frame, 3u), NO_INDEX);
+    complete_expression(store_type);
+    return;
+  }
+
+  if stage == 140u {
+    if !require_type_slots(1u) { return; }
+    frame_set(frame, 3u, fresh_variable());
+    frame_set(frame, 1u, 141u);
+    return;
+  }
+  if stage == 141u {
+    if !require_type_slots(1u) { return; }
+    frame_set(frame, 4u, allocate_type(
+      TYPE_LIST, frame_get(frame, 3u), NO_INDEX, NO_INDEX));
+    frame_set(frame, 1u, 142u);
+    return;
+  }
+  if stage == 142u {
+    if !require_type_slots(1u) || !require_frame_slots(1u) { return; }
+    let store_type = allocate_type(TYPE_NAMED, node.payload, frame_get(frame, 4u), NO_INDEX);
+    frame_set(frame, 5u, store_type);
+    frame_set(frame, 1u, 143u);
+    if push_expression(node.child0, environment) {
+      frame_set(state.frame_top - 1u, 11u, store_type);
+    }
+    return;
+  }
+  if stage == 143u {
+    if start_unify(
+      frame_get(frame, 5u), state.returned_type, node.start_byte, node.end_byte) {
+      frame_set(frame, 1u, 144u);
+    }
+    return;
+  }
+  if stage == 144u {
+    if node.tag == TAG_STORE_LENGTH {
+      complete_expression(0u);
+      return;
+    }
+    if !require_frame_slots(1u) { return; }
+    frame_set(frame, 1u, 145u);
+    if push_expression(node.child1, environment) {
+      frame_set(state.frame_top - 1u, 11u, 0u);
+    }
+    return;
+  }
+  if stage == 145u {
+    if start_unify(0u, state.returned_type, node.start_byte, node.end_byte) {
+      frame_set(frame, 1u, 146u);
+    }
+    return;
+  }
+  if stage == 146u {
+    if node.tag == TAG_STORE_READ {
+      complete_expression(frame_get(frame, 3u));
+      return;
+    }
+    if !require_frame_slots(1u) { return; }
+    frame_set(frame, 1u, 147u);
+    if push_expression(node.child2, environment) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 3u));
+    }
+    return;
+  }
+  if stage == 147u {
+    if start_unify(
+      frame_get(frame, 3u), state.returned_type, node.start_byte, node.end_byte) {
+      frame_set(frame, 1u, 148u);
+    }
+    return;
+  }
+  if stage == 148u {
+    complete_expression(frame_get(frame, 5u));
     return;
   }
 
@@ -4385,6 +4502,23 @@ fn node_shape_is_valid(node_index: u32) -> bool {
     return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
       node.evaluation_mode == 0u;
   }
+  if node.tag == TAG_STORE_NEW || node.tag == TAG_STORE_READ {
+    return node.payload < state.type_count && type_metadata(node.payload, 1u) == 1u &&
+      required_child_is_valid(node_index, node.child0) &&
+      required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
+      node.evaluation_mode == 0u;
+  }
+  if node.tag == TAG_STORE_LENGTH {
+    return node.payload < state.type_count && type_metadata(node.payload, 1u) == 1u &&
+      required_child_is_valid(node_index, node.child0) &&
+      node.child1 == NO_INDEX && node.child2 == NO_INDEX && node.evaluation_mode == 0u;
+  }
+  if node.tag == TAG_STORE_WRITE || node.tag == TAG_STORE_GROW {
+    return node.payload < state.type_count && type_metadata(node.payload, 1u) == 1u &&
+      required_child_is_valid(node_index, node.child0) &&
+      required_child_is_valid(node_index, node.child1) &&
+      required_child_is_valid(node_index, node.child2) && node.evaluation_mode == 0u;
+  }
   if node.tag == TAG_LET || node.tag == TAG_LET_REC || node.tag == TAG_APPLY ||
     node.tag == TAG_BINARY || node.tag == TAG_BUFFER_APPEND {
     let whole_number = node.tag == TAG_BINARY &&
@@ -4400,7 +4534,8 @@ fn node_shape_is_valid(node_index: u32) -> bool {
       (node.evaluation_mode == 0u || node.tag == TAG_LET || node.tag == TAG_APPLY) &&
       (node.tag != TAG_BUFFER_APPEND || node.payload == 0u) &&
       (node.tag != TAG_LET_REC || core_node(node.child0).tag == TAG_LAMBDA) &&
-      (node.tag != TAG_BINARY || (node.payload >= 1u && node.payload <= 65u));
+      (node.tag != TAG_BINARY ||
+        (node.payload >= 1u && node.payload <= BINARY_REMAINDER_FLOAT_64));
   }
   if node.tag == TAG_IF {
     return required_child_is_valid(node_index, node.child0) &&

@@ -102,6 +102,52 @@ Deno.test("mutually recursive local functions retain lexical captures", async ()
   }
 });
 
+Deno.test("nested recursive groups preserve source order through GPU compilation", async () => {
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      span: { startByte: 0, endByte: 30 },
+      body: {
+        kind: "let-rec-group",
+        bindings: [{
+          name: "outer",
+          parameters: [],
+          span: { startByte: 10, endByte: 30 },
+          body: {
+            kind: "let-rec-group",
+            bindings: [{
+              name: "inner",
+              parameters: [],
+              body: surface.integer(42),
+              span: { startByte: 20, endByte: 25 },
+            }],
+            body: surface.name("inner"),
+            span: { startByte: 20, endByte: 25 },
+          },
+        }],
+        body: surface.name("outer"),
+        span: { startByte: 10, endByte: 30 },
+      },
+    }],
+    [],
+    "main",
+    30,
+    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+  );
+
+  const compilation = await functionalCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const execution = await runFunctionalWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("recursive groups retain captures used by buffer operations", async () => {
   const module = buildFunctionalSurfaceModule(
     [{
