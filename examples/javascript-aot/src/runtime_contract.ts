@@ -47,6 +47,11 @@ export const JAVASCRIPT_ENVIRONMENT_TYPE = "$javascript#Environment";
 export const JAVASCRIPT_ENVIRONMENT_EMPTY = "$javascript#EmptyEnvironment";
 export const JAVASCRIPT_ENVIRONMENT_BINDING = "$javascript#EnvironmentBinding";
 
+export const JAVASCRIPT_REFERENCE_TYPE = "$javascript#Reference";
+export const JAVASCRIPT_UNRESOLVABLE_REFERENCE = "$javascript#UnresolvableReference";
+export const JAVASCRIPT_BINDING_REFERENCE = "$javascript#BindingReference";
+export const JAVASCRIPT_PROPERTY_REFERENCE = "$javascript#PropertyReference";
+
 export const JAVASCRIPT_BINDING_STORE_TYPE = "$javascript#BindingStore";
 export const JAVASCRIPT_BINDING_STORE = "$javascript#BindingStoreValue";
 
@@ -312,6 +317,34 @@ export function javascriptRuntimeTypeDeclarations(
         span,
       },
     ],
+  }, {
+    name: JAVASCRIPT_REFERENCE_TYPE,
+    parameters: [],
+    span,
+    constructors: [{
+      name: JAVASCRIPT_UNRESOLVABLE_REFERENCE,
+      fields: [
+        { name: "name", type: textType, span },
+        { name: "strict", type: booleanType, span },
+      ],
+      span,
+    }, {
+      name: JAVASCRIPT_BINDING_REFERENCE,
+      fields: [
+        { name: "bindingIdentity", type: integerType, span },
+        { name: "strict", type: booleanType, span },
+      ],
+      span,
+    }, {
+      name: JAVASCRIPT_PROPERTY_REFERENCE,
+      fields: [
+        { name: "base", type: valueType, span },
+        { name: "key", type: propertyKeyType, span },
+        { name: "receiver", type: valueType, span },
+        { name: "strict", type: booleanType, span },
+      ],
+      span,
+    }],
   }, {
     name: JAVASCRIPT_STATE_TYPE,
     parameters: [],
