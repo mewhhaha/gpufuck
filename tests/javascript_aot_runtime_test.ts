@@ -11,8 +11,10 @@ import {
   JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED,
   JAVASCRIPT_RUNTIME_EMPTY_HEAP,
   JAVASCRIPT_RUNTIME_EMPTY_STATE,
+  JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE,
   JAVASCRIPT_RUNTIME_LOOKUP_BINDING,
   JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY,
+  JAVASCRIPT_RUNTIME_RESOLVE_BINDING_REFERENCE,
   JAVASCRIPT_RUNTIME_SAME_VALUE,
   JAVASCRIPT_RUNTIME_SET_BINDING,
   JAVASCRIPT_RUNTIME_STRICT_EQUAL,
@@ -21,6 +23,7 @@ import {
 import {
   JAVASCRIPT_ACCESSOR_DESCRIPTOR,
   JAVASCRIPT_BINDING_MUTABLE,
+  JAVASCRIPT_BINDING_REFERENCE,
   JAVASCRIPT_BINDING_STORE,
   JAVASCRIPT_BINDING_UPDATE_ALREADY_INITIALIZED,
   JAVASCRIPT_BINDING_UPDATE_IMMUTABLE,
@@ -44,7 +47,9 @@ import {
   JAVASCRIPT_OBJECT_RECORD,
   JAVASCRIPT_PROPERTY_KEY_STRING,
   JAVASCRIPT_PROPERTY_LIST_EMPTY,
+  JAVASCRIPT_PROPERTY_REFERENCE,
   JAVASCRIPT_STATE,
+  JAVASCRIPT_UNRESOLVABLE_REFERENCE,
   JAVASCRIPT_VALUE_BOOLEAN,
   JAVASCRIPT_VALUE_FOUND,
   JAVASCRIPT_VALUE_MISSING,
@@ -207,6 +212,61 @@ Deno.test("JavaScript runtime environments and completions preserve updated valu
     ]),
     environmentUpdateArms(),
   );
+
+  deepStrictEqual(await compileAndRun(result), { kind: "float-64", value: 42 });
+});
+
+Deno.test("JavaScript binding resolution produces explicit Reference records", async () => {
+  const state = call(JAVASCRIPT_RUNTIME_DEFINE_BINDING, [
+    reference(JAVASCRIPT_RUNTIME_EMPTY_STATE),
+    text("answer"),
+    call(JAVASCRIPT_BINDING_MUTABLE, [call(JAVASCRIPT_VALUE_NUMBER, [float64(42)])]),
+  ]);
+  const resolved = call(JAVASCRIPT_RUNTIME_RESOLVE_BINDING_REFERENCE, [
+    state,
+    text("answer"),
+    boolean(true),
+  ]);
+  const result = match(resolved, [{
+    constructor: JAVASCRIPT_UNRESOLVABLE_REFERENCE,
+    binders: ["name", "strict"],
+    body: fault("defined binding resolved as unresolvable"),
+    span,
+  }, {
+    constructor: JAVASCRIPT_BINDING_REFERENCE,
+    binders: ["bindingIdentity", "strict"],
+    body: match(
+      call(JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE, [
+        state,
+        call(JAVASCRIPT_BINDING_REFERENCE, [
+          reference("bindingIdentity"),
+          reference("strict"),
+        ]),
+      ]),
+      [{
+        constructor: JAVASCRIPT_VALUE_MISSING,
+        binders: [],
+        body: fault("resolved binding lost its value"),
+        span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_UNINITIALIZED,
+        binders: [],
+        body: fault("resolved binding became uninitialized"),
+        span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_FOUND,
+        binders: ["value"],
+        body: expectNumber("value"),
+        span,
+      }],
+    ),
+    span,
+  }, {
+    constructor: JAVASCRIPT_PROPERTY_REFERENCE,
+    binders: ["base", "key", "receiver", "strict"],
+    body: fault("binding resolved as a property reference"),
+    span,
+  }]);
 
   deepStrictEqual(await compileAndRun(result), { kind: "float-64", value: 42 });
 });

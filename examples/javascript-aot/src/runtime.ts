@@ -10,6 +10,7 @@ import {
   JAVASCRIPT_ACCESSOR_PROPERTY,
   JAVASCRIPT_BINDING_IMMUTABLE,
   JAVASCRIPT_BINDING_MUTABLE,
+  JAVASCRIPT_BINDING_REFERENCE,
   JAVASCRIPT_BINDING_STORE,
   JAVASCRIPT_BINDING_UNINITIALIZED,
   JAVASCRIPT_BINDING_UPDATE_ALREADY_INITIALIZED,
@@ -32,7 +33,9 @@ import {
   JAVASCRIPT_PROPERTY_KEY_STRING,
   JAVASCRIPT_PROPERTY_KEY_SYMBOL,
   JAVASCRIPT_PROPERTY_LIST_EMPTY,
+  JAVASCRIPT_PROPERTY_REFERENCE,
   JAVASCRIPT_STATE,
+  JAVASCRIPT_UNRESOLVABLE_REFERENCE,
   JAVASCRIPT_VALUE_BOOLEAN,
   JAVASCRIPT_VALUE_FOUND,
   JAVASCRIPT_VALUE_MISSING,
@@ -63,13 +66,15 @@ export const JAVASCRIPT_RUNTIME_LOOKUP_BINDING = "$javascript#lookupBinding";
 export const JAVASCRIPT_RUNTIME_DEFINE_BINDING = "$javascript#defineBinding";
 export const JAVASCRIPT_RUNTIME_INITIALIZE_BINDING = "$javascript#initializeBinding";
 export const JAVASCRIPT_RUNTIME_SET_BINDING = "$javascript#setBinding";
+export const JAVASCRIPT_RUNTIME_RESOLVE_BINDING_REFERENCE = "$javascript#resolveBindingReference";
+export const JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE = "$javascript#getReferenceValue";
 
 const DESCRIPTOR_TO_PROPERTY = "$javascript#descriptorToProperty";
 const DEFINE_PROPERTY_IN_LIST = "$javascript#definePropertyInList";
 const OBJECT_EXISTS = "$javascript#objectExists";
 const LOOKUP_OBJECT = "$javascript#lookupObject";
-const LOOKUP_ENVIRONMENT_BINDING = "$javascript#lookupEnvironmentBinding";
 const LOOKUP_BINDING_CELL = "$javascript#lookupBindingCell";
+const RESOLVE_ENVIRONMENT_REFERENCE = "$javascript#resolveEnvironmentReference";
 const INITIALIZE_ENVIRONMENT_BINDING = "$javascript#initializeEnvironmentBinding";
 const INITIALIZE_BINDING_CELL = "$javascript#initializeBindingCell";
 const SET_ENVIRONMENT_BINDING = "$javascript#setEnvironmentBinding";
@@ -757,33 +762,31 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     }], span),
     span,
   }, {
-    name: JAVASCRIPT_RUNTIME_LOOKUP_BINDING,
-    parameters: ["state", "name"],
+    name: JAVASCRIPT_RUNTIME_RESOLVE_BINDING_REFERENCE,
+    parameters: ["state", "name", "strict"],
     annotation: null,
     body: match(reference("state", span), [{
       constructor: JAVASCRIPT_STATE,
       binders: ["heap", "environment", "bindings"],
-      body: match(reference("bindings", span), [{
-        constructor: JAVASCRIPT_BINDING_STORE,
-        binders: ["nextIdentity", "cells"],
-        body: call(LOOKUP_ENVIRONMENT_BINDING, [
-          reference("environment", span),
-          reference("cells", span),
-          reference("name", span),
-        ], span),
-        span,
-      }], span),
+      body: call(RESOLVE_ENVIRONMENT_REFERENCE, [
+        reference("environment", span),
+        reference("name", span),
+        reference("strict", span),
+      ], span),
       span,
     }], span),
     span,
   }, {
-    name: LOOKUP_ENVIRONMENT_BINDING,
-    parameters: ["environment", "cells", "name"],
+    name: RESOLVE_ENVIRONMENT_REFERENCE,
+    parameters: ["environment", "name", "strict"],
     annotation: null,
     body: match(reference("environment", span), [{
       constructor: JAVASCRIPT_ENVIRONMENT_EMPTY,
       binders: [],
-      body: reference(JAVASCRIPT_VALUE_MISSING, span),
+      body: call(JAVASCRIPT_UNRESOLVABLE_REFERENCE, [
+        reference("name", span),
+        reference("strict", span),
+      ], span),
       span,
     }, {
       constructor: JAVASCRIPT_ENVIRONMENT_BINDING,
@@ -795,19 +798,66 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
           reference("name", span),
           span,
         ),
-        call(LOOKUP_BINDING_CELL, [
-          reference("cells", span),
+        call(JAVASCRIPT_BINDING_REFERENCE, [
           reference("bindingIdentity", span),
+          reference("strict", span),
         ], span),
-        call(LOOKUP_ENVIRONMENT_BINDING, [
+        call(RESOLVE_ENVIRONMENT_REFERENCE, [
           reference("outer", span),
-          reference("cells", span),
           reference("name", span),
+          reference("strict", span),
         ], span),
         span,
       ),
       span,
     }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE,
+    parameters: ["state", "resolvedReference"],
+    annotation: null,
+    body: match(reference("resolvedReference", span), [{
+      constructor: JAVASCRIPT_UNRESOLVABLE_REFERENCE,
+      binders: ["name", "strict"],
+      body: reference(JAVASCRIPT_VALUE_MISSING, span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_BINDING_REFERENCE,
+      binders: ["bindingIdentity", "strict"],
+      body: match(reference("state", span), [{
+        constructor: JAVASCRIPT_STATE,
+        binders: ["heap", "environment", "bindings"],
+        body: match(reference("bindings", span), [{
+          constructor: JAVASCRIPT_BINDING_STORE,
+          binders: ["nextIdentity", "cells"],
+          body: call(LOOKUP_BINDING_CELL, [
+            reference("cells", span),
+            reference("bindingIdentity", span),
+          ], span),
+          span,
+        }], span),
+        span,
+      }], span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_PROPERTY_REFERENCE,
+      binders: ["base", "key", "receiver", "strict"],
+      body: getPropertyReferenceValue(span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_LOOKUP_BINDING,
+    parameters: ["state", "name"],
+    annotation: null,
+    body: call(JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE, [
+      reference("state", span),
+      call(JAVASCRIPT_RUNTIME_RESOLVE_BINDING_REFERENCE, [
+        reference("state", span),
+        reference("name", span),
+        boolean(false, span),
+      ], span),
+    ], span),
     span,
   }, {
     name: LOOKUP_BINDING_CELL,
@@ -1117,6 +1167,89 @@ function lookupPrototypeProperty(
     ], span),
     span,
   }, ...invalidPrototypeArms(span)], span);
+}
+
+function getPropertyReferenceValue(
+  span: { readonly startByte: number; readonly endByte: number },
+): FunctionalSurfaceExpression {
+  const invalidBase = runtimeFault("JavaScript property reference base is not an object", span);
+  return match(reference("base", span), [{
+    constructor: JAVASCRIPT_VALUE_OBJECT,
+    binders: ["objectIdentity"],
+    body: match(reference("state", span), [{
+      constructor: JAVASCRIPT_STATE,
+      binders: ["heap", "environment", "bindings"],
+      body: match(reference("heap", span), [{
+        constructor: JAVASCRIPT_HEAP,
+        binders: ["nextIdentity", "objects"],
+        body: match(
+          call(JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY, [
+            reference("objects", span),
+            reference("objectIdentity", span),
+            reference("key", span),
+          ], span),
+          [{
+            constructor: JAVASCRIPT_DESCRIPTOR_MISSING,
+            binders: [],
+            body: reference(JAVASCRIPT_VALUE_MISSING, span),
+            span,
+          }, {
+            constructor: JAVASCRIPT_DESCRIPTOR_FOUND,
+            binders: ["descriptor"],
+            body: match(reference("descriptor", span), [{
+              constructor: JAVASCRIPT_DATA_DESCRIPTOR,
+              binders: ["value", "writable", "enumerable", "configurable"],
+              body: call(JAVASCRIPT_VALUE_FOUND, [reference("value", span)], span),
+              span,
+            }, {
+              constructor: JAVASCRIPT_ACCESSOR_DESCRIPTOR,
+              binders: ["getter", "setter", "enumerable", "configurable"],
+              body: runtimeFault(
+                "JavaScript accessor invocation requires the execution-context call path",
+                span,
+              ),
+              span,
+            }], span),
+            span,
+          }],
+          span,
+        ),
+        span,
+      }], span),
+      span,
+    }], span),
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_UNDEFINED,
+    binders: [],
+    body: invalidBase,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_NULL,
+    binders: [],
+    body: invalidBase,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_BOOLEAN,
+    binders: ["booleanValue"],
+    body: invalidBase,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_NUMBER,
+    binders: ["numberValue"],
+    body: invalidBase,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_STRING,
+    binders: ["stringValue"],
+    body: invalidBase,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_SYMBOL,
+    binders: ["symbolIdentity"],
+    body: invalidBase,
+    span,
+  }], span);
 }
 
 function allocateObjectResult(

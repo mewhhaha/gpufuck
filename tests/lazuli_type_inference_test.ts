@@ -160,6 +160,37 @@ Deno.test("host type inference treats runtime faults as dependency leaves", () =
   deepStrictEqual(inference.mainType, { kind: "integer" });
 });
 
+Deno.test("host type inference preserves Store element types through persistent updates", () => {
+  const module = buildFunctionalSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: {
+        kind: "let",
+        name: "store",
+        value: surface.storeNew(surface.integer(1), surface.boolean(false)),
+        body: surface.storeRead(
+          surface.storeWrite(
+            surface.name("store"),
+            surface.integer(0),
+            surface.boolean(true),
+          ),
+          surface.integer(0),
+        ),
+      },
+    }],
+    [],
+    "main",
+    0,
+  );
+
+  const inference = inferLazuliTypes(semanticSurfaceFromModule(module));
+
+  ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
+  if (inference.ok) deepStrictEqual(inference.mainType, { kind: "boolean" });
+});
+
 Deno.test("GPU type inference matches the host oracle for the 64-program successful corpus", async () => {
   equal(successfulCorpus.length, 64);
 
