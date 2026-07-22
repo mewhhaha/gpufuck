@@ -79,6 +79,7 @@ interface RuntimeFunction {
   readonly name: string;
   readonly thisMode: "dynamic" | "lexical";
   readonly strict: boolean;
+  readonly mappedArguments: boolean;
   readonly usesArguments: boolean;
   readonly parameters: readonly string[];
   readonly functionLength: number;
@@ -509,6 +510,9 @@ class JavaScriptRuntimeLowering {
             name: declaration.name,
             parameters: declaration.parameters,
             parameterLength: declaration.parameterLength ?? declaration.parameters.length,
+            ...(declaration.simpleParameterList === false
+              ? { simpleParameterList: false as const }
+              : {}),
             ...(declaration.requiresRuntimeModel === true
               ? { requiresRuntimeModel: true as const }
               : {}),
@@ -1729,11 +1733,14 @@ class JavaScriptRuntimeLowering {
       name: `$javascript#runtimeFunction#${this.#functions.length}`,
       thisMode,
       strict,
+      mappedArguments: !strict && syntax.simpleParameterList !== false,
       usesArguments: runtimeStatementsReferenceName(body, "arguments"),
       parameters,
       functionLength: syntax.parameterLength ?? parameters.length,
       classMethods: syntax.kind === "function-declaration" ? syntax.classMethods ?? null : null,
-      body: strict ? body : rewriteMappedArguments(body, parameters),
+      body: !strict && syntax.simpleParameterList !== false
+        ? rewriteMappedArguments(body, parameters)
+        : body,
       span,
     };
     this.#functions.push(runtimeFunction);

@@ -16,6 +16,7 @@ export interface JavaScriptAotFunctionDeclaration {
   readonly name: string;
   readonly parameters: readonly string[];
   readonly parameterLength?: number;
+  readonly simpleParameterList?: false;
   readonly requiresRuntimeModel?: true;
   readonly classMethods?: readonly JavaScriptAotClassMethod[];
   readonly body: readonly JavaScriptAotStatement[];
@@ -42,6 +43,7 @@ export type JavaScriptAotStatement =
     readonly name: string;
     readonly parameters: readonly string[];
     readonly parameterLength?: number;
+    readonly simpleParameterList?: false;
     readonly requiresRuntimeModel?: true;
     readonly classMethods?: readonly JavaScriptAotClassMethod[];
     readonly body: readonly JavaScriptAotStatement[];
@@ -190,6 +192,7 @@ export type JavaScriptAotExpression =
     readonly thisMode: "dynamic" | "lexical";
     readonly parameters: readonly string[];
     readonly parameterLength?: number;
+    readonly simpleParameterList?: false;
     readonly body: readonly JavaScriptAotStatement[];
     readonly span: FunctionalSpan;
   }

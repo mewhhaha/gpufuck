@@ -438,6 +438,7 @@ function parseDeclaration(
       name: babaRequiredTokenField(declaration, "name").text,
       parameters: parameters.names,
       parameterLength: parameters.functionLength,
+      ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
       ...(declaration.name === "generator_declaration"
         ? { requiresRuntimeModel: true as const }
         : {}),
@@ -458,6 +459,7 @@ function parseDeclaration(
     name: babaRequiredTokenField(declaration, "name").text,
     parameters: parameters.names,
     parameterLength: parameters.functionLength,
+    ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
     body: insertParameterInitializers(
       parseBlock(babaRequiredRuleField(declaration, "body"), offsets),
       parameters.initializers,
@@ -502,6 +504,7 @@ function parseStatement(
         name: babaRequiredTokenField(statement, "name").text,
         parameters: parameters.names,
         parameterLength: parameters.functionLength,
+        ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
         ...(statement.name === "generator_declaration"
           ? { requiresRuntimeModel: true as const }
           : {}),
@@ -519,6 +522,7 @@ function parseStatement(
         name: babaRequiredTokenField(statement, "name").text,
         parameters: parameters.names,
         parameterLength: parameters.functionLength,
+        ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
         body: insertParameterInitializers(
           parseBlock(babaRequiredRuleField(statement, "body"), offsets),
           parameters.initializers,
@@ -730,6 +734,9 @@ function parseClass(
         thisMode: "dynamic",
         parameters: methodParameters.names,
         parameterLength: methodParameters.functionLength,
+        ...(methodParameters.initializers.length === 0
+          ? {}
+          : { simpleParameterList: false as const }),
         body: insertParameterInitializers(
           parseBlock(babaRequiredRuleField(method, "body"), offsets),
           methodParameters.initializers,
@@ -746,6 +753,7 @@ function parseClass(
     name: babaRequiredTokenField(declaration, "name").text,
     parameters: parameters.names,
     parameterLength: parameters.functionLength,
+    ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
     requiresRuntimeModel: true,
     classMethods,
     body: insertParameterInitializers(
@@ -1061,6 +1069,7 @@ function parseExpression(
         thisMode: "dynamic",
         parameters: parameters.names,
         parameterLength: parameters.functionLength,
+        ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
         body: insertParameterInitializers(
           parseBlock(babaRequiredRuleField(expression, "body"), offsets),
           parameters.initializers,
@@ -1169,6 +1178,7 @@ function parseObjectProperty(
         thisMode: "dynamic",
         parameters: parameters.names,
         parameterLength: parameters.functionLength,
+        ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
         body: insertParameterInitializers(
           parseBlock(babaRequiredRuleField(property, "body"), offsets),
           parameters.initializers,
