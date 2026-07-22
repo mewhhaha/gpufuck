@@ -17,7 +17,14 @@ export interface JavaScriptAotFunctionDeclaration {
   readonly parameters: readonly string[];
   readonly parameterLength?: number;
   readonly requiresRuntimeModel?: true;
+  readonly classMethods?: readonly JavaScriptAotClassMethod[];
   readonly body: readonly JavaScriptAotStatement[];
+  readonly span: FunctionalSpan;
+}
+
+export interface JavaScriptAotClassMethod {
+  readonly name: string;
+  readonly value: Extract<JavaScriptAotExpression, { readonly kind: "function" }>;
   readonly span: FunctionalSpan;
 }
 
@@ -36,6 +43,7 @@ export type JavaScriptAotStatement =
     readonly parameters: readonly string[];
     readonly parameterLength?: number;
     readonly requiresRuntimeModel?: true;
+    readonly classMethods?: readonly JavaScriptAotClassMethod[];
     readonly body: readonly JavaScriptAotStatement[];
     readonly span: FunctionalSpan;
   }

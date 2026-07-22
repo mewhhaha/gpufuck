@@ -11,6 +11,7 @@ import {
 } from "../../../src/baba_frontend.ts";
 import type {
   JavaScriptAotBinaryOperator,
+  JavaScriptAotClassMethod,
   JavaScriptAotDeclaration,
   JavaScriptAotExpression,
   JavaScriptAotModule,
@@ -150,13 +151,15 @@ export function parseJavaScriptAotModule(name: string, source: string): JavaScri
         `JavaScript module ${JSON.stringify(name)}: ${diagnostic.code}: ${diagnostic.message}`,
       );
     }
-    return {
+    const module = {
       name,
       declarations: babaRuleFieldArray(parsed.cursor, "declarations").map((declaration) =>
         parseDeclaration(declaration, byteOffsets)
       ),
       span: { startByte: 0, endByte: byteOffsets.byteLength },
     };
+    assertStrictModeEarlyErrors(module.declarations);
+    return module;
   } catch (error) {
     if (
       error instanceof RangeError &&
@@ -171,6 +174,208 @@ export function parseJavaScriptAotModule(name: string, source: string): JavaScri
     throw error;
   } finally {
     parser.reset();
+  }
+}
+
+function assertStrictModeEarlyErrors(
+  declarations: readonly JavaScriptAotDeclaration[],
+): void {
+  const restrictedNames = new Set(["arguments", "eval"]);
+  const hasUseStrictDirective = (statements: readonly JavaScriptAotStatement[]): boolean => {
+    for (const statement of statements) {
+      if (statement.kind !== "expression" || statement.value.kind !== "string") return false;
+      if (statement.value.raw === '"use strict"' || statement.value.raw === "'use strict'") {
+        return true;
+      }
+    }
+    return false;
+  };
+  const visitExpression = (expression: JavaScriptAotExpression, strict: boolean): void => {
+    switch (expression.kind) {
+      case "array":
+        for (const value of expression.values) visitExpression(value, strict);
+        return;
+      case "object":
+        for (const property of expression.properties) visitExpression(property.value, strict);
+        return;
+      case "function":
+        visitFunction(
+          expression.name,
+          expression.parameters,
+          expression.body,
+          strict,
+          expression.span,
+        );
+        return;
+      case "unary":
+      case "property":
+        visitExpression(expression.value, strict);
+        return;
+      case "binary":
+        visitExpression(expression.left, strict);
+        visitExpression(expression.right, strict);
+        return;
+      case "conditional":
+        visitExpression(expression.condition, strict);
+        visitExpression(expression.consequent, strict);
+        visitExpression(expression.alternate, strict);
+        return;
+      case "call":
+        visitExpression(expression.callee, strict);
+        for (const argument of expression.arguments) visitExpression(argument, strict);
+        return;
+      case "new":
+        for (const argument of expression.arguments) visitExpression(argument, strict);
+        return;
+      case "index":
+        visitExpression(expression.value, strict);
+        visitExpression(expression.index, strict);
+        return;
+      default:
+        return;
+    }
+  };
+  const visitStatements = (
+    statements: readonly JavaScriptAotStatement[],
+    inheritedStrictMode: boolean,
+  ): void => {
+    const strict = inheritedStrictMode || hasUseStrictDirective(statements);
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "function-declaration":
+          visitFunction(
+            statement.name,
+            statement.parameters,
+            statement.body,
+            statement.classMethods !== undefined || strict,
+            statement.span,
+          );
+          for (const method of statement.classMethods ?? []) {
+            visitExpression(method.value, true);
+          }
+          break;
+        case "constant":
+        case "mutable":
+          if (strict && restrictedNames.has(statement.name)) {
+            throw new JavaScriptAotSyntaxError(
+              statement.span,
+              `JavaScript strict mode cannot bind ${JSON.stringify(statement.name)}.`,
+            );
+          }
+          visitExpression(statement.value, strict);
+          break;
+        case "var":
+          for (const declaration of statement.declarations) {
+            if (strict && restrictedNames.has(declaration.name)) {
+              throw new JavaScriptAotSyntaxError(
+                declaration.span,
+                `JavaScript strict mode cannot bind ${JSON.stringify(declaration.name)}.`,
+              );
+            }
+            if (declaration.value !== null) visitExpression(declaration.value, strict);
+          }
+          break;
+        case "assignment":
+          if (strict && restrictedNames.has(statement.name)) {
+            throw new JavaScriptAotSyntaxError(
+              statement.span,
+              `JavaScript strict mode cannot assign to ${JSON.stringify(statement.name)}.`,
+            );
+          }
+          visitExpression(statement.value, strict);
+          break;
+        case "property-assignment":
+          visitExpression(statement.target, strict);
+          visitExpression(statement.value, strict);
+          break;
+        case "return":
+        case "throw":
+        case "expression":
+          visitExpression(statement.value, strict);
+          break;
+        case "if":
+          visitExpression(statement.condition, strict);
+          visitStatements(statement.consequent, strict);
+          if (statement.alternate !== null) visitStatements(statement.alternate, strict);
+          break;
+        case "while":
+          visitExpression(statement.condition, strict);
+          visitStatements(statement.body, strict);
+          visitStatements(statement.continueBody, strict);
+          break;
+        case "block":
+          visitStatements(statement.statements, strict);
+          break;
+        case "try":
+          if (strict && statement.catchName !== null && restrictedNames.has(statement.catchName)) {
+            throw new JavaScriptAotSyntaxError(
+              statement.span,
+              `JavaScript strict mode cannot bind ${JSON.stringify(statement.catchName)}.`,
+            );
+          }
+          visitStatements(statement.body, strict);
+          if (statement.catchBody !== null) visitStatements(statement.catchBody, strict);
+          if (statement.finallyBody !== null) visitStatements(statement.finallyBody, strict);
+          break;
+        case "break":
+        case "continue":
+          break;
+      }
+    }
+  };
+  const visitFunction = (
+    name: string | null,
+    parameters: readonly string[],
+    body: readonly JavaScriptAotStatement[],
+    inheritedStrictMode: boolean,
+    span: JavaScriptAotExpression["span"],
+  ): void => {
+    const strict = inheritedStrictMode || hasUseStrictDirective(body);
+    if (strict) {
+      if (name !== null && restrictedNames.has(name)) {
+        throw new JavaScriptAotSyntaxError(
+          span,
+          `JavaScript strict mode cannot bind function name ${JSON.stringify(name)}.`,
+        );
+      }
+      const restrictedParameter = parameters.find((parameter) => restrictedNames.has(parameter));
+      if (restrictedParameter !== undefined) {
+        throw new JavaScriptAotSyntaxError(
+          span,
+          `JavaScript strict mode cannot bind parameter ${JSON.stringify(restrictedParameter)}.`,
+        );
+      }
+      const parameterNames = new Set<string>();
+      for (const parameter of parameters) {
+        if (parameterNames.has(parameter)) {
+          throw new JavaScriptAotSyntaxError(
+            span,
+            `JavaScript strict mode function declares parameter ${
+              JSON.stringify(parameter)
+            } more than once.`,
+          );
+        }
+        parameterNames.add(parameter);
+      }
+    }
+    visitStatements(body, strict);
+  };
+
+  for (const declaration of declarations) {
+    if (declaration.kind === "constant") {
+      visitExpression(declaration.value, false);
+    } else {
+      visitFunction(
+        declaration.name,
+        declaration.parameters,
+        declaration.body,
+        declaration.classMethods !== undefined,
+        declaration.span,
+      );
+      for (const method of declaration.classMethods ?? []) {
+        visitExpression(method.value, true);
+      }
+    }
   }
 }
 
@@ -328,13 +533,17 @@ function parseStatement(
         value: parseExpression(babaRequiredRuleField(statement, "value"), offsets),
         span,
       };
-    case "mutable_statement":
+    case "mutable_statement": {
+      const initializer = babaOptionalRuleField(statement, "initializer");
       return {
         kind: "mutable",
         name: babaRequiredTokenField(statement, "name").text,
-        value: parseExpression(babaRequiredRuleField(statement, "value"), offsets),
+        value: initializer === null
+          ? { kind: "name", name: "undefined", span }
+          : parseExpression(babaRequiredRuleField(initializer, "value"), offsets),
         span,
       };
+    }
     case "var_statement":
       return {
         kind: "var",
@@ -478,6 +687,8 @@ function parseClass(
   readonly name: string;
   readonly parameters: readonly string[];
   readonly parameterLength: number;
+  readonly requiresRuntimeModel: true;
+  readonly classMethods: readonly JavaScriptAotClassMethod[];
   readonly body: readonly JavaScriptAotStatement[];
   readonly span: JavaScriptAotDeclaration["span"];
 } {
@@ -503,7 +714,7 @@ function parseClass(
   const parameters = parametersNode === null
     ? { names: [], initializers: [], functionLength: 0 }
     : parseParameterList(parametersNode, offsets);
-  const methodInitializers = methods.flatMap((method): readonly JavaScriptAotStatement[] => {
+  const classMethods = methods.flatMap((method): readonly JavaScriptAotClassMethod[] => {
     const methodName = babaRequiredTokenField(method, "name");
     if (methodName.text === "constructor") return [];
     const methodParametersNode = babaOptionalRuleField(method, "parameters");
@@ -512,14 +723,7 @@ function parseClass(
       : parseParameterList(methodParametersNode, offsets);
     const methodSpan = offsets.span(method.span);
     return [{
-      kind: "property-assignment",
-      target: {
-        kind: "property",
-        value: { kind: "name", name: "this", span: methodSpan },
-        name: methodName.text,
-        span: methodSpan,
-      },
-      operator: "=",
+      name: methodName.text,
       value: {
         kind: "function",
         name: methodName.text,
@@ -542,8 +746,10 @@ function parseClass(
     name: babaRequiredTokenField(declaration, "name").text,
     parameters: parameters.names,
     parameterLength: parameters.functionLength,
+    requiresRuntimeModel: true,
+    classMethods,
     body: insertParameterInitializers(
-      [...methodInitializers, ...constructorBody],
+      constructorBody,
       parameters.initializers,
     ),
     span: offsets.span(declaration.span),
@@ -1335,6 +1541,35 @@ function parseParameterList(
       names.push(`$javascript#parameter#${span.startByte}`);
       if (!foundDefault) functionLength++;
       const argument = parameterArgumentExpression(parameterIndex, span);
+      initializers.push({
+        kind: "if",
+        condition: {
+          kind: "binary",
+          operator: "||",
+          left: {
+            kind: "binary",
+            operator: "===",
+            left: argument,
+            right: { kind: "null", span },
+            span,
+          },
+          right: {
+            kind: "binary",
+            operator: "===",
+            left: argument,
+            right: { kind: "name", name: "undefined", span },
+            span,
+          },
+          span,
+        },
+        consequent: [{
+          kind: "throw",
+          value: { kind: "new", constructor: "TypeError", arguments: [], span },
+          span,
+        }],
+        alternate: null,
+        span,
+      });
       const bindings = babaOptionalRuleField(parameter, "bindings");
       if (bindings !== null) {
         if (parameter.name === "array_binding_parameter") {

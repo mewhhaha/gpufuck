@@ -621,8 +621,8 @@ export interface ConstantStatementCursor extends RuleCursorBase<"constant_statem
 }
 
 export interface MutableStatementCursor extends RuleCursorBase<"mutable_statement"> {
+  field(name: "initializer"): VariableInitializerCursor | null;
   field(name: "name"): TokenCursor<"named", "IDENT">;
-  field(name: "value"): ExprCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1505,7 +1505,6 @@ export type CursorParseResult<Root extends RuleCursor = RootCursor> =
     source: string;
     diagnostics: readonly ParseDiagnostic[];
   };
-
 export type ValidateParseResult =
   | {
     ok: true;

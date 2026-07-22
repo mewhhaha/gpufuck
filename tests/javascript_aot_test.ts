@@ -95,6 +95,30 @@ export function main() {
   deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
+Deno.test("constructs an ordinary object with the standard Object constructor", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const object = new Object();
+  object.answer = 42;
+  return object.answer === 42;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("checks own properties without consulting the prototype chain", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const object = new Object();
+  object.answer = 42;
+  return object.hasOwnProperty("answer") && !object.hasOwnProperty("missing");
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
 Deno.test("coerces numeric literal property keys for static and runtime objects", async () => {
   const staticValue = await compileAndRun(`
 export function main() {
@@ -412,6 +436,35 @@ export function main() {
   deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
+Deno.test("executes twelve sequential runtime method calls", async () => {
+  const value = await compileAndRun(`
+function increment(value) {
+  return value + 1;
+}
+
+export function main() {
+  let holder = {};
+  holder.increment = increment;
+  let value = 0;
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  value = holder.increment(value);
+  return value;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 12 });
+});
+
 Deno.test("hoists mutually recursive runtime function declarations", async () => {
   const value = await compileAndRun(`
 export function main() {
@@ -487,6 +540,42 @@ export function main() {
   return inspect(42, 39) === true;
 }
 `);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("reflects sloppy parameter writes through mapped arguments", async () => {
+  const value = await compileAndRun(
+    `
+function update(value) {
+  value = 42;
+  return arguments[0];
+}
+
+export function main() {
+  return update(0) === 42;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("reflects mapped argument writes through sloppy parameters", async () => {
+  const value = await compileAndRun(
+    `
+function update(value) {
+  arguments[0] = 42;
+  return value;
+}
+
+export function main() {
+  return update(0) === 42;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
 
   deepStrictEqual(value, { kind: "boolean", value: true });
 });
@@ -578,6 +667,65 @@ export function main() {
 `);
 
   deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("shares class methods through the constructor prototype", async () => {
+  const value = await compileAndRun(`
+class Counter {
+  read() {
+    return 42;
+  }
+}
+
+export function main() {
+  const first = new Counter();
+  return first.read === Counter.prototype.read;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("tests class instances through the prototype chain", async () => {
+  const value = await compileAndRun(`
+class Counter {}
+
+export function main() {
+  const counter = new Counter();
+  return counter instanceof Counter;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("applies strict parameter rules to class methods", () => {
+  const result = lowerJavaScriptAotSource(
+    "strict-class-method.mjs",
+    `class Invalid { method(value, value) { return value; } }
+export function main() { return 42; }`,
+  );
+
+  equal(result.ok, false);
+  if (result.ok) return;
+  match(
+    result.diagnostics[0].message,
+    /strict mode function declares parameter "value" more than once/,
+  );
+});
+
+Deno.test("keeps a class binding uninitialized until its declaration", async () => {
+  await rejects(
+    () =>
+      compileAndRun(`
+export function main() {
+  const constructor = Counter;
+  class Counter {}
+  return constructor === Counter;
+}
+`),
+    /ReferenceError: JavaScript name "Counter" was read before initialization/,
+  );
 });
 
 Deno.test("resumes a straight-line generator through persistent iterator state", async () => {
@@ -1116,6 +1264,18 @@ export function main() {
   var value;
   value = null;
   value *= undefined;
+  return isNaN(value);
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("converts an uninitialized var before postfix increment", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  var value;
+  value++;
   return isNaN(value);
 }
 `);

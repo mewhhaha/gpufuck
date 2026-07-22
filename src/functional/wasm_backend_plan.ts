@@ -45,6 +45,13 @@ export function createFunctionalWasmBackendPlan(
   const scalarResult = functionalHostScalarType(entry.result);
   const compactScalarEligible = module.evaluationProfile ===
       FunctionalEvaluationProfile.StrictEager &&
+    !nodes.some((node) =>
+      node.tag === FunctionalCoreTag.StoreNew ||
+      node.tag === FunctionalCoreTag.StoreLength ||
+      node.tag === FunctionalCoreTag.StoreRead ||
+      node.tag === FunctionalCoreTag.StoreWrite ||
+      node.tag === FunctionalCoreTag.StoreGrow
+    ) &&
     module.entryEffects.length === 0 &&
     module.hostCapabilities.every((capability) => capability.fields.length === 0) &&
     !entry.takesInit &&

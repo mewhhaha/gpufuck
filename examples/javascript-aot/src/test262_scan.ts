@@ -7,7 +7,11 @@ import {
   test262FrontendProbeSource,
   type Test262Metadata,
 } from "./test262.ts";
-import { lowerTest262PositiveTest, probeTest262NegativeTest } from "./test262_harness.ts";
+import {
+  lowerTest262NegativeTest,
+  lowerTest262PositiveTest,
+  probeTest262NegativeTest,
+} from "./test262_harness.ts";
 
 export interface Test262FrontendBatchRequest {
   readonly checkout: string;
@@ -89,7 +93,9 @@ export function probeApplicableTest262Source(
   const negativeExpectation = metadata.negative;
   if (negativeExpectation !== null) {
     const outcomes = executionModes.map((mode): Test262FrontendModeProbe => {
-      const result = probeTest262NegativeTest(path, source, metadata, entryName, mode);
+      const result = negativeExpectation.phase === "runtime"
+        ? lowerTest262NegativeTest(path, source, metadata, entryName, mode)
+        : probeTest262NegativeTest(path, source, metadata, entryName, mode);
       if (result.kind === "mismatch") {
         return {
           kind: "unsupported",

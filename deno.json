@@ -191,7 +191,7 @@
     "bench:semantic-wavefront": "deno bench benchmarks/semantic_wavefront_bench.ts",
     "compare:type-programming": "deno run --allow-read --allow-run=zig --allow-write=/tmp tools/compare_type_programming.ts",
     "check:gleam-stdlib": "deno run --allow-read --allow-run=git --allow-write=/tmp tools/check_gleam_stdlib.ts",
-    "check:javascript-test262": "deno run --allow-read --allow-run=git,deno --allow-write=/tmp examples/javascript-aot/check_test262.ts",
+    "check:javascript-test262": "deno run --allow-read --allow-run=git,deno,ps --allow-write=/tmp examples/javascript-aot/check_test262.ts",
     "profile:lazuli-compiler": "deno run --allow-read tools/profile_lazuli_compiler.ts",
     "publish:dry-run": "deno publish --dry-run --allow-dirty",
     "compile": "deno run --allow-read cli.ts",

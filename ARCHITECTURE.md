@@ -319,19 +319,26 @@ validity evidence.
 
 ### 5.2 Reachability versus checking
 
-The linker includes the artifacts supplied by the frontend. The GPU resolves and checks all linked
-definitions. Later, Wasm emission computes reachability from the entry and explicit Wasm exports and
-omits unreachable definitions.
+The frontend retains responsibility for selecting the package dependency closure and reporting
+source diagnostics before linking. When the linker builds an executable module,
+[`surface_reachability.ts`](src/functional/surface_reachability.ts) retains definitions reachable
+from the selected entry and explicit Wasm exports. The GPU resolves and checks that executable
+closure. Wasm emission computes reachability again after constant-condition pruning exposes facts
+that were unavailable at the surface boundary.
 
-This ordering is deliberate:
+This ordering keeps package selection and source diagnostics in the frontend, avoids sending unused
+library support through GPU semantic compilation, and still allows the resolved backend to remove
+definitions made unreachable by optimization.
 
-- unused declarations still receive source diagnostics;
-- cached checking remains independent of a particular executable entry;
-- whole-program Wasm remains small;
-- the frontend retains responsibility for selecting the package dependency closure.
+Runtime-heavy frontends should also share continuations before they submit the surface tree. The
+JavaScript adapter lifts statement tails and repeated call, construction, accessor, and coercion
+resumptions into explicit functions. Its `ToPrimitive` state machine is a demand-linked definition,
+not a copy at every coercion site. These are ordinary Functional Core functions after resolution;
+the frontend-specific step only prevents continuation-passing lowering from expanding the input tree
+or producing one oversized Wasm function.
 
-Early semantic slicing may be added as an optimization, but it cannot silently change whether an
-unused invalid declaration is accepted.
+Frontends that promise diagnostics for unused declarations must validate them before selecting the
+executable roots; reachability cannot silently change whether source is accepted.
 
 ## 6. Packed ABIs and trust boundaries
 
@@ -648,13 +655,21 @@ Analysis consumes resolved indices. No pass performs string-based source name re
 Constructing `FunctionalWasmBackendPlan` is the boundary between analysis and emission. It carries
 the module and Core nodes together with capture, function, storage, entry, instrumentation, and
 compact-scalar decisions, preventing compact and general emitters from independently rebuilding
-those facts.
+those facts. Compact scalar emission is selected only when the plan proves that no Functional Store
+operation or other general-runtime feature is reachable. A module that fails this preflight goes
+directly to general emission instead of paying for a compact attempt that must be discarded.
 
 ### 10.2 Dead-code and runtime elimination
 
 [`wasm_function_analysis.ts`](src/functional/wasm_function_analysis.ts) walks global references from
 the selected entry and every explicit Wasm export. Unreachable definitions are absent from the
 artifact.
+
+Before surface encoding, [`surface_reachability.ts`](src/functional/surface_reachability.ts)
+performs the corresponding target-independent walk for linked executables and demand-linked frontend
+runtimes. This matters for runtime-heavy frontends such as JavaScript: adding an unused builtin does
+not increase GPU typechecking work for unrelated programs. The resolved Wasm analysis remains
+necessary because constant evaluation can reveal additional unreachable definitions.
 
 Feature reachability also controls runtime support. A strict effect-free scalar program can omit:
 

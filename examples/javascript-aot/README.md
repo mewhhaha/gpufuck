@@ -39,7 +39,9 @@ string and symbol property keys, data and accessor descriptors, prototypes, lexi
 and normal, return, throw, break, and continue completion records. This path executes object
 allocation, strict equality and SameValue, own and inherited property reads, dot and string-index
 writes, hoisted `var`, function objects with captured environments, calls, and cross-call throws
-caught by lexical `catch`. Identity exhaustion and dangling prototypes fail deterministically.
+caught by lexical `catch`. Identity exhaustion and dangling prototypes fail deterministically. Only
+runtime definitions reachable from the entry are encoded for GPU checking, so adding an unused
+builtin does not increase compilation work or the emitted artifact.
 
 Object records and stable binding cells live in Functional Core `Store` values, so lookup and
 updates are checked indexed operations instead of recursive host-side lists. Name and property
@@ -74,25 +76,32 @@ function calls, including supported Test262 `assert.throws` callbacks. Generator
 intentionally bounded to straight-line `yield` statements plus one final return; it lowers to a
 durable iterator state machine. Async functions currently model deterministic fulfilled values and
 immediate `then` delivery, not the ECMAScript job queue, rejection propagation, or suspension over
-host work. Basic classes do not yet provide inheritance, prototype sharing, private fields, or
-static initialization. General descriptor redefinition, data descriptors through
-`Object.defineProperty`, imports, and the remaining dynamic coercions are subsequent vertical
-slices. Runtime globals are not generally implicit; the frontend currently recognizes only the
-immutable numeric globals and statically known `typeof` cases. Dynamic code generation through
-`eval` or `Function` is rejected before GPU compilation.
+host work. Basic classes allocate one shared prototype, install instance methods there, preserve the
+class declaration temporal dead zone, and use the prototype chain for construction and `instanceof`.
+They do not yet provide inheritance, private fields, or static initialization. General descriptor
+redefinition, data descriptors through `Object.defineProperty`, imports, and the remaining dynamic
+coercions are subsequent vertical slices. Runtime globals are not generally implicit; the frontend
+currently recognizes only the immutable numeric globals and statically known `typeof` cases. Dynamic
+code generation through `eval` or `Function` is rejected before GPU compilation.
 
 The compatibility target is the complete applicable Test262 `test/language` corpus, not an informal
 JavaScript subset. `deno task check:javascript-test262` checks out the pinned upstream revision and
 reports the complete inventory, including strict and non-strict execution modes, negative-test
-phases, modules, async tests, current frontend readiness, and the intentional dynamic-code
-exclusion. Every ready required mode is compiled to a fresh artifact and executed. Readiness is
-deliberately not labeled conformance: a test passes only once the runner can execute its harness and
-observe the required result or exact failure phase. Negative probes distinguish parse, resolution,
-and runtime expectations and reject a failure at the wrong phase; runtime-ready negatives retain
-their expected error type for execution validation. Frontend probing runs in bounded subprocess
-batches so generated-parser and lowering state cannot accumulate across the complete corpus.
+phases, modules, async tests, current frontend readiness, and dynamic-code exclusions. Every ready
+required mode is compiled to a fresh artifact and executed. Readiness is deliberately not labeled
+conformance: a test passes only once the runner can execute its harness and observe the required
+result or exact failure phase. Negative probes distinguish parse, resolution, and runtime
+expectations and reject a failure at the wrong phase; runtime-ready negatives retain their expected
+error type for execution validation. Frontend probing runs in bounded subprocess batches so
+generated-parser and lowering state cannot accumulate across the complete corpus. Execution uses two
+concurrent eight-mode workers, each limited to 768 MiB RSS and 60 seconds. A worker that reaches
+either boundary is retried one mode at a time so the report names the exact offender without
+exposing the machine to unbounded compiler artifacts.
 
-At the pinned revision, all 2,047 frontend-ready positive execution modes pass GPU compilation and
-Wasm execution. This number is a progress baseline, not a conformance claim: 30,991 modes still need
-parser coverage, 2,659 still need lowering or runtime facilities, and the negative corpus still
-needs complete execution coverage after phase-aware frontend admission.
+At the pinned revision, 2,856 positive execution modes are frontend-ready. Of the 2,881 positive and
+runtime-negative modes admitted for execution, 2,621 pass GPU compilation and Wasm execution; six
+reach a semantic compilation diagnostic and 254 fail their adapted runtime assertion. No admitted
+mode reaches a compiler or runner resource limit. The runner also validates 7,294 parse or
+resolution modes at their exact negative phase. These numbers are a progress baseline, not a
+conformance claim: 30,263 modes still need parser coverage and 3,586 still need lowering or runtime
+facilities.

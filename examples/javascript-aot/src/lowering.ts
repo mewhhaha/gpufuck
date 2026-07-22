@@ -391,7 +391,7 @@ class JavaScriptAotLowering {
         functionLength: null,
         throwsAcrossCalls: false,
         zeroArgumentApplication: false,
-        constantValue: null,
+        constantValue: { kind: "name" as const, name: "undefined", span },
         objectFields: null,
         mutable: true,
         assignable: true,

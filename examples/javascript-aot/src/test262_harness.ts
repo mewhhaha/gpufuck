@@ -1,4 +1,5 @@
 import type {
+  JavaScriptAotClassMethod,
   JavaScriptAotDeclaration,
   JavaScriptAotExpression,
   JavaScriptAotModule,
@@ -44,6 +45,7 @@ export type Test262NegativeHarnessResult =
   | {
     readonly kind: "runtime-ready";
     readonly expectedType: string;
+    readonly validation: "returned-boolean" | "runtime-fault";
     readonly lowered: LoweredJavaScriptAotModule;
   }
   | { readonly kind: "mismatch"; readonly diagnostic: JavaScriptAotDiagnostic };
@@ -131,15 +133,79 @@ export function lowerTest262NegativeTest(
   }
 
   try {
-    const lowered = lowerHarnessModule(
+    if (expectation.phase === "runtime") {
+      const harnessModule = transformModuleAssertions(sourceModule);
+      if (expectation.type === "ReferenceError") {
+        return {
+          kind: "runtime-ready",
+          expectedType: expectation.type,
+          validation: "runtime-fault",
+          lowered: lowerHarnessModule(path, harnessModule, entryName, mode, {
+            allowUnresolvedReferences: true,
+          }),
+        };
+      }
+      if (requiresJavaScriptRuntimeModel(harnessModule)) {
+        return {
+          kind: "runtime-ready",
+          expectedType: expectation.type,
+          validation: "runtime-fault",
+          lowered: lowerHarnessModule(path, harnessModule, entryName, mode),
+        };
+      }
+      const caughtName = `$Test262RuntimeException${sourceModule.span.startByte}`;
+      const lowered = lowerHarnessModule(
+        path,
+        {
+          ...harnessModule,
+          declarations: harnessModule.declarations.map((declaration) => {
+            if (declaration.kind !== "function" || declaration.name !== entryName) {
+              return declaration;
+            }
+            return {
+              ...declaration,
+              body: [{
+                kind: "try",
+                body: declaration.body,
+                catchName: caughtName,
+                catchBody: [{
+                  kind: "return",
+                  value: {
+                    kind: "binary",
+                    operator: "instanceof",
+                    left: { kind: "name", name: caughtName, span: declaration.span },
+                    right: { kind: "name", name: expectation.type, span: declaration.span },
+                    span: declaration.span,
+                  },
+                  span: declaration.span,
+                }],
+                finallyBody: null,
+                span: declaration.span,
+              }, {
+                kind: "return",
+                value: { kind: "boolean", value: false, span: declaration.span },
+                span: declaration.span,
+              }],
+            };
+          }),
+        },
+        entryName,
+        mode,
+        { caughtExceptionType: expectation.type },
+      );
+      return {
+        kind: "runtime-ready",
+        expectedType: expectation.type,
+        validation: "returned-boolean",
+        lowered,
+      };
+    }
+    lowerHarnessModule(
       path,
       transformModuleAssertions(sourceModule),
       entryName,
       mode,
     );
-    if (expectation.phase === "runtime") {
-      return { kind: "runtime-ready", expectedType: expectation.type, lowered };
-    }
     return {
       kind: "mismatch",
       diagnostic: negativeMismatchDiagnostic(
@@ -280,16 +346,23 @@ function lowerHarnessModule(
   sourceModule: JavaScriptAotModule,
   entryName: string,
   mode: Test262ExecutionMode,
+  options: {
+    readonly caughtExceptionType?: string;
+    readonly allowUnresolvedReferences?: true;
+  } = {},
 ): LoweredJavaScriptAotModule {
   const runtimeFaultConstructors = new Map([
     [TEST262_FAILURE_CONSTRUCTOR, `Test262 assertion failed in ${path}.`],
-    ["Test262Error", `Test262 test failed in ${path}.`],
+    ...(options.caughtExceptionType === "Test262Error"
+      ? []
+      : [["Test262Error", `Test262Error: test failed in ${path}.`] as const]),
   ]);
-  return requiresJavaScriptRuntimeModel(sourceModule)
+  return options.allowUnresolvedReferences === true || requiresJavaScriptRuntimeModel(sourceModule)
     ? lowerJavaScriptRuntimeModule(sourceModule, entryName, {
       runtimeFaultConstructors,
       callThisMode: mode === "non-strict" || mode === "raw" ? "sloppy" : "strict",
       entryThisMode: mode === "module" ? "undefined" : "global",
+      ...(options.allowUnresolvedReferences === true ? { allowUnresolvedReferences: true } : {}),
     })
     : lowerJavaScriptAotModule(sourceModule, entryName, {
       exceptionConstructors: new Set(["Test262Error"]),
@@ -338,7 +411,12 @@ function transformDeclarationAssertions(
   if (declaration.kind === "constant") {
     return { ...declaration, value: transformExpressionAssertions(declaration.value) };
   }
-  return { ...declaration, body: declaration.body.map(transformStatementAssertions) };
+  const classMethods = declaration.classMethods?.map(transformClassMethodAssertions);
+  return {
+    ...declaration,
+    body: declaration.body.map(transformStatementAssertions),
+    ...(classMethods === undefined ? {} : { classMethods }),
+  };
 }
 
 function transformStatementAssertions(statement: JavaScriptAotStatement): JavaScriptAotStatement {
@@ -346,8 +424,14 @@ function transformStatementAssertions(statement: JavaScriptAotStatement): JavaSc
     case "break":
     case "continue":
       return statement;
-    case "function-declaration":
-      return { ...statement, body: statement.body.map(transformStatementAssertions) };
+    case "function-declaration": {
+      const classMethods = statement.classMethods?.map(transformClassMethodAssertions);
+      return {
+        ...statement,
+        body: statement.body.map(transformStatementAssertions),
+        ...(classMethods === undefined ? {} : { classMethods }),
+      };
+    }
     case "constant":
     case "mutable":
     case "assignment":
@@ -410,6 +494,20 @@ function transformStatementAssertions(statement: JavaScriptAotStatement): JavaSc
   }
 }
 
+function transformClassMethodAssertions(
+  method: JavaScriptAotClassMethod,
+): JavaScriptAotClassMethod {
+  const value = transformExpressionAssertions(method.value);
+  if (value.kind !== "function") {
+    throw new Error(
+      `Test262 assertion transformation changed class method ${
+        JSON.stringify(method.name)
+      } into ${value.kind}.`,
+    );
+  }
+  return { ...method, value };
+}
+
 function transformThrowsAssertion(
   expression: JavaScriptAotExpression,
   span: JavaScriptAotStatement["span"],
@@ -451,15 +549,15 @@ function transformThrowsAssertion(
     kind: "block",
     statements: [{
       kind: "try",
-      body: [...callback.body, { kind: "return", value: failure, span }],
+      body: [...callback.body, { kind: "throw", value: failure, span }],
       catchName: caughtName,
       catchBody: [{
         kind: "expression",
         value: assertionExpression(
           binaryExpression(
-            "===",
+            "instanceof",
             { kind: "name", name: caughtName, span },
-            { kind: "new", constructor: expected.name, arguments: [], span },
+            expected,
             span,
           ),
           span,
@@ -679,7 +777,7 @@ function assertionExpression(
 }
 
 function binaryExpression(
-  operator: "===" | "!==" | "same-value" | "not-same-value",
+  operator: "===" | "!==" | "instanceof" | "same-value" | "not-same-value",
   left: JavaScriptAotExpression,
   right: JavaScriptAotExpression,
   span: JavaScriptAotExpression["span"],

@@ -131,7 +131,37 @@ throw new TypeError();
   );
 
   equal(result.kind, "runtime-ready");
-  if (result.kind === "runtime-ready") equal(result.expectedType, "TypeError");
+  if (result.kind === "runtime-ready") {
+    equal(result.expectedType, "TypeError");
+    equal(result.validation, "returned-boolean");
+  }
+});
+
+Deno.test("routes temporal-dead-zone negatives through runtime faults", () => {
+  const path = "test/language/runtime-tdz.js";
+  const source = `/*---
+flags: [noStrict]
+negative:
+  phase: runtime
+  type: ReferenceError
+---*/
+value;
+let value;
+`;
+  const metadata = parseTest262Metadata(path, source);
+  const result = lowerTest262NegativeTest(
+    path,
+    source,
+    metadata,
+    "entry",
+    "non-strict",
+  );
+
+  equal(result.kind, "runtime-ready");
+  if (result.kind === "runtime-ready") {
+    equal(result.expectedType, "ReferenceError");
+    equal(result.validation, "runtime-fault");
+  }
 });
 
 Deno.test("reports a Test262 negative failure that occurs in the wrong phase", () => {
@@ -180,6 +210,59 @@ const = 1;
     mode: "strict",
     phase: "parse",
     expectedType: "SyntaxError",
+  }]);
+});
+
+Deno.test("rejects restricted assignments during strict-mode parsing", () => {
+  const path = "test/language/strict-arguments-assignment.js";
+  const source = `/*---
+flags: [onlyStrict]
+negative:
+  phase: parse
+  type: SyntaxError
+---*/
+$DONOTEVALUATE();
+function fail() {
+  arguments = 7;
+}
+`;
+  const probe = probeApplicableTest262Source(
+    `/checkout/${path}`,
+    path,
+    source,
+    "entry",
+  );
+
+  deepStrictEqual(probe.outcomes, [{
+    kind: "negative-ready",
+    mode: "strict",
+    phase: "parse",
+    expectedType: "SyntaxError",
+  }]);
+});
+
+Deno.test("keeps unresolved name reads in the runtime ReferenceError phase", () => {
+  const path = "test/language/runtime-reference-error.js";
+  const source = `/*---
+flags: [noStrict]
+negative:
+  phase: runtime
+  type: ReferenceError
+---*/
+missingBinding;
+`;
+  const probe = probeApplicableTest262Source(
+    `/checkout/${path}`,
+    path,
+    source,
+    "entry",
+  );
+
+  deepStrictEqual(probe.outcomes, [{
+    kind: "negative-ready",
+    mode: "non-strict",
+    phase: "runtime",
+    expectedType: "ReferenceError",
   }]);
 });
 
@@ -303,6 +386,29 @@ assert.sameValue(point.answer, 42);
   const metadata = parseTest262Metadata("test/language/runtime-object.js", source);
   const result = lowerTest262PositiveTest(
     "test/language/runtime-object.js",
+    source,
+    metadata,
+    "testEntry",
+    "non-strict",
+  );
+
+  equal(result.ok, true, result.ok ? undefined : result.diagnostics[0].message);
+});
+
+Deno.test("transforms Test262 assertions inside class methods", () => {
+  const source = `/*---
+flags: [noStrict]
+---*/
+class Counter {
+  verify() {
+    assert.sameValue(arguments.length, 2);
+  }
+}
+Counter.prototype.verify(40, 2);
+`;
+  const metadata = parseTest262Metadata("test/language/class-method.js", source);
+  const result = lowerTest262PositiveTest(
+    "test/language/class-method.js",
     source,
     metadata,
     "testEntry",

@@ -38,7 +38,7 @@ statement = class_declaration | generator_declaration | async_function_declarati
 statement_body = block | if_statement | non_if_statement ;
 non_if_statement = class_declaration | generator_declaration | async_function_declaration | function_declaration | constant_statement | mutable_statement | var_statement | assignment_statement | update_statement | yield_statement | return_statement | throw_statement | break_statement | continue_statement | try_statement | while_statement | for_statement | expression_statement | empty_statement ;
 constant_statement = "const" name:IDENT "=" value:expr ";" ;
-mutable_statement = "let" name:IDENT "=" value:expr ";" ;
+mutable_statement = "let" name:IDENT initializer:variable_initializer? ";" ;
 var_statement = "var" declarations:variable_declaration_list ";" ;
 variable_declaration_list = head:variable_declarator tail:variable_declaration_tail* ;
 variable_declaration_tail = "," value:variable_declarator ;

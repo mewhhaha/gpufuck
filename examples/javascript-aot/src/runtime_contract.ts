@@ -23,6 +23,7 @@ export const JAVASCRIPT_PROPERTY_KEY_SYMBOL = "$javascript#SymbolKey";
 export const JAVASCRIPT_OBJECT_KIND_TYPE = "$javascript#ObjectKind";
 export const JAVASCRIPT_OBJECT_ORDINARY = "$javascript#OrdinaryObject";
 export const JAVASCRIPT_OBJECT_CALLABLE = "$javascript#CallableObject";
+export const JAVASCRIPT_OBJECT_ERROR = "$javascript#ErrorObject";
 
 export const JAVASCRIPT_THIS_BINDING_TYPE = "$javascript#ThisBinding";
 export const JAVASCRIPT_THIS_DYNAMIC = "$javascript#DynamicThis";
@@ -212,6 +213,11 @@ export function javascriptRuntimeTypeDeclarations(
           { name: "environment", type: environmentType, span },
           { name: "thisBinding", type: thisBindingType, span },
         ],
+        span,
+      },
+      {
+        name: JAVASCRIPT_OBJECT_ERROR,
+        fields: [{ name: "name", type: textType, span }],
         span,
       },
     ],

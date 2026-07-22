@@ -30,6 +30,7 @@ import {
   JAVASCRIPT_MAXIMUM_BINDING_COUNT,
   JAVASCRIPT_MAXIMUM_OBJECT_COUNT,
   JAVASCRIPT_OBJECT_CALLABLE,
+  JAVASCRIPT_OBJECT_ERROR,
   JAVASCRIPT_OBJECT_ORDINARY,
   JAVASCRIPT_OBJECT_RECORD,
   JAVASCRIPT_PROPERTY_KEY_STRING,
@@ -76,6 +77,7 @@ export const JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY_DESCRIPTOR = "$javascript#lookup
 export const JAVASCRIPT_RUNTIME_LOOKUP_OWN_PROPERTY = "$javascript#lookupOwnProperty";
 export const JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY = "$javascript#lookupProperty";
 export const JAVASCRIPT_RUNTIME_OBJECT_KIND = "$javascript#objectKind";
+export const JAVASCRIPT_RUNTIME_HAS_PROTOTYPE = "$javascript#hasPrototype";
 export const JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED =
   "$javascript#defineOwnPropertyUnchecked";
 export const JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT = "$javascript#allocateObject";
@@ -480,6 +482,11 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
           binders: ["typeofTarget", "typeofRealm", "typeofEnvironment", "typeofThis"],
           body: text("function", span),
           span,
+        }, {
+          constructor: JAVASCRIPT_OBJECT_ERROR,
+          binders: ["typeofErrorName"],
+          body: text("object", span),
+          span,
         }],
         span,
       ),
@@ -547,6 +554,11 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
             "callableThis",
           ],
           body: boolean(true, span),
+          span,
+        }, {
+          constructor: JAVASCRIPT_OBJECT_ERROR,
+          binders: ["callableErrorName"],
+          body: boolean(false, span),
           span,
         }],
         span,
@@ -879,6 +891,48 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         constructor: JAVASCRIPT_OBJECT_RECORD,
         binders: ["prototype", "extensible", "objectKind", "properties"],
         body: reference("objectKind", span),
+        span,
+      }],
+      span,
+    ),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_HAS_PROTOTYPE,
+    parameters: ["objects", "identity", "expectedPrototypeIdentity"],
+    annotation: null,
+    body: match(
+      call(LOOKUP_OBJECT, [
+        reference("objects", span),
+        reference("identity", span),
+      ], span),
+      [{
+        constructor: JAVASCRIPT_OBJECT_RECORD,
+        binders: ["prototype", "extensible", "objectKind", "properties"],
+        body: match(reference("prototype", span), [{
+          constructor: JAVASCRIPT_VALUE_NULL,
+          binders: [],
+          body: boolean(false, span),
+          span,
+        }, {
+          constructor: JAVASCRIPT_VALUE_OBJECT,
+          binders: ["prototypeIdentity"],
+          body: conditional(
+            binary(
+              FunctionalBinaryOperator.Equal,
+              reference("prototypeIdentity", span),
+              reference("expectedPrototypeIdentity", span),
+              span,
+            ),
+            boolean(true, span),
+            call(JAVASCRIPT_RUNTIME_HAS_PROTOTYPE, [
+              reference("objects", span),
+              reference("prototypeIdentity", span),
+              reference("expectedPrototypeIdentity", span),
+            ], span),
+            span,
+          ),
+          span,
+        }, ...invalidPrototypeArms(span)], span),
         span,
       }],
       span,

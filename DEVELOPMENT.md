@@ -92,15 +92,19 @@ all 19 package modules and all 1,521 JavaScript-targeted tests in bounded batche
 roughly 90 seconds on the GPU used for development.
 
 `check:javascript-test262` pins the upstream Test262 checkout and inventories every standalone test
-under `test/language`. It excludes only the `eval` corpus required by dynamic source generation,
-which the AOT profile intentionally forbids. Its frontend-readiness counts are a development
-baseline, not conformance results: positive tests are wrapped with an AOT entry and negative tests
-remain pending until the runner can verify the specified parse, resolution, or runtime phase
-exactly. Every frontend-ready strict, non-strict, module, or raw mode is compiled as a fresh GPU
-artifact and executed independently. An existing checkout at the pinned commit may be passed as the
-first argument. The current pinned baseline is 1,970 successful adapted executions with no compiler
-or runtime failures; the runner reports the remaining parser, lowering, and negative-phase work
-separately rather than presenting that baseline as conformance.
+under `test/language`. Dynamic source generation remains outside the AOT profile. Its
+frontend-readiness counts are a development baseline, not conformance results: positive tests are
+wrapped with an AOT entry and negative tests must fail in their specified parse, resolution, or
+runtime phase. Every frontend-ready strict, non-strict, module, or raw mode is compiled as a fresh
+GPU artifact and executed independently. Execution workers are limited to 768 MiB RSS and 60
+seconds; a limited eight-mode batch is retried one mode at a time to preserve exact attribution. An
+existing checkout at the pinned commit may be passed as the first argument.
+
+The current pinned baseline admits 2,881 positive and runtime-negative modes for execution: 2,621
+pass, six reach a semantic compilation diagnostic, and 254 fail at runtime. No admitted mode reaches
+a compiler or runner resource limit. Another 7,294 negative modes pass at their exact parse or
+resolution phase. The task exits nonzero while any admitted mode fails, and `--report=<path>`
+preserves the complete JSON result for comparison.
 
 `deno task test` uses `deno test --parallel` with `DENO_JOBS=2`. GPU tests are not ordinary
 millisecond unit tests: some deliberately force workspace growth, single-transition dispatches,
