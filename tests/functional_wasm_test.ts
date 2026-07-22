@@ -4009,6 +4009,30 @@ Deno.test("eliminates definitions unreachable from the linked entry", () => {
   deepStrictEqual(linked.module.hostCapabilities, []);
 });
 
+Deno.test("retains definitions referenced by storage expressions", () => {
+  const linked = linkFunctionalModules([{
+    name: "application",
+    definitions: [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.storeNew(surface.integer(1), surface.name("initialValue")),
+    }, {
+      name: "initialValue",
+      parameters: [],
+      annotation: null,
+      body: surface.integer(42),
+    }],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "main", definition: "main" }],
+    sourceByteLength: 0,
+    options: {},
+  }], { module: "application", exportName: "main" });
+
+  equal(linked.module.definitionCount, 2);
+});
+
 Deno.test("retains Init capabilities used by a linked entry", async () => {
   const linked = linkFunctionalModules([{
     name: "application",

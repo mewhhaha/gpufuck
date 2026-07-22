@@ -148,6 +148,7 @@ function isCoreTag(tag: number): boolean {
     case FunctionalCoreTag.Boolean:
     case FunctionalCoreTag.Text:
     case FunctionalCoreTag.Bytes:
+    case FunctionalCoreTag.RuntimeFault:
     case FunctionalCoreTag.Local:
     case FunctionalCoreTag.Global:
     case FunctionalCoreTag.Constructor:

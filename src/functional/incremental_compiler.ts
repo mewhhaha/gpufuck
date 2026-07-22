@@ -792,6 +792,9 @@ function portableChildValues(node: PortableCoreNode): readonly number[] {
     case FunctionalCoreTag.Integer:
     case FunctionalCoreTag.Float32:
     case FunctionalCoreTag.Boolean:
+    case FunctionalCoreTag.Text:
+    case FunctionalCoreTag.Bytes:
+    case FunctionalCoreTag.RuntimeFault:
     case FunctionalCoreTag.Local:
     case FunctionalCoreTag.Global:
     case FunctionalCoreTag.Constructor:

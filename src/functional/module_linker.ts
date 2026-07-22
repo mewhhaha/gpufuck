@@ -10,6 +10,7 @@ import type {
   FunctionalSurfaceModuleOptions,
 } from "./host_contract.ts";
 import { FUNCTIONAL_INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
+import { analyzeFunctionalSurfaceReachability } from "./surface_reachability.ts";
 import {
   buildFunctionalSurfaceModule,
   type FunctionalSurfaceCaseArm,
@@ -540,7 +541,7 @@ export function linkFunctionalModules(
       }`,
     });
   }
-  const reachability = analyzeLinkedDefinitionReachability(linkedDefinitions, [
+  const reachability = analyzeFunctionalSurfaceReachability(linkedDefinitions, [
     entryDefinition,
     ...linkedWasmExports.map((exported) => exported.definition),
   ]);
@@ -556,7 +557,7 @@ export function linkFunctionalModules(
     fields.add(binding.field);
     reachableHostFields.set(binding.capability, fields);
   }
-  const reachableCapabilities = reachability.usesHostInit
+  const reachableCapabilities = reachability.referencedSymbols.has(FUNCTIONAL_INIT_CONSTRUCTOR_NAME)
     ? capabilities
     : capabilities.flatMap((capability) => {
       const fields = reachableHostFields.get(capability.name);
@@ -582,82 +583,6 @@ export function linkFunctionalModules(
     module: { ...module, sources: Object.freeze(sources) },
     sources: Object.freeze(sources),
   };
-}
-
-function analyzeLinkedDefinitionReachability(
-  definitions: readonly FunctionalSurfaceDefinition[],
-  roots: readonly string[],
-): {
-  readonly definitionNames: ReadonlySet<string>;
-  readonly usesHostInit: boolean;
-} {
-  const definitionsByName = new Map(definitions.map((definition) => [definition.name, definition]));
-  const reachable = new Set<string>();
-  const pending = [...roots];
-  let usesHostInit = false;
-  while (pending.length > 0) {
-    const definitionName = pending.pop()!;
-    if (reachable.has(definitionName)) continue;
-    const definition = definitionsByName.get(definitionName);
-    if (definition === undefined) continue;
-    reachable.add(definitionName);
-    const expressions: FunctionalSurfaceExpression[] = [definition.body];
-    while (expressions.length > 0) {
-      const expression = expressions.pop()!;
-      switch (expression.kind) {
-        case "name":
-          if (expression.name === FUNCTIONAL_INIT_CONSTRUCTOR_NAME) usesHostInit = true;
-          if (definitionsByName.has(expression.name) && !reachable.has(expression.name)) {
-            pending.push(expression.name);
-          }
-          break;
-        case "text-append":
-        case "bytes-append":
-        case "binary":
-          expressions.push(expression.left, expression.right);
-          break;
-        case "apply":
-          expressions.push(expression.callee, expression.argument);
-          break;
-        case "lambda":
-          expressions.push(expression.body);
-          break;
-        case "let":
-        case "let-rec":
-          expressions.push(expression.value, expression.body);
-          break;
-        case "let-rec-group":
-          expressions.push(expression.body, ...expression.bindings.map((binding) => binding.body));
-          break;
-        case "if":
-          expressions.push(expression.condition, expression.consequent, expression.alternate);
-          break;
-        case "unary":
-        case "numeric-convert":
-          expressions.push(expression.value);
-          break;
-        case "case":
-          if (
-            expression.arms.some((arm) => arm.constructor === FUNCTIONAL_INIT_CONSTRUCTOR_NAME)
-          ) {
-            usesHostInit = true;
-          }
-          expressions.push(expression.value, ...expression.arms.map((arm) => arm.body));
-          break;
-        case "integer":
-        case "signed-integer-64":
-        case "float-32":
-        case "float-64":
-        case "whole-number-f64":
-        case "boolean":
-        case "text":
-        case "bytes":
-        case "runtime-fault":
-          break;
-      }
-    }
-  }
-  return { definitionNames: reachable, usesHostInit };
 }
 
 function rewriteExpression(

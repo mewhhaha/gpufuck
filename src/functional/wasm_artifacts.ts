@@ -38,6 +38,10 @@ const instrumentedWasmByResolvedCore = new Map<
   string,
   Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }>
 >();
+const wasmArtifactsByResolvedCore = new Map<
+  string,
+  Promise<FunctionalWasmArtifact>
+>();
 
 export async function compileFunctionalModuleToWasm(
   module: GpuFunctionalModule,
@@ -118,8 +122,32 @@ export async function cachedFunctionalWasmArtifact(
   return await cachedModuleValue(
     wasmArtifactsByModule,
     module,
-    () => module.readCoreNodes().then((nodes) => compileFunctionalWasmArtifact(module, nodes)),
+    () => module.readCoreNodes().then((nodes) => sharedFunctionalWasmArtifact(module, nodes)),
   );
+}
+
+async function sharedFunctionalWasmArtifact(
+  module: GpuFunctionalModule,
+  nodes: readonly FunctionalCoreNode[],
+): Promise<FunctionalWasmArtifact> {
+  const fingerprint = await resolvedCoreFingerprint(module, nodes);
+  const cached = wasmArtifactsByResolvedCore.get(fingerprint);
+  if (cached !== undefined) {
+    wasmArtifactsByResolvedCore.delete(fingerprint);
+    wasmArtifactsByResolvedCore.set(fingerprint, cached);
+    return await cached;
+  }
+  const compilation = Promise.resolve().then(() => compileFunctionalWasmArtifact(module, nodes));
+  wasmArtifactsByResolvedCore.set(fingerprint, compilation);
+  evictOldestResolvedCoreArtifacts(wasmArtifactsByResolvedCore);
+  try {
+    return await compilation;
+  } catch (error) {
+    if (wasmArtifactsByResolvedCore.get(fingerprint) === compilation) {
+      wasmArtifactsByResolvedCore.delete(fingerprint);
+    }
+    throw error;
+  }
 }
 
 export async function cachedExecutableWasm(
@@ -162,7 +190,7 @@ async function sharedFuelInstrumentedWasm(
     return { ...artifact, executable: new WebAssembly.Module(artifact.bytes) };
   });
   instrumentedWasmByResolvedCore.set(fingerprint, compilation);
-  evictOldestResolvedCoreArtifacts();
+  evictOldestResolvedCoreArtifacts(instrumentedWasmByResolvedCore);
   try {
     return await compilation;
   } catch (error) {
@@ -173,11 +201,13 @@ async function sharedFuelInstrumentedWasm(
   }
 }
 
-function evictOldestResolvedCoreArtifacts(): void {
-  while (instrumentedWasmByResolvedCore.size > MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS) {
-    const oldest = instrumentedWasmByResolvedCore.keys().next().value;
+function evictOldestResolvedCoreArtifacts<Value>(
+  artifacts: Map<string, Promise<Value>>,
+): void {
+  while (artifacts.size > MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS) {
+    const oldest = artifacts.keys().next().value;
     if (oldest === undefined) return;
-    instrumentedWasmByResolvedCore.delete(oldest);
+    artifacts.delete(oldest);
   }
 }
 

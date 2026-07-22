@@ -11,7 +11,7 @@ export interface FunctionalLambdaSet {
 }
 
 interface FlowState {
-  readonly lambdaNodes: Set<number>;
+  lambdaNodes: Set<number> | undefined;
   incomplete: boolean;
 }
 
@@ -41,8 +41,8 @@ export class FunctionalLambdaSetAnalysis {
   readonly #module: GpuFunctionalModule;
   readonly #nodes: readonly FunctionalCoreNode[];
   readonly #states: FlowState[];
-  readonly #edges: Set<number>[];
-  readonly #applicationsByCallee: ApplicationConstraint[][];
+  readonly #edges: (Set<number> | undefined)[];
+  readonly #applicationsByCallee: (ApplicationConstraint[] | undefined)[];
   readonly #lambdaBodies = new Map<number, number>();
   readonly #constructorFieldOffsets: readonly number[];
   readonly #binderBase: number;
@@ -51,6 +51,7 @@ export class FunctionalLambdaSetAnalysis {
   readonly #externalValue: number;
   readonly #workQueue: number[] = [];
   readonly #queued: boolean[];
+  readonly #lambdaSets: (FunctionalLambdaSet | undefined)[];
 
   constructor(module: GpuFunctionalModule, nodes: readonly FunctionalCoreNode[]) {
     this.#module = module;
@@ -69,11 +70,12 @@ export class FunctionalLambdaSetAnalysis {
     const flowVariableCount = this.#externalValue + 1;
     this.#states = Array.from(
       { length: flowVariableCount },
-      () => ({ lambdaNodes: new Set<number>(), incomplete: false }),
+      () => ({ lambdaNodes: undefined, incomplete: false }),
     );
-    this.#edges = Array.from({ length: flowVariableCount }, () => new Set<number>());
-    this.#applicationsByCallee = Array.from({ length: flowVariableCount }, () => []);
+    this.#edges = Array.from({ length: flowVariableCount }, () => undefined);
+    this.#applicationsByCallee = Array.from({ length: flowVariableCount }, () => undefined);
     this.#queued = Array.from({ length: flowVariableCount }, () => false);
+    this.#lambdaSets = Array.from({ length: nodes.length }, () => undefined);
 
     this.#markIncomplete(this.#externalValue);
     this.#markEscapingConstructorFieldsIncomplete();
@@ -95,20 +97,25 @@ export class FunctionalLambdaSetAnalysis {
       result: this.#externalValue,
       connectedLambdaNodes: new Set<number>(),
     };
-    this.#applicationsByCallee[entryApplication.callee]!.push(entryApplication);
+    this.#applicationsByCallee[entryApplication.callee] = [entryApplication];
     this.#enqueue(entryApplication.callee);
     this.#solve();
   }
 
   lambdaSet(nodeIndex: number): FunctionalLambdaSet {
+    const cached = this.#lambdaSets[nodeIndex];
+    if (cached !== undefined) return cached;
     const state = this.#state(this.#nodeVariable(nodeIndex));
-    return Object.freeze({
-      lambdaNodes: Object.freeze([...state.lambdaNodes].sort((left, right) => left - right)),
+    const lambdaNodes = state.lambdaNodes ?? [];
+    const lambdaSet = Object.freeze({
+      lambdaNodes: Object.freeze([...lambdaNodes].sort((left, right) => left - right)),
       complete: !state.incomplete,
     });
+    this.#lambdaSets[nodeIndex] = lambdaSet;
+    return lambdaSet;
   }
 
-  #visitExpression(nodeIndex: number, environment: readonly number[]): void {
+  #visitExpression(nodeIndex: number, environment: number[]): void {
     const node = this.#node(nodeIndex);
     switch (node.tag) {
       case FunctionalCoreTag.Integer:
@@ -119,7 +126,7 @@ export class FunctionalLambdaSetAnalysis {
       case FunctionalCoreTag.Boolean:
         return;
       case FunctionalCoreTag.Local: {
-        const binding = environment[node.payload];
+        const binding = environment[environment.length - node.payload - 1];
         if (binding === undefined) {
           throw new Error(
             `functional lambda-set local depth ${node.payload} at node ${nodeIndex} exceeds environment depth ${environment.length}`,
@@ -148,7 +155,9 @@ export class FunctionalLambdaSetAnalysis {
       case FunctionalCoreTag.Lambda: {
         this.#addLambda(this.#nodeVariable(nodeIndex), nodeIndex);
         this.#lambdaBodies.set(nodeIndex, node.child0);
-        this.#visitExpression(node.child0, [this.#binderVariable(nodeIndex), ...environment]);
+        environment.push(this.#binderVariable(nodeIndex));
+        this.#visitExpression(node.child0, environment);
+        environment.pop();
         return;
       }
       case FunctionalCoreTag.Apply:
@@ -159,13 +168,17 @@ export class FunctionalLambdaSetAnalysis {
       case FunctionalCoreTag.Let:
         this.#visitExpression(node.child0, environment);
         this.#addEdge(this.#nodeVariable(node.child0), this.#binderVariable(nodeIndex));
-        this.#visitExpression(node.child1, [this.#binderVariable(nodeIndex), ...environment]);
+        environment.push(this.#binderVariable(nodeIndex));
+        this.#visitExpression(node.child1, environment);
+        environment.pop();
         this.#addEdge(this.#nodeVariable(node.child1), this.#nodeVariable(nodeIndex));
         return;
       case FunctionalCoreTag.LetRec:
-        this.#visitExpression(node.child0, [this.#binderVariable(nodeIndex), ...environment]);
+        environment.push(this.#binderVariable(nodeIndex));
+        this.#visitExpression(node.child0, environment);
         this.#addEdge(this.#nodeVariable(node.child0), this.#binderVariable(nodeIndex));
-        this.#visitExpression(node.child1, [this.#binderVariable(nodeIndex), ...environment]);
+        this.#visitExpression(node.child1, environment);
+        environment.pop();
         this.#addEdge(this.#nodeVariable(node.child1), this.#nodeVariable(nodeIndex));
         return;
       case FunctionalCoreTag.If:
@@ -233,12 +246,17 @@ export class FunctionalLambdaSetAnalysis {
       result: this.#nodeVariable(nodeIndex),
       connectedLambdaNodes: new Set<number>(),
     };
-    this.#applicationsByCallee[application.callee]!.push(application);
+    const applications = this.#applicationsByCallee[application.callee];
+    if (applications === undefined) {
+      this.#applicationsByCallee[application.callee] = [application];
+    } else {
+      applications.push(application);
+    }
   }
 
   #visitCaseArms(
     firstArm: number,
-    environment: readonly number[],
+    environment: number[],
     caseNode: number,
   ): void {
     let armIndex = firstArm;
@@ -257,7 +275,7 @@ export class FunctionalLambdaSetAnalysis {
       }
 
       let body = arm.child0;
-      let armEnvironment = [...environment];
+      const outerEnvironmentDepth = environment.length;
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
         const binding = this.#node(body);
         if (binding.tag !== FunctionalCoreTag.PatternBind) {
@@ -270,10 +288,11 @@ export class FunctionalLambdaSetAnalysis {
           this.#constructorField(arm.payload, field),
           this.#binderVariable(body),
         );
-        armEnvironment = [this.#binderVariable(body), ...armEnvironment];
+        environment.push(this.#binderVariable(body));
         body = binding.child0;
       }
-      this.#visitExpression(body, armEnvironment);
+      this.#visitExpression(body, environment);
+      environment.length = outerEnvironmentDepth;
       this.#addEdge(this.#nodeVariable(body), this.#nodeVariable(caseNode));
       armIndex = arm.child1;
     }
@@ -285,8 +304,8 @@ export class FunctionalLambdaSetAnalysis {
       const source = this.#workQueue[nextVariable]!;
       nextVariable += 1;
       this.#queued[source] = false;
-      for (const target of this.#edges[source]!) this.#merge(source, target);
-      for (const application of this.#applicationsByCallee[source]!) {
+      for (const target of this.#edges[source] ?? []) this.#merge(source, target);
+      for (const application of this.#applicationsByCallee[source] ?? []) {
         this.#connectApplication(application);
       }
     }
@@ -295,7 +314,7 @@ export class FunctionalLambdaSetAnalysis {
   #connectApplication(application: ApplicationConstraint): void {
     const callee = this.#state(application.callee);
     if (callee.incomplete) this.#markIncomplete(application.result);
-    for (const lambdaNode of callee.lambdaNodes) {
+    for (const lambdaNode of callee.lambdaNodes ?? []) {
       if (application.connectedLambdaNodes.has(lambdaNode)) continue;
       application.connectedLambdaNodes.add(lambdaNode);
       const body = this.#lambdaBodies.get(lambdaNode);
@@ -310,7 +329,11 @@ export class FunctionalLambdaSetAnalysis {
   }
 
   #addEdge(source: number, target: number): void {
-    const targets = this.#edges[source]!;
+    let targets = this.#edges[source];
+    if (targets === undefined) {
+      targets = new Set<number>();
+      this.#edges[source] = targets;
+    }
     if (targets.has(target)) return;
     targets.add(target);
     this.#merge(source, target);
@@ -324,15 +347,16 @@ export class FunctionalLambdaSetAnalysis {
       targetState.incomplete = true;
       changed = true;
     }
-    if (!targetState.incomplete) {
+    if (!targetState.incomplete && sourceState.lambdaNodes !== undefined) {
       for (const lambdaNode of sourceState.lambdaNodes) {
-        if (targetState.lambdaNodes.has(lambdaNode)) continue;
-        if (targetState.lambdaNodes.size === MAXIMUM_LAMBDA_SET_SIZE) {
-          targetState.lambdaNodes.clear();
+        if (targetState.lambdaNodes?.has(lambdaNode)) continue;
+        if (targetState.lambdaNodes?.size === MAXIMUM_LAMBDA_SET_SIZE) {
+          targetState.lambdaNodes = undefined;
           targetState.incomplete = true;
           changed = true;
           break;
         }
+        targetState.lambdaNodes ??= new Set<number>();
         targetState.lambdaNodes.add(lambdaNode);
         changed = true;
       }
@@ -342,11 +366,12 @@ export class FunctionalLambdaSetAnalysis {
 
   #addLambda(variable: number, lambdaNode: number): void {
     const state = this.#state(variable);
-    if (state.incomplete || state.lambdaNodes.has(lambdaNode)) return;
-    if (state.lambdaNodes.size === MAXIMUM_LAMBDA_SET_SIZE) {
-      state.lambdaNodes.clear();
+    if (state.incomplete || state.lambdaNodes?.has(lambdaNode)) return;
+    if (state.lambdaNodes?.size === MAXIMUM_LAMBDA_SET_SIZE) {
+      state.lambdaNodes = undefined;
       state.incomplete = true;
     } else {
+      state.lambdaNodes ??= new Set<number>();
       state.lambdaNodes.add(lambdaNode);
     }
     this.#enqueue(variable);

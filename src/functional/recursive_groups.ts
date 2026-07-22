@@ -221,7 +221,10 @@ function elaborateRecursiveGroup(
   }
 
   for (const binding of bindings) {
-    const rewritten = rewriteNames(binding.body, replacements, new Set(binding.parameters));
+    const shadowedReplacements = new Set(
+      binding.parameters.filter((parameter) => replacements.has(parameter)),
+    );
+    const rewritten = rewriteNames(binding.body, replacements, shadowedReplacements);
     const parameters = [...captureNames, ...binding.parameters];
     elaboration.definitions.push({
       name: requiredMapValue(generatedNames, binding.name),
@@ -266,16 +269,26 @@ function rewriteNames(
     case "lambda":
       return {
         ...expression,
-        body: rewrite(expression.body, withName(boundNames, expression.parameter)),
+        body: rewrite(
+          expression.body,
+          withReplacementNames(boundNames, [expression.parameter], replacements),
+        ),
       };
     case "let":
       return {
         ...expression,
         value: rewrite(expression.value),
-        body: rewrite(expression.body, withName(boundNames, expression.name)),
+        body: rewrite(
+          expression.body,
+          withReplacementNames(boundNames, [expression.name], replacements),
+        ),
       };
     case "let-rec": {
-      const recursiveScope = withName(boundNames, expression.name);
+      const recursiveScope = withReplacementNames(
+        boundNames,
+        [expression.name],
+        replacements,
+      );
       return {
         ...expression,
         value: rewrite(expression.value, recursiveScope),
@@ -283,12 +296,19 @@ function rewriteNames(
       };
     }
     case "let-rec-group": {
-      const groupScope = withNames(boundNames, expression.bindings.map((binding) => binding.name));
+      const groupScope = withReplacementNames(
+        boundNames,
+        expression.bindings.map((binding) => binding.name),
+        replacements,
+      );
       return {
         ...expression,
         bindings: expression.bindings.map((binding) => ({
           ...binding,
-          body: rewrite(binding.body, withNames(groupScope, binding.parameters)),
+          body: rewrite(
+            binding.body,
+            withReplacementNames(groupScope, binding.parameters, replacements),
+          ),
         })),
         body: rewrite(expression.body, groupScope),
       };
@@ -343,7 +363,10 @@ function rewriteNames(
         value: rewrite(expression.value),
         arms: expression.arms.map((arm) => ({
           ...arm,
-          body: rewrite(arm.body, withNames(boundNames, arm.binders)),
+          body: rewrite(
+            arm.body,
+            withReplacementNames(boundNames, arm.binders, replacements),
+          ),
         })),
       };
   }
@@ -456,6 +479,20 @@ function withNames(names: ReadonlySet<string>, additions: Iterable<string>): Set
   const result = new Set(names);
   for (const name of additions) result.add(name);
   return result;
+}
+
+function withReplacementNames(
+  names: ReadonlySet<string>,
+  additions: Iterable<string>,
+  replacements: ReadonlyMap<string, FunctionalSurfaceExpression>,
+): ReadonlySet<string> {
+  let result: Set<string> | undefined;
+  for (const name of additions) {
+    if (!replacements.has(name) || names.has(name)) continue;
+    if (result === undefined) result = new Set(names);
+    result.add(name);
+  }
+  return result ?? names;
 }
 
 function requireUniqueName(name: string, names: Set<string>, location: string): void {

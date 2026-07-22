@@ -40,7 +40,10 @@ import {
   type FunctionalCompiledCoreArtifact,
 } from "./core_artifact.ts";
 import type { FunctionalEffectCoreModule } from "./effect_core_contract.ts";
-import { GpuFunctionalEffectCoreVerifier } from "./effect_core.ts";
+import {
+  FUNCTIONAL_EFFECT_CORE_MAXIMUM_TRANSITIONS_PER_DISPATCH,
+  GpuFunctionalEffectCoreVerifier,
+} from "./effect_core.ts";
 import { normalizeFunctionalHostCapabilities } from "./host_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import { buildFunctionalSurfaceModule } from "./surface_builder.ts";
@@ -61,9 +64,9 @@ export type {
 
 const DEFAULT_MAXIMUM_COMPILATION_STEPS = 1_000_000;
 const HARD_MAXIMUM_COMPILATION_STEPS = 10_000_000;
-const DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 65_536;
+const DEFAULT_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 524_288;
 const DEFAULT_CANCELLABLE_COMPILATION_STEPS_PER_DISPATCH = 16_384;
-const HARD_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 65_536;
+const HARD_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 524_288;
 // One source byte upper-bounds one schema or type-parameter record. Six KiB covers its
 // semantic storage, inference metadata/workspace/output/readback, and one workspace growth.
 const COMPILATION_TRANSIENT_BYTES_PER_INPUT = 6_144;
@@ -171,7 +174,10 @@ export class GpuFunctionalCompiler {
     const effectVerifier = await this.#effectVerifier;
     const effect = await effectVerifier.verifyAndLower(effectModule, {
       maximumTransitions: limits.maximumSteps,
-      maximumTransitionsPerDispatch: limits.maximumStepsPerDispatch,
+      maximumTransitionsPerDispatch: Math.min(
+        limits.maximumStepsPerDispatch,
+        FUNCTIONAL_EFFECT_CORE_MAXIMUM_TRANSITIONS_PER_DISPATCH,
+      ),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
     if (!effect.ok) return { ok: false, diagnostics: [effect.diagnostic] };

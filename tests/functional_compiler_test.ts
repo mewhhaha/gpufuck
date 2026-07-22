@@ -311,6 +311,22 @@ Deno.test("compiles and evaluates a parser-independent functional module", async
   }
 });
 
+Deno.test("accepts a 524288-step dispatch quantum and rejects larger quanta", async () => {
+  const { compiler } = functionalRuntime();
+  const compilation = await compiler.compileModule(integerModule(42, "program_result"), {
+    maximumStepsPerDispatch: 524_288,
+  });
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (compilation.ok) compilation.module.destroy();
+
+  await rejects(
+    compiler.compileModule(integerModule(42, "program_result"), {
+      maximumStepsPerDispatch: 524_289,
+    }),
+    /maximumStepsPerDispatch must be an integer from 1 through 524288; received 524289/,
+  );
+});
+
 Deno.test("infers and executes target-neutral structural equality", async () => {
   const pair = (left: number, right: number) =>
     surface.apply(
@@ -572,6 +588,44 @@ Deno.test("incremental compilation rechecks dependents only when an imported int
   if (interfaceChange.ok) return;
   deepStrictEqual(interfaceChange.incremental.compiledModules, ["application", "math"]);
   match(interfaceChange.diagnostics[0].message, /type|integer|boolean/i);
+});
+
+Deno.test("incremental compilation restores cached runtime-fault nodes", async () => {
+  const incremental = new IncrementalGpuFunctionalCompiler(functionalRuntime().compiler, {
+    cache: new MemoryFunctionalIncrementalCache(),
+  });
+  const integer = { kind: "integer" } as const;
+  const artifact: FunctionalModuleArtifact = {
+    name: "faulting-application",
+    definitions: [{
+      name: "main",
+      parameters: [],
+      annotation: integer,
+      body: surface.runtimeFault("broken"),
+    }],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "main", definition: "main", type: integer }],
+    sourceByteLength: 6,
+    options: {},
+  };
+  const entry = { module: artifact.name, exportName: "main" };
+
+  const first = await incremental.compile([artifact], entry);
+  ok(first.ok, first.ok ? undefined : first.diagnostics[0].message);
+  if (!first.ok) return;
+  first.module.destroy();
+
+  const restored = await incremental.compile([artifact], entry);
+  ok(restored.ok, restored.ok ? undefined : restored.diagnostics[0].message);
+  if (!restored.ok) return;
+  try {
+    deepStrictEqual(restored.incremental.compiledModules, []);
+    const nodes = await restored.module.readCoreNodes();
+    equal(nodes[0]?.tag, FunctionalCoreTag.RuntimeFault);
+  } finally {
+    restored.module.destroy();
+  }
 });
 
 Deno.test("incremental compilation treats mutually recursive modules as one cache unit", async () => {

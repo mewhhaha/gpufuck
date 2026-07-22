@@ -22,6 +22,7 @@ import type { FunctionalHostType } from "./host_contract.ts";
 
 const EFFECT_CORE_RESULT_WORD_LENGTH = 2;
 const EFFECT_CORE_STATE_BYTE_LENGTH = FUNCTIONAL_EFFECT_CORE_STATE_WORD_LENGTH * 4;
+export const FUNCTIONAL_EFFECT_CORE_MAXIMUM_TRANSITIONS_PER_DISPATCH = 65_536;
 export interface FunctionalEffectCoreDispatchObservation {
   readonly dispatch: number;
   readonly transitions: number;
@@ -388,7 +389,11 @@ function validateVerificationOptions(options: FunctionalEffectCoreVerificationOp
   for (
     const [name, value, maximum] of [
       ["maximumTransitions", options.maximumTransitions, 10_000_000],
-      ["maximumTransitionsPerDispatch", options.maximumTransitionsPerDispatch, 65_536],
+      [
+        "maximumTransitionsPerDispatch",
+        options.maximumTransitionsPerDispatch,
+        FUNCTIONAL_EFFECT_CORE_MAXIMUM_TRANSITIONS_PER_DISPATCH,
+      ],
     ] as const
   ) {
     if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
