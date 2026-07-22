@@ -404,6 +404,86 @@ Deno.test("nested Store updates preserve writes across growth in both backends",
   }
 });
 
+Deno.test("bounded WebAssembly charges Store initialization by element count", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "store",
+    value: surface.storeNew(surface.integer(1_000), surface.integer(0)),
+    body: surface.integer(42),
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("bounded Store initialization case did not compile");
+
+  try {
+    const baseline = await functionalWasmRuntime().evaluator.evaluate(compilation.module);
+    ok(baseline.ok, baseline.ok ? undefined : baseline.fault.message);
+    if (!baseline.ok) return;
+    ok(baseline.stats.steps >= 1_000);
+
+    const exact = await functionalWasmRuntime().evaluator.evaluate(compilation.module, {
+      maximumSteps: baseline.stats.steps,
+    });
+    deepStrictEqual(exact, baseline);
+
+    const insufficient = await functionalWasmRuntime().evaluator.evaluate(compilation.module, {
+      maximumSteps: baseline.stats.steps - 1,
+    });
+    equal(insufficient.ok, false);
+    if (insufficient.ok) return;
+    equal(insufficient.fault.kind, "out-of-fuel");
+    equal(insufficient.stats.steps, baseline.stats.steps - 1);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("bounded WebAssembly charges persistent Store copies by element count", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "original",
+    value: surface.storeNew(surface.integer(100), surface.integer(0)),
+    body: {
+      kind: "let",
+      name: "changed",
+      value: surface.storeWrite(
+        surface.name("original"),
+        surface.integer(0),
+        surface.integer(1),
+      ),
+      body: surface.binary(
+        FunctionalBinaryOperator.Add,
+        surface.storeRead(surface.name("original"), surface.integer(0)),
+        surface.storeRead(surface.name("changed"), surface.integer(0)),
+      ),
+    },
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("bounded persistent Store case did not compile");
+
+  try {
+    const baseline = await functionalWasmRuntime().evaluator.evaluate(compilation.module);
+    ok(baseline.ok, baseline.ok ? undefined : baseline.fault.message);
+    if (!baseline.ok) return;
+    ok(baseline.stats.steps >= 200);
+
+    const insufficient = await functionalWasmRuntime().evaluator.evaluate(compilation.module, {
+      maximumSteps: baseline.stats.steps - 1,
+    });
+    equal(insufficient.ok, false);
+    if (insufficient.ok) return;
+    equal(insufficient.fault.kind, "out-of-fuel");
+    equal(insufficient.stats.steps, baseline.stats.steps - 1);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("Store length limits fail consistently across linear-memory and WasmGC backends", async () => {
   const expression: FunctionalSurfaceExpression = {
     kind: "let",
@@ -1207,6 +1287,114 @@ Deno.test("appends Text and Bytes without a host callback", async () => {
     kind: "bytes",
     value: new Uint8Array([0, 127, 128, 255]),
   });
+});
+
+Deno.test("limits decoded byte payloads independently from result nodes", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(surface.bytes(new Uint8Array([0, 127, 128, 255]))),
+  );
+  if (!compilation.ok) throw new Error("result byte limit fixture did not compile");
+
+  try {
+    const exact = await runFunctionalWasmModule(compilation.module, {
+      maximumResultBytes: 4,
+    });
+    deepStrictEqual(exact.value, {
+      kind: "bytes",
+      value: new Uint8Array([0, 127, 128, 255]),
+    });
+    await rejects(
+      () => runFunctionalWasmModule(compilation.module, { maximumResultBytes: 3 }),
+      (error) => {
+        ok(error instanceof FunctionalWasmRuntimeError);
+        equal(error.code, "F3010");
+        equal(error.kind, "result-too-large");
+        equal(
+          error.message,
+          "F3010: functional WASM result exceeded maximumResultBytes 3",
+        );
+        return true;
+      },
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("bounded WebAssembly charges buffer literals and copies by byte count", async () => {
+  const expression: FunctionalSurfaceExpression = {
+    kind: "let",
+    name: "joined",
+    value: {
+      kind: "text-append",
+      left: { kind: "text", value: "a".repeat(1_000) },
+      right: { kind: "text", value: "b".repeat(1_000) },
+    },
+    body: surface.integer(42),
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("bounded buffer copy case did not compile");
+
+  try {
+    const baseline = await functionalWasmRuntime().evaluator.evaluate(compilation.module);
+    ok(baseline.ok, baseline.ok ? undefined : baseline.fault.message);
+    if (!baseline.ok) return;
+    ok(baseline.stats.steps >= 4_000);
+
+    const exact = await functionalWasmRuntime().evaluator.evaluate(compilation.module, {
+      maximumSteps: baseline.stats.steps,
+    });
+    deepStrictEqual(exact, baseline);
+
+    const insufficient = await functionalWasmRuntime().evaluator.evaluate(compilation.module, {
+      maximumSteps: baseline.stats.steps - 1,
+    });
+    equal(insufficient.ok, false);
+    if (insufficient.ok) return;
+    equal(insufficient.fault.kind, "out-of-fuel");
+    equal(insufficient.stats.steps, baseline.stats.steps - 1);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("bounded WebAssembly charges structural buffer equality by byte count", async () => {
+  const value = "x".repeat(1_000);
+  const expression: FunctionalSurfaceExpression = {
+    kind: "if",
+    condition: surface.binary(
+      FunctionalBinaryOperator.StructuralEqual,
+      { kind: "text", value },
+      { kind: "text", value },
+    ),
+    consequent: surface.integer(42),
+    alternate: surface.integer(0),
+  };
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("bounded buffer equality case did not compile");
+
+  try {
+    const baseline = await functionalWasmRuntime().evaluator.evaluate(compilation.module);
+    ok(baseline.ok, baseline.ok ? undefined : baseline.fault.message);
+    if (!baseline.ok) return;
+    ok(baseline.stats.steps >= 3_000);
+
+    const insufficient = await functionalWasmRuntime().evaluator.evaluate(compilation.module, {
+      maximumSteps: baseline.stats.steps - 1,
+    });
+    equal(insufficient.ok, false);
+    if (insufficient.ok) return;
+    equal(insufficient.fault.kind, "out-of-fuel");
+    equal(insufficient.stats.steps, baseline.stats.steps - 1);
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("round-trips text, bytes, arrays, slices, and resources through WebAssembly", async () => {
@@ -4240,6 +4428,38 @@ Deno.test("rejects invalid result bounds before running host effects", async () 
           },
         }),
       /maximumResultNodes must be a positive safe integer; received 0/,
+    );
+    deepStrictEqual(observed, []);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("rejects invalid result byte bounds before running host effects", async () => {
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    hostInitModule(
+      surface.apply(surface.name("observe"), surface.integer(1)),
+    ),
+  );
+  if (!compilation.ok) throw new Error("early result-byte-bound fixture did not compile");
+  const observed: number[] = [];
+  try {
+    await rejects(
+      () =>
+        runFunctionalWasmModule(compilation.module, {
+          maximumResultBytes: 0,
+          init: {
+            Environment: {
+              base: { kind: "integer", value: 0 },
+              increment: (argument) => argument,
+              observe: (argument) => {
+                if (argument.kind === "integer") observed.push(argument.value);
+                return argument;
+              },
+            },
+          },
+        }),
+      /maximumResultBytes must be a positive safe integer; received 0/,
     );
     deepStrictEqual(observed, []);
   } finally {

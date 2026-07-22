@@ -72,6 +72,20 @@ export function test262FrontendProbeSource(
   return `export function ${entryName}() {\n${directive}${body}\nreturn true;\n}\n`;
 }
 
+export function test262NegativeProbeSource(
+  source: string,
+  metadata: Test262Metadata,
+  entryName: string,
+  mode: Test262ExecutionMode,
+): string {
+  if (metadata.negative === null) {
+    throw new Error("A positive Test262 test cannot use the negative-test probe.");
+  }
+  const body = removeMetadataBlock(source);
+  const directive = mode === "strict" ? '"use strict";\n' : "";
+  return `export function ${entryName}() {\n${directive}${body}\nreturn true;\n}\n`;
+}
+
 function removeMetadataBlock(source: string): string {
   const start = source.indexOf("/*---");
   const end = source.indexOf("---*/", start + 5);

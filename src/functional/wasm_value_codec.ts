@@ -665,6 +665,7 @@ export function decodeFunctionalWasmValue(
   type: FunctionalType,
   rawResult: number | bigint,
   maximumResultNodes: number,
+  maximumResultBytes = 1_048_576,
 ): FunctionalWasmValue {
   return decodeFunctionalWasmValueWithScalarRepresentation(
     instance,
@@ -672,6 +673,7 @@ export function decodeFunctionalWasmValue(
     type,
     rawResult,
     maximumResultNodes,
+    maximumResultBytes,
     "native",
   );
 }
@@ -682,6 +684,7 @@ export function decodeFunctionalWasmBoxedValue(
   type: FunctionalType,
   rawResult: number | bigint,
   maximumResultNodes: number,
+  maximumResultBytes = 1_048_576,
 ): FunctionalWasmValue {
   return decodeFunctionalWasmValueWithScalarRepresentation(
     instance,
@@ -689,6 +692,7 @@ export function decodeFunctionalWasmBoxedValue(
     type,
     rawResult,
     maximumResultNodes,
+    maximumResultBytes,
     "boxed",
   );
 }
@@ -699,11 +703,17 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
   type: FunctionalType,
   rawResult: number | bigint,
   maximumResultNodes: number,
+  maximumResultBytes: number,
   scalarRepresentation: "native" | "boxed",
 ): FunctionalWasmValue {
   if (!Number.isSafeInteger(maximumResultNodes) || maximumResultNodes < 1) {
     throw new RangeError(
       `functional WASM maximumResultNodes must be a positive safe integer; received ${maximumResultNodes}`,
+    );
+  }
+  if (!Number.isSafeInteger(maximumResultBytes) || maximumResultBytes < 1) {
+    throw new RangeError(
+      `functional WASM maximumResultBytes must be a positive safe integer; received ${maximumResultBytes}`,
     );
   }
   if (scalarRepresentation === "native" && type.kind === "integer") {
@@ -759,6 +769,7 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     };
 
   let decodedNodes = 0;
+  let decodedBytes = 0;
   let decodedResult: FunctionalWasmValue | undefined;
   const activePointers = new Set<number>();
   const frames: DecodeFrame[] = [{
@@ -921,6 +932,13 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     const valueCount = view.getUint32(pointer + 8, true);
     if (expected.kind === "named" && expected.name === FUNCTIONAL_TEXT_TYPE_NAME) {
       requireObjectKind(pointer, objectKind, TEXT_OBJECT_KIND, "text");
+      decodedBytes += valueCount;
+      if (decodedBytes > maximumResultBytes) {
+        throw new FunctionalWasmValueError(
+          "result-too-large",
+          `functional WASM result exceeded maximumResultBytes ${maximumResultBytes}`,
+        );
+      }
       const bytes = boundedBytes(view, pointer, valueCount, "text");
       frames.pop();
       appendDecodedValue({
@@ -931,6 +949,13 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     }
     if (expected.kind === "named" && expected.name === FUNCTIONAL_BYTES_TYPE_NAME) {
       requireObjectKind(pointer, objectKind, BYTES_OBJECT_KIND, "bytes");
+      decodedBytes += valueCount;
+      if (decodedBytes > maximumResultBytes) {
+        throw new FunctionalWasmValueError(
+          "result-too-large",
+          `functional WASM result exceeded maximumResultBytes ${maximumResultBytes}`,
+        );
+      }
       frames.pop();
       appendDecodedValue({
         kind: "bytes",

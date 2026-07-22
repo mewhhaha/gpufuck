@@ -20,15 +20,89 @@ import { JavaScriptAotSyntaxError } from "./diagnostic.ts";
 
 type JavaScriptAotParser = ReturnType<typeof createParser>;
 
+const JAVASCRIPT_AOT_MAXIMUM_AUTOMATIC_SEMICOLONS = 4;
+const JAVASCRIPT_AOT_MAXIMUM_SOURCE_BYTE_LENGTH = 256 * 1024;
+const JAVASCRIPT_AOT_MAXIMUM_SYNTAX_NESTING = 256;
+const JAVASCRIPT_AOT_MAXIMUM_TOKENS = 8_192;
+const JAVASCRIPT_AOT_OPENING_DELIMITERS = new Set(["(", "[", "{"]);
+const JAVASCRIPT_AOT_CLOSING_DELIMITERS = new Set([")", "]", "}"]);
+const JAVASCRIPT_AOT_PREFIX_OPERATORS = new Set([
+  "!",
+  "+",
+  "-",
+  "new",
+  "typeof",
+  "void",
+  "~",
+]);
+
 let javascriptAotParser: JavaScriptAotParser | undefined;
 
 export function parseJavaScriptAotModule(name: string, source: string): JavaScriptAotModule {
   if (name.length === 0) throw new Error("JavaScript AOT module name must be nonempty");
+  const sourceByteLength = new TextEncoder().encode(source).byteLength;
+  if (sourceByteLength > JAVASCRIPT_AOT_MAXIMUM_SOURCE_BYTE_LENGTH) {
+    throw new JavaScriptAotSyntaxError(
+      { startByte: 0, endByte: sourceByteLength },
+      `JavaScript module ${
+        JSON.stringify(name)
+      } exceeds the ${JAVASCRIPT_AOT_MAXIMUM_SOURCE_BYTE_LENGTH}-byte source limit; received ${sourceByteLength} bytes.`,
+    );
+  }
   const parser = getJavaScriptAotParser();
   try {
     const byteOffsets = new BabaUtf8ByteOffsets(source);
     let parserSource = source;
+    const lexed = parser.lex(parserSource, { preserveTrivia: false });
+    if (
+      lexed.diagnostics.length === 0 &&
+      lexed.tokenTape.length > JAVASCRIPT_AOT_MAXIMUM_TOKENS
+    ) {
+      throw new JavaScriptAotSyntaxError(
+        { startByte: 0, endByte: sourceByteLength },
+        `JavaScript module ${
+          JSON.stringify(name)
+        } exceeds the ${JAVASCRIPT_AOT_MAXIMUM_TOKENS}-token parser limit; received ${lexed.tokenTape.length} tokens.`,
+      );
+    }
+    if (lexed.diagnostics.length === 0) {
+      let delimiterDepth = 0;
+      let prefixOperatorDepth = 0;
+      for (let tokenIndex = 0; tokenIndex < lexed.tokenTape.length; tokenIndex++) {
+        const token = lexed.tokenTape.token(tokenIndex);
+        if (token === undefined || token.type !== "literal") {
+          prefixOperatorDepth = 0;
+          continue;
+        }
+        if (JAVASCRIPT_AOT_OPENING_DELIMITERS.has(token.literal)) {
+          delimiterDepth++;
+        } else if (JAVASCRIPT_AOT_CLOSING_DELIMITERS.has(token.literal)) {
+          delimiterDepth = Math.max(0, delimiterDepth - 1);
+        }
+        if (delimiterDepth > JAVASCRIPT_AOT_MAXIMUM_SYNTAX_NESTING) {
+          throw new JavaScriptAotSyntaxError(
+            byteOffsets.span(token.span),
+            `JavaScript module ${
+              JSON.stringify(name)
+            } exceeds the syntax nesting limit of ${JAVASCRIPT_AOT_MAXIMUM_SYNTAX_NESTING}.`,
+          );
+        }
+
+        prefixOperatorDepth = JAVASCRIPT_AOT_PREFIX_OPERATORS.has(token.literal)
+          ? prefixOperatorDepth + 1
+          : 0;
+        if (prefixOperatorDepth > JAVASCRIPT_AOT_MAXIMUM_SYNTAX_NESTING) {
+          throw new JavaScriptAotSyntaxError(
+            byteOffsets.span(token.span),
+            `JavaScript module ${
+              JSON.stringify(name)
+            } exceeds the prefix-operator nesting limit of ${JAVASCRIPT_AOT_MAXIMUM_SYNTAX_NESTING}.`,
+          );
+        }
+      }
+    }
     let parsed = parser.parse(parserSource, { preserveTrivia: false });
+    let insertedSemicolons = 0;
     while (!parsed.ok) {
       const diagnostic = parsed.diagnostics[0];
       if (diagnostic?.expected?.includes('";"') !== true) break;
@@ -51,6 +125,15 @@ export function parseJavaScriptAotModule(name: string, source: string): JavaScri
         ? whitespace
         : -1;
       if (semicolonPosition < 0) break;
+      if (insertedSemicolons === JAVASCRIPT_AOT_MAXIMUM_AUTOMATIC_SEMICOLONS) {
+        throw new JavaScriptAotSyntaxError(
+          byteOffsets.span(diagnostic.span),
+          `JavaScript module ${
+            JSON.stringify(name)
+          } requires more than ${JAVASCRIPT_AOT_MAXIMUM_AUTOMATIC_SEMICOLONS} automatic semicolon insertions.`,
+        );
+      }
+      insertedSemicolons++;
       parserSource = parserSource.slice(0, semicolonPosition) + ";" +
         parserSource.slice(semicolonPosition + 1);
       parsed = parser.parse(parserSource, { preserveTrivia: false });
@@ -74,6 +157,18 @@ export function parseJavaScriptAotModule(name: string, source: string): JavaScri
       ),
       span: { startByte: 0, endByte: byteOffsets.byteLength },
     };
+  } catch (error) {
+    if (
+      error instanceof RangeError &&
+      (error.message === "Maximum call stack size exceeded" ||
+        error.message === "Wasm parser plan exceeds maximum memory pages.")
+    ) {
+      throw new JavaScriptAotSyntaxError(
+        { startByte: 0, endByte: sourceByteLength },
+        `JavaScript module ${JSON.stringify(name)} exhausted the parser resource limit.`,
+      );
+    }
+    throw error;
   } finally {
     parser.reset();
   }
@@ -112,16 +207,56 @@ function parseDeclaration(
       span,
     };
   }
+  if (declaration.name === "class_declaration") {
+    const parsedClass = parseClass(declaration, offsets);
+    return {
+      kind: "function",
+      exported,
+      ...parsedClass,
+    };
+  }
+  if (
+    declaration.name === "generator_declaration" ||
+    declaration.name === "async_function_declaration"
+  ) {
+    const parametersNode = babaOptionalRuleField(declaration, "parameters");
+    const parameters = parametersNode === null
+      ? { names: [], initializers: [], functionLength: 0 }
+      : parseParameterList(parametersNode, offsets);
+    const bodyNode = babaRequiredRuleField(declaration, "body");
+    const body = declaration.name === "generator_declaration"
+      ? parseGeneratorBody(bodyNode, offsets)
+      : transformAsyncBody(parseBlock(bodyNode, offsets), offsets.span(declaration.span));
+    return {
+      kind: "function",
+      exported,
+      name: babaRequiredTokenField(declaration, "name").text,
+      parameters: parameters.names,
+      parameterLength: parameters.functionLength,
+      ...(declaration.name === "generator_declaration"
+        ? { requiresRuntimeModel: true as const }
+        : {}),
+      body: insertParameterInitializers(body, parameters.initializers),
+      span,
+    };
+  }
   if (declaration.name !== "function_declaration") {
     throw new Error(`Unsupported Baba JavaScript declaration node ${declaration.name}.`);
   }
   const parametersNode = babaOptionalRuleField(declaration, "parameters");
+  const parameters = parametersNode === null
+    ? { names: [], initializers: [], functionLength: 0 }
+    : parseParameterList(parametersNode, offsets);
   return {
     kind: "function",
     exported,
     name: babaRequiredTokenField(declaration, "name").text,
-    parameters: parametersNode === null ? [] : identifierList(parametersNode),
-    body: parseBlock(babaRequiredRuleField(declaration, "body"), offsets),
+    parameters: parameters.names,
+    parameterLength: parameters.functionLength,
+    body: insertParameterInitializers(
+      parseBlock(babaRequiredRuleField(declaration, "body"), offsets),
+      parameters.initializers,
+    ),
     span,
   };
 }
@@ -142,13 +277,47 @@ function parseStatement(
   const statement = node.name === "statement" ? babaChildRule(node) : node;
   const span = offsets.span(statement.span);
   switch (statement.name) {
-    case "function_declaration": {
+    case "class_declaration":
+      return {
+        kind: "function-declaration",
+        ...parseClass(statement, offsets),
+      };
+    case "generator_declaration":
+    case "async_function_declaration": {
       const parametersNode = babaOptionalRuleField(statement, "parameters");
+      const parameters = parametersNode === null
+        ? { names: [], initializers: [], functionLength: 0 }
+        : parseParameterList(parametersNode, offsets);
+      const bodyNode = babaRequiredRuleField(statement, "body");
+      const body = statement.name === "generator_declaration"
+        ? parseGeneratorBody(bodyNode, offsets)
+        : transformAsyncBody(parseBlock(bodyNode, offsets), span);
       return {
         kind: "function-declaration",
         name: babaRequiredTokenField(statement, "name").text,
-        parameters: parametersNode === null ? [] : identifierList(parametersNode),
-        body: parseBlock(babaRequiredRuleField(statement, "body"), offsets),
+        parameters: parameters.names,
+        parameterLength: parameters.functionLength,
+        ...(statement.name === "generator_declaration"
+          ? { requiresRuntimeModel: true as const }
+          : {}),
+        body: insertParameterInitializers(body, parameters.initializers),
+        span,
+      };
+    }
+    case "function_declaration": {
+      const parametersNode = babaOptionalRuleField(statement, "parameters");
+      const parameters = parametersNode === null
+        ? { names: [], initializers: [], functionLength: 0 }
+        : parseParameterList(parametersNode, offsets);
+      return {
+        kind: "function-declaration",
+        name: babaRequiredTokenField(statement, "name").text,
+        parameters: parameters.names,
+        parameterLength: parameters.functionLength,
+        body: insertParameterInitializers(
+          parseBlock(babaRequiredRuleField(statement, "body"), offsets),
+          parameters.initializers,
+        ),
         span,
       };
     }
@@ -235,6 +404,11 @@ function parseStatement(
         value: parseExpression(babaRequiredRuleField(statement, "value"), offsets),
         span,
       };
+    case "yield_statement":
+      throw new JavaScriptAotSyntaxError(
+        span,
+        "JavaScript yield is only valid directly inside a supported generator body.",
+      );
     case "block_statement":
       return {
         kind: "block",
@@ -295,6 +469,85 @@ function parseStatement(
     default:
       throw new Error(`Unsupported Baba JavaScript statement node ${statement.name}.`);
   }
+}
+
+function parseClass(
+  declaration: BabaRuleCursor,
+  offsets: BabaUtf8ByteOffsets,
+): {
+  readonly name: string;
+  readonly parameters: readonly string[];
+  readonly parameterLength: number;
+  readonly body: readonly JavaScriptAotStatement[];
+  readonly span: JavaScriptAotDeclaration["span"];
+} {
+  const methods = babaRuleFieldArray(
+    babaRequiredRuleField(declaration, "body"),
+    "methods",
+  );
+  const constructors = methods.filter((method) =>
+    babaRequiredTokenField(method, "name").text === "constructor"
+  );
+  if (constructors.length > 1) {
+    throw new JavaScriptAotSyntaxError(
+      offsets.span(constructors[1]!.span),
+      `JavaScript class ${
+        JSON.stringify(babaRequiredTokenField(declaration, "name").text)
+      } declares more than one constructor.`,
+    );
+  }
+  const constructor = constructors[0] ?? null;
+  const parametersNode = constructor === null
+    ? null
+    : babaOptionalRuleField(constructor, "parameters");
+  const parameters = parametersNode === null
+    ? { names: [], initializers: [], functionLength: 0 }
+    : parseParameterList(parametersNode, offsets);
+  const methodInitializers = methods.flatMap((method): readonly JavaScriptAotStatement[] => {
+    const methodName = babaRequiredTokenField(method, "name");
+    if (methodName.text === "constructor") return [];
+    const methodParametersNode = babaOptionalRuleField(method, "parameters");
+    const methodParameters = methodParametersNode === null
+      ? { names: [], initializers: [], functionLength: 0 }
+      : parseParameterList(methodParametersNode, offsets);
+    const methodSpan = offsets.span(method.span);
+    return [{
+      kind: "property-assignment",
+      target: {
+        kind: "property",
+        value: { kind: "name", name: "this", span: methodSpan },
+        name: methodName.text,
+        span: methodSpan,
+      },
+      operator: "=",
+      value: {
+        kind: "function",
+        name: methodName.text,
+        thisMode: "dynamic",
+        parameters: methodParameters.names,
+        parameterLength: methodParameters.functionLength,
+        body: insertParameterInitializers(
+          parseBlock(babaRequiredRuleField(method, "body"), offsets),
+          methodParameters.initializers,
+        ),
+        span: methodSpan,
+      },
+      span: methodSpan,
+    }];
+  });
+  const constructorBody = constructor === null
+    ? []
+    : parseBlock(babaRequiredRuleField(constructor, "body"), offsets);
+  return {
+    name: babaRequiredTokenField(declaration, "name").text,
+    parameters: parameters.names,
+    parameterLength: parameters.functionLength,
+    body: insertParameterInitializers(
+      [...methodInitializers, ...constructorBody],
+      parameters.initializers,
+    ),
+    span: offsets.span(declaration.span),
+  };
 }
 
 function parseForInitializer(
@@ -540,6 +793,15 @@ function parseExpression(
         value: parseExpression(babaRequiredRuleField(expression, "value"), offsets),
         span: offsets.span(expression.span),
       };
+    case "await_expression": {
+      const span = offsets.span(expression.span);
+      return {
+        kind: "property",
+        value: parseExpression(babaRequiredRuleField(expression, "value"), offsets),
+        name: "value",
+        span,
+      };
+    }
     case "call": {
       let result = parseExpression(babaRequiredRuleField(expression, "callee"), offsets);
       for (const operationWrapper of babaRuleFieldArray(expression, "operations")) {
@@ -584,12 +846,19 @@ function parseExpression(
       return parseExpression(babaRequiredRuleField(expression, "body"), offsets);
     case "function_expression": {
       const parametersNode = babaOptionalRuleField(expression, "parameters");
+      const parameters = parametersNode === null
+        ? { names: [], initializers: [], functionLength: 0 }
+        : parseParameterList(parametersNode, offsets);
       return {
         kind: "function",
         name: babaOptionalTokenField(expression, "name")?.text ?? null,
         thisMode: "dynamic",
-        parameters: parametersNode === null ? [] : identifierList(parametersNode),
-        body: parseBlock(babaRequiredRuleField(expression, "body"), offsets),
+        parameters: parameters.names,
+        parameterLength: parameters.functionLength,
+        body: insertParameterInitializers(
+          parseBlock(babaRequiredRuleField(expression, "body"), offsets),
+          parameters.initializers,
+        ),
         span: offsets.span(expression.span),
       };
     }
@@ -639,6 +908,7 @@ function parseExpression(
       return {
         kind: "string",
         value: parseString(token.text, offsets.span(token.span)),
+        raw: token.text,
         span: offsets.span(expression.span),
       };
     }
@@ -680,9 +950,247 @@ function parseObjectProperty(
     : propertyName.name === "number_property_name"
     ? String(Number(nameToken.text.replaceAll("_", "")))
     : nameToken.text;
+  if (property.name === "object_method") {
+    const parametersNode = babaOptionalRuleField(property, "parameters");
+    const parameters = parametersNode === null
+      ? { names: [], initializers: [], functionLength: 0 }
+      : parseParameterList(parametersNode, offsets);
+    return {
+      name,
+      value: {
+        kind: "function",
+        name: null,
+        thisMode: "dynamic",
+        parameters: parameters.names,
+        parameterLength: parameters.functionLength,
+        body: insertParameterInitializers(
+          parseBlock(babaRequiredRuleField(property, "body"), offsets),
+          parameters.initializers,
+        ),
+        span: offsets.span(property.span),
+      },
+    };
+  }
   return {
     name,
     value: parseExpression(babaRequiredRuleField(property, "value"), offsets),
+  };
+}
+
+function parseGeneratorBody(
+  block: BabaRuleCursor,
+  offsets: BabaUtf8ByteOffsets,
+): readonly JavaScriptAotStatement[] {
+  const span = offsets.span(block.span);
+  const yielded: JavaScriptAotExpression[] = [];
+  let returned: JavaScriptAotExpression | null = null;
+  for (const wrappedStatement of babaRuleFieldArray(block, "statements")) {
+    const statement = wrappedStatement.name === "statement"
+      ? babaChildRule(wrappedStatement)
+      : wrappedStatement;
+    if (statement.name === "empty_statement") continue;
+    if (statement.name === "yield_statement") {
+      if (returned !== null) {
+        throw new JavaScriptAotSyntaxError(
+          offsets.span(statement.span),
+          "JavaScript generator yield cannot follow its final return.",
+        );
+      }
+      const value = babaOptionalRuleField(statement, "value");
+      yielded.push(
+        value === null
+          ? { kind: "name", name: "undefined", span: offsets.span(statement.span) }
+          : parseExpression(value, offsets),
+      );
+      continue;
+    }
+    if (statement.name === "return_statement" && returned === null) {
+      returned = parseOptionalReturnValue(statement, offsets);
+      continue;
+    }
+    throw new JavaScriptAotSyntaxError(
+      offsets.span(statement.span),
+      "JavaScript AOT generators currently support only straight-line yield statements and one final return.",
+    );
+  }
+
+  const stateName = `$javascript#generatorState#${span.startByte}`;
+  const nextBody: JavaScriptAotStatement[] = [{
+    kind: "assignment",
+    name: stateName,
+    operator: "=",
+    value: {
+      kind: "binary",
+      operator: "+",
+      left: { kind: "name", name: stateName, span },
+      right: { kind: "number", value: 1, span },
+      span,
+    },
+    span,
+  }];
+  let nextValue: JavaScriptAotExpression = { kind: "name", name: "undefined", span };
+  if (returned !== null) {
+    nextValue = {
+      kind: "conditional",
+      condition: {
+        kind: "binary",
+        operator: "===",
+        left: { kind: "name", name: stateName, span },
+        right: { kind: "number", value: yielded.length + 1, span },
+        span,
+      },
+      consequent: returned,
+      alternate: nextValue,
+      span,
+    };
+  }
+  for (let index = yielded.length - 1; index >= 0; index--) {
+    nextValue = {
+      kind: "conditional",
+      condition: {
+        kind: "binary",
+        operator: "===",
+        left: { kind: "name", name: stateName, span },
+        right: { kind: "number", value: index + 1, span },
+        span,
+      },
+      consequent: yielded[index]!,
+      alternate: nextValue,
+      span,
+    };
+  }
+  nextBody.push({
+    kind: "return",
+    value: iteratorResult(nextValue, {
+      kind: "binary",
+      operator: ">",
+      left: { kind: "name", name: stateName, span },
+      right: { kind: "number", value: yielded.length, span },
+      span,
+    }, span),
+    span,
+  });
+  return [{
+    kind: "mutable",
+    name: stateName,
+    value: { kind: "number", value: 0, span },
+    span,
+  }, {
+    kind: "return",
+    value: {
+      kind: "object",
+      properties: [{
+        name: "next",
+        value: {
+          kind: "function",
+          name: null,
+          thisMode: "dynamic",
+          parameters: [],
+          parameterLength: 0,
+          body: nextBody,
+          span,
+        },
+        span,
+      }],
+      span,
+    },
+    span,
+  }];
+}
+
+function iteratorResult(
+  value: JavaScriptAotExpression,
+  done: boolean | JavaScriptAotExpression,
+  span: JavaScriptAotExpression["span"],
+): JavaScriptAotExpression {
+  return {
+    kind: "object",
+    properties: [{ name: "value", value, span }, {
+      name: "done",
+      value: typeof done === "boolean" ? { kind: "boolean", value: done, span } : done,
+      span,
+    }],
+    span,
+  };
+}
+
+function transformAsyncBody(
+  body: readonly JavaScriptAotStatement[],
+  span: JavaScriptAotExpression["span"],
+): readonly JavaScriptAotStatement[] {
+  const transform = (statement: JavaScriptAotStatement): JavaScriptAotStatement => {
+    switch (statement.kind) {
+      case "return":
+        return { ...statement, value: fulfilledPromise(statement.value, statement.span) };
+      case "if":
+        return {
+          ...statement,
+          consequent: statement.consequent.map(transform),
+          alternate: statement.alternate?.map(transform) ?? null,
+        };
+      case "while":
+        return {
+          ...statement,
+          body: statement.body.map(transform),
+          continueBody: statement.continueBody.map(transform),
+        };
+      case "block":
+        return { ...statement, statements: statement.statements.map(transform) };
+      case "try":
+        return {
+          ...statement,
+          body: statement.body.map(transform),
+          catchBody: statement.catchBody?.map(transform) ?? null,
+          finallyBody: statement.finallyBody?.map(transform) ?? null,
+        };
+      default:
+        return statement;
+    }
+  };
+  return [
+    ...body.map(transform),
+    {
+      kind: "return",
+      value: fulfilledPromise({ kind: "name", name: "undefined", span }, span),
+      span,
+    },
+  ];
+}
+
+function fulfilledPromise(
+  value: JavaScriptAotExpression,
+  span: JavaScriptAotExpression["span"],
+): JavaScriptAotExpression {
+  return {
+    kind: "object",
+    properties: [{ name: "value", value, span }, {
+      name: "then",
+      value: {
+        kind: "function",
+        name: null,
+        thisMode: "dynamic",
+        parameters: ["resolve"],
+        parameterLength: 1,
+        body: [{
+          kind: "return",
+          value: {
+            kind: "call",
+            callee: { kind: "name", name: "resolve", span },
+            arguments: [{
+              kind: "property",
+              value: { kind: "name", name: "this", span },
+              name: "value",
+              span,
+            }],
+            span,
+          },
+          span,
+        }],
+        span,
+      },
+      span,
+    }],
+    span,
   };
 }
 
@@ -782,15 +1290,145 @@ function operatorText(name: string): JavaScriptAotBinaryOperator {
   }
 }
 
-function identifierList(node: BabaRuleCursor): readonly string[] {
-  const identifiers: string[] = [];
+function parseParameterList(
+  node: BabaRuleCursor,
+  offsets: BabaUtf8ByteOffsets,
+): {
+  readonly names: readonly string[];
+  readonly initializers: readonly JavaScriptAotStatement[];
+  readonly functionLength: number;
+} {
+  const names: string[] = [];
+  const initializers: JavaScriptAotStatement[] = [];
+  let functionLength = 0;
+  let foundDefault = false;
   let current: BabaRuleCursor | null = node;
+  let parameterIndex = 0;
   while (current !== null) {
-    identifiers.push(babaRequiredTokenField(current, "head").text);
+    const parameter = babaChildRule(babaRequiredRuleField(current, "head"));
     const tail = babaOptionalRuleField(current, "rest");
-    current = tail === null ? null : babaOptionalRuleField(tail, "rest");
+    const next = tail === null ? null : babaOptionalRuleField(tail, "rest");
+    if (parameter.name === "rest_parameter") {
+      if (parameterIndex !== 0 || next !== null) {
+        throw new JavaScriptAotSyntaxError(
+          offsets.span(parameter.span),
+          "JavaScript AOT currently requires a rest parameter to be the function's only parameter.",
+        );
+      }
+      const name = babaRequiredTokenField(parameter, "name").text;
+      initializers.push({
+        kind: "mutable",
+        name,
+        value: { kind: "name", name: "arguments", span: offsets.span(parameter.span) },
+        span: offsets.span(parameter.span),
+      });
+      foundDefault = true;
+      current = next;
+      parameterIndex++;
+      continue;
+    }
+    if (
+      parameter.name === "array_binding_parameter" ||
+      parameter.name === "object_binding_parameter"
+    ) {
+      const span = offsets.span(parameter.span);
+      names.push(`$javascript#parameter#${span.startByte}`);
+      if (!foundDefault) functionLength++;
+      const argument = parameterArgumentExpression(parameterIndex, span);
+      const bindings = babaOptionalRuleField(parameter, "bindings");
+      if (bindings !== null) {
+        if (parameter.name === "array_binding_parameter") {
+          for (const [index, binding] of tokenList(bindings).entries()) {
+            initializers.push({
+              kind: "mutable",
+              name: binding,
+              value: {
+                kind: "index",
+                value: argument,
+                index: { kind: "string", value: String(index), raw: null, span },
+                span,
+              },
+              span,
+            });
+          }
+        } else {
+          for (const binding of listRules(bindings)) {
+            const property = babaRequiredTokenField(binding, "property").text;
+            const alias = babaOptionalRuleField(binding, "alias");
+            initializers.push({
+              kind: "mutable",
+              name: alias === null ? property : babaRequiredTokenField(alias, "name").text,
+              value: { kind: "property", value: argument, name: property, span },
+              span,
+            });
+          }
+        }
+      }
+      current = next;
+      parameterIndex++;
+      continue;
+    }
+    const name = babaRequiredTokenField(parameter, "name").text;
+    names.push(name);
+    if (parameter.name === "default_parameter") {
+      foundDefault = true;
+      const span = offsets.span(parameter.span);
+      initializers.push({
+        kind: "if",
+        condition: {
+          kind: "binary",
+          operator: "===",
+          left: { kind: "name", name, span },
+          right: { kind: "name", name: "undefined", span },
+          span,
+        },
+        consequent: [{
+          kind: "assignment",
+          name,
+          operator: "=",
+          value: parseExpression(babaRequiredRuleField(parameter, "value"), offsets),
+          span,
+        }],
+        alternate: null,
+        span,
+      });
+    } else if (!foundDefault) {
+      functionLength++;
+    }
+    current = next;
+    parameterIndex++;
   }
-  return identifiers;
+  return { names, initializers, functionLength };
+}
+
+function parameterArgumentExpression(
+  index: number,
+  span: JavaScriptAotExpression["span"],
+): JavaScriptAotExpression {
+  return {
+    kind: "index",
+    value: { kind: "name", name: "arguments", span },
+    index: { kind: "string", value: String(index), raw: null, span },
+    span,
+  };
+}
+
+function insertParameterInitializers(
+  body: readonly JavaScriptAotStatement[],
+  initializers: readonly JavaScriptAotStatement[],
+): readonly JavaScriptAotStatement[] {
+  if (initializers.length === 0) return body;
+  let directiveCount = 0;
+  while (directiveCount < body.length) {
+    const statement = body[directiveCount]!;
+    if (statement.kind !== "expression" || statement.value.kind !== "string") break;
+    directiveCount++;
+  }
+  return [
+    ...body.slice(0, directiveCount),
+    ...initializers,
+    ...body.slice(directiveCount),
+  ];
 }
 
 function listRules(node: BabaRuleCursor): readonly BabaRuleCursor[] {
@@ -798,6 +1436,17 @@ function listRules(node: BabaRuleCursor): readonly BabaRuleCursor[] {
   let current: BabaRuleCursor | null = node;
   while (current !== null) {
     values.push(babaRequiredRuleField(current, "head"));
+    const tail = babaOptionalRuleField(current, "rest");
+    current = tail === null ? null : babaOptionalRuleField(tail, "rest");
+  }
+  return values;
+}
+
+function tokenList(node: BabaRuleCursor): readonly string[] {
+  const values: string[] = [];
+  let current: BabaRuleCursor | null = node;
+  while (current !== null) {
+    values.push(babaRequiredTokenField(current, "head").text);
     const tail = babaOptionalRuleField(current, "rest");
     current = tail === null ? null : babaOptionalRuleField(tail, "rest");
   }

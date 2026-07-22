@@ -25,6 +25,7 @@ export interface FunctionalEvaluationOptions {
   readonly input?: FunctionalInputValue;
   readonly resultForm?: "weak-head" | "deep";
   readonly maximumResultNodes?: number;
+  readonly maximumResultBytes?: number;
 }
 
 export interface FunctionalDeepEvaluationOptions extends FunctionalEvaluationOptions {
@@ -373,6 +374,9 @@ export async function evaluateFunctionalModuleWithBoundedWasm(
       ...(options.maximumResultNodes === undefined
         ? {}
         : { maximumResultNodes: options.maximumResultNodes }),
+      ...(options.maximumResultBytes === undefined
+        ? {}
+        : { maximumResultBytes: options.maximumResultBytes }),
     });
   } catch (cause) {
     if (!(cause instanceof FunctionalWasmRuntimeError)) throw cause;

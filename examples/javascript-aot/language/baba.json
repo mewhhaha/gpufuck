@@ -2,33 +2,33 @@
   "parser": {
     "resolutions": [
       {
-        "conflict": "c_7d288a6e656dcd00",
+        "conflict": "c_34dc2c285e4fc34e",
         "prefer": "shift"
       },
       {
-        "conflict": "c_8fdcc9bd4874c926",
+        "conflict": "c_89b3e2cdfbdde160",
         "prefer": "reduce",
         "reduce": "block = (statement)*"
       },
       {
-        "conflict": "c_02c6c39529c306a4",
+        "conflict": "c_eea3d56fb33ef5d4",
         "prefer": "reduce"
       },
       {
-        "conflict": "c_55398f757cbaf861",
+        "conflict": "c_f44b69ed71f6292d",
         "prefer": "reduce"
       },
       {
-        "conflict": "c_9563d40e2b6ff477",
+        "conflict": "c_6333df6ad4dc5e87",
         "prefer": "reduce"
       },
       {
-        "conflict": "c_824338d2bf27715d",
+        "conflict": "c_4b6c30d40d75ee23",
         "prefer": "reduce",
         "reduce": "function_declaration = IDENT"
       },
       {
-        "conflict": "c_9a0440c3e95426cd",
+        "conflict": "c_0d8950cdd92d6f4d",
         "prefer": "shift"
       }
     ]

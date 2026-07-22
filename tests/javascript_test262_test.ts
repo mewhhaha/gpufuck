@@ -6,7 +6,11 @@ import {
   test262ExecutionModes,
   test262FrontendProbeSource,
 } from "../examples/javascript-aot/src/test262.ts";
-import { lowerTest262PositiveTest } from "../examples/javascript-aot/src/test262_harness.ts";
+import {
+  lowerTest262NegativeTest,
+  lowerTest262PositiveTest,
+} from "../examples/javascript-aot/src/test262_harness.ts";
+import { probeApplicableTest262Source } from "../examples/javascript-aot/src/test262_scan.ts";
 
 Deno.test("reads Test262 inline lists and negative expectations", () => {
   const metadata = parseTest262Metadata(
@@ -61,6 +65,122 @@ negative:
       ),
     /Test262 file "test\/language\/broken\.js" has unsupported negative phase "compile"/,
   );
+});
+
+Deno.test("matches Test262 negative tests only at their declared phase and type", () => {
+  const parseSource = `/*---
+flags: [noStrict]
+negative:
+  phase: parse
+  type: SyntaxError
+---*/
+const = 1;
+`;
+  const parseMetadata = parseTest262Metadata("test/language/parse-negative.js", parseSource);
+  deepStrictEqual(
+    lowerTest262NegativeTest(
+      "test/language/parse-negative.js",
+      parseSource,
+      parseMetadata,
+      "entry",
+      "non-strict",
+    ),
+    { kind: "matched", phase: "parse" },
+  );
+
+  const resolutionSource = `/*---
+flags: [noStrict]
+negative:
+  phase: resolution
+  type: ReferenceError
+---*/
+missingBinding;
+`;
+  const resolutionMetadata = parseTest262Metadata(
+    "test/language/resolution-negative.js",
+    resolutionSource,
+  );
+  deepStrictEqual(
+    lowerTest262NegativeTest(
+      "test/language/resolution-negative.js",
+      resolutionSource,
+      resolutionMetadata,
+      "entry",
+      "non-strict",
+    ),
+    { kind: "matched", phase: "resolution" },
+  );
+});
+
+Deno.test("keeps runtime-negative Test262 tests executable for typed validation", () => {
+  const source = `/*---
+flags: [noStrict]
+negative:
+  phase: runtime
+  type: TypeError
+---*/
+throw new TypeError();
+`;
+  const metadata = parseTest262Metadata("test/language/runtime-negative.js", source);
+  const result = lowerTest262NegativeTest(
+    "test/language/runtime-negative.js",
+    source,
+    metadata,
+    "entry",
+    "non-strict",
+  );
+
+  equal(result.kind, "runtime-ready");
+  if (result.kind === "runtime-ready") equal(result.expectedType, "TypeError");
+});
+
+Deno.test("reports a Test262 negative failure that occurs in the wrong phase", () => {
+  const source = `/*---
+flags: [noStrict]
+negative:
+  phase: runtime
+  type: TypeError
+---*/
+const = 1;
+`;
+  const metadata = parseTest262Metadata("test/language/wrong-phase.js", source);
+  const result = lowerTest262NegativeTest(
+    "test/language/wrong-phase.js",
+    source,
+    metadata,
+    "entry",
+    "non-strict",
+  );
+
+  equal(result.kind, "mismatch");
+  if (result.kind === "mismatch") {
+    match(result.diagnostic.message, /expected runtime TypeError, but reached parse SyntaxError/);
+  }
+});
+
+Deno.test("probes Test262 negative modes with their exact expected phase", () => {
+  const path = "test/language/negative.js";
+  const source = `/*---
+flags: [onlyStrict]
+negative:
+  phase: parse
+  type: SyntaxError
+---*/
+const = 1;
+`;
+  const probe = probeApplicableTest262Source(
+    `/checkout/${path}`,
+    path,
+    source,
+    "entry",
+  );
+
+  deepStrictEqual(probe.outcomes, [{
+    kind: "negative-ready",
+    mode: "strict",
+    phase: "parse",
+    expectedType: "SyntaxError",
+  }]);
 });
 
 Deno.test("excludes only fixtures and dynamic code from the core Test262 profile", () => {
@@ -132,6 +252,26 @@ flags: []
   match(strict ?? "", /^export function entry\(\) \{\n"use strict";\n\nassert/);
 });
 
+Deno.test("probes every required mode of a positive Test262 source", () => {
+  const path = "test/language/example.js";
+  const probe = probeApplicableTest262Source(
+    `/checkout/${path}`,
+    path,
+    `/*---
+flags: []
+---*/
+const answer = 42;
+`,
+    "testEntry",
+  );
+
+  deepStrictEqual(probe.executionModes, ["non-strict", "strict"]);
+  deepStrictEqual(probe.outcomes, [
+    { kind: "ready", mode: "non-strict" },
+    { kind: "ready", mode: "strict" },
+  ]);
+});
+
 Deno.test("lowers Test262 assertions to checked Functional Core expressions", () => {
   const source = `/*---
 flags: [noStrict]
@@ -163,6 +303,26 @@ assert.sameValue(point.answer, 42);
   const metadata = parseTest262Metadata("test/language/runtime-object.js", source);
   const result = lowerTest262PositiveTest(
     "test/language/runtime-object.js",
+    source,
+    metadata,
+    "testEntry",
+    "non-strict",
+  );
+
+  equal(result.ok, true, result.ok ? undefined : result.diagnostics[0].message);
+});
+
+Deno.test("routes dynamic Test262 SameValue assertions through the runtime model", () => {
+  const source = `/*---
+flags: [noStrict]
+---*/
+const object = {};
+const alias = object;
+assert.sameValue(alias, object);
+`;
+  const metadata = parseTest262Metadata("test/language/runtime-same-value.js", source);
+  const result = lowerTest262PositiveTest(
+    "test/language/runtime-same-value.js",
     source,
     metadata,
     "testEntry",

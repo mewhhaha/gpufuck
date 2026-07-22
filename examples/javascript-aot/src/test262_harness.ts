@@ -14,9 +14,10 @@ import { parseJavaScriptAotModule } from "./parser.ts";
 import {
   lowerJavaScriptRuntimeModule,
   requiresJavaScriptRuntimeModel,
+  validateJavaScriptRuntimeResolution,
 } from "./runtime_lowering.ts";
 import type { Test262ExecutionMode, Test262Metadata } from "./test262.ts";
-import { test262FrontendProbeSource } from "./test262.ts";
+import { test262FrontendProbeSource, test262NegativeProbeSource } from "./test262.ts";
 
 const TEST262_FAILURE_CONSTRUCTOR = "$Test262Failure";
 const TEST262_ERROR_CONSTRUCTORS = new Set([
@@ -37,6 +38,20 @@ export type Test262HarnessLoweringResult =
     readonly ok: false;
     readonly diagnostics: readonly [JavaScriptAotDiagnostic, ...JavaScriptAotDiagnostic[]];
   };
+
+export type Test262NegativeHarnessResult =
+  | { readonly kind: "matched"; readonly phase: "parse" | "resolution" }
+  | {
+    readonly kind: "runtime-ready";
+    readonly expectedType: string;
+    readonly lowered: LoweredJavaScriptAotModule;
+  }
+  | { readonly kind: "mismatch"; readonly diagnostic: JavaScriptAotDiagnostic };
+
+export type Test262NegativeProbeResult =
+  | { readonly kind: "matched"; readonly phase: "parse" | "resolution" }
+  | { readonly kind: "runtime-ready"; readonly expectedType: string }
+  | { readonly kind: "mismatch"; readonly diagnostic: JavaScriptAotDiagnostic };
 
 export function lowerTest262PositiveTest(
   path: string,
@@ -64,27 +79,241 @@ export function lowerTest262PositiveTest(
 
   try {
     const harnessModule = transformModuleAssertions(sourceModule);
-    const runtimeFaultConstructors = new Map([
-      [TEST262_FAILURE_CONSTRUCTOR, `Test262 assertion failed in ${path}.`],
-    ]);
     return {
       ok: true,
-      lowered: requiresJavaScriptRuntimeModel(harnessModule)
-        ? lowerJavaScriptRuntimeModule(harnessModule, entryName, {
-          runtimeFaultConstructors,
-          callThisMode: mode === "non-strict" || mode === "raw" ? "sloppy" : "strict",
-        })
-        : lowerJavaScriptAotModule(harnessModule, entryName, {
-          exceptionConstructors: new Set(["Test262Error"]),
-          runtimeFaultConstructors,
-        }),
+      lowered: lowerHarnessModule(path, harnessModule, entryName, mode),
     };
   } catch (error) {
     if (error instanceof JavaScriptAotLoweringError) {
       return { ok: false, diagnostics: [diagnostic(path, "lower", "J1002", error)] };
     }
+    if (isSurfaceLimitError(error)) {
+      return {
+        ok: false,
+        diagnostics: [surfaceLimitDiagnostic(path, sourceModule.span, error)],
+      };
+    }
     throw error;
   }
+}
+
+export function lowerTest262NegativeTest(
+  path: string,
+  source: string,
+  metadata: Test262Metadata,
+  entryName: string,
+  mode: Test262ExecutionMode,
+): Test262NegativeHarnessResult {
+  const expectation = metadata.negative;
+  if (expectation === null) {
+    throw new Error(`Positive Test262 test ${JSON.stringify(path)} has no negative expectation.`);
+  }
+  const probeSource = test262NegativeProbeSource(source, metadata, entryName, mode);
+  let sourceModule: JavaScriptAotModule;
+  try {
+    sourceModule = parseJavaScriptAotModule(path, probeSource);
+  } catch (error) {
+    if (!(error instanceof JavaScriptAotSyntaxError)) throw error;
+    if (expectation.phase === "parse" && expectation.type === "SyntaxError") {
+      return { kind: "matched", phase: "parse" };
+    }
+    return {
+      kind: "mismatch",
+      diagnostic: negativeMismatchDiagnostic(
+        path,
+        expectation.phase,
+        expectation.type,
+        "parse",
+        "SyntaxError",
+        error.span,
+      ),
+    };
+  }
+
+  try {
+    const lowered = lowerHarnessModule(
+      path,
+      transformModuleAssertions(sourceModule),
+      entryName,
+      mode,
+    );
+    if (expectation.phase === "runtime") {
+      return { kind: "runtime-ready", expectedType: expectation.type, lowered };
+    }
+    return {
+      kind: "mismatch",
+      diagnostic: negativeMismatchDiagnostic(
+        path,
+        expectation.phase,
+        expectation.type,
+        "runtime",
+        "no error",
+        sourceModule.span,
+      ),
+    };
+  } catch (error) {
+    if (isSurfaceLimitError(error)) {
+      return {
+        kind: "mismatch",
+        diagnostic: surfaceLimitDiagnostic(path, sourceModule.span, error),
+      };
+    }
+    if (!(error instanceof JavaScriptAotLoweringError)) throw error;
+    const actualType = resolutionErrorType(error);
+    if (expectation.phase === "resolution" && expectation.type === actualType) {
+      return { kind: "matched", phase: "resolution" };
+    }
+    return {
+      kind: "mismatch",
+      diagnostic: negativeMismatchDiagnostic(
+        path,
+        expectation.phase,
+        expectation.type,
+        "resolution",
+        actualType,
+        error.span,
+      ),
+    };
+  }
+}
+
+export function probeTest262NegativeTest(
+  path: string,
+  source: string,
+  metadata: Test262Metadata,
+  entryName: string,
+  mode: Test262ExecutionMode,
+): Test262NegativeProbeResult {
+  const expectation = metadata.negative;
+  if (expectation === null) {
+    throw new Error(`Positive Test262 test ${JSON.stringify(path)} has no negative expectation.`);
+  }
+  const probeSource = test262NegativeProbeSource(source, metadata, entryName, mode);
+  let sourceModule: JavaScriptAotModule;
+  try {
+    sourceModule = parseJavaScriptAotModule(path, probeSource);
+  } catch (error) {
+    if (!(error instanceof JavaScriptAotSyntaxError)) throw error;
+    if (expectation.phase === "parse" && expectation.type === "SyntaxError") {
+      return { kind: "matched", phase: "parse" };
+    }
+    return {
+      kind: "mismatch",
+      diagnostic: negativeMismatchDiagnostic(
+        path,
+        expectation.phase,
+        expectation.type,
+        "parse",
+        "SyntaxError",
+        error.span,
+      ),
+    };
+  }
+
+  try {
+    validateJavaScriptRuntimeResolution(
+      transformModuleAssertions(sourceModule),
+      entryName,
+    );
+  } catch (error) {
+    if (!(error instanceof JavaScriptAotLoweringError)) throw error;
+    const actualType = resolutionErrorType(error);
+    if (expectation.phase === "resolution" && expectation.type === actualType) {
+      return { kind: "matched", phase: "resolution" };
+    }
+    return {
+      kind: "mismatch",
+      diagnostic: negativeMismatchDiagnostic(
+        path,
+        expectation.phase,
+        expectation.type,
+        "resolution",
+        actualType,
+        error.span,
+      ),
+    };
+  }
+
+  if (expectation.phase === "runtime") {
+    return { kind: "runtime-ready", expectedType: expectation.type };
+  }
+  return {
+    kind: "mismatch",
+    diagnostic: negativeMismatchDiagnostic(
+      path,
+      expectation.phase,
+      expectation.type,
+      "runtime",
+      "no error",
+      sourceModule.span,
+    ),
+  };
+}
+
+function resolutionErrorType(error: JavaScriptAotLoweringError): "ReferenceError" | "SyntaxError" {
+  return /not (?:lexically )?declared|unresolved|later lexical binding/.test(error.message)
+    ? "ReferenceError"
+    : "SyntaxError";
+}
+
+function isSurfaceLimitError(error: unknown): error is RangeError {
+  return error instanceof RangeError &&
+    error.message.startsWith("functional surface ") && error.message.includes(" exceeds ");
+}
+
+function surfaceLimitDiagnostic(
+  path: string,
+  span: JavaScriptAotModule["span"],
+  error: RangeError,
+): JavaScriptAotDiagnostic {
+  return {
+    stage: "lower",
+    code: "J1002",
+    module: path,
+    span,
+    message: `JavaScript AOT ${error.message}.`,
+  };
+}
+
+function lowerHarnessModule(
+  path: string,
+  sourceModule: JavaScriptAotModule,
+  entryName: string,
+  mode: Test262ExecutionMode,
+): LoweredJavaScriptAotModule {
+  const runtimeFaultConstructors = new Map([
+    [TEST262_FAILURE_CONSTRUCTOR, `Test262 assertion failed in ${path}.`],
+    ["Test262Error", `Test262 test failed in ${path}.`],
+  ]);
+  return requiresJavaScriptRuntimeModel(sourceModule)
+    ? lowerJavaScriptRuntimeModule(sourceModule, entryName, {
+      runtimeFaultConstructors,
+      callThisMode: mode === "non-strict" || mode === "raw" ? "sloppy" : "strict",
+      entryThisMode: mode === "module" ? "undefined" : "global",
+    })
+    : lowerJavaScriptAotModule(sourceModule, entryName, {
+      exceptionConstructors: new Set(["Test262Error"]),
+      runtimeFaultConstructors,
+    });
+}
+
+function negativeMismatchDiagnostic(
+  path: string,
+  expectedPhase: "parse" | "resolution" | "runtime",
+  expectedType: string,
+  actualPhase: "parse" | "resolution" | "runtime",
+  actualType: string,
+  span: JavaScriptAotModule["span"],
+): JavaScriptAotDiagnostic {
+  return {
+    stage: actualPhase === "parse" ? "parse" : "lower",
+    code: actualPhase === "parse" ? "J1001" : "J1002",
+    module: path,
+    span,
+    message: `Test262 negative test ${
+      JSON.stringify(path)
+    } expected ${expectedPhase} ${expectedType}, but reached ${actualPhase} ${actualType}.`,
+  };
 }
 
 function diagnostic(

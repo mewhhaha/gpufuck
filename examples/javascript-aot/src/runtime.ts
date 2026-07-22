@@ -29,6 +29,7 @@ import {
   JAVASCRIPT_HEAP_ALLOCATION,
   JAVASCRIPT_MAXIMUM_BINDING_COUNT,
   JAVASCRIPT_MAXIMUM_OBJECT_COUNT,
+  JAVASCRIPT_OBJECT_CALLABLE,
   JAVASCRIPT_OBJECT_ORDINARY,
   JAVASCRIPT_OBJECT_RECORD,
   JAVASCRIPT_PROPERTY_KEY_STRING,
@@ -65,6 +66,10 @@ export const JAVASCRIPT_RUNTIME_EMPTY_HEAP = "$javascript#emptyHeap";
 export const JAVASCRIPT_RUNTIME_EMPTY_STATE = "$javascript#emptyState";
 export const JAVASCRIPT_RUNTIME_PROPERTY_KEY_EQUAL = "$javascript#propertyKeyEqual";
 export const JAVASCRIPT_RUNTIME_TO_BOOLEAN = "$javascript#toBoolean";
+export const JAVASCRIPT_RUNTIME_TO_NUMBER = "$javascript#toNumber";
+export const JAVASCRIPT_RUNTIME_TYPEOF = "$javascript#typeof";
+export const JAVASCRIPT_RUNTIME_IS_CALLABLE = "$javascript#isCallable";
+export const JAVASCRIPT_RUNTIME_ADD = "$javascript#add";
 export const JAVASCRIPT_RUNTIME_STRICT_EQUAL = "$javascript#strictEqual";
 export const JAVASCRIPT_RUNTIME_SAME_VALUE = "$javascript#sameValue";
 export const JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY_DESCRIPTOR = "$javascript#lookupPropertyDescriptor";
@@ -359,6 +364,244 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       constructor: JAVASCRIPT_VALUE_OBJECT,
       binders: ["objectIdentity"],
       body: boolean(true, span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_TO_NUMBER,
+    parameters: ["value"],
+    annotation: null,
+    body: match(reference("value", span), [{
+      constructor: JAVASCRIPT_VALUE_UNDEFINED,
+      binders: [],
+      body: { kind: "float-64", value: Number.NaN, span },
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_NULL,
+      binders: [],
+      body: { kind: "float-64", value: 0, span },
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_BOOLEAN,
+      binders: ["numberBoolean"],
+      body: conditional(
+        reference("numberBoolean", span),
+        { kind: "float-64", value: 1, span },
+        { kind: "float-64", value: 0, span },
+        span,
+      ),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_NUMBER,
+      binders: ["numberValue"],
+      body: reference("numberValue", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_STRING,
+      binders: ["numberString"],
+      body: conditional(
+        binary(
+          FunctionalBinaryOperator.StructuralEqual,
+          reference("numberString", span),
+          text("", span),
+          span,
+        ),
+        { kind: "float-64", value: 0, span },
+        runtimeFault("JavaScript runtime ToNumber does not yet parse nonempty strings", span),
+        span,
+      ),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_SYMBOL,
+      binders: ["numberSymbol"],
+      body: runtimeFault("JavaScript cannot convert a Symbol value to a number", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_OBJECT,
+      binders: ["numberObject"],
+      body: runtimeFault("JavaScript runtime ToPrimitive is required before object ToNumber", span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_TYPEOF,
+    parameters: ["heap", "value"],
+    annotation: null,
+    body: match(reference("value", span), [{
+      constructor: JAVASCRIPT_VALUE_UNDEFINED,
+      binders: [],
+      body: text("undefined", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_NULL,
+      binders: [],
+      body: text("object", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_BOOLEAN,
+      binders: ["typeofBoolean"],
+      body: text("boolean", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_NUMBER,
+      binders: ["typeofNumber"],
+      body: text("number", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_STRING,
+      binders: ["typeofString"],
+      body: text("string", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_SYMBOL,
+      binders: ["typeofSymbol"],
+      body: text("symbol", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_OBJECT,
+      binders: ["typeofObject"],
+      body: match(
+        call(JAVASCRIPT_RUNTIME_OBJECT_KIND, [
+          match(reference("heap", span), [{
+            constructor: JAVASCRIPT_HEAP,
+            binders: ["typeofNextIdentity", "typeofObjects"],
+            body: reference("typeofObjects", span),
+            span,
+          }], span),
+          reference("typeofObject", span),
+        ], span),
+        [{
+          constructor: JAVASCRIPT_OBJECT_ORDINARY,
+          binders: [],
+          body: text("object", span),
+          span,
+        }, {
+          constructor: JAVASCRIPT_OBJECT_CALLABLE,
+          binders: ["typeofTarget", "typeofRealm", "typeofEnvironment", "typeofThis"],
+          body: text("function", span),
+          span,
+        }],
+        span,
+      ),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_IS_CALLABLE,
+    parameters: ["heap", "value"],
+    annotation: null,
+    body: match(reference("value", span), [{
+      constructor: JAVASCRIPT_VALUE_UNDEFINED,
+      binders: [],
+      body: boolean(false, span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_NULL,
+      binders: [],
+      body: boolean(false, span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_BOOLEAN,
+      binders: ["callableBoolean"],
+      body: boolean(false, span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_NUMBER,
+      binders: ["callableNumber"],
+      body: boolean(false, span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_STRING,
+      binders: ["callableString"],
+      body: boolean(false, span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_SYMBOL,
+      binders: ["callableSymbol"],
+      body: boolean(false, span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_OBJECT,
+      binders: ["callableObject"],
+      body: match(
+        call(JAVASCRIPT_RUNTIME_OBJECT_KIND, [
+          match(reference("heap", span), [{
+            constructor: JAVASCRIPT_HEAP,
+            binders: ["callableNextIdentity", "callableObjects"],
+            body: reference("callableObjects", span),
+            span,
+          }], span),
+          reference("callableObject", span),
+        ], span),
+        [{
+          constructor: JAVASCRIPT_OBJECT_ORDINARY,
+          binders: [],
+          body: boolean(false, span),
+          span,
+        }, {
+          constructor: JAVASCRIPT_OBJECT_CALLABLE,
+          binders: [
+            "callableTarget",
+            "callableRealm",
+            "callableEnvironment",
+            "callableThis",
+          ],
+          body: boolean(true, span),
+          span,
+        }],
+        span,
+      ),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_ADD,
+    parameters: ["left", "right"],
+    annotation: null,
+    body: match(reference("left", span), [{
+      constructor: JAVASCRIPT_VALUE_UNDEFINED,
+      binders: [],
+      body: numericAddition(span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_NULL,
+      binders: [],
+      body: numericAddition(span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_BOOLEAN,
+      binders: ["addLeftBoolean"],
+      body: numericAddition(span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_NUMBER,
+      binders: ["addLeftNumber"],
+      body: numericAddition(span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_STRING,
+      binders: ["addLeftString"],
+      body: match(reference("right", span), [{
+        constructor: JAVASCRIPT_VALUE_STRING,
+        binders: ["addRightString"],
+        body: call(JAVASCRIPT_VALUE_STRING, [{
+          kind: "text-append",
+          left: reference("addLeftString", span),
+          right: reference("addRightString", span),
+          span,
+        }], span),
+        span,
+      }, ...invalidStringAdditionArms(span)], span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_SYMBOL,
+      binders: ["addLeftSymbol"],
+      body: runtimeFault("JavaScript cannot add a Symbol value", span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_VALUE_OBJECT,
+      binders: ["addLeftObject"],
+      body: runtimeFault("JavaScript runtime addition requires object ToPrimitive", span),
       span,
     }], span),
     span,
@@ -1971,6 +2214,57 @@ function compareMatchingValueKind(
   );
 }
 
+function numericAddition(
+  span: { readonly startByte: number; readonly endByte: number },
+): FunctionalSurfaceExpression {
+  return call(JAVASCRIPT_VALUE_NUMBER, [binary(
+    FunctionalBinaryOperator.AddFloat64,
+    call(JAVASCRIPT_RUNTIME_TO_NUMBER, [reference("left", span)], span),
+    call(JAVASCRIPT_RUNTIME_TO_NUMBER, [reference("right", span)], span),
+    span,
+  )], span);
+}
+
+function invalidStringAdditionArms(
+  span: { readonly startByte: number; readonly endByte: number },
+): readonly FunctionalSurfaceCaseArm[] {
+  const unsupported = runtimeFault(
+    "JavaScript runtime string addition requires ToString for a non-string operand",
+    span,
+  );
+  return [{
+    constructor: JAVASCRIPT_VALUE_UNDEFINED,
+    binders: [],
+    body: unsupported,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_NULL,
+    binders: [],
+    body: unsupported,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_BOOLEAN,
+    binders: ["addRightBoolean"],
+    body: unsupported,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_NUMBER,
+    binders: ["addRightNumber"],
+    body: unsupported,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_SYMBOL,
+    binders: ["addRightSymbol"],
+    body: unsupported,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_OBJECT,
+    binders: ["addRightObject"],
+    body: unsupported,
+    span,
+  }];
+}
+
 function sameNumberValue(
   left: FunctionalSurfaceExpression,
   right: FunctionalSurfaceExpression,
@@ -2023,6 +2317,13 @@ function boolean(
   span: { readonly startByte: number; readonly endByte: number },
 ): FunctionalSurfaceExpression {
   return { kind: "boolean", value, span };
+}
+
+function text(
+  value: string,
+  span: { readonly startByte: number; readonly endByte: number },
+): FunctionalSurfaceExpression {
+  return { kind: "text", value, span };
 }
 
 function call(

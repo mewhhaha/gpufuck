@@ -59,6 +59,7 @@ export interface FunctionalWasmRunOptions {
   readonly init?: FunctionalWasmInit;
   readonly argument?: FunctionalWasmValue;
   readonly maximumResultNodes?: number;
+  readonly maximumResultBytes?: number;
   readonly argumentOwnership?: "bounded-borrow" | "ownership-transfer";
   readonly signal?: AbortSignal;
 }
@@ -99,7 +100,7 @@ async function runFunctionalWasmAttempt(
   maximumSteps?: number,
 ): Promise<FunctionalWasmExecution & { readonly semanticSteps?: number }> {
   options.signal?.throwIfAborted();
-  const maximumResultNodes = validateFunctionalWasmRunControls(options);
+  const { maximumResultNodes, maximumResultBytes } = validateFunctionalWasmRunControls(options);
   if (!allowSuspendingHostOperations) {
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
@@ -237,6 +238,7 @@ async function runFunctionalWasmAttempt(
         entry.result,
         result,
         maximumResultNodes,
+        maximumResultBytes,
       );
     } catch (cause) {
       if (cause instanceof FunctionalWasmValueError) {
@@ -292,8 +294,11 @@ async function runFunctionalWasmAttempt(
 }
 
 function validateFunctionalWasmRunControls(
-  options: Pick<FunctionalWasmRunOptions, "argumentOwnership" | "maximumResultNodes">,
-): number {
+  options: Pick<
+    FunctionalWasmRunOptions,
+    "argumentOwnership" | "maximumResultBytes" | "maximumResultNodes"
+  >,
+): { readonly maximumResultNodes: number; readonly maximumResultBytes: number } {
   const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
   if (
     argumentOwnership !== "bounded-borrow" &&
@@ -315,7 +320,13 @@ function validateFunctionalWasmRunControls(
       `functional WASM maximumResultNodes must be a positive safe integer; received ${maximumResultNodes}`,
     );
   }
-  return maximumResultNodes;
+  const maximumResultBytes = options.maximumResultBytes ?? 1_048_576;
+  if (!Number.isSafeInteger(maximumResultBytes) || maximumResultBytes < 1) {
+    throw new RangeError(
+      `functional WASM maximumResultBytes must be a positive safe integer; received ${maximumResultBytes}`,
+    );
+  }
+  return { maximumResultNodes, maximumResultBytes };
 }
 
 interface FunctionalWasmReplayRecord {

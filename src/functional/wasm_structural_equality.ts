@@ -17,6 +17,7 @@ export function structuralEqualityFunction(options: {
   readonly typeIndex: number;
   readonly functionIndex: number;
   readonly emitForceValue: (instructions: WasmInstructions) => void;
+  readonly emitFuelChargeAmount: (instructions: WasmInstructions, amount: number) => void;
 }): WasmFunctionBody {
   const instructions = new WasmInstructions(2);
   const left = instructions.addLocal(WasmValueType.I64);
@@ -90,6 +91,7 @@ export function structuralEqualityFunction(options: {
     kind,
     count,
     index,
+    options.emitFuelChargeAmount,
   );
   instructions.emit(0x0b);
 
@@ -99,7 +101,14 @@ export function structuralEqualityFunction(options: {
   instructions.localGet(kind);
   instructions.i32Const(BYTES_OBJECT_KIND);
   instructions.emit(0x46, 0x72, 0x04, 0x40);
-  emitBufferEquality(instructions, leftPointer, rightPointer, count, index);
+  emitBufferEquality(
+    instructions,
+    leftPointer,
+    rightPointer,
+    count,
+    index,
+    options.emitFuelChargeAmount,
+  );
   instructions.emit(0x0b);
 
   instructions.localGet(kind);
@@ -161,6 +170,7 @@ function emitAggregateEquality(
   kind: number,
   count: number,
   index: number,
+  emitFuelChargeAmount: (instructions: WasmInstructions, amount: number) => void,
 ): void {
   instructions.localGet(kind);
   instructions.i32Const(CONSTRUCTOR_OBJECT_KIND);
@@ -173,6 +183,7 @@ function emitAggregateEquality(
   instructions.i32Const(0);
   instructions.emit(0x0f, 0x0b, 0x0b);
   emitEqualObjectCount(instructions, leftPointer, rightPointer, count);
+  emitFuelChargeAmount(instructions, count);
   instructions.i32Const(0);
   instructions.localSet(index);
   instructions.emit(0x02, 0x40, 0x03, 0x40);
@@ -210,8 +221,10 @@ function emitBufferEquality(
   rightPointer: number,
   count: number,
   index: number,
+  emitFuelChargeAmount: (instructions: WasmInstructions, amount: number) => void,
 ): void {
   emitEqualObjectCount(instructions, leftPointer, rightPointer, count);
+  emitFuelChargeAmount(instructions, count);
   instructions.i32Const(0);
   instructions.localSet(index);
   instructions.emit(0x02, 0x40, 0x03, 0x40);

@@ -21,7 +21,16 @@ arithmetic, comparison, remainder, bitwise, and shift operations. Literal unary 
 decidable `typeof`, standard radix literals, and numeric separators are also supported. Mutable
 source bindings and loops lower to immutable SSA-style bindings and local recursive Core functions.
 Arrays and their higher-order methods lower to a generic algebraic Core type and ordinary recursive
-definitions. The entry is an exported zero-argument `main` function or constant.
+definitions. Runtime calls preserve extra arguments and expose an `arguments` object; simple,
+default, object-binding, array-binding, and sole rest parameters share that call-frame model. Object
+methods, basic classes with constructors and instance methods, straight-line generators, and
+deterministic fulfilled async functions are executable. The entry is an exported zero-argument
+`main` function or constant.
+
+Frontend admission is deliberately bounded before generated-parser or recursive lowering work:
+source is limited to 256 KiB of UTF-8, token streams to 8,192 tokens, delimiter and prefix-operator
+nesting to 256, automatic semicolon insertion to four sites, and active AOT `try` continuations to
+128. Inputs beyond those boundaries produce ordinary parse or lowering diagnostics.
 
 Programs that require object identity or property writes use a separate runtime-model lowering path.
 It represents every JavaScript value with one tagged `Value` type and threads explicit state through
@@ -41,13 +50,17 @@ lexical and variable environments, `this` value, and realm. Each realm owns a gl
 callable objects retain their creation realm and captured lexical environment while the existing CPS
 lowering represents the execution-context stack. Property calls preserve their receiver as `this`;
 strict bare calls receive `undefined`, non-strict bare calls receive the realm global object, and
-arrow functions retain the lexical `this` from their creation context.
+arrow functions retain the lexical `this` from their creation context. The runtime profile also
+supports `Function.prototype.call`, nullish-list `apply`, and `bind` without bound arguments. Bound
+functions preserve their target's strictness and cannot be rebound by a later call.
 
 The runtime profile recognizes `Object.defineProperty(object, "name", descriptor)` when the key and
 descriptor shape are statically visible. Accessor descriptors may provide `get`, `set`,
 `enumerable`, and `configurable`; getter and setter functions run through ordinary callable dispatch
 with the property receiver as `this`. Their heap and binding updates persist, and thrown values
-propagate through the same completion path as direct calls.
+propagate through the same completion path as direct calls. Literal-string
+`String.prototype.replace` supports a string or callable replacement; callable replacements receive
+the matched text, match offset, and source string.
 
 This is a statically inferable AOT profile, not general JavaScript yet. Dynamic conditions and
 logical operands currently must be Boolean; statically known primitives and objects use JavaScript
@@ -57,9 +70,13 @@ restricted line-terminator behavior after `return`. Runtime environments map lex
 binding-cell identities in a state-threaded store. Mutable captures, recursive named function
 expressions, and mutually recursive function declarations therefore observe the same current binding
 instead of copying an environment snapshot. Throws propagate through lexical blocks and eligible
-function calls, including supported Test262 `assert.throws` callbacks. General descriptor
-redefinition, data descriptors through `Object.defineProperty`, imports, general dynamic coercion,
-mutable or heterogeneous arrays, classes, generators, and async execution remain subsequent vertical
+function calls, including supported Test262 `assert.throws` callbacks. Generator admission is
+intentionally bounded to straight-line `yield` statements plus one final return; it lowers to a
+durable iterator state machine. Async functions currently model deterministic fulfilled values and
+immediate `then` delivery, not the ECMAScript job queue, rejection propagation, or suspension over
+host work. Basic classes do not yet provide inheritance, prototype sharing, private fields, or
+static initialization. General descriptor redefinition, data descriptors through
+`Object.defineProperty`, imports, and the remaining dynamic coercions are subsequent vertical
 slices. Runtime globals are not generally implicit; the frontend currently recognizes only the
 immutable numeric globals and statically known `typeof` cases. Dynamic code generation through
 `eval` or `Function` is rejected before GPU compilation.
@@ -70,9 +87,12 @@ reports the complete inventory, including strict and non-strict execution modes,
 phases, modules, async tests, current frontend readiness, and the intentional dynamic-code
 exclusion. Every ready required mode is compiled to a fresh artifact and executed. Readiness is
 deliberately not labeled conformance: a test passes only once the runner can execute its harness and
-observe the required result or exact failure phase.
+observe the required result or exact failure phase. Negative probes distinguish parse, resolution,
+and runtime expectations and reject a failure at the wrong phase; runtime-ready negatives retain
+their expected error type for execution validation. Frontend probing runs in bounded subprocess
+batches so generated-parser and lowering state cannot accumulate across the complete corpus.
 
-At the pinned revision, 1,970 required positive execution modes currently pass frontend lowering,
-GPU compilation, and Wasm execution. This number is a progress baseline, not a conformance claim;
-30,952 modes still need parser coverage, 2,775 still need lowering or runtime facilities, and 4,511
-negative tests still need exact phase verification.
+At the pinned revision, all 2,047 frontend-ready positive execution modes pass GPU compilation and
+Wasm execution. This number is a progress baseline, not a conformance claim: 30,991 modes still need
+parser coverage, 2,659 still need lowering or runtime facilities, and the negative corpus still
+needs complete execution coverage after phase-aware frontend admission.
