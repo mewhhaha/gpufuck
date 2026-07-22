@@ -258,6 +258,13 @@ traces, and tests.
 Core is small enough for multiple backends but rich enough to retain laziness decisions and source
 fault locations.
 
+Indexed runtime state uses the language-neutral `Store a` Core primitive. Stores have persistent
+new, length, checked-read, write, and growth operations with a device-independent maximum length.
+This is the common substrate for frontend-defined object heaps, binding tables, register files, and
+scratch structures; JavaScript object semantics, for example, remain in its example frontend rather
+than leaking into Core. The linear-memory backend copies observable persistent updates unless
+uniqueness permits reuse, while WasmGC maps the same operations to typed arrays.
+
 ## 5. Target-level modules
 
 Source modules and target modules solve different problems.
@@ -609,9 +616,9 @@ The default backend uses compact scalar values or explicit linear-memory storage
 backend in [`wasm_gc_codegen.ts`](src/functional/wasm_gc_codegen.ts) targets engines implementing
 the finalized [WebAssembly GC extension](https://webassembly.github.io/gc/core/). It consumes the
 same resolved Core and uses one recursive typed struct/array group for scalars, immutable algebraic
-values, closures, environments, and shared thunks. This permits cycles between recursive closures
-without a frontend root protocol. Lazy values carry unevaluated, evaluating, and evaluated states;
-forcing an evaluating thunk reports the same blackhole fault as the default runtime.
+values, stores, closures, environments, and shared thunks. This permits cycles between recursive
+closures without a frontend root protocol. Lazy values carry unevaluated, evaluating, and evaluated
+states; forcing an evaluating thunk reports the same blackhole fault as the default runtime.
 
 Selection is explicit through `FunctionalWasmCompilationOptions.backend`; omission selects
 `linear-memory`. [`wasm_gc_execution.ts`](src/functional/wasm_gc_execution.ts) validates engine

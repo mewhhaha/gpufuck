@@ -24,6 +24,10 @@ export const JAVASCRIPT_OBJECT_KIND_TYPE = "$javascript#ObjectKind";
 export const JAVASCRIPT_OBJECT_ORDINARY = "$javascript#OrdinaryObject";
 export const JAVASCRIPT_OBJECT_CALLABLE = "$javascript#CallableObject";
 
+export const JAVASCRIPT_THIS_BINDING_TYPE = "$javascript#ThisBinding";
+export const JAVASCRIPT_THIS_DYNAMIC = "$javascript#DynamicThis";
+export const JAVASCRIPT_THIS_LEXICAL = "$javascript#LexicalThis";
+
 export const JAVASCRIPT_PROPERTY_DESCRIPTOR_TYPE = "$javascript#PropertyDescriptor";
 export const JAVASCRIPT_DATA_DESCRIPTOR = "$javascript#DataDescriptor";
 export const JAVASCRIPT_ACCESSOR_DESCRIPTOR = "$javascript#AccessorDescriptor";
@@ -46,6 +50,11 @@ export const JAVASCRIPT_HEAP = "$javascript#HeapValue";
 export const JAVASCRIPT_ENVIRONMENT_TYPE = "$javascript#Environment";
 export const JAVASCRIPT_ENVIRONMENT_EMPTY = "$javascript#EmptyEnvironment";
 export const JAVASCRIPT_ENVIRONMENT_BINDING = "$javascript#EnvironmentBinding";
+
+export const JAVASCRIPT_EXECUTION_CONTEXT_TYPE = "$javascript#ExecutionContext";
+export const JAVASCRIPT_EXECUTION_CONTEXT = "$javascript#ExecutionContextValue";
+export const JAVASCRIPT_REALM_TYPE = "$javascript#Realm";
+export const JAVASCRIPT_REALM = "$javascript#RealmValue";
 
 export const JAVASCRIPT_REFERENCE_TYPE = "$javascript#Reference";
 export const JAVASCRIPT_UNRESOLVABLE_REFERENCE = "$javascript#UnresolvableReference";
@@ -78,6 +87,7 @@ export const JAVASCRIPT_VALUE_LOOKUP_TYPE = "$javascript#ValueLookup";
 export const JAVASCRIPT_VALUE_MISSING = "$javascript#MissingValue";
 export const JAVASCRIPT_VALUE_UNINITIALIZED = "$javascript#UninitializedValue";
 export const JAVASCRIPT_VALUE_FOUND = "$javascript#FoundValue";
+export const JAVASCRIPT_VALUE_ACCESSOR = "$javascript#AccessorValue";
 
 export const JAVASCRIPT_HEAP_ALLOCATION_TYPE = "$javascript#HeapAllocation";
 export const JAVASCRIPT_HEAP_ALLOCATION = "$javascript#AllocatedObject";
@@ -89,6 +99,17 @@ export const JAVASCRIPT_BINDING_UPDATE_ALREADY_INITIALIZED =
   "$javascript#BindingAlreadyInitialized";
 export const JAVASCRIPT_BINDING_UPDATE_IMMUTABLE = "$javascript#BindingImmutable";
 export const JAVASCRIPT_BINDING_UPDATE_UPDATED = "$javascript#BindingUpdated";
+
+export const JAVASCRIPT_REFERENCE_UPDATE_TYPE = "$javascript#ReferenceUpdate";
+export const JAVASCRIPT_REFERENCE_UPDATE_UPDATED = "$javascript#ReferenceUpdated";
+export const JAVASCRIPT_REFERENCE_UPDATE_UNRESOLVABLE = "$javascript#ReferenceUnresolvable";
+export const JAVASCRIPT_REFERENCE_UPDATE_UNINITIALIZED = "$javascript#ReferenceUninitialized";
+export const JAVASCRIPT_REFERENCE_UPDATE_IMMUTABLE = "$javascript#ReferenceImmutable";
+export const JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE = "$javascript#ReferenceNonWritable";
+export const JAVASCRIPT_REFERENCE_UPDATE_MISSING_SETTER = "$javascript#ReferenceMissingSetter";
+export const JAVASCRIPT_REFERENCE_UPDATE_NON_EXTENSIBLE = "$javascript#ReferenceNonExtensible";
+export const JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE = "$javascript#ReferenceInvalidBase";
+export const JAVASCRIPT_REFERENCE_UPDATE_ACCESSOR = "$javascript#ReferenceAccessorCall";
 
 const integerType = { kind: "integer" as const };
 const float64Type = { kind: "float-64" as const };
@@ -102,12 +123,15 @@ const valueType = namedType(JAVASCRIPT_VALUE_TYPE);
 const propertyKeyType = namedType(JAVASCRIPT_PROPERTY_KEY_TYPE);
 const propertyDescriptorType = namedType(JAVASCRIPT_PROPERTY_DESCRIPTOR_TYPE);
 const objectKindType = namedType(JAVASCRIPT_OBJECT_KIND_TYPE);
+const thisBindingType = namedType(JAVASCRIPT_THIS_BINDING_TYPE);
 const propertyListType = namedType(JAVASCRIPT_PROPERTY_LIST_TYPE);
 const objectRecordType = namedType(JAVASCRIPT_OBJECT_RECORD_TYPE);
 const heapType = namedType(JAVASCRIPT_HEAP_TYPE);
 const environmentType = namedType(JAVASCRIPT_ENVIRONMENT_TYPE);
 const bindingStateType = namedType(JAVASCRIPT_BINDING_STATE_TYPE);
 const bindingStoreType = namedType(JAVASCRIPT_BINDING_STORE_TYPE);
+const realmType = namedType(JAVASCRIPT_REALM_TYPE);
+const executionContextType = namedType(JAVASCRIPT_EXECUTION_CONTEXT_TYPE);
 const stateType = namedType(JAVASCRIPT_STATE_TYPE);
 const completionTargetType = namedType(JAVASCRIPT_COMPLETION_TARGET_TYPE);
 
@@ -162,6 +186,19 @@ export function javascriptRuntimeTypeDeclarations(
       span,
     }],
   }, {
+    name: JAVASCRIPT_THIS_BINDING_TYPE,
+    parameters: [],
+    span,
+    constructors: [{
+      name: JAVASCRIPT_THIS_DYNAMIC,
+      fields: [],
+      span,
+    }, {
+      name: JAVASCRIPT_THIS_LEXICAL,
+      fields: [{ name: "value", type: valueType, span }],
+      span,
+    }],
+  }, {
     name: JAVASCRIPT_OBJECT_KIND_TYPE,
     parameters: [],
     span,
@@ -171,7 +208,9 @@ export function javascriptRuntimeTypeDeclarations(
         name: JAVASCRIPT_OBJECT_CALLABLE,
         fields: [
           { name: "target", type: integerType, span },
+          { name: "realm", type: realmType, span },
           { name: "environment", type: environmentType, span },
+          { name: "thisBinding", type: thisBindingType, span },
         ],
         span,
       },
@@ -318,6 +357,15 @@ export function javascriptRuntimeTypeDeclarations(
       },
     ],
   }, {
+    name: JAVASCRIPT_REALM_TYPE,
+    parameters: [],
+    span,
+    constructors: [{
+      name: JAVASCRIPT_REALM,
+      fields: [{ name: "globalObject", type: valueType, span }],
+      span,
+    }],
+  }, {
     name: JAVASCRIPT_REFERENCE_TYPE,
     parameters: [],
     span,
@@ -346,6 +394,20 @@ export function javascriptRuntimeTypeDeclarations(
       span,
     }],
   }, {
+    name: JAVASCRIPT_EXECUTION_CONTEXT_TYPE,
+    parameters: [],
+    span,
+    constructors: [{
+      name: JAVASCRIPT_EXECUTION_CONTEXT,
+      fields: [
+        { name: "realm", type: realmType, span },
+        { name: "lexicalEnvironment", type: environmentType, span },
+        { name: "variableEnvironment", type: environmentType, span },
+        { name: "thisValue", type: valueType, span },
+      ],
+      span,
+    }],
+  }, {
     name: JAVASCRIPT_STATE_TYPE,
     parameters: [],
     span,
@@ -353,7 +415,7 @@ export function javascriptRuntimeTypeDeclarations(
       name: JAVASCRIPT_STATE,
       fields: [
         { name: "heap", type: heapType, span },
-        { name: "environment", type: environmentType, span },
+        { name: "context", type: executionContextType, span },
         { name: "bindings", type: bindingStoreType, span },
       ],
       span,
@@ -390,6 +452,14 @@ export function javascriptRuntimeTypeDeclarations(
         fields: [{ name: "value", type: valueType, span }],
         span,
       },
+      {
+        name: JAVASCRIPT_VALUE_ACCESSOR,
+        fields: [
+          { name: "getter", type: valueType, span },
+          { name: "receiver", type: valueType, span },
+        ],
+        span,
+      },
     ],
   }, {
     name: JAVASCRIPT_HEAP_ALLOCATION_TYPE,
@@ -415,6 +485,34 @@ export function javascriptRuntimeTypeDeclarations(
       {
         name: JAVASCRIPT_BINDING_UPDATE_UPDATED,
         fields: [{ name: "state", type: stateType, span }],
+        span,
+      },
+    ],
+  }, {
+    name: JAVASCRIPT_REFERENCE_UPDATE_TYPE,
+    parameters: [],
+    span,
+    constructors: [
+      {
+        name: JAVASCRIPT_REFERENCE_UPDATE_UPDATED,
+        fields: [{ name: "state", type: stateType, span }],
+        span,
+      },
+      { name: JAVASCRIPT_REFERENCE_UPDATE_UNRESOLVABLE, fields: [], span },
+      { name: JAVASCRIPT_REFERENCE_UPDATE_UNINITIALIZED, fields: [], span },
+      { name: JAVASCRIPT_REFERENCE_UPDATE_IMMUTABLE, fields: [], span },
+      { name: JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE, fields: [], span },
+      { name: JAVASCRIPT_REFERENCE_UPDATE_MISSING_SETTER, fields: [], span },
+      { name: JAVASCRIPT_REFERENCE_UPDATE_NON_EXTENSIBLE, fields: [], span },
+      { name: JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, fields: [], span },
+      {
+        name: JAVASCRIPT_REFERENCE_UPDATE_ACCESSOR,
+        fields: [
+          { name: "state", type: stateType, span },
+          { name: "setter", type: valueType, span },
+          { name: "receiver", type: valueType, span },
+          { name: "value", type: valueType, span },
+        ],
         span,
       },
     ],

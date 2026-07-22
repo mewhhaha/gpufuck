@@ -3780,8 +3780,26 @@ fn expression_transition() {
       frame_set(frame, 4u, fresh_variable());
     }
     let callee = frame_get(frame, 3u);
+    if type_get(callee, 0u) == TYPE_INSTANCE ||
+      type_get(callee, 0u) == TYPE_LAZY_CONSTRUCTOR {
+      materialize_lazy_type(callee);
+      return;
+    }
+    if type_get(callee, 0u) == TYPE_VARIABLE && type_get(callee, 1u) != NO_INDEX {
+      frame_set(frame, 3u, type_get(callee, 1u));
+      return;
+    }
     if type_get(callee, 0u) == TYPE_FUNCTION {
       let parameter = type_get(callee, 2u);
+      if type_get(parameter, 0u) == TYPE_INSTANCE ||
+        type_get(parameter, 0u) == TYPE_LAZY_CONSTRUCTOR {
+        materialize_lazy_type(parameter);
+        return;
+      }
+      if type_get(parameter, 0u) == TYPE_VARIABLE && type_get(parameter, 1u) != NO_INDEX {
+        type_set(callee, 2u, type_get(parameter, 1u));
+        return;
+      }
       let parameter_kind = type_get(parameter, 0u);
       if parameter_kind == TYPE_FORALL {
         frame_set(frame, 6u, parameter);

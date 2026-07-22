@@ -24,6 +24,7 @@ import {
   JAVASCRIPT_DESCRIPTOR_MISSING,
   JAVASCRIPT_ENVIRONMENT_BINDING,
   JAVASCRIPT_ENVIRONMENT_EMPTY,
+  JAVASCRIPT_EXECUTION_CONTEXT,
   JAVASCRIPT_HEAP,
   JAVASCRIPT_HEAP_ALLOCATION,
   JAVASCRIPT_MAXIMUM_BINDING_COUNT,
@@ -34,8 +35,19 @@ import {
   JAVASCRIPT_PROPERTY_KEY_SYMBOL,
   JAVASCRIPT_PROPERTY_LIST_EMPTY,
   JAVASCRIPT_PROPERTY_REFERENCE,
+  JAVASCRIPT_REALM,
+  JAVASCRIPT_REFERENCE_UPDATE_ACCESSOR,
+  JAVASCRIPT_REFERENCE_UPDATE_IMMUTABLE,
+  JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE,
+  JAVASCRIPT_REFERENCE_UPDATE_MISSING_SETTER,
+  JAVASCRIPT_REFERENCE_UPDATE_NON_EXTENSIBLE,
+  JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE,
+  JAVASCRIPT_REFERENCE_UPDATE_UNINITIALIZED,
+  JAVASCRIPT_REFERENCE_UPDATE_UNRESOLVABLE,
+  JAVASCRIPT_REFERENCE_UPDATE_UPDATED,
   JAVASCRIPT_STATE,
   JAVASCRIPT_UNRESOLVABLE_REFERENCE,
+  JAVASCRIPT_VALUE_ACCESSOR,
   JAVASCRIPT_VALUE_BOOLEAN,
   JAVASCRIPT_VALUE_FOUND,
   JAVASCRIPT_VALUE_MISSING,
@@ -68,6 +80,12 @@ export const JAVASCRIPT_RUNTIME_INITIALIZE_BINDING = "$javascript#initializeBind
 export const JAVASCRIPT_RUNTIME_SET_BINDING = "$javascript#setBinding";
 export const JAVASCRIPT_RUNTIME_RESOLVE_BINDING_REFERENCE = "$javascript#resolveBindingReference";
 export const JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE = "$javascript#getReferenceValue";
+export const JAVASCRIPT_RUNTIME_PUT_REFERENCE_VALUE = "$javascript#putReferenceValue";
+export const JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT = "$javascript#lexicalEnvironment";
+export const JAVASCRIPT_RUNTIME_REALM = "$javascript#currentRealm";
+export const JAVASCRIPT_RUNTIME_GLOBAL_OBJECT = "$javascript#globalObject";
+export const JAVASCRIPT_RUNTIME_THIS_VALUE = "$javascript#thisValue";
+export const JAVASCRIPT_RUNTIME_WITH_GLOBAL_THIS = "$javascript#withGlobalThis";
 
 const DESCRIPTOR_TO_PROPERTY = "$javascript#descriptorToProperty";
 const DEFINE_PROPERTY_IN_LIST = "$javascript#definePropertyInList";
@@ -75,10 +93,14 @@ const OBJECT_EXISTS = "$javascript#objectExists";
 const LOOKUP_OBJECT = "$javascript#lookupObject";
 const LOOKUP_BINDING_CELL = "$javascript#lookupBindingCell";
 const RESOLVE_ENVIRONMENT_REFERENCE = "$javascript#resolveEnvironmentReference";
+const PUT_BINDING_REFERENCE_VALUE = "$javascript#putBindingReferenceValue";
+const PUT_OBJECT_PROPERTY = "$javascript#putObjectProperty";
+const PUT_RECEIVER_DATA_PROPERTY = "$javascript#putReceiverDataProperty";
 const INITIALIZE_ENVIRONMENT_BINDING = "$javascript#initializeEnvironmentBinding";
 const INITIALIZE_BINDING_CELL = "$javascript#initializeBindingCell";
 const SET_ENVIRONMENT_BINDING = "$javascript#setEnvironmentBinding";
 const SET_BINDING_CELL = "$javascript#setBindingCell";
+const WITH_LEXICAL_ENVIRONMENT = "$javascript#withLexicalEnvironment";
 
 export interface JavaScriptRuntimeSurface {
   readonly definitions: readonly FunctionalSurfaceDefinition[];
@@ -100,18 +122,138 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     name: JAVASCRIPT_RUNTIME_EMPTY_STATE,
     parameters: [],
     annotation: null,
-    body: call(JAVASCRIPT_STATE, [
-      reference(JAVASCRIPT_RUNTIME_EMPTY_HEAP, span),
-      reference(JAVASCRIPT_ENVIRONMENT_EMPTY, span),
-      call(JAVASCRIPT_BINDING_STORE, [
-        integer(0, span),
-        storeNew(
-          integer(0, span),
-          call(JAVASCRIPT_BINDING_UNINITIALIZED, [boolean(false, span)], span),
-          span,
-        ),
+    body: match(
+      call(JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT, [
+        reference(JAVASCRIPT_RUNTIME_EMPTY_HEAP, span),
+        reference(JAVASCRIPT_VALUE_NULL, span),
+        reference(JAVASCRIPT_OBJECT_ORDINARY, span),
       ], span),
-    ], span),
+      [{
+        constructor: JAVASCRIPT_HEAP_ALLOCATION,
+        binders: ["initialHeap", "globalObject"],
+        body: call(JAVASCRIPT_STATE, [
+          reference("initialHeap", span),
+          call(JAVASCRIPT_EXECUTION_CONTEXT, [
+            call(JAVASCRIPT_REALM, [
+              reference("globalObject", span),
+            ], span),
+            reference(JAVASCRIPT_ENVIRONMENT_EMPTY, span),
+            reference(JAVASCRIPT_ENVIRONMENT_EMPTY, span),
+            reference(JAVASCRIPT_VALUE_UNDEFINED, span),
+          ], span),
+          call(JAVASCRIPT_BINDING_STORE, [
+            integer(0, span),
+            storeNew(
+              integer(0, span),
+              call(JAVASCRIPT_BINDING_UNINITIALIZED, [boolean(false, span)], span),
+              span,
+            ),
+          ], span),
+        ], span),
+        span,
+      }],
+      span,
+    ),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT,
+    parameters: ["context"],
+    annotation: null,
+    body: match(reference("context", span), [{
+      constructor: JAVASCRIPT_EXECUTION_CONTEXT,
+      binders: ["realm", "lexicalEnvironment", "variableEnvironment", "thisValue"],
+      body: reference("lexicalEnvironment", span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_REALM,
+    parameters: ["context"],
+    annotation: null,
+    body: match(reference("context", span), [{
+      constructor: JAVASCRIPT_EXECUTION_CONTEXT,
+      binders: ["realm", "lexicalEnvironment", "variableEnvironment", "thisValue"],
+      body: reference("realm", span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_THIS_VALUE,
+    parameters: ["context"],
+    annotation: null,
+    body: match(reference("context", span), [{
+      constructor: JAVASCRIPT_EXECUTION_CONTEXT,
+      binders: ["realm", "lexicalEnvironment", "variableEnvironment", "thisValue"],
+      body: reference("thisValue", span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_GLOBAL_OBJECT,
+    parameters: ["state"],
+    annotation: null,
+    body: match(reference("state", span), [{
+      constructor: JAVASCRIPT_STATE,
+      binders: ["heap", "context", "bindings"],
+      body: match(reference("context", span), [{
+        constructor: JAVASCRIPT_EXECUTION_CONTEXT,
+        binders: ["realm", "lexicalEnvironment", "variableEnvironment", "thisValue"],
+        body: match(reference("realm", span), [{
+          constructor: JAVASCRIPT_REALM,
+          binders: ["globalObject"],
+          body: reference("globalObject", span),
+          span,
+        }], span),
+        span,
+      }], span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_WITH_GLOBAL_THIS,
+    parameters: ["state"],
+    annotation: null,
+    body: match(reference("state", span), [{
+      constructor: JAVASCRIPT_STATE,
+      binders: ["heap", "context", "bindings"],
+      body: match(reference("context", span), [{
+        constructor: JAVASCRIPT_EXECUTION_CONTEXT,
+        binders: ["realm", "lexicalEnvironment", "variableEnvironment", "thisValue"],
+        body: match(reference("realm", span), [{
+          constructor: JAVASCRIPT_REALM,
+          binders: ["globalObject"],
+          body: call(JAVASCRIPT_STATE, [
+            reference("heap", span),
+            call(JAVASCRIPT_EXECUTION_CONTEXT, [
+              reference("realm", span),
+              reference("lexicalEnvironment", span),
+              reference("variableEnvironment", span),
+              reference("globalObject", span),
+            ], span),
+            reference("bindings", span),
+          ], span),
+          span,
+        }], span),
+        span,
+      }], span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: WITH_LEXICAL_ENVIRONMENT,
+    parameters: ["context", "lexicalEnvironment"],
+    annotation: null,
+    body: match(reference("context", span), [{
+      constructor: JAVASCRIPT_EXECUTION_CONTEXT,
+      binders: ["realm", "previousLexicalEnvironment", "variableEnvironment", "thisValue"],
+      body: call(JAVASCRIPT_EXECUTION_CONTEXT, [
+        reference("realm", span),
+        reference("lexicalEnvironment", span),
+        reference("variableEnvironment", span),
+        reference("thisValue", span),
+      ], span),
+      span,
+    }], span),
     span,
   }, {
     name: JAVASCRIPT_RUNTIME_PROPERTY_KEY_EQUAL,
@@ -767,9 +909,9 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     annotation: null,
     body: match(reference("state", span), [{
       constructor: JAVASCRIPT_STATE,
-      binders: ["heap", "environment", "bindings"],
+      binders: ["heap", "context", "bindings"],
       body: call(RESOLVE_ENVIRONMENT_REFERENCE, [
-        reference("environment", span),
+        call(JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT, [reference("context", span)], span),
         reference("name", span),
         reference("strict", span),
       ], span),
@@ -826,7 +968,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       binders: ["bindingIdentity", "strict"],
       body: match(reference("state", span), [{
         constructor: JAVASCRIPT_STATE,
-        binders: ["heap", "environment", "bindings"],
+        binders: ["heap", "context", "bindings"],
         body: match(reference("bindings", span), [{
           constructor: JAVASCRIPT_BINDING_STORE,
           binders: ["nextIdentity", "cells"],
@@ -845,6 +987,290 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       body: getPropertyReferenceValue(span),
       span,
     }], span),
+    span,
+  }, {
+    name: JAVASCRIPT_RUNTIME_PUT_REFERENCE_VALUE,
+    parameters: ["state", "resolvedReference", "value"],
+    annotation: null,
+    body: match(reference("resolvedReference", span), [{
+      constructor: JAVASCRIPT_UNRESOLVABLE_REFERENCE,
+      binders: ["name", "strict"],
+      body: reference(JAVASCRIPT_REFERENCE_UPDATE_UNRESOLVABLE, span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_BINDING_REFERENCE,
+      binders: ["bindingIdentity", "strict"],
+      body: call(PUT_BINDING_REFERENCE_VALUE, [
+        reference("state", span),
+        reference("bindingIdentity", span),
+        reference("value", span),
+      ], span),
+      span,
+    }, {
+      constructor: JAVASCRIPT_PROPERTY_REFERENCE,
+      binders: ["base", "key", "receiver", "strict"],
+      body: match(reference("base", span), [{
+        constructor: JAVASCRIPT_VALUE_OBJECT,
+        binders: ["baseIdentity"],
+        body: call(PUT_OBJECT_PROPERTY, [
+          reference("state", span),
+          reference("baseIdentity", span),
+          reference("key", span),
+          reference("receiver", span),
+          reference("value", span),
+        ], span),
+        span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_UNDEFINED,
+        binders: [],
+        body: reference(JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, span),
+        span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_NULL,
+        binders: [],
+        body: reference(JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, span),
+        span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_BOOLEAN,
+        binders: ["booleanValue"],
+        body: reference(JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, span),
+        span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_NUMBER,
+        binders: ["numberValue"],
+        body: reference(JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, span),
+        span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_STRING,
+        binders: ["stringValue"],
+        body: reference(JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, span),
+        span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_SYMBOL,
+        binders: ["symbolIdentity"],
+        body: reference(JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, span),
+        span,
+      }], span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: PUT_BINDING_REFERENCE_VALUE,
+    parameters: ["state", "bindingIdentity", "value"],
+    annotation: null,
+    body: match(reference("state", span), [{
+      constructor: JAVASCRIPT_STATE,
+      binders: ["heap", "context", "bindings"],
+      body: match(reference("bindings", span), [{
+        constructor: JAVASCRIPT_BINDING_STORE,
+        binders: ["nextIdentity", "cells"],
+        body: conditional(
+          binary(
+            FunctionalBinaryOperator.Less,
+            reference("bindingIdentity", span),
+            integer(0, span),
+            span,
+          ),
+          runtimeFault("JavaScript reference contains a negative binding identity", span),
+          conditional(
+            binary(
+              FunctionalBinaryOperator.Less,
+              reference("bindingIdentity", span),
+              storeLength(reference("cells", span), span),
+              span,
+            ),
+            match(
+              storeRead(
+                reference("cells", span),
+                reference("bindingIdentity", span),
+                span,
+              ),
+              [{
+                constructor: JAVASCRIPT_BINDING_UNINITIALIZED,
+                binders: ["mutable"],
+                body: reference(JAVASCRIPT_REFERENCE_UPDATE_UNINITIALIZED, span),
+                span,
+              }, {
+                constructor: JAVASCRIPT_BINDING_IMMUTABLE,
+                binders: ["existingValue"],
+                body: reference(JAVASCRIPT_REFERENCE_UPDATE_IMMUTABLE, span),
+                span,
+              }, {
+                constructor: JAVASCRIPT_BINDING_MUTABLE,
+                binders: ["existingValue"],
+                body: call(JAVASCRIPT_REFERENCE_UPDATE_UPDATED, [call(JAVASCRIPT_STATE, [
+                  reference("heap", span),
+                  reference("context", span),
+                  call(JAVASCRIPT_BINDING_STORE, [
+                    reference("nextIdentity", span),
+                    storeWrite(
+                      reference("cells", span),
+                      reference("bindingIdentity", span),
+                      call(JAVASCRIPT_BINDING_MUTABLE, [reference("value", span)], span),
+                      span,
+                    ),
+                  ], span),
+                ], span)], span),
+                span,
+              }],
+              span,
+            ),
+            runtimeFault("JavaScript reference contains a missing binding identity", span),
+            span,
+          ),
+          span,
+        ),
+        span,
+      }], span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: PUT_OBJECT_PROPERTY,
+    parameters: ["state", "baseIdentity", "key", "receiver", "value"],
+    annotation: null,
+    body: match(reference("state", span), [{
+      constructor: JAVASCRIPT_STATE,
+      binders: ["heap", "context", "bindings"],
+      body: match(reference("heap", span), [{
+        constructor: JAVASCRIPT_HEAP,
+        binders: ["nextIdentity", "objects"],
+        body: match(
+          call(LOOKUP_OBJECT, [
+            reference("objects", span),
+            reference("baseIdentity", span),
+          ], span),
+          [{
+            constructor: JAVASCRIPT_OBJECT_RECORD,
+            binders: ["prototype", "extensible", "objectKind", "properties"],
+            body: match(
+              call(JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY_DESCRIPTOR, [
+                reference("properties", span),
+                reference("key", span),
+              ], span),
+              [{
+                constructor: JAVASCRIPT_DESCRIPTOR_MISSING,
+                binders: [],
+                body: match(reference("prototype", span), [{
+                  constructor: JAVASCRIPT_VALUE_NULL,
+                  binders: [],
+                  body: call(PUT_RECEIVER_DATA_PROPERTY, [
+                    reference("state", span),
+                    reference("receiver", span),
+                    reference("key", span),
+                    reference("value", span),
+                  ], span),
+                  span,
+                }, {
+                  constructor: JAVASCRIPT_VALUE_OBJECT,
+                  binders: ["prototypeIdentity"],
+                  body: call(PUT_OBJECT_PROPERTY, [
+                    reference("state", span),
+                    reference("prototypeIdentity", span),
+                    reference("key", span),
+                    reference("receiver", span),
+                    reference("value", span),
+                  ], span),
+                  span,
+                }, ...invalidPrototypeArms(span)], span),
+                span,
+              }, {
+                constructor: JAVASCRIPT_DESCRIPTOR_FOUND,
+                binders: ["descriptor"],
+                body: match(reference("descriptor", span), [{
+                  constructor: JAVASCRIPT_DATA_DESCRIPTOR,
+                  binders: ["existingValue", "writable", "enumerable", "configurable"],
+                  body: conditional(
+                    reference("writable", span),
+                    call(PUT_RECEIVER_DATA_PROPERTY, [
+                      reference("state", span),
+                      reference("receiver", span),
+                      reference("key", span),
+                      reference("value", span),
+                    ], span),
+                    reference(JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE, span),
+                    span,
+                  ),
+                  span,
+                }, {
+                  constructor: JAVASCRIPT_ACCESSOR_DESCRIPTOR,
+                  binders: ["getter", "setter", "enumerable", "configurable"],
+                  body: match(reference("setter", span), [{
+                    constructor: JAVASCRIPT_VALUE_UNDEFINED,
+                    binders: [],
+                    body: reference(JAVASCRIPT_REFERENCE_UPDATE_MISSING_SETTER, span),
+                    span,
+                  }, {
+                    constructor: JAVASCRIPT_VALUE_OBJECT,
+                    binders: ["setterIdentity"],
+                    body: call(JAVASCRIPT_REFERENCE_UPDATE_ACCESSOR, [
+                      reference("state", span),
+                      reference("setter", span),
+                      reference("receiver", span),
+                      reference("value", span),
+                    ], span),
+                    span,
+                  }, {
+                    constructor: JAVASCRIPT_VALUE_NULL,
+                    binders: [],
+                    body: runtimeFault(
+                      "JavaScript property descriptor has a non-callable setter",
+                      span,
+                    ),
+                    span,
+                  }, {
+                    constructor: JAVASCRIPT_VALUE_BOOLEAN,
+                    binders: ["booleanValue"],
+                    body: runtimeFault(
+                      "JavaScript property descriptor has a non-callable setter",
+                      span,
+                    ),
+                    span,
+                  }, {
+                    constructor: JAVASCRIPT_VALUE_NUMBER,
+                    binders: ["numberValue"],
+                    body: runtimeFault(
+                      "JavaScript property descriptor has a non-callable setter",
+                      span,
+                    ),
+                    span,
+                  }, {
+                    constructor: JAVASCRIPT_VALUE_STRING,
+                    binders: ["stringValue"],
+                    body: runtimeFault(
+                      "JavaScript property descriptor has a non-callable setter",
+                      span,
+                    ),
+                    span,
+                  }, {
+                    constructor: JAVASCRIPT_VALUE_SYMBOL,
+                    binders: ["symbolIdentity"],
+                    body: runtimeFault(
+                      "JavaScript property descriptor has a non-callable setter",
+                      span,
+                    ),
+                    span,
+                  }], span),
+                  span,
+                }], span),
+                span,
+              }],
+              span,
+            ),
+            span,
+          }],
+          span,
+        ),
+        span,
+      }], span),
+      span,
+    }], span),
+    span,
+  }, {
+    name: PUT_RECEIVER_DATA_PROPERTY,
+    parameters: ["state", "receiver", "key", "value"],
+    annotation: null,
+    body: putReceiverDataProperty(span),
     span,
   }, {
     name: JAVASCRIPT_RUNTIME_LOOKUP_BINDING,
@@ -896,7 +1322,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     annotation: null,
     body: match(reference("state", span), [{
       constructor: JAVASCRIPT_STATE,
-      binders: ["heap", "environment", "bindings"],
+      binders: ["heap", "context", "bindings"],
       body: match(reference("bindings", span), [{
         constructor: JAVASCRIPT_BINDING_STORE,
         binders: ["nextIdentity", "cells"],
@@ -910,10 +1336,13 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
           runtimeFault("JavaScript binding identity space is exhausted", span),
           call(JAVASCRIPT_STATE, [
             reference("heap", span),
-            call(JAVASCRIPT_ENVIRONMENT_BINDING, [
-              reference("name", span),
-              reference("nextIdentity", span),
-              reference("environment", span),
+            call(WITH_LEXICAL_ENVIRONMENT, [
+              reference("context", span),
+              call(JAVASCRIPT_ENVIRONMENT_BINDING, [
+                reference("name", span),
+                reference("nextIdentity", span),
+                call(JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT, [reference("context", span)], span),
+              ], span),
             ], span),
             call(JAVASCRIPT_BINDING_STORE, [
               binary(
@@ -948,11 +1377,11 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     annotation: null,
     body: match(reference("state", span), [{
       constructor: JAVASCRIPT_STATE,
-      binders: ["heap", "environment", "bindings"],
+      binders: ["heap", "context", "bindings"],
       body: call(INITIALIZE_ENVIRONMENT_BINDING, [
         reference("heap", span),
-        reference("environment", span),
-        reference("environment", span),
+        reference("context", span),
+        call(JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT, [reference("context", span)], span),
         reference("bindings", span),
         reference("name", span),
         reference("value", span),
@@ -962,7 +1391,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     span,
   }, {
     name: INITIALIZE_ENVIRONMENT_BINDING,
-    parameters: ["heap", "rootEnvironment", "environment", "bindings", "name", "value"],
+    parameters: ["heap", "context", "environment", "bindings", "name", "value"],
     annotation: null,
     body: match(reference("environment", span), [{
       constructor: JAVASCRIPT_ENVIRONMENT_EMPTY,
@@ -984,7 +1413,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
           binders: ["nextIdentity", "cells"],
           body: call(INITIALIZE_BINDING_CELL, [
             reference("heap", span),
-            reference("rootEnvironment", span),
+            reference("context", span),
             reference("nextIdentity", span),
             reference("cells", span),
             reference("cells", span),
@@ -995,7 +1424,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         }], span),
         call(INITIALIZE_ENVIRONMENT_BINDING, [
           reference("heap", span),
-          reference("rootEnvironment", span),
+          reference("context", span),
           reference("outer", span),
           reference("bindings", span),
           reference("name", span),
@@ -1008,14 +1437,14 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     span,
   }, {
     name: INITIALIZE_BINDING_CELL,
-    parameters: ["heap", "environment", "nextIdentity", "allCells", "cells", "identity", "value"],
+    parameters: ["heap", "context", "nextIdentity", "allCells", "cells", "identity", "value"],
     annotation: null,
     body: match(storeRead(reference("cells", span), reference("identity", span), span), [{
       constructor: JAVASCRIPT_BINDING_UNINITIALIZED,
       binders: ["mutable"],
       body: call(JAVASCRIPT_BINDING_UPDATE_UPDATED, [call(JAVASCRIPT_STATE, [
         reference("heap", span),
-        reference("environment", span),
+        reference("context", span),
         call(JAVASCRIPT_BINDING_STORE, [
           reference("nextIdentity", span),
           storeWrite(
@@ -1050,11 +1479,11 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     annotation: null,
     body: match(reference("state", span), [{
       constructor: JAVASCRIPT_STATE,
-      binders: ["heap", "environment", "bindings"],
+      binders: ["heap", "context", "bindings"],
       body: call(SET_ENVIRONMENT_BINDING, [
         reference("heap", span),
-        reference("environment", span),
-        reference("environment", span),
+        reference("context", span),
+        call(JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT, [reference("context", span)], span),
         reference("bindings", span),
         reference("name", span),
         reference("value", span),
@@ -1064,7 +1493,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     span,
   }, {
     name: SET_ENVIRONMENT_BINDING,
-    parameters: ["heap", "rootEnvironment", "environment", "bindings", "name", "value"],
+    parameters: ["heap", "context", "environment", "bindings", "name", "value"],
     annotation: null,
     body: match(reference("environment", span), [{
       constructor: JAVASCRIPT_ENVIRONMENT_EMPTY,
@@ -1086,7 +1515,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
           binders: ["nextIdentity", "cells"],
           body: call(SET_BINDING_CELL, [
             reference("heap", span),
-            reference("rootEnvironment", span),
+            reference("context", span),
             reference("nextIdentity", span),
             reference("cells", span),
             reference("cells", span),
@@ -1097,7 +1526,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         }], span),
         call(SET_ENVIRONMENT_BINDING, [
           reference("heap", span),
-          reference("rootEnvironment", span),
+          reference("context", span),
           reference("outer", span),
           reference("bindings", span),
           reference("name", span),
@@ -1110,7 +1539,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     span,
   }, {
     name: SET_BINDING_CELL,
-    parameters: ["heap", "environment", "nextIdentity", "allCells", "cells", "identity", "value"],
+    parameters: ["heap", "context", "nextIdentity", "allCells", "cells", "identity", "value"],
     annotation: null,
     body: match(storeRead(reference("cells", span), reference("identity", span), span), [{
       constructor: JAVASCRIPT_BINDING_UNINITIALIZED,
@@ -1127,7 +1556,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       binders: ["existingValue"],
       body: call(JAVASCRIPT_BINDING_UPDATE_UPDATED, [call(JAVASCRIPT_STATE, [
         reference("heap", span),
-        reference("environment", span),
+        reference("context", span),
         call(JAVASCRIPT_BINDING_STORE, [
           reference("nextIdentity", span),
           storeWrite(
@@ -1169,6 +1598,161 @@ function lookupPrototypeProperty(
   }, ...invalidPrototypeArms(span)], span);
 }
 
+function putReceiverDataProperty(
+  span: { readonly startByte: number; readonly endByte: number },
+): FunctionalSurfaceExpression {
+  const invalidReceiver = reference(JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, span);
+  return match(reference("receiver", span), [{
+    constructor: JAVASCRIPT_VALUE_OBJECT,
+    binders: ["receiverIdentity"],
+    body: match(reference("state", span), [{
+      constructor: JAVASCRIPT_STATE,
+      binders: ["heap", "context", "bindings"],
+      body: match(reference("heap", span), [{
+        constructor: JAVASCRIPT_HEAP,
+        binders: ["nextIdentity", "objects"],
+        body: match(
+          call(LOOKUP_OBJECT, [
+            reference("objects", span),
+            reference("receiverIdentity", span),
+          ], span),
+          [{
+            constructor: JAVASCRIPT_OBJECT_RECORD,
+            binders: ["prototype", "extensible", "objectKind", "properties"],
+            body: match(
+              call(JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY_DESCRIPTOR, [
+                reference("properties", span),
+                reference("key", span),
+              ], span),
+              [{
+                constructor: JAVASCRIPT_DESCRIPTOR_MISSING,
+                binders: [],
+                body: conditional(
+                  reference("extensible", span),
+                  updatedReceiverState(
+                    call(JAVASCRIPT_DATA_DESCRIPTOR, [
+                      reference("value", span),
+                      boolean(true, span),
+                      boolean(true, span),
+                      boolean(true, span),
+                    ], span),
+                    span,
+                  ),
+                  reference(JAVASCRIPT_REFERENCE_UPDATE_NON_EXTENSIBLE, span),
+                  span,
+                ),
+                span,
+              }, {
+                constructor: JAVASCRIPT_DESCRIPTOR_FOUND,
+                binders: ["receiverDescriptor"],
+                body: match(reference("receiverDescriptor", span), [{
+                  constructor: JAVASCRIPT_DATA_DESCRIPTOR,
+                  binders: [
+                    "receiverValue",
+                    "receiverWritable",
+                    "receiverEnumerable",
+                    "receiverConfigurable",
+                  ],
+                  body: conditional(
+                    reference("receiverWritable", span),
+                    updatedReceiverState(
+                      call(JAVASCRIPT_DATA_DESCRIPTOR, [
+                        reference("value", span),
+                        reference("receiverWritable", span),
+                        reference("receiverEnumerable", span),
+                        reference("receiverConfigurable", span),
+                      ], span),
+                      span,
+                    ),
+                    reference(JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE, span),
+                    span,
+                  ),
+                  span,
+                }, {
+                  constructor: JAVASCRIPT_ACCESSOR_DESCRIPTOR,
+                  binders: [
+                    "receiverGetter",
+                    "receiverSetter",
+                    "receiverEnumerable",
+                    "receiverConfigurable",
+                  ],
+                  body: reference(JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE, span),
+                  span,
+                }], span),
+                span,
+              }],
+              span,
+            ),
+            span,
+          }],
+          span,
+        ),
+        span,
+      }], span),
+      span,
+    }], span),
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_UNDEFINED,
+    binders: [],
+    body: invalidReceiver,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_NULL,
+    binders: [],
+    body: invalidReceiver,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_BOOLEAN,
+    binders: ["booleanValue"],
+    body: invalidReceiver,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_NUMBER,
+    binders: ["numberValue"],
+    body: invalidReceiver,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_STRING,
+    binders: ["stringValue"],
+    body: invalidReceiver,
+    span,
+  }, {
+    constructor: JAVASCRIPT_VALUE_SYMBOL,
+    binders: ["symbolIdentity"],
+    body: invalidReceiver,
+    span,
+  }], span);
+}
+
+function updatedReceiverState(
+  descriptor: FunctionalSurfaceExpression,
+  span: { readonly startByte: number; readonly endByte: number },
+): FunctionalSurfaceExpression {
+  return call(JAVASCRIPT_REFERENCE_UPDATE_UPDATED, [call(JAVASCRIPT_STATE, [
+    call(JAVASCRIPT_HEAP, [
+      reference("nextIdentity", span),
+      storeWrite(
+        reference("objects", span),
+        reference("receiverIdentity", span),
+        call(JAVASCRIPT_OBJECT_RECORD, [
+          reference("prototype", span),
+          reference("extensible", span),
+          reference("objectKind", span),
+          call(DEFINE_PROPERTY_IN_LIST, [
+            reference("properties", span),
+            reference("key", span),
+            descriptor,
+          ], span),
+        ], span),
+        span,
+      ),
+    ], span),
+    reference("context", span),
+    reference("bindings", span),
+  ], span)], span);
+}
+
 function getPropertyReferenceValue(
   span: { readonly startByte: number; readonly endByte: number },
 ): FunctionalSurfaceExpression {
@@ -1178,7 +1762,7 @@ function getPropertyReferenceValue(
     binders: ["objectIdentity"],
     body: match(reference("state", span), [{
       constructor: JAVASCRIPT_STATE,
-      binders: ["heap", "environment", "bindings"],
+      binders: ["heap", "context", "bindings"],
       body: match(reference("heap", span), [{
         constructor: JAVASCRIPT_HEAP,
         binders: ["nextIdentity", "objects"],
@@ -1204,10 +1788,62 @@ function getPropertyReferenceValue(
             }, {
               constructor: JAVASCRIPT_ACCESSOR_DESCRIPTOR,
               binders: ["getter", "setter", "enumerable", "configurable"],
-              body: runtimeFault(
-                "JavaScript accessor invocation requires the execution-context call path",
+              body: match(reference("getter", span), [{
+                constructor: JAVASCRIPT_VALUE_UNDEFINED,
+                binders: [],
+                body: call(JAVASCRIPT_VALUE_FOUND, [
+                  reference(JAVASCRIPT_VALUE_UNDEFINED, span),
+                ], span),
                 span,
-              ),
+              }, {
+                constructor: JAVASCRIPT_VALUE_OBJECT,
+                binders: ["getterIdentity"],
+                body: call(JAVASCRIPT_VALUE_ACCESSOR, [
+                  reference("getter", span),
+                  reference("receiver", span),
+                ], span),
+                span,
+              }, {
+                constructor: JAVASCRIPT_VALUE_NULL,
+                binders: [],
+                body: runtimeFault(
+                  "JavaScript property descriptor has a non-callable getter",
+                  span,
+                ),
+                span,
+              }, {
+                constructor: JAVASCRIPT_VALUE_BOOLEAN,
+                binders: ["booleanValue"],
+                body: runtimeFault(
+                  "JavaScript property descriptor has a non-callable getter",
+                  span,
+                ),
+                span,
+              }, {
+                constructor: JAVASCRIPT_VALUE_NUMBER,
+                binders: ["numberValue"],
+                body: runtimeFault(
+                  "JavaScript property descriptor has a non-callable getter",
+                  span,
+                ),
+                span,
+              }, {
+                constructor: JAVASCRIPT_VALUE_STRING,
+                binders: ["stringValue"],
+                body: runtimeFault(
+                  "JavaScript property descriptor has a non-callable getter",
+                  span,
+                ),
+                span,
+              }, {
+                constructor: JAVASCRIPT_VALUE_SYMBOL,
+                binders: ["symbolIdentity"],
+                body: runtimeFault(
+                  "JavaScript property descriptor has a non-callable getter",
+                  span,
+                ),
+                span,
+              }], span),
               span,
             }], span),
             span,

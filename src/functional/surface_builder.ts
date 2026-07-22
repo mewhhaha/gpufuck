@@ -58,6 +58,7 @@ export type {
 const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
 const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
 const SURFACE_FEATURE_STORE = 1 << 2;
+const MAXIMUM_SURFACE_EXPRESSION_DEPTH = 1_024;
 const MAXIMUM_SURFACE_TYPE_DEPTH = 512;
 const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
 
@@ -654,8 +655,9 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
   const activeExpressions = new WeakSet<object>();
   const pending: {
     readonly expression: FunctionalSurfaceExpression;
+    readonly depth: number;
     readonly exiting: boolean;
-  }[] = [{ expression, exiting: false }];
+  }[] = [{ expression, depth: 0, exiting: false }];
   let remainingNodes = FUNCTIONAL_MAXIMUM_EXPRESSION_NODES;
   let features = 0;
   while (pending.length !== 0) {
@@ -670,6 +672,11 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
         `functional surface expression exceeds ${FUNCTIONAL_MAXIMUM_EXPRESSION_NODES} nodes`,
       );
     }
+    if (current.depth > MAXIMUM_SURFACE_EXPRESSION_DEPTH) {
+      throw new RangeError(
+        `functional surface expression exceeds depth ${MAXIMUM_SURFACE_EXPRESSION_DEPTH}`,
+      );
+    }
     remainingNodes -= 1;
     const nested = current.expression;
     if (
@@ -682,9 +689,9 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
       throw new TypeError("functional surface expression contains a structural cycle");
     }
     activeExpressions.add(nested);
-    pending.push({ expression: nested, exiting: true });
+    pending.push({ expression: nested, depth: current.depth, exiting: true });
     const visit = (child: FunctionalSurfaceExpression): void => {
-      pending.push({ expression: child, exiting: false });
+      pending.push({ expression: child, depth: current.depth + 1, exiting: false });
     };
     switch (nested.kind) {
       case "name":

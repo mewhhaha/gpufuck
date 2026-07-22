@@ -45,6 +45,11 @@ interface GcFunctionBody {
   readonly instructions: readonly number[];
 }
 
+interface FunctionalStoreUpdate {
+  readonly node: FunctionalCoreNode;
+  readonly nodeIndex: number;
+}
+
 export function compileFunctionalWasmGc(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
@@ -264,10 +269,8 @@ class GcCoreEmitter {
         this.emitStoreRead(nodeIndex, node, environment);
         return;
       case FunctionalCoreTag.StoreWrite:
-        this.emitStoreWrite(nodeIndex, node, environment);
-        return;
       case FunctionalCoreTag.StoreGrow:
-        this.emitStoreGrow(nodeIndex, node, environment);
+        this.emitStoreUpdates(nodeIndex, environment);
         return;
       case FunctionalCoreTag.Case:
         this.emitCase(nodeIndex, node, environment);
@@ -919,63 +922,103 @@ class GcCoreEmitter {
     this.#instructions.refAsNonNull();
   }
 
-  emitStoreWrite(
-    nodeIndex: number,
-    node: FunctionalCoreNode,
-    environment: readonly number[],
-  ): void {
-    this.emitExpression(node.child0, environment);
-    const store = this.#instructions.addValueLocal();
-    this.#instructions.localSet(store);
-    this.emitPayload(node.child1, environment);
-    const index = this.#instructions.addI32Local();
-    this.#instructions.localSet(index);
-    this.emitExpression(node.child2, environment);
-    const value = this.#instructions.addValueLocal();
-    this.#instructions.localSet(value);
-    this.requireStoreIndex(store, index, nodeIndex);
-    const fields = this.cloneStoreFields(store, value);
-    this.#instructions.localGet(fields);
-    this.#instructions.refAsNonNull();
-    this.#instructions.localGet(index);
-    this.#instructions.localGet(value);
-    this.#instructions.refAsNonNull();
-    this.#instructions.arraySet();
-    this.emitStoreValue(fields);
-  }
+  emitStoreUpdates(nodeIndex: number, environment: readonly number[]): void {
+    const updates: FunctionalStoreUpdate[] = [];
+    let sourceNodeIndex = nodeIndex;
+    while (true) {
+      const sourceNode = this.node(sourceNodeIndex);
+      if (
+        sourceNode.tag !== FunctionalCoreTag.StoreWrite &&
+        sourceNode.tag !== FunctionalCoreTag.StoreGrow
+      ) break;
+      updates.push({ node: sourceNode, nodeIndex: sourceNodeIndex });
+      sourceNodeIndex = sourceNode.child0;
+    }
+    updates.reverse();
 
-  emitStoreGrow(
-    nodeIndex: number,
-    node: FunctionalCoreNode,
-    environment: readonly number[],
-  ): void {
-    this.emitExpression(node.child0, environment);
+    this.emitExpression(sourceNodeIndex, environment);
     const store = this.#instructions.addValueLocal();
     this.#instructions.localSet(store);
-    this.emitPayload(node.child1, environment);
-    const newLength = this.#instructions.addI32Local();
-    this.#instructions.localSet(newLength);
-    this.emitExpression(node.child2, environment);
-    const initial = this.#instructions.addValueLocal();
-    this.#instructions.localSet(initial);
-    this.requireStoreLength(newLength, nodeIndex);
-    const oldLength = this.#instructions.addI32Local();
+    const sourceLength = this.#instructions.addI32Local();
     this.#instructions.localGet(store);
     this.#instructions.refAsNonNull();
     this.#instructions.structGet(VALUE_FIELDS_FIELD);
     this.#instructions.arrayLength();
-    this.#instructions.localSet(oldLength);
-    this.#instructions.localGet(oldLength);
-    this.#instructions.localGet(newLength);
-    this.#instructions.emit(0x4b);
-    this.emitStoreFaultWhenTrue(nodeIndex);
+    this.#instructions.localSet(sourceLength);
+    const currentLength = this.#instructions.addI32Local();
+    this.#instructions.localGet(sourceLength);
+    this.#instructions.localSet(currentLength);
+    const evaluated: ({
+      readonly kind: "write";
+      readonly index: number;
+      readonly value: number;
+    } | {
+      readonly kind: "grow";
+      readonly previousLength: number;
+      readonly newLength: number;
+      readonly initial: number;
+    })[] = [];
+    for (const update of updates) {
+      this.emitPayload(update.node.child1, environment);
+      const operand = this.#instructions.addI32Local();
+      this.#instructions.localSet(operand);
+      this.emitExpression(update.node.child2, environment);
+      const value = this.#instructions.addValueLocal();
+      this.#instructions.localSet(value);
+      if (update.node.tag === FunctionalCoreTag.StoreWrite) {
+        this.#instructions.localGet(operand);
+        this.#instructions.localGet(currentLength);
+        this.#instructions.emit(0x4f);
+        this.emitStoreFaultWhenTrue(update.nodeIndex);
+        evaluated.push({ kind: "write", index: operand, value });
+        continue;
+      }
+      this.requireStoreLength(operand, update.nodeIndex);
+      this.#instructions.localGet(currentLength);
+      this.#instructions.localGet(operand);
+      this.#instructions.emit(0x4b);
+      this.emitStoreFaultWhenTrue(update.nodeIndex);
+      const previousLength = this.#instructions.addI32Local();
+      this.#instructions.localGet(currentLength);
+      this.#instructions.localSet(previousLength);
+      this.#instructions.localGet(operand);
+      this.#instructions.localSet(currentLength);
+      evaluated.push({
+        kind: "grow",
+        previousLength,
+        newLength: operand,
+        initial: value,
+      });
+    }
+
     const fields = this.#instructions.addFieldsLocal();
-    this.#instructions.localGet(initial);
+    const allocationInitial = evaluated.findLast((update) => update.kind === "grow") ??
+      evaluated[0]!;
+    this.#instructions.localGet(
+      allocationInitial.kind === "grow" ? allocationInitial.initial : allocationInitial.value,
+    );
     this.#instructions.refAsNonNull();
-    this.#instructions.localGet(newLength);
+    this.#instructions.localGet(currentLength);
     this.#instructions.arrayNew();
     this.#instructions.localSet(fields);
-    this.copyStoreFields(fields, store, oldLength);
+    this.copyStoreFields(fields, store, sourceLength);
+    for (const update of evaluated) {
+      if (update.kind === "write") {
+        this.#instructions.localGet(fields);
+        this.#instructions.refAsNonNull();
+        this.#instructions.localGet(update.index);
+        this.#instructions.localGet(update.value);
+        this.#instructions.refAsNonNull();
+        this.#instructions.arraySet();
+        continue;
+      }
+      this.emitStoreFill(
+        fields,
+        update.previousLength,
+        update.newLength,
+        update.initial,
+      );
+    }
     this.emitStoreValue(fields);
   }
 
@@ -1006,23 +1049,6 @@ class GcCoreEmitter {
     this.#instructions.end();
   }
 
-  cloneStoreFields(store: number, initial: number): number {
-    const length = this.#instructions.addI32Local();
-    this.#instructions.localGet(store);
-    this.#instructions.refAsNonNull();
-    this.#instructions.structGet(VALUE_FIELDS_FIELD);
-    this.#instructions.arrayLength();
-    this.#instructions.localSet(length);
-    const fields = this.#instructions.addFieldsLocal();
-    this.#instructions.localGet(initial);
-    this.#instructions.refAsNonNull();
-    this.#instructions.localGet(length);
-    this.#instructions.arrayNew();
-    this.#instructions.localSet(fields);
-    this.copyStoreFields(fields, store, length);
-    return fields;
-  }
-
   copyStoreFields(destination: number, store: number, length: number): void {
     this.#instructions.localGet(destination);
     this.#instructions.refAsNonNull();
@@ -1033,6 +1059,27 @@ class GcCoreEmitter {
     this.#instructions.i32Const(0);
     this.#instructions.localGet(length);
     this.#instructions.arrayCopy();
+  }
+
+  emitStoreFill(fields: number, start: number, end: number, value: number): void {
+    const cursor = this.#instructions.addI32Local();
+    this.#instructions.localGet(start);
+    this.#instructions.localSet(cursor);
+    this.#instructions.emit(0x02, 0x40, 0x03, 0x40);
+    this.#instructions.localGet(cursor);
+    this.#instructions.localGet(end);
+    this.#instructions.emit(0x4f, 0x0d, 0x01);
+    this.#instructions.localGet(fields);
+    this.#instructions.refAsNonNull();
+    this.#instructions.localGet(cursor);
+    this.#instructions.localGet(value);
+    this.#instructions.refAsNonNull();
+    this.#instructions.arraySet();
+    this.#instructions.localGet(cursor);
+    this.#instructions.i32Const(1);
+    this.#instructions.emit(0x6a);
+    this.#instructions.localSet(cursor);
+    this.#instructions.emit(0x0c, 0x00, 0x0b, 0x0b);
   }
 
   emitStoreValue(fields: number): void {

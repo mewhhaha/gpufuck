@@ -180,6 +180,14 @@ capability error during instantiation. The emitted `main` returns a typed GC ref
 boundary. Raw consumers must check the exported `wasmGcAbiVersion` global against
 `FUNCTIONAL_WASM_GC_ABI_VERSION`.
 
+Functional Surface also provides persistent indexed stores through `surface.storeNew`,
+`surface.storeLength`, `surface.storeRead`, `surface.storeWrite`, and `surface.storeGrow`. A store
+write or growth returns a new value and leaves the previous store observable, which lets frontends
+model heaps, binding tables, and indexed runtime state without language-specific Core primitives.
+Stores are bounded to 16,777,216 elements. The default backend represents them in linear memory; the
+WasmGC backend uses typed arrays. Either backend may reuse uniquely owned storage when that is
+provably indistinguishable from the persistent semantics.
+
 Reuse one `GpuFunctionalCompiler` for the lifetime of a device. Compiler creation includes shader
 and pipeline initialization; recreating it for every source defeats the intended batching and cache
 behavior.

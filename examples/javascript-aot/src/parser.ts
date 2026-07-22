@@ -24,54 +24,59 @@ let javascriptAotParser: JavaScriptAotParser | undefined;
 
 export function parseJavaScriptAotModule(name: string, source: string): JavaScriptAotModule {
   if (name.length === 0) throw new Error("JavaScript AOT module name must be nonempty");
-  const byteOffsets = new BabaUtf8ByteOffsets(source);
-  let parserSource = source;
-  let parsed = getJavaScriptAotParser().parse(parserSource, { preserveTrivia: false });
-  while (!parsed.ok) {
-    const diagnostic = parsed.diagnostics[0];
-    if (diagnostic?.expected?.includes('";"') !== true) break;
+  const parser = getJavaScriptAotParser();
+  try {
+    const byteOffsets = new BabaUtf8ByteOffsets(source);
+    let parserSource = source;
+    let parsed = parser.parse(parserSource, { preserveTrivia: false });
+    while (!parsed.ok) {
+      const diagnostic = parsed.diagnostics[0];
+      if (diagnostic?.expected?.includes('";"') !== true) break;
 
-    let cursor = diagnostic.span.start - 1;
-    let lineTerminator = -1;
-    let whitespace = -1;
-    while (cursor >= 0 && /\s/.test(parserSource[cursor]!)) {
-      whitespace = cursor;
-      if (parserSource[cursor] === "\n" || parserSource[cursor] === "\r") {
-        lineTerminator = cursor;
-        break;
+      let cursor = diagnostic.span.start - 1;
+      let lineTerminator = -1;
+      let whitespace = -1;
+      while (cursor >= 0 && /\s/.test(parserSource[cursor]!)) {
+        whitespace = cursor;
+        if (parserSource[cursor] === "\n" || parserSource[cursor] === "\r") {
+          lineTerminator = cursor;
+          break;
+        }
+        cursor--;
       }
-      cursor--;
+      const permitsInsertionBeforeBrace = diagnostic.found === '"}"' && whitespace >= 0;
+      const semicolonPosition = lineTerminator >= 0
+        ? lineTerminator
+        : permitsInsertionBeforeBrace
+        ? whitespace
+        : -1;
+      if (semicolonPosition < 0) break;
+      parserSource = parserSource.slice(0, semicolonPosition) + ";" +
+        parserSource.slice(semicolonPosition + 1);
+      parsed = parser.parse(parserSource, { preserveTrivia: false });
     }
-    const permitsInsertionBeforeBrace = diagnostic.found === '"}"' && whitespace >= 0;
-    const semicolonPosition = lineTerminator >= 0
-      ? lineTerminator
-      : permitsInsertionBeforeBrace
-      ? whitespace
-      : -1;
-    if (semicolonPosition < 0) break;
-    parserSource = parserSource.slice(0, semicolonPosition) + ";" +
-      parserSource.slice(semicolonPosition + 1);
-    parsed = getJavaScriptAotParser().parse(parserSource, { preserveTrivia: false });
-  }
-  if (!parsed.ok) {
-    const diagnostic = parsed.diagnostics[0];
-    if (diagnostic === undefined) {
-      throw new Error(
-        `Baba failed to parse JavaScript AOT module ${JSON.stringify(name)} without diagnostics.`,
+    if (!parsed.ok) {
+      const diagnostic = parsed.diagnostics[0];
+      if (diagnostic === undefined) {
+        throw new Error(
+          `Baba failed to parse JavaScript AOT module ${JSON.stringify(name)} without diagnostics.`,
+        );
+      }
+      throw new JavaScriptAotSyntaxError(
+        byteOffsets.span(diagnostic.span),
+        `JavaScript module ${JSON.stringify(name)}: ${diagnostic.code}: ${diagnostic.message}`,
       );
     }
-    throw new JavaScriptAotSyntaxError(
-      byteOffsets.span(diagnostic.span),
-      `JavaScript module ${JSON.stringify(name)}: ${diagnostic.code}: ${diagnostic.message}`,
-    );
+    return {
+      name,
+      declarations: babaRuleFieldArray(parsed.cursor, "declarations").map((declaration) =>
+        parseDeclaration(declaration, byteOffsets)
+      ),
+      span: { startByte: 0, endByte: byteOffsets.byteLength },
+    };
+  } finally {
+    parser.reset();
   }
-  return {
-    name,
-    declarations: babaRuleFieldArray(parsed.cursor, "declarations").map((declaration) =>
-      parseDeclaration(declaration, byteOffsets)
-    ),
-    span: { startByte: 0, endByte: byteOffsets.byteLength },
-  };
 }
 
 function getJavaScriptAotParser(): JavaScriptAotParser {
@@ -460,6 +465,7 @@ function parseExpression(
       return {
         kind: "function",
         name: null,
+        thisMode: "lexical",
         parameters: [babaRequiredTokenField(expression, "parameter").text],
         body: body.name === "block"
           ? parseBlock(body, offsets)
@@ -581,6 +587,7 @@ function parseExpression(
       return {
         kind: "function",
         name: babaOptionalTokenField(expression, "name")?.text ?? null,
+        thisMode: "dynamic",
         parameters: parametersNode === null ? [] : identifierList(parametersNode),
         body: parseBlock(babaRequiredRuleField(expression, "body"), offsets),
         span: offsets.span(expression.span),

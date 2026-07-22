@@ -14,6 +14,7 @@ import {
   JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE,
   JAVASCRIPT_RUNTIME_LOOKUP_BINDING,
   JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY,
+  JAVASCRIPT_RUNTIME_PUT_REFERENCE_VALUE,
   JAVASCRIPT_RUNTIME_RESOLVE_BINDING_REFERENCE,
   JAVASCRIPT_RUNTIME_SAME_VALUE,
   JAVASCRIPT_RUNTIME_SET_BINDING,
@@ -39,6 +40,7 @@ import {
   JAVASCRIPT_DESCRIPTOR_FOUND,
   JAVASCRIPT_DESCRIPTOR_MISSING,
   JAVASCRIPT_ENVIRONMENT_EMPTY,
+  JAVASCRIPT_EXECUTION_CONTEXT,
   JAVASCRIPT_HEAP,
   JAVASCRIPT_HEAP_ALLOCATION,
   JAVASCRIPT_MAXIMUM_BINDING_COUNT,
@@ -48,8 +50,19 @@ import {
   JAVASCRIPT_PROPERTY_KEY_STRING,
   JAVASCRIPT_PROPERTY_LIST_EMPTY,
   JAVASCRIPT_PROPERTY_REFERENCE,
+  JAVASCRIPT_REALM,
+  JAVASCRIPT_REFERENCE_UPDATE_ACCESSOR,
+  JAVASCRIPT_REFERENCE_UPDATE_IMMUTABLE,
+  JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE,
+  JAVASCRIPT_REFERENCE_UPDATE_MISSING_SETTER,
+  JAVASCRIPT_REFERENCE_UPDATE_NON_EXTENSIBLE,
+  JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE,
+  JAVASCRIPT_REFERENCE_UPDATE_UNINITIALIZED,
+  JAVASCRIPT_REFERENCE_UPDATE_UNRESOLVABLE,
+  JAVASCRIPT_REFERENCE_UPDATE_UPDATED,
   JAVASCRIPT_STATE,
   JAVASCRIPT_UNRESOLVABLE_REFERENCE,
+  JAVASCRIPT_VALUE_ACCESSOR,
   JAVASCRIPT_VALUE_BOOLEAN,
   JAVASCRIPT_VALUE_FOUND,
   JAVASCRIPT_VALUE_MISSING,
@@ -108,6 +121,27 @@ Deno.test("JavaScript runtime strict equality distinguishes object identities", 
     ),
     float64(0),
   );
+
+  deepStrictEqual(await compileAndRun(result), { kind: "float-64", value: 42 });
+});
+
+Deno.test("JavaScript runtime state starts with an execution context and realm global object", async () => {
+  const result = match(reference(JAVASCRIPT_RUNTIME_EMPTY_STATE), [{
+    constructor: JAVASCRIPT_STATE,
+    binders: ["heap", "context", "bindings"],
+    body: match(reference("context"), [{
+      constructor: JAVASCRIPT_EXECUTION_CONTEXT,
+      binders: ["realm", "lexicalEnvironment", "variableEnvironment", "thisValue"],
+      body: match(reference("realm"), [{
+        constructor: JAVASCRIPT_REALM,
+        binders: ["globalObject"],
+        body: expectObject("globalObject", "globalObjectIdentity", () => float64(42)),
+        span,
+      }]),
+      span,
+    }]),
+    span,
+  }]);
 
   deepStrictEqual(await compileAndRun(result), { kind: "float-64", value: 42 });
 });
@@ -258,6 +292,11 @@ Deno.test("JavaScript binding resolution produces explicit Reference records", a
         binders: ["value"],
         body: expectNumber("value"),
         span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_ACCESSOR,
+        binders: ["getter", "receiver"],
+        body: fault("binding lookup requested an accessor call"),
+        span,
       }],
     ),
     span,
@@ -267,6 +306,184 @@ Deno.test("JavaScript binding resolution produces explicit Reference records", a
     body: fault("binding resolved as a property reference"),
     span,
   }]);
+
+  deepStrictEqual(await compileAndRun(result), { kind: "float-64", value: 42 });
+});
+
+Deno.test("JavaScript Reference writes update the resolved binding cell", async () => {
+  const state = call(JAVASCRIPT_RUNTIME_DEFINE_BINDING, [
+    reference(JAVASCRIPT_RUNTIME_EMPTY_STATE),
+    text("answer"),
+    call(JAVASCRIPT_BINDING_MUTABLE, [call(JAVASCRIPT_VALUE_NUMBER, [float64(40)])]),
+  ]);
+  const resolved = call(JAVASCRIPT_RUNTIME_RESOLVE_BINDING_REFERENCE, [
+    state,
+    text("answer"),
+    boolean(true),
+  ]);
+  const result = match(
+    call(JAVASCRIPT_RUNTIME_PUT_REFERENCE_VALUE, [
+      state,
+      resolved,
+      call(JAVASCRIPT_VALUE_NUMBER, [float64(42)]),
+    ]),
+    expectUpdatedReference((updatedState) =>
+      match(
+        call(JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE, [updatedState, resolved]),
+        [{
+          constructor: JAVASCRIPT_VALUE_MISSING,
+          binders: [],
+          body: fault("updated Reference lost its binding"),
+          span,
+        }, {
+          constructor: JAVASCRIPT_VALUE_UNINITIALIZED,
+          binders: [],
+          body: fault("updated Reference became uninitialized"),
+          span,
+        }, {
+          constructor: JAVASCRIPT_VALUE_FOUND,
+          binders: ["value"],
+          body: expectNumber("value"),
+          span,
+        }, {
+          constructor: JAVASCRIPT_VALUE_ACCESSOR,
+          binders: ["getter", "receiver"],
+          body: fault("binding Reference requested an accessor call"),
+          span,
+        }],
+      )
+    ),
+  );
+
+  deepStrictEqual(await compileAndRun(result), { kind: "float-64", value: 42 });
+});
+
+Deno.test("JavaScript Reference writes create checked data properties", async () => {
+  const key = call(JAVASCRIPT_PROPERTY_KEY_STRING, [text("answer")]);
+  const result = match(
+    call(JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT, [
+      reference(JAVASCRIPT_RUNTIME_EMPTY_HEAP),
+      reference(JAVASCRIPT_VALUE_NULL),
+      reference(JAVASCRIPT_OBJECT_ORDINARY),
+    ]),
+    [{
+      constructor: JAVASCRIPT_HEAP_ALLOCATION,
+      binders: ["heap", "object"],
+      body: letExpression(
+        "state",
+        stateWithEmptyBindings(reference("heap")),
+        letExpression(
+          "propertyReference",
+          call(JAVASCRIPT_PROPERTY_REFERENCE, [
+            reference("object"),
+            key,
+            reference("object"),
+            boolean(true),
+          ]),
+          match(
+            call(JAVASCRIPT_RUNTIME_PUT_REFERENCE_VALUE, [
+              reference("state"),
+              reference("propertyReference"),
+              call(JAVASCRIPT_VALUE_NUMBER, [float64(42)]),
+            ]),
+            expectUpdatedReference((updatedState) =>
+              match(
+                call(JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE, [
+                  updatedState,
+                  reference("propertyReference"),
+                ]),
+                [{
+                  constructor: JAVASCRIPT_VALUE_MISSING,
+                  binders: [],
+                  body: fault("created property was not found"),
+                  span,
+                }, {
+                  constructor: JAVASCRIPT_VALUE_UNINITIALIZED,
+                  binders: [],
+                  body: fault("created property was uninitialized"),
+                  span,
+                }, {
+                  constructor: JAVASCRIPT_VALUE_FOUND,
+                  binders: ["value"],
+                  body: expectNumber("value"),
+                  span,
+                }, {
+                  constructor: JAVASCRIPT_VALUE_ACCESSOR,
+                  binders: ["getter", "receiver"],
+                  body: fault("data property requested an accessor call"),
+                  span,
+                }],
+              )
+            ),
+          ),
+        ),
+      ),
+      span,
+    }],
+  );
+
+  deepStrictEqual(await compileAndRun(result), { kind: "float-64", value: 42 });
+});
+
+Deno.test("JavaScript Reference writes reject inherited non-writable properties", async () => {
+  const key = call(JAVASCRIPT_PROPERTY_KEY_STRING, [text("fixed")]);
+  const descriptor = call(JAVASCRIPT_DATA_DESCRIPTOR, [
+    call(JAVASCRIPT_VALUE_NUMBER, [float64(41)]),
+    boolean(false),
+    boolean(true),
+    boolean(true),
+  ]);
+  const result = match(
+    call(JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT, [
+      reference(JAVASCRIPT_RUNTIME_EMPTY_HEAP),
+      reference(JAVASCRIPT_VALUE_NULL),
+      reference(JAVASCRIPT_OBJECT_ORDINARY),
+    ]),
+    [{
+      constructor: JAVASCRIPT_HEAP_ALLOCATION,
+      binders: ["prototypeHeap", "prototype"],
+      body: expectObject("prototype", "prototypeIdentity", (prototypeIdentity) =>
+        letExpression(
+          "heapWithFixedProperty",
+          call(JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED, [
+            reference("prototypeHeap"),
+            prototypeIdentity,
+            key,
+            descriptor,
+          ]),
+          match(
+            call(JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT, [
+              reference("heapWithFixedProperty"),
+              reference("prototype"),
+              reference(JAVASCRIPT_OBJECT_ORDINARY),
+            ]),
+            [{
+              constructor: JAVASCRIPT_HEAP_ALLOCATION,
+              binders: ["childHeap", "child"],
+              body: letExpression(
+                "state",
+                stateWithEmptyBindings(reference("childHeap")),
+                match(
+                  call(JAVASCRIPT_RUNTIME_PUT_REFERENCE_VALUE, [
+                    reference("state"),
+                    call(JAVASCRIPT_PROPERTY_REFERENCE, [
+                      reference("child"),
+                      key,
+                      reference("child"),
+                      boolean(true),
+                    ]),
+                    call(JAVASCRIPT_VALUE_NUMBER, [float64(42)]),
+                  ]),
+                  expectNonWritableReference(),
+                ),
+              ),
+              span,
+            }],
+          ),
+        )),
+      span,
+    }],
+  );
 
   deepStrictEqual(await compileAndRun(result), { kind: "float-64", value: 42 });
 });
@@ -307,7 +524,7 @@ Deno.test("JavaScript runtime rejects object identity exhaustion before wrapping
 Deno.test("JavaScript runtime rejects binding identity exhaustion before wrapping", async () => {
   const state = call(JAVASCRIPT_STATE, [
     reference(JAVASCRIPT_RUNTIME_EMPTY_HEAP),
-    reference(JAVASCRIPT_ENVIRONMENT_EMPTY),
+    emptyExecutionContext(),
     call(JAVASCRIPT_BINDING_STORE, [
       integer(JAVASCRIPT_MAXIMUM_BINDING_COUNT),
       {
@@ -386,8 +603,115 @@ function environmentUpdateArms(): readonly FunctionalSurfaceCaseArm[] {
           ),
         ),
         span,
+      }, {
+        constructor: JAVASCRIPT_VALUE_ACCESSOR,
+        binders: ["getter", "receiver"],
+        body: fault("environment lookup requested an accessor call"),
+        span,
       }],
     ),
+    span,
+  }];
+}
+
+function expectUpdatedReference(
+  onUpdated: (state: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
+): readonly FunctionalSurfaceCaseArm[] {
+  const rejected = fault("JavaScript Reference write was rejected");
+  return [{
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_UPDATED,
+    binders: ["updatedReferenceState"],
+    body: onUpdated(reference("updatedReferenceState")),
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_ACCESSOR,
+    binders: ["state", "setter", "receiver", "value"],
+    body: rejected,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_UNRESOLVABLE,
+    binders: [],
+    body: rejected,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_UNINITIALIZED,
+    binders: [],
+    body: rejected,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_IMMUTABLE,
+    binders: [],
+    body: rejected,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE,
+    binders: [],
+    body: rejected,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_MISSING_SETTER,
+    binders: [],
+    body: rejected,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_NON_EXTENSIBLE,
+    binders: [],
+    body: rejected,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE,
+    binders: [],
+    body: rejected,
+    span,
+  }];
+}
+
+function expectNonWritableReference(): readonly FunctionalSurfaceCaseArm[] {
+  const wrongResult = fault("inherited non-writable property accepted a Reference write");
+  return [{
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_UPDATED,
+    binders: ["updatedState"],
+    body: wrongResult,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_ACCESSOR,
+    binders: ["state", "setter", "receiver", "value"],
+    body: wrongResult,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_UNRESOLVABLE,
+    binders: [],
+    body: wrongResult,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_UNINITIALIZED,
+    binders: [],
+    body: wrongResult,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_IMMUTABLE,
+    binders: [],
+    body: wrongResult,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE,
+    binders: [],
+    body: float64(42),
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_MISSING_SETTER,
+    binders: [],
+    body: wrongResult,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_NON_EXTENSIBLE,
+    binders: [],
+    body: wrongResult,
+    span,
+  }, {
+    constructor: JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE,
+    binders: [],
+    body: wrongResult,
     span,
   }];
 }
@@ -552,6 +876,33 @@ function emptyObjectStore(): FunctionalSurfaceExpression {
     ]),
     span,
   };
+}
+
+function stateWithEmptyBindings(heap: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+  return call(JAVASCRIPT_STATE, [
+    heap,
+    emptyExecutionContext(),
+    call(JAVASCRIPT_BINDING_STORE, [
+      integer(0),
+      {
+        kind: "store-new",
+        length: integer(0),
+        initial: call(JAVASCRIPT_BINDING_MUTABLE, [reference(JAVASCRIPT_VALUE_UNDEFINED)]),
+        span,
+      },
+    ]),
+  ]);
+}
+
+function emptyExecutionContext(): FunctionalSurfaceExpression {
+  return call(JAVASCRIPT_EXECUTION_CONTEXT, [
+    call(JAVASCRIPT_REALM, [
+      reference(JAVASCRIPT_VALUE_UNDEFINED),
+    ]),
+    reference(JAVASCRIPT_ENVIRONMENT_EMPTY),
+    reference(JAVASCRIPT_ENVIRONMENT_EMPTY),
+    reference(JAVASCRIPT_VALUE_UNDEFINED),
+  ]);
 }
 
 function float64(value: number): FunctionalSurfaceExpression {

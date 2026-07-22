@@ -21,14 +21,20 @@ import {
   JAVASCRIPT_RUNTIME_DEFINE_BINDING,
   JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED,
   JAVASCRIPT_RUNTIME_EMPTY_STATE,
+  JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE,
+  JAVASCRIPT_RUNTIME_GLOBAL_OBJECT,
   JAVASCRIPT_RUNTIME_INITIALIZE_BINDING,
+  JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT,
   JAVASCRIPT_RUNTIME_LOOKUP_BINDING,
-  JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY,
   JAVASCRIPT_RUNTIME_OBJECT_KIND,
+  JAVASCRIPT_RUNTIME_PUT_REFERENCE_VALUE,
+  JAVASCRIPT_RUNTIME_REALM,
   JAVASCRIPT_RUNTIME_SAME_VALUE,
   JAVASCRIPT_RUNTIME_SET_BINDING,
   JAVASCRIPT_RUNTIME_STRICT_EQUAL,
+  JAVASCRIPT_RUNTIME_THIS_VALUE,
   JAVASCRIPT_RUNTIME_TO_BOOLEAN,
+  JAVASCRIPT_RUNTIME_WITH_GLOBAL_THIS,
   javascriptRuntimeSurface,
 } from "./runtime.ts";
 import * as Runtime from "./runtime_contract.ts";
@@ -41,6 +47,7 @@ export interface LoweredJavaScriptRuntimeModule {
 
 export interface JavaScriptRuntimeLoweringOptions {
   readonly runtimeFaultConstructors?: ReadonlyMap<string, string>;
+  readonly callThisMode?: "strict" | "sloppy";
 }
 
 type RuntimeExpressionContinuation = (
@@ -57,9 +64,21 @@ type RuntimeEntryResultKind = "boolean" | "number" | "string";
 interface RuntimeFunction {
   readonly id: number;
   readonly name: string;
+  readonly thisMode: "dynamic" | "lexical";
   readonly parameters: readonly string[];
   readonly body: readonly JavaScriptAotStatement[];
   readonly span: JavaScriptAotExpression["span"];
+}
+
+type RuntimeFunctionSyntax =
+  | Extract<JavaScriptAotStatement, { readonly kind: "function-declaration" }>
+  | Extract<JavaScriptAotExpression, { readonly kind: "function" }>;
+
+interface RuntimeAccessorDescriptor {
+  readonly getter: FunctionalSurfaceExpression;
+  readonly setter: FunctionalSurfaceExpression;
+  readonly enumerable: boolean;
+  readonly configurable: boolean;
 }
 
 const runtimeNumericOperators: Readonly<Partial<Record<string, FunctionalBinaryOperator>>> = {
@@ -73,9 +92,6 @@ const runtimeNumericOperators: Readonly<Partial<Record<string, FunctionalBinaryO
   ">": FunctionalBinaryOperator.GreaterFloat64,
   ">=": FunctionalBinaryOperator.GreaterEqualFloat64,
 };
-const JAVASCRIPT_RUNTIME_MAXIMUM_SYNTAX_NODES = 128;
-const JAVASCRIPT_RUNTIME_MAXIMUM_BRANCHING_NODES = 3;
-
 export function requiresJavaScriptRuntimeModel(sourceModule: JavaScriptAotModule): boolean {
   return sourceModule.declarations.some((declaration) =>
     declaration.kind === "constant"
@@ -89,18 +105,6 @@ export function lowerJavaScriptRuntimeModule(
   entryName: string,
   options: JavaScriptRuntimeLoweringOptions = {},
 ): LoweredJavaScriptRuntimeModule {
-  if (
-    !runtimeSyntaxFitsBudget(
-      sourceModule,
-      JAVASCRIPT_RUNTIME_MAXIMUM_SYNTAX_NODES,
-      JAVASCRIPT_RUNTIME_MAXIMUM_BRANCHING_NODES,
-    )
-  ) {
-    throw new JavaScriptAotLoweringError(
-      sourceModule.span,
-      `JavaScript runtime-model lowering exceeds its ${JAVASCRIPT_RUNTIME_MAXIMUM_SYNTAX_NODES}-node/${JAVASCRIPT_RUNTIME_MAXIMUM_BRANCHING_NODES}-branch frontend budget.`,
-    );
-  }
   const lowering = new JavaScriptRuntimeLowering(sourceModule, entryName, options);
   return lowering.lower();
 }
@@ -108,6 +112,7 @@ export function lowerJavaScriptRuntimeModule(
 class JavaScriptRuntimeLowering {
   #bindingIndex = 0;
   readonly #functions: RuntimeFunction[] = [];
+  readonly #functionsBySyntax = new WeakMap<RuntimeFunctionSyntax, RuntimeFunction>();
 
   constructor(
     private readonly sourceModule: JavaScriptAotModule,
@@ -124,10 +129,14 @@ class JavaScriptRuntimeLowering {
         `JavaScript runtime-model name ${JSON.stringify(unresolvedName.name)} is not declared.`,
       );
     }
+    this.prepareRuntimeFunctions(entry.body);
     const entryResultKind = runtimeEntryResultKind(entry);
     const runtime = javascriptRuntimeSurface(this.sourceModule.span.endByte);
+    const emptyState = reference(JAVASCRIPT_RUNTIME_EMPTY_STATE, entry.span);
     const initialState = this.extendFunctionStateWithDeclarations(
-      reference(JAVASCRIPT_RUNTIME_EMPTY_STATE, entry.span),
+      (this.options.callThisMode ?? "strict") === "sloppy"
+        ? call(JAVASCRIPT_RUNTIME_WITH_GLOBAL_THIS, [emptyState], entry.span)
+        : emptyState,
       entry.body,
     );
     const entryDefinition: FunctionalSurfaceDefinition = {
@@ -170,12 +179,19 @@ class JavaScriptRuntimeLowering {
     runtimeFunction: RuntimeFunction,
   ): FunctionalSurfaceDefinition {
     const heapName = this.freshName("functionHeap");
+    const realmName = this.freshName("functionRealm");
     const environmentName = this.freshName("capturedEnvironment");
     const bindingsName = this.freshName("functionBindings");
+    const thisValueName = this.freshName("thisValue");
     const argumentNames = runtimeFunction.parameters.map(() => this.freshName("argument"));
     let state = call(Runtime.JAVASCRIPT_STATE, [
       reference(heapName, runtimeFunction.span),
-      reference(environmentName, runtimeFunction.span),
+      call(Runtime.JAVASCRIPT_EXECUTION_CONTEXT, [
+        reference(realmName, runtimeFunction.span),
+        reference(environmentName, runtimeFunction.span),
+        reference(environmentName, runtimeFunction.span),
+        reference(thisValueName, runtimeFunction.span),
+      ], runtimeFunction.span),
       reference(bindingsName, runtimeFunction.span),
     ], runtimeFunction.span);
     for (let index = 0; index < runtimeFunction.parameters.length; index++) {
@@ -193,7 +209,14 @@ class JavaScriptRuntimeLowering {
     );
     return {
       name: runtimeFunction.name,
-      parameters: [heapName, environmentName, bindingsName, ...argumentNames],
+      parameters: [
+        heapName,
+        realmName,
+        environmentName,
+        bindingsName,
+        thisValueName,
+        ...argumentNames,
+      ],
       annotation: null,
       body: this.initializeHoistedFunctions(
         runtimeFunction.body,
@@ -303,9 +326,11 @@ class JavaScriptRuntimeLowering {
       return this.initializeHoistedFunctions(statements, index + 1, state, onReady);
     }
     const runtimeFunction = this.registerRuntimeFunction(
+      statement,
       statement.parameters,
       statement.body,
       statement.span,
+      "dynamic",
     );
     return this.allocateRuntimeFunction(
       runtimeFunction,
@@ -446,40 +471,7 @@ class JavaScriptRuntimeLowering {
     state: FunctionalSurfaceExpression,
     onNormal: RuntimeStatementContinuation,
   ): FunctionalSurfaceExpression {
-    if (expression.kind !== "conditional") {
-      return this.lowerExpression(expression, state, (nextState) => onNormal(nextState));
-    }
-    return this.lowerExpression(
-      expression.condition,
-      state,
-      (conditionState, conditionValue) =>
-        this.resumeNormalCompletion(
-          conditional(
-            call(JAVASCRIPT_RUNTIME_TO_BOOLEAN, [conditionValue], expression.condition.span),
-            this.lowerExpression(
-              expression.consequent,
-              conditionState,
-              (branchState, branchValue) =>
-                call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
-                  branchState,
-                  branchValue,
-                ], expression.consequent.span),
-            ),
-            this.lowerExpression(
-              expression.alternate,
-              conditionState,
-              (branchState, branchValue) =>
-                call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
-                  branchState,
-                  branchValue,
-                ], expression.alternate.span),
-            ),
-            expression.span,
-          ),
-          onNormal,
-          expression.span,
-        ),
-    );
+    return this.lowerExpression(expression, state, (nextState) => onNormal(nextState));
   }
 
   private lowerStatementBranch(
@@ -490,23 +482,23 @@ class JavaScriptRuntimeLowering {
     const span = statements[0]?.span ?? this.sourceModule.span;
     const stateName = this.freshName("blockState");
     const heapName = this.freshName("blockHeap");
-    const outerEnvironmentName = this.freshName("blockOuterEnvironment");
+    const outerContextName = this.freshName("blockOuterContext");
     const bindingsName = this.freshName("blockBindings");
     return letExpression(
       stateName,
       state,
       match(reference(stateName, span), [{
         constructor: Runtime.JAVASCRIPT_STATE,
-        binders: [heapName, outerEnvironmentName, bindingsName],
+        binders: [heapName, outerContextName, bindingsName],
         body: this.resumeNormalCompletion(
-          this.restoreCompletionEnvironment(
+          this.restoreCompletionContext(
             this.initializeHoistedFunctions(
               statements,
               0,
               this.extendLexicalStateWithDeclarations(reference(stateName, span), statements),
               (readyState) => this.lowerStatements(statements, 0, readyState),
             ),
-            reference(outerEnvironmentName, span),
+            reference(outerContextName, span),
             span,
           ),
           onNormal,
@@ -575,10 +567,13 @@ class JavaScriptRuntimeLowering {
     const breakTargetName = this.freshName("tryBreakTarget");
     const continueStateName = this.freshName("tryContinueState");
     const continueTargetName = this.freshName("tryContinueTarget");
-    return match(bodyCompletion, [{
+    const completion = match(bodyCompletion, [{
       constructor: Runtime.JAVASCRIPT_COMPLETION_NORMAL,
       binders: [normalStateName, normalValueName],
-      body: onNormal(reference(normalStateName, statement.span)),
+      body: call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
+        reference(normalStateName, statement.span),
+        reference(normalValueName, statement.span),
+      ], statement.span),
       span: statement.span,
     }, {
       constructor: Runtime.JAVASCRIPT_COMPLETION_RETURN,
@@ -595,7 +590,11 @@ class JavaScriptRuntimeLowering {
         statement,
         reference(throwStateName, statement.span),
         reference(throwValueName, statement.span),
-        onNormal,
+        (catchState) =>
+          call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
+            catchState,
+            reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, statement.span),
+          ], statement.span),
       ),
       span: statement.span,
     }, {
@@ -615,6 +614,7 @@ class JavaScriptRuntimeLowering {
       ], statement.span),
       span: statement.span,
     }], statement.span);
+    return this.resumeNormalCompletion(completion, onNormal, statement.span);
   }
 
   private lowerCatch(
@@ -625,28 +625,28 @@ class JavaScriptRuntimeLowering {
   ): FunctionalSurfaceExpression {
     const stateName = this.freshName("caughtState");
     const heapName = this.freshName("caughtHeap");
-    const outerEnvironmentName = this.freshName("catchOuterEnvironment");
+    const outerContextName = this.freshName("catchOuterContext");
     const bindingsName = this.freshName("catchBindings");
     return letExpression(
       stateName,
       thrownState,
       match(reference(stateName, statement.span), [{
         constructor: Runtime.JAVASCRIPT_STATE,
-        binders: [heapName, outerEnvironmentName, bindingsName],
+        binders: [heapName, outerContextName, bindingsName],
         body: this.resumeNormalCompletion(
-          this.restoreCompletionEnvironment(
+          this.restoreCompletionContext(
             this.lowerStatementBranch(
               statement.catchBody!,
               statement.catchName === null
                 ? call(Runtime.JAVASCRIPT_STATE, [
                   reference(heapName, statement.span),
-                  reference(outerEnvironmentName, statement.span),
+                  reference(outerContextName, statement.span),
                   reference(bindingsName, statement.span),
                 ], statement.span)
                 : call(JAVASCRIPT_RUNTIME_DEFINE_BINDING, [
                   call(Runtime.JAVASCRIPT_STATE, [
                     reference(heapName, statement.span),
-                    reference(outerEnvironmentName, statement.span),
+                    reference(outerContextName, statement.span),
                     reference(bindingsName, statement.span),
                   ], statement.span),
                   text(statement.catchName, statement.span),
@@ -658,7 +658,7 @@ class JavaScriptRuntimeLowering {
                   reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, statement.span),
                 ], statement.span),
             ),
-            reference(outerEnvironmentName, statement.span),
+            reference(outerContextName, statement.span),
             statement.span,
           ),
           onNormal,
@@ -670,21 +670,21 @@ class JavaScriptRuntimeLowering {
     );
   }
 
-  private restoreCompletionEnvironment(
+  private restoreCompletionContext(
     completion: FunctionalSurfaceExpression,
-    environment: FunctionalSurfaceExpression,
+    context: FunctionalSurfaceExpression,
     span: JavaScriptAotStatement["span"],
   ): FunctionalSurfaceExpression {
     const restoredState = (stateName: string): FunctionalSurfaceExpression => {
       const heapName = this.freshName("restoredHeap");
-      const discardedEnvironmentName = this.freshName("discardedEnvironment");
+      const discardedContextName = this.freshName("discardedContext");
       const bindingsName = this.freshName("restoredBindings");
       return match(reference(stateName, span), [{
         constructor: Runtime.JAVASCRIPT_STATE,
-        binders: [heapName, discardedEnvironmentName, bindingsName],
+        binders: [heapName, discardedContextName, bindingsName],
         body: call(Runtime.JAVASCRIPT_STATE, [
           reference(heapName, span),
-          environment,
+          context,
           reference(bindingsName, span),
         ], span),
         span,
@@ -798,6 +798,61 @@ class JavaScriptRuntimeLowering {
     }], span);
   }
 
+  private resumeExpressionCompletion(
+    completion: FunctionalSurfaceExpression,
+    onValue: RuntimeExpressionContinuation,
+    span: JavaScriptAotExpression["span"],
+  ): FunctionalSurfaceExpression {
+    const normalStateName = this.freshName("expressionState");
+    const normalValueName = this.freshName("expressionValue");
+    const returnStateName = this.freshName("expressionReturnState");
+    const returnValueName = this.freshName("expressionReturnValue");
+    const throwStateName = this.freshName("expressionThrowState");
+    const throwValueName = this.freshName("expressionThrowValue");
+    const breakStateName = this.freshName("expressionBreakState");
+    const breakTargetName = this.freshName("expressionBreakTarget");
+    const continueStateName = this.freshName("expressionContinueState");
+    const continueTargetName = this.freshName("expressionContinueTarget");
+    return match(completion, [{
+      constructor: Runtime.JAVASCRIPT_COMPLETION_NORMAL,
+      binders: [normalStateName, normalValueName],
+      body: onValue(reference(normalStateName, span), reference(normalValueName, span)),
+      span,
+    }, {
+      constructor: Runtime.JAVASCRIPT_COMPLETION_RETURN,
+      binders: [returnStateName, returnValueName],
+      body: call(Runtime.JAVASCRIPT_COMPLETION_RETURN, [
+        reference(returnStateName, span),
+        reference(returnValueName, span),
+      ], span),
+      span,
+    }, {
+      constructor: Runtime.JAVASCRIPT_COMPLETION_THROW,
+      binders: [throwStateName, throwValueName],
+      body: call(Runtime.JAVASCRIPT_COMPLETION_THROW, [
+        reference(throwStateName, span),
+        reference(throwValueName, span),
+      ], span),
+      span,
+    }, {
+      constructor: Runtime.JAVASCRIPT_COMPLETION_BREAK,
+      binders: [breakStateName, breakTargetName],
+      body: call(Runtime.JAVASCRIPT_COMPLETION_BREAK, [
+        reference(breakStateName, span),
+        reference(breakTargetName, span),
+      ], span),
+      span,
+    }, {
+      constructor: Runtime.JAVASCRIPT_COMPLETION_CONTINUE,
+      binders: [continueStateName, continueTargetName],
+      body: call(Runtime.JAVASCRIPT_COMPLETION_CONTINUE, [
+        reference(continueStateName, span),
+        reference(continueTargetName, span),
+      ], span),
+      span,
+    }], span);
+  }
+
   private lowerPropertyAssignment(
     statement: Extract<JavaScriptAotStatement, { readonly kind: "property-assignment" }>,
     state: FunctionalSurfaceExpression,
@@ -831,34 +886,112 @@ class JavaScriptRuntimeLowering {
           this.expectObjectArms(statement.target.span, (identity) =>
             this.lowerExpression(statement.value, receiverState, (valueState, value) => {
               const stateName = this.freshName("propertyWriteState");
-              const heapName = this.freshName("propertyWriteHeap");
-              const environmentName = this.freshName("propertyWriteEnvironment");
-              const bindingsName = this.freshName("propertyWriteBindings");
+              const updatedStateName = this.freshName("propertyWriteUpdatedState");
+              const setterStateName = this.freshName("setterState");
+              const setterName = this.freshName("setter");
+              const setterReceiverName = this.freshName("setterReceiver");
+              const setterValueName = this.freshName("setterValue");
+              const rejectedWrite = runtimeFault(
+                `JavaScript property ${JSON.stringify(propertyName)} is not writable`,
+                statement.span,
+              );
+              const objectValue = call(Runtime.JAVASCRIPT_VALUE_OBJECT, [
+                identity,
+              ], statement.target.span);
               return letExpression(
                 stateName,
                 valueState,
-                match(reference(stateName, statement.span), [{
-                  constructor: Runtime.JAVASCRIPT_STATE,
-                  binders: [heapName, environmentName, bindingsName],
-                  body: onNormal(call(Runtime.JAVASCRIPT_STATE, [
-                    call(JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED, [
-                      reference(heapName, statement.span),
-                      identity,
+                match(
+                  call(JAVASCRIPT_RUNTIME_PUT_REFERENCE_VALUE, [
+                    reference(stateName, statement.span),
+                    call(Runtime.JAVASCRIPT_PROPERTY_REFERENCE, [
+                      objectValue,
                       call(Runtime.JAVASCRIPT_PROPERTY_KEY_STRING, [
                         text(propertyName, statement.target.span),
                       ], statement.target.span),
-                      call(Runtime.JAVASCRIPT_DATA_DESCRIPTOR, [
-                        value,
-                        boolean(true, statement.span),
-                        boolean(true, statement.span),
-                        boolean(true, statement.span),
-                      ], statement.span),
+                      objectValue,
+                      boolean(true, statement.span),
                     ], statement.span),
-                    reference(environmentName, statement.span),
-                    reference(bindingsName, statement.span),
-                  ], statement.span)),
-                  span: statement.span,
-                }], statement.span),
+                    value,
+                  ], statement.span),
+                  [{
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_UPDATED,
+                    binders: [updatedStateName],
+                    body: onNormal(reference(updatedStateName, statement.span)),
+                    span: statement.span,
+                  }, {
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_ACCESSOR,
+                    binders: [
+                      setterStateName,
+                      setterName,
+                      setterReceiverName,
+                      setterValueName,
+                    ],
+                    body: this.invokeRuntimeCallable(
+                      reference(setterName, statement.span),
+                      reference(setterStateName, statement.span),
+                      reference(setterReceiverName, statement.span),
+                      [reference(setterValueName, statement.span)],
+                      (completedState) =>
+                        onNormal(completedState),
+                      statement.span,
+                    ),
+                    span: statement.span,
+                  }, {
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_UNRESOLVABLE,
+                    binders: [],
+                    body: runtimeFault(
+                      "JavaScript property Reference was unresolvable",
+                      statement.span,
+                    ),
+                    span: statement.span,
+                  }, {
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_UNINITIALIZED,
+                    binders: [],
+                    body: runtimeFault(
+                      "JavaScript property Reference was uninitialized",
+                      statement.span,
+                    ),
+                    span: statement.span,
+                  }, {
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_IMMUTABLE,
+                    binders: [],
+                    body: rejectedWrite,
+                    span: statement.span,
+                  }, {
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_NON_WRITABLE,
+                    binders: [],
+                    body: rejectedWrite,
+                    span: statement.span,
+                  }, {
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_MISSING_SETTER,
+                    binders: [],
+                    body: runtimeFault(
+                      `JavaScript property ${JSON.stringify(propertyName)} has no setter`,
+                      statement.span,
+                    ),
+                    span: statement.span,
+                  }, {
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_NON_EXTENSIBLE,
+                    binders: [],
+                    body: runtimeFault(
+                      `JavaScript property ${
+                        JSON.stringify(propertyName)
+                      } cannot be added to a non-extensible object`,
+                      statement.span,
+                    ),
+                    span: statement.span,
+                  }, {
+                    constructor: Runtime.JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE,
+                    binders: [],
+                    body: runtimeFault(
+                      "JavaScript property Reference has an invalid base",
+                      statement.span,
+                    ),
+                    span: statement.span,
+                  }],
+                  statement.span,
+                ),
                 statement.span,
               );
             })),
@@ -917,6 +1050,20 @@ class JavaScriptRuntimeLowering {
             ),
           );
         }
+        if (expression.name === "this") {
+          const contextName = this.freshName("thisContext");
+          return match(state, [{
+            constructor: Runtime.JAVASCRIPT_STATE,
+            binders: [this.freshName("thisHeap"), contextName, this.freshName("thisBindings")],
+            body: onValue(
+              state,
+              call(JAVASCRIPT_RUNTIME_THIS_VALUE, [
+                reference(contextName, expression.span),
+              ], expression.span),
+            ),
+            span: expression.span,
+          }], expression.span);
+        }
         return this.lookupBinding(state, expression.name, onValue, expression.span);
       case "object":
         return this.lowerObject(expression, state, onValue);
@@ -973,10 +1120,30 @@ class JavaScriptRuntimeLowering {
           expression.condition,
           state,
           (conditionState, conditionValue) =>
-            conditional(
-              call(JAVASCRIPT_RUNTIME_TO_BOOLEAN, [conditionValue], expression.condition.span),
-              this.lowerExpression(expression.consequent, conditionState, onValue),
-              this.lowerExpression(expression.alternate, conditionState, onValue),
+            this.resumeExpressionCompletion(
+              conditional(
+                call(JAVASCRIPT_RUNTIME_TO_BOOLEAN, [conditionValue], expression.condition.span),
+                this.lowerExpression(
+                  expression.consequent,
+                  conditionState,
+                  (branchState, branchValue) =>
+                    call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
+                      branchState,
+                      branchValue,
+                    ], expression.consequent.span),
+                ),
+                this.lowerExpression(
+                  expression.alternate,
+                  conditionState,
+                  (branchState, branchValue) =>
+                    call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
+                      branchState,
+                      branchValue,
+                    ], expression.alternate.span),
+                ),
+                expression.span,
+              ),
+              onValue,
               expression.span,
             ),
         );
@@ -998,9 +1165,11 @@ class JavaScriptRuntimeLowering {
     onValue: RuntimeExpressionContinuation,
   ): FunctionalSurfaceExpression {
     const runtimeFunction = this.registerRuntimeFunction(
+      expression,
       expression.parameters,
       expression.body,
       expression.span,
+      expression.thisMode,
     );
     if (expression.name !== null) {
       return this.allocateNamedRuntimeFunction(expression.name, runtimeFunction, state, onValue);
@@ -1017,14 +1186,14 @@ class JavaScriptRuntimeLowering {
     const span = runtimeFunction.span;
     const stateName = this.freshName("namedFunctionState");
     const heapName = this.freshName("namedFunctionHeap");
-    const outerEnvironmentName = this.freshName("namedFunctionOuterEnvironment");
+    const outerContextName = this.freshName("namedFunctionOuterContext");
     const bindingsName = this.freshName("namedFunctionBindings");
     return letExpression(
       stateName,
       state,
       match(reference(stateName, span), [{
         constructor: Runtime.JAVASCRIPT_STATE,
-        binders: [heapName, outerEnvironmentName, bindingsName],
+        binders: [heapName, outerContextName, bindingsName],
         body: this.allocateRuntimeFunction(
           runtimeFunction,
           call(JAVASCRIPT_RUNTIME_DEFINE_BINDING, [
@@ -1040,7 +1209,7 @@ class JavaScriptRuntimeLowering {
               (initializedState) => {
                 const initializedStateName = this.freshName("initializedNamedFunctionState");
                 const initializedHeapName = this.freshName("initializedNamedFunctionHeap");
-                const innerEnvironmentName = this.freshName("namedFunctionInnerEnvironment");
+                const innerContextName = this.freshName("namedFunctionInnerContext");
                 const initializedBindingsName = this.freshName(
                   "initializedNamedFunctionBindings",
                 );
@@ -1051,13 +1220,13 @@ class JavaScriptRuntimeLowering {
                     constructor: Runtime.JAVASCRIPT_STATE,
                     binders: [
                       initializedHeapName,
-                      innerEnvironmentName,
+                      innerContextName,
                       initializedBindingsName,
                     ],
                     body: onValue(
                       call(Runtime.JAVASCRIPT_STATE, [
                         reference(initializedHeapName, span),
-                        reference(outerEnvironmentName, span),
+                        reference(outerContextName, span),
                         reference(initializedBindingsName, span),
                       ], span),
                       value,
@@ -1077,10 +1246,14 @@ class JavaScriptRuntimeLowering {
   }
 
   private registerRuntimeFunction(
+    syntax: RuntimeFunctionSyntax,
     parameters: readonly string[],
     body: readonly JavaScriptAotStatement[],
     span: JavaScriptAotExpression["span"],
+    thisMode: "dynamic" | "lexical",
   ): RuntimeFunction {
+    const registered = this.#functionsBySyntax.get(syntax);
+    if (registered !== undefined) return registered;
     const parameterNames = new Set<string>();
     for (const parameter of parameters) {
       if (parameterNames.has(parameter)) {
@@ -1096,12 +1269,118 @@ class JavaScriptRuntimeLowering {
     const runtimeFunction: RuntimeFunction = {
       id: this.#functions.length,
       name: `$javascript#runtimeFunction#${this.#functions.length}`,
+      thisMode,
       parameters,
       body,
       span,
     };
     this.#functions.push(runtimeFunction);
+    this.#functionsBySyntax.set(syntax, runtimeFunction);
     return runtimeFunction;
+  }
+
+  private prepareRuntimeFunctions(statements: readonly JavaScriptAotStatement[]): void {
+    const visitExpression = (expression: JavaScriptAotExpression): void => {
+      switch (expression.kind) {
+        case "array":
+          for (const value of expression.values) visitExpression(value);
+          return;
+        case "object":
+          for (const property of expression.properties) visitExpression(property.value);
+          return;
+        case "function":
+          this.registerRuntimeFunction(
+            expression,
+            expression.parameters,
+            expression.body,
+            expression.span,
+            expression.thisMode,
+          );
+          visitStatements(expression.body);
+          return;
+        case "unary":
+        case "property":
+          visitExpression(expression.value);
+          return;
+        case "binary":
+          visitExpression(expression.left);
+          visitExpression(expression.right);
+          return;
+        case "conditional":
+          visitExpression(expression.condition);
+          visitExpression(expression.consequent);
+          visitExpression(expression.alternate);
+          return;
+        case "call":
+          visitExpression(expression.callee);
+          for (const argument of expression.arguments) visitExpression(argument);
+          return;
+        case "new":
+          for (const argument of expression.arguments) visitExpression(argument);
+          return;
+        case "index":
+          visitExpression(expression.value);
+          visitExpression(expression.index);
+          return;
+        default:
+          return;
+      }
+    };
+    const visitStatements = (nested: readonly JavaScriptAotStatement[]): void => {
+      for (const statement of nested) {
+        switch (statement.kind) {
+          case "function-declaration":
+            this.registerRuntimeFunction(
+              statement,
+              statement.parameters,
+              statement.body,
+              statement.span,
+              "dynamic",
+            );
+            visitStatements(statement.body);
+            break;
+          case "constant":
+          case "mutable":
+          case "assignment":
+          case "return":
+          case "throw":
+          case "expression":
+            visitExpression(statement.value);
+            break;
+          case "property-assignment":
+            visitExpression(statement.target);
+            visitExpression(statement.value);
+            break;
+          case "var":
+            for (const declaration of statement.declarations) {
+              if (declaration.value !== null) visitExpression(declaration.value);
+            }
+            break;
+          case "if":
+            visitExpression(statement.condition);
+            visitStatements(statement.consequent);
+            if (statement.alternate !== null) visitStatements(statement.alternate);
+            break;
+          case "while":
+            visitExpression(statement.condition);
+            visitStatements(statement.body);
+            visitStatements(statement.continueBody);
+            break;
+          case "block":
+            visitStatements(statement.statements);
+            break;
+          case "try":
+            visitStatements(statement.body);
+            if (statement.catchBody !== null) visitStatements(statement.catchBody);
+            if (statement.finallyBody !== null) visitStatements(statement.finallyBody);
+            break;
+          case "break":
+          case "continue":
+            break;
+        }
+      }
+    };
+    visitStatements(statements);
   }
 
   private allocateRuntimeFunction(
@@ -1112,7 +1391,7 @@ class JavaScriptRuntimeLowering {
     const span = runtimeFunction.span;
     const stateName = this.freshName("functionValueState");
     const heapName = this.freshName("functionValueHeap");
-    const environmentName = this.freshName("functionValueEnvironment");
+    const contextName = this.freshName("functionValueContext");
     const bindingsName = this.freshName("functionValueBindings");
     const allocatedHeapName = this.freshName("functionObjectHeap");
     const allocatedValueName = this.freshName("functionObjectValue");
@@ -1121,14 +1400,24 @@ class JavaScriptRuntimeLowering {
       state,
       match(reference(stateName, span), [{
         constructor: Runtime.JAVASCRIPT_STATE,
-        binders: [heapName, environmentName, bindingsName],
+        binders: [heapName, contextName, bindingsName],
         body: match(
           call(JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT, [
             reference(heapName, span),
             reference(Runtime.JAVASCRIPT_VALUE_NULL, span),
             call(Runtime.JAVASCRIPT_OBJECT_CALLABLE, [
               integer(runtimeFunction.id, span),
-              reference(environmentName, span),
+              call(JAVASCRIPT_RUNTIME_REALM, [reference(contextName, span)], span),
+              call(JAVASCRIPT_RUNTIME_LEXICAL_ENVIRONMENT, [
+                reference(contextName, span),
+              ], span),
+              runtimeFunction.thisMode === "lexical"
+                ? call(Runtime.JAVASCRIPT_THIS_LEXICAL, [
+                  call(JAVASCRIPT_RUNTIME_THIS_VALUE, [
+                    reference(contextName, span),
+                  ], span),
+                ], span)
+                : reference(Runtime.JAVASCRIPT_THIS_DYNAMIC, span),
             ], span),
           ], span),
           [{
@@ -1137,7 +1426,7 @@ class JavaScriptRuntimeLowering {
             body: onValue(
               call(Runtime.JAVASCRIPT_STATE, [
                 reference(allocatedHeapName, span),
-                reference(environmentName, span),
+                reference(contextName, span),
                 reference(bindingsName, span),
               ], span),
               reference(allocatedValueName, span),
@@ -1157,73 +1446,382 @@ class JavaScriptRuntimeLowering {
     state: FunctionalSurfaceExpression,
     onValue: RuntimeExpressionContinuation,
   ): FunctionalSurfaceExpression {
-    return this.lowerExpression(expression.callee, state, (calleeState, callee) =>
-      match(
-        callee,
-        this.expectObjectArms(expression.callee.span, (identity) =>
-          this.lowerArguments(
-            expression.arguments,
-            0,
+    if (isRuntimeDefinePropertyCall(expression)) {
+      return this.lowerDefinePropertyCall(expression, state, onValue);
+    }
+    if (expression.callee.kind === "property") {
+      const callee = expression.callee;
+      return this.lowerExpression(
+        callee.value,
+        state,
+        (receiverState, receiver) =>
+          this.readProperty(
+            receiverState,
+            receiver,
+            callee.name,
+            (calleeState, callee) =>
+              this.lowerCallArguments(
+                expression,
+                calleeState,
+                callee,
+                receiver,
+                onValue,
+              ),
+            callee.span,
+          ),
+      );
+    }
+    if (expression.callee.kind === "index") {
+      const callee = expression.callee;
+      if (callee.index.kind !== "string") {
+        throw new JavaScriptAotLoweringError(
+          callee.index.span,
+          "JavaScript runtime-model computed method calls currently require a string literal key.",
+        );
+      }
+      const propertyName = callee.index.value;
+      return this.lowerExpression(
+        callee.value,
+        state,
+        (receiverState, receiver) =>
+          this.readProperty(
+            receiverState,
+            receiver,
+            propertyName,
+            (calleeState, callee) =>
+              this.lowerCallArguments(
+                expression,
+                calleeState,
+                callee,
+                receiver,
+                onValue,
+              ),
+            callee.span,
+          ),
+      );
+    }
+    return this.lowerExpression(
+      expression.callee,
+      state,
+      (calleeState, callee) => {
+        if ((this.options.callThisMode ?? "strict") === "strict") {
+          return this.lowerCallArguments(
+            expression,
             calleeState,
-            [],
-            (argumentState, arguments_) => {
-              const stateName = this.freshName("callState");
-              const heapName = this.freshName("callHeap");
-              const callerEnvironmentName = this.freshName("callerEnvironment");
-              const bindingsName = this.freshName("callBindings");
-              const nextIdentityName = this.freshName("callNextIdentity");
-              const objectsName = this.freshName("callObjects");
-              const targetName = this.freshName("callTarget");
-              const capturedEnvironmentName = this.freshName("functionEnvironment");
+            callee,
+            reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, expression.span),
+            onValue,
+          );
+        }
+        const stateName = this.freshName("sloppyCallState");
+        return letExpression(
+          stateName,
+          calleeState,
+          this.lowerCallArguments(
+            expression,
+            reference(stateName, expression.span),
+            callee,
+            call(JAVASCRIPT_RUNTIME_GLOBAL_OBJECT, [
+              reference(stateName, expression.span),
+            ], expression.span),
+            onValue,
+          ),
+          expression.span,
+        );
+      },
+    );
+  }
+
+  private lowerCallArguments(
+    expression: Extract<JavaScriptAotExpression, { readonly kind: "call" }>,
+    state: FunctionalSurfaceExpression,
+    callee: FunctionalSurfaceExpression,
+    thisValue: FunctionalSurfaceExpression,
+    onValue: RuntimeExpressionContinuation,
+  ): FunctionalSurfaceExpression {
+    return this.lowerArguments(
+      expression.arguments,
+      0,
+      state,
+      [],
+      (argumentState, arguments_) =>
+        this.invokeRuntimeCallable(
+          callee,
+          argumentState,
+          thisValue,
+          arguments_,
+          onValue,
+          expression.span,
+        ),
+    );
+  }
+
+  private lowerDefinePropertyCall(
+    expression: Extract<JavaScriptAotExpression, { readonly kind: "call" }>,
+    state: FunctionalSurfaceExpression,
+    onValue: RuntimeExpressionContinuation,
+  ): FunctionalSurfaceExpression {
+    if (expression.arguments.length !== 3) {
+      throw new JavaScriptAotLoweringError(
+        expression.span,
+        `JavaScript Object.defineProperty expects 3 arguments; received ${expression.arguments.length}.`,
+      );
+    }
+    const target = expression.arguments[0]!;
+    const key = expression.arguments[1]!;
+    const descriptor = expression.arguments[2]!;
+    if (key.kind !== "string") {
+      throw new JavaScriptAotLoweringError(
+        key.span,
+        "JavaScript runtime-model Object.defineProperty currently requires a string literal key.",
+      );
+    }
+    if (descriptor.kind !== "object") {
+      throw new JavaScriptAotLoweringError(
+        descriptor.span,
+        "JavaScript runtime-model Object.defineProperty currently requires an object-literal descriptor.",
+      );
+    }
+    const initialDescriptor: RuntimeAccessorDescriptor = {
+      getter: reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, descriptor.span),
+      setter: reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, descriptor.span),
+      enumerable: false,
+      configurable: false,
+    };
+    return this.lowerExpression(target, state, (targetState, targetValue) =>
+      match(
+        targetValue,
+        this.expectObjectArms(target.span, (targetIdentity) =>
+          this.lowerAccessorDescriptor(
+            descriptor.properties,
+            0,
+            targetState,
+            initialDescriptor,
+            (descriptorState, resolvedDescriptor) => {
+              const stateName = this.freshName("definePropertyState");
+              const heapName = this.freshName("definePropertyHeap");
+              const contextName = this.freshName("definePropertyContext");
+              const bindingsName = this.freshName("definePropertyBindings");
               return letExpression(
                 stateName,
-                argumentState,
+                descriptorState,
                 match(reference(stateName, expression.span), [{
                   constructor: Runtime.JAVASCRIPT_STATE,
-                  binders: [heapName, callerEnvironmentName, bindingsName],
-                  body: match(reference(heapName, expression.span), [{
-                    constructor: Runtime.JAVASCRIPT_HEAP,
-                    binders: [nextIdentityName, objectsName],
-                    body: match(
-                      call(JAVASCRIPT_RUNTIME_OBJECT_KIND, [
-                        reference(objectsName, expression.span),
-                        identity,
+                  binders: [heapName, contextName, bindingsName],
+                  body: onValue(
+                    call(Runtime.JAVASCRIPT_STATE, [
+                      call(JAVASCRIPT_RUNTIME_DEFINE_OWN_PROPERTY_UNCHECKED, [
+                        reference(heapName, expression.span),
+                        targetIdentity,
+                        call(Runtime.JAVASCRIPT_PROPERTY_KEY_STRING, [
+                          text(key.value, key.span),
+                        ], key.span),
+                        call(Runtime.JAVASCRIPT_ACCESSOR_DESCRIPTOR, [
+                          resolvedDescriptor.getter,
+                          resolvedDescriptor.setter,
+                          boolean(resolvedDescriptor.enumerable, descriptor.span),
+                          boolean(resolvedDescriptor.configurable, descriptor.span),
+                        ], descriptor.span),
                       ], expression.span),
-                      [{
-                        constructor: Runtime.JAVASCRIPT_OBJECT_ORDINARY,
-                        binders: [],
-                        body: runtimeFault("JavaScript value is not callable", expression.span),
-                        span: expression.span,
-                      }, {
-                        constructor: Runtime.JAVASCRIPT_OBJECT_CALLABLE,
-                        binders: [targetName, capturedEnvironmentName],
-                        body: this.resumeCall(
-                          this.dispatchCall(
-                            reference(targetName, expression.span),
-                            reference(heapName, expression.span),
-                            reference(capturedEnvironmentName, expression.span),
-                            reference(bindingsName, expression.span),
-                            arguments_,
-                            expression.span,
-                          ),
-                          reference(callerEnvironmentName, expression.span),
-                          onValue,
-                          expression.span,
-                        ),
-                        span: expression.span,
-                      }],
-                      expression.span,
-                    ),
-                    span: expression.span,
-                  }], expression.span),
+                      reference(contextName, expression.span),
+                      reference(bindingsName, expression.span),
+                    ], expression.span),
+                    targetValue,
+                  ),
                   span: expression.span,
                 }], expression.span),
                 expression.span,
               );
             },
           )),
-        expression.span,
+        target.span,
       ));
+  }
+
+  private lowerAccessorDescriptor(
+    properties: Extract<JavaScriptAotExpression, { readonly kind: "object" }>["properties"],
+    index: number,
+    state: FunctionalSurfaceExpression,
+    descriptor: RuntimeAccessorDescriptor,
+    onDescriptor: (
+      state: FunctionalSurfaceExpression,
+      descriptor: RuntimeAccessorDescriptor,
+    ) => FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression {
+    const property = properties[index];
+    if (property === undefined) return onDescriptor(state, descriptor);
+    if (property.name === "get" || property.name === "set") {
+      return this.lowerExpression(
+        property.value,
+        state,
+        (nextState, value) => {
+          const nextDescriptor = property.name === "get"
+            ? { ...descriptor, getter: value }
+            : { ...descriptor, setter: value };
+          const continueWithAccessor = this.lowerAccessorDescriptor(
+            properties,
+            index + 1,
+            nextState,
+            nextDescriptor,
+            onDescriptor,
+          );
+          const invalidAccessor = runtimeFault(
+            `JavaScript accessor descriptor ${
+              JSON.stringify(property.name)
+            } must be callable or undefined`,
+            property.value.span,
+          );
+          return match(value, [{
+            constructor: Runtime.JAVASCRIPT_VALUE_UNDEFINED,
+            binders: [],
+            body: continueWithAccessor,
+            span: property.value.span,
+          }, {
+            constructor: Runtime.JAVASCRIPT_VALUE_OBJECT,
+            binders: [this.freshName("accessorIdentity")],
+            body: continueWithAccessor,
+            span: property.value.span,
+          }, {
+            constructor: Runtime.JAVASCRIPT_VALUE_NULL,
+            binders: [],
+            body: invalidAccessor,
+            span: property.value.span,
+          }, {
+            constructor: Runtime.JAVASCRIPT_VALUE_BOOLEAN,
+            binders: [this.freshName("accessorBoolean")],
+            body: invalidAccessor,
+            span: property.value.span,
+          }, {
+            constructor: Runtime.JAVASCRIPT_VALUE_NUMBER,
+            binders: [this.freshName("accessorNumber")],
+            body: invalidAccessor,
+            span: property.value.span,
+          }, {
+            constructor: Runtime.JAVASCRIPT_VALUE_STRING,
+            binders: [this.freshName("accessorString")],
+            body: invalidAccessor,
+            span: property.value.span,
+          }, {
+            constructor: Runtime.JAVASCRIPT_VALUE_SYMBOL,
+            binders: [this.freshName("accessorSymbol")],
+            body: invalidAccessor,
+            span: property.value.span,
+          }], property.value.span);
+        },
+      );
+    }
+    if (property.name === "enumerable" || property.name === "configurable") {
+      if (property.value.kind !== "boolean") {
+        throw new JavaScriptAotLoweringError(
+          property.value.span,
+          `JavaScript accessor descriptor ${
+            JSON.stringify(property.name)
+          } must be a Boolean literal in this AOT profile.`,
+        );
+      }
+      return this.lowerAccessorDescriptor(
+        properties,
+        index + 1,
+        state,
+        property.name === "enumerable"
+          ? { ...descriptor, enumerable: property.value.value }
+          : { ...descriptor, configurable: property.value.value },
+        onDescriptor,
+      );
+    }
+    throw new JavaScriptAotLoweringError(
+      property.span,
+      `JavaScript accessor descriptor property ${JSON.stringify(property.name)} is not supported.`,
+    );
+  }
+
+  private invokeRuntimeCallable(
+    callee: FunctionalSurfaceExpression,
+    state: FunctionalSurfaceExpression,
+    thisValue: FunctionalSurfaceExpression,
+    arguments_: readonly FunctionalSurfaceExpression[],
+    onValue: RuntimeExpressionContinuation,
+    span: JavaScriptAotExpression["span"],
+  ): FunctionalSurfaceExpression {
+    return match(
+      callee,
+      this.expectObjectArms(span, (identity) => {
+        const stateName = this.freshName("callState");
+        const heapName = this.freshName("callHeap");
+        const callerContextName = this.freshName("callerContext");
+        const bindingsName = this.freshName("callBindings");
+        const nextIdentityName = this.freshName("callNextIdentity");
+        const objectsName = this.freshName("callObjects");
+        const targetName = this.freshName("callTarget");
+        const capturedRealmName = this.freshName("functionRealm");
+        const capturedEnvironmentName = this.freshName("functionEnvironment");
+        const thisBindingName = this.freshName("functionThisBinding");
+        const lexicalThisName = this.freshName("lexicalThis");
+        return letExpression(
+          stateName,
+          state,
+          match(reference(stateName, span), [{
+            constructor: Runtime.JAVASCRIPT_STATE,
+            binders: [heapName, callerContextName, bindingsName],
+            body: match(reference(heapName, span), [{
+              constructor: Runtime.JAVASCRIPT_HEAP,
+              binders: [nextIdentityName, objectsName],
+              body: match(
+                call(JAVASCRIPT_RUNTIME_OBJECT_KIND, [
+                  reference(objectsName, span),
+                  identity,
+                ], span),
+                [{
+                  constructor: Runtime.JAVASCRIPT_OBJECT_ORDINARY,
+                  binders: [],
+                  body: runtimeFault("JavaScript value is not callable", span),
+                  span,
+                }, {
+                  constructor: Runtime.JAVASCRIPT_OBJECT_CALLABLE,
+                  binders: [
+                    targetName,
+                    capturedRealmName,
+                    capturedEnvironmentName,
+                    thisBindingName,
+                  ],
+                  body: this.resumeCall(
+                    this.dispatchCall(
+                      reference(targetName, span),
+                      reference(heapName, span),
+                      reference(capturedRealmName, span),
+                      reference(capturedEnvironmentName, span),
+                      reference(bindingsName, span),
+                      match(reference(thisBindingName, span), [{
+                        constructor: Runtime.JAVASCRIPT_THIS_DYNAMIC,
+                        binders: [],
+                        body: thisValue,
+                        span,
+                      }, {
+                        constructor: Runtime.JAVASCRIPT_THIS_LEXICAL,
+                        binders: [lexicalThisName],
+                        body: reference(lexicalThisName, span),
+                        span,
+                      }], span),
+                      arguments_,
+                      span,
+                    ),
+                    reference(callerContextName, span),
+                    onValue,
+                    span,
+                  ),
+                  span,
+                }],
+                span,
+              ),
+              span,
+            }], span),
+            span,
+          }], span),
+          span,
+        );
+      }),
+      span,
+    );
   }
 
   private lowerArguments(
@@ -1249,8 +1847,10 @@ class JavaScriptRuntimeLowering {
   private dispatchCall(
     target: FunctionalSurfaceExpression,
     heap: FunctionalSurfaceExpression,
+    realm: FunctionalSurfaceExpression,
     environment: FunctionalSurfaceExpression,
     bindings: FunctionalSurfaceExpression,
+    thisValue: FunctionalSurfaceExpression,
     arguments_: readonly FunctionalSurfaceExpression[],
     span: JavaScriptAotExpression["span"],
   ): FunctionalSurfaceExpression {
@@ -1270,7 +1870,11 @@ class JavaScriptRuntimeLowering {
           integer(runtimeFunction.id, span),
           span,
         ),
-        call(runtimeFunction.name, [heap, environment, bindings, ...parameters], span),
+        call(
+          runtimeFunction.name,
+          [heap, realm, environment, bindings, thisValue, ...parameters],
+          span,
+        ),
         dispatch,
         span,
       );
@@ -1280,7 +1884,7 @@ class JavaScriptRuntimeLowering {
 
   private resumeCall(
     completion: FunctionalSurfaceExpression,
-    callerEnvironment: FunctionalSurfaceExpression,
+    callerContext: FunctionalSurfaceExpression,
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
   ): FunctionalSurfaceExpression {
@@ -1289,15 +1893,15 @@ class JavaScriptRuntimeLowering {
       valueName: string,
     ): FunctionalSurfaceExpression => {
       const heapName = this.freshName("returnedHeap");
-      const functionEnvironmentName = this.freshName("returnedFunctionEnvironment");
+      const functionContextName = this.freshName("returnedFunctionContext");
       const bindingsName = this.freshName("returnedBindings");
       return match(reference(completedStateName, span), [{
         constructor: Runtime.JAVASCRIPT_STATE,
-        binders: [heapName, functionEnvironmentName, bindingsName],
+        binders: [heapName, functionContextName, bindingsName],
         body: onValue(
           call(Runtime.JAVASCRIPT_STATE, [
             reference(heapName, span),
-            callerEnvironment,
+            callerContext,
             reference(bindingsName, span),
           ], span),
           reference(valueName, span),
@@ -1310,15 +1914,15 @@ class JavaScriptRuntimeLowering {
       valueName: string,
     ): FunctionalSurfaceExpression => {
       const heapName = this.freshName("thrownHeap");
-      const functionEnvironmentName = this.freshName("thrownFunctionEnvironment");
+      const functionContextName = this.freshName("thrownFunctionContext");
       const bindingsName = this.freshName("thrownBindings");
       return match(reference(completedStateName, span), [{
         constructor: Runtime.JAVASCRIPT_STATE,
-        binders: [heapName, functionEnvironmentName, bindingsName],
+        binders: [heapName, functionContextName, bindingsName],
         body: call(Runtime.JAVASCRIPT_COMPLETION_THROW, [
           call(Runtime.JAVASCRIPT_STATE, [
             reference(heapName, span),
-            callerEnvironment,
+            callerContext,
             reference(bindingsName, span),
           ], span),
           reference(valueName, span),
@@ -1371,7 +1975,7 @@ class JavaScriptRuntimeLowering {
   ): FunctionalSurfaceExpression {
     const stateName = this.freshName("objectState");
     const heapName = this.freshName("objectHeap");
-    const environmentName = this.freshName("objectEnvironment");
+    const contextName = this.freshName("objectContext");
     const bindingsName = this.freshName("objectBindings");
     const allocatedHeapName = this.freshName("allocatedHeap");
     const allocatedObjectName = this.freshName("allocatedObject");
@@ -1380,7 +1984,7 @@ class JavaScriptRuntimeLowering {
       state,
       match(reference(stateName, expression.span), [{
         constructor: Runtime.JAVASCRIPT_STATE,
-        binders: [heapName, environmentName, bindingsName],
+        binders: [heapName, contextName, bindingsName],
         body: match(
           call(JAVASCRIPT_RUNTIME_ALLOCATE_OBJECT, [
             reference(heapName, expression.span),
@@ -1398,7 +2002,7 @@ class JavaScriptRuntimeLowering {
                   0,
                   call(Runtime.JAVASCRIPT_STATE, [
                     reference(allocatedHeapName, expression.span),
-                    reference(environmentName, expression.span),
+                    reference(contextName, expression.span),
                     reference(bindingsName, expression.span),
                   ], expression.span),
                   reference(allocatedObjectName, expression.span),
@@ -1430,14 +2034,14 @@ class JavaScriptRuntimeLowering {
     return this.lowerExpression(property.value, state, (propertyState, propertyValue) => {
       const stateName = this.freshName("propertyState");
       const heapName = this.freshName("propertyHeap");
-      const environmentName = this.freshName("propertyEnvironment");
+      const contextName = this.freshName("propertyContext");
       const bindingsName = this.freshName("propertyBindings");
       return letExpression(
         stateName,
         propertyState,
         match(reference(stateName, property.span), [{
           constructor: Runtime.JAVASCRIPT_STATE,
-          binders: [heapName, environmentName, bindingsName],
+          binders: [heapName, contextName, bindingsName],
           body: this.lowerObjectProperties(
             properties,
             index + 1,
@@ -1455,7 +2059,7 @@ class JavaScriptRuntimeLowering {
                   boolean(true, property.span),
                 ], property.span),
               ], property.span),
-              reference(environmentName, property.span),
+              reference(contextName, property.span),
               reference(bindingsName, property.span),
             ], property.span),
             objectValue,
@@ -1480,70 +2084,62 @@ class JavaScriptRuntimeLowering {
       receiver,
       this.expectObjectArms(span, (identity) => {
         const stateName = this.freshName("propertyReadState");
-        const heapName = this.freshName("propertyReadHeap");
-        const environmentName = this.freshName("propertyReadEnvironment");
-        const bindingsName = this.freshName("propertyReadBindings");
-        const nextIdentityName = this.freshName("nextIdentity");
-        const objectsName = this.freshName("objects");
-        const descriptorName = this.freshName("propertyDescriptor");
         const propertyValueName = this.freshName("propertyValue");
-        const writableName = this.freshName("writable");
-        const enumerableName = this.freshName("enumerable");
-        const configurableName = this.freshName("configurable");
         const getterName = this.freshName("getter");
-        const setterName = this.freshName("setter");
+        const getterReceiverName = this.freshName("getterReceiver");
+        const objectValue = call(Runtime.JAVASCRIPT_VALUE_OBJECT, [identity], span);
         return letExpression(
           stateName,
           state,
-          match(reference(stateName, span), [{
-            constructor: Runtime.JAVASCRIPT_STATE,
-            binders: [heapName, environmentName, bindingsName],
-            body: match(reference(heapName, span), [{
-              constructor: Runtime.JAVASCRIPT_HEAP,
-              binders: [nextIdentityName, objectsName],
-              body: match(
-                call(JAVASCRIPT_RUNTIME_LOOKUP_PROPERTY, [
-                  reference(objectsName, span),
-                  identity,
-                  call(Runtime.JAVASCRIPT_PROPERTY_KEY_STRING, [text(propertyName, span)], span),
-                ], span),
-                [{
-                  constructor: Runtime.JAVASCRIPT_DESCRIPTOR_MISSING,
-                  binders: [],
-                  body: onValue(state, reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, span)),
-                  span,
-                }, {
-                  constructor: Runtime.JAVASCRIPT_DESCRIPTOR_FOUND,
-                  binders: [descriptorName],
-                  body: match(reference(descriptorName, span), [{
-                    constructor: Runtime.JAVASCRIPT_DATA_DESCRIPTOR,
-                    binders: [
-                      propertyValueName,
-                      writableName,
-                      enumerableName,
-                      configurableName,
-                    ],
-                    body: onValue(state, reference(propertyValueName, span)),
-                    span,
-                  }, {
-                    constructor: Runtime.JAVASCRIPT_ACCESSOR_DESCRIPTOR,
-                    binders: [getterName, setterName, enumerableName, configurableName],
-                    body: runtimeFault(
-                      `JavaScript accessor ${
-                        JSON.stringify(propertyName)
-                      } requires callable dispatch`,
-                      span,
-                    ),
-                    span,
-                  }], span),
-                  span,
-                }],
+          match(
+            call(JAVASCRIPT_RUNTIME_GET_REFERENCE_VALUE, [
+              reference(stateName, span),
+              call(Runtime.JAVASCRIPT_PROPERTY_REFERENCE, [
+                objectValue,
+                call(Runtime.JAVASCRIPT_PROPERTY_KEY_STRING, [text(propertyName, span)], span),
+                objectValue,
+                boolean(true, span),
+              ], span),
+            ], span),
+            [{
+              constructor: Runtime.JAVASCRIPT_VALUE_MISSING,
+              binders: [],
+              body: onValue(
+                reference(stateName, span),
+                reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, span),
+              ),
+              span,
+            }, {
+              constructor: Runtime.JAVASCRIPT_VALUE_UNINITIALIZED,
+              binders: [],
+              body: runtimeFault(
+                `JavaScript property ${JSON.stringify(propertyName)} was uninitialized`,
                 span,
               ),
               span,
-            }], span),
+            }, {
+              constructor: Runtime.JAVASCRIPT_VALUE_FOUND,
+              binders: [propertyValueName],
+              body: onValue(
+                reference(stateName, span),
+                reference(propertyValueName, span),
+              ),
+              span,
+            }, {
+              constructor: Runtime.JAVASCRIPT_VALUE_ACCESSOR,
+              binders: [getterName, getterReceiverName],
+              body: this.invokeRuntimeCallable(
+                reference(getterName, span),
+                reference(stateName, span),
+                reference(getterReceiverName, span),
+                [],
+                onValue,
+                span,
+              ),
+              span,
+            }],
             span,
-          }], span),
+          ),
           span,
         );
       }),
@@ -1645,17 +2241,49 @@ class JavaScriptRuntimeLowering {
       );
     }
     if (expression.operator === "&&" || expression.operator === "||") {
-      return this.lowerExpression(expression.left, state, (leftState, left) =>
-        conditional(
-          call(JAVASCRIPT_RUNTIME_TO_BOOLEAN, [left], expression.left.span),
-          expression.operator === "&&"
-            ? this.lowerExpression(expression.right, leftState, onValue)
-            : onValue(leftState, left),
-          expression.operator === "&&"
-            ? onValue(leftState, left)
-            : this.lowerExpression(expression.right, leftState, onValue),
-          expression.span,
-        ));
+      return this.lowerExpression(
+        expression.left,
+        state,
+        (leftState, left) =>
+          this.resumeExpressionCompletion(
+            conditional(
+              call(JAVASCRIPT_RUNTIME_TO_BOOLEAN, [left], expression.left.span),
+              expression.operator === "&&"
+                ? this.lowerExpression(
+                  expression.right,
+                  leftState,
+                  (rightState, right) =>
+                    call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
+                      rightState,
+                      right,
+                    ], expression.right.span),
+                )
+                : call(
+                  Runtime.JAVASCRIPT_COMPLETION_NORMAL,
+                  [leftState, left],
+                  expression.left.span,
+                ),
+              expression.operator === "&&"
+                ? call(
+                  Runtime.JAVASCRIPT_COMPLETION_NORMAL,
+                  [leftState, left],
+                  expression.left.span,
+                )
+                : this.lowerExpression(
+                  expression.right,
+                  leftState,
+                  (rightState, right) =>
+                    call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
+                      rightState,
+                      right,
+                    ], expression.right.span),
+                ),
+              expression.span,
+            ),
+            onValue,
+            expression.span,
+          ),
+      );
     }
     const operator = runtimeNumericOperators[expression.operator];
     if (operator === undefined) {
@@ -1725,6 +2353,11 @@ class JavaScriptRuntimeLowering {
           constructor: Runtime.JAVASCRIPT_VALUE_FOUND,
           binders: [valueName],
           body: onValue(reference(stateName, span), reference(valueName, span)),
+          span,
+        }, {
+          constructor: Runtime.JAVASCRIPT_VALUE_ACCESSOR,
+          binders: ["getter", "receiver"],
+          body: runtimeFault("JavaScript environment binding resolved as an accessor", span),
           span,
         }],
         span,
@@ -1951,7 +2584,7 @@ class JavaScriptRuntimeLowering {
 function firstRuntimeUnresolvedName(
   entry: JavaScriptAotFunctionDeclaration,
 ): { readonly name: string; readonly span: JavaScriptAotExpression["span"] } | null {
-  const runtimeGlobals = new Set(["undefined", "NaN", "Infinity"]);
+  const runtimeGlobals = new Set(["undefined", "NaN", "Infinity", "this"]);
   let unresolved: { readonly name: string; readonly span: JavaScriptAotExpression["span"] } | null =
     null;
   const visitExpression = (
@@ -1992,7 +2625,9 @@ function firstRuntimeUnresolvedName(
         visitExpression(expression.alternate, names);
         return;
       case "call":
-        visitExpression(expression.callee, names);
+        if (!isRuntimeDefinePropertyCall(expression)) {
+          visitExpression(expression.callee, names);
+        }
         for (const argument of expression.arguments) visitExpression(argument, names);
         return;
       case "new":
@@ -2075,6 +2710,15 @@ function firstRuntimeUnresolvedName(
   const entryNames = declaredRuntimeNames(entry.body, new Set(entry.parameters));
   visitStatements(entry.body, entryNames);
   return unresolved;
+}
+
+function isRuntimeDefinePropertyCall(
+  expression: Extract<JavaScriptAotExpression, { readonly kind: "call" }>,
+): boolean {
+  return expression.callee.kind === "property" &&
+    expression.callee.value.kind === "name" &&
+    expression.callee.value.name === "Object" &&
+    expression.callee.name === "defineProperty";
 }
 
 function declaredRuntimeNames(
@@ -2226,6 +2870,8 @@ function runtimeExpressionResultKind(
 }
 
 function expressionRequiresRuntimeModel(expression: JavaScriptAotExpression): boolean {
+  if (expression.kind === "name" && expression.name === "this") return true;
+  if (expression.kind === "call" && isRuntimeDefinePropertyCall(expression)) return true;
   if (
     expression.kind === "binary" &&
     (expression.operator === "===" || expression.operator === "!==" ||
@@ -2301,98 +2947,6 @@ function statementRequiresRuntimeModel(statement: JavaScriptAotStatement): boole
     case "continue":
       return false;
   }
-}
-
-function runtimeSyntaxFitsBudget(
-  sourceModule: JavaScriptAotModule,
-  maximumNodes: number,
-  maximumBranchingNodes: number,
-): boolean {
-  let remaining = maximumNodes;
-  let remainingBranches = maximumBranchingNodes;
-  const joinedExpressions = new WeakSet<object>();
-  const consume = (): boolean => {
-    remaining--;
-    return remaining >= 0;
-  };
-  const visitExpression = (expression: JavaScriptAotExpression): boolean => {
-    if (!consume()) return false;
-    switch (expression.kind) {
-      case "array":
-        return expression.values.every(visitExpression);
-      case "object":
-        return expression.properties.every((property) => visitExpression(property.value));
-      case "function":
-        return expression.body.every(visitStatement);
-      case "unary":
-      case "property":
-        return visitExpression(expression.value);
-      case "binary":
-        if (
-          (expression.operator === "&&" || expression.operator === "||") &&
-          --remainingBranches < 0
-        ) return false;
-        return visitExpression(expression.left) && visitExpression(expression.right);
-      case "conditional":
-        if (!joinedExpressions.has(expression) && --remainingBranches < 0) return false;
-        return visitExpression(expression.condition) &&
-          visitExpression(expression.consequent) && visitExpression(expression.alternate);
-      case "call":
-        return visitExpression(expression.callee) && expression.arguments.every(visitExpression);
-      case "new":
-        return expression.arguments.every(visitExpression);
-      case "index":
-        return visitExpression(expression.value) && visitExpression(expression.index);
-      default:
-        return true;
-    }
-  };
-  const visitStatements = (statements: readonly JavaScriptAotStatement[]): boolean =>
-    statements.every(visitStatement);
-  function visitStatement(statement: JavaScriptAotStatement): boolean {
-    if (!consume()) return false;
-    switch (statement.kind) {
-      case "function-declaration":
-        return visitStatements(statement.body);
-      case "constant":
-      case "mutable":
-      case "assignment":
-      case "return":
-      case "throw":
-        return visitExpression(statement.value);
-      case "expression":
-        if (statement.value.kind === "conditional") joinedExpressions.add(statement.value);
-        return visitExpression(statement.value);
-      case "property-assignment":
-        return visitExpression(statement.target) && visitExpression(statement.value);
-      case "var":
-        return statement.declarations.every((declaration) =>
-          declaration.value === null || visitExpression(declaration.value)
-        );
-      case "if":
-        return visitExpression(statement.condition) && visitStatements(statement.consequent) &&
-          (statement.alternate === null || visitStatements(statement.alternate));
-      case "while":
-        return visitExpression(statement.condition) && visitStatements(statement.body) &&
-          visitStatements(statement.continueBody);
-      case "block":
-        return visitStatements(statement.statements);
-      case "try":
-        if (--remainingBranches < 0) return false;
-        return visitStatements(statement.body) &&
-          (statement.catchBody === null || visitStatements(statement.catchBody)) &&
-          (statement.finallyBody === null || visitStatements(statement.finallyBody));
-      case "break":
-      case "continue":
-        return true;
-    }
-  }
-  return sourceModule.declarations.every((declaration) => {
-    if (!consume()) return false;
-    return declaration.kind === "constant"
-      ? visitExpression(declaration.value)
-      : visitStatements(declaration.body);
-  });
 }
 
 function valueCaseArms(

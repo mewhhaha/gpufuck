@@ -147,6 +147,10 @@ class JavaScriptAotLowering {
   readonly #usedExceptionConstructors = new Set<string>();
   readonly #arrayDefinitions = new Set<string>();
   readonly #objectShapes = new Map<string, JavaScriptAotObjectShape>();
+  readonly #assignmentIndexes = new WeakMap<
+    readonly JavaScriptAotStatement[],
+    ReadonlyMap<string, number>
+  >();
 
   constructor(
     private readonly sourceModule: JavaScriptAotModule,
@@ -333,6 +337,7 @@ class JavaScriptAotLowering {
   ): LoweredJavaScriptAotFunction {
     const parameterNames = new Set<string>();
     const functionEnvironment = new Map<string, JavaScriptAotBinding>();
+    const assignmentIndexes = this.assignmentIndexes(statements);
     for (const [name, binding] of capturedEnvironment) {
       functionEnvironment.set(name, { ...binding, assignable: false });
     }
@@ -345,7 +350,7 @@ class JavaScriptAotLowering {
       }
       parameterNames.add(parameter);
       const coreName = this.freshBindingName(parameter);
-      const mayBeAssigned = statementsAssignName(statements, parameter);
+      const mayBeAssigned = assignmentIndexes.has(parameter);
       functionEnvironment.set(parameter, {
         coreName,
         functionArity: null,
@@ -467,10 +472,11 @@ class JavaScriptAotLowering {
     }
     const declarationEnvironment = new Map(environment);
     const coreNames = new Map<string, string>();
+    const assignmentIndexes = this.assignmentIndexes(statements);
     for (const declaration of declarations) {
       const coreName = this.freshBindingName(declaration.name);
       coreNames.set(declaration.name, coreName);
-      const mayBeAssigned = statementsAssignName(statements, declaration.name);
+      const mayBeAssigned = assignmentIndexes.has(declaration.name);
       declarationEnvironment.set(declaration.name, {
         coreName,
         functionArity: declaration.parameters.length,
@@ -611,48 +617,73 @@ class JavaScriptAotLowering {
       );
     }
     if (statement.kind === "constant" || statement.kind === "mutable") {
-      const coreName = this.freshBindingName(statement.name);
-      const initializerEnvironment = new Map(environment);
-      initializerEnvironment.delete(statement.name);
       const bodyEnvironment = new Map(environment);
-      const mayBeAssigned = statement.kind === "mutable" &&
-        statementsAssignName(statements, statement.name, statementIndex + 1);
-      bodyEnvironment.set(statement.name, {
-        coreName,
-        functionArity: statement.value.kind === "function"
-          ? statement.value.parameters.length
-          : null,
-        throwsAcrossCalls: statement.value.kind === "function" &&
-          statementsMayEscapeThrow(statement.value.body),
-        zeroArgumentApplication: statement.value.kind === "function" &&
-          statement.value.parameters.length === 0,
-        constantValue: isPrimitiveWrapper(statement.value) &&
-            this.resolveCoerciblePrimitive(statement.value, initializerEnvironment) !== null
-          ? statement.value
-          : constantExpression(statement.value) ?? primitiveConstantExpression(
-            this.resolvePrimitiveConstant(statement.value, initializerEnvironment),
-            statement.value.span,
-          ),
-        objectFields: objectFields(statement.value),
-        mutable: mayBeAssigned,
-        assignable: mayBeAssigned,
-      });
-      return {
-        kind: "let",
-        name: coreName,
-        value: this.lowerExpression(statement.value, initializerEnvironment),
-        body: this.lowerStatements(
-          statements,
-          bodyEnvironment,
-          onFallthrough,
-          onThrow,
-          onReturn,
-          onBreak,
-          onContinue,
-          statementIndex + 1,
-        ),
-        span: statement.span,
-      };
+      const assignmentIndexes = this.assignmentIndexes(statements);
+      const loweredDeclarations: {
+        readonly name: string;
+        readonly value: FunctionalSurfaceExpression;
+        readonly span: { readonly startByte: number; readonly endByte: number };
+      }[] = [];
+      let nextStatementIndex = statementIndex;
+      while (true) {
+        const declaration = statements[nextStatementIndex];
+        if (
+          declaration === undefined ||
+          declaration.kind !== "constant" && declaration.kind !== "mutable"
+        ) break;
+        const coreName = this.freshBindingName(declaration.name);
+        bodyEnvironment.delete(declaration.name);
+        const mayBeAssigned = declaration.kind === "mutable" &&
+          (assignmentIndexes.get(declaration.name) ?? -1) > nextStatementIndex;
+        const binding: JavaScriptAotBinding = {
+          coreName,
+          functionArity: declaration.value.kind === "function"
+            ? declaration.value.parameters.length
+            : null,
+          throwsAcrossCalls: declaration.value.kind === "function" &&
+            statementsMayEscapeThrow(declaration.value.body),
+          zeroArgumentApplication: declaration.value.kind === "function" &&
+            declaration.value.parameters.length === 0,
+          constantValue: isPrimitiveWrapper(declaration.value) &&
+              this.resolveCoerciblePrimitive(declaration.value, bodyEnvironment) !== null
+            ? declaration.value
+            : constantExpression(declaration.value) ?? primitiveConstantExpression(
+              this.resolvePrimitiveConstant(declaration.value, bodyEnvironment),
+              declaration.value.span,
+            ),
+          objectFields: objectFields(declaration.value),
+          mutable: mayBeAssigned,
+          assignable: mayBeAssigned,
+        };
+        loweredDeclarations.push({
+          name: coreName,
+          value: this.lowerExpression(declaration.value, bodyEnvironment),
+          span: declaration.span,
+        });
+        bodyEnvironment.set(declaration.name, binding);
+        nextStatementIndex++;
+      }
+      let body = this.lowerStatements(
+        statements,
+        bodyEnvironment,
+        onFallthrough,
+        onThrow,
+        onReturn,
+        onBreak,
+        onContinue,
+        nextStatementIndex,
+      );
+      for (let index = loweredDeclarations.length - 1; index >= 0; index--) {
+        const declaration = loweredDeclarations[index]!;
+        body = {
+          kind: "let",
+          name: declaration.name,
+          value: declaration.value,
+          body,
+          span: declaration.span,
+        };
+      }
+      return body;
     }
     if (statement.kind === "assignment") {
       return this.lowerAssignment(
@@ -1100,11 +1131,12 @@ class JavaScriptAotLowering {
     }
     const loopName = this.freshBindingName("loop");
     const tokenName = this.freshBindingName("loopToken");
+    const loopAssignments = assignedNamesInStatements([
+      ...statement.body,
+      ...statement.continueBody,
+    ]);
     const mutableNames = [...environment]
-      .filter(([name, binding]) =>
-        binding.assignable &&
-        statementsAssignName([...statement.body, ...statement.continueBody], name)
-      )
+      .filter(([name, binding]) => binding.assignable && loopAssignments.has(name))
       .map(([name]) => name);
     const loopEnvironment = new Map(environment);
     const stateParameters = mutableNames.map((name) => {
@@ -1194,6 +1226,21 @@ class JavaScriptAotLowering {
       body: callLoop(environment),
       span: statement.span,
     };
+  }
+
+  private assignmentIndexes(
+    statements: readonly JavaScriptAotStatement[],
+  ): ReadonlyMap<string, number> {
+    const cached = this.#assignmentIndexes.get(statements);
+    if (cached !== undefined) return cached;
+    const indexes = new Map<string, number>();
+    for (let index = 0; index < statements.length; index++) {
+      for (const name of assignedNamesInStatement(statements[index]!)) {
+        indexes.set(name, index);
+      }
+    }
+    this.#assignmentIndexes.set(statements, indexes);
+    return indexes;
   }
 
   private lowerExpression(
@@ -2956,71 +3003,96 @@ function applyExpressions(
   return expression;
 }
 
-function statementsAssignName(
+function assignedNamesInStatements(
   statements: readonly JavaScriptAotStatement[],
-  name: string,
-  startIndex = 0,
-): boolean {
-  for (let index = startIndex; index < statements.length; index++) {
-    const statement = statements[index]!;
-    if (statement.kind === "function-declaration") {
-      if (
-        statement.parameters.includes(name) || collectVarNames(statement.body).has(name) ||
-        blockDeclaresName(statement.body, name)
-      ) continue;
-      if (statementsAssignName(statement.body, name)) return true;
-      continue;
+): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const statement of statements) {
+    for (const name of assignedNamesInStatement(statement)) names.add(name);
+  }
+  return names;
+}
+
+function assignedNamesInStatement(statement: JavaScriptAotStatement): ReadonlySet<string> {
+  const names = new Set<string>();
+  const includeExpression = (expression: JavaScriptAotExpression): void => {
+    for (const name of assignedNamesInExpression(expression)) names.add(name);
+  };
+  const includeBlock = (statements: readonly JavaScriptAotStatement[]): void => {
+    for (const name of assignedNamesEscapingBlock(statements)) names.add(name);
+  };
+  switch (statement.kind) {
+    case "function-declaration": {
+      for (const name of assignedNamesInStatements(statement.body)) names.add(name);
+      for (const parameter of statement.parameters) names.delete(parameter);
+      for (const name of collectVarNames(statement.body)) names.delete(name);
+      for (const declaration of statement.body) {
+        if (
+          declaration.kind === "constant" || declaration.kind === "mutable" ||
+          declaration.kind === "function-declaration"
+        ) names.delete(declaration.name);
+      }
+      return names;
     }
-    if (statement.kind === "assignment") {
-      if (statement.name === name || expressionAssignsName(statement.value, name)) return true;
-      continue;
-    }
-    if (statement.kind === "var") {
-      if (
-        statement.declarations.some((declaration) =>
-          declaration.value !== null && expressionAssignsName(declaration.value, name)
-        )
-      ) return true;
-      continue;
-    }
+    case "assignment":
+      names.add(statement.name);
+      includeExpression(statement.value);
+      return names;
+    case "property-assignment":
+      includeExpression(statement.target);
+      includeExpression(statement.value);
+      return names;
+    case "var":
+      for (const declaration of statement.declarations) {
+        if (declaration.value !== null) includeExpression(declaration.value);
+      }
+      return names;
+    case "constant":
+    case "mutable":
+    case "return":
+    case "throw":
+    case "expression":
+      includeExpression(statement.value);
+      return names;
+    case "block":
+      includeBlock(statement.statements);
+      return names;
+    case "while":
+      includeExpression(statement.condition);
+      includeBlock(statement.body);
+      includeBlock(statement.continueBody);
+      return names;
+    case "try":
+      includeBlock(statement.body);
+      if (statement.catchBody !== null) {
+        const catchAssignments = new Set(assignedNamesEscapingBlock(statement.catchBody));
+        if (statement.catchName !== null) catchAssignments.delete(statement.catchName);
+        for (const name of catchAssignments) names.add(name);
+      }
+      if (statement.finallyBody !== null) includeBlock(statement.finallyBody);
+      return names;
+    case "if":
+      includeExpression(statement.condition);
+      includeBlock(statement.consequent);
+      if (statement.alternate !== null) includeBlock(statement.alternate);
+      return names;
+    case "break":
+    case "continue":
+      return names;
+  }
+}
+
+function assignedNamesEscapingBlock(
+  statements: readonly JavaScriptAotStatement[],
+): ReadonlySet<string> {
+  const names = new Set(assignedNamesInStatements(statements));
+  for (const statement of statements) {
     if (
       statement.kind === "constant" || statement.kind === "mutable" ||
-      statement.kind === "return" || statement.kind === "throw" ||
-      statement.kind === "expression"
-    ) {
-      if (expressionAssignsName(statement.value, name)) return true;
-      continue;
-    }
-    if (statement.kind === "block") {
-      if (blockAssignsOuterName(statement.statements, name)) return true;
-      continue;
-    }
-    if (statement.kind === "while") {
-      if (
-        expressionAssignsName(statement.condition, name) ||
-        blockAssignsOuterName(statement.body, name) ||
-        blockAssignsOuterName(statement.continueBody, name)
-      ) return true;
-      continue;
-    }
-    if (statement.kind === "try") {
-      if (
-        blockAssignsOuterName(statement.body, name) ||
-        statement.catchBody !== null && statement.catchName !== name &&
-          blockAssignsOuterName(statement.catchBody, name) ||
-        statement.finallyBody !== null && blockAssignsOuterName(statement.finallyBody, name)
-      ) return true;
-      continue;
-    }
-    if (statement.kind === "if") {
-      if (
-        expressionAssignsName(statement.condition, name) ||
-        blockAssignsOuterName(statement.consequent, name) ||
-        statement.alternate !== null && blockAssignsOuterName(statement.alternate, name)
-      ) return true;
-    }
+      statement.kind === "function-declaration"
+    ) names.delete(statement.name);
   }
-  return false;
+  return names;
 }
 
 function statementsMayEscapeThrow(statements: readonly JavaScriptAotStatement[]): boolean {
@@ -3080,62 +3152,62 @@ function collectVarNames(statements: readonly JavaScriptAotStatement[]): Readonl
   return names;
 }
 
-function blockAssignsOuterName(
-  statements: readonly JavaScriptAotStatement[],
-  name: string,
-): boolean {
-  if (blockDeclaresName(statements, name)) return false;
-  return statementsAssignName(statements, name);
-}
-
-function blockDeclaresName(
-  statements: readonly JavaScriptAotStatement[],
-  name: string,
-): boolean {
-  return statements.some((statement) =>
-    (statement.kind === "constant" || statement.kind === "mutable" ||
-      statement.kind === "function-declaration") && statement.name === name
-  );
-}
-
-function expressionAssignsName(expression: JavaScriptAotExpression, name: string): boolean {
+function assignedNamesInExpression(expression: JavaScriptAotExpression): ReadonlySet<string> {
+  const names = new Set<string>();
+  const include = (nested: JavaScriptAotExpression): void => {
+    for (const name of assignedNamesInExpression(nested)) names.add(name);
+  };
   switch (expression.kind) {
     case "number":
     case "string":
     case "boolean":
     case "null":
     case "name":
-      return false;
+      return names;
     case "array":
-      return expression.values.some((value) => expressionAssignsName(value, name));
+      for (const value of expression.values) include(value);
+      return names;
     case "object":
-      return expression.properties.some((property) => expressionAssignsName(property.value, name));
-    case "function":
-      if (
-        expression.name === name || expression.parameters.includes(name) ||
-        blockDeclaresName(expression.body, name)
-      ) {
-        return false;
+      for (const property of expression.properties) include(property.value);
+      return names;
+    case "function": {
+      for (const name of assignedNamesInStatements(expression.body)) names.add(name);
+      if (expression.name !== null) names.delete(expression.name);
+      for (const parameter of expression.parameters) names.delete(parameter);
+      for (const name of collectVarNames(expression.body)) names.delete(name);
+      for (const statement of expression.body) {
+        if (
+          statement.kind === "constant" || statement.kind === "mutable" ||
+          statement.kind === "function-declaration"
+        ) names.delete(statement.name);
       }
-      return statementsAssignName(expression.body, name);
+      return names;
+    }
     case "unary":
-      return expressionAssignsName(expression.value, name);
+      include(expression.value);
+      return names;
     case "binary":
-      return expressionAssignsName(expression.left, name) ||
-        expressionAssignsName(expression.right, name);
+      include(expression.left);
+      include(expression.right);
+      return names;
     case "conditional":
-      return expressionAssignsName(expression.condition, name) ||
-        expressionAssignsName(expression.consequent, name) ||
-        expressionAssignsName(expression.alternate, name);
+      include(expression.condition);
+      include(expression.consequent);
+      include(expression.alternate);
+      return names;
     case "call":
-      return expressionAssignsName(expression.callee, name) ||
-        expression.arguments.some((argument) => expressionAssignsName(argument, name));
+      include(expression.callee);
+      for (const argument of expression.arguments) include(argument);
+      return names;
     case "new":
-      return expression.arguments.some((argument) => expressionAssignsName(argument, name));
+      for (const argument of expression.arguments) include(argument);
+      return names;
     case "property":
-      return expressionAssignsName(expression.value, name);
+      include(expression.value);
+      return names;
     case "index":
-      return expressionAssignsName(expression.value, name) ||
-        expressionAssignsName(expression.index, name);
+      include(expression.value);
+      include(expression.index);
+      return names;
   }
 }

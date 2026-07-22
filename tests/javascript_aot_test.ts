@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, match, ok } from "node:assert/strict";
+import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
 
 import {
   GpuFunctionalCompiler,
@@ -6,6 +6,8 @@ import {
   runFunctionalWasmModule,
 } from "../functional.ts";
 import { lowerJavaScriptAotSource } from "../examples/javascript-aot/mod.ts";
+import { parseJavaScriptAotModule } from "../examples/javascript-aot/src/parser.ts";
+import { lowerJavaScriptRuntimeModule } from "../examples/javascript-aot/src/runtime_lowering.ts";
 
 let device: GPUDevice | undefined;
 let compiler: GpuFunctionalCompiler | undefined;
@@ -93,6 +95,106 @@ export function main() {
   deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
+Deno.test("invokes JavaScript accessors with their property receiver", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const object = { stored: 40 };
+  Object.defineProperty(object, "answer", {
+    get: function() { return this.stored; },
+    set: function(value) { this.stored = value; },
+    enumerable: true,
+    configurable: true
+  });
+  object.answer = 42;
+  return object.answer + 0;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("propagates a JavaScript getter throw through lexical catch", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const object = {};
+  Object.defineProperty(object, "answer", {
+    get: function() { throw 42; }
+  });
+  try {
+    return object.answer + 0;
+  } catch (error) {
+    return error + 0;
+  }
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("propagates a JavaScript setter throw through lexical catch", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const object = {};
+  Object.defineProperty(object, "answer", {
+    set: function(value) { throw value; }
+  });
+  try {
+    object.answer = 42;
+    return 0;
+  } catch (error) {
+    return error + 0;
+  }
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("returns undefined when a JavaScript accessor has no getter", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const object = {};
+  Object.defineProperty(object, "answer", {
+    set: function(value) { this.value = value; }
+  });
+  return object.answer === undefined;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("rejects assignment through a JavaScript accessor without a setter", async () => {
+  await rejects(
+    () =>
+      compileAndRun(`
+export function main() {
+  const object = {};
+  Object.defineProperty(object, "answer", {
+    get: function() { return 42; }
+  });
+  object.answer = 0;
+  return 0;
+}
+`),
+    /property "answer" has no setter/,
+  );
+});
+
+Deno.test("rejects a non-callable JavaScript accessor at definition", async () => {
+  await rejects(
+    () =>
+      compileAndRun(`
+export function main() {
+  const object = {};
+  Object.defineProperty(object, "answer", { get: 42 });
+  return 0;
+}
+`),
+    /descriptor "get" must be callable or undefined/,
+  );
+});
+
 Deno.test("hoists and updates runtime var bindings around object mutation", async () => {
   const value = await compileAndRun(`
 export function main() {
@@ -114,6 +216,69 @@ export function main() {
   return function() {} === function() {} ? 0 : add(40) + 0;
 }
 `);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("binds undefined as this for an ordinary strict JavaScript call", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const readThis = function() { return this; };
+  if (function() {} === function() {}) return false;
+  return readThis() === undefined;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("binds the receiver as this for a JavaScript method call", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const object = {
+    answer: 40,
+    readAnswer: function(offset) { return this.answer + offset; }
+  };
+  if (function() {} === function() {}) return 0;
+  return object.readAnswer(2) + 0;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("captures lexical this for a JavaScript arrow function", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  const source = {
+    answer: 42,
+    makeReader: function() {
+      return unused => this.answer;
+    }
+  };
+  const readAnswer = source.makeReader();
+  const other = { answer: 0, readAnswer: readAnswer };
+  if (function() {} === function() {}) return 0;
+  return other.readAnswer(0) + 0;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("shares the Realm global object between a sloppy script and ordinary call", async () => {
+  const value = await compileAndRun(
+    `
+export function main() {
+  var global = this;
+  const writeAnswer = function() { this.answer = 42; };
+  if (function() {} === function() {}) return 0;
+  writeAnswer();
+  return global.answer + 0;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
 
   deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
@@ -1293,13 +1458,61 @@ Deno.test("rejects snapshot lowering when a closure reads a later-mutated bindin
   match(frontend.diagnostics[0].message, /closure reads captured mutable binding "value"/);
 });
 
-async function compileAndRun(source: string) {
-  const frontend = lowerJavaScriptAotSource("test.mjs", source);
+Deno.test("runtime-model lowering accepts programs beyond its former syntax budget", () => {
+  const frontend = lowerJavaScriptAotSource(
+    "runtime-syntax-scale.mjs",
+    `export function main() { const object = {}; ${"0;".repeat(80)} return 42; }`,
+  );
+
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
-  if (!frontend.ok) throw new Error("JavaScript source did not lower");
+});
+
+Deno.test("runtime-model lowering joins sequential conditional expressions", () => {
+  const frontend = lowerJavaScriptAotSource(
+    "runtime-branch-scale.mjs",
+    `export function main() { const object = {}; let flag = true; ${
+      "flag = flag ? true : false; flag = flag && true;".repeat(16)
+    } ${"try { 0; } catch { 0; }".repeat(16)} return 42; }`,
+  );
+
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+});
+
+Deno.test("flat JavaScript declarations stop at the surface depth boundary", () => {
+  const declarations = Array.from(
+    { length: 2_048 },
+    (_, index) => `let value${index} = 0;`,
+  ).join("");
+  const frontend = lowerJavaScriptAotSource(
+    "declaration-depth.mjs",
+    `export function main() { ${declarations} return 0; }`,
+  );
+
+  equal(frontend.ok, false);
+  if (frontend.ok) return;
+  match(frontend.diagnostics[0].message, /functional surface expression exceeds depth 1024/);
+});
+
+async function compileAndRun(
+  source: string,
+  options: { readonly callThisMode?: "strict" | "sloppy" } = {},
+) {
+  let module;
+  if (options.callThisMode === "sloppy") {
+    module = lowerJavaScriptRuntimeModule(
+      parseJavaScriptAotModule("test.mjs", source),
+      "main",
+      options,
+    ).module;
+  } else {
+    const frontend = lowerJavaScriptAotSource("test.mjs", source);
+    ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+    if (!frontend.ok) throw new Error("JavaScript source did not lower");
+    module = frontend.lowered.module;
+  }
   if (compiler === undefined) throw new Error("JavaScript AOT test compiler was not initialized");
 
-  const compilation = await compiler.compileModule(frontend.lowered.module);
+  const compilation = await compiler.compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("JavaScript AOT module did not compile");
   try {

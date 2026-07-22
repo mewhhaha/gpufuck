@@ -170,6 +170,7 @@ export type JavaScriptAotExpression =
   | {
     readonly kind: "function";
     readonly name: string | null;
+    readonly thisMode: "dynamic" | "lexical";
     readonly parameters: readonly string[];
     readonly body: readonly JavaScriptAotStatement[];
     readonly span: FunctionalSpan;

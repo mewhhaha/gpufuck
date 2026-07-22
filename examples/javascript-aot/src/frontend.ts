@@ -60,6 +60,21 @@ export function lowerJavaScriptAotSource(
         }],
       };
     }
+    if (
+      error instanceof RangeError &&
+      error.message.startsWith("functional surface expression exceeds")
+    ) {
+      return {
+        ok: false,
+        diagnostics: [{
+          stage: "lower",
+          code: "J1002",
+          module: name,
+          span: sourceModule.span,
+          message: `JavaScript AOT ${error.message}.`,
+        }],
+      };
+    }
     throw error;
   }
 }

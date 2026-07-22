@@ -229,6 +229,29 @@ Deno.test("surface validation bounds application chains created by recursive-gro
   );
 });
 
+Deno.test("surface validation rejects expression depth before host recursion overflows", () => {
+  let body: FunctionalSurfaceExpression = surface.integer(0);
+  for (let depth = 0; depth < 1_025; depth++) {
+    body = {
+      kind: "let",
+      name: `value${depth}`,
+      value: surface.integer(depth),
+      body,
+    };
+  }
+
+  throws(
+    () =>
+      buildFunctionalSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body }],
+        [],
+        "main",
+        0,
+      ),
+    /functional surface expression exceeds depth 1024/,
+  );
+});
+
 function functionalRuntime(): FunctionalRuntime {
   if (runtime === undefined) throw new Error("functional test runtime was not initialized");
   return runtime;

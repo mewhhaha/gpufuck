@@ -164,6 +164,11 @@ interface ConstructorReuseTarget {
   readonly fieldCount: number;
 }
 
+interface FunctionalStoreUpdate {
+  readonly node: FunctionalCoreNode;
+  readonly nodeIndex: number;
+}
+
 type FunctionalBinding =
   | ValueSource
   | { readonly kind: "v128-f32x4"; readonly index: number }
@@ -1166,10 +1171,8 @@ class FunctionalWasmCompiler {
         this.compileStoreRead(instructions, node, nodeIndex, environment);
         return;
       case FunctionalCoreTag.StoreWrite:
-        this.compileStoreWrite(instructions, node, nodeIndex, environment);
-        return;
       case FunctionalCoreTag.StoreGrow:
-        this.compileStoreGrow(instructions, node, nodeIndex, environment);
+        this.compileStoreUpdates(instructions, nodeIndex, environment);
         return;
       case FunctionalCoreTag.Text:
       case FunctionalCoreTag.Bytes: {
@@ -2603,61 +2606,104 @@ class FunctionalWasmCompiler {
     instructions.i64Load(0);
   }
 
-  compileStoreWrite(
+  compileStoreUpdates(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
     nodeIndex: number,
     environment: FunctionalEnvironment,
   ): void {
-    const source = this.compileStorePointer(instructions, node.child0, environment);
-    this.compileIntegerExpression(instructions, node.child1, environment);
-    const index = instructions.addLocal(WasmValueType.I32);
-    instructions.localSet(index);
-    this.compileExpression(instructions, node.child2, environment);
-    const value = instructions.addLocal(WasmValueType.I64);
-    instructions.localSet(value);
-    this.requireStoreIndex(instructions, source, index, nodeIndex);
-    const length = instructions.addLocal(WasmValueType.I32);
-    instructions.localGet(source);
-    instructions.i32Load(8);
-    instructions.localSet(length);
-    const destination = this.allocateStore(instructions, length);
-    this.emitStoreCopy(instructions, destination, source, length);
-    this.emitStoreElementAddress(instructions, destination, index);
-    instructions.localGet(value);
-    instructions.i64Store(0);
-    instructions.localGet(destination);
-    instructions.emit(0xad);
-  }
+    const updates: FunctionalStoreUpdate[] = [];
+    let sourceNodeIndex = nodeIndex;
+    while (true) {
+      const sourceNode = this.node(sourceNodeIndex);
+      if (
+        sourceNode.tag !== FunctionalCoreTag.StoreWrite &&
+        sourceNode.tag !== FunctionalCoreTag.StoreGrow
+      ) break;
+      updates.push({ node: sourceNode, nodeIndex: sourceNodeIndex });
+      sourceNodeIndex = sourceNode.child0;
+    }
+    for (let index = 1; index < updates.length; index++) {
+      this.#runtimeEmitter.emitFuelCharge(instructions, updates[index]!.nodeIndex);
+    }
+    updates.reverse();
 
-  compileStoreGrow(
-    instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    nodeIndex: number,
-    environment: FunctionalEnvironment,
-  ): void {
-    const source = this.compileStorePointer(instructions, node.child0, environment);
-    this.compileIntegerExpression(instructions, node.child1, environment);
-    const newLength = instructions.addLocal(WasmValueType.I32);
-    instructions.localSet(newLength);
-    this.compileExpression(instructions, node.child2, environment);
-    const initial = instructions.addLocal(WasmValueType.I64);
-    instructions.localSet(initial);
-    this.requireStoreLength(instructions, newLength, nodeIndex);
-    const oldLength = instructions.addLocal(WasmValueType.I32);
+    const source = this.compileStorePointer(instructions, sourceNodeIndex, environment);
+    const sourceLength = instructions.addLocal(WasmValueType.I32);
     instructions.localGet(source);
     instructions.i32Load(8);
-    instructions.localTee(oldLength);
-    instructions.localGet(newLength);
-    instructions.emit(0x4b, 0x04, 0x40);
-    this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, nodeIndex);
-    instructions.emit(0x0b);
-    const destination = this.allocateStore(instructions, newLength);
-    this.emitStoreCopy(instructions, destination, source, oldLength);
-    const cursor = instructions.addLocal(WasmValueType.I32);
-    instructions.localGet(oldLength);
-    instructions.localSet(cursor);
-    this.emitStoreFill(instructions, destination, cursor, newLength, initial);
+    instructions.localSet(sourceLength);
+    const currentLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(sourceLength);
+    instructions.localSet(currentLength);
+    const evaluated: ({
+      readonly kind: "write";
+      readonly index: number;
+      readonly value: number;
+    } | {
+      readonly kind: "grow";
+      readonly previousLength: number;
+      readonly newLength: number;
+      readonly initial: number;
+    })[] = [];
+    for (const update of updates) {
+      this.compileIntegerExpression(instructions, update.node.child1, environment);
+      const operand = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(operand);
+      this.compileExpression(instructions, update.node.child2, environment);
+      const value = instructions.addLocal(WasmValueType.I64);
+      instructions.localSet(value);
+      if (update.node.tag === FunctionalCoreTag.StoreWrite) {
+        instructions.localGet(operand);
+        instructions.localGet(currentLength);
+        instructions.emit(0x4f, 0x04, 0x40);
+        this.#runtimeEmitter.emitFault(
+          instructions,
+          WASM_FAULT_OUT_OF_BOUNDS,
+          update.nodeIndex,
+        );
+        instructions.emit(0x0b);
+        evaluated.push({ kind: "write", index: operand, value });
+        continue;
+      }
+      this.requireStoreLength(instructions, operand, update.nodeIndex);
+      instructions.localGet(currentLength);
+      instructions.localGet(operand);
+      instructions.emit(0x4b, 0x04, 0x40);
+      this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, update.nodeIndex);
+      instructions.emit(0x0b);
+      const previousLength = instructions.addLocal(WasmValueType.I32);
+      instructions.localGet(currentLength);
+      instructions.localSet(previousLength);
+      instructions.localGet(operand);
+      instructions.localSet(currentLength);
+      evaluated.push({
+        kind: "grow",
+        previousLength,
+        newLength: operand,
+        initial: value,
+      });
+    }
+
+    const destination = this.allocateStore(instructions, currentLength);
+    this.emitStoreCopy(instructions, destination, source, sourceLength);
+    for (const update of evaluated) {
+      if (update.kind === "write") {
+        this.emitStoreElementAddress(instructions, destination, update.index);
+        instructions.localGet(update.value);
+        instructions.i64Store(0);
+        continue;
+      }
+      const cursor = instructions.addLocal(WasmValueType.I32);
+      instructions.localGet(update.previousLength);
+      instructions.localSet(cursor);
+      this.emitStoreFill(
+        instructions,
+        destination,
+        cursor,
+        update.newLength,
+        update.initial,
+      );
+    }
     instructions.localGet(destination);
     instructions.emit(0xad);
   }

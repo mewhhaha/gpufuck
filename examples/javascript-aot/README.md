@@ -32,6 +32,23 @@ allocation, strict equality and SameValue, own and inherited property reads, dot
 writes, hoisted `var`, function objects with captured environments, calls, and cross-call throws
 caught by lexical `catch`. Identity exhaustion and dangling prototypes fail deterministically.
 
+Object records and stable binding cells live in Functional Core `Store` values, so lookup and
+updates are checked indexed operations instead of recursive host-side lists. Name and property
+access lower through explicit ECMAScript-style Reference records. Property writes follow ordinary
+prototype descriptors, reject inherited non-writable properties, and create persistent own
+properties on eligible receivers. Runtime state carries an explicit execution context containing its
+lexical and variable environments, `this` value, and realm. Each realm owns a global object;
+callable objects retain their creation realm and captured lexical environment while the existing CPS
+lowering represents the execution-context stack. Property calls preserve their receiver as `this`;
+strict bare calls receive `undefined`, non-strict bare calls receive the realm global object, and
+arrow functions retain the lexical `this` from their creation context.
+
+The runtime profile recognizes `Object.defineProperty(object, "name", descriptor)` when the key and
+descriptor shape are statically visible. Accessor descriptors may provide `get`, `set`,
+`enumerable`, and `configurable`; getter and setter functions run through ordinary callable dispatch
+with the property receiver as `this`. Their heap and binding updates persist, and thrown values
+propagate through the same completion path as direct calls.
+
 This is a statically inferable AOT profile, not general JavaScript yet. Dynamic conditions and
 logical operands currently must be Boolean; statically known primitives and objects use JavaScript
 truthiness. Calls cannot rely on missing or ignored arguments. The parser applies automatic
@@ -40,13 +57,12 @@ restricted line-terminator behavior after `return`. Runtime environments map lex
 binding-cell identities in a state-threaded store. Mutable captures, recursive named function
 expressions, and mutually recursive function declarations therefore observe the same current binding
 instead of copying an environment snapshot. Throws propagate through lexical blocks and eligible
-function calls, including supported Test262 `assert.throws` callbacks. General descriptor mutation
-and accessor dispatch, imports, general dynamic coercion, mutable or heterogeneous arrays, classes,
-generators, and async execution remain subsequent vertical slices. Runtime-model lowering also
-retains a temporary 128-syntax-node/three-branch admission bound while remaining CPS joins become
-explicit evaluation results. Runtime globals are not generally implicit; the frontend currently
-recognizes only the immutable numeric globals and statically known `typeof` cases. Dynamic code
-generation through `eval` or `Function` is rejected before GPU compilation.
+function calls, including supported Test262 `assert.throws` callbacks. General descriptor
+redefinition, data descriptors through `Object.defineProperty`, imports, general dynamic coercion,
+mutable or heterogeneous arrays, classes, generators, and async execution remain subsequent vertical
+slices. Runtime globals are not generally implicit; the frontend currently recognizes only the
+immutable numeric globals and statically known `typeof` cases. Dynamic code generation through
+`eval` or `Function` is rejected before GPU compilation.
 
 The compatibility target is the complete applicable Test262 `test/language` corpus, not an informal
 JavaScript subset. `deno task check:javascript-test262` checks out the pinned upstream revision and

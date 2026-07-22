@@ -72,6 +72,7 @@ export function lowerTest262PositiveTest(
       lowered: requiresJavaScriptRuntimeModel(harnessModule)
         ? lowerJavaScriptRuntimeModule(harnessModule, entryName, {
           runtimeFaultConstructors,
+          callThisMode: mode === "non-strict" || mode === "raw" ? "sloppy" : "strict",
         })
         : lowerJavaScriptAotModule(harnessModule, entryName, {
           exceptionConstructors: new Set(["Test262Error"]),

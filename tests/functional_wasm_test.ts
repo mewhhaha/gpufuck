@@ -372,6 +372,38 @@ Deno.test("Store values preserve prior versions across linear-memory and WasmGC 
   }
 });
 
+Deno.test("nested Store updates preserve writes across growth in both backends", async () => {
+  const original = surface.storeNew(surface.integer(2), surface.integer(10));
+  const updated = surface.storeWrite(
+    surface.storeGrow(
+      surface.storeWrite(original, surface.integer(0), surface.integer(20)),
+      surface.integer(4),
+      surface.integer(30),
+    ),
+    surface.integer(3),
+    surface.integer(40),
+  );
+  const expression = surface.binary(
+    FunctionalBinaryOperator.Add,
+    surface.storeRead(updated, surface.integer(0)),
+    surface.storeRead(updated, surface.integer(3)),
+  );
+  const compilation = await functionalWasmRuntime().compiler.compileModule(
+    singleDefinitionModule(expression, FunctionalEvaluationProfile.StrictEager),
+  );
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("nested Store update case did not compile");
+
+  try {
+    const linear = await runFunctionalWasmModule(compilation.module);
+    const gc = await runFunctionalWasmGcModule(compilation.module);
+    deepStrictEqual(linear.value, { kind: "integer", value: 60 });
+    deepStrictEqual(gc.value, linear.value);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("Store length limits fail consistently across linear-memory and WasmGC backends", async () => {
   const expression: FunctionalSurfaceExpression = {
     kind: "let",
