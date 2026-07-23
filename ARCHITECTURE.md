@@ -403,6 +403,16 @@ The first persistent WGSL pass validates tables and converts the surface to Core
 - records definition dependency edges;
 - retains both ends of the source span and the chosen evaluation mode.
 
+The packed symbol table also contains an immutable lowering record for each structurally valid
+surface node. One pass validates declarations and selects the deterministic diagnostic. When the
+entire remaining lowering plan fits the current fuel and dispatch quantum, a two-dimensional
+dispatch emits every independent `(program, node)` pair before the terminal semantic state is copied
+into inference. Programs with fewer than 64 remaining nodes, or plans that do not fit the current
+quantum, consume the same records one at a time in the persistent fallback. This keeps a quantum of
+one exact without a host readback between node tiles. Packed batches use node-level dispatch for at
+most four programs; wider batches already expose program-level parallelism and use the
+scalar-per-program path to avoid oversubscribing the device.
+
 Numeric local depths remove names from later phases and make lexical lookup independent of frontend
 symbol tables. This representation follows the motivation of de Bruijn indices: alpha-equivalent
 binders share one structural representation. See N. G. de Bruijn,

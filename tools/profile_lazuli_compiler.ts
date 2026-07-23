@@ -2,6 +2,9 @@ import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
 import { lazuliSurfaceToFunctionalModule } from "../src/lazuli/functional_adapter.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
+import { LAZULI_DEFINITION_WORD_LENGTH, LazuliDefinitionWord } from "../src/semantic/abi.ts";
+import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";
+import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
 import { GpuLazuliSemanticCompiler } from "../src/lazuli/gpu_semantic_compiler.ts";
 import type { GpuLazuliCompilationDispatchObservation } from "../src/lazuli/gpu_type_inference_contract.ts";
 import { LazuliCompilationStatus } from "../src/lazuli/compiler_shader.ts";
@@ -93,6 +96,7 @@ try {
     const samples: number[] = [];
     let representativeDispatches: readonly DispatchProfile[] = [];
     let representativeCoreReadbackMilliseconds = 0;
+    let representativeCoreNodes: readonly LazuliCoreNode[] = [];
     for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
       const dispatches: DispatchProfile[] = [];
       let previousDispatch = performance.now();
@@ -125,7 +129,7 @@ try {
       if (sample === SAMPLE_COUNT - 1) {
         representativeDispatches = dispatches;
         const readbackStart = performance.now();
-        await compilation.module.readCoreNodes();
+        representativeCoreNodes = await compilation.module.readCoreNodes();
         representativeCoreReadbackMilliseconds = performance.now() - readbackStart;
       }
       compilation.module.destroy();
@@ -135,6 +139,10 @@ try {
       medianMilliseconds: median(samples),
       representativeDispatches,
       representativeCoreReadbackMilliseconds,
+      definitionParallelism: semanticDefinitionParallelismProfile(
+        definitionRoots(semanticSurface),
+        representativeCoreNodes,
+      ),
     };
   }
 
@@ -312,6 +320,18 @@ function median(samples: readonly number[]): number {
   const middle = ordered[Math.floor(ordered.length / 2)];
   if (middle === undefined) throw new Error("Lazuli profile requires at least one sample");
   return middle;
+}
+
+function definitionRoots(surface: typeof semanticSurface): readonly number[] {
+  return Array.from({ length: surface.definitionCount }, (_, definition) => {
+    const root = surface.definitionWords[
+      definition * LAZULI_DEFINITION_WORD_LENGTH + LazuliDefinitionWord.RootNode
+    ];
+    if (root === undefined) {
+      throw new Error(`profile surface omits the root node for definition ${definition}`);
+    }
+    return root;
+  });
 }
 
 function dispatchPhase(

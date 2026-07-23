@@ -25,6 +25,19 @@ export interface SemanticDefinitionWavefrontSchedule {
   readonly wavefronts: readonly (readonly number[])[];
 }
 
+export interface SemanticDefinitionParallelismProfile {
+  readonly definitionCount: number;
+  readonly componentCount: number;
+  readonly waveCount: number;
+  readonly totalWork: number;
+  readonly criticalPathWork: number;
+  readonly availableParallelism: number;
+  readonly maximumWavefrontComponents: number;
+  readonly maximumWavefrontDefinitions: number;
+  readonly largestComponentDefinitions: number;
+  readonly wavefrontWork: readonly number[];
+}
+
 interface PackedSemanticDefinitionGraphs {
   readonly dependencyCounts: Uint32Array;
   readonly dependentOffsets: Uint32Array;
@@ -48,6 +61,62 @@ export function semanticDefinitionDependencyGraph(
     definitionDependencies(definition, root, definitionRoots.length, nodes)
   );
   return dependencyGraph(dependencies);
+}
+
+export function semanticDefinitionParallelismProfile(
+  definitionRoots: readonly number[],
+  nodes: readonly LazuliCoreNode[],
+): SemanticDefinitionParallelismProfile {
+  const definitionWork = definitionRoots.map((root, definition) =>
+    definitionNodeWork(definition, root, nodes)
+  );
+  const graph = semanticDefinitionDependencyGraph(definitionRoots, nodes);
+  const schedule = scheduleSemanticDefinitionWavefronts(graph);
+  const componentWork = graph.components.map((component) =>
+    component.definitions.reduce((work, definition) => work + definitionWork[definition]!, 0)
+  );
+  const componentSpan = Array.from({ length: graph.components.length }, () => 0);
+  for (const wavefront of schedule.wavefronts) {
+    for (const component of wavefront) {
+      const dependencySpan = graph.components[component]!.dependencies.reduce(
+        (span, dependency) => Math.max(span, componentSpan[dependency]!),
+        0,
+      );
+      componentSpan[component] = dependencySpan + componentWork[component]!;
+    }
+  }
+  const totalWork = componentWork.reduce((work, component) => work + component, 0);
+  const criticalPathWork = componentSpan.reduce((span, component) => Math.max(span, component), 0);
+  const wavefrontWork = schedule.wavefronts.map((wavefront) =>
+    wavefront.reduce((work, component) => work + componentWork[component]!, 0)
+  );
+  const wavefrontDefinitions = schedule.wavefronts.map((wavefront) =>
+    wavefront.reduce(
+      (definitions, component) => definitions + graph.components[component]!.definitions.length,
+      0,
+    )
+  );
+  return Object.freeze({
+    definitionCount: definitionRoots.length,
+    componentCount: graph.components.length,
+    waveCount: schedule.wavefronts.length,
+    totalWork,
+    criticalPathWork,
+    availableParallelism: criticalPathWork === 0 ? 0 : totalWork / criticalPathWork,
+    maximumWavefrontComponents: schedule.wavefronts.reduce(
+      (width, wavefront) => Math.max(width, wavefront.length),
+      0,
+    ),
+    maximumWavefrontDefinitions: wavefrontDefinitions.reduce(
+      (width, definitions) => Math.max(width, definitions),
+      0,
+    ),
+    largestComponentDefinitions: graph.components.reduce(
+      (largest, component) => Math.max(largest, component.definitions.length),
+      0,
+    ),
+    wavefrontWork: Object.freeze(wavefrontWork),
+  });
 }
 
 export function scheduleSemanticDefinitionWavefronts(
@@ -537,6 +606,31 @@ function definitionDependencies(
     }
   }
   return Object.freeze([...dependencies].sort((left, right) => left - right));
+}
+
+function definitionNodeWork(
+  definition: number,
+  root: number,
+  nodes: readonly LazuliCoreNode[],
+): number {
+  const visited = new Set<number>();
+  const pending = [root];
+  while (pending.length !== 0) {
+    const nodeIndex = pending.pop()!;
+    if (visited.has(nodeIndex)) continue;
+    visited.add(nodeIndex);
+    const node = nodes[nodeIndex];
+    if (node === undefined) {
+      throw new Error(
+        `semantic definition d${definition} reaches core node ${nodeIndex} beyond ${nodes.length} nodes`,
+      );
+    }
+    if (node.tag === LazuliCoreTag.Global) continue;
+    for (const child of coreChildren(node)) {
+      if (child !== LAZULI_NO_INDEX) pending.push(child);
+    }
+  }
+  return visited.size;
 }
 
 function coreChildren(node: LazuliCoreNode): readonly number[] {

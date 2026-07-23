@@ -294,9 +294,10 @@ deno task profile:lazuli-compiler
 ```
 
 `profile:lazuli-compiler` separates cold WebGPU initialization, frontend preparation, semantic
-dispatch, readback, and batch behavior. Record the adapter description and whether it is a software
-fallback. Software adapters are useful for correctness and synchronization analysis but do not
-predict hardware-GPU latency.
+dispatch, readback, batch behavior, and definition-level work/span. The parallelism profile reports
+SCC count, dependency waves, weighted critical-path work, maximum wave width, and the largest serial
+component. Record the adapter description and whether it is a software fallback. Software adapters
+are useful for correctness and synchronization analysis but do not predict hardware-GPU latency.
 
 `bench:semantic-wavefront` separates latency from sustained device-resident throughput. Host
 scheduling remains the correct path when JavaScript immediately needs one small schedule: a WebGPU

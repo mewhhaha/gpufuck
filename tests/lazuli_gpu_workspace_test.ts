@@ -14,6 +14,7 @@ import {
   runGpuLazuliTypeInference,
 } from "../src/lazuli/gpu_type_inference.ts";
 import { GpuLazuliSemanticCompiler } from "../src/lazuli/gpu_semantic_compiler.ts";
+import { LazuliCompilationStatus } from "../src/lazuli/compiler_shader.ts";
 import { inferLazuliTypes } from "../src/lazuli/type_inference.ts";
 import {
   LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
@@ -199,6 +200,83 @@ Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel b
     );
     ok(recovered.ok);
     if (recovered.ok) recovered.module.destroy();
+  } finally {
+    device.destroy();
+  }
+});
+
+Deno.test("planned semantic lowering matches the scalar fallback in its first dispatch", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const source = [
+      ...Array.from(
+        { length: 160 },
+        (_, index) => `fn value${index} = ${index};`,
+      ),
+      "fn main = value159;",
+    ].join("\n");
+    const parsed = parseLazuliSource(source);
+    ok(parsed.ok);
+    if (!parsed.ok) throw new Error("planned lowering fixture did not parse");
+    const observations: GpuLazuliCompilationDispatchObservation[] = [];
+    const compilation = await compiler.compile(
+      parsed.surface,
+      source.length,
+      { maximumSteps: 1_000_000, maximumStepsPerDispatch: 65_536 },
+      undefined,
+      { observeDispatch: (observation) => observations.push(observation) },
+    );
+
+    ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+    equal(observations[0]?.semanticStatus, LazuliCompilationStatus.Ok);
+    if (!compilation.ok) return;
+    const plannedNodes = await compilation.module.readCoreNodes();
+    const fallback = await compiler.compile(
+      parsed.surface,
+      source.length,
+      { maximumSteps: 1_000_000, maximumStepsPerDispatch: 63 },
+      undefined,
+    );
+    ok(fallback.ok, fallback.ok ? undefined : fallback.diagnostics[0].message);
+    if (fallback.ok) {
+      deepStrictEqual(fallback.module.mainType, compilation.module.mainType);
+      deepStrictEqual(await fallback.module.readCoreNodes(), plannedNodes);
+      fallback.module.destroy();
+    }
+    compilation.module.destroy();
+  } finally {
+    device.destroy();
+  }
+});
+
+Deno.test("planned semantic lowering reports its first diagnostic", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const source = [
+      ...Array.from(
+        { length: 80 },
+        (_, index) => `fn value${index} = ${index};`,
+      ),
+      "fn main = missing;",
+    ].join("\n");
+    const parsed = parseLazuliSource(source);
+    ok(parsed.ok);
+    if (!parsed.ok) throw new Error("planned diagnostic fixture did not parse");
+    const observations: GpuLazuliCompilationDispatchObservation[] = [];
+    const compilation = await compiler.compile(
+      parsed.surface,
+      source.length,
+      { maximumSteps: 1_000_000, maximumStepsPerDispatch: 65_536 },
+      undefined,
+      { observeDispatch: (observation) => observations.push(observation) },
+    );
+
+    equal(compilation.ok, false);
+    if (!compilation.ok) equal(compilation.diagnostics[0].code, "L2001");
+    equal(observations.length, 1);
+    equal(observations[0]?.semanticStatus, LazuliCompilationStatus.Diagnostic);
   } finally {
     device.destroy();
   }

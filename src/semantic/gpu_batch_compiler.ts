@@ -8,6 +8,7 @@ import {
 } from "./abi.ts";
 import {
   LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
+  LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE,
   LazuliCompilationInternalStateWord,
   LazuliCompilationStateWord,
   LazuliCompilationStatus,
@@ -20,6 +21,7 @@ import {
   PackedModuleAllocationError,
   type TerminalInference,
 } from "./gpu_batch_results.ts";
+import type { GpuLazuliSemanticPipelines } from "./gpu_semantic_contract.ts";
 import { readInferenceState, readSemanticState } from "./gpu_type_inference_gpu_io.ts";
 import { fuelExhausted } from "./gpu_type_inference_results.ts";
 import {
@@ -45,10 +47,16 @@ import {
   prepareLazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
-import { createLazuliSymbolLookup, LAZULI_SYMBOL_LOOKUP_WORD_LENGTH } from "./symbol_lookup.ts";
+import {
+  createLazuliSymbolLookup,
+  LAZULI_INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC,
+  LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
+  LazuliSymbolLookupWord,
+} from "./symbol_lookup.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 const FAST_COMPLETION_MINIMUM_DISPATCH_QUANTUM = 4_096;
+const PLANNED_LOWERING_MAXIMUM_BATCH_LANES = 4;
 
 export interface LazuliBatchCompilationInput {
   readonly surface: EncodedLazuliSurface;
@@ -81,7 +89,7 @@ export interface BatchLane extends LazuliBatchCompilationInput {
 
 export async function compileLazuliBatch(
   device: GPUDevice,
-  semanticPipeline: GPUComputePipeline,
+  semanticPipelines: GpuLazuliSemanticPipelines,
   inferencePipeline: GPUComputePipeline,
   inputs: readonly LazuliBatchCompilationInput[],
   signal: AbortSignal | undefined,
@@ -90,7 +98,7 @@ export async function compileLazuliBatch(
 ): Promise<readonly LazuliCompileResult[]> {
   return await compileLazuliBatchWithin(
     device,
-    semanticPipeline,
+    semanticPipelines,
     inferencePipeline,
     inputs,
     signal,
@@ -102,7 +110,7 @@ export async function compileLazuliBatch(
 
 async function compileLazuliBatchWithin(
   device: GPUDevice,
-  semanticPipeline: GPUComputePipeline,
+  semanticPipelines: GpuLazuliSemanticPipelines,
   inferencePipeline: GPUComputePipeline,
   inputs: readonly LazuliBatchCompilationInput[],
   signal: AbortSignal | undefined,
@@ -116,7 +124,7 @@ async function compileLazuliBatchWithin(
   if (inputs.length > device.limits.maxComputeWorkgroupsPerDimension) {
     return await compileSplitBatch(
       device,
-      semanticPipeline,
+      semanticPipelines,
       inferencePipeline,
       inputs,
       signal,
@@ -133,7 +141,7 @@ async function compileLazuliBatchWithin(
     if (error instanceof RangeError) {
       return await compileSplitBatch(
         device,
-        semanticPipeline,
+        semanticPipelines,
         inferencePipeline,
         inputs,
         signal,
@@ -149,7 +157,7 @@ async function compileLazuliBatchWithin(
   try {
     packed = await runPackedCompilation(
       device,
-      semanticPipeline,
+      semanticPipelines,
       inferencePipeline,
       lanes,
       signal,
@@ -159,7 +167,7 @@ async function compileLazuliBatchWithin(
     if (error instanceof PackedAllocationError || error instanceof PackedModuleAllocationError) {
       return await compileSplitBatch(
         device,
-        semanticPipeline,
+        semanticPipelines,
         inferencePipeline,
         inputs,
         signal,
@@ -187,7 +195,7 @@ async function compileLazuliBatchWithin(
 
 async function compileSplitBatch(
   device: GPUDevice,
-  semanticPipeline: GPUComputePipeline,
+  semanticPipelines: GpuLazuliSemanticPipelines,
   inferencePipeline: GPUComputePipeline,
   inputs: readonly LazuliBatchCompilationInput[],
   signal: AbortSignal | undefined,
@@ -200,7 +208,7 @@ async function compileSplitBatch(
   const compileHalf = (half: readonly LazuliBatchCompilationInput[]) =>
     compileLazuliBatchWithin(
       device,
-      semanticPipeline,
+      semanticPipelines,
       inferencePipeline,
       half,
       signal,
@@ -237,7 +245,7 @@ async function compileSplitBatch(
 
 async function runPackedCompilation(
   device: GPUDevice,
-  semanticPipeline: GPUComputePipeline,
+  semanticPipelines: GpuLazuliSemanticPipelines,
   inferencePipeline: GPUComputePipeline,
   lanes: readonly BatchLane[],
   signal: AbortSignal | undefined,
@@ -269,6 +277,12 @@ async function runPackedCompilation(
       lane.symbolLookupWords,
       lane.symbolLookupBase * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
     );
+    if (lanes.length > PLANNED_LOWERING_MAXIMUM_BATCH_LANES) {
+      const header = (lane.symbolLookupBase + lane.surface.symbolNames.length) *
+        LAZULI_SYMBOL_LOOKUP_WORD_LENGTH;
+      symbolLookupWords[header + LazuliSymbolLookupWord.Definition] =
+        LAZULI_INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC;
+    }
     const relocatedMetadata = lane.metadata.words.slice();
     for (let footerWord = 1; footerWord < 8; footerWord++) {
       const index = lane.metadata.indexedMetadataFooterBase + footerWord;
@@ -323,7 +337,7 @@ async function runPackedCompilation(
 
     const semanticBindings = device.createBindGroup({
       label: `Lazuli packed semantic bindings (${lanes.length} lanes)`,
-      layout: semanticPipeline.getBindGroupLayout(0),
+      layout: semanticPipelines.compilation.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: surfaceBuffer } },
         { binding: 1, resource: { buffer: definitionBuffer } },
@@ -361,7 +375,7 @@ async function runPackedCompilation(
       signal?.throwIfAborted();
       await dispatchBatch(
         device,
-        semanticPipeline,
+        semanticPipelines,
         semanticBindings,
         inferencePipeline,
         inferenceBindings,
@@ -537,6 +551,7 @@ function prepareBatchLanes(
   let outputRecords = 0;
   let fastOutputRecords = 0;
   const lanes = inputs.map((input, resultIndex): BatchLane => {
+    const symbolLookupWords = createLazuliSymbolLookup(input.surface);
     const metadata = prepareLazuliInferenceShaderMetadata(
       input.surface,
       flattenLazuliTypeSchemas(input.surface),
@@ -548,7 +563,6 @@ function prepareBatchLanes(
       limits,
       input.initialWorkspaceCapacities,
     );
-    const symbolLookupWords = createLazuliSymbolLookup(input.surface);
     const lane = {
       ...input,
       resultIndex,
@@ -891,7 +905,7 @@ async function allocateBatchBuffers(
 
 async function dispatchBatch(
   device: GPUDevice,
-  semanticPipeline: GPUComputePipeline,
+  semanticPipelines: GpuLazuliSemanticPipelines,
   semanticBindings: GPUBindGroup,
   inferencePipeline: GPUComputePipeline,
   inferenceBindings: GPUBindGroup,
@@ -912,10 +926,27 @@ async function dispatchBatch(
       label: `Compile Lazuli packed batch (${laneCount} lanes)`,
     });
     const semanticPass = commands.beginComputePass({ label: "Resolve packed Lazuli lanes" });
-    semanticPass.setPipeline(semanticPipeline);
+    semanticPass.setPipeline(semanticPipelines.compilation);
     semanticPass.setBindGroup(0, semanticBindings);
     semanticPass.dispatchWorkgroups(laneCount);
     semanticPass.end();
+    const widestLane = lanes.reduce(
+      (maximum, lane) => Math.max(maximum, lane.surface.nodeCount),
+      0,
+    );
+    const loweringWorkgroups = lanes.length > PLANNED_LOWERING_MAXIMUM_BATCH_LANES ||
+        widestLane < LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE
+      ? 0
+      : Math.ceil(widestLane / LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE);
+    if (loweringWorkgroups > 0) {
+      const loweringPass = commands.beginComputePass({
+        label: "Lower packed Lazuli nodes",
+      });
+      loweringPass.setPipeline(semanticPipelines.plannedLowering);
+      loweringPass.setBindGroup(0, semanticBindings);
+      loweringPass.dispatchWorkgroups(loweringWorkgroups, laneCount);
+      loweringPass.end();
+    }
     for (let laneIndex = 0; laneIndex < laneCount; laneIndex++) {
       commands.copyBufferToBuffer(
         semanticStateBuffer,

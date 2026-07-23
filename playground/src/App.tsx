@@ -10,7 +10,7 @@ import {
   TextArea,
   TextField,
 } from "@comp0/react";
-import { useEffect, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
 
 import {
   type BrowserCompilationResult,
@@ -39,6 +39,21 @@ type ResultState =
   | { readonly kind: "infrastructure-failure"; readonly message: string }
   | { readonly kind: "complete"; readonly result: BrowserCompilationResult };
 
+interface EditorViewport {
+  readonly height: number;
+  readonly scrollLeft: number;
+  readonly scrollTop: number;
+}
+
+// These values must match the editor typography and padding in styles.css.
+const EDITOR_LINE_HEIGHT = 27.2;
+const EDITOR_VERTICAL_PADDING = 20;
+const EDITOR_OVERSCAN_LINES = 8;
+const INITIAL_EDITOR_VIEWPORT: EditorViewport = {
+  height: 600,
+  scrollLeft: 0,
+  scrollTop: 0,
+};
 const webGpuAvailable = globalThis.isSecureContext && navigator.gpu !== undefined;
 let compilerModule: Promise<typeof import("./compiler/browser-compiler")> | undefined;
 
@@ -47,9 +62,8 @@ export function App() {
   const [selectedExamplePath, setSelectedExamplePath] = useState("");
   const [source, setSource] = useState("");
   const [result, setResult] = useState<ResultState>({ kind: "idle" });
+  const [editorViewport, setEditorViewport] = useState<EditorViewport>(INITIAL_EDITOR_VIEWPORT);
   const sourceEditor = useRef<HTMLTextAreaElement>(null);
-  const sourceGutter = useRef<HTMLDivElement>(null);
-  const sourceHighlight = useRef<HTMLPreElement>(null);
   const sourceLoadSequence = useRef(0);
   const working = result.kind === "working";
 
@@ -83,6 +97,16 @@ export function App() {
     [],
   );
 
+  useEffect(() => {
+    const editor = sourceEditor.current;
+    if (editor === null) return;
+    const observer = new ResizeObserver(() => {
+      setEditorViewport((viewport) => ({ ...viewport, height: editor.clientHeight }));
+    });
+    observer.observe(editor);
+    return () => observer.disconnect();
+  }, []);
+
   async function selectExample(path: string) {
     if (examples.kind !== "ready") return;
     const example = examples.examples.find((candidate) => candidate.path === path);
@@ -102,6 +126,8 @@ export function App() {
       if (sourceLoadSequence.current !== sequence) return;
       setSource(nextSource);
       setResult({ kind: "idle" });
+      sourceEditor.current?.scrollTo({ left: 0, top: 0 });
+      setEditorViewport((viewport) => ({ ...viewport, scrollLeft: 0, scrollTop: 0 }));
       sourceEditor.current?.focus();
     } catch (cause) {
       if (sourceLoadSequence.current !== sequence) return;
@@ -131,13 +157,11 @@ export function App() {
   }
 
   function synchronizeEditorScroll(event: UIEvent<HTMLTextAreaElement>) {
-    if (sourceGutter.current !== null) {
-      sourceGutter.current.scrollTop = event.currentTarget.scrollTop;
-    }
-    if (sourceHighlight.current !== null) {
-      sourceHighlight.current.scrollTop = event.currentTarget.scrollTop;
-      sourceHighlight.current.scrollLeft = event.currentTarget.scrollLeft;
-    }
+    setEditorViewport({
+      height: event.currentTarget.clientHeight,
+      scrollLeft: event.currentTarget.scrollLeft,
+      scrollTop: event.currentTarget.scrollTop,
+    });
   }
 
   function selectDiagnostic(diagnostic: PlaygroundDiagnostic) {
@@ -170,10 +194,27 @@ export function App() {
   const success = compilation?.kind === "success" ? compilation : undefined;
   const timings = compilation?.timings;
   const diagnostics = compilation?.kind === "diagnostics" ? compilation.diagnostics : [];
-  const lineNumbers = Array.from(
-    { length: source.split("\n").length },
-    (_, index) => index + 1,
+  const sourceLines = useMemo(() => source.split("\n"), [source]);
+  const firstVisibleLine = Math.max(
+    0,
+    Math.floor(
+      Math.max(0, editorViewport.scrollTop - EDITOR_VERTICAL_PADDING) / EDITOR_LINE_HEIGHT,
+    ) - EDITOR_OVERSCAN_LINES,
+  );
+  const visibleLineCount =
+    Math.ceil(editorViewport.height / EDITOR_LINE_HEIGHT) + EDITOR_OVERSCAN_LINES * 2;
+  const lastVisibleLine = Math.min(sourceLines.length, firstVisibleLine + visibleLineCount);
+  const visibleSource = useMemo(
+    () => sourceLines.slice(firstVisibleLine, lastVisibleLine).join("\n"),
+    [firstVisibleLine, lastVisibleLine, sourceLines],
+  );
+  const highlightedSource = useMemo(() => highlightLazuliSource(visibleSource), [visibleSource]);
+  const visibleLineNumbers = Array.from(
+    { length: lastVisibleLine - firstVisibleLine },
+    (_, index) => firstVisibleLine + index + 1,
   ).join("\n");
+  const editorWindowTop =
+    EDITOR_VERTICAL_PADDING + firstVisibleLine * EDITOR_LINE_HEIGHT - editorViewport.scrollTop;
   const status = statusPresentation(result, webGpuAvailable);
   const examplesReady = examples.kind === "ready";
 
@@ -266,12 +307,25 @@ export function App() {
               disabled={!examplesReady || working}
             >
               <Label className="visually-hidden">Lazuli source code</Label>
-              <div ref={sourceGutter} className="editor-gutter" aria-hidden="true">
-                {lineNumbers}
+              <div className="editor-gutter" aria-hidden="true">
+                <div
+                  className="editor-gutter-window"
+                  style={{ transform: `translateY(${editorWindowTop}px)` }}
+                >
+                  {visibleLineNumbers}
+                </div>
               </div>
               <div className="editor-code">
-                <pre ref={sourceHighlight} className="source-highlight" aria-hidden="true">
-                  {highlightLazuliSource(source).map((token) =>
+                <pre
+                  className="source-highlight"
+                  aria-hidden="true"
+                  style={{
+                    transform: `translate(${
+                      EDITOR_VERTICAL_PADDING - editorViewport.scrollLeft
+                    }px, ${editorWindowTop}px)`,
+                  }}
+                >
+                  {highlightedSource.map((token) =>
                     token.kind === "plain" ? (
                       token.value
                     ) : (

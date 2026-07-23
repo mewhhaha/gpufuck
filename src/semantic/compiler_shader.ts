@@ -1,5 +1,8 @@
 import { LAZULI_MAXIMUM_CONSTRUCTOR_ARITY, LazuliBinaryOperator, LazuliCoreTag } from "./abi.ts";
-import { LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC } from "./symbol_lookup.ts";
+import {
+  LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC,
+  LAZULI_INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC,
+} from "./symbol_lookup.ts";
 
 export const LAZULI_COMPILATION_STATE_WORD_LENGTH = 24;
 export const LAZULI_COMPILATION_STATE_BYTE_LENGTH = LAZULI_COMPILATION_STATE_WORD_LENGTH *
@@ -7,6 +10,7 @@ export const LAZULI_COMPILATION_STATE_BYTE_LENGTH = LAZULI_COMPILATION_STATE_WOR
 export const LAZULI_COMPILATION_INTERNAL_STATE_WORD_LENGTH = 32;
 export const LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH =
   LAZULI_COMPILATION_INTERNAL_STATE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
+export const LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE = 64;
 
 export const LazuliCompilationStateWord = {
   NodeCount: 0,
@@ -168,6 +172,9 @@ var<private> state: CompilationState;
 const NO_INDEX: u32 = 0xffffffffu;
 const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${LAZULI_MAXIMUM_CONSTRUCTOR_ARITY}u;
 const INDEXED_LOCAL_RESOLUTION_MAGIC: u32 = ${LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC}u;
+const INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC: u32 = ${LAZULI_INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC}u;
+const PLANNED_LOWERING_READY: u32 = 0x4c5a5052u;
+const PLANNED_LOWERING_MINIMUM_NODES: u32 = ${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE}u;
 
 const STATUS_PENDING: u32 = 0u;
 const STATUS_OK: u32 = 1u;
@@ -257,13 +264,28 @@ fn indexed_local_resolutions_are_available() -> bool {
   let header_index = state.symbol_lookup_base + state.symbol_count;
   if header_index >= arrayLength(&symbol_lookups) { return false; }
   let header = symbol_lookups[header_index];
-  return header.definition == INDEXED_LOCAL_RESOLUTION_MAGIC &&
+  return (header.definition == INDEXED_LOCAL_RESOLUTION_MAGIC ||
+      header.definition == INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC) &&
     header.algebraic_type == state.node_count &&
     state.node_count < arrayLength(&symbol_lookups) - header_index;
 }
 
+fn planned_lowering_is_available() -> bool {
+  let header_index = state.symbol_lookup_base + state.symbol_count;
+  return header_index < arrayLength(&symbol_lookups) &&
+    symbol_lookups[header_index].definition == INDEXED_LOCAL_RESOLUTION_MAGIC;
+}
+
 fn indexed_local_resolution(node: u32) -> SymbolLookup {
   return symbol_lookups[state.symbol_lookup_base + state.symbol_count + 1u + node];
+}
+
+fn indexed_lowering_limit() -> u32 {
+  let header = symbol_lookups[state.symbol_lookup_base + state.symbol_count];
+  if header.case_node == NO_INDEX {
+    return state.node_count;
+  }
+  return header.case_node + 1u;
 }
 
 fn report_diagnostic(code: u32, source: u32, detail: u32) {
@@ -680,6 +702,21 @@ fn lower_node() {
   }
 
   let surface_node = surface_nodes[state.surface_node_base + state.primary_cursor];
+  if indexed_local_resolutions_are_available() {
+    let lowering = indexed_local_resolution(state.primary_cursor);
+    if lowering.constructor != ERROR_NONE {
+      report_diagnostic(
+        lowering.constructor,
+        surface_node.start_byte,
+        lowering.case_node,
+      );
+      return;
+    }
+    state.core_tag = lowering.definition;
+    state.core_payload = lowering.algebraic_type;
+    write_lowered_node();
+    return;
+  }
   state.core_tag = surface_node.tag;
   state.core_payload = surface_node.payload;
   if surface_node.tag == SURFACE_STRICT_LET {
@@ -689,28 +726,10 @@ fn lower_node() {
   }
   if surface_node.tag == SURFACE_LET || surface_node.tag == SURFACE_STRICT_LET {
     state.core_payload = 1u;
-    if indexed_local_resolutions_are_available() {
-      state.core_payload = select(
-        0u,
-        1u,
-        indexed_local_resolution(state.primary_cursor).case_node != 0u,
-      );
-    }
   }
   if surface_node.tag == SURFACE_NAME {
     state.resolution_node = state.primary_cursor;
     state.resolution_symbol = surface_node.payload;
-    if indexed_local_resolutions_are_available() {
-      let resolution = indexed_local_resolution(state.primary_cursor);
-      if resolution.definition == CORE_LOCAL {
-        state.core_tag = CORE_LOCAL;
-        state.core_payload = resolution.algebraic_type;
-        write_lowered_node();
-        return;
-      }
-      state.phase = PHASE_RESOLVE_GLOBAL_NAME;
-      return;
-    }
     state.resolution_parent = surface_node.parent;
     state.resolution_child = state.primary_cursor;
     state.resolution_depth = 0u;
@@ -919,9 +938,48 @@ fn compile_lane() {
     if state.total_steps - dispatch_start_steps >= state.maximum_steps_per_dispatch {
       return;
     }
+    if state.phase == PHASE_LOWER_NODE &&
+      indexed_local_resolutions_are_available() &&
+      planned_lowering_is_available() {
+      let lowering_limit = indexed_lowering_limit();
+      let remaining = lowering_limit - state.primary_cursor;
+      if remaining >= PLANNED_LOWERING_MINIMUM_NODES &&
+        remaining <= state.maximum_steps - state.total_steps &&
+        remaining <= state.maximum_steps_per_dispatch -
+          (state.total_steps - dispatch_start_steps) {
+        let error_node = symbol_lookups[
+          state.symbol_lookup_base + state.symbol_count
+        ].case_node;
+        state.total_steps += remaining;
+        state.resolution_parent = state.primary_cursor;
+        state.resolution_child = lowering_limit;
+        state.resolution_depth = error_node;
+        state.resolution_symbol = PLANNED_LOWERING_READY;
+        if error_node == NO_INDEX {
+          state.status = STATUS_OK;
+        } else {
+          let surface_node = surface_nodes[state.surface_node_base + error_node];
+          let lowering = indexed_local_resolution(error_node);
+          report_diagnostic(
+            lowering.constructor,
+            surface_node.start_byte,
+            lowering.case_node,
+          );
+        }
+        return;
+      }
+    }
     state.total_steps += 1u;
     advance_compilation();
   }
+}
+
+fn prepare_inference_state() {
+  state.phase = state.core_node_base;
+  state.primary_cursor = state.definition_base;
+  state.secondary_cursor = state.algebraic_type_base;
+  state.tertiary_cursor = state.constructor_base;
+  state.resolution_node = state.inference_output_base;
 }
 
 @compute @workgroup_size(1)
@@ -933,12 +991,48 @@ fn compile_lazuli(@builtin(global_invocation_id) invocation: vec3<u32>) {
   state = compilation_states[lane_index];
   compile_lane();
   if state.status != STATUS_PENDING {
-    state.phase = state.core_node_base;
-    state.primary_cursor = state.definition_base;
-    state.secondary_cursor = state.algebraic_type_base;
-    state.tertiary_cursor = state.constructor_base;
-    state.resolution_node = state.inference_output_base;
+    prepare_inference_state();
   }
   compilation_states[lane_index] = state;
+}
+
+@compute @workgroup_size(${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE})
+fn lower_planned_lazuli(
+  @builtin(workgroup_id) workgroup: vec3<u32>,
+  @builtin(local_invocation_index) local_invocation: u32,
+) {
+  let lane_index = workgroup.y;
+  if lane_index >= arrayLength(&compilation_states) {
+    return;
+  }
+  state = compilation_states[lane_index];
+  if state.resolution_symbol != PLANNED_LOWERING_READY ||
+    !indexed_local_resolutions_are_available() {
+    return;
+  }
+
+  let node = workgroup.x * ${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE}u + local_invocation;
+  if node < state.resolution_parent ||
+    node >= state.resolution_child ||
+    (state.resolution_depth != NO_INDEX && node >= state.resolution_depth) {
+    return;
+  }
+  let surface_node = surface_nodes[state.surface_node_base + node];
+  let lowering = indexed_local_resolution(node);
+  core_nodes[state.core_node_base + node] = CoreNode(
+    lowering.definition,
+    lowering.algebraic_type,
+    surface_node.child0,
+    surface_node.child1,
+    surface_node.child2,
+    surface_node.start_byte,
+    surface_node.end_byte,
+    select(
+      0u,
+      1u,
+      surface_node.tag == SURFACE_STRICT_LET ||
+        surface_node.tag == SURFACE_STRICT_APPLY,
+    ),
+  );
 }
 `;

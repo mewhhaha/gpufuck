@@ -8,6 +8,11 @@ const sourceRoot = path.join(repositoryRoot, "examples", "lazuli");
 const massiveBindingCount = 2_048;
 const massiveBindingsPerDefinition = 128;
 const massiveSourceName = "massive-2048-bindings.laz";
+const wideDefinitionCount = 1_500;
+const wideSourceName = "wide-1500-definitions.laz";
+const fanoutLeafCount = 1_024;
+const fanoutWidth = 8;
+const fanoutSourceName = "fanout-1024-leaves.laz";
 
 await rm(generatedRoot, { force: true, recursive: true });
 await mkdir(path.join(generatedRoot, "sources"), { recursive: true });
@@ -31,6 +36,10 @@ if (sourceNames.length === 0) {
 }
 
 const manifest = [];
+const writeGeneratedExample = async (name, sourceName, source) => {
+  await writeFile(path.join(generatedRoot, "sources", sourceName), source);
+  manifest.push({ name, path: `generated/sources/${sourceName}` });
+};
 for (const sourceName of sourceNames) {
   await cp(path.join(sourceRoot, sourceName), path.join(generatedRoot, "sources", sourceName));
   manifest.push({
@@ -71,11 +80,58 @@ const massiveSource = [
   `fn main = massiveChunk${(massiveChunkDefinitions.length - 1).toString().padStart(2, "0")};`,
   "",
 ].join("\n");
-await writeFile(path.join(generatedRoot, "sources", massiveSourceName), massiveSource);
-manifest.push({
-  name: `massive · ${massiveBindingCount.toLocaleString("en-US")} bindings`,
-  path: `generated/sources/${massiveSourceName}`,
-});
+await writeGeneratedExample(
+  `massive · ${massiveBindingCount.toLocaleString("en-US")} bindings`,
+  massiveSourceName,
+  massiveSource,
+);
+
+const wideSource = [
+  `-- Generated browser stress example with ${wideDefinitionCount.toLocaleString("en-US")} independent definitions.`,
+  ...Array.from(
+    { length: wideDefinitionCount },
+    (_, index) => `fn wide${index.toString().padStart(4, "0")} = ${index};`,
+  ),
+  `fn main = wide${(wideDefinitionCount - 1).toString().padStart(4, "0")};`,
+  "",
+].join("\n");
+await writeGeneratedExample(
+  `wide · ${wideDefinitionCount.toLocaleString("en-US")} definitions`,
+  wideSourceName,
+  wideSource,
+);
+
+const fanoutDefinitions = [];
+let fanoutLevelNames = Array.from(
+  { length: fanoutLeafCount },
+  (_, index) => `fanoutLeaf${index.toString().padStart(4, "0")}`,
+);
+fanoutDefinitions.push(...fanoutLevelNames.map((name) => `fn ${name} = 1;`));
+let fanoutLevel = 0;
+while (fanoutLevelNames.length > 1) {
+  const nextLevelNames = [];
+  for (let first = 0; first < fanoutLevelNames.length; first += fanoutWidth) {
+    const group = fanoutLevelNames.slice(first, first + fanoutWidth);
+    const name = `fanout${fanoutLevel.toString().padStart(2, "0")}_${nextLevelNames.length
+      .toString()
+      .padStart(4, "0")}`;
+    fanoutDefinitions.push(`fn ${name} = ${group.join(" + ")};`);
+    nextLevelNames.push(name);
+  }
+  fanoutLevelNames = nextLevelNames;
+  fanoutLevel += 1;
+}
+const fanoutSource = [
+  `-- Generated browser stress example reducing ${fanoutLeafCount.toLocaleString("en-US")} independent leaves in ${fanoutWidth}-way layers.`,
+  ...fanoutDefinitions,
+  `fn main = ${fanoutLevelNames[0]};`,
+  "",
+].join("\n");
+await writeGeneratedExample(
+  `fanout · ${fanoutLeafCount.toLocaleString("en-US")} leaves`,
+  fanoutSourceName,
+  fanoutSource,
+);
 
 await writeFile(
   path.join(generatedRoot, "examples.json"),

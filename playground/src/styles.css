@@ -367,8 +367,8 @@ textarea:focus-visible {
 }
 
 .editor-gutter {
+  position: relative;
   overflow: hidden;
-  padding: 20px 10px;
   border-right: 1px solid var(--line);
   color: #404957;
   font-family: var(--mono);
@@ -377,6 +377,13 @@ textarea:focus-visible {
   text-align: right;
   white-space: pre-line;
   user-select: none;
+}
+
+.editor-gutter-window {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  left: 10px;
 }
 
 .editor-code {
@@ -393,8 +400,6 @@ textarea:focus-visible {
   inset: 0;
   width: 100%;
   height: 100%;
-  margin: 0;
-  padding: 20px;
   background: transparent;
   font-family: var(--mono);
   font-size: 16px;
@@ -405,18 +410,22 @@ textarea:focus-visible {
 }
 
 .source-highlight {
-  overflow: auto;
+  inset: auto;
+  top: 0;
+  left: 0;
+  width: max-content;
+  min-width: calc(100% - 40px);
+  height: auto;
+  margin: 0;
+  padding: 0;
   color: #dce2e8;
   pointer-events: none;
-  scrollbar-width: none;
-}
-
-.source-highlight::-webkit-scrollbar {
-  display: none;
 }
 
 .editor-code textarea {
   z-index: 1;
+  margin: 0;
+  padding: 20px;
   resize: none;
   border: 0;
   outline: 0;

@@ -303,3 +303,60 @@ Deno.test("packed compilation cleans up after cancellation and remains reusable"
     device.destroy();
   }
 });
+
+Deno.test("packed compilation lowers wide lanes independently", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliCompiler.create(device);
+    const sources = [
+      { prefix: "integer", expression: "42" },
+      { prefix: "boolean", expression: "true" },
+    ].map(({ prefix, expression }) =>
+      [
+        ...Array.from(
+          { length: 80 },
+          (_, index) => `fn ${prefix}${index} = ${expression};`,
+        ),
+        `fn main = ${prefix}79;`,
+      ].join("\n")
+    );
+    const compilations = await compiler.compileBatch(sources);
+
+    ok(compilations[0]?.ok);
+    ok(compilations[1]?.ok);
+    if (compilations[0]?.ok) {
+      deepStrictEqual(compilations[0].module.mainType, { kind: "integer" });
+    }
+    if (compilations[1]?.ok) {
+      deepStrictEqual(compilations[1].module.mainType, { kind: "boolean" });
+    }
+    for (const compilation of compilations) {
+      if (compilation.ok) compilation.module.destroy();
+    }
+  } finally {
+    device.destroy();
+  }
+});
+
+Deno.test("packed compilation keeps wide batches program parallel", async () => {
+  const device = await requestWebGpuDevice();
+  try {
+    const compiler = await GpuLazuliCompiler.create(device);
+    const sources = Array.from({ length: 5 }, (_, program) =>
+      [
+        ...Array.from(
+          { length: 80 },
+          (_, index) => `fn value${program}_${index} = ${index};`,
+        ),
+        `fn main = value${program}_79;`,
+      ].join("\n"));
+    const compilations = await compiler.compileBatch(sources);
+
+    ok(compilations.every((compilation) => compilation.ok));
+    for (const compilation of compilations) {
+      if (compilation.ok) compilation.module.destroy();
+    }
+  } finally {
+    device.destroy();
+  }
+});

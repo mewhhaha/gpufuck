@@ -9,6 +9,7 @@ import {
 import {
   LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
   LAZULI_COMPILER_SHADER,
+  LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE,
   LazuliCompilationInternalStateWord as InternalStateWord,
   LazuliCompilationStateWord as StateWord,
   LazuliCompilationStatus as Status,
@@ -27,10 +28,11 @@ import {
   type LazuliBatchCompilationInstrumentation,
 } from "./gpu_batch_compiler.ts";
 import { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
+import type { GpuLazuliSemanticPipelines } from "./gpu_semantic_contract.ts";
 import { runGpuLazuliCompilationInference } from "./gpu_type_inference_runner.ts";
 import type { GpuLazuliCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
 import { LAZULI_TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
-import { createLazuliSymbolLookup, LAZULI_SYMBOL_LOOKUP_WORD_LENGTH } from "./symbol_lookup.ts";
+import { createLazuliSymbolLookup } from "./symbol_lookup.ts";
 
 export interface LazuliSemanticCompilationLimits {
   readonly maximumSteps: number;
@@ -43,17 +45,17 @@ export interface LazuliSemanticCompilationInstrumentation {
 
 export class GpuLazuliSemanticCompiler {
   readonly #device: GPUDevice;
-  readonly #pipeline: GPUComputePipeline;
+  readonly #pipelines: GpuLazuliSemanticPipelines;
   readonly #inferencePipeline: GPUComputePipeline;
   readonly #dispatchScheduler: GpuDispatchScheduler;
 
   private constructor(
     device: GPUDevice,
-    pipeline: GPUComputePipeline,
+    pipelines: GpuLazuliSemanticPipelines,
     inferencePipeline: GPUComputePipeline,
   ) {
     this.#device = device;
-    this.#pipeline = pipeline;
+    this.#pipelines = pipelines;
     this.#inferencePipeline = inferencePipeline;
     this.#dispatchScheduler = new GpuDispatchScheduler(device);
   }
@@ -89,13 +91,41 @@ export class GpuLazuliSemanticCompiler {
     }
 
     try {
-      const [pipeline, inferencePipeline] = await Promise.all([
+      const semanticBindGroupLayout = device.createBindGroupLayout({
+        label: "Lazuli semantic compiler bindings",
+        entries: [
+          semanticStorageBinding(0, "storage"),
+          semanticStorageBinding(1, "read-only-storage"),
+          semanticStorageBinding(2, "read-only-storage"),
+          semanticStorageBinding(3, "read-only-storage"),
+          semanticStorageBinding(4, "storage"),
+          semanticStorageBinding(5, "storage"),
+          semanticStorageBinding(6, "storage"),
+        ],
+      });
+      const semanticPipelineLayout = device.createPipelineLayout({
+        label: "Lazuli semantic compiler pipeline layout",
+        bindGroupLayouts: [semanticBindGroupLayout],
+      });
+      const [
+        compilationPipeline,
+        plannedLoweringPipeline,
+        inferencePipeline,
+      ] = await Promise.all([
         device.createComputePipelineAsync({
           label: "Lazuli semantic compiler pipeline",
-          layout: "auto",
+          layout: semanticPipelineLayout,
           compute: {
             module: shaderModule,
             entryPoint: "compile_lazuli",
+          },
+        }),
+        device.createComputePipelineAsync({
+          label: "Lazuli planned lowering pipeline",
+          layout: semanticPipelineLayout,
+          compute: {
+            module: shaderModule,
+            entryPoint: "lower_planned_lazuli",
           },
         }),
         device.createComputePipelineAsync({
@@ -107,7 +137,14 @@ export class GpuLazuliSemanticCompiler {
           },
         }),
       ]);
-      return new GpuLazuliSemanticCompiler(device, pipeline, inferencePipeline);
+      return new GpuLazuliSemanticCompiler(
+        device,
+        {
+          compilation: compilationPipeline,
+          plannedLowering: plannedLoweringPipeline,
+        },
+        inferencePipeline,
+      );
     } catch (cause) {
       throw new Error("WebGPU could not create the Lazuli semantic compiler pipeline", { cause });
     }
@@ -228,7 +265,7 @@ export class GpuLazuliSemanticCompiler {
 
         bindGroup = this.#device.createBindGroup({
           label: "Lazuli semantic compiler bindings",
-          layout: this.#pipeline.getBindGroupLayout(0),
+          layout: this.#pipelines.compilation.getBindGroupLayout(0),
           entries: [
             { binding: 0, resource: { buffer: surfaceNodeBuffer } },
             { binding: 1, resource: { buffer: definitionBuffer } },
@@ -279,6 +316,10 @@ export class GpuLazuliSemanticCompiler {
         );
       }
 
+      const plannedLoweringWorkgroups = surface.nodeCount <
+          LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE
+        ? 0
+        : Math.ceil(surface.nodeCount / LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE);
       const combined = await runGpuLazuliCompilationInference({
         device: this.#device,
         pipeline: this.#inferencePipeline,
@@ -295,9 +336,10 @@ export class GpuLazuliSemanticCompiler {
           ? {}
           : { observeCompilationDispatch: instrumentation.observeDispatch }),
       }, {
-        pipeline: this.#pipeline,
+        pipelines: this.#pipelines,
         bindGroup,
         stateBuffer,
+        plannedLoweringWorkgroups,
       }, this.#dispatchScheduler);
       const state = combined.semanticState;
 
@@ -404,7 +446,7 @@ export class GpuLazuliSemanticCompiler {
   ): Promise<readonly LazuliCompileResult[]> {
     return await compileLazuliBatch(
       this.#device,
-      this.#pipeline,
+      this.#pipelines,
       this.#inferencePipeline,
       inputs,
       signal,
@@ -418,6 +460,17 @@ export class GpuLazuliSemanticCompiler {
       instrumentation,
     );
   }
+}
+
+function semanticStorageBinding(
+  binding: number,
+  type: GPUBufferBindingType,
+): GPUBindGroupLayoutEntry {
+  return {
+    binding,
+    visibility: GPUShaderStage.COMPUTE,
+    buffer: { type },
+  };
 }
 
 function storageBufferSize(recordCount: number, recordByteLength: number): number {

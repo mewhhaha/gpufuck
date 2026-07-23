@@ -136,11 +136,7 @@ export async function runSemanticCompilationToCompletion(
         const commands = options.device.createCommandEncoder({
           label: "Lazuli semantic preflight fallback commands",
         });
-        const pass = commands.beginComputePass({ label: "Compile Lazuli surface nodes" });
-        pass.setPipeline(semanticPass.pipeline);
-        pass.setBindGroup(0, semanticPass.bindGroup);
-        pass.dispatchWorkgroups(1);
-        pass.end();
+        encodeSemanticCompilation(commands, semanticPass, 1);
         commands.copyBufferToBuffer(
           semanticPass.stateBuffer,
           0,
@@ -293,13 +289,7 @@ function encodeInferenceDispatch(
   semanticPass: GpuLazuliSemanticCompilationPass | undefined,
 ): void {
   if (semanticPass !== undefined) {
-    const semanticCompute = commands.beginComputePass({
-      label: "Compile Lazuli surface nodes",
-    });
-    semanticCompute.setPipeline(semanticPass.pipeline);
-    semanticCompute.setBindGroup(0, semanticPass.bindGroup);
-    semanticCompute.dispatchWorkgroups(1);
-    semanticCompute.end();
+    encodeSemanticCompilation(commands, semanticPass, 1);
     commands.copyBufferToBuffer(
       semanticPass.stateBuffer,
       0,
@@ -338,6 +328,29 @@ function encodeInferenceDispatch(
       coreReadbackByteLength,
     );
   }
+}
+
+function encodeSemanticCompilation(
+  commands: GPUCommandEncoder,
+  semanticPass: GpuLazuliSemanticCompilationPass,
+  laneCount: number,
+): void {
+  const compilation = commands.beginComputePass({
+    label: "Compile Lazuli surface nodes",
+  });
+  compilation.setPipeline(semanticPass.pipelines.compilation);
+  compilation.setBindGroup(0, semanticPass.bindGroup);
+  compilation.dispatchWorkgroups(laneCount);
+  compilation.end();
+  if (semanticPass.plannedLoweringWorkgroups === 0) return;
+
+  const lowering = commands.beginComputePass({
+    label: "Lower planned Lazuli nodes",
+  });
+  lowering.setPipeline(semanticPass.pipelines.plannedLowering);
+  lowering.setBindGroup(0, semanticPass.bindGroup);
+  lowering.dispatchWorkgroups(semanticPass.plannedLoweringWorkgroups, laneCount);
+  lowering.end();
 }
 
 export async function copyOutputForReadback(
