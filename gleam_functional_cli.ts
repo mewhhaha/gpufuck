@@ -2,7 +2,6 @@ import {
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
-  runFunctionalWasmModule,
 } from "./functional.ts";
 import {
   type GleamFunctionalSourceModule,
@@ -59,14 +58,21 @@ export async function main(
       return 1;
     }
     try {
+      const evaluator = await GpuFunctionalEvaluator.create(device);
+      const evaluation = await evaluator.evaluate(compilation.module);
       if (command === "run") {
-        const execution = await runFunctionalWasmModule(compilation.module);
+        if (!evaluation.ok) {
+          const location = evaluation.fault.sourceByteOffset === null
+            ? ""
+            : ` byte ${evaluation.fault.sourceByteOffset}`;
+          output.error(`error[${evaluation.fault.code}]${location}: ${evaluation.fault.message}`);
+          return 1;
+        }
         output.log(JSON.stringify(
           {
             entryType: compilation.module.entryType,
-            value: execution.value,
-            stats: execution.stats,
-            wasmByteLength: execution.bytes.byteLength,
+            value: evaluation.value,
+            stats: evaluation.stats,
           },
           null,
           2,
@@ -74,8 +80,6 @@ export async function main(
         return 0;
       }
 
-      const evaluator = await GpuFunctionalEvaluator.create(device);
-      const evaluation = await evaluator.evaluate(compilation.module);
       const source = sources.map((module) => `// ${module.name}\n${module.source.trimEnd()}`).join(
         "\n\n",
       );

@@ -1,16 +1,16 @@
-import { parseLazuliSource } from "../src/lazuli/frontend.ts";
-import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
-import { lazuliSurfaceToFunctionalModule } from "../src/lazuli/functional_adapter.ts";
+import { parseLazuliSource } from "../src/semantic/frontend.ts";
+import { GpuLazuliCompiler } from "../src/semantic/compiler.ts";
+import { lazuliSurfaceToFunctionalModule } from "../src/semantic/functional_adapter.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { LAZULI_DEFINITION_WORD_LENGTH, LazuliDefinitionWord } from "../src/semantic/abi.ts";
 import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";
 import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
-import { GpuLazuliSemanticCompiler } from "../src/lazuli/gpu_semantic_compiler.ts";
-import type { GpuLazuliCompilationDispatchObservation } from "../src/lazuli/gpu_type_inference_contract.ts";
-import { LazuliCompilationStatus } from "../src/lazuli/compiler_shader.ts";
-import { LazuliInferenceStatus } from "../src/lazuli/type_inference_shader.ts";
+import { GpuLazuliSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
+import type { GpuLazuliCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
+import { LazuliCompilationStatus } from "../src/semantic/compiler_shader.ts";
+import { LazuliInferenceStatus } from "../src/semantic/type_inference_shader.ts";
 
-const DEFAULT_SOURCE_PATH = "examples/lazuli-brainfuck/compiler.laz";
+const DEFAULT_SOURCE_PATH = "examples/lazuli/brainfuck_compiler.laz";
 const SAMPLE_COUNT = 5;
 const BATCH_SIZE = 16;
 const BATCH_SCALING_SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512] as const;

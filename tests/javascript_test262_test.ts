@@ -112,7 +112,7 @@ missingBinding;
   );
 });
 
-Deno.test("keeps runtime-negative Test262 tests executable for typed validation", () => {
+Deno.test("keeps runtime-negative Test262 tests ready with their expected error type", () => {
   const source = `/*---
 flags: [noStrict]
 negative:
@@ -133,11 +133,10 @@ throw new TypeError();
   equal(result.kind, "runtime-ready");
   if (result.kind === "runtime-ready") {
     equal(result.expectedType, "TypeError");
-    equal(result.validation, "returned-boolean");
   }
 });
 
-Deno.test("routes temporal-dead-zone negatives through runtime faults", () => {
+Deno.test("keeps temporal-dead-zone negatives ready with their expected error type", () => {
   const path = "test/language/runtime-tdz.js";
   const source = `/*---
 flags: [noStrict]
@@ -160,7 +159,6 @@ let value;
   equal(result.kind, "runtime-ready");
   if (result.kind === "runtime-ready") {
     equal(result.expectedType, "ReferenceError");
-    equal(result.validation, "runtime-fault");
   }
 });
 

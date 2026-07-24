@@ -10,8 +10,8 @@ import {
 } from "../mod.ts";
 import { buildFunctionalSurfaceModule, surface } from "../functional.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
-import { parseLazuliSource } from "../src/lazuli/frontend.ts";
-import { inferLazuliTypes } from "../src/lazuli/type_inference.ts";
+import { parseLazuliSource } from "../src/semantic/frontend.ts";
+import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
 
 interface InferenceSnapshotSuccess {
   readonly ok: true;

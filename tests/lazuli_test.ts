@@ -12,7 +12,7 @@ import {
   parseLazuliSource,
   requestWebGpuDevice,
 } from "../mod.ts";
-import { LAZULI_TYPE_WORD_LENGTH, LazuliTypeWord } from "../src/lazuli/abi.ts";
+import { LAZULI_TYPE_WORD_LENGTH, LazuliTypeWord } from "../src/semantic/abi.ts";
 
 interface LazuliRuntime {
   readonly device: GPUDevice;

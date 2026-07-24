@@ -7,8 +7,8 @@ import {
   LAZULI_TYPE_WORD_LENGTH,
   type LazuliType,
   LazuliTypeWord,
-} from "../src/lazuli/abi.ts";
-import { parseLazuliSource } from "../src/lazuli/frontend.ts";
+} from "../src/semantic/abi.ts";
+import { parseLazuliSource } from "../src/semantic/frontend.ts";
 import {
   decodeLazuliType,
   decodeLazuliTypeSchema,
@@ -20,7 +20,7 @@ import {
   LazuliTypeSchemaTag,
   LazuliTypeSchemaWord,
   serializeLazuliType,
-} from "../src/lazuli/type_schema_abi.ts";
+} from "../src/semantic/type_schema_abi.ts";
 
 const canonicalSource = "data Box a = Box(value: (a, Int)); let main : Box Bool = Box (true, 1);";
 

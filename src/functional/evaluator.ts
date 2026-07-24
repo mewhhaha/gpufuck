@@ -12,9 +12,6 @@ import {
   FunctionalNumericConversion,
   FunctionalUnaryOperator,
 } from "./abi.ts";
-import { type FunctionalWasmExecution, runBoundedFunctionalWasmModule } from "./wasm_execution.ts";
-import { FunctionalWasmRuntimeError } from "./wasm_host_boundary.ts";
-import type { FunctionalWasmValue } from "./wasm_value_codec.ts";
 
 export interface FunctionalEvaluationOptions {
   readonly maximumSteps?: number;
@@ -177,8 +174,11 @@ export class GpuFunctionalEvaluator {
     options: FunctionalEvaluationOptions = {},
   ): Promise<AnyFunctionalEvaluationResult> {
     const numerics = await moduleNumericRequirements(module);
-    if (numerics.boundedWasm) {
-      return await evaluateFunctionalModuleWithBoundedWasm(module, options);
+    if (numerics.unsupported !== undefined) {
+      throw new TypeError(
+        `the GPU evaluator cannot execute ${numerics.unsupported}; WGSL has no portable 64-bit ` +
+          "numerics, text, bytes, or store operations",
+      );
     }
     const result = await this.#evaluator.evaluate(
       lazuliRuntimeModule(module),
@@ -210,7 +210,7 @@ export class GpuFunctionalEvaluator {
     const numericRequirements = await Promise.all(modules.map(moduleNumericRequirements));
     if (
       numericRequirements.some((requirements) =>
-        requirements.boundedWasm ||
+        requirements.unsupported !== undefined ||
         (requirements.signedInteger64 && options.resultForm !== "deep")
       )
     ) {
@@ -231,7 +231,8 @@ export class GpuFunctionalEvaluator {
 
 interface FunctionalNumericRequirements {
   readonly signedInteger64: boolean;
-  readonly boundedWasm: boolean;
+  /** Names the first construct the GPU evaluator cannot execute, or undefined when it can. */
+  readonly unsupported: string | undefined;
 }
 
 async function moduleNumericRequirements(
@@ -256,13 +257,13 @@ async function inspectModuleNumericRequirements(
 ): Promise<FunctionalNumericRequirements> {
   const nodes = await module.readCoreNodes();
   let signedInteger64 = false;
-  let boundedWasm = false;
+  let unsupported: string | undefined;
   for (const node of nodes) {
     if (node.tag === FunctionalCoreTag.SignedInteger64) signedInteger64 = true;
     if (
       node.tag === FunctionalCoreTag.Float64 ||
       node.tag === FunctionalCoreTag.WholeNumberF64
-    ) boundedWasm = true;
+    ) unsupported ??= "a 64-bit float literal";
     if (
       node.tag === FunctionalCoreTag.Text || node.tag === FunctionalCoreTag.Bytes ||
       node.tag === FunctionalCoreTag.RuntimeFault || node.tag === FunctionalCoreTag.BufferAppend ||
@@ -270,7 +271,7 @@ async function inspectModuleNumericRequirements(
       node.tag === FunctionalCoreTag.StoreRead || node.tag === FunctionalCoreTag.StoreWrite ||
       node.tag === FunctionalCoreTag.StoreGrow
     ) {
-      boundedWasm = true;
+      unsupported ??= "text, bytes, runtime faults, buffers, or stores";
     }
     if (node.tag === FunctionalCoreTag.Unary) {
       if (node.payload === FunctionalUnaryOperator.NegateSignedInteger64) signedInteger64 = true;
@@ -278,13 +279,13 @@ async function inspectModuleNumericRequirements(
         node.payload === FunctionalUnaryOperator.NegateFloat64 ||
         node.payload === FunctionalUnaryOperator.NegateWholeNumberF64 ||
         node.payload === FunctionalUnaryOperator.SquareRootFloat32
-      ) boundedWasm = true;
+      ) unsupported ??= "64-bit float negation or 32-bit square root";
     }
     if (node.tag === FunctionalCoreTag.Binary) {
       if (
         node.payload === FunctionalBinaryOperator.StructuralEqual ||
         node.payload === FunctionalBinaryOperator.StructuralNotEqual
-      ) boundedWasm = true;
+      ) unsupported ??= "structural equality";
       if (
         (node.payload >= FunctionalBinaryOperator.EqualSignedInteger64 &&
           node.payload <= FunctionalBinaryOperator.DivideSignedInteger64) ||
@@ -294,12 +295,14 @@ async function inspectModuleNumericRequirements(
         node.payload >= FunctionalBinaryOperator.EqualFloat64 &&
           node.payload <= FunctionalBinaryOperator.DivideFloat64 ||
         node.payload === FunctionalBinaryOperator.RemainderFloat64
-      ) boundedWasm = true;
+      ) unsupported ??= "64-bit float arithmetic";
       if (
         node.payload >= FunctionalBinaryOperator.EqualWholeNumberF64 &&
         node.payload <= FunctionalBinaryOperator.RemainderWholeNumberF64
-      ) boundedWasm = true;
-      if (node.payload === FunctionalBinaryOperator.DivideFloat32) boundedWasm = true;
+      ) unsupported ??= "portable whole-number arithmetic";
+      if (node.payload === FunctionalBinaryOperator.DivideFloat32) {
+        unsupported ??= "32-bit float division";
+      }
     }
     if (node.tag === FunctionalCoreTag.NumericConvert) {
       if (
@@ -315,10 +318,10 @@ async function inspectModuleNumericRequirements(
         node.payload === FunctionalNumericConversion.Float64ToSignedInteger32 ||
         node.payload === FunctionalNumericConversion.Float64ToSignedInteger64 ||
         node.payload === FunctionalNumericConversion.Float64ToFloat32
-      ) boundedWasm = true;
+      ) unsupported ??= "a 64-bit float conversion";
     }
   }
-  return { signedInteger64, boundedWasm };
+  return { signedInteger64, unsupported };
 }
 
 function shallowFunctionalValue(
@@ -338,173 +341,6 @@ function shallowFunctionalValue(
     case "constructor":
       return { kind: "constructor", name: value.name, fieldCount: value.fieldCount };
   }
-}
-
-export function evaluateFunctionalModuleWithBoundedWasm(
-  module: GpuFunctionalModule,
-  options: FunctionalDeepEvaluationOptions,
-): Promise<FunctionalDeepEvaluationResult>;
-export function evaluateFunctionalModuleWithBoundedWasm(
-  module: GpuFunctionalModule,
-  options: FunctionalEvaluationOptions,
-): Promise<FunctionalEvaluationResult>;
-export async function evaluateFunctionalModuleWithBoundedWasm(
-  module: GpuFunctionalModule,
-  options: FunctionalEvaluationOptions,
-): Promise<AnyFunctionalEvaluationResult> {
-  options.signal?.throwIfAborted();
-  if (
-    options.maximumStepsPerDispatch !== undefined || options.heapSlots !== undefined ||
-    options.stackFrames !== undefined
-  ) {
-    throw new TypeError(
-      "bounded WebAssembly evaluation does not accept GPU dispatch, heap, or stack controls",
-    );
-  }
-  if (module.hostCapabilities.length !== 0) {
-    throw new TypeError(
-      "bounded IEEE evaluation with host capabilities requires a WASM runner init",
-    );
-  }
-  const maximumSteps = options.maximumSteps ?? 1_000_000;
-  let execution;
-  try {
-    execution = await runBoundedFunctionalWasmModule(module, maximumSteps, {
-      ...(options.input === undefined ? {} : { argument: wasmInputValue(options.input) }),
-      ...(options.maximumResultNodes === undefined
-        ? {}
-        : { maximumResultNodes: options.maximumResultNodes }),
-      ...(options.maximumResultBytes === undefined
-        ? {}
-        : { maximumResultBytes: options.maximumResultBytes }),
-    });
-  } catch (cause) {
-    if (!(cause instanceof FunctionalWasmRuntimeError)) throw cause;
-    const fault = functionalFaultFromBoundedWasm(cause, maximumSteps);
-    if (fault === undefined) throw cause;
-    return {
-      ok: false,
-      fault,
-      stats: {
-        steps: cause.code === "F3002" ? maximumSteps : 0,
-        allocations: 0,
-        peakStack: 0,
-        thunkEvaluations: 0,
-      },
-    };
-  }
-  options.signal?.throwIfAborted();
-  return {
-    ok: true,
-    value: functionalValueFromWasm(execution, options.resultForm === "deep"),
-    stats: {
-      steps: execution.semanticSteps,
-      allocations: Math.ceil(execution.stats.allocatedBytes / 8),
-      peakStack: 0,
-      thunkEvaluations: execution.stats.thunkEvaluations,
-    },
-  };
-}
-
-function wasmInputValue(value: FunctionalInputValue): FunctionalWasmValue {
-  switch (value.kind) {
-    case "whole-number-f64":
-      return { kind: "integer", value: value.value };
-    case "tuple":
-      return {
-        kind: "tuple",
-        values: [wasmInputValue(value.values[0]), wasmInputValue(value.values[1])],
-      };
-    case "constructor":
-      return {
-        kind: "constructor",
-        name: value.name,
-        fields: value.fields.map(wasmInputValue),
-      };
-    default:
-      return value;
-  }
-}
-
-function functionalFaultFromBoundedWasm(
-  error: FunctionalWasmRuntimeError,
-  maximumSteps: number,
-): FunctionalRuntimeFault | undefined {
-  const sourceByteOffset = error.span?.startByte ?? null;
-  if (error.code === "F3002") {
-    return {
-      kind: "out-of-fuel",
-      code: "F3002",
-      message: `evaluation exhausted its limit of ${maximumSteps} steps`,
-      sourceByteOffset,
-    };
-  }
-  if (error.code === "F3003") {
-    return { kind: "out-of-heap", code: "F3003", message: error.message, sourceByteOffset };
-  }
-  if (error.code === "F3005") {
-    return { kind: "blackhole", code: "F3005", message: error.message, sourceByteOffset };
-  }
-  if (error.code === "F3007") {
-    return { kind: "divide-by-zero", code: "F3007", message: error.message, sourceByteOffset };
-  }
-  if (error.code === "F3010") {
-    return { kind: "result-too-large", code: "F3010", message: error.message, sourceByteOffset };
-  }
-  if (error.code === "F3011") {
-    return { kind: "cyclic-result", code: "F3011", message: error.message, sourceByteOffset };
-  }
-  if (error.code === "F3012") {
-    return {
-      kind: "invalid-numeric-conversion",
-      code: "F3012",
-      message: error.message,
-      sourceByteOffset,
-    };
-  }
-  return undefined;
-}
-
-function functionalValueFromWasm(
-  execution: FunctionalWasmExecution,
-  deep: boolean,
-): FunctionalValue | FunctionalDeepValue {
-  const convert = (value: FunctionalWasmValue): FunctionalValue | FunctionalDeepValue => {
-    switch (value.kind) {
-      case "integer":
-      case "signed-integer-64":
-      case "float-32":
-      case "float-64":
-      case "boolean":
-      case "unit":
-        return value;
-      case "tuple":
-        if (!deep) return { kind: "tuple", fieldCount: 2 };
-        return {
-          kind: "tuple",
-          fieldCount: 2,
-          fields: value.values.map((field) => convert(field) as FunctionalDeepValue),
-        };
-      case "constructor":
-        if (!deep) {
-          return { kind: "constructor", name: value.name, fieldCount: value.fields.length };
-        }
-        return {
-          kind: "constructor",
-          name: value.name,
-          fieldCount: value.fields.length,
-          fields: value.fields.map((field) => convert(field) as FunctionalDeepValue),
-        };
-      case "text":
-      case "bytes":
-      case "array":
-      case "slice":
-      case "resource":
-      case "erased":
-        throw new TypeError(`functional evaluator cannot expose ${value.kind} boundary values`);
-    }
-  };
-  return convert(execution.value);
 }
 
 function lazuliRuntimeModule(module: GpuFunctionalModule): GpuLazuliModule {

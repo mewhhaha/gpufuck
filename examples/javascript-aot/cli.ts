@@ -1,8 +1,4 @@
-import {
-  GpuFunctionalCompiler,
-  requestWebGpuDevice,
-  runFunctionalWasmModule,
-} from "../../functional.ts";
+import { GpuFunctionalCompiler, requestWebGpuDevice } from "../../functional.ts";
 import { lowerJavaScriptAotSource } from "./mod.ts";
 
 type CliOutput = Pick<Console, "error" | "log">;
@@ -41,13 +37,10 @@ export async function main(
       return 1;
     }
     try {
-      const execution = await runFunctionalWasmModule(compilation.module);
       output.log(JSON.stringify(
         {
+          compiled: true,
           entryType: compilation.module.entryType,
-          value: execution.value,
-          stats: execution.stats,
-          wasmByteLength: execution.bytes.byteLength,
         },
         null,
         2,

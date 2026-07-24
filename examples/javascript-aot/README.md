@@ -1,31 +1,33 @@
 # JavaScript AOT frontend
 
 This experiment parses a closed ES module with Baba, lowers JavaScript control flow into the
-language-neutral Functional Surface, resolves and typechecks it on WebGPU, and emits ordinary Wasm.
-All JavaScript-specific code lives in this example: `src/` contains the frontend, `language/`
-contains the Baba grammar and generated parser, and `check_test262.ts` owns the pinned conformance
-harness. The repository's `src/` directory remains language-neutral. Run the example with:
+language-neutral Functional Surface, and resolves and typechecks it on WebGPU. It is compile-only:
+the CLI reports compilation success and the inferred entry type, and nothing here runs the compiled
+program. Its purpose is to feed the compiler a wide batch of independent modules, which is what the
+roughly 50,000 standalone Test262 files provide. All JavaScript-specific code lives in this example:
+`src/` contains the frontend, `language/` contains the Baba grammar and generated parser, and
+`check_test262.ts` owns the pinned corpus harness. The repository's `src/` directory remains
+language-neutral. Run the example with:
 
 ```sh
 deno task run:javascript-aot examples/javascript-aot/number_pipeline.mjs
 ```
 
-The executable slices support exported, private, local, and mutually recursive function
-declarations; anonymous, named, and single-parameter arrow closures; `const`, `let`, and hoisted
-`var` bindings; assignment; `while` and classic `for` loops; single-statement bodies; `break`;
-`continue`; evaluated expression statements; `return`; block-scoped `if`/`else`; conditional
-expressions; Boolean short-circuiting; strings; `null` and `undefined`; lexical `throw`,
-`try`/`catch`, and `finally`; standard error values and `instanceof`; immutable object shapes;
-homogeneous array literals; indexing; `.length`; `.map`; `.reduce`; and JavaScript `number`
-arithmetic, comparison, remainder, bitwise, and shift operations. Literal unary coercion, statically
-decidable `typeof`, standard radix literals, and numeric separators are also supported. Mutable
-source bindings and loops lower to immutable SSA-style bindings and local recursive Core functions.
-Arrays and their higher-order methods lower to a generic algebraic Core type and ordinary recursive
-definitions. Runtime calls preserve extra arguments and expose an `arguments` object; simple,
-default, object-binding, array-binding, and sole rest parameters share that call-frame model. Object
-methods, basic classes with constructors and instance methods, straight-line generators, and
-deterministic fulfilled async functions are executable. The entry is an exported zero-argument
-`main` function or constant.
+The compiled slices support exported, private, local, and mutually recursive function declarations;
+anonymous, named, and single-parameter arrow closures; `const`, `let`, and hoisted `var` bindings;
+assignment; `while` and classic `for` loops; single-statement bodies; `break`; `continue`; evaluated
+expression statements; `return`; block-scoped `if`/`else`; conditional expressions; Boolean
+short-circuiting; strings; `null` and `undefined`; lexical `throw`, `try`/`catch`, and `finally`;
+standard error values and `instanceof`; immutable object shapes; homogeneous array literals;
+indexing; `.length`; `.map`; `.reduce`; and JavaScript `number` arithmetic, comparison, remainder,
+bitwise, and shift operations. Literal unary coercion, statically decidable `typeof`, standard radix
+literals, and numeric separators are also supported. Mutable source bindings and loops lower to
+immutable SSA-style bindings and local recursive Core functions. Arrays and their higher-order
+methods lower to a generic algebraic Core type and ordinary recursive definitions. Runtime calls
+preserve extra arguments and expose an `arguments` object; simple, default, object-binding,
+array-binding, and sole rest parameters share that call-frame model. Object methods, basic classes
+with constructors and instance methods, straight-line generators, and deterministic fulfilled async
+functions are accepted. The entry is an exported zero-argument `main` function or constant.
 
 Frontend admission is deliberately bounded before generated-parser or recursive lowering work:
 source is limited to 256 KiB of UTF-8, token streams to 8,192 tokens, delimiter and prefix-operator
@@ -36,12 +38,12 @@ Programs that require object identity or property writes use a separate runtime-
 It represents every JavaScript value with one tagged `Value` type and threads explicit state through
 evaluation. The state owns a persistent heap of identity-bearing ordinary and callable objects,
 string and symbol property keys, data and accessor descriptors, prototypes, lexical environments,
-and normal, return, throw, break, and continue completion records. This path executes object
+and normal, return, throw, break, and continue completion records. This path lowers object
 allocation, strict equality and SameValue, own and inherited property reads, dot and string-index
 writes, hoisted `var`, function objects with captured environments, calls, and cross-call throws
-caught by lexical `catch`. Identity exhaustion and dangling prototypes fail deterministically. Only
-runtime definitions reachable from the entry are encoded for GPU checking, so adding an unused
-builtin does not increase compilation work or the emitted artifact.
+caught by lexical `catch`. Identity exhaustion and dangling prototypes lower to explicit runtime
+faults. Only runtime definitions reachable from the entry are encoded for GPU checking, so adding an
+unused builtin does not increase compilation work.
 
 Object records and stable binding cells live in Functional Core `Store` values, so lookup and
 updates are checked indexed operations instead of recursive host-side lists. Name and property
@@ -58,9 +60,9 @@ functions preserve their target's strictness and cannot be rebound by a later ca
 
 The runtime profile recognizes `Object.defineProperty(object, "name", descriptor)` when the key and
 descriptor shape are statically visible. Accessor descriptors may provide `get`, `set`,
-`enumerable`, and `configurable`; getter and setter functions run through ordinary callable dispatch
-with the property receiver as `this`. Their heap and binding updates persist, and thrown values
-propagate through the same completion path as direct calls. Literal-string
+`enumerable`, and `configurable`; getter and setter functions lower through ordinary callable
+dispatch with the property receiver as `this`. Their heap and binding updates thread through the
+lowered state, and thrown values follow the same completion path as direct calls. Literal-string
 `String.prototype.replace` supports a string or callable replacement; callable replacements receive
 the matched text, match offset, and source string.
 
@@ -92,19 +94,18 @@ The compatibility target is the complete applicable Test262 `test/language` corp
 JavaScript subset. `deno task check:javascript-test262` checks out the pinned upstream revision and
 reports the complete inventory, including strict and non-strict execution modes, negative-test
 phases, modules, async tests, current frontend readiness, and dynamic-code exclusions. Every ready
-required mode is compiled to a fresh artifact and executed. Readiness is deliberately not labeled
-conformance: a test passes only once the runner can execute its harness and observe the required
-result or exact failure phase. Negative probes distinguish parse, resolution, and runtime
-expectations and reject a failure at the wrong phase; runtime-ready negatives retain their expected
-error type for execution validation. Frontend probing runs in bounded subprocess batches so
-generated-parser and lowering state cannot accumulate across the complete corpus. Execution uses a
-pool of up to two persistent workers that create their GPU compiler once and accept one mode per
-request. Each worker gets a separate 180-second warmup window, then a 60-second per-mode limit and
-768 MiB of RSS headroom above its measured warm baseline. The semantic compiler runs with its
-ten-million-step hard cap. Time, memory, and compiler-fuel exhaustion have their own resource-limit
-bucket.
+required mode is compiled to a fresh artifact; compiled modules are never executed, so the harness
+reports compilation outcomes and diagnostics rather than conformance. Negative probes distinguish
+parse, resolution, and runtime expectations and reject a failure at the wrong phase; runtime-ready
+negatives retain their expected error type, which no longer decides a result while execution is out
+of scope. Frontend probing runs in bounded subprocess batches so generated-parser and lowering state
+cannot accumulate across the complete corpus. Compilation uses a pool of up to two persistent
+workers that create their GPU compiler once and accept one mode per request. Each worker gets a
+separate 180-second warmup window, then a 60-second per-mode limit and 768 MiB of RSS headroom above
+its measured warm baseline. The semantic compiler runs with its ten-million-step hard cap. Time,
+memory, and compiler-fuel exhaustion have their own resource-limit bucket.
 
 The report balances every applicable mode between success and a specific parser, lowering, resource,
-compilation, or execution failure. The command exits nonzero until that failed count is zero;
-frontend readiness alone can never make the gate pass. Use `--report=<path>` to retain exact
-pinned-revision counts instead of relying on a documentation snapshot.
+or compilation failure. The command exits nonzero until that failed count is zero; frontend
+readiness alone can never make the gate pass. Use `--report=<path>` to retain exact pinned-revision
+counts instead of relying on a documentation snapshot.

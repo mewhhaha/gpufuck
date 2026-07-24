@@ -45,7 +45,6 @@ export type Test262NegativeHarnessResult =
   | {
     readonly kind: "runtime-ready";
     readonly expectedType: string;
-    readonly validation: "returned-boolean" | "runtime-fault";
     readonly lowered: LoweredJavaScriptAotModule;
   }
   | { readonly kind: "mismatch"; readonly diagnostic: JavaScriptAotDiagnostic };
@@ -139,7 +138,6 @@ export function lowerTest262NegativeTest(
         return {
           kind: "runtime-ready",
           expectedType: expectation.type,
-          validation: "runtime-fault",
           lowered: lowerHarnessModule(path, harnessModule, entryName, mode, {
             allowUnresolvedReferences: true,
           }),
@@ -149,7 +147,6 @@ export function lowerTest262NegativeTest(
         return {
           kind: "runtime-ready",
           expectedType: expectation.type,
-          validation: "runtime-fault",
           lowered: lowerHarnessModule(path, harnessModule, entryName, mode),
         };
       }
@@ -196,7 +193,6 @@ export function lowerTest262NegativeTest(
       return {
         kind: "runtime-ready",
         expectedType: expectation.type,
-        validation: "returned-boolean",
         lowered,
       };
     }

@@ -5,7 +5,7 @@ import {
   surface,
 } from "../../../functional.ts";
 import {
-  executeTest262Case,
+  compileTest262Case,
   TEST262_COMPILATION_OPTIONS,
   type Test262ExecutionResponse,
 } from "./test262_execute.ts";
@@ -53,7 +53,7 @@ try {
       try {
         response = {
           ok: true,
-          result: await executeTest262Case(compiler, workerRequest.request),
+          result: await compileTest262Case(compiler, workerRequest.request),
         };
       } catch (error) {
         response = {
