@@ -6,3 +6,4 @@
   "{"
   "}"
 ] @rainbow.bracket
+

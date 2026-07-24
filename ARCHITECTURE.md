@@ -337,6 +337,12 @@ not a copy at every coercion site. These are ordinary Functional Core functions 
 the frontend-specific step only prevents continuation-passing lowering from expanding the input tree
 or producing one oversized Wasm function.
 
+JavaScript call frames carry the callable object as well as its target, captured realm and
+environment, receiver, and arguments. This preserves `arguments.callee` identity without making it a
+global lookup. Strict and non-simple parameter lists use unmapped arguments objects; ordinary sloppy
+parameter lists may use the frontend's mapped-cell rewrite. Non-callable invocation produces a
+catchable `TypeError` completion, and all failure arms share one lifted continuation.
+
 Frontends that promise diagnostics for unused declarations must validate them before selecting the
 executable roots; reachability cannot silently change whether source is accepted.
 

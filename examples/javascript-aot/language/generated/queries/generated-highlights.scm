@@ -70,6 +70,7 @@
 (string_expression) @string
 (boolean_expression) @constant.builtin
 (null_expression) @constant.builtin
+(ESCAPED_PROPERTY_IDENT) @variable.other.member
 (NUMBER) @number
 (STRING) @string
 (LINE_COMMENT) @comment
@@ -78,6 +79,7 @@
 (async_function_declaration name: (IDENT) @function)
 (catch_binding name: (IDENT) @variable)
 (class_declaration name: (IDENT) @type)
+(class_method name: (ESCAPED_PROPERTY_IDENT) @function)
 (class_method name: (IDENT) @function)
 (default_parameter name: (IDENT) @variable)
 (function_declaration name: (IDENT) @function)
@@ -87,6 +89,7 @@
 (object_binding_alias name: (IDENT) @variable)
 (object_binding property: (IDENT) @variable.other.member)
 (object_method name: (object_property_name) @function)
+(property_access name: (ESCAPED_PROPERTY_IDENT) @variable.other.member)
 (property_access name: (IDENT) @variable.other.member)
 (rest_parameter name: (IDENT) @variable)
 (shorthand_object_property name: (IDENT) @variable.other.member)

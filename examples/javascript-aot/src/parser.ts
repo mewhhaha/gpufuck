@@ -158,7 +158,7 @@ export function parseJavaScriptAotModule(name: string, source: string): JavaScri
       ),
       span: { startByte: 0, endByte: byteOffsets.byteLength },
     };
-    assertStrictModeEarlyErrors(module.declarations);
+    assertJavaScriptEarlyErrors(module.declarations);
     return module;
   } catch (error) {
     if (
@@ -177,7 +177,7 @@ export function parseJavaScriptAotModule(name: string, source: string): JavaScri
   }
 }
 
-function assertStrictModeEarlyErrors(
+function assertJavaScriptEarlyErrors(
   declarations: readonly JavaScriptAotDeclaration[],
 ): void {
   const restrictedNames = new Set(["arguments", "eval"]);
@@ -201,10 +201,11 @@ function assertStrictModeEarlyErrors(
       case "function":
         visitFunction(
           expression.name,
-          expression.parameters,
+          expression.parameterBoundNames ?? expression.parameters,
           expression.body,
           strict,
           expression.span,
+          expression.simpleParameterList !== false,
         );
         return;
       case "unary":
@@ -245,10 +246,11 @@ function assertStrictModeEarlyErrors(
         case "function-declaration":
           visitFunction(
             statement.name,
-            statement.parameters,
+            statement.parameterBoundNames ?? statement.parameters,
             statement.body,
             statement.classMethods !== undefined || strict,
             statement.span,
+            statement.simpleParameterList !== false,
           );
           for (const method of statement.classMethods ?? []) {
             visitExpression(method.value, true);
@@ -325,12 +327,20 @@ function assertStrictModeEarlyErrors(
   };
   const visitFunction = (
     name: string | null,
-    parameters: readonly string[],
+    boundNames: readonly string[],
     body: readonly JavaScriptAotStatement[],
     inheritedStrictMode: boolean,
     span: JavaScriptAotExpression["span"],
+    simpleParameterList: boolean,
   ): void => {
-    const strict = inheritedStrictMode || hasUseStrictDirective(body);
+    const useStrictDirective = hasUseStrictDirective(body);
+    if (!simpleParameterList && useStrictDirective) {
+      throw new JavaScriptAotSyntaxError(
+        span,
+        'JavaScript function with a non-simple parameter list cannot contain a "use strict" directive.',
+      );
+    }
+    const strict = inheritedStrictMode || useStrictDirective;
     if (strict) {
       if (name !== null && restrictedNames.has(name)) {
         throw new JavaScriptAotSyntaxError(
@@ -338,25 +348,25 @@ function assertStrictModeEarlyErrors(
           `JavaScript strict mode cannot bind function name ${JSON.stringify(name)}.`,
         );
       }
-      const restrictedParameter = parameters.find((parameter) => restrictedNames.has(parameter));
+      const restrictedParameter = boundNames.find((boundName) => restrictedNames.has(boundName));
       if (restrictedParameter !== undefined) {
         throw new JavaScriptAotSyntaxError(
           span,
           `JavaScript strict mode cannot bind parameter ${JSON.stringify(restrictedParameter)}.`,
         );
       }
-      const parameterNames = new Set<string>();
-      for (const parameter of parameters) {
-        if (parameterNames.has(parameter)) {
-          throw new JavaScriptAotSyntaxError(
-            span,
-            `JavaScript strict mode function declares parameter ${
-              JSON.stringify(parameter)
-            } more than once.`,
-          );
-        }
-        parameterNames.add(parameter);
+    }
+    const parameterNames = new Set<string>();
+    for (const boundName of boundNames) {
+      if (parameterNames.has(boundName) && (strict || !simpleParameterList)) {
+        throw new JavaScriptAotSyntaxError(
+          span,
+          `JavaScript ${
+            strict ? "strict mode" : "non-simple parameter"
+          } function declares parameter ${JSON.stringify(boundName)} more than once.`,
+        );
       }
+      parameterNames.add(boundName);
     }
     visitStatements(body, strict);
   };
@@ -367,10 +377,11 @@ function assertStrictModeEarlyErrors(
     } else {
       visitFunction(
         declaration.name,
-        declaration.parameters,
+        declaration.parameterBoundNames ?? declaration.parameters,
         declaration.body,
         declaration.classMethods !== undefined,
         declaration.span,
+        declaration.simpleParameterList !== false,
       );
       for (const method of declaration.classMethods ?? []) {
         visitExpression(method.value, true);
@@ -426,7 +437,14 @@ function parseDeclaration(
   ) {
     const parametersNode = babaOptionalRuleField(declaration, "parameters");
     const parameters = parametersNode === null
-      ? { names: [], initializers: [], functionLength: 0 }
+      ? {
+        names: [],
+        boundNames: [],
+        initializers: [],
+        initializerCounts: [],
+        defaults: [],
+        functionLength: 0,
+      }
       : parseParameterList(parametersNode, offsets);
     const bodyNode = babaRequiredRuleField(declaration, "body");
     const body = declaration.name === "generator_declaration"
@@ -438,7 +456,12 @@ function parseDeclaration(
       name: babaRequiredTokenField(declaration, "name").text,
       parameters: parameters.names,
       parameterLength: parameters.functionLength,
-      ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
+      ...(parameters.initializers.length === 0 ? {} : {
+        simpleParameterList: false as const,
+        parameterBoundNames: parameters.boundNames,
+        parameterInitializerCounts: parameters.initializerCounts,
+        parameterDefaults: parameters.defaults,
+      }),
       ...(declaration.name === "generator_declaration"
         ? { requiresRuntimeModel: true as const }
         : {}),
@@ -451,7 +474,14 @@ function parseDeclaration(
   }
   const parametersNode = babaOptionalRuleField(declaration, "parameters");
   const parameters = parametersNode === null
-    ? { names: [], initializers: [], functionLength: 0 }
+    ? {
+      names: [],
+      boundNames: [],
+      initializers: [],
+      initializerCounts: [],
+      defaults: [],
+      functionLength: 0,
+    }
     : parseParameterList(parametersNode, offsets);
   return {
     kind: "function",
@@ -459,7 +489,12 @@ function parseDeclaration(
     name: babaRequiredTokenField(declaration, "name").text,
     parameters: parameters.names,
     parameterLength: parameters.functionLength,
-    ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
+    ...(parameters.initializers.length === 0 ? {} : {
+      simpleParameterList: false as const,
+      parameterBoundNames: parameters.boundNames,
+      parameterInitializerCounts: parameters.initializerCounts,
+      parameterDefaults: parameters.defaults,
+    }),
     body: insertParameterInitializers(
       parseBlock(babaRequiredRuleField(declaration, "body"), offsets),
       parameters.initializers,
@@ -493,7 +528,14 @@ function parseStatement(
     case "async_function_declaration": {
       const parametersNode = babaOptionalRuleField(statement, "parameters");
       const parameters = parametersNode === null
-        ? { names: [], initializers: [], functionLength: 0 }
+        ? {
+          names: [],
+          boundNames: [],
+          initializers: [],
+          initializerCounts: [],
+          defaults: [],
+          functionLength: 0,
+        }
         : parseParameterList(parametersNode, offsets);
       const bodyNode = babaRequiredRuleField(statement, "body");
       const body = statement.name === "generator_declaration"
@@ -504,7 +546,12 @@ function parseStatement(
         name: babaRequiredTokenField(statement, "name").text,
         parameters: parameters.names,
         parameterLength: parameters.functionLength,
-        ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
+        ...(parameters.initializers.length === 0 ? {} : {
+          simpleParameterList: false as const,
+          parameterBoundNames: parameters.boundNames,
+          parameterInitializerCounts: parameters.initializerCounts,
+          parameterDefaults: parameters.defaults,
+        }),
         ...(statement.name === "generator_declaration"
           ? { requiresRuntimeModel: true as const }
           : {}),
@@ -515,14 +562,26 @@ function parseStatement(
     case "function_declaration": {
       const parametersNode = babaOptionalRuleField(statement, "parameters");
       const parameters = parametersNode === null
-        ? { names: [], initializers: [], functionLength: 0 }
+        ? {
+          names: [],
+          boundNames: [],
+          initializers: [],
+          initializerCounts: [],
+          defaults: [],
+          functionLength: 0,
+        }
         : parseParameterList(parametersNode, offsets);
       return {
         kind: "function-declaration",
         name: babaRequiredTokenField(statement, "name").text,
         parameters: parameters.names,
         parameterLength: parameters.functionLength,
-        ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
+        ...(parameters.initializers.length === 0 ? {} : {
+          simpleParameterList: false as const,
+          parameterBoundNames: parameters.boundNames,
+          parameterInitializerCounts: parameters.initializerCounts,
+          parameterDefaults: parameters.defaults,
+        }),
         body: insertParameterInitializers(
           parseBlock(babaRequiredRuleField(statement, "body"), offsets),
           parameters.initializers,
@@ -701,7 +760,11 @@ function parseClass(
     "methods",
   );
   const constructors = methods.filter((method) =>
-    babaRequiredTokenField(method, "name").text === "constructor"
+    parsePropertyIdentifierName(
+      method,
+      "name",
+      offsets,
+    ) === "constructor"
   );
   if (constructors.length > 1) {
     throw new JavaScriptAotSyntaxError(
@@ -716,27 +779,48 @@ function parseClass(
     ? null
     : babaOptionalRuleField(constructor, "parameters");
   const parameters = parametersNode === null
-    ? { names: [], initializers: [], functionLength: 0 }
+    ? {
+      names: [],
+      boundNames: [],
+      initializers: [],
+      initializerCounts: [],
+      defaults: [],
+      functionLength: 0,
+    }
     : parseParameterList(parametersNode, offsets);
   const classMethods = methods.flatMap((method): readonly JavaScriptAotClassMethod[] => {
-    const methodName = babaRequiredTokenField(method, "name");
-    if (methodName.text === "constructor") return [];
+    const methodName = parsePropertyIdentifierName(
+      method,
+      "name",
+      offsets,
+    );
+    if (methodName === "constructor") return [];
     const methodParametersNode = babaOptionalRuleField(method, "parameters");
     const methodParameters = methodParametersNode === null
-      ? { names: [], initializers: [], functionLength: 0 }
+      ? {
+        names: [],
+        boundNames: [],
+        initializers: [],
+        initializerCounts: [],
+        defaults: [],
+        functionLength: 0,
+      }
       : parseParameterList(methodParametersNode, offsets);
     const methodSpan = offsets.span(method.span);
     return [{
-      name: methodName.text,
+      name: methodName,
       value: {
         kind: "function",
-        name: methodName.text,
+        name: methodName,
         thisMode: "dynamic",
         parameters: methodParameters.names,
         parameterLength: methodParameters.functionLength,
-        ...(methodParameters.initializers.length === 0
-          ? {}
-          : { simpleParameterList: false as const }),
+        ...(methodParameters.initializers.length === 0 ? {} : {
+          simpleParameterList: false as const,
+          parameterBoundNames: methodParameters.boundNames,
+          parameterInitializerCounts: methodParameters.initializerCounts,
+          parameterDefaults: methodParameters.defaults,
+        }),
         body: insertParameterInitializers(
           parseBlock(babaRequiredRuleField(method, "body"), offsets),
           methodParameters.initializers,
@@ -753,7 +837,12 @@ function parseClass(
     name: babaRequiredTokenField(declaration, "name").text,
     parameters: parameters.names,
     parameterLength: parameters.functionLength,
-    ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
+    ...(parameters.initializers.length === 0 ? {} : {
+      simpleParameterList: false as const,
+      parameterBoundNames: parameters.boundNames,
+      parameterInitializerCounts: parameters.initializerCounts,
+      parameterDefaults: parameters.defaults,
+    }),
     requiresRuntimeModel: true,
     classMethods,
     body: insertParameterInitializers(
@@ -1026,7 +1115,11 @@ function parseExpression(
           result = {
             kind: "property",
             value: result,
-            name: babaRequiredTokenField(operation, "name").text,
+            name: parsePropertyIdentifierName(
+              operation,
+              "name",
+              offsets,
+            ),
             span: offsets.span({ start: expression.span.start, end: operation.span.end }),
           };
           continue;
@@ -1061,7 +1154,14 @@ function parseExpression(
     case "function_expression": {
       const parametersNode = babaOptionalRuleField(expression, "parameters");
       const parameters = parametersNode === null
-        ? { names: [], initializers: [], functionLength: 0 }
+        ? {
+          names: [],
+          boundNames: [],
+          initializers: [],
+          initializerCounts: [],
+          defaults: [],
+          functionLength: 0,
+        }
         : parseParameterList(parametersNode, offsets);
       return {
         kind: "function",
@@ -1069,7 +1169,12 @@ function parseExpression(
         thisMode: "dynamic",
         parameters: parameters.names,
         parameterLength: parameters.functionLength,
-        ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
+        ...(parameters.initializers.length === 0 ? {} : {
+          simpleParameterList: false as const,
+          parameterBoundNames: parameters.boundNames,
+          parameterInitializerCounts: parameters.initializerCounts,
+          parameterDefaults: parameters.defaults,
+        }),
         body: insertParameterInitializers(
           parseBlock(babaRequiredRuleField(expression, "body"), offsets),
           parameters.initializers,
@@ -1159,16 +1264,26 @@ function parseObjectProperty(
     };
   }
   const propertyName = babaChildRule(babaRequiredRuleField(property, "name"));
-  const nameToken = babaRequiredTokenField(propertyName, "value");
-  const name = propertyName.name === "string_property_name"
-    ? parseString(nameToken.text, offsets.span(nameToken.span))
-    : propertyName.name === "number_property_name"
-    ? String(Number(nameToken.text.replaceAll("_", "")))
-    : nameToken.text;
+  let name: string;
+  if (propertyName.name === "identifier_property_name") {
+    name = parsePropertyIdentifierName(propertyName, "value", offsets);
+  } else {
+    const nameToken = babaRequiredTokenField(propertyName, "value");
+    name = propertyName.name === "string_property_name"
+      ? parseString(nameToken.text, offsets.span(nameToken.span))
+      : String(Number(nameToken.text.replaceAll("_", "")));
+  }
   if (property.name === "object_method") {
     const parametersNode = babaOptionalRuleField(property, "parameters");
     const parameters = parametersNode === null
-      ? { names: [], initializers: [], functionLength: 0 }
+      ? {
+        names: [],
+        boundNames: [],
+        initializers: [],
+        initializerCounts: [],
+        defaults: [],
+        functionLength: 0,
+      }
       : parseParameterList(parametersNode, offsets);
     return {
       name,
@@ -1178,7 +1293,12 @@ function parseObjectProperty(
         thisMode: "dynamic",
         parameters: parameters.names,
         parameterLength: parameters.functionLength,
-        ...(parameters.initializers.length === 0 ? {} : { simpleParameterList: false as const }),
+        ...(parameters.initializers.length === 0 ? {} : {
+          simpleParameterList: false as const,
+          parameterBoundNames: parameters.boundNames,
+          parameterInitializerCounts: parameters.initializerCounts,
+          parameterDefaults: parameters.defaults,
+        }),
         body: insertParameterInitializers(
           parseBlock(babaRequiredRuleField(property, "body"), offsets),
           parameters.initializers,
@@ -1231,87 +1351,157 @@ function parseGeneratorBody(
   }
 
   const stateName = `$javascript#generatorState#${span.startByte}`;
-  const nextBody: JavaScriptAotStatement[] = [{
-    kind: "assignment",
-    name: stateName,
-    operator: "=",
-    value: {
-      kind: "binary",
-      operator: "+",
-      left: { kind: "name", name: stateName, span },
-      right: { kind: "number", value: 1, span },
-      span,
+  const deferredValues = yielded.map((value, index) => ({
+    name: `$javascript#generatorYield#${span.startByte}#${index}`,
+    value,
+  }));
+  const deferredReturn = returned === null ? null : {
+    name: `$javascript#generatorReturn#${span.startByte}`,
+    value: returned,
+  };
+  const terminalState = yielded.length + 1;
+  const nextBody: JavaScriptAotStatement[] = deferredValues.map(
+    (deferredValue, index): JavaScriptAotStatement => {
+      const resultName = `$javascript#generatorResult#${span.startByte}#${index}`;
+      return {
+        kind: "if",
+        condition: {
+          kind: "binary",
+          operator: "===",
+          left: { kind: "name", name: stateName, span },
+          right: { kind: "number", value: index, span },
+          span,
+        },
+        consequent: [{
+          kind: "assignment",
+          name: stateName,
+          operator: "=",
+          value: { kind: "number", value: terminalState, span },
+          span,
+        }, {
+          kind: "constant",
+          name: resultName,
+          value: {
+            kind: "call",
+            callee: { kind: "name", name: deferredValue.name, span },
+            arguments: [],
+            span,
+          },
+          span,
+        }, {
+          kind: "assignment",
+          name: stateName,
+          operator: "=",
+          value: { kind: "number", value: index + 1, span },
+          span,
+        }, {
+          kind: "return",
+          value: iteratorResult(
+            { kind: "name", name: resultName, span },
+            { kind: "boolean", value: false, span },
+            span,
+          ),
+          span,
+        }],
+        alternate: null,
+        span,
+      };
     },
-    span,
-  }];
-  let nextValue: JavaScriptAotExpression = { kind: "name", name: "undefined", span };
-  if (returned !== null) {
-    nextValue = {
-      kind: "conditional",
+  );
+  if (deferredReturn !== null) {
+    const resultName = `$javascript#generatorReturnResult#${span.startByte}`;
+    nextBody.push({
+      kind: "if",
       condition: {
         kind: "binary",
         operator: "===",
         left: { kind: "name", name: stateName, span },
-        right: { kind: "number", value: yielded.length + 1, span },
+        right: { kind: "number", value: yielded.length, span },
         span,
       },
-      consequent: returned,
-      alternate: nextValue,
-      span,
-    };
-  }
-  for (let index = yielded.length - 1; index >= 0; index--) {
-    nextValue = {
-      kind: "conditional",
-      condition: {
-        kind: "binary",
-        operator: "===",
-        left: { kind: "name", name: stateName, span },
-        right: { kind: "number", value: index + 1, span },
+      consequent: [{
+        kind: "assignment",
+        name: stateName,
+        operator: "=",
+        value: { kind: "number", value: terminalState, span },
         span,
-      },
-      consequent: yielded[index]!,
-      alternate: nextValue,
-      span,
-    };
-  }
-  nextBody.push({
-    kind: "return",
-    value: iteratorResult(nextValue, {
-      kind: "binary",
-      operator: ">",
-      left: { kind: "name", name: stateName, span },
-      right: { kind: "number", value: yielded.length, span },
-      span,
-    }, span),
-    span,
-  });
-  return [{
-    kind: "mutable",
-    name: stateName,
-    value: { kind: "number", value: 0, span },
-    span,
-  }, {
-    kind: "return",
-    value: {
-      kind: "object",
-      properties: [{
-        name: "next",
+      }, {
+        kind: "constant",
+        name: resultName,
         value: {
-          kind: "function",
-          name: null,
-          thisMode: "dynamic",
-          parameters: [],
-          parameterLength: 0,
-          body: nextBody,
+          kind: "call",
+          callee: { kind: "name", name: deferredReturn.name, span },
+          arguments: [],
           span,
         },
         span,
+      }, {
+        kind: "return",
+        value: iteratorResult(
+          { kind: "name", name: resultName, span },
+          { kind: "boolean", value: true, span },
+          span,
+        ),
+        span,
       }],
+      alternate: null,
+      span,
+    });
+  }
+  nextBody.push({
+    kind: "return",
+    value: iteratorResult(
+      { kind: "name", name: "undefined", span },
+      { kind: "boolean", value: true, span },
+      span,
+    ),
+    span,
+  });
+  return [
+    ...[...deferredValues, ...(deferredReturn === null ? [] : [deferredReturn])].map(
+      ({ name, value }): JavaScriptAotStatement => ({
+        kind: "constant",
+        name,
+        value: {
+          kind: "function",
+          name: null,
+          thisMode: "lexical",
+          parameters: [],
+          parameterLength: 0,
+          body: [{ kind: "return", value, span: value.span }],
+          span: value.span,
+        },
+        span: value.span,
+      }),
+    ),
+    {
+      kind: "mutable",
+      name: stateName,
+      value: { kind: "number", value: 0, span },
       span,
     },
-    span,
-  }];
+    {
+      kind: "return",
+      value: {
+        kind: "object",
+        properties: [{
+          name: "next",
+          value: {
+            kind: "function",
+            name: null,
+            thisMode: "dynamic",
+            parameters: [],
+            parameterLength: 0,
+            body: nextBody,
+            span,
+          },
+          span,
+        }],
+        span,
+      },
+      span,
+    },
+  ];
 }
 
 function iteratorResult(
@@ -1511,16 +1701,23 @@ function parseParameterList(
   offsets: BabaUtf8ByteOffsets,
 ): {
   readonly names: readonly string[];
+  readonly boundNames: readonly string[];
   readonly initializers: readonly JavaScriptAotStatement[];
+  readonly initializerCounts: readonly number[];
+  readonly defaults: readonly (JavaScriptAotExpression | null)[];
   readonly functionLength: number;
 } {
   const names: string[] = [];
+  const boundNames: string[] = [];
   const initializers: JavaScriptAotStatement[] = [];
+  const initializerCounts: number[] = [];
+  const defaults: (JavaScriptAotExpression | null)[] = [];
   let functionLength = 0;
   let foundDefault = false;
   let current: BabaRuleCursor | null = node;
   let parameterIndex = 0;
   while (current !== null) {
+    const initializerStart = initializers.length;
     const parameter = babaChildRule(babaRequiredRuleField(current, "head"));
     const tail = babaOptionalRuleField(current, "rest");
     const next = tail === null ? null : babaOptionalRuleField(tail, "rest");
@@ -1532,6 +1729,7 @@ function parseParameterList(
         );
       }
       const name = babaRequiredTokenField(parameter, "name").text;
+      boundNames.push(name);
       initializers.push({
         kind: "mutable",
         name,
@@ -1539,6 +1737,8 @@ function parseParameterList(
         span: offsets.span(parameter.span),
       });
       foundDefault = true;
+      defaults.push(null);
+      initializerCounts.push(initializers.length - initializerStart);
       current = next;
       parameterIndex++;
       continue;
@@ -1584,6 +1784,7 @@ function parseParameterList(
       if (bindings !== null) {
         if (parameter.name === "array_binding_parameter") {
           for (const [index, binding] of tokenList(bindings).entries()) {
+            boundNames.push(binding);
             initializers.push({
               kind: "mutable",
               name: binding,
@@ -1600,24 +1801,33 @@ function parseParameterList(
           for (const binding of listRules(bindings)) {
             const property = babaRequiredTokenField(binding, "property").text;
             const alias = babaOptionalRuleField(binding, "alias");
+            const boundName = alias === null
+              ? property
+              : babaRequiredTokenField(alias, "name").text;
+            boundNames.push(boundName);
             initializers.push({
               kind: "mutable",
-              name: alias === null ? property : babaRequiredTokenField(alias, "name").text,
+              name: boundName,
               value: { kind: "property", value: argument, name: property, span },
               span,
             });
           }
         }
       }
+      defaults.push(null);
+      initializerCounts.push(initializers.length - initializerStart);
       current = next;
       parameterIndex++;
       continue;
     }
     const name = babaRequiredTokenField(parameter, "name").text;
     names.push(name);
+    boundNames.push(name);
     if (parameter.name === "default_parameter") {
       foundDefault = true;
       const span = offsets.span(parameter.span);
+      const defaultValue = parseExpression(babaRequiredRuleField(parameter, "value"), offsets);
+      defaults.push(defaultValue);
       initializers.push({
         kind: "if",
         condition: {
@@ -1631,19 +1841,21 @@ function parseParameterList(
           kind: "assignment",
           name,
           operator: "=",
-          value: parseExpression(babaRequiredRuleField(parameter, "value"), offsets),
+          value: defaultValue,
           span,
         }],
         alternate: null,
         span,
       });
-    } else if (!foundDefault) {
-      functionLength++;
+    } else {
+      defaults.push(null);
+      if (!foundDefault) functionLength++;
     }
+    initializerCounts.push(initializers.length - initializerStart);
     current = next;
     parameterIndex++;
   }
-  return { names, initializers, functionLength };
+  return { names, boundNames, initializers, initializerCounts, defaults, functionLength };
 }
 
 function parameterArgumentExpression(
@@ -1703,6 +1915,41 @@ function variableDeclarators(node: BabaRuleCursor): readonly BabaRuleCursor[] {
     babaRequiredRuleField(node, "head"),
     ...babaRuleFieldArray(node, "tail").map((tail) => babaRequiredRuleField(tail, "value")),
   ];
+}
+
+function parsePropertyIdentifierName(
+  node: BabaRuleCursor,
+  field: "name" | "value",
+  offsets: BabaUtf8ByteOffsets,
+): string {
+  const token = babaRequiredTokenField(node, field);
+  const decoded = token.text.replace(
+    /\\u([0-9A-Fa-f]{4})/g,
+    (_escape, hexadecimal: string) => String.fromCharCode(Number.parseInt(hexadecimal, 16)),
+  );
+  const characters = Array.from(decoded);
+  if (characters[0] === undefined || !/[A-Za-z_$]/.test(characters[0])) {
+    throw new JavaScriptAotSyntaxError(
+      offsets.span(token.span),
+      `JavaScript property IdentifierName ${JSON.stringify(token.text)} decodes to ${
+        JSON.stringify(decoded)
+      }, whose first character is not an ASCII IdentifierStart.`,
+    );
+  }
+  const invalidPartIndex = characters.findIndex(
+    (character, index) => index > 0 && !/[A-Za-z0-9_$]/.test(character),
+  );
+  if (invalidPartIndex !== -1) {
+    throw new JavaScriptAotSyntaxError(
+      offsets.span(token.span),
+      `JavaScript property IdentifierName ${JSON.stringify(token.text)} decodes to ${
+        JSON.stringify(decoded)
+      }, whose character ${invalidPartIndex + 1} ${
+        JSON.stringify(characters[invalidPartIndex])
+      } is not an ASCII IdentifierPart.`,
+    );
+  }
+  return decoded;
 }
 
 function parseString(

@@ -17,6 +17,9 @@ export interface JavaScriptAotFunctionDeclaration {
   readonly parameters: readonly string[];
   readonly parameterLength?: number;
   readonly simpleParameterList?: false;
+  readonly parameterBoundNames?: readonly string[];
+  readonly parameterInitializerCounts?: readonly number[];
+  readonly parameterDefaults?: readonly (JavaScriptAotExpression | null)[];
   readonly requiresRuntimeModel?: true;
   readonly classMethods?: readonly JavaScriptAotClassMethod[];
   readonly body: readonly JavaScriptAotStatement[];
@@ -44,6 +47,9 @@ export type JavaScriptAotStatement =
     readonly parameters: readonly string[];
     readonly parameterLength?: number;
     readonly simpleParameterList?: false;
+    readonly parameterBoundNames?: readonly string[];
+    readonly parameterInitializerCounts?: readonly number[];
+    readonly parameterDefaults?: readonly (JavaScriptAotExpression | null)[];
     readonly requiresRuntimeModel?: true;
     readonly classMethods?: readonly JavaScriptAotClassMethod[];
     readonly body: readonly JavaScriptAotStatement[];
@@ -193,6 +199,9 @@ export type JavaScriptAotExpression =
     readonly parameters: readonly string[];
     readonly parameterLength?: number;
     readonly simpleParameterList?: false;
+    readonly parameterBoundNames?: readonly string[];
+    readonly parameterInitializerCounts?: readonly number[];
+    readonly parameterDefaults?: readonly (JavaScriptAotExpression | null)[];
     readonly body: readonly JavaScriptAotStatement[];
     readonly span: FunctionalSpan;
   }

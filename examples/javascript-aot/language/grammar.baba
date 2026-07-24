@@ -1,4 +1,5 @@
 token IDENT = /[A-Za-z_$][A-Za-z0-9_$]*/ ;
+token ESCAPED_PROPERTY_IDENT = /([A-Za-z_$][A-Za-z0-9_$]*\\u[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]|\\u[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])([A-Za-z0-9_$]|\\u[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])*/ ;
 token NUMBER = /(0[xX][0-9a-fA-F](_?[0-9a-fA-F])*|0[bB][01](_?[01])*|0[oO][0-7](_?[0-7])*|((0|[1-9](_?[0-9])*)(\.([0-9](_?[0-9])*)?)?|\.[0-9](_?[0-9])*)([eE][+-]?[0-9](_?[0-9])*)?)/ ;
 token STRING = /"(\\.|[^"\\\r\n])*"|'(\\.|[^'\\\r\n])*'/ ;
 skip WS = /[ \t\r\n]+/ ;
@@ -12,7 +13,7 @@ exportable_declaration = class_declaration | generator_declaration | async_funct
 
 class_declaration = "class" name:IDENT body:class_body ;
 class_body = "{" methods:class_method* "}" ;
-class_method = name:IDENT "(" parameters:parameter_list? ")" body:block ;
+class_method = name:IDENT "(" parameters:parameter_list? ")" body:block | name:ESCAPED_PROPERTY_IDENT "(" parameters:parameter_list? ")" body:block ;
 generator_declaration = "function" star name:IDENT "(" parameters:parameter_list? ")" body:block ;
 async_function_declaration = "async" "function" name:IDENT "(" parameters:parameter_list? ")" body:block ;
 
@@ -146,7 +147,7 @@ await_expression = "await" value:unary ;
 call = callee:primary operations:postfix_operation* ;
 postfix_operation = call_arguments | property_access | index_access ;
 call_arguments = "(" values:argument_list? ")" ;
-property_access = "." name:IDENT ;
+property_access = "." name:IDENT | "." name:ESCAPED_PROPERTY_IDENT ;
 index_access = "[" index:expr "]" ;
 argument_list = head:expr rest:argument_list_tail? ;
 argument_list_tail = "," rest:argument_list? ;
@@ -161,7 +162,7 @@ object_property = object_method | named_object_property | shorthand_object_prope
 object_method = name:object_property_name "(" parameters:parameter_list? ")" body:block ;
 named_object_property = name:object_property_name ":" value:expr ;
 object_property_name = identifier_property_name | string_property_name | number_property_name ;
-identifier_property_name = value:IDENT ;
+identifier_property_name = value:IDENT | value:ESCAPED_PROPERTY_IDENT ;
 string_property_name = value:STRING ;
 number_property_name = value:NUMBER ;
 shorthand_object_property = name:IDENT ;

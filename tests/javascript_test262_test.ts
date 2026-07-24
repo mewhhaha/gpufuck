@@ -418,6 +418,29 @@ Counter.prototype.verify(40, 2);
   equal(result.ok, true, result.ok ? undefined : result.diagnostics[0].message);
 });
 
+Deno.test("prepares function expressions nested in Test262 parameter defaults", () => {
+  const path = "test/language/default-parameter-function.js";
+  const source = `/*---
+flags: [noStrict]
+features: [default-parameters]
+---*/
+var read = function(value = (function() { return 42; }())) {
+  return value;
+};
+assert.sameValue(read(), 42);
+`;
+  const metadata = parseTest262Metadata(path, source);
+  const result = lowerTest262PositiveTest(
+    path,
+    source,
+    metadata,
+    "testEntry",
+    "non-strict",
+  );
+
+  equal(result.ok, true, result.ok ? undefined : result.diagnostics[0].message);
+});
+
 Deno.test("routes dynamic Test262 SameValue assertions through the runtime model", () => {
   const source = `/*---
 flags: [noStrict]

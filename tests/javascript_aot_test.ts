@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
+import { deepStrictEqual, equal, match, ok, rejects, throws } from "node:assert/strict";
 
 import {
   GpuFunctionalCompiler,
@@ -117,6 +117,61 @@ export function main() {
 `);
 
   deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("rejects null method receivers before evaluating arguments", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  let argumentEvaluations = 0;
+  function markArgumentEvaluation() {
+    argumentEvaluations = argumentEvaluations + 1;
+    return null;
+  }
+  try {
+    null.hasOwnProperty(markArgumentEvaluation());
+  } catch (error) {
+    if (!(error instanceof TypeError)) return false;
+  }
+  try {
+    null.bind(markArgumentEvaluation());
+  } catch (error) {
+    if (!(error instanceof TypeError)) return false;
+  }
+  try {
+    null.call(markArgumentEvaluation());
+  } catch (error) {
+    if (!(error instanceof TypeError)) return false;
+  }
+  try {
+    null.apply(markArgumentEvaluation());
+  } catch (error) {
+    if (!(error instanceof TypeError)) return false;
+  }
+  return argumentEvaluations === 0;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("evaluates arguments before rejecting a non-callable method receiver", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  let argumentEvaluations = 0;
+  function markArgumentEvaluation() {
+    argumentEvaluations = argumentEvaluations + 1;
+    return null;
+  }
+  try {
+    ({}).call(markArgumentEvaluation());
+  } catch (error) {
+    return error instanceof TypeError && argumentEvaluations === 1;
+  }
+  return false;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
 });
 
 Deno.test("coerces numeric literal property keys for static and runtime objects", async () => {
@@ -561,6 +616,127 @@ export function main() {
   deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
+Deno.test("throws a catchable TypeError for strict arguments callee access", async () => {
+  const value = await compileAndRun(`
+function inspect() {
+  "use strict";
+  return arguments.callee;
+}
+
+export function main() {
+  try {
+    inspect();
+  } catch (error) {
+    return error instanceof TypeError;
+  }
+  return false;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("throws a catchable TypeError for non-simple arguments callee access", async () => {
+  const value = await compileAndRun(`
+function inspect(value = 1) {
+  try {
+    return arguments.callee;
+  } catch (error) {
+    return error instanceof TypeError;
+  }
+}
+
+export function main() {
+  return inspect() === true;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("rejects unimplemented intrinsic wrapper construction during lowering", () => {
+  const result = lowerJavaScriptAotSource(
+    "runtime-boolean-wrapper.mjs",
+    `export function main() {
+  const source = {};
+  source.value = true;
+  try {
+    return new Boolean(source.value);
+  } catch (error) {
+    return error;
+  }
+}`,
+  );
+
+  equal(result.ok, false);
+  if (result.ok) return;
+  equal(result.diagnostics[0].stage, "lower");
+  match(
+    result.diagnostics[0].message,
+    /runtime-model new Boolean requires intrinsic primitive-wrapper support/,
+  );
+});
+
+Deno.test("does not treat intrinsic wrappers as unresolved runtime globals", () => {
+  const module = parseJavaScriptAotModule(
+    "unresolved-boolean-wrapper.mjs",
+    `export function main() { return new Boolean(true); }`,
+  );
+
+  throws(
+    () =>
+      lowerJavaScriptRuntimeModule(module, "main", {
+        allowUnresolvedReferences: true,
+      }),
+    /runtime-model new Boolean requires intrinsic primitive-wrapper support/,
+  );
+});
+
+Deno.test("uses lexically shadowing primitive wrapper constructors", async () => {
+  const value = await compileAndRun(`
+class Boolean {
+  constructor(value) {
+    this.value = value;
+  }
+}
+class Number {
+  constructor(value) {
+    this.value = value;
+  }
+}
+class String {
+  constructor(value) {
+    this.value = value;
+  }
+}
+
+export function main() {
+  const boolean = new Boolean(10);
+  const number = new Number(20);
+  const string = new String(12);
+  return boolean.value + number.value + string.value;
+}
+`);
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("keeps a shadowing wrapper constructor uninitialized before its declaration", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  try {
+    new Boolean(true);
+  } catch (error) {
+    if (!(error instanceof ReferenceError)) return false;
+  }
+  class Boolean {}
+  return true;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
 Deno.test("reflects sloppy parameter writes through mapped arguments", async () => {
   const value = await compileAndRun(
     `
@@ -595,6 +771,24 @@ export function main() {
   );
 
   deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("maps only the last duplicate parameter to sloppy arguments", async () => {
+  const value = await compileAndRun(
+    `
+function inspect(value, value) {
+  value = 42;
+  return arguments[0] === 1 && arguments[1] === 42 ? value : 0;
+}
+
+export function main() {
+  return inspect(1, 2) + 0;
+}
+`,
+    { callThisMode: "sloppy" },
+  );
+
+  deepStrictEqual(value, { kind: "float-64", value: 42 });
 });
 
 Deno.test("keeps arguments unmapped for a non-simple parameter list", async () => {
@@ -646,7 +840,6 @@ export function main() {
     return 2;
   };
   const add = function(first, second = defaultValue()) {
-    "use strict";
     return first + second;
   };
   const calculator = {
@@ -659,6 +852,79 @@ export function main() {
     add(40, undefined) === 42 &&
     defaults === 1 &&
     calculator.add(40) === 42;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("keeps later parameters uninitialized while evaluating an earlier default", async () => {
+  const value = await compileAndRun(`
+function inspect(first = second, second) {
+  return false;
+}
+
+export function main() {
+  try {
+    inspect();
+  } catch (error) {
+    return error instanceof ReferenceError;
+  }
+  return false;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("keeps a parameter uninitialized while evaluating its own default", async () => {
+  const value = await compileAndRun(`
+function inspect(value = value) {
+  return false;
+}
+
+export function main() {
+  try {
+    inspect();
+  } catch (error) {
+    return error instanceof ReferenceError;
+  }
+  return false;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("hides body declarations from closures created by parameter defaults", async () => {
+  const value = await compileAndRun(`
+export function main() {
+  var value = 1;
+  function inspect(capture = function() { return value; }) {
+    var value = 42;
+    return capture();
+  }
+  if (function() {} === function() {}) return false;
+  return inspect() === 1;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
+});
+
+Deno.test("catches temporal dead zone reads without another default parameter", async () => {
+  const value = await compileAndRun(`
+function inspect() {
+  try {
+    return value;
+  } catch (error) {
+    return error instanceof ReferenceError;
+  }
+  let value = 42;
+}
+
+export function main() {
+  return inspect() === true;
 }
 `);
 
@@ -749,6 +1015,54 @@ export function main() { return 42; }`,
   );
 });
 
+Deno.test("rejects duplicate names in non-simple parameter lists", () => {
+  const result = lowerJavaScriptAotSource(
+    "duplicate-default-parameter.mjs",
+    `function invalid(value, value = 0) { return value; }
+export function main() { return 42; }`,
+  );
+
+  equal(result.ok, false);
+  if (result.ok) return;
+  equal(result.diagnostics[0].stage, "parse");
+  match(
+    result.diagnostics[0].message,
+    /non-simple parameter function declares parameter "value" more than once/,
+  );
+});
+
+Deno.test("rejects duplicate bound names hidden by parameter destructuring", () => {
+  const result = lowerJavaScriptAotSource(
+    "duplicate-bound-parameter.mjs",
+    `function invalid({ value }, value = 0) { return value; }
+export function main() { return 42; }`,
+  );
+
+  equal(result.ok, false);
+  if (result.ok) return;
+  equal(result.diagnostics[0].stage, "parse");
+  match(
+    result.diagnostics[0].message,
+    /non-simple parameter function declares parameter "value" more than once/,
+  );
+});
+
+Deno.test("rejects use strict directives with non-simple parameter lists", () => {
+  const result = lowerJavaScriptAotSource(
+    "strict-default-parameter.mjs",
+    `function invalid(value = 0) { "use strict"; return value; }
+export function main() { return 42; }`,
+  );
+
+  equal(result.ok, false);
+  if (result.ok) return;
+  equal(result.diagnostics[0].stage, "parse");
+  match(
+    result.diagnostics[0].message,
+    /non-simple parameter list cannot contain a "use strict" directive/,
+  );
+});
+
 Deno.test("keeps a class binding uninitialized until its declaration", async () => {
   await rejects(
     () =>
@@ -765,8 +1079,8 @@ export function main() {
 
 Deno.test("resumes a straight-line generator through persistent iterator state", async () => {
   const value = await compileAndRun(`
-function * sequence() {
-  yield 42;
+function * sequence(value) {
+  yield arguments[0];
 }
 
 function verify(iterator, first) {
@@ -779,11 +1093,39 @@ function verify(iterator, first) {
 }
 
 export function main() {
-  return verify(sequence(), true) + 0;
+  return verify(sequence(42), true) + 0;
 }
 `);
 
   deepStrictEqual(value, { kind: "float-64", value: 42 });
+});
+
+Deno.test("closes a generator after deferred yield evaluation throws", async () => {
+  const value = await compileAndRun(`
+function fail() {
+  throw new Error();
+}
+
+function * sequence() {
+  yield fail();
+  yield 42;
+}
+
+export function main() {
+  const iterator = sequence();
+  try {
+    iterator.next();
+  } catch (error) {
+    const completed = iterator.next();
+    return error instanceof Error &&
+      completed.done === true &&
+      completed.value === undefined;
+  }
+  return false;
+}
+`);
+
+  deepStrictEqual(value, { kind: "boolean", value: true });
 });
 
 Deno.test("unwraps deterministic async values and invokes their then callback", async () => {

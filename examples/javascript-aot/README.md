@@ -82,7 +82,11 @@ They do not yet provide inheritance, private fields, or static initialization. G
 redefinition, data descriptors through `Object.defineProperty`, imports, and the remaining dynamic
 coercions are subsequent vertical slices. Runtime globals are not generally implicit; the frontend
 currently recognizes only the immutable numeric globals and statically known `typeof` cases. Dynamic
-code generation through `eval` or `Function` is rejected before GPU compilation.
+primitive-wrapper construction is supported only when its payload is statically coercible; the
+runtime model rejects intrinsic `Boolean`, `Number`, and `String` construction until it can preserve
+their internal values and prototypes. Lexically shadowing constructors still use ordinary class
+construction. Dynamic code generation through `eval` or `Function` is rejected before GPU
+compilation.
 
 The compatibility target is the complete applicable Test262 `test/language` corpus, not an informal
 JavaScript subset. `deno task check:javascript-test262` checks out the pinned upstream revision and
@@ -93,15 +97,14 @@ conformance: a test passes only once the runner can execute its harness and obse
 result or exact failure phase. Negative probes distinguish parse, resolution, and runtime
 expectations and reject a failure at the wrong phase; runtime-ready negatives retain their expected
 error type for execution validation. Frontend probing runs in bounded subprocess batches so
-generated-parser and lowering state cannot accumulate across the complete corpus. Execution uses two
-concurrent eight-mode workers, each limited to 768 MiB RSS and 60 seconds. A worker that reaches
-either boundary is retried one mode at a time so the report names the exact offender without
-exposing the machine to unbounded compiler artifacts.
+generated-parser and lowering state cannot accumulate across the complete corpus. Execution uses a
+pool of up to two persistent workers that create their GPU compiler once and accept one mode per
+request. Each worker gets a separate 180-second warmup window, then a 60-second per-mode limit and
+768 MiB of RSS headroom above its measured warm baseline. The semantic compiler runs with its
+ten-million-step hard cap. Time, memory, and compiler-fuel exhaustion have their own resource-limit
+bucket.
 
-At the pinned revision, 2,856 positive execution modes are frontend-ready. Of the 2,881 positive and
-runtime-negative modes admitted for execution, 2,621 pass GPU compilation and Wasm execution; six
-reach a semantic compilation diagnostic and 254 fail their adapted runtime assertion. No admitted
-mode reaches a compiler or runner resource limit. The runner also validates 7,294 parse or
-resolution modes at their exact negative phase. These numbers are a progress baseline, not a
-conformance claim: 30,263 modes still need parser coverage and 3,586 still need lowering or runtime
-facilities.
+The report balances every applicable mode between success and a specific parser, lowering, resource,
+compilation, or execution failure. The command exits nonzero until that failed count is zero;
+frontend readiness alone can never make the gate pass. Use `--report=<path>` to retain exact
+pinned-revision counts instead of relying on a documentation snapshot.

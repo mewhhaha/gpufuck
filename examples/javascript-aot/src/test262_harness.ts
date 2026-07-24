@@ -412,10 +412,14 @@ function transformDeclarationAssertions(
     return { ...declaration, value: transformExpressionAssertions(declaration.value) };
   }
   const classMethods = declaration.classMethods?.map(transformClassMethodAssertions);
+  const parameterDefaults = declaration.parameterDefaults?.map((defaultValue) =>
+    defaultValue === null ? null : transformExpressionAssertions(defaultValue)
+  );
   return {
     ...declaration,
     body: declaration.body.map(transformStatementAssertions),
     ...(classMethods === undefined ? {} : { classMethods }),
+    ...(parameterDefaults === undefined ? {} : { parameterDefaults }),
   };
 }
 
@@ -426,10 +430,14 @@ function transformStatementAssertions(statement: JavaScriptAotStatement): JavaSc
       return statement;
     case "function-declaration": {
       const classMethods = statement.classMethods?.map(transformClassMethodAssertions);
+      const parameterDefaults = statement.parameterDefaults?.map((defaultValue) =>
+        defaultValue === null ? null : transformExpressionAssertions(defaultValue)
+      );
       return {
         ...statement,
         body: statement.body.map(transformStatementAssertions),
         ...(classMethods === undefined ? {} : { classMethods }),
+        ...(parameterDefaults === undefined ? {} : { parameterDefaults }),
       };
     }
     case "constant":
@@ -702,8 +710,16 @@ function transformExpressionAssertions(
           value: transformExpressionAssertions(property.value),
         })),
       };
-    case "function":
-      return { ...expression, body: expression.body.map(transformStatementAssertions) };
+    case "function": {
+      const parameterDefaults = expression.parameterDefaults?.map((defaultValue) =>
+        defaultValue === null ? null : transformExpressionAssertions(defaultValue)
+      );
+      return {
+        ...expression,
+        body: expression.body.map(transformStatementAssertions),
+        ...(parameterDefaults === undefined ? {} : { parameterDefaults }),
+      };
+    }
     case "unary":
       return { ...expression, value: transformExpressionAssertions(expression.value) };
     case "binary":

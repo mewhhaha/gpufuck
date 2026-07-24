@@ -96,15 +96,17 @@ under `test/language`. Dynamic source generation remains outside the AOT profile
 frontend-readiness counts are a development baseline, not conformance results: positive tests are
 wrapped with an AOT entry and negative tests must fail in their specified parse, resolution, or
 runtime phase. Every frontend-ready strict, non-strict, module, or raw mode is compiled as a fresh
-GPU artifact and executed independently. Execution workers are limited to 768 MiB RSS and 60
-seconds; a limited eight-mode batch is retried one mode at a time to preserve exact attribution. An
-existing checkout at the pinned commit may be passed as the first argument.
+GPU artifact and executed independently. A pool of up to two persistent workers creates each GPU
+compiler once, then accepts one mode per request. Compiler warmup has a separate 180-second limit.
+After readiness, each mode has 60 seconds and 768 MiB of additional RSS above that worker's measured
+warm baseline; the semantic compiler uses its ten-million-step hard cap. Time, memory, and
+compiler-fuel exhaustion are reported as resource limits rather than semantic compilation failures.
 
-The current pinned baseline admits 2,881 positive and runtime-negative modes for execution: 2,621
-pass, six reach a semantic compilation diagnostic, and 254 fail at runtime. No admitted mode reaches
-a compiler or runner resource limit. Another 7,294 negative modes pass at their exact parse or
-resolution phase. The task exits nonzero while any admitted mode fails, and `--report=<path>`
-preserves the complete JSON result for comparison.
+The report balances every applicable execution mode between successful exact-phase or GPU/Wasm
+execution and a specific failure bucket. The task exits nonzero while any applicable mode is
+unsupported, resource-limited, fails compilation, or fails execution. `--report=<path>` preserves
+the complete JSON result for comparison, and an existing checkout at the pinned commit may be passed
+as the first argument.
 
 `deno task test` uses `deno test --parallel` with `DENO_JOBS=2`. GPU tests are not ordinary
 millisecond unit tests: some deliberately force workspace growth, single-transition dispatches,

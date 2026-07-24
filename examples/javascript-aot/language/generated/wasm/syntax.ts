@@ -88,6 +88,7 @@ export interface ParseDiagnostic {
 
 export type MainTokenKind =
   | "IDENT"
+  | "ESCAPED_PROPERTY_IDENT"
   | "NUMBER"
   | "STRING";
 
@@ -475,7 +476,7 @@ export interface ClassBodyCursor extends RuleCursorBase<"class_body"> {
 
 export interface ClassMethodCursor extends RuleCursorBase<"class_method"> {
   field(name: "body"): BlockCursor;
-  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "name"): TokenCursor<"named", "ESCAPED_PROPERTY_IDENT"> | TokenCursor<"named", "IDENT">;
   field(name: "parameters"): ParameterListCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -1151,7 +1152,7 @@ export interface CallArgumentsCursor extends RuleCursorBase<"call_arguments"> {
 }
 
 export interface PropertyAccessCursor extends RuleCursorBase<"property_access"> {
-  field(name: "name"): TokenCursor<"named", "IDENT">;
+  field(name: "name"): TokenCursor<"named", "ESCAPED_PROPERTY_IDENT"> | TokenCursor<"named", "IDENT">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1240,7 +1241,7 @@ export interface ObjectPropertyNameCursor extends RuleCursorBase<"object_propert
 }
 
 export interface IdentifierPropertyNameCursor extends RuleCursorBase<"identifier_property_name"> {
-  field(name: "value"): TokenCursor<"named", "IDENT">;
+  field(name: "value"): TokenCursor<"named", "ESCAPED_PROPERTY_IDENT"> | TokenCursor<"named", "IDENT">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -1505,6 +1506,7 @@ export type CursorParseResult<Root extends RuleCursor = RootCursor> =
     source: string;
     diagnostics: readonly ParseDiagnostic[];
   };
+
 export type ValidateParseResult =
   | {
     ok: true;
@@ -1516,3 +1518,4 @@ export type ValidateParseResult =
     source: string;
     diagnostics: readonly ParseDiagnostic[];
   };
+
