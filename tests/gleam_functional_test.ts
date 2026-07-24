@@ -1100,8 +1100,7 @@ Deno.test("renders linked Gleam source and both functional IR stages side by sid
     match(trace, /Gleam source modules<\/th><th>Normalized functional surface/);
     match(trace, /Encoded functional ABI<\/th><th>GPU-resolved core IR/);
     match(trace, /kernel\/program::run/);
-    // Int lowers to i64, so the rendered value is a stringified BigInt.
-    match(trace, /"value": "1109720"/);
+    match(trace, /"value": 1109720/);
   } finally {
     compilation.module.destroy();
   }

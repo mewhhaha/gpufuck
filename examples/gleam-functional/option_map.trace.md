@@ -28,10 +28,6 @@ pub fn main() -&gt; Int {
   | None
   | Some(field0: a)
 
-type $GleamList&lt;value&gt; =
-  | $GleamNil
-  | $GleamCons(head: value, tail: $GleamList&lt;value&gt;)
-
 fn map(option, transform) : &lt;inferred&gt; =
   (case
     option
@@ -44,42 +40,55 @@ fn map(option, transform) : &lt;inferred&gt; =
           transform
           value))))
 
-fn main() : i32 =
+fn main($gleam_unit_parameter) : () -&gt; i64 =
   (case
     (apply
       (apply
         map
         (apply
           Some
-          21))
+          21i64))
       (lambda value
-        (Multiply
+        (MultiplySignedInteger64
           value
-          2)))
+          2i64)))
     (None  -&gt;
-      0)
+      0i64)
     (Some value -&gt;
       value))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v5; entry=option_map::main
+<tr><td><pre><code>ABI v5; entry=$gleam/entry::main
 
 definitions:
   d0 option_map::map root=n0 bytes=41..149 : &lt;inferred&gt;
-  d1 option_map::main root=n13 bytes=151..266 : i32
+  d1 option_map::main root=n13 bytes=151..266 : () -&gt; i64
+  d2 $gleam/entry::$import$sourceEntry root=n30 bytes=267..267 : &lt;inferred&gt;
+  d3 $gleam/entry::main root=n31 bytes=267..267 : &lt;inferred&gt;
 
 types:
-  t0 option_map::Option constructors=[c0,c2)
-  t1 option_map::$GleamList constructors=[c2,c4)
-  t2 $UnitType constructors=[c4,c5)
-  t3 $TupleType constructors=[c5,c6)
+  t0 $gleam/prelude::$GleamList constructors=[c0,c2)
+  t1 $gleam/prelude::$GleamBitArray constructors=[c2,c3)
+  t2 $gleam/prelude::$GleamResult constructors=[c3,c5)
+  t3 $gleam/prelude::$GleamTupleZero constructors=[c5,c6)
+  t4 $gleam/prelude::$GleamTupleOne constructors=[c6,c7)
+  t5 option_map::Option constructors=[c7,c9)
+  t6 $FunctionalBytes constructors=[c9,c10)
+  t7 $UnitType constructors=[c10,c11)
+  t8 $TupleType constructors=[c11,c12)
 
 constructors:
-  c0 option_map::None owner=t0 arity=0
-  c1 option_map::Some owner=t0 arity=1
-  c2 option_map::$GleamNil owner=t1 arity=0
-  c3 option_map::$GleamCons owner=t1 arity=2
-  c4 $Unit owner=t2 arity=0
-  c5 $Tuple owner=t3 arity=2
+  c0 $gleam/prelude::$GleamNil owner=t0 arity=0
+  c1 $gleam/prelude::$GleamCons owner=t0 arity=2
+  c2 $gleam/prelude::$GleamBitArrayValue owner=t1 arity=2
+  c3 $gleam/prelude::Ok owner=t2 arity=1
+  c4 $gleam/prelude::Error owner=t2 arity=1
+  c5 $gleam/prelude::$GleamTupleZeroValue owner=t3 arity=0
+  c6 $gleam/prelude::$GleamTupleOneValue owner=t4 arity=1
+  c7 option_map::None owner=t5 arity=0
+  c8 option_map::Some owner=t5 arity=1
+  c9 $FunctionalBytesValue owner=t6 arity=0
+  c10 $Unit owner=t7 arity=0
+  c11 $Tuple owner=t8 arity=2
 
 nodes:
   n0 Lambda symbol=option children=[n1] parent=- bytes=41..149
@@ -95,53 +104,63 @@ nodes:
   n10 StrictApply evaluation=strict children=[n11,n12] parent=n8 bytes=126..142
   n11 Name symbol=transform children=[] parent=n10 bytes=126..135
   n12 Name symbol=value children=[] parent=n10 bytes=136..141
-  n13 Case  children=[n14,n24] parent=- bytes=172..266
-  n14 StrictApply evaluation=strict children=[n15,n20] parent=n13 bytes=181..219
-  n15 StrictApply evaluation=strict children=[n16,n17] parent=n14 bytes=181..219
-  n16 Name symbol=option_map::map children=[] parent=n15 bytes=181..184
-  n17 StrictApply evaluation=strict children=[n18,n19] parent=n15 bytes=185..193
-  n18 Name symbol=option_map::Some children=[] parent=n17 bytes=185..189
-  n19 Integer value=21 children=[] parent=n17 bytes=190..192
-  n20 Lambda symbol=value children=[n21] parent=n14 bytes=195..218
-  n21 Binary operator=Multiply children=[n22,n23] parent=n20 bytes=205..218
-  n22 Name symbol=value children=[] parent=n21 bytes=207..213
-  n23 Integer value=2 children=[] parent=n21 bytes=215..216
-  n24 CaseArm symbol=option_map::None children=[n25,n26] parent=n13 bytes=226..240
-  n25 Integer value=0 children=[] parent=n24 bytes=234..235
-  n26 CaseArm symbol=option_map::Some children=[n27] parent=n24 bytes=240..263
-  n27 PatternBind symbol=value children=[n28] parent=n26 bytes=240..263
-  n28 Name symbol=value children=[] parent=n27 bytes=255..263</code></pre></td><td><pre><code>entry=d1; type=i32; effects=[]
+  n13 Lambda symbol=$gleam_unit_parameter children=[n14] parent=- bytes=151..266
+  n14 Case  children=[n15,n25] parent=n13 bytes=172..266
+  n15 StrictApply evaluation=strict children=[n16,n21] parent=n14 bytes=181..219
+  n16 StrictApply evaluation=strict children=[n17,n18] parent=n15 bytes=181..219
+  n17 Name symbol=option_map::map children=[] parent=n16 bytes=181..184
+  n18 StrictApply evaluation=strict children=[n19,n20] parent=n16 bytes=185..193
+  n19 Name symbol=option_map::Some children=[] parent=n18 bytes=185..189
+  n20 SignedInteger64  children=[n0] parent=n18 bytes=190..192
+  n21 Lambda symbol=value children=[n22] parent=n15 bytes=195..218
+  n22 Binary operator=MultiplySignedInteger64 children=[n23,n24] parent=n21 bytes=205..218
+  n23 Name symbol=value children=[] parent=n22 bytes=207..213
+  n24 SignedInteger64  children=[n0] parent=n22 bytes=215..216
+  n25 CaseArm symbol=option_map::None children=[n26,n27] parent=n14 bytes=226..240
+  n26 SignedInteger64  children=[n0] parent=n25 bytes=234..235
+  n27 CaseArm symbol=option_map::Some children=[n28] parent=n25 bytes=240..263
+  n28 PatternBind symbol=value children=[n29] parent=n27 bytes=240..263
+  n29 Name symbol=value children=[] parent=n28 bytes=255..263
+  n30 Name symbol=option_map::main children=[] parent=- bytes=267..267
+  n31 StrictApply evaluation=strict children=[n32,n33] parent=- bytes=267..267
+  n32 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n31 bytes=267..267
+  n33 Name symbol=$Unit children=[] parent=n31 bytes=267..267</code></pre></td><td><pre><code>entry=d3; type=i64; effects=[]
 
 nodes:
   n0 Lambda symbol=option children=[n1] sourceByte=41
   n1 Lambda symbol=transform children=[n2] sourceByte=41
   n2 Case  children=[n3,n4] sourceByte=67
   n3 Local depth=1 children=[] sourceByte=76
-  n4 CaseArm constructor=c0:option_map::None children=[n5,n6] sourceByte=89
-  n5 Constructor constructor=c0:option_map::None children=[] sourceByte=97
-  n6 CaseArm constructor=c1:option_map::Some children=[n7] sourceByte=106
+  n4 CaseArm constructor=c7:option_map::None children=[n5,n6] sourceByte=89
+  n5 Constructor constructor=c7:option_map::None children=[] sourceByte=97
+  n6 CaseArm constructor=c8:option_map::Some children=[n7] sourceByte=106
   n7 PatternBind symbol=value children=[n8] sourceByte=106
   n8 Apply evaluation=strict children=[n9,n10] sourceByte=121
-  n9 Constructor constructor=c1:option_map::Some children=[] sourceByte=121
+  n9 Constructor constructor=c8:option_map::Some children=[] sourceByte=121
   n10 Apply evaluation=strict children=[n11,n12] sourceByte=126
   n11 Local depth=1 children=[] sourceByte=126
   n12 Local depth=0 children=[] sourceByte=136
-  n13 Case  children=[n14,n24] sourceByte=172
-  n14 Apply evaluation=strict children=[n15,n20] sourceByte=181
-  n15 Apply evaluation=strict children=[n16,n17] sourceByte=181
-  n16 Global definition=d0 children=[] sourceByte=181
-  n17 Apply evaluation=strict children=[n18,n19] sourceByte=185
-  n18 Constructor constructor=c1:option_map::Some children=[] sourceByte=185
-  n19 Integer value=21 children=[] sourceByte=190
-  n20 Lambda symbol=value children=[n21] sourceByte=195
-  n21 Binary operator=Multiply children=[n22,n23] sourceByte=205
-  n22 Local depth=0 children=[] sourceByte=207
-  n23 Integer value=2 children=[] sourceByte=215
-  n24 CaseArm constructor=c0:option_map::None children=[n25,n26] sourceByte=226
-  n25 Integer value=0 children=[] sourceByte=234
-  n26 CaseArm constructor=c1:option_map::Some children=[n27] sourceByte=240
-  n27 PatternBind symbol=value children=[n28] sourceByte=240
-  n28 Local depth=0 children=[] sourceByte=255</code></pre></td></tr>
+  n13 Lambda symbol=$gleam_unit_parameter children=[n14] sourceByte=151
+  n14 Case  children=[n15,n25] sourceByte=172
+  n15 Apply evaluation=strict children=[n16,n21] sourceByte=181
+  n16 Apply evaluation=strict children=[n17,n18] sourceByte=181
+  n17 Global definition=d0 children=[] sourceByte=181
+  n18 Apply evaluation=strict children=[n19,n20] sourceByte=185
+  n19 Constructor constructor=c8:option_map::Some children=[] sourceByte=185
+  n20 SignedInteger64 payload=21 children=[n0] sourceByte=190
+  n21 Lambda symbol=value children=[n22] sourceByte=195
+  n22 Binary operator=MultiplySignedInteger64 children=[n23,n24] sourceByte=205
+  n23 Local depth=0 children=[] sourceByte=207
+  n24 SignedInteger64 payload=2 children=[n0] sourceByte=215
+  n25 CaseArm constructor=c7:option_map::None children=[n26,n27] sourceByte=226
+  n26 SignedInteger64  children=[n0] sourceByte=234
+  n27 CaseArm constructor=c8:option_map::Some children=[n28] sourceByte=240
+  n28 PatternBind symbol=value children=[n29] sourceByte=240
+  n29 Local depth=0 children=[] sourceByte=255
+  n30 Global definition=d1 children=[] sourceByte=267
+  n31 Apply evaluation=strict children=[n32,n33] sourceByte=267
+  n32 Global definition=d2 children=[] sourceByte=267
+  n33 Constructor constructor=c10:$Unit children=[] sourceByte=267</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -149,17 +168,17 @@ nodes:
 ```json
 {
   "entryType": {
-    "kind": "integer"
+    "kind": "signed-integer-64"
   },
   "value": {
-    "kind": "integer",
+    "kind": "signed-integer-64",
     "value": 42
   },
   "stats": {
-    "steps": 57,
-    "allocations": 21,
+    "steps": 68,
+    "allocations": 30,
     "peakStack": 5,
-    "thunkEvaluations": 2
+    "thunkEvaluations": 4
   }
 }
 ```

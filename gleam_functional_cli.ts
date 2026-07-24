@@ -59,7 +59,9 @@ export async function main(
     }
     try {
       const evaluator = await GpuFunctionalEvaluator.create(device);
-      const evaluation = await evaluator.evaluate(compilation.module);
+      const evaluation = await evaluator.evaluate(compilation.module, {
+        heapSlots: gleamHeapSlots(compilation.module),
+      });
       if (command === "run") {
         if (!evaluation.ok) {
           const location = evaluation.fault.sourceByteOffset === null
@@ -100,6 +102,17 @@ export async function main(
   } finally {
     device.destroy();
   }
+}
+
+/**
+ * The evaluator sizes its default heap from the node count, but Gleam lowers `Int` to i64 and i64
+ * values are boxed, so an arithmetic-heavy module allocates far more per node than that default
+ * assumes. The kernel example otherwise fails with `evaluation exhausted its heap of 256 slots`.
+ */
+function gleamHeapSlots(
+  module: { readonly nodeCount: number; readonly definitionCount: number },
+): number {
+  return Math.max(4096, (module.definitionCount + module.nodeCount * 4) * 8);
 }
 
 async function readModuleSource(

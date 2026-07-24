@@ -20,11 +20,7 @@ fn add(left, right) {
 
 pub fn main() -&gt; Int {
   fold([10, 20, 12], 0, add)
-}</code></pre></td><td><pre><code>type $GleamList&lt;value&gt; =
-  | $GleamNil
-  | $GleamCons(head: value, tail: $GleamList&lt;value&gt;)
-
-fn fold(values, accumulator, combine) : &lt;inferred&gt; =
+}</code></pre></td><td><pre><code>fn fold(values, accumulator, combine) : &lt;inferred&gt; =
   (case
     values
     ($GleamNil  -&gt;
@@ -43,11 +39,11 @@ fn fold(values, accumulator, combine) : &lt;inferred&gt; =
         combine)))
 
 fn add(left, right) : &lt;inferred&gt; =
-  (Add
+  (AddSignedInteger64
     left
     right)
 
-fn main() : i32 =
+fn main($gleam_unit_parameter) : () -&gt; i64 =
   (apply
     (apply
       (apply
@@ -55,36 +51,49 @@ fn main() : i32 =
         (apply
           (apply
             $GleamCons
-            10)
+            10i64)
           (apply
             (apply
               $GleamCons
-              20)
+              20i64)
             (apply
               (apply
                 $GleamCons
-                12)
+                12i64)
               $GleamNil))))
-      0)
+      0i64)
     add)</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v5; entry=list_fold::main
+<tr><td><pre><code>ABI v5; entry=$gleam/entry::main
 
 definitions:
   d0 list_fold::fold root=n0 bytes=0..153 : &lt;inferred&gt;
   d1 list_fold::add root=n21 bytes=155..193 : &lt;inferred&gt;
-  d2 list_fold::main root=n26 bytes=195..248 : i32
+  d2 list_fold::main root=n26 bytes=195..248 : () -&gt; i64
+  d3 $gleam/entry::$import$sourceEntry root=n46 bytes=249..249 : &lt;inferred&gt;
+  d4 $gleam/entry::main root=n47 bytes=249..249 : &lt;inferred&gt;
 
 types:
-  t0 list_fold::$GleamList constructors=[c0,c2)
-  t1 $UnitType constructors=[c2,c3)
-  t2 $TupleType constructors=[c3,c4)
+  t0 $gleam/prelude::$GleamList constructors=[c0,c2)
+  t1 $gleam/prelude::$GleamBitArray constructors=[c2,c3)
+  t2 $gleam/prelude::$GleamResult constructors=[c3,c5)
+  t3 $gleam/prelude::$GleamTupleZero constructors=[c5,c6)
+  t4 $gleam/prelude::$GleamTupleOne constructors=[c6,c7)
+  t5 $FunctionalBytes constructors=[c7,c8)
+  t6 $UnitType constructors=[c8,c9)
+  t7 $TupleType constructors=[c9,c10)
 
 constructors:
-  c0 list_fold::$GleamNil owner=t0 arity=0
-  c1 list_fold::$GleamCons owner=t0 arity=2
-  c2 $Unit owner=t1 arity=0
-  c3 $Tuple owner=t2 arity=2
+  c0 $gleam/prelude::$GleamNil owner=t0 arity=0
+  c1 $gleam/prelude::$GleamCons owner=t0 arity=2
+  c2 $gleam/prelude::$GleamBitArrayValue owner=t1 arity=2
+  c3 $gleam/prelude::Ok owner=t2 arity=1
+  c4 $gleam/prelude::Error owner=t2 arity=1
+  c5 $gleam/prelude::$GleamTupleZeroValue owner=t3 arity=0
+  c6 $gleam/prelude::$GleamTupleOneValue owner=t4 arity=1
+  c7 $FunctionalBytesValue owner=t5 arity=0
+  c8 $Unit owner=t6 arity=0
+  c9 $Tuple owner=t7 arity=2
 
 nodes:
   n0 Lambda symbol=values children=[n1] parent=- bytes=0..153
@@ -92,9 +101,9 @@ nodes:
   n2 Lambda symbol=combine children=[n3] parent=n1 bytes=0..153
   n3 Case  children=[n4,n5] parent=n2 bytes=38..153
   n4 Name symbol=values children=[] parent=n3 bytes=47..54
-  n5 CaseArm symbol=list_fold::$GleamNil children=[n6,n7] parent=n3 bytes=60..82
+  n5 CaseArm symbol=$gleam/prelude::$GleamNil children=[n6,n7] parent=n3 bytes=60..82
   n6 Name symbol=accumulator children=[] parent=n5 bytes=66..82
-  n7 CaseArm symbol=list_fold::$GleamCons children=[n8] parent=n5 bytes=82..150
+  n7 CaseArm symbol=$gleam/prelude::$GleamCons children=[n8] parent=n5 bytes=82..150
   n8 PatternBind symbol=tail children=[n9] parent=n7 bytes=82..150
   n9 PatternBind symbol=head children=[n10] parent=n8 bytes=82..150
   n10 StrictApply evaluation=strict children=[n11,n20] parent=n9 bytes=100..147
@@ -110,28 +119,33 @@ nodes:
   n20 Name symbol=combine children=[] parent=n10 bytes=139..146
   n21 Lambda symbol=left children=[n22] parent=- bytes=155..193
   n22 Lambda symbol=right children=[n23] parent=n21 bytes=155..193
-  n23 Binary operator=Add children=[n24,n25] parent=n22 bytes=175..193
+  n23 Binary operator=AddSignedInteger64 children=[n24,n25] parent=n22 bytes=175..193
   n24 Name symbol=left children=[] parent=n23 bytes=179..184
   n25 Name symbol=right children=[] parent=n23 bytes=186..192
-  n26 StrictApply evaluation=strict children=[n27,n44] parent=- bytes=216..248
-  n27 StrictApply evaluation=strict children=[n28,n43] parent=n26 bytes=216..248
-  n28 StrictApply evaluation=strict children=[n29,n30] parent=n27 bytes=216..248
-  n29 Name symbol=list_fold::fold children=[] parent=n28 bytes=220..224
-  n30 StrictApply evaluation=strict children=[n31,n34] parent=n28 bytes=225..237
-  n31 StrictApply evaluation=strict children=[n32,n33] parent=n30 bytes=225..237
-  n32 Name symbol=list_fold::$GleamCons children=[] parent=n31 bytes=225..237
-  n33 Integer value=10 children=[] parent=n31 bytes=226..228
-  n34 StrictApply evaluation=strict children=[n35,n38] parent=n30 bytes=225..237
-  n35 StrictApply evaluation=strict children=[n36,n37] parent=n34 bytes=225..237
-  n36 Name symbol=list_fold::$GleamCons children=[] parent=n35 bytes=225..237
-  n37 Integer value=20 children=[] parent=n35 bytes=230..232
-  n38 StrictApply evaluation=strict children=[n39,n42] parent=n34 bytes=225..237
-  n39 StrictApply evaluation=strict children=[n40,n41] parent=n38 bytes=225..237
-  n40 Name symbol=list_fold::$GleamCons children=[] parent=n39 bytes=225..237
-  n41 Integer value=12 children=[] parent=n39 bytes=234..236
-  n42 Name symbol=list_fold::$GleamNil children=[] parent=n38 bytes=225..237
-  n43 Integer value=0 children=[] parent=n27 bytes=239..240
-  n44 Name symbol=list_fold::add children=[] parent=n26 bytes=242..245</code></pre></td><td><pre><code>entry=d2; type=i32; effects=[]
+  n26 Lambda symbol=$gleam_unit_parameter children=[n27] parent=- bytes=195..248
+  n27 StrictApply evaluation=strict children=[n28,n45] parent=n26 bytes=216..248
+  n28 StrictApply evaluation=strict children=[n29,n44] parent=n27 bytes=216..248
+  n29 StrictApply evaluation=strict children=[n30,n31] parent=n28 bytes=216..248
+  n30 Name symbol=list_fold::fold children=[] parent=n29 bytes=220..224
+  n31 StrictApply evaluation=strict children=[n32,n35] parent=n29 bytes=225..237
+  n32 StrictApply evaluation=strict children=[n33,n34] parent=n31 bytes=225..237
+  n33 Name symbol=$gleam/prelude::$GleamCons children=[] parent=n32 bytes=225..237
+  n34 SignedInteger64  children=[n0] parent=n32 bytes=226..228
+  n35 StrictApply evaluation=strict children=[n36,n39] parent=n31 bytes=225..237
+  n36 StrictApply evaluation=strict children=[n37,n38] parent=n35 bytes=225..237
+  n37 Name symbol=$gleam/prelude::$GleamCons children=[] parent=n36 bytes=225..237
+  n38 SignedInteger64  children=[n0] parent=n36 bytes=230..232
+  n39 StrictApply evaluation=strict children=[n40,n43] parent=n35 bytes=225..237
+  n40 StrictApply evaluation=strict children=[n41,n42] parent=n39 bytes=225..237
+  n41 Name symbol=$gleam/prelude::$GleamCons children=[] parent=n40 bytes=225..237
+  n42 SignedInteger64  children=[n0] parent=n40 bytes=234..236
+  n43 Name symbol=$gleam/prelude::$GleamNil children=[] parent=n39 bytes=225..237
+  n44 SignedInteger64  children=[n0] parent=n28 bytes=239..240
+  n45 Name symbol=list_fold::add children=[] parent=n27 bytes=242..245
+  n46 Name symbol=list_fold::main children=[] parent=- bytes=249..249
+  n47 StrictApply evaluation=strict children=[n48,n49] parent=- bytes=249..249
+  n48 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n47 bytes=249..249
+  n49 Name symbol=$Unit children=[] parent=n47 bytes=249..249</code></pre></td><td><pre><code>entry=d4; type=i64; effects=[]
 
 nodes:
   n0 Lambda symbol=values children=[n1] sourceByte=0
@@ -139,9 +153,9 @@ nodes:
   n2 Lambda symbol=combine children=[n3] sourceByte=0
   n3 Case  children=[n4,n5] sourceByte=38
   n4 Local depth=2 children=[] sourceByte=47
-  n5 CaseArm constructor=c0:list_fold::$GleamNil children=[n6,n7] sourceByte=60
+  n5 CaseArm constructor=c0:$gleam/prelude::$GleamNil children=[n6,n7] sourceByte=60
   n6 Local depth=1 children=[] sourceByte=66
-  n7 CaseArm constructor=c1:list_fold::$GleamCons children=[n8] sourceByte=82
+  n7 CaseArm constructor=c1:$gleam/prelude::$GleamCons children=[n8] sourceByte=82
   n8 PatternBind symbol=tail children=[n9] sourceByte=82
   n9 PatternBind symbol=head children=[n10] sourceByte=82
   n10 Apply evaluation=strict children=[n11,n20] sourceByte=100
@@ -157,28 +171,33 @@ nodes:
   n20 Local depth=2 children=[] sourceByte=139
   n21 Lambda symbol=left children=[n22] sourceByte=155
   n22 Lambda symbol=right children=[n23] sourceByte=155
-  n23 Binary operator=Add children=[n24,n25] sourceByte=175
+  n23 Binary operator=AddSignedInteger64 children=[n24,n25] sourceByte=175
   n24 Local depth=1 children=[] sourceByte=179
   n25 Local depth=0 children=[] sourceByte=186
-  n26 Apply evaluation=strict children=[n27,n44] sourceByte=216
-  n27 Apply evaluation=strict children=[n28,n43] sourceByte=216
-  n28 Apply evaluation=strict children=[n29,n30] sourceByte=216
-  n29 Global definition=d0 children=[] sourceByte=220
-  n30 Apply evaluation=strict children=[n31,n34] sourceByte=225
-  n31 Apply evaluation=strict children=[n32,n33] sourceByte=225
-  n32 Constructor constructor=c1:list_fold::$GleamCons children=[] sourceByte=225
-  n33 Integer value=10 children=[] sourceByte=226
-  n34 Apply evaluation=strict children=[n35,n38] sourceByte=225
-  n35 Apply evaluation=strict children=[n36,n37] sourceByte=225
-  n36 Constructor constructor=c1:list_fold::$GleamCons children=[] sourceByte=225
-  n37 Integer value=20 children=[] sourceByte=230
-  n38 Apply evaluation=strict children=[n39,n42] sourceByte=225
-  n39 Apply evaluation=strict children=[n40,n41] sourceByte=225
-  n40 Constructor constructor=c1:list_fold::$GleamCons children=[] sourceByte=225
-  n41 Integer value=12 children=[] sourceByte=234
-  n42 Constructor constructor=c0:list_fold::$GleamNil children=[] sourceByte=225
-  n43 Integer value=0 children=[] sourceByte=239
-  n44 Global definition=d1 children=[] sourceByte=242</code></pre></td></tr>
+  n26 Lambda symbol=$gleam_unit_parameter children=[n27] sourceByte=195
+  n27 Apply evaluation=strict children=[n28,n45] sourceByte=216
+  n28 Apply evaluation=strict children=[n29,n44] sourceByte=216
+  n29 Apply evaluation=strict children=[n30,n31] sourceByte=216
+  n30 Global definition=d0 children=[] sourceByte=220
+  n31 Apply evaluation=strict children=[n32,n35] sourceByte=225
+  n32 Apply evaluation=strict children=[n33,n34] sourceByte=225
+  n33 Constructor constructor=c1:$gleam/prelude::$GleamCons children=[] sourceByte=225
+  n34 SignedInteger64 payload=10 children=[n0] sourceByte=226
+  n35 Apply evaluation=strict children=[n36,n39] sourceByte=225
+  n36 Apply evaluation=strict children=[n37,n38] sourceByte=225
+  n37 Constructor constructor=c1:$gleam/prelude::$GleamCons children=[] sourceByte=225
+  n38 SignedInteger64 payload=20 children=[n0] sourceByte=230
+  n39 Apply evaluation=strict children=[n40,n43] sourceByte=225
+  n40 Apply evaluation=strict children=[n41,n42] sourceByte=225
+  n41 Constructor constructor=c1:$gleam/prelude::$GleamCons children=[] sourceByte=225
+  n42 SignedInteger64 payload=12 children=[n0] sourceByte=234
+  n43 Constructor constructor=c0:$gleam/prelude::$GleamNil children=[] sourceByte=225
+  n44 SignedInteger64  children=[n0] sourceByte=239
+  n45 Global definition=d1 children=[] sourceByte=242
+  n46 Global definition=d2 children=[] sourceByte=249
+  n47 Apply evaluation=strict children=[n48,n49] sourceByte=249
+  n48 Global definition=d3 children=[] sourceByte=249
+  n49 Constructor constructor=c8:$Unit children=[] sourceByte=249</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -186,17 +205,17 @@ nodes:
 ```json
 {
   "entryType": {
-    "kind": "integer"
+    "kind": "signed-integer-64"
   },
   "value": {
-    "kind": "integer",
+    "kind": "signed-integer-64",
     "value": 42
   },
   "stats": {
-    "steps": 233,
-    "allocations": 80,
+    "steps": 209,
+    "allocations": 93,
     "peakStack": 8,
-    "thunkEvaluations": 3
+    "thunkEvaluations": 5
   }
 }
 ```

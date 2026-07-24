@@ -41,12 +41,21 @@ export interface FunctionalCompilationTraceInput {
   readonly evaluation: FunctionalEvaluationResult;
 }
 
+/** `JSON.stringify` escapes control characters, so the marker has to survive as printable text. */
+const BIGINT_MARKER = "@@functional-bigint@@";
+
+/**
+ * 64-bit values arrive as BigInt, which `JSON.stringify` refuses outright. Quoting them would change
+ * the shape of every checked-in trace, and routing them through `Number` would lose precision past
+ * 2^53, so the exact digits are marked during serialization and unquoted afterwards.
+ */
 function formatOutcome(outcome: unknown): string {
-  return JSON.stringify(
+  const marked = JSON.stringify(
     outcome,
-    (_key, value) => typeof value === "bigint" ? value.toString() : value,
+    (_key, value) => typeof value === "bigint" ? `${BIGINT_MARKER}${value}` : value,
     2,
   );
+  return marked.replaceAll(new RegExp(`"${BIGINT_MARKER}(-?\\d+)"`, "g"), "$1");
 }
 
 export function renderFunctionalCompilationTrace(input: FunctionalCompilationTraceInput): string {
