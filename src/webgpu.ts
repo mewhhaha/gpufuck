@@ -1,4 +1,11 @@
 /**
+ * The semantic kernels already bind all 8 storage buffers WebGPU guarantees by default, so any
+ * additional binding needs an explicitly raised limit. Adapters report far more than this; the
+ * request is clamped to whatever the selected adapter supports.
+ */
+const SEMANTIC_STORAGE_BUFFERS_PER_STAGE = 16;
+
+/**
  * Requests the WebGPU device used for semantic compilation and evaluation.
  *
  * This throws when Deno's WebGPU API is disabled, no compatible hardware or software adapter is
@@ -30,7 +37,15 @@ export async function requestWebGpuDevice(): Promise<GPUDevice> {
   }
 
   try {
-    return await adapter.requestDevice();
+    return await adapter.requestDevice({
+      requiredFeatures: adapter.features.has("timestamp-query") ? ["timestamp-query"] : [],
+      requiredLimits: {
+        maxStorageBuffersPerShaderStage: Math.min(
+          SEMANTIC_STORAGE_BUFFERS_PER_STAGE,
+          adapter.limits.maxStorageBuffersPerShaderStage,
+        ),
+      },
+    });
   } catch (cause) {
     const adapterName = adapter.info.description || adapter.info.device || adapter.info.vendor ||
       "unnamed adapter";

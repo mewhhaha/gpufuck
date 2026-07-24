@@ -69,6 +69,8 @@ Deno.test("WebGPU device creation identifies the adapter and preserves its failu
       device: "",
       vendor: "",
     },
+    features: new Set<string>(),
+    limits: { maxStorageBuffersPerShaderStage: 8 },
     requestDevice: () => Promise.reject(creationFailure),
   } as unknown as GPUAdapter;
   const gpu = {
