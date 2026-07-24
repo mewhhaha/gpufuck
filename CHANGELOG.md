@@ -5,31 +5,39 @@ All notable changes to gpufuck are documented here. The project follows
 
 ## Unreleased
 
-This release narrows the project to a single purpose: being a fast compiler on the GPU. Roughly
-73,000 lines that did not serve that purpose were removed. It is a large, deliberate reduction in
+This release narrows the project toward one purpose: being a fast compiler on the GPU. Roughly
+49,000 net lines of non-documentation code were removed. It is a large, deliberate reduction in
 capability, and the compiler is not yet fast — see [BASELINE.md](BASELINE.md).
+
+The WebAssembly backend was removed during this cycle and restored before release. It stays because
+Ducklang compiles through it and has no other code generator; it imports `functional.ts` by relative
+path, so there is no version for it to pin to.
 
 ### Removed
 
-- Removed the entire WebAssembly backend: emission, the linear-memory and WasmGC code generators,
-  SIMD lowering, the public value ABI, execution and async replay, the host emitter, and the
-  Component Model boundary. Compilation now ends at resolved Functional Core.
-- Removed the storage-plan subsystem, Storage Core, ownership resolution, and reuse planning.
-- Removed compile-time execution, partial evaluation, Type Core, Effect Core, incremental
-  compilation and its caches, row types, existentials, the capability resolver, and constraint
-  elaboration.
 - Removed the Haskell, OCaml, Rust, 1SubML, and PureScript frontends and the Brainfuck GPU compiler.
+- Removed incremental compilation and its persistent caches, so every compilation is cold.
+- Removed row types, existentials, the capability resolver, and constraint elaboration.
+- Removed Type Core apart from `type_core_contract.ts`, which the comptime constant encoder needs.
+- Removed Effect Core from the public API. Its modules are still in `src/functional/`, but nothing
+  imports them and neither entry point exports them.
+- Removed partial evaluation.
 - Removed the browser playground and its GitHub Pages workflow.
 - Removed the `src/lazuli/` re-export shim; its implementation files now live in `src/semantic/`.
 - Reduced the published subpaths to `.` (`functional.ts`) and `./core` (`core.ts`). The `wasm`,
-  `comptime`, `effects`, and `type-services` subpaths no longer exist.
+  `comptime`, `effects`, and `type-services` subpaths no longer exist; the WebAssembly backend,
+  storage planning, and the comptime executor are exported from the root instead.
 
 ### Changed
 
-- `GpuFunctionalEvaluator` is the only runtime. It inspects resolved Core before dispatch and throws
-  a `TypeError` naming the first construct it cannot execute: 64-bit floats, portable whole-number
-  f64, text, bytes, runtime faults, buffers, stores, structural equality, 32-bit float division, and
-  32-bit square root. Such programs still compile and typecheck.
+- `GpuFunctionalEvaluator.evaluate` now selects a runtime instead of rejecting programs. It inspects
+  resolved Core before dispatch and delegates programs needing 64-bit floats, portable whole-number
+  f64, text, bytes, runtime faults, buffer append, stores, structural equality, 32-bit float
+  division, or 32-bit square root to bounded WebAssembly execution; everything else runs on the GPU
+  evaluator. Callers pass no flag. The delegated path rejects the GPU-only dispatch, heap, and stack
+  options with a `TypeError` and caps semantic steps at 1,000,000.
+- Gleam's `Int` now lowers to 64-bit integers instead of the f64-backed JavaScript model. Division
+  and remainder keep Gleam's rules: a zero divisor yields `0`, and division truncates toward zero.
 - `requestWebGpuDevice()` now requests `maxStorageBuffersPerShaderStage` of 16, clamped to adapter
   support, and opts into `timestamp-query` when the adapter exposes it.
 - Documented the measured baseline and its kill criteria in `BASELINE.md`, and corrected the

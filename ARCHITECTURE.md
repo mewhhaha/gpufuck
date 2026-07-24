@@ -7,13 +7,14 @@ every claim here is judged against.
 
 ## 1. Purpose and scope
 
-Gpufuck is a semantic compiler for functional languages whose sole purpose is to be a fast compiler
-on the GPU. It has no code generator: the pipeline ends at resolved Functional Core, which the GPU
-Core evaluator executes.
+Gpufuck is a semantic compiler for functional languages whose purpose is to be a fast compiler on
+the GPU. Resolved Functional Core is the pivot: the GPU Core evaluator executes it, and the
+WebAssembly backend compiles it to a binary module.
 
 The project owns the portable Functional Surface and packed module ABI, target-level typed modules
 and static linking, Core lowering, dependency analysis, Hindley–Milner inference and coverage, a
-bounded GPU evaluator, and the bounded-work, cancellation, diagnostic, and device-ownership
+bounded GPU evaluator, WebAssembly emission with its storage plan and host boundary, bounded
+compile-time execution, and the bounded-work, cancellation, diagnostic, and device-ownership
 contracts around all of it.
 
 A source-language implementation owns lexing, parsing, module discovery, visibility, source-specific
@@ -22,8 +23,7 @@ filename, line/column, excerpt, and wording concern in diagnostics. A feature en
 when several languages can describe it without importing one frontend's syntax or policy.
 
 Non-goals: parsing inside WGSL; replacing source-language ownership or effect checking; emitting
-machine code or WebAssembly (that backend existed and was deleted); impredicative inference,
-dependent types, or compile-time execution.
+native machine code; impredicative inference or dependent types.
 
 ## 2. System context
 
@@ -34,7 +34,8 @@ packed Functional ABI, version 5
     ▼  CPU: symbol lookup and lowering plan (src/semantic/symbol_lookup.ts)
     ▼  GPU: Core lowering, then the persistent inference machine
 resolved Functional Core
-    ▼  GPU Core evaluator
+    ├─►  GPU Core evaluator, delegating to bounded Wasm where WGSL cannot go
+    └─►  WebAssembly backend: storage plan, codegen, host boundary, binary
 ```
 
 The CPU/GPU boundary is not where earlier revisions of this document placed it, and the difference
@@ -98,7 +99,7 @@ selects the entry. The import annotation makes the GPU verify the importer's dec
 against the exported implementation.
 [`surface_reachability.ts`](src/functional/surface_reachability.ts) then retains only definitions
 reachable from the entry, so an unused frontend-runtime builtin adds no GPU typechecking work. There
-is no incremental cache; it was removed with the backend it served.
+is no incremental cache; it was removed and has not returned, so every compilation is cold.
 
 WebGPU storage buffers favor flat fixed-width records, so object graphs become indexed arrays before
 submission. Functional ABI version 5 uses eight `u32` words per Core node, four per definition, five
@@ -194,29 +195,71 @@ inference would only take that path from 39.3 to 29.1 µs/module — a **1.35×*
 is worth doing because the GPU phase is currently a regression, not because the ceiling above it is
 high. A faster parser would outweigh the entire retarget.
 
-## 7. Evaluator and the capability regression
+## 7. External consumers
+
+**Ducklang is why the WebAssembly backend exists.** Ducklang is a separate language project — an
+Interaction Calculus inspired language, kept in a checkout beside this one — whose own README states
+its pipeline as:
+
+```text
+Source -> Frontend -> semantic Core -> gpufuck Functional Core -> Wasm
+```
+
+It owns parsing, its own semantic Core, and the lowering into Functional Surface;
+`experiments/gpufuck/core_lowering.ts` is its entire backend adapter. It has no other code
+generator, so deleting gpufuck's Wasm emission leaves Ducklang with no target at all.
+
+What it imports from `functional.ts`: `GpuFunctionalCompiler` and `requestWebGpuDevice`,
+`linkFunctionalModules` and the `surface` builders, `compileFunctionalModuleToWasm`,
+`runFunctionalWasmModule` and `runFunctionalWasmModuleAsync` with their `init` and host-value types,
+`planFunctionalModuleStorage`, and `GpuFunctionalComptimeExecutor`. Storage planning, comptime, and
+the host boundary are load-bearing for it, not vestigial.
+
+The coupling is a **relative import**, `../../../gpufuck/functional.ts`, not a JSR version range.
+There is no pin and no release step between the two projects: a change here reaches Ducklang on its
+next compile, and a removed export breaks it immediately.
+[`tests/functional_wasm_smoke_test.ts`](tests/functional_wasm_smoke_test.ts) is the in-repo guard —
+nothing else in the suite emits WebAssembly, so without it the code generator can be deleted or
+broken and the suite stays green.
+
+## 8. Runtimes
 
 A successful `GpuFunctionalModule` owns resolved node, definition, and constructor buffers, plus
 counts, roots, qualified names, arities, the entry and its inferred type, nominal declarations, host
-capability contracts, source ranges, evaluation profile, and an idempotent `destroy()`.
-[`evaluator.ts`](src/functional/evaluator.ts) is a bounded graph reducer over that Core supporting
-strict and call-by-need binding, lane-local fuel, bounded heap and stack, cancellation, and
-deep-result limits. With the Wasm backend gone it is the only runtime.
+capability contracts, source ranges, evaluation profile, and an idempotent `destroy()`. Two runtimes
+consume it, and `GpuFunctionalEvaluator.evaluate` chooses between them without the caller deciding.
 
-Portable WGSL exposes no `i64` or `f64`, and its floating-point rules do not promise host-Wasm
-rounding. The evaluator represents wrapping `i64` with two words and handles a safe `f32` subset.
-Every operation that previously delegated to fuel-instrumented Wasm now has nowhere to go.
-`inspectModuleNumericRequirements` reads resolved Core before dispatch and names the first construct
-it cannot run; `GpuFunctionalEvaluator.evaluate` then throws a `TypeError`. The rejected set is
-64-bit float and portable whole-number f64 literals; text, bytes, runtime faults, buffer append, and
-all five `Store` operations; 64-bit float and portable whole-number arithmetic; structural equality;
-32-bit float division and square root; and every numeric conversion touching `f64`.
+[`evaluator.ts`](src/functional/evaluator.ts) is a bounded graph reducer over resolved Core
+supporting strict and call-by-need binding, lane-local fuel, bounded heap and stack, cancellation,
+and deep-result limits. Portable WGSL exposes no `i64` or `f64`, and its floating-point rules do not
+promise host-Wasm rounding, so the reducer represents wrapping `i64` with two words and handles only
+a safe `f32` subset.
 
-Such programs still compile and typecheck; they cannot be evaluated. Host capability declarations
-and `wasmExports` metadata likewise still typecheck with no backend to consume them. This is a real,
-deliberate loss and should not be documented away.
+`moduleNumericRequirements` reads resolved Core once per module — cached in a `WeakMap` — and sets
+two flags. `signedInteger64` keeps evaluation on the GPU but forces a deep result form so 64-bit
+values survive readback. `boundedWasm` routes the whole program to
+`evaluateFunctionalModuleWithBoundedWasm`, which compiles it through the same backend and runs it
+under a fuel-instrumented module. That second set is 64-bit float and portable whole-number f64
+literals; text, bytes, runtime faults, buffer append, and all five `Store` operations; 64-bit float
+and portable whole-number arithmetic; structural equality; 32-bit float division and square root;
+and every numeric conversion touching `f64`. `evaluateBatch` splits the batch when any lane needs
+the delegated path.
 
-## 8. The retarget
+The delegation is not free of seams, and they are contract violations rather than diagnostics: the
+bounded-Wasm path throws a `TypeError` for the GPU-only `maximumStepsPerDispatch`, `heapSlots`, and
+`stackFrames` options, and for any module declaring host capabilities, because `evaluate()` has
+nowhere to take a runner `init` — such a program must go through `runFunctionalWasmModule` instead.
+Its step budget is capped at 1,000,000, below the evaluator's configurable fuel.
+
+Ahead-of-time emission is the other consumer.
+[`wasm_artifacts.ts`](src/functional/wasm_artifacts.ts) exposes `compileFunctionalModuleToWasm` over
+two code generators — `linear-memory`, optionally with a caller-supplied storage plan, owned-type
+exports, or Wasm SIMD, and `wasm-gc` — memoizing artifacts per module and per resolved-Core
+fingerprint. Host capability declarations and `wasmExports` are consumed here: capabilities become
+the imported host boundary emitted by [`wasm_host_emitter.ts`](src/functional/wasm_host_emitter.ts),
+and exported definitions become module exports.
+
+## 9. The retarget
 
 The current shape — one lane per module running a serial `loop { if phase == … }` state machine over
 a large `var<private>` struct — is why section 6 reads the way it does. The direction is bulk
@@ -246,7 +289,7 @@ host reaches. If node-parallel validation and constraint generation cannot bring
 30 µs, unification and generalization will not close the gap either, since they are strictly harder
 to parallelize. BASELINE.md records that criterion so it cannot be quietly relaxed.
 
-## 9. Diagnostics and resource ownership
+## 10. Diagnostics and resource ownership
 
 `F1xxx` covers structural, resolution, and work-limit diagnostics and `F2xxx` covers type,
 annotation, coverage, and inference diagnostics; both arrive in the compile result. `F3001`–`F3012`
@@ -264,25 +307,28 @@ stack, and readback belong to one evaluation. Workspace growth temporarily owns 
 replacement buffers, transferring only after the copy and state patch complete. Catch blocks cannot
 continue with ambiguous ownership, and module destruction is idempotent.
 
-## 10. Frontends
+## 11. Frontends
 
 Three live in the repository; none is part of the published entry point. **Lazuli** is the reference
 language and compatibility API, not the definition of Functional Core: its Baba-generated parser
 runs on the host, defaults to lazy call-by-need, and exercises inferred functions and recursive
 data, partial type holes, indexed equality proofs, built-in text, bytes, and lists, and host `Init`
 values. **Gleam** demonstrates the separation at module scale — its adapter owns syntax, visibility,
-labels, records, bit arrays, external annotations, pipeline desugaring, and Gleam's f64-backed
-JavaScript `Int` model. **JavaScript AOT** is the largest frontend and the reason `Store` and
-continuation sharing exist in Core: it lifts statement tails and repeated call, construction,
-accessor, and coercion resumptions into explicit functions so continuation-passing lowering does not
-expand the input tree, and its call frames carry the callable object as well as its target, captured
-realm and environment, receiver, and arguments, preserving `arguments.callee` identity without a
-global lookup.
+labels, records, bit arrays, external annotations, and pipeline desugaring. Its `Int` lowers to
+64-bit integers rather than the f64-backed JavaScript model: a semantics choice, made because the
+corpus is integer arithmetic and `i64` keeps it on the GPU evaluator. Division and remainder keep
+Gleam's rules — the frontend guards a zero divisor and yields `0`, so `42 / 0 == 0`, and `i64`
+division truncates toward zero, so `-7 / 2 == -3`. **JavaScript AOT** is the largest frontend and
+the reason `Store` and continuation sharing exist in Core: it lifts statement tails and repeated
+call, construction, accessor, and coercion resumptions into explicit functions so
+continuation-passing lowering does not expand the input tree, and its call frames carry the callable
+object as well as its target, captured realm and environment, receiver, and arguments, preserving
+`arguments.callee` identity without a global lookup.
 
 New semantic features must be exposed through `src/functional/` contracts and must not depend on any
 frontend's keywords or parser structures.
 
-## 11. Architectural decisions
+## 12. Architectural decisions
 
 Decisions that are easy to reverse accidentally in a local patch.
 
@@ -315,13 +361,17 @@ changes Haskell-like programs.
 would have different performance and cancellation behaviour, and would make every number in section
 6 meaningless. The cost is that CPU-only machines cannot use the compiler at all.
 
-**One runtime, with its gaps stated.** Constructs WGSL cannot express fail loudly at `evaluate()`
-rather than being approximated, because approximating `f64` or structural equality would give a
-checked Core program substrate-dependent semantics. The cost is section 7. Revisit when the WGSL
-portability baseline exposes the required scalar operations, or an explicitly selected second
-backend returns.
+**Constructs WGSL cannot express are delegated, never approximated.** Emulating `f64` or structural
+equality in WGSL would give a checked Core program substrate-dependent semantics, so `evaluate()`
+routes those programs to bounded WebAssembly instead. The cost is a second execution substrate with
+its own option surface and step cap (section 8). Revisit the split when the WGSL portability
+baseline exposes the required scalar operations.
 
-## 12. Limits and safety properties
+**The WebAssembly backend is a supported target, not an artifact of history.** It has an external
+consumer that imports it by relative path with no version pin (section 7). Removing an export, or
+the backend itself, breaks that consumer at its next compile with no deprecation window.
+
+## 13. Limits and safety properties
 
 1 MiB of source evidence, 65,536 surface nodes, semantic depth 512, constructor arity 256, stores of
 16,777,216 elements, and device-derived buffer maxima. Runtime APIs add explicit fuel, heap, stack,
@@ -332,7 +382,7 @@ configurable, and turn device limitations into reproducible evidence. Proof witn
 dictionaries are ordinary values; recursive proof programs can diverge, and typechecking does not
 imply totality.
 
-## 13. Internal source map
+## 14. Internal source map
 
 | Concern                | Primary modules                                                                               |
 | ---------------------- | --------------------------------------------------------------------------------------------- |
@@ -344,9 +394,16 @@ imply totality.
 | GPU inference          | `type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts` |
 | CPU oracle and schemas | `src/semantic/type_inference.ts`, `type_schema_abi.ts`                                        |
 | Evaluation             | `src/functional/evaluator.ts`, `src/semantic/evaluator_shader.ts`                             |
+| Wasm backend           | `wasm_artifacts.ts`, `wasm_codegen.ts`, `wasm_gc_codegen.ts`, `wasm_binary.ts`                |
+| Wasm runtime and hosts | `wasm_execution.ts`, `wasm_host_emitter.ts`, `wasm_value_codec.ts`, `wasm_arena.ts`           |
+| Storage and comptime   | `storage_plan.ts`, `storage_core.ts`, `comptime.ts`                                           |
 | Diagnostics and device | `src/functional/diagnostics.ts`, `compilation_diagnostics.ts`, `src/webgpu.ts`                |
 
-## 14. Technical references
+`src/functional/effect_core*.ts` and `effect_contract.ts` are in the tree but dormant: nothing
+imports them and neither entry point exports them. Of Type Core only `type_core_contract.ts`
+survives, and it exists because `comptime_constant.ts` needs its value and type shapes.
+
+## 15. Technical references
 
 Not a transcription of any one paper; these explain specific decisions.
 

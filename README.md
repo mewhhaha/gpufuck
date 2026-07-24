@@ -3,9 +3,12 @@
 `gpufuck` exists to answer one question: can a compiler's semantic phases run fast on a GPU? A
 language frontend supplies syntax, source-language rules, and desugaring; gpufuck packs that into a
 portable Functional Surface, resolves and typechecks it on WebGPU, and produces a resolved
-Functional Core. Core programs are executed by the GPU Core evaluator.
+Functional Core. Core programs are executed by the GPU Core evaluator or compiled to WebAssembly.
 
-Everything that did not serve that question has been removed.
+Much of what did not serve that question has been removed — five frontends, the Brainfuck GPU
+compiler, incremental compilation, row types, existentials, and the browser playground are gone. The
+WebAssembly backend is not: it is the code generator
+[Ducklang](ARCHITECTURE.md#7-external-consumers) compiles through.
 
 ```text
 source text
@@ -18,8 +21,8 @@ CPU: symbol lookup and the lowering plan
 GPU: Core lowering, dependency SCCs, Hindley–Milner inference, coverage
     ▼
 resolved Functional Core
-    ▼
-GPU Core evaluator
+    ├─► GPU Core evaluator, delegating to bounded Wasm where WGSL cannot go
+    └─► WebAssembly artifact (compileFunctionalModuleToWasm)
 ```
 
 ## Status
@@ -48,13 +51,14 @@ are all `@compute @workgroup_size(1)` — one lane per module running a serial s
 data parallelism inside a program. The single exception only copies a lowering plan the host already
 computed. Fixing that is the point of the current work, and BASELINE.md records its kill criteria.
 
-**Execution lost capabilities.** The Wasm backend is gone, so the GPU evaluator is the only runtime.
-It cannot execute 64-bit floats, portable whole-number f64, text, bytes, runtime faults, buffers,
-stores, structural equality, f32 division, or f32 square root — WGSL does not offer portable
-semantics for them, and there is no longer a Wasm path to delegate to.
-`GpuFunctionalEvaluator.evaluate` inspects resolved Core and throws a `TypeError` naming the first
-construct it cannot run. Such programs still compile and typecheck; they just cannot be evaluated.
-This is a real, deliberate loss, not an oversight.
+**Execution spans two runtimes.** Portable WGSL has no `i64` or `f64` and does not promise host-Wasm
+rounding, so the GPU evaluator cannot execute 64-bit floats, portable whole-number f64, text, bytes,
+runtime faults, buffer append, `Store` operations, structural equality, f32 division, or f32 square
+root. `GpuFunctionalEvaluator.evaluate` inspects resolved Core before dispatch and delegates any
+program using them to bounded WebAssembly execution, so the choice of runtime is not a caller
+concern. That path takes `maximumSteps` and result limits but rejects the GPU-specific dispatch,
+heap, and stack options with a `TypeError`; a module declaring host capabilities has to go through
+`runFunctionalWasmModule` instead, because that is where the runner `init` is supplied.
 
 ## Installation
 
@@ -73,9 +77,11 @@ deno add jsr:@mewhhaha/gpufuck@^0.3.0
 }
 ```
 
-Two entry points: the root is the complete language-neutral API, and `./core` is the same surface
-and Core contracts plus GPU compilation, without the evaluator, linker, or trace renderer. The
-bundled Lazuli, Gleam, and JavaScript AOT frontends are repository examples, not published exports.
+Two entry points: the root is the complete language-neutral API — compilation, linking, evaluation,
+the WebAssembly backend, storage planning, and the comptime executor — and `./core` is the same
+surface and Core contracts plus GPU compilation, without the evaluator, linker, backend, comptime,
+or trace renderer. The bundled Lazuli, Gleam, and JavaScript AOT frontends are repository examples,
+not published exports.
 
 ## Compile and run a first module
 
@@ -139,6 +145,26 @@ Reuse one `GpuFunctionalCompiler` for the lifetime of a device: creation builds 
 pipelines, and `compileBatch()` is where batching pays off. A successful `GpuFunctionalModule` owns
 GPU buffers, so always `destroy()` it in `finally`.
 
+## Emit a WebAssembly artifact
+
+The same compiled module is the backend's input. `compileFunctionalModuleToWasm()` returns the
+binary — `linear-memory` by default, `wasm-gc` on request — and `runFunctionalWasmModule()` runs it
+in the host engine and decodes the result:
+
+```ts
+import { compileFunctionalModuleToWasm, runFunctionalWasmModule } from "@mewhhaha/gpufuck";
+
+const bytes = await compileFunctionalModuleToWasm(compilation.module);
+await Deno.writeFile("main.wasm", bytes);
+
+const execution = await runFunctionalWasmModule(compilation.module);
+console.log(execution.value); // { kind: "integer", value: 42 }
+```
+
+Host capability declarations and `wasmExports` are consumed here: capabilities become the imported
+host boundary supplied through the run options' `init`, and exported definitions become module
+exports.
+
 ## Connect a language frontend
 
 A frontend parses and enforces its own rules, desugars into functions, immutable bindings,
@@ -174,16 +200,17 @@ coverage, and entry concreteness.
 
 Expected failures are structured: `F1xxx` for structural and resolution diagnostics and `F2xxx` for
 type, annotation, and coverage diagnostics in the compile result; `F3001`–`F3012` as evaluation
-faults; `F4001`–`F4007` as `FunctionalLinkError`. WebGPU setup and device failures throw or reject
-with a `cause`, and Core the evaluator cannot execute throws a `TypeError` naming the construct.
-Spans are UTF-8 byte offsets; `locateFunctionalDiagnostic()` maps an offset in a linked module back
-to the owning module, and filenames, line/column lookup, and wording stay in the frontend.
+faults, from either runtime; `F4001`–`F4007` as `FunctionalLinkError`. WebGPU setup and device
+failures throw or reject with a `cause`, and options a chosen runtime cannot honour throw a
+`TypeError`. Spans are UTF-8 byte offsets; `locateFunctionalDiagnostic()` maps an offset in a linked
+module back to the owning module, and filenames, line/column lookup, and wording stay in the
+frontend.
 
 Source is capped at 1 MiB, surface trees at 65,536 nodes, semantic depth at 512, constructor arity
 at 256, and stores at 16,777,216 elements. Compilation defaults to 1,000,000 semantic transitions
-with a hard cap of 10,000,000. Host capability and Wasm-export declarations still typecheck, but no
-backend consumes them. Budgets and device limits fail with structured evidence rather than
-permitting unbounded GPU work.
+with a hard cap of 10,000,000, and bounded WebAssembly execution accepts at most 1,000,000 semantic
+steps. Budgets and device limits fail with structured evidence rather than permitting unbounded GPU
+work.
 
 ## Included frontends
 

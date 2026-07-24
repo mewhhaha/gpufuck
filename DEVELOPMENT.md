@@ -17,24 +17,31 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 
 ## Repository map
 
-| Path                         | Responsibility                                                     |
-| ---------------------------- | ------------------------------------------------------------------ |
-| `functional.ts`              | Complete published language-neutral API                            |
-| `core.ts`                    | Surface/Core contracts and GPU compilation, without the evaluator  |
-| `src/functional/`            | Functional ABI, compiler facade, linking, contracts, evaluator     |
-| `src/semantic/`              | Host lowering plan, GPU shaders, runners, and the inference oracle |
-| `src/webgpu.ts`              | Device request, required limits, and setup diagnostics             |
-| `src/gleam_functional/`      | Repository-only Gleam parser, lowering, and trace adapter          |
-| `language/lazuli/`, `gleam/` | Baba grammars and generated parser/editor artifacts                |
-| `examples/lazuli/`           | Lazuli sample programs                                             |
-| `examples/gleam-functional/` | Gleam sample modules and traces                                    |
-| `examples/javascript-aot/`   | JavaScript frontend, grammar, and the pinned Test262 harness       |
-| `tests/`                     | Behavioral, differential, stress, growth, and cancellation tests   |
-| `benchmarks/`                | Deno benchmark entry points                                        |
-| `tools/`                     | Profiling, Gleam stdlib check, and editor-support scripts          |
+| Path                         | Responsibility                                                      |
+| ---------------------------- | ------------------------------------------------------------------- |
+| `functional.ts`              | Complete published language-neutral API                             |
+| `core.ts`                    | Surface/Core contracts and GPU compilation, without the evaluator   |
+| `src/functional/`            | Functional ABI, compiler facade, linking, contracts, evaluator      |
+| `src/functional/wasm_*.ts`   | WebAssembly code generators, binary emitter, runtime, host boundary |
+| `src/functional/storage_*`   | Storage plan and Storage Core verification behind the backend       |
+| `src/functional/comptime*`   | Bounded compile-time execution over compiled Core                   |
+| `src/semantic/`              | Host lowering plan, GPU shaders, runners, and the inference oracle  |
+| `src/webgpu.ts`              | Device request, required limits, and setup diagnostics              |
+| `src/gleam_functional/`      | Repository-only Gleam parser, lowering, and trace adapter           |
+| `language/lazuli/`, `gleam/` | Baba grammars and generated parser/editor artifacts                 |
+| `examples/lazuli/`           | Lazuli sample programs                                              |
+| `examples/gleam-functional/` | Gleam sample modules and traces                                     |
+| `examples/javascript-aot/`   | JavaScript frontend, grammar, and the pinned Test262 harness        |
+| `tests/`                     | Behavioral, differential, stress, growth, and cancellation tests    |
+| `benchmarks/`                | Deno benchmark entry points                                         |
+| `tools/`                     | Profiling, Gleam stdlib check, and editor-support scripts           |
 
 All JavaScript-specific code lives under `examples/javascript-aot/`. The repository's `src/`
 directory stays language-neutral.
+
+The WebAssembly backend has an out-of-repo consumer, Ducklang, which imports `functional.ts` by
+relative path with no version pin — see [ARCHITECTURE.md](ARCHITECTURE.md) section 7. Removing an
+export it uses breaks it at its next compile, with no deprecation window.
 
 ## Normal verification loop
 
@@ -58,14 +65,16 @@ deno task check:javascript-test262
 ```
 
 `check:gleam-stdlib` accepts an existing checkout as its first argument and requires the commit the
-tool records, so results cannot silently change with upstream `main`. It is now compile coverage
-only — the execution half went with the Wasm backend.
+tool records, so results cannot silently change with upstream `main`. It compiles the pinned corpus
+and does not run it; single-program execution is covered by `deno task run:gleam-functional`.
 
 `check:javascript-test262` pins the Test262 checkout and inventories every standalone test under
 `test/language`. Its counts are a frontend-readiness baseline, not conformance results: positive
 tests are wrapped with an AOT entry, negative tests must fail in their specified phase, and every
-ready mode is compiled as a fresh GPU artifact. Time, memory, and compiler-fuel exhaustion are
-reported as resource limits rather than semantic compilation failures.
+ready mode is compiled as a fresh GPU artifact. Compiled modules are never executed — the corpus is
+a wide batch for measuring compile throughput and frontend coverage, and running thousands of
+artifacts would measure something else. Time, memory, and compiler-fuel exhaustion are reported as
+resource limits rather than semantic compilation failures.
 
 `deno task test` uses `deno test --parallel` with `DENO_JOBS=2`. GPU tests are not ordinary
 millisecond unit tests: some deliberately force workspace growth, single-transition dispatches,
@@ -79,6 +88,8 @@ more workers can increase device contention. Measure the full suite on the activ
 Tests are grouped by externally observable contract: `functional_compiler_test.ts` for surface
 packing, GPU diagnostics, inference, batches, and cancellation;
 `functional_language_features_test.ts` for Core semantics through compile-and-evaluate;
+`functional_wasm_smoke_test.ts` for the WebAssembly backend — it is the only test that emits a
+binary, so a deleted or broken code generator is invisible without it;
 `lazuli_gpu_workspace_test.ts` for arena growth, device bounds, cleanup, and exact fuel;
 `lazuli_gpu_diagnostic_parity_test.ts` for shader-versus-oracle parity; `semantic_*_test.ts` for
 host lowering plans and dependency-wave schedules; and the frontend-named files for source-language
@@ -118,9 +129,9 @@ The packed surface, resolved Core, and type metadata are compatibility boundarie
 one: identify every encoder, shader decoder, host decoder, trace renderer, and test that consumes
 the record; reuse reserved words when the change is compatible; increment the ABI version when old
 data cannot be interpreted safely; add malformed-buffer and round-trip coverage; and verify
-evaluator behavior separately from inference behavior. The module ABI is `src/functional/abi.ts` and
-the canonical linked-preorder type metadata is `src/semantic/type_schema_abi.ts`. Never silently
-accept a record from an unknown ABI version.
+evaluator, WebAssembly-backend, and inference behavior separately from each other. The module ABI is
+`src/functional/abi.ts` and the canonical linked-preorder type metadata is
+`src/semantic/type_schema_abi.ts`. Never silently accept a record from an unknown ABI version.
 
 ## Changing GPU semantic compilation
 
@@ -175,8 +186,9 @@ near timer resolution need more samples, not a percentage-only conclusion.
 
 Expected source failures use typed results and stable diagnostic families. API contract violations,
 device failures, and internal invariant failures throw. Cancellation rejects with the caller's abort
-reason. Constructs the GPU evaluator cannot execute throw a `TypeError` naming the construct — do
-not approximate them.
+reason. Constructs portable WGSL cannot express are delegated to bounded WebAssembly by
+`evaluate()`, never approximated in the shader; the delegated path throws a `TypeError` for options
+it cannot honour, such as GPU dispatch, heap, and stack controls.
 
 Resource ownership must be visible in control flow: a successful compiled module owns its persistent
 GPU buffers and callers destroy it in `finally`; evaluators own and release only per-run buffers;
@@ -188,8 +200,8 @@ translate it at the boundary with its original `cause` preserved.
 
 The manifest is `deno.json` and the public entry is `functional.ts`. Run `deno task fmt`, `lint`,
 `check`, and `test`, then `git diff --check` and `deno task publish:dry-run`. Before changing the
-version, confirm the README examples use only public exports, confirm every module reachable from
-`functional.ts` and `core.ts` is listed under `publish.include`, include documentation and license
+version, confirm the README examples use only public exports, confirm no module reachable from
+`functional.ts` or `core.ts` is caught by `publish.exclude`, include documentation and license
 changes, document ABI changes, and inspect the dry-run package for repository-only frontends or
 generated artifacts that should not ship. The release workflow publishes only tags whose
 `v<version>` name exactly matches `deno.json`.
