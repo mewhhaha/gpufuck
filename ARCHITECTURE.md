@@ -71,6 +71,22 @@ lower into nominal declarations, explicit dictionaries, linked artifacts, and un
 [`recursive_groups.ts`](src/functional/recursive_groups.ts) lambda-lifts local SCCs into top-level
 ones with captures made explicit.
 
+**Surface sugar** is elaborated on the host during `buildFunctionalSurfaceModule`, behind a feature
+mask so a module that uses none of it pays nothing. `recursive_groups.ts` is the precedent and
+`case_defaults.ts` follows it: a `case` may carry an `otherwise` arm, which expands to the
+exhaustive form the Core requires by filling in the constructors the arms omit and binding the
+fallback once so arms share it. The scrutinee is bound once too, so it is evaluated once and can be
+handed to the arm's binder.
+
+The design rule for this layer is that a primitive earns its place only when a second, unrelated
+frontend would reach for it. Each of the three that exist was added because two independent
+frontends had hand-rolled the same workaround — spans, because no builder emitted one so a frontend
+tracking locations abandoned the builder entirely; parameter lists, because every other binding form
+already took one; and the `case` default, because exhaustiveness is enforced and every frontend
+therefore enumerated a type's constructors itself. Sugar that only one frontend wants belongs in
+that frontend. Deleted Effect Core is the counterexample: a subsystem shaped around one idea of
+effects that no frontend adopted.
+
 **Type schemas** are structural trees over primitives, parameters, tuples, named applications,
 functions, and explicit `forall`, encoded in one canonical linked preorder. Each six-word record
 holds tag, symbol, first child index, next sibling index, and the two span bytes; definition roots,
