@@ -41,6 +41,14 @@ export interface FunctionalCompilationTraceInput {
   readonly evaluation: FunctionalEvaluationResult;
 }
 
+function formatOutcome(outcome: unknown): string {
+  return JSON.stringify(
+    outcome,
+    (_key, value) => typeof value === "bigint" ? value.toString() : value,
+    2,
+  );
+}
+
 export function renderFunctionalCompilationTrace(input: FunctionalCompilationTraceInput): string {
   const normalized = formatNormalizedSurface(
     input.surface.definitions,
@@ -49,20 +57,15 @@ export function renderFunctionalCompilationTrace(input: FunctionalCompilationTra
   const encoded = formatEncodedModule(input.surface.module);
   const core = formatCoreModule(input.compiledModule, input.surface.module, input.coreNodes);
   const outcome = input.evaluation.ok
-    ? JSON.stringify(
-      {
-        entryType: input.compiledModule.entryType,
-        value: input.evaluation.value,
-        stats: input.evaluation.stats,
-      },
-      null,
-      2,
-    )
-    : JSON.stringify(
-      { entryType: input.compiledModule.entryType, fault: input.evaluation.fault },
-      null,
-      2,
-    );
+    ? formatOutcome({
+      entryType: input.compiledModule.entryType,
+      value: input.evaluation.value,
+      stats: input.evaluation.stats,
+    })
+    : formatOutcome({
+      entryType: input.compiledModule.entryType,
+      fault: input.evaluation.fault,
+    });
 
   return `# ${input.title}
 

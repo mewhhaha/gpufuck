@@ -1,6 +1,7 @@
 import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
 
 import {
+  type FunctionalEvaluationOptions,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
@@ -21,6 +22,12 @@ interface GleamFunctionalRuntime {
 }
 
 let runtime: GleamFunctionalRuntime | undefined;
+
+/**
+ * Gleam `Int` lowers to boxed i64, so the kernel example allocates past the evaluator's default
+ * heap of 256 slots. It completes within 512; this leaves headroom.
+ */
+const KERNEL_HEAP_SLOTS = 1024;
 
 Deno.test.beforeAll(async () => {
   const device = await requestWebGpuDevice();
@@ -155,7 +162,10 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 1333333337n });
+  deepStrictEqual(await evaluate(frontend.lowered), {
+    kind: "signed-integer-64",
+    value: 1333333337n,
+  });
 });
 
 Deno.test("lowers Gleam string concatenation and exact string patterns", async () => {
@@ -816,20 +826,20 @@ pub fn main() -> Int {
               throw new TypeError(`external add expected a tuple; received ${argument.kind}`);
             }
             const [left, right] = argument.values;
-            if (left.kind !== "integer" || right.kind !== "integer") {
+            if (left.kind !== "signed-integer-64" || right.kind !== "signed-integer-64") {
               throw new TypeError("external add expected two integers");
             }
-            return { kind: "integer", value: left.value + right.value };
+            return { kind: "signed-integer-64", value: left.value + right.value };
           },
           "subtract@external/subtract.subtract": (argument) => {
             if (argument.kind !== "tuple") {
               throw new TypeError(`external subtract expected a tuple; received ${argument.kind}`);
             }
             const [left, right] = argument.values;
-            if (left.kind !== "integer" || right.kind !== "integer") {
+            if (left.kind !== "signed-integer-64" || right.kind !== "signed-integer-64") {
               throw new TypeError("external subtract expected two integers");
             }
-            return { kind: "integer", value: left.value - right.value };
+            return { kind: "signed-integer-64", value: left.value - right.value };
           },
         },
       },
@@ -933,7 +943,7 @@ pub fn main() {
 Deno.test("links and evaluates a recursive three-module Gleam program", async () => {
   const sources = await readKernelSources();
   const lowered = requireLinked(sources, "kernel/main");
-  const evaluation = await evaluate(lowered);
+  const evaluation = await evaluate(lowered, { heapSlots: KERNEL_HEAP_SLOTS });
 
   deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 1109720n });
 });
@@ -1020,33 +1030,6 @@ pub fn main() -> Int {
   match(frontend.diagnostics[0].message, /catch-all case arm must be last/);
 });
 
-Deno.test("renders linked Gleam source and both functional IR stages side by side", async () => {
-  const sources = await readKernelSources();
-  const lowered = requireLinked(sources, "kernel/main");
-  const { compiler, evaluator } = gleamRuntime();
-  const compilation = await compiler.compileModule(lowered.module);
-  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
-  if (!compilation.ok) return;
-
-  try {
-    const trace = renderGleamFunctionalTrace({
-      title: "linked kernel",
-      source: sources.map((module) => `// ${module.name}\n${module.source}`).join("\n"),
-      lowered,
-      compiledModule: compilation.module,
-      coreNodes: await compilation.module.readCoreNodes(),
-      evaluation: await evaluator.evaluate(compilation.module),
-    });
-
-    match(trace, /Gleam source modules<\/th><th>Normalized functional surface/);
-    match(trace, /Encoded functional ABI<\/th><th>GPU-resolved core IR/);
-    match(trace, /kernel\/program::run/);
-    match(trace, /"value": 1109720/);
-  } finally {
-    compilation.module.destroy();
-  }
-});
-
 async function evaluateSingleExample(
   path: string,
 ): Promise<{ readonly kind: string; readonly value: unknown }> {
@@ -1060,13 +1043,14 @@ async function evaluateSingleExample(
 
 async function evaluate(
   lowered: LoweredGleamFunctionalProgram,
+  options: FunctionalEvaluationOptions = {},
 ): Promise<{ readonly kind: string; readonly value: unknown }> {
   const { compiler, evaluator } = gleamRuntime();
   const compilation = await compiler.compileModule(lowered.module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("Gleam example did not compile.");
   try {
-    const evaluation = await evaluator.evaluate(compilation.module);
+    const evaluation = await evaluator.evaluate(compilation.module, options);
     ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
     if (!evaluation.ok) throw new Error("Gleam example did not evaluate.");
     if (
@@ -1094,6 +1078,34 @@ async function evaluateWasm(
     compilation.module.destroy();
   }
 }
+
+Deno.test("renders linked Gleam source and both functional IR stages side by side", async () => {
+  const sources = await readKernelSources();
+  const lowered = requireLinked(sources, "kernel/main");
+  const { compiler, evaluator } = gleamRuntime();
+  const compilation = await compiler.compileModule(lowered.module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const trace = renderGleamFunctionalTrace({
+      title: "linked kernel",
+      source: sources.map((module) => `// ${module.name}\n${module.source}`).join("\n"),
+      lowered,
+      compiledModule: compilation.module,
+      coreNodes: await compilation.module.readCoreNodes(),
+      evaluation: await evaluator.evaluate(compilation.module, { heapSlots: 1024 }),
+    });
+
+    match(trace, /Gleam source modules<\/th><th>Normalized functional surface/);
+    match(trace, /Encoded functional ABI<\/th><th>GPU-resolved core IR/);
+    match(trace, /kernel\/program::run/);
+    // Int lowers to i64, so the rendered value is a stringified BigInt.
+    match(trace, /"value": "1109720"/);
+  } finally {
+    compilation.module.destroy();
+  }
+});
 
 async function readKernelSources(): Promise<readonly GleamFunctionalSourceModule[]> {
   return await Promise.all(
