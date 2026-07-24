@@ -36,7 +36,7 @@ export function concreteFunctionalType(schema: FunctionalTypeSchema): Functional
   return instantiateSchema(schema, new Map());
 }
 
-function instantiateSchema(
+export function instantiateSchema(
   schema: FunctionalTypeSchema,
   parameters: ReadonlyMap<string, FunctionalType>,
 ): FunctionalType {
