@@ -2,73 +2,46 @@
 
 This guide is for contributors changing gpufuck itself. Consumers embedding the compiler should
 start with [README.md](README.md); implementation boundaries and rationale live in
-[ARCHITECTURE.md](ARCHITECTURE.md).
+[ARCHITECTURE.md](ARCHITECTURE.md); measured performance lives in [BASELINE.md](BASELINE.md).
 
 ## Prerequisites
-
-Required for the normal verification loop:
 
 - Deno 2.9 or newer;
 - a WebGPU adapter exposed to Deno;
 - Deno's unstable WebGPU API, already enabled by this repository's `deno.json`.
 
-Optional tools:
-
-- `just` for Lazuli editor-support recipes;
-- `tree-sitter` and Helix for `just install`;
-- Zig for `deno task compare:type-programming`;
-- Gleam 1.17 or newer for `deno task test:gleam-differential`;
-- a hardware GPU for representative performance measurements.
+Optional: `just` plus `tree-sitter` and Helix for the Lazuli editor-support recipes.
 
 No dependency installation step is needed. Deno resolves the pinned imports in `deno.json` and
 `deno.lock`.
 
-## Browser playground
-
-Build the static GitHub Pages artifact and serve it from a local secure-context exception at
-`http://127.0.0.1:8000`:
-
-```sh
-deno task build:browser-demo
-deno task serve:browser-demo
-```
-
-The separate `playground/` package uses Vite, React 19, the React Compiler, TypeScript 7, oxlint,
-oxfmt, and `@comp0/react`. Its build copies the generated Baba parser module, parser plan, and
-Lazuli examples into `playground/public/generated/`, then emits the static site to
-`playground/dist/`. The Pages workflow verifies and deploys that directory on every push to `main`.
-Browser parsing must call `initializeLazuliParser()` with asset URLs before it uses the otherwise
-synchronous Lazuli frontend; Deno continues to load the same assets directly from disk.
-
 ## Repository map
 
-| Path                                                                  | Responsibility                                                                               |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `functional.ts`                                                       | Complete published language-neutral API                                                      |
-| `core.ts`, `wasm.ts`, `comptime.ts`, `effects.ts`, `type_services.ts` | Focused package subpaths                                                                     |
-| `src/functional/`                                                     | Functional ABI, optional IRs, compiler facade, linking, caches, evaluator, and Wasm backend  |
-| `src/semantic/`                                                       | Shared packed semantic engine                                                                |
-| `src/lazuli/`                                                         | Thin Lazuli compatibility adapters                                                           |
-| `language/lazuli/`                                                    | Baba grammar and generated parser/editor artifacts                                           |
-| `examples/functional-ir/`                                             | Direct target-API examples                                                                   |
-| `playground/`                                                         | Vite React WebGPU compiler playground published through GitHub Pages                         |
-| `examples/*-functional/`                                              | Independent source-language frontend examples and traces                                     |
-| `src/gleam_functional/`                                               | Repository-only Gleam parser, strict lowering, module artifacts, and trace adapter           |
-| `src/purescript_profile/`                                             | Repository-only stress profile for rows, capabilities, associated types, and rank-2 checking |
-| `tests/`                                                              | Behavioral, differential, stress, cancellation, growth, and Wasm execution tests             |
-| `benchmarks/`                                                         | Deno benchmark entry points                                                                  |
-| `tools/`                                                              | Profiling, comparison, parser, and editor-support scripts                                    |
+| Path                         | Responsibility                                                     |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `functional.ts`              | Complete published language-neutral API                            |
+| `core.ts`                    | Surface/Core contracts and GPU compilation, without the evaluator  |
+| `src/functional/`            | Functional ABI, compiler facade, linking, contracts, evaluator     |
+| `src/semantic/`              | Host lowering plan, GPU shaders, runners, and the inference oracle |
+| `src/webgpu.ts`              | Device request, required limits, and setup diagnostics             |
+| `src/gleam_functional/`      | Repository-only Gleam parser, lowering, and trace adapter          |
+| `language/lazuli/`, `gleam/` | Baba grammars and generated parser/editor artifacts                |
+| `examples/lazuli/`           | Lazuli sample programs                                             |
+| `examples/gleam-functional/` | Gleam sample modules and traces                                    |
+| `examples/javascript-aot/`   | JavaScript frontend, grammar, and the pinned Test262 harness       |
+| `tests/`                     | Behavioral, differential, stress, growth, and cancellation tests   |
+| `benchmarks/`                | Deno benchmark entry points                                        |
+| `tools/`                     | Profiling, Gleam stdlib check, and editor-support scripts          |
 
-The published package exports the complete `functional.ts` entry plus focused subpaths for Core,
-Wasm, comptime, effects, and type services. Repository-only language example entry points remain
-separate.
+All JavaScript-specific code lives under `examples/javascript-aot/`. The repository's `src/`
+directory stays language-neutral.
 
 ## Normal verification loop
 
 Run the focused test for the code being changed first, then the full checks:
 
 ```sh
-deno test --allow-read tests/functional_wasm_test.ts
+deno test --allow-read tests/functional_compiler_test.ts
 deno task fmt
 deno task lint
 deno task check
@@ -76,296 +49,150 @@ deno task test
 git diff --check
 ```
 
-The pinned Gleam compatibility checks are separate because one invokes an installed compiler and the
-other fetches an upstream repository:
+The pinned upstream compatibility checks are separate because they fetch or invoke external
+repositories:
 
 ```sh
-deno task test:gleam-differential
 deno task check:gleam-stdlib
 deno task check:javascript-test262
 ```
 
-`check:gleam-stdlib` accepts an existing checkout as its first argument. The checkout must be at the
-commit recorded by the tool, so the result cannot silently change with upstream `main`. It compiles
-all 19 package modules and all 1,521 JavaScript-targeted tests in bounded batches, then executes the
-444 tests whose reachable definitions need no Gleam runtime adapter. The current local run takes
-roughly 90 seconds on the GPU used for development.
+`check:gleam-stdlib` accepts an existing checkout as its first argument and requires the commit the
+tool records, so results cannot silently change with upstream `main`. It is now compile coverage
+only — the execution half went with the Wasm backend.
 
-`check:javascript-test262` pins the upstream Test262 checkout and inventories every standalone test
-under `test/language`. Dynamic source generation remains outside the AOT profile. Its
-frontend-readiness counts are a development baseline, not conformance results: positive tests are
-wrapped with an AOT entry and negative tests must fail in their specified parse, resolution, or
-runtime phase. Every frontend-ready strict, non-strict, module, or raw mode is compiled as a fresh
-GPU artifact and executed independently. A pool of up to two persistent workers creates each GPU
-compiler once, then accepts one mode per request. Compiler warmup has a separate 180-second limit.
-After readiness, each mode has 60 seconds and 768 MiB of additional RSS above that worker's measured
-warm baseline; the semantic compiler uses its ten-million-step hard cap. Time, memory, and
-compiler-fuel exhaustion are reported as resource limits rather than semantic compilation failures.
-
-The report balances every applicable execution mode between successful exact-phase or GPU/Wasm
-execution and a specific failure bucket. The task exits nonzero while any applicable mode is
-unsupported, resource-limited, fails compilation, or fails execution. `--report=<path>` preserves
-the complete JSON result for comparison, and an existing checkout at the pinned commit may be passed
-as the first argument.
+`check:javascript-test262` pins the Test262 checkout and inventories every standalone test under
+`test/language`. Its counts are a frontend-readiness baseline, not conformance results: positive
+tests are wrapped with an AOT entry, negative tests must fail in their specified phase, and every
+ready mode is compiled as a fresh GPU artifact. Time, memory, and compiler-fuel exhaustion are
+reported as resource limits rather than semantic compilation failures.
 
 `deno task test` uses `deno test --parallel` with `DENO_JOBS=2`. GPU tests are not ordinary
 millisecond unit tests: some deliberately force workspace growth, single-transition dispatches,
-device-limit failures, cancellation, or complete cross-backend execution. Individual stress tests
-can take 20–40 seconds. That duration is expected when the test name describes one of those
-boundaries; it is not the expected latency of a normal compilation.
-
-Use Deno's filter for a focused iteration:
-
-```sh
-deno test --allow-read tests/lazuli_gpu_workspace_test.ts \
-  --filter "grows each exhausted arena"
-```
-
-Do not increase test parallelism blindly. Each test worker can own WebGPU pipelines, buffers, and
-readbacks. More CPU workers may increase device contention and make the suite slower or less
-deterministic. Measure the full suite on the active adapter before changing `DENO_JOBS`.
+device-limit failures, or cancellation. Individual stress tests can take 20–40 seconds; that is
+expected when the test name describes one of those boundaries, and it is not the latency of a normal
+compilation. Do not raise `DENO_JOBS` blindly — each worker owns WebGPU pipelines and buffers, and
+more workers can increase device contention. Measure the full suite on the active adapter first.
 
 ## Test ownership
 
-Tests are grouped by externally observable contract:
+Tests are grouped by externally observable contract: `functional_compiler_test.ts` for surface
+packing, GPU diagnostics, inference, batches, and cancellation;
+`functional_language_features_test.ts` for Core semantics through compile-and-evaluate;
+`lazuli_gpu_workspace_test.ts` for arena growth, device bounds, cleanup, and exact fuel;
+`lazuli_gpu_diagnostic_parity_test.ts` for shader-versus-oracle parity; `semantic_*_test.ts` for
+host lowering plans and dependency-wave schedules; and the frontend-named files for source-language
+behavior and trace stability.
 
-| Test family                                            | Contract                                                                   |
-| ------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `functional_compiler_test.ts`                          | Surface packing, GPU diagnostics, inference, batches, cancellation         |
-| `functional_wasm_test.ts`                              | Resolved Core to Wasm semantics, ABI, effects, host calls, specialization  |
-| `functional_comptime_test.ts`                          | Required execution, generated IR, partial evaluation, incremental comptime |
-| `functional_effect_core_test.ts`                       | Effect Core verification and lowering                                      |
-| `functional_type_program_test.ts`, `type_core_test.ts` | Type normalization, capability evidence, Type Core execution               |
-| `lazuli_gpu_workspace_test.ts`                         | Elastic arena growth, device bounds, cleanup, exact fuel                   |
-| `lazuli_gpu_diagnostic_parity_test.ts`                 | GPU/TypeScript oracle parity                                               |
-| `*_functional_test.ts`                                 | Source-language frontend behavior and trace stability                      |
-| `gleam_differential_test.ts`                           | Value parity with the installed official Gleam JavaScript backend          |
+`inferLazuliTypes` in `src/semantic/type_inference.ts` is a differential oracle and the CPU column
+in BASELINE.md. Production inference must remain on the GPU path; do not turn the oracle into an
+implicit CPU fallback. When adding a regression test, assert through a public boundary. Internal
+instrumentation exists for deterministic dispatch, fuel, workspace, and cancellation tests, but must
+not be exported through `functional.ts`.
 
-The TypeScript inference implementation is a differential oracle. Production semantic inference must
-remain on the GPU path; do not turn the oracle into an implicit CPU fallback.
+## Generated parsers
 
-When adding a regression test, assert through a public boundary where possible. Internal
-instrumentation exists for deterministic dispatch, fuel, workspace, and cancellation tests, but it
-must not be exported through `functional.ts`.
-
-## Generated Lazuli files
-
-The canonical grammar is `language/lazuli/grammar.baba`. Regenerate its parser after grammar or
-metadata changes:
-
-```sh
-deno task generate:lazuli
-```
-
-Generated output under `language/lazuli/generated/` is excluded from formatting. Review both the
-grammar change and generated diff.
-
-To build and install the Tree-sitter parser and Helix queries:
-
-```sh
-just install
-```
-
-The individual recipes are:
-
-```sh
-just helix
-just install-helix
-```
-
-`just install` writes to the user's Helix configuration. It is a local developer action and must not
-be part of automated tests or publishing.
+Canonical grammars are `language/<name>/grammar.baba` and
+`examples/javascript-aot/language/grammar.baba`. Regenerate with `deno task generate:lazuli`,
+`generate:gleam`, or `generate:javascript-aot` after a grammar or metadata change, and review both
+the grammar diff and the generated diff. Generated output is excluded from formatting.
+`just install` builds and installs the Tree-sitter parser and Helix queries into the user's Helix
+configuration; it is a local developer action and must never run in automated tests or publishing.
 
 ## Adding or changing a frontend
 
-A source-language frontend should stay outside the semantic engine. A complete frontend change
-usually includes:
+A frontend stays outside the semantic engine: parse into a source-specific AST with UTF-8 byte
+spans, enforce the rules Functional Core does not represent, lower to `FunctionalSurfaceDefinition`
+and `FunctionalSurfaceTypeDeclaration` values, select strict or lazy evaluation deliberately,
+translate neutral diagnostics back to source terminology, and add an accepted program, a rejected
+program, and an end-to-end evaluation test.
 
-1. Parse into a source-specific AST with UTF-8 byte spans.
-2. Enforce source-language rules not represented by Functional Core.
-3. Lower to `FunctionalSurfaceDefinition`, `FunctionalSurfaceTypeDeclaration`, optional Type Core,
-   or Effect Core values.
-4. Select strict or lazy evaluation deliberately.
-5. Translate neutral diagnostics back to source files and terminology.
-6. Add a small accepted program, a rejected program, and an end-to-end Wasm execution test.
-7. Add or update a trace showing source, normalized surface, packed ABI, and resolved Core.
-
-Repository grammars use Baba and keep generated Wasm parser artifacts beside their source under
-`language/<frontend>/generated/`. Run the matching `generate:<frontend>` task after changing a
-grammar, and keep cursor-to-AST conversion in the frontend rather than the neutral compiler.
-
-Keep parsing and desugaring out of `src/functional/`. That directory is target-neutral and cannot
-acquire rules named after Lazuli, Haskell, Rust, OCaml, or another source language.
-
-Reusable elaboration belongs beside the target contracts. `recursive_groups.ts` lambda-lifts local
-SCCs, `constraint_elaboration.ts` inserts normalized capability evidence, `row_types.ts` closes
-record/variant/effect rows, and `existential.ts` builds fixed-eliminator packages. These passes must
-produce ordinary surface constructs; do not extend the packed ABI when a bounded elaboration can
-preserve the same semantics.
+Keep parsing and desugaring out of `src/functional/` — that directory is target-neutral and cannot
+acquire rules named after a source language. Reusable elaboration belongs beside the target
+contracts; `recursive_groups.ts` is the model. Do not extend the packed ABI when a bounded
+elaboration preserves the same semantics.
 
 ## Changing the packed ABI
 
-The packed surface, resolved Core, type metadata, and Wasm value ABI are compatibility boundaries.
-Before changing one:
-
-- identify every encoder, shader decoder, host decoder, cache fingerprint, trace renderer, and test
-  that consumes the record;
-- reuse reserved words when the change is compatible;
-- increment the relevant ABI or cache-format version when old data cannot be interpreted safely;
-- add malformed-buffer and round-trip coverage;
-- verify evaluator behavior separately from inference behavior.
-
-The Functional module ABI is declared in `src/functional/abi.ts`. Canonical linked-preorder type
-metadata is encoded and decoded by `src/semantic/type_schema_abi.ts`. The public structured Wasm
-boundary is in `src/functional/wasm_abi.ts` and `src/functional/wasm_value_codec.ts`.
-
-Never silently accept a record from an unknown ABI version.
+The packed surface, resolved Core, and type metadata are compatibility boundaries. Before changing
+one: identify every encoder, shader decoder, host decoder, trace renderer, and test that consumes
+the record; reuse reserved words when the change is compatible; increment the ABI version when old
+data cannot be interpreted safely; add malformed-buffer and round-trip coverage; and verify
+evaluator behavior separately from inference behavior. The module ABI is `src/functional/abi.ts` and
+the canonical linked-preorder type metadata is `src/semantic/type_schema_abi.ts`. Never silently
+accept a record from an unknown ABI version.
 
 ## Changing GPU semantic compilation
 
-The semantic compiler is a persistent bounded state machine, not one invocation-sized shader
-algorithm. Preserve these invariants:
+The semantic compiler is a persistent bounded state machine. Preserve these invariants:
 
-- one charged transition performs constant-bounded semantic work;
-- a transition inspects at most one logical record or edge and allocates at most one record per
-  arena;
+- one charged transition performs constant-bounded semantic work, inspecting at most one logical
+  record or edge and allocating at most one record per arena;
 - work frames survive dispatch boundaries;
-- workspace growth does not reset phase, results, or fuel;
-- growth yields do not consume semantic fuel;
+- workspace growth does not reset phase, results, or fuel, and growth yields consume no fuel;
 - cancellation is observed between bounded dispatches;
 - every failure or cancellation path destroys owned temporary buffers;
 - device loss and internal invariant violations propagate rather than becoming source diagnostics.
 
-WGSL has no recursion and restricts portable integer and floating-point facilities. New inference
-operations must therefore be expressed as explicit durable frames. An input-sized loop hidden inside
-one transition invalidates the latency and cancellation guarantees even if total work still looks
-linear.
+WGSL has no recursion, restricts portable integer and floating-point facilities, and rejects
+unbounded `loop` inside a value-returning function, so new operations must be explicit durable
+frames or explicitly bounded walks. An input-sized loop hidden inside one transition invalidates the
+latency and cancellation guarantees even if total work still looks linear.
 
-After shader changes, run at least:
-
-```sh
-deno task check
-deno test --allow-read tests/lazuli_gpu_diagnostic_parity_test.ts
-deno test --allow-read tests/lazuli_gpu_workspace_test.ts
-deno test --allow-read tests/lazuli_concurrent_compilation_test.ts
-deno task test
-```
-
-Shader creation calls `getCompilationInfo()` and reports WGSL compiler diagnostics before pipeline
-creation. Runtime WebGPU validation scopes must attach enough buffer sizes, adapter limits, and
-operation context to distinguish source exhaustion from infrastructure failure.
-
-## Changing Wasm emission
-
-Wasm code generation starts from GPU-resolved Core. Preserve source evaluation semantics first;
-representation and specialization are secondary.
-
-Relevant seams:
-
-- `wasm_backend_plan.ts`: validated capture, function, storage, entry, and compact-representation
-  facts consumed by emission;
-- `wasm_function_analysis.ts`: function shapes, reachability, tail calls, numeric folds;
-- `wasm_capture_analysis.ts`: lexical captures and environment layout;
-- `wasm_unique_reuse_analysis.ts`: strict constructor origins and path-sensitive final case uses;
-- `wasm_lambda_sets.ts`: finite callee-set analysis and specialization limits;
-- `wasm_codegen.ts`: orchestration and expression emission;
-- `wasm_host_emitter.ts`: built-in host-buffer literals and intrinsic emission;
-- `wasm_runtime_binary.ts`: allocator, thunk forcing, and runtime support bodies;
-- `wasm_runtime_layout.ts`: shared runtime global indices and allocator markers;
-- `wasm_value_codec.ts`: public argument and result representation;
-- `wasm_execution.ts`: compilation cache, instantiation, sync/async execution, and fault
-  translation.
-
-Every optimization needs an end-to-end semantic test. For lazy code, include a case whose result
-would diverge or fault if the optimizer accidentally forced an unused value. For scalar fast paths,
-inspect both behavior and artifact shape. Compiler statistics belong beside cached artifacts, not in
-production Wasm exports.
+Shader creation calls `getCompilationInfo()` and reports WGSL diagnostics before pipeline creation.
+Runtime validation scopes must attach enough buffer sizes, adapter limits, and operation context to
+distinguish source exhaustion from infrastructure failure. After shader changes, run
+`deno task
+check`, the GPU parity, workspace, and concurrent-compilation tests, and then
+`deno task test`.
 
 ## Benchmarks and profiling
 
-Run benchmarks on the same machine, adapter, power state, Deno version, and workload before and
-after a performance change:
-
 ```sh
+deno task bench:throughput
 deno task bench:lazuli
-deno task bench:functional-wasm
-deno task bench:functional-wasm-gc
-deno task bench:functional-comptime
 deno task bench:semantic-wavefront
 deno task profile:lazuli-compiler
 ```
 
+`bench:throughput` produces the numbers in [BASELINE.md](BASELINE.md) and decides whether a change
+to the GPU path was worth making. Report **marginal cost per module**, not total wall time: both
+paths pay the same host parse, so a total-wall-time ratio flatters the GPU. Update BASELINE.md in
+the same commit as any change that moves it.
+
 `profile:lazuli-compiler` separates cold WebGPU initialization, frontend preparation, semantic
-dispatch, readback, batch behavior, and definition-level work/span. The parallelism profile reports
-SCC count, dependency waves, weighted critical-path work, maximum wave width, and the largest serial
-component. Record the adapter description and whether it is a software fallback. Software adapters
-are useful for correctness and synchronization analysis but do not predict hardware-GPU latency.
+dispatch, readback, batch behavior, and definition-level work and span. `bench:semantic-wavefront`
+separates latency from sustained device-resident throughput — do not use a resident-throughput
+number to claim lower single-compilation latency. Record the adapter description and whether it is a
+software fallback; software adapters are useful for correctness and synchronization analysis but do
+not predict hardware latency.
 
-`bench:semantic-wavefront` separates latency from sustained device-resident throughput. Host
-scheduling remains the correct path when JavaScript immediately needs one small schedule: a WebGPU
-submission and readback costs far more than the work. The reusable GPU plan instead leaves its waves
-in a storage buffer and batches independent graphs in one dispatch. Compare both rows; do not use
-the resident throughput number to claim lower single-compilation latency.
-
-For code-generation changes, measure at least:
-
-- source-to-Wasm latency after compiler warm-up;
-- Wasm byte length;
-- instantiation latency;
-- first execution;
-- repeated execution on the same instance;
-- allocation and thunk counts where applicable;
-- a recomputing entry separately from a retained-value entry.
-
-Do not compare a memoized result against a recomputing implementation as if it measured code
-quality. Record semantic differences in the benchmark description.
-
-Investigate a median regression greater than 25% on the same machine before accepting it. Small
-absolute changes near timer resolution need more samples rather than a percentage-only conclusion.
+Run benchmarks on the same machine, adapter, power state, Deno version, and workload before and
+after. Investigate a median regression greater than 25% before accepting it; small absolute changes
+near timer resolution need more samples, not a percentage-only conclusion.
 
 ## Diagnostics and cleanup
 
 Expected source failures use typed results and stable diagnostic families. API contract violations,
 device failures, and internal invariant failures throw. Cancellation rejects with the caller's abort
-reason.
+reason. Constructs the GPU evaluator cannot execute throw a `TypeError` naming the construct — do
+not approximate them.
 
-Resource ownership must be visible in control flow:
-
-- a successful compiled module owns its persistent GPU buffers;
-- callers destroy compiled modules in `finally`;
-- evaluators own and release only per-run buffers;
-- workspace replacement owns both buffers until a successful copy transfers the active state;
-- cache entries contain portable bytes and metadata, never live `GPUBuffer` objects.
-
-Do not catch a WebGPU or Wasm error merely to return a generic source diagnostic. Either enrich and
-rethrow it or translate it at the boundary with its original `cause` preserved.
+Resource ownership must be visible in control flow: a successful compiled module owns its persistent
+GPU buffers and callers destroy it in `finally`; evaluators own and release only per-run buffers;
+workspace replacement owns both buffers until a successful copy transfers the active state. Do not
+catch a WebGPU error merely to return a generic source diagnostic — enrich and rethrow it, or
+translate it at the boundary with its original `cause` preserved.
 
 ## Publishing
 
-The package manifest is `deno.json`; the public entry is `functional.ts`. Validate the exact
-published file set with:
-
-```sh
-deno task fmt
-deno task lint
-deno task check
-deno task test
-git diff --check
-deno task publish:dry-run
-```
-
-Before changing the version:
-
-- confirm the README examples use only public exports;
-- confirm new public modules are listed under `publish.include`;
-- include documentation and license changes;
-- document ABI or cache-version changes;
-- inspect the dry-run package for repository-only frontends or generated artifacts that should not
-  ship.
-
-For the first release, create `@mewhhaha/gpufuck` on JSR and link it to the `mewhhaha/gpufuck`
-GitHub repository before pushing the version tag. The release workflow publishes only tags whose
-`v<version>` name exactly matches `deno.json`; for example, version `0.1.0` must be tagged `v0.1.0`.
+The manifest is `deno.json` and the public entry is `functional.ts`. Run `deno task fmt`, `lint`,
+`check`, and `test`, then `git diff --check` and `deno task publish:dry-run`. Before changing the
+version, confirm the README examples use only public exports, confirm every module reachable from
+`functional.ts` and `core.ts` is listed under `publish.include`, include documentation and license
+changes, document ABI changes, and inspect the dry-run package for repository-only frontends or
+generated artifacts that should not ship. The release workflow publishes only tags whose
+`v<version>` name exactly matches `deno.json`.
 
 ## Commit scope
 

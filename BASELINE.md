@@ -42,9 +42,11 @@ both columns do the same work.
 1. _Floor (~11.4 ms)._ Deno's `mapAsync` stalls ~11.4 ms per await even on a buffer with nothing
    submitted; eight concurrent awaits cost the same as one. This is the whole of the N=1 number and
    it is a runtime property, not a compiler one. Unmeasured in Chrome.
-2. _Slope (~9.7x)._ Every production kernel is `@compute @workgroup_size(1)`, one lane per module,
-   running a serial `loop { if phase == … }` state machine over a 74-field `var<private>` struct.
-   This survives any runtime fix.
+2. _Slope (~9.7x)._ The semantic, inference, and evaluator kernels are all
+   `@compute @workgroup_size(1)`, one lane per module, running a serial `loop { if phase == … }`
+   state machine over a 74-field `var<private>` struct. The one exception, `lower_planned_lazuli` at
+   `workgroup_size(64)`, only copies a lowering plan the host already computed, and is disabled
+   above four batch lanes. This survives any runtime fix.
 
 **The Amdahl ceiling is 1.35x.** Parsing is 74% of the CPU path and stays on the CPU (baba). Even a
 free, instantaneous GPU inference would only take the CPU path from 39.3 to 29.1 µs/module. Every

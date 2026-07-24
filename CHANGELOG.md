@@ -5,21 +5,36 @@ All notable changes to gpufuck are documented here. The project follows
 
 ## Unreleased
 
-- Added a portable immutable `F32x4` library and opt-in native Wasm SIMD lowering for arithmetic,
-  masks, lane operations, reductions, vectorizable higher-order operations, and private unboxed
-  vector workers, including linked modules, with automatic scalar fallback at lazy boundaries.
-- Expanded the experimental Haskell frontend with transparent type synonyms, `newtype`, Unicode
-  `Char` and `String` literals, predicative rank-N signatures, and mutually recursive local groups.
-- Added an explicit, non-default WasmGC backend for pure closed Functional Core modules, including
-  typed algebraic values, closures, shared lazy thunks, recursive closure cycles, wide numerics,
-  bounded structured-result decoding, and blackhole diagnostics.
-- Added conservative unique-ownership resolution for complete immutable Storage Core traces,
-  including transitive last-use releases, escaping graphs, and exact-size reuse planning.
-- Added resolved-Core uniqueness and path-liveness analysis that reuses compatible strict
-  constructor allocations in Wasm while retaining fresh allocation for aliases, lazy values, owned
-  exports, captures, and layout changes.
-- Hardened Component Model WIT generation against identifier collisions, malformed resources, empty
-  variants, and cyclic or excessively deep type schemas.
+This release narrows the project to a single purpose: being a fast compiler on the GPU. Roughly
+73,000 lines that did not serve that purpose were removed. It is a large, deliberate reduction in
+capability, and the compiler is not yet fast — see [BASELINE.md](BASELINE.md).
+
+### Removed
+
+- Removed the entire WebAssembly backend: emission, the linear-memory and WasmGC code generators,
+  SIMD lowering, the public value ABI, execution and async replay, the host emitter, and the
+  Component Model boundary. Compilation now ends at resolved Functional Core.
+- Removed the storage-plan subsystem, Storage Core, ownership resolution, and reuse planning.
+- Removed compile-time execution, partial evaluation, Type Core, Effect Core, incremental
+  compilation and its caches, row types, existentials, the capability resolver, and constraint
+  elaboration.
+- Removed the Haskell, OCaml, Rust, 1SubML, and PureScript frontends and the Brainfuck GPU compiler.
+- Removed the browser playground and its GitHub Pages workflow.
+- Removed the `src/lazuli/` re-export shim; its implementation files now live in `src/semantic/`.
+- Reduced the published subpaths to `.` (`functional.ts`) and `./core` (`core.ts`). The `wasm`,
+  `comptime`, `effects`, and `type-services` subpaths no longer exist.
+
+### Changed
+
+- `GpuFunctionalEvaluator` is the only runtime. It inspects resolved Core before dispatch and throws
+  a `TypeError` naming the first construct it cannot execute: 64-bit floats, portable whole-number
+  f64, text, bytes, runtime faults, buffers, stores, structural equality, 32-bit float division, and
+  32-bit square root. Such programs still compile and typecheck.
+- `requestWebGpuDevice()` now requests `maxStorageBuffersPerShaderStage` of 16, clamped to adapter
+  support, and opts into `timestamp-query` when the adapter exposes it.
+- Documented the measured baseline and its kill criteria in `BASELINE.md`, and corrected the
+  long-standing claim that name resolution runs on the GPU. It runs on the host, in
+  `src/semantic/symbol_lookup.ts`; the shader copies the resulting lowering plan.
 
 ## 0.3.0 - 2026-07-19
 

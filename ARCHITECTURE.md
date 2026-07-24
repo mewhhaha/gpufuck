@@ -1,1426 +1,375 @@
 # Architecture
 
-This document describes gpufuck's system boundaries, compilation stages, persistent GPU machines,
-Wasm backend, runtime contracts, and design decisions. It is written for frontend authors and
-contributors who need to know where a decision belongs and which invariants a change must preserve.
-
-The public integration path is in [README.md](README.md). Commands and repository workflow are in
-[DEVELOPMENT.md](DEVELOPMENT.md).
+System boundaries, compilation stages, GPU machines, and the decisions a change must not silently
+reverse. The integration path is in [README.md](README.md), commands in
+[DEVELOPMENT.md](DEVELOPMENT.md), and measured performance in [BASELINE.md](BASELINE.md) — which
+every claim here is judged against.
 
 ## 1. Purpose and scope
 
-Gpufuck is a reusable semantic compiler and Wasm backend for functional languages. It deliberately
-does not define a universal source syntax or a universal language semantics.
+Gpufuck is a semantic compiler for functional languages whose sole purpose is to be a fast compiler
+on the GPU. It has no code generator: the pipeline ends at resolved Functional Core, which the GPU
+Core evaluator executes.
 
-The project owns:
+The project owns the portable Functional Surface and packed module ABI, target-level typed modules
+and static linking, Core lowering, dependency analysis, Hindley–Milner inference and coverage, a
+bounded GPU evaluator, and the bounded-work, cancellation, diagnostic, and device-ownership
+contracts around all of it.
 
-- a portable Functional Surface and packed module ABI;
-- target-level typed modules and static linking;
-- GPU name resolution, dependency analysis, inference, checking, coverage, and Core lowering;
-- optional type normalization, capability evidence, Type Core, Effect Core, and compile-time
-  execution;
-- a resolved numeric Core shared by evaluators and Wasm emission;
-- whole-program Wasm analysis, representation selection, optimization, emission, and execution
-  adapters;
-- bounded work, cancellation points, diagnostics, source evidence, and device resource ownership.
+A source-language implementation owns lexing, parsing, module discovery, visibility, source-specific
+scoping, numeric literal defaulting, mutation and ownership rules, effect classification, and every
+filename, line/column, excerpt, and wording concern in diagnostics. A feature enters the target only
+when several languages can describe it without importing one frontend's syntax or policy.
 
-A source-language implementation owns:
-
-- lexing, parsing, concrete syntax, layout, macros, and source files;
-- its module discovery, package graph, visibility, re-export, and coherence rules;
-- source-specific scoping that differs from Functional Core;
-- numeric literal defaulting, overflow semantics, mutation, ownership, and borrow checking;
-- effect classification and the meaning of purity, `IO`, exceptions, and async operations;
-- elaboration of language-specific type features into the optional target services;
-- filenames, line/column mapping, excerpts, recovery, and source-language diagnostic wording.
-
-This split is the central architectural constraint. A feature should enter the target only when
-multiple languages can describe it without importing one frontend's syntax or policy.
-
-### Goals
-
-- Amortize semantic compilation across many independent programs on a GPU.
-- Make fuel, dispatch quanta, and cancellation real latency bounds rather than accounting fiction.
-- Preserve enough source evidence to produce useful frontend diagnostics.
-- Keep emitted Wasm independent of WebGPU and gpufuck.
-- Support both strict and lazy functional languages through explicit evaluation modes.
-- Make advanced type execution and effects optional layers above a small Core.
-- Keep every cross-process or host/device format versioned and structurally bounded.
-- Prefer whole-program optimization while retaining an incremental module cache.
-
-### Non-goals
-
-- Parsing arbitrary languages inside WGSL.
-- Replacing source-language ownership, effect, or coherence checking.
-- Providing GHC, rustc, OCaml, or Zig compatibility from the target alone.
-- Dynamic Wasm linking or a public relocatable Wasm object format.
-- Mandating a tracing garbage collector, runtime borrow checker, unrestricted raw memory, or SIMD
-  primitives in Functional Core.
-- Impredicative inference, full dependent types, or unrestricted compile-time execution.
-- Executing generated Wasm on the GPU.
+Non-goals: parsing inside WGSL; replacing source-language ownership or effect checking; emitting
+machine code or WebAssembly (that backend existed and was deleted); impredicative inference,
+dependent types, or compile-time execution.
 
 ## 2. System context
 
 ```text
-┌──────────────────────── source-language implementation ─────────────────────────┐
-│ parser ─► source AST ─► source checks ─► desugaring ─► artifacts and spans      │
-└──────────────────────────────────┬──────────────────────────────────────────────┘
-                                   │
-               ┌───────────────────┼────────────────────────┐
-               ▼                   ▼                        ▼
-        Functional Surface   Type services            Effect Core
-               │             and comptime                   │
-               └───────────────────┬────────────────────────┘
-                                   ▼
-                    module artifacts and static linker
-                                   ▼
-                   packed Functional ABI, version 5
-                                   ▼
-             WebGPU resolution and persistent inference machines
-                                   ▼
-                        resolved Functional Core
-                         │                     │
-                         ▼                     ▼
-               bounded GPU evaluator   whole-program Wasm backend
-                                               ▼
-                                      standalone `.wasm`
+frontend: parse ─► source checks ─► desugar ─► artifacts and spans
+    ▼  module artifacts and static linker
+packed Functional ABI, version 5
+    ▼  CPU: symbol lookup and lowering plan (src/semantic/symbol_lookup.ts)
+    ▼  GPU: Core lowering, then the persistent inference machine
+resolved Functional Core
+    ▼  GPU Core evaluator
 ```
 
-The CPU/GPU distinction is semantic rather than ideological. Parsing, structural packing, module
-discovery, cache I/O, Wasm byte emission, and host integration stay on the host because they are
-branch-heavy, filesystem-dependent, or latency-sensitive at small sizes. Resolution and inference
-are GPU state machines because they can share pipelines and submissions across wide batches.
-
-Generated Wasm executes in an ordinary Wasm engine. WebGPU is a build-time dependency, not a
-deployment dependency.
-
-## 3. Decision ownership by stage
-
-The following table is the quickest answer to “where should this feature live?”
-
-| Stage             | Decisions made                                                               | Owner                                          | Durable output                           |
-| ----------------- | ---------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------- |
-| Parse             | Tokens, grammar, layout, macro expansion                                     | Frontend                                       | Source AST with UTF-8 spans              |
-| Source checking   | Visibility, moves, borrows, language-specific effects and coherence          | Frontend                                       | Trusted source AST                       |
-| Desugar           | How source constructs map to functions, values, constructors, cases, effects | Frontend                                       | Functional Surface or optional higher IR |
-| Type elaboration  | Higher-kinded application, constraints, existentials, and open rows          | Optional gpufuck service under frontend policy | First-order schemas plus evidence        |
-| Artifact creation | Typed imports/exports and module-local declarations                          | Frontend using target contracts                | `FunctionalModuleArtifact`               |
-| Static link       | Qualification, import/export compatibility, aggregate source ranges          | gpufuck                                        | One encoded linked module                |
-| GPU resolution    | Local depths, global indices, constructor indices, dependency edges and SCCs | gpufuck                                        | Resolved numeric Core tables             |
-| GPU inference     | Schemes, unification, refinements, coverage, concrete entry type             | gpufuck                                        | Checked `GpuFunctionalModule`            |
-| Wasm analysis     | Reachability, captures, lambda sets, worker shapes, storage and entry ABI    | gpufuck                                        | Private backend lowering plan            |
-| Wasm emission     | Representation, direct/indirect calls, thunks, loops, memory and exports     | gpufuck                                        | Standalone bytes                         |
-| Host execution    | Concrete host values, operations, ownership promises, suspension             | Application plus validated gpufuck adapter     | Execution value or structured fault      |
-
-Decisions move only in one direction. The Wasm backend must not reinterpret source syntax, and a
-frontend must not patch resolved Core indices after GPU checking.
-
-## 4. The IR ladder
-
-Gpufuck uses several IRs because they answer different questions. They are not mandatory passes
-through one monolithic pipeline.
-
-### 4.1 Source ASTs
-
-Each frontend owns its AST. The repository examples intentionally have independent parsers and
-lowerers under `src/haskell_functional/`, `src/ocaml_functional/`, `src/rust_functional/`, and
-`src/onesubml_functional/`. They demonstrate that target-neutrality is enforced by code boundaries,
-not only claimed in documentation.
-
-Source ASTs retain conveniences such as record syntax, nested patterns, guards, multiple equations,
-or Rust-style matches. Those shapes do not enter the GPU ABI directly.
-
-### 4.2 Functional Surface
-
-The surface is the required high-level target. It contains:
-
-- scalar, static text, and static bytes literals, names, and explicit runtime faults;
-- lambdas and unary application;
-- immutable `let`, lambda-valued `let-rec`, and local mutually recursive groups;
-- `if`, primitive unary/binary operations, and numeric conversions;
-- nominal constructors and flat constructor cases;
-- definitions, structural annotations, nominal declarations, and an entry;
-- source spans and explicit evaluation modes.
-
-The builder in [`surface_builder.ts`](src/functional/surface_builder.ts) offers ergonomic objects
-and then packs them. The format in [`abi.ts`](src/functional/abi.ts) is the actual portable
-boundary.
-
-The surface retains unresolved names. This is intentional: name resolution, dependency discovery,
-recursive SCCs, and the relationship between annotations and definitions are part of the semantic
-GPU workload.
-
-Lists, records, traits, source modules, and multi-argument functions are not Core primitives. The
-shared elaborators lower them into nominal declarations, explicit dictionaries, linked artifacts,
-and unary functions. Local recursive groups are lambda-lifted into ordinary top-level SCCs, with
-captured lexical values made explicit. Keeping the target small makes the same inference and backend
-machinery useful to many languages.
-
-### 4.3 Type schemas
-
-Annotations and nominal fields use structural `FunctionalTypeSchema` trees. The supported leaves and
-constructors include primitive types, parameters, tuples, named applications, functions, and
-explicit `forall`.
-
-Schemas use one canonical linked-preorder encoding. Each six-word record contains:
-
-1. tag;
-2. symbol;
-3. first child index;
-4. next sibling index;
-5. start byte;
-6. end byte.
-
-Definition roots, type-parameter tables, constructor-field roots, and indexed result roots share the
-same metadata buffer. The encoder and decoder are in
-[`type_schema_abi.ts`](src/semantic/type_schema_abi.ts). Inferred output is serialized in the same
-format and read through the same decoder, preventing host and shader schema formats from drifting.
-
-The decoder rejects cycles, reused records, invalid sibling relationships, invalid symbols, wrong
-child counts, unreachable records, and excessive depth. Structural validation happens before
-semantic trust.
-
-### 4.4 Type normalization and evidence
-
-The GPU schema ABI is deliberately first-order. Languages with higher-kinded type application or
-associated families normalize those features before surface packing.
-
-[`type_program.ts`](src/functional/type_program.ts) provides deterministic
-`FunctionalTypeNormalizer` reduction.
-[`capability_resolver.ts`](src/functional/capability_resolver.ts) provides bounded search for
-frontend-defined predicates such as:
-
-```text
-field(owner, name)  -> fieldType
-method(owner, name) -> implementation
-copy(type)          -> proof
-element(container)  -> elementType
-```
-
-Resolution returns an evidence tree. `verify()` can replay that tree independently, which allows
-cache or transport boundaries without trusting a bare answer. Search is separate from normalization
-because normalization should be deterministic while capability selection may be ambiguous.
-
-[`constraint_elaboration.ts`](src/functional/constraint_elaboration.ts) joins normalization and
-evidence search at call sites. Compile-time and erased evidence disappear; runtime evidence becomes
-an explicit leading dictionary argument. This is also the higher-kinded boundary: constructor-kinded
-parameters normalize before the first-order schema ABI is packed.
-
-[`row_types.ts`](src/functional/row_types.ts) defines one open-row substitution algorithm for
-records, variants, and effects. It is bounded by semantic transitions and rejects kind changes,
-conflicting fields, recursive tails, and closed-row mismatches. Closed record and variant rows lower
-to nominal constructors. Closed effect rows lower to Effect Core operation contracts. Open tails do
-not enter the packed GPU ABI.
-
-[`existential.ts`](src/functional/existential.ts) provides predicative existential packages through
-a fixed-eliminator closure. The implementation captures a payload whose type mentions the hidden
-parameter, but only a closed result crosses the package boundary. This supports abstract interfaces
-without introducing impredicative inference or a new runtime representation.
-
-[`type_core.ts`](src/functional/type_core.ts) supplies a small pure, kinded execution language for
-closed type computations over types, wrapping integers, Booleans, and symbols. Structural lowering
-and kind checking happen on the host; bounded execution uses the shared GPU semantic machinery.
-
-These services do not change ordinary HM inference. Frontends opt in only when their type language
-requires them.
-
-### 4.5 Effect Core
-
-Effect Core represents `return`, host calls, local operations, bind, branch, and handle. Its
-contract is in [`effect_core_contract.ts`](src/functional/effect_core_contract.ts).
-
-A persistent GPU pass validates one computation record per transition. It checks operation and
-branch types, infers effect rows, and verifies that the computation graph is a rooted linear-use
-tree. Reused or cyclic computation records fail before lowering. Handlers receive exactly one
-continuation path, so malformed source cannot silently discard or duplicate a resumption through the
-Effect Core representation.
-
-[`effect_core_lowering.ts`](src/functional/effect_core_lowering.ts) lowers verified computations
-into the ordinary surface. The normal resolver and inferencer then independently check embedded
-value expressions. This two-stage check keeps effects explicit without adding effect-specific
-expression tags to the resolved runtime Core.
-
-The compatibility `lowerFunctionalEffectProgram()` API validates this same Effect Core shape before
-preserving its historical continuation-passing surface output. New frontends that require GPU effect
-verification submit Effect Core directly through `compileEffectModule()`.
-
-### 4.6 Resolved Functional Core
-
-Resolved Core is the trusted semantic input to evaluation and Wasm emission. Its nodes contain
-numeric local depths, definition indices, constructor indices, child indices, source start/end
-bytes, and evaluation mode. Surface names are never resolved a second time on the host.
-
-The public decoded shape is `FunctionalCoreNode` in
-[`compiler_module.ts`](src/functional/compiler_module.ts). The packed representation remains on GPU
-buffers owned by `GpuFunctionalModule`; `readCoreNodes()` is an explicit readback for emission,
-traces, and tests.
-
-Core is small enough for multiple backends but rich enough to retain laziness decisions and source
-fault locations.
-
-Indexed runtime state uses the language-neutral `Store a` Core primitive. Stores have persistent
-new, length, checked-read, write, and growth operations with a device-independent maximum length.
-This is the common substrate for frontend-defined object heaps, binding tables, register files, and
-scratch structures; JavaScript object semantics, for example, remain in its example frontend rather
-than leaking into Core. The linear-memory backend copies observable persistent updates unless
-uniqueness permits reuse, while WasmGC maps the same operations to typed arrays.
-
-## 5. Target-level modules
-
-Source modules and target modules solve different problems.
-
-The frontend parses imports, locates packages, applies visibility and language coherence, and emits
-one `FunctionalModuleArtifact` for each selected source module. Each artifact contains definitions,
-nominal types, separately declared value/type/constructor imports and exports, source length,
-evaluation profile, host contracts, and optional Wasm exports.
-
-[`module_linker.ts`](src/functional/module_linker.ts) then:
-
-- validates artifact structure;
-- gives every definition, nominal type, and constructor a module-qualified name;
-- rewrites local and imported references;
-- turns each import alias into an annotated boundary definition;
-- checks evaluation-profile and host-capability compatibility;
-- rejects duplicate modules, missing imports, missing entries, and duplicate exports;
-- concatenates source ranges without losing the owning module;
-- selects one exported definition as the whole-program entry.
-
-The import annotation makes the GPU verify the importer's declared contract against the exported
-implementation. Nominal types stay qualified, so unrelated modules cannot become structurally equal
-by accident.
-
-Linking occurs before GPU compilation. Gpufuck does not currently emit independently typechecked
-Wasm object files or dynamically link them at runtime.
-
-### 5.1 Incremental compilation
-
-[`incremental_graph.ts`](src/functional/incremental_graph.ts) fingerprints an exported interface
-separately from its implementation and computes module dependency SCCs. The cache format includes:
-
-- cache-format version;
-- Functional ABI version;
-- target and compiler/frontend version;
-- interface and implementation fingerprints;
-- dependency fingerprints;
-- portable resolved Core and inferred types.
-
-[`incremental_compiler.ts`](src/functional/incremental_compiler.ts) recompiles changed SCCs in a GPU
-batch. An implementation-only change can preserve importers when the exported interface is stable.
-An interface, nominal declaration, effect/capability contract, evaluation profile, or public Wasm
-export change invalidates reverse dependencies. Mutually recursive modules are cached as one unit.
-
-Cache entries never own live `GPUBuffer` objects. Relinking reconstructs an ordinary compiled
-module, after which Wasm analysis remains whole-program and can optimize across module boundaries.
-
-The design follows the separation between dependency structure and build actions described in
-[Build Systems à la Carte](https://www.microsoft.com/en-us/research/publication/build-systems-la-carte/),
-while using language-specific interface fingerprints rather than filesystem timestamps as semantic
-validity evidence.
-
-### 5.2 Reachability versus checking
-
-The frontend retains responsibility for selecting the package dependency closure and reporting
-source diagnostics before linking. When the linker builds an executable module,
-[`surface_reachability.ts`](src/functional/surface_reachability.ts) retains definitions reachable
-from the selected entry and explicit Wasm exports. The GPU resolves and checks that executable
-closure. Wasm emission computes reachability again after constant-condition pruning exposes facts
-that were unavailable at the surface boundary.
-
-This ordering keeps package selection and source diagnostics in the frontend, avoids sending unused
-library support through GPU semantic compilation, and still allows the resolved backend to remove
-definitions made unreachable by optimization.
-
-Runtime-heavy frontends should also share continuations before they submit the surface tree. The
-JavaScript adapter lifts statement tails and repeated call, construction, accessor, and coercion
-resumptions into explicit functions. Its `ToPrimitive` state machine is a demand-linked definition,
-not a copy at every coercion site. These are ordinary Functional Core functions after resolution;
-the frontend-specific step only prevents continuation-passing lowering from expanding the input tree
-or producing one oversized Wasm function.
-
-JavaScript call frames carry the callable object as well as its target, captured realm and
-environment, receiver, and arguments. This preserves `arguments.callee` identity without making it a
-global lookup. Strict and non-simple parameter lists use unmapped arguments objects; ordinary sloppy
-parameter lists may use the frontend's mapped-cell rewrite. Non-callable invocation produces a
-catchable `TypeError` completion, and all failure arms share one lifted continuation.
-
-Frontends that promise diagnostics for unused declarations must validate them before selecting the
-executable roots; reachability cannot silently change whether source is accepted.
-
-## 6. Packed ABIs and trust boundaries
-
-WebGPU storage buffers favor flat fixed-width records. Gpufuck therefore converts object graphs into
-indexed arrays before submission.
-
-Functional ABI version 5 shares the core physical layout with the Lazuli compatibility layer:
-
-- expression/Core node: eight `u32` words;
-- definition: four `u32` words;
-- nominal type declaration: five `u32` words;
-- constructor: five `u32` words;
-- schema node: six `u32` words in canonical linked preorder.
-
-The ABI stores counts explicitly and reserves `0xffffffff` as the absent index. Every buffer length,
-root, child, symbol, arity, profile, primitive capability, and source span is validated before it is
-used semantically.
-
-There are three distinct version boundaries:
-
-| Boundary                     | Current version | Purpose                                                   |
-| ---------------------------- | --------------: | --------------------------------------------------------- |
-| Functional/Lazuli module ABI |               5 | Host-to-GPU surface and resolved records                  |
-| Functional Wasm value ABI    |               1 | Host arguments, results, structured values, and resources |
-| Incremental cache format     |               1 | Portable resolved modules and dependency evidence         |
-
-One version number cannot substitute for another. A change to cache metadata does not necessarily
-change runtime values; a structured Wasm layout change does not necessarily change WGSL records.
-
-Malformed packed input is an API contract violation and throws before GPU submission. A well-formed
-program that cannot be typed returns a source diagnostic. Device allocation failure, device loss,
-and impossible internal state are infrastructure failures and propagate with evidence.
-
-## 7. GPU semantic compilation
-
-[`compiler.ts`](src/functional/compiler.ts) is the language-neutral facade. It validates public
-options and device-derived size limits, normalizes host contracts, admits work under a transient
-memory budget, and delegates to the shared engine in `src/semantic/`. The files in `src/lazuli/` are
-compatibility re-exports; shared code does not depend on them. Some internal symbol names retain
-`Lazuli` for ABI compatibility, but no source-language syntax reaches the semantic shaders.
-
-### 7.1 Pipeline creation
-
-`GpuFunctionalCompiler.create(device)` creates and validates the semantic-resolution and inference
-compute pipelines once. Shader compilation messages are read before asynchronous pipeline creation,
-so invalid WGSL fails at initialization rather than at the first user source.
-
-Device limits determine maximum node, definition, type, constructor, and concurrent transient
-storage. A device that cannot hold even one record is rejected with its reported limits.
-
-Compiler reuse is therefore part of the API's performance model: pipeline creation is intentionally
-outside individual compilation calls.
-
-### 7.2 Resolution pass
-
-The first persistent WGSL pass validates tables and converts the surface to Core. It:
-
-- validates node tags, children, symbols, and declaration ranges;
-- resolves lexical variables to de Bruijn-style depths;
-- resolves definitions and constructors to numeric indices;
-- verifies case binder and constructor shape;
-- records definition dependency edges;
-- retains both ends of the source span and the chosen evaluation mode.
-
-The packed symbol table also contains an immutable lowering record for each structurally valid
-surface node. One pass validates declarations and selects the deterministic diagnostic. When the
-entire remaining lowering plan fits the current fuel and dispatch quantum, a two-dimensional
-dispatch emits every independent `(program, node)` pair before the terminal semantic state is copied
-into inference. Programs with fewer than 64 remaining nodes, or plans that do not fit the current
-quantum, consume the same records one at a time in the persistent fallback. This keeps a quantum of
-one exact without a host readback between node tiles. Packed batches use node-level dispatch for at
-most four programs; wider batches already expose program-level parallelism and use the
-scalar-per-program path to avoid oversubscribing the device.
-
-Numeric local depths remove names from later phases and make lexical lookup independent of frontend
-symbol tables. This representation follows the motivation of de Bruijn indices: alpha-equivalent
-binders share one structural representation. See N. G. de Bruijn,
-[“Lambda calculus notation with nameless dummies”](https://doi.org/10.1016/1385-7258(72)90034-0).
-
-### 7.3 Inference pass
-
-The second persistent WGSL pass consumes resolved nodes and canonical schema metadata. It performs:
-
-- dependency SCC discovery and walking;
-- union-find representative traversal;
-- occurs checks and unification;
-- environment lookup and lexical scheme handling;
-- generalization and instantiation;
-- annotation subsumption, skolemization, and variance-aware function comparison;
-- indexed constructor refinement scoped to a case arm;
-- compatible-constructor coverage and inaccessible-arm checks;
-- entry concreteness;
-- serialization of the inferred entry type.
-
-The baseline inference discipline is Hindley–Milner, whose principal-type result originates in Luis
-Damas and Robin Milner,
-[“Principal type-schemes for functional programs”](https://doi.org/10.1145/582153.582176).
-Dependency SCCs use the same graph concept introduced by Robert Tarjan in
-[“Depth-first search and linear graph algorithms”](https://doi.org/10.1137/0201010).
-
-Indexed constructors add local equality refinements. The architecture intentionally requires
-annotations where a higher-rank or non-principal indexed boundary needs a frontend choice rather
-than pretending all GADT programs have principal inferred types. Relevant background includes Peyton
-Jones et al.,
-[“Simple unification-based type inference for GADTs”](https://www.microsoft.com/en-us/research/publication/simple-unification-based-type-inference-for-gadts/)
-and
-[OutsideIn(X)](https://www.microsoft.com/en-us/research/publication/outsideinx-modular-type-inference-with-local-assumptions/).
-
-Predicative rank-N parameters are checked only when explicitly annotated. Actual schemes are
-instantiated, expected schemes are skolemized, parameter types are compared contravariantly, and
-result types covariantly. Quantified values are not inferred impredicatively.
-
-### 7.4 Truly bounded microsteps
-
-The compiler's fuel and cancellation guarantees depend on a strict invariant: a charged semantic
-transition performs constant-bounded work.
-
-Input-sized algorithms are represented as durable work frames rather than loops hidden inside one
-shader invocation. Union-find traversal, occurs checks, unification, generalization, instantiation,
-schema traversal, coverage, concreteness, SCC walking, and output serialization can all suspend and
-resume. One transition may:
-
-- inspect one logical record or edge;
-- push at most two durable frames;
-- allocate at most one record in each arena;
-- advance one semantic state-machine phase.
-
-Fuel increments only when semantic work advances. Dispatch bookkeeping and workspace-growth yields
-do not consume semantic fuel.
-
-This definition matters more than asymptotic complexity. A linear scan of a million records inside
-one “step” would make a one-step dispatch uncancellable for the duration of the scan. Explicit
-frames make `maximumStepsPerDispatch` a meaningful upper bound on work between host observations.
-
-The default total budget is 1,000,000 semantic transitions. Non-cancellable calls can use a larger
-dispatch quantum to avoid readback overhead; calls carrying an `AbortSignal` use a finer default
-quantum. An explicit quantum of one exists for exact fuel, growth, and cancellation tests and is
-expected to be slow because every semantic transition becomes a submission/readback boundary.
-
-### 7.5 Workspace arenas and growth
-
-Inference keeps separate logical arenas for types, environments, work frames, refinements, scratch
-records, and serialized output. Initial capacities are derived from input shape instead of fixed
-large multipliers.
-
-When an arena fills, the runner in
-[`gpu_type_inference_runner.ts`](src/semantic/gpu_type_inference_runner.ts):
-
-1. identifies the exhausted arena from structured state;
-2. doubles only that logical capacity, subject to device limits;
-3. allocates a replacement workspace;
-4. copies live logical records at their new bases;
-5. patches bases and capacities;
-6. resumes the same phase with the same fuel, results, and refinements;
-7. destroys the old workspace after a successful transfer.
-
-Output growth follows the same durable model. A failed copy, allocation error, or cancellation owns
-both temporary buffers until both are destroyed. After a completed growth there is exactly one
-active workspace.
-
-Device-size and allocation-limit failures become bounded-work diagnostics only when they represent a
-program exceeding the supported workspace. Device loss and violated invariants are not disguised as
-source errors.
-
-### 7.6 Batching and scheduling
-
-`compileBatch()` packs independent programs into lanes. A workgroup advances each lane, terminal
-lanes become inactive, and one mapped state readback observes the batch at a quantum boundary.
-Results preserve input order.
-
-Successful packed lanes are copied into independently owned compiled-module buffers only after their
-terminal state is known. Diagnostic lanes allocate no persistent result module. If one lane needs
-elastic growth, completed siblings remain valid and only the exceptional lane continues on the
-scalar growth path.
-
+The CPU/GPU boundary is not where earlier revisions of this document placed it, and the difference
+matters when reading a profile.
+
+**Name resolution runs on the CPU, and always has.** `createLoweringPlan` in
+[`symbol_lookup.ts`](src/semantic/symbol_lookup.ts) walks the packed surface on the host: it
+computes de Bruijn depths for lexical names, resolves remaining names to global definition or
+constructor indices, resolves case-arm constructors, and records the first deterministic diagnostic.
+It writes one four-word record per surface node behind a magic header. The shader predicate
+`indexed_local_resolutions_are_available` in [`compiler_shader.ts`](src/semantic/compiler_shader.ts)
+checks for that header and copies the precomputed Core tag and payload into the resolved node. The
+GPU decides nothing there.
+
+What the GPU does own is inference: dependency SCC discovery, union-find, occurs checks,
+unification, generalization and instantiation, annotation subsumption and skolemization, indexed
+constructor refinement, coverage, entry concreteness, and serialization of the inferred type.
+
+Decisions move in one direction only. A frontend must not patch resolved Core indices after
+checking.
+
+## 3. The IR ladder
+
+**Functional Surface** is the required high-level target: scalar, static text, and static bytes
+literals; names and explicit runtime faults; lambdas and unary application; immutable `let`,
+lambda-valued `let-rec`, and local mutually recursive groups; `if`, primitive operations, and
+numeric conversions; nominal constructors and flat constructor cases; persistent indexed `Store`
+operations; definitions, annotations, nominal declarations, and an entry. Every node carries source
+spans and an explicit evaluation mode. [`surface_builder.ts`](src/functional/surface_builder.ts)
+offers ergonomic objects and packs them; [`abi.ts`](src/functional/abi.ts) is the portable boundary.
+Lists, records, traits, source modules, and multi-argument functions are not Core primitives — they
+lower into nominal declarations, explicit dictionaries, linked artifacts, and unary functions, and
+[`recursive_groups.ts`](src/functional/recursive_groups.ts) lambda-lifts local SCCs into top-level
+ones with captures made explicit.
+
+**Type schemas** are structural trees over primitives, parameters, tuples, named applications,
+functions, and explicit `forall`, encoded in one canonical linked preorder. Each six-word record
+holds tag, symbol, first child index, next sibling index, and the two span bytes; definition roots,
+type-parameter tables, constructor-field roots, and indexed result roots share one metadata buffer.
+Inferred output uses the same format and decoder in
+[`type_schema_abi.ts`](src/semantic/type_schema_abi.ts), so host and shader formats cannot drift.
+The decoder rejects cycles, reused records, invalid siblings and symbols, wrong child counts,
+unreachable records, and excessive depth before anything is trusted.
+
+**Resolved Core** is the trusted semantic input to evaluation. Nodes carry numeric local depths,
+definition and constructor indices, child indices, span bytes, and evaluation mode; names are never
+resolved twice. The decoded shape is `FunctionalCoreNode` in
+[`compiler_module.ts`](src/functional/compiler_module.ts); the packed form stays on buffers owned by
+`GpuFunctionalModule`, with `readCoreNodes()` as an explicit readback. Indexed runtime state uses
+the neutral `Store a` primitive — persistent new, length, checked read, write, and growth, bounded
+to 16,777,216 elements — which keeps JavaScript object semantics inside the JavaScript frontend.
+
+## 4. Modules, linking, and packed ABIs
+
+The frontend emits one `FunctionalModuleArtifact` per source module.
+[`module_linker.ts`](src/functional/module_linker.ts) validates artifact structure, qualifies every
+definition, nominal type, and constructor, rewrites references, turns each import alias into an
+annotated boundary definition, checks evaluation-profile and host-capability compatibility, rejects
+duplicates and missing imports, concatenates source ranges without losing the owning module, and
+selects the entry. The import annotation makes the GPU verify the importer's declared contract
+against the exported implementation.
+[`surface_reachability.ts`](src/functional/surface_reachability.ts) then retains only definitions
+reachable from the entry, so an unused frontend-runtime builtin adds no GPU typechecking work. There
+is no incremental cache; it was removed with the backend it served.
+
+WebGPU storage buffers favor flat fixed-width records, so object graphs become indexed arrays before
+submission. Functional ABI version 5 uses eight `u32` words per Core node, four per definition, five
+per nominal type declaration, five per constructor, and six per schema node. Counts are explicit and
+`0xffffffff` is the absent index. Every length, root, child, symbol, arity, profile, capability, and
+span is validated before semantic use. Malformed packed input is an API contract violation and
+throws before submission; a well-formed program that cannot be typed returns a diagnostic; device
+failure and impossible internal state propagate as infrastructure errors.
+
+## 5. GPU semantic compilation
+
+[`compiler.ts`](src/functional/compiler.ts) is the language-neutral facade: it validates options and
+device-derived size limits, normalizes host contracts, admits work under a transient memory budget,
+and delegates to `src/semantic/`. Some internal names retain `Lazuli` for ABI compatibility, but no
+source syntax reaches the shaders. `GpuFunctionalCompiler.create(device)` builds and validates the
+pipelines once, reading shader compilation messages before asynchronous pipeline creation so invalid
+WGSL fails at initialization rather than on the first user source; device limits determine maximum
+node, definition, type, constructor, and transient storage. [`webgpu.ts`](src/webgpu.ts) requests
+`maxStorageBuffersPerShaderStage` of 16 (clamped to adapter support) because the existing kernels
+already bind all eight WebGPU guarantees by default, and opts into `timestamp-query` when available.
+
+**Core lowering** validates node tags, children, symbols, and declaration ranges; checks case binder
+and constructor shape; records definition dependency edges; and retains both span ends and the
+evaluation mode. When the host lowering plan is present it supplies the resolved tag and payload.
+Two kernels exist: `compile_lazuli` is the persistent per-lane state machine at
+`@compute @workgroup_size(1)`, and `lower_planned_lazuli` is the one data-parallel production kernel
+— at `@compute @workgroup_size(64)` it copies the plan for every `(program, node)` pair in a single
+dispatch, gated on the remaining plan fitting the current fuel and quantum. Programs under 64
+remaining nodes use the serial path, and packed batches use it for at most four lanes because wider
+batches already expose lane parallelism.
+
+**Inference** consumes resolved nodes and canonical schema metadata. The baseline discipline is
+Hindley–Milner. Indexed constructors add equality refinements scoped to a case arm. Predicative
+rank-N parameters are checked only when annotated: actual schemes instantiated, expected schemes
+skolemized, parameters compared contravariantly and results covariantly. Quantified values are not
+inferred impredicatively.
+
+**Truly bounded microsteps.** Fuel and cancellation depend on one invariant: a charged transition
+performs constant-bounded work. Input-sized algorithms are durable work frames, not loops hidden
+inside an invocation. A transition inspects at most one record or edge, pushes at most two frames,
+allocates at most one record per arena, and advances one phase; fuel increments only when semantic
+work advances. This matters more than asymptotic complexity — a linear scan of a million records
+inside one "step" would make a one-step dispatch uncancellable for its duration. The default budget
+is 1,000,000 transitions with a hard cap of 10,000,000.
+
+**Workspace arenas.** Inference keeps separate arenas for types, environments, frames, refinements,
+scratch, and output, sized from input shape. When one fills,
+[`gpu_type_inference_runner.ts`](src/semantic/gpu_type_inference_runner.ts) doubles only that
+capacity subject to device limits, allocates a replacement, copies live records at their new bases,
+patches bases and capacities, resumes the same phase with the same fuel and results, and destroys
+the old workspace after a successful transfer. A failed copy, allocation error, or cancellation owns
+both buffers until both are destroyed.
+
+**Batching.** `compileBatch()` packs independent programs into lanes; one mapped state readback
+observes the batch at a quantum boundary, results preserve input order, and successful lanes are
+copied into independently owned buffers only after their terminal state is known.
 [`gpu_dispatch_scheduler.ts`](src/functional/gpu_dispatch_scheduler.ts) coalesces ready dispatches
-into one command buffer, up to a fixed lane limit. Two microtasks allow sibling compiler promises to
-reach the queue together. [`compilation_admission.ts`](src/functional/compilation_admission.ts)
-bounds concurrent work by both request count and estimated transient bytes, preventing many large
-callers from exhausting one device merely because JavaScript scheduled them concurrently.
-
-Cancellation is checked while queued, before submission, and after the validation scope resolves. A
-submitted GPU dispatch cannot be interrupted mid-command; bounded quanta limit the interval until
-the next observation.
-
-`definition_wavefront.ts` condenses recursive definitions into SCCs and schedules the acyclic
-component graph in deterministic dependency waves. Latency-sensitive host-visible schedules stay on
-the CPU. A 128-component schedule takes roughly 14 µs on the current development machine, while a
-WebGPU submission and readback still takes roughly 11 ms even after the kernel was reduced to one
-dispatch.
-
-The GPU seam is therefore a reusable device-resident plan rather than a synchronous replacement for
-the host algorithm. One bounded invocation schedules each graph, independent graphs fill the
-dispatch, and the resulting wave buffer can feed later GPU passes without returning to JavaScript.
-The plan retains immutable dependency counts, resets only its mutable buffers, and can encode
-several schedules into one command buffer. In the checked-in benchmark, 64 resident batches of 256
-graphs take roughly 32 ms, compared with roughly 288 ms for reconstructing the same schedules on the
-host: about nine times the throughput. These numbers describe sustained throughput, not
-first-compilation latency. A graph is bounded to 256 components and 256 dependency edges; larger
-graphs keep using the host scheduler until a multi-workgroup kernel can preserve the same
-deterministic and bounded behavior.
-
-## 8. Compile-time execution
-
-Required compile-time execution is a target-neutral staging boundary, not a syntax feature.
-[`comptime.ts`](src/functional/comptime.ts) accepts ordinary module artifacts whose selected exports
-must evaluate to closed first-order constants.
-
-The pipeline is:
-
-```text
-comptime artifacts
-    ├─ static link and GPU semantic compilation
-    ├─ purity and closed-result checks
-    ├─ bounded evaluation
-    ├─ canonical constant encoding
-    └─ optional generated-definition decoding and splice
-```
-
-Required execution supports pure functions, recursion, scalar values, tuples, ADTs, cases, and
-cross-module constants. It rejects host capabilities, effects, suspension, closures in public
-results, malformed generated IR, and exhausted compilation/execution/output budgets.
-
-Tiny closed first-order constants use cached fuel-instrumented Wasm by default because GPU
-submission and readback dominate the computation. Explicit GPU evaluator controls remain available
-for deterministic dispatch and workspace tests. This is a performance decision after semantic
-checking, not a change in the frontend contract.
-
-The canonical `FunctionalConstant` format distinguishes semantic values from frontend-defined
-metadata. Type trees, proofs, and capability evidence are represented by declared ADTs rather than
-privileged host tags. Generated code uses the schemas in
-[`comptime_ir.ts`](src/functional/comptime_ir.ts); the host validates every constructor, list shape,
-name, operator, and evaluation mode before splicing definitions into a normal artifact.
-
-`partiallyEvaluateFunctionalModule()` is optional and non-authoritative. It replaces a selected pure
-nullary definition only after successful bounded evaluation. A compile error, runtime fault, closure
-result, or exhausted limit leaves the original definition untouched, so an optimization cannot
-decide whether a runtime program is accepted.
-
-Incremental comptime caches dependency outputs, not just implementations. If a dependency changes
-but computes the same exported constants, consumers remain valid. A changed constant invalidates the
-reverse dependency closure.
-
-## 9. Compiled module and evaluator
-
-A successful `GpuFunctionalModule` contains:
-
-- resolved node, definition, and constructor GPU buffers;
-- counts, roots, qualified names, and constructor arities;
-- the selected entry and its concrete inferred type;
-- nominal declarations and host capability contracts;
-- explicit public Wasm exports;
-- source-module ranges and evaluation profile;
-- an idempotent `destroy()` operation.
-
-The caller owns this object. Destroying it releases GPU buffers but does not invalidate Wasm bytes
-already emitted from it.
-
-[`evaluator.ts`](src/functional/evaluator.ts) is a bounded graph reducer used for differential
-testing, explicit GPU evaluation, and structured traces. It supports strict and call-by-need binding
-modes, lane-local fuel, bounded heap and stack, cancellation, and deep-result limits.
-
-It is not the default deployment runtime. The source-language run commands normally emit and execute
-Wasm. Keeping the evaluator independent is valuable because backend tests can compare two
-implementations of the same resolved Core semantics.
-
-Portable WGSL does not expose native `i64` or `f64`, and its floating-point rules do not promise all
-host-Wasm rounding behavior. The evaluator represents wrapping `i64` with two words and handles a
-safe basic `f32` subset on GPU. Operations requiring exact portable wide or division/square-root
-semantics use cached fuel-instrumented Wasm. Target-neutral structural equality uses the same path:
-GPU inference requires both operands to have one type, then Wasm compares immediate values and
-recursively compares constructors, text, bytes, arrays, slices, resources, and boxed numerics. The
-limitation follows the scalar types defined by the
-[WGSL specification](https://www.w3.org/TR/WGSL/), not a frontend restriction.
-
-## 10. Wasm backend
-
-Wasm emission begins only after GPU resolution and inference succeed. The host reads resolved Core
-and emits a dependency-free binary directly; there is no WAT round trip.
-
-The backend follows the [WebAssembly Core Specification](https://webassembly.github.io/spec/core/)
-for binary encoding, validation, functions, tables, linear memory, numeric operations, and control
-flow. Binary primitives are implemented in [`wasm_binary.ts`](src/functional/wasm_binary.ts).
-[`wasm_backend_plan.ts`](src/functional/wasm_backend_plan.ts) owns the validated, private lowering
-plan shared by compact and general emission; [`wasm_codegen.ts`](src/functional/wasm_codegen.ts)
-consumes that plan and emits expressions. Built-in host-buffer operations live in
-[`wasm_host_emitter.ts`](src/functional/wasm_host_emitter.ts); runtime functions and their shared
-global layout live in [`wasm_runtime_binary.ts`](src/functional/wasm_runtime_binary.ts) and
-[`wasm_runtime_layout.ts`](src/functional/wasm_runtime_layout.ts).
-
-The default backend uses compact scalar values or explicit linear-memory storage. The opt-in WasmGC
-backend in [`wasm_gc_codegen.ts`](src/functional/wasm_gc_codegen.ts) targets engines implementing
-the finalized [WebAssembly GC extension](https://webassembly.github.io/gc/core/). It consumes the
-same resolved Core and uses one recursive typed struct/array group for scalars, immutable algebraic
-values, stores, closures, environments, and shared thunks. This permits cycles between recursive
-closures without a frontend root protocol. Lazy values carry unevaluated, evaluating, and evaluated
-states; forcing an evaluating thunk reports the same blackhole fault as the default runtime.
-
-Selection is explicit through `FunctionalWasmCompilationOptions.backend`; omission selects
-`linear-memory`. [`wasm_gc_execution.ts`](src/functional/wasm_gc_execution.ts) validates engine
-support, traverses the typed-reference result through generated accessors, rejects structural
-cycles, and bounds decoded nodes. The current public boundary is deliberately closed and first
-order: it accepts strict or lazy pure modules, closures and recursion internally, algebraic results,
-and portable scalar numerics. Effects, host fields, entry arguments, extra callable exports, text,
-bytes, integer operations needing fault-compatible division semantics, trapping float-to-integer
-conversions, Storage Core manifests, and owned exports remain on the default backend. Differential
-tests require every supported program to agree with that backend.
-
-### 10.1 Analysis order
-
-Backend analyses run in an order that exposes facts to later choices:
-
-1. Determine entry and explicit export signatures.
-2. Prove bounded scalar constants and prune unreachable conditional branches and definitions.
-3. Recognize function shapes, saturation, recursion, tail calls, and numeric folds.
-4. Recognize canonical fixed-vector operations and vectorizable higher-order expressions.
-5. Compute lexical captures and environment layouts.
-6. Propagate lambda sets through values, calls, branches, recursion, and constructor fields.
-7. Select direct workers, finite direct dispatch, or general closures.
-8. Determine strict/lazy representation and runtime facilities required.
-9. Emit functions, runtime support, memory/table sections, imports, exports, and fault evidence.
-
-Analysis consumes resolved indices. No pass performs string-based source name resolution.
-Constructing `FunctionalWasmBackendPlan` is the boundary between analysis and emission. It carries
-the module and Core nodes together with capture, function, storage, entry, instrumentation, and
-compact-scalar decisions, preventing compact and general emitters from independently rebuilding
-those facts. Compact scalar emission is selected only when the plan proves that no Functional Store
-operation or other general-runtime feature is reachable. A module that fails this preflight goes
-directly to general emission instead of paying for a compact attempt that must be discarded.
-
-### 10.2 Dead-code and runtime elimination
-
-[`wasm_function_analysis.ts`](src/functional/wasm_function_analysis.ts) walks global references from
-the selected entry and every explicit Wasm export. Unreachable definitions are absent from the
-artifact.
-
-Before surface encoding, [`surface_reachability.ts`](src/functional/surface_reachability.ts)
-performs the corresponding target-independent walk for linked executables and demand-linked frontend
-runtimes. This matters for runtime-heavy frontends such as JavaScript: adding an unused builtin does
-not increase GPU typechecking work for unrelated programs. The resolved Wasm analysis remains
-necessary because constant evaluation can reveal additional unreachable definitions.
-
-Feature reachability also controls runtime support. A strict effect-free scalar program can omit:
-
-- linear memory;
-- allocator and free list;
-- thunk records and forcing;
-- function table and indirect dispatch;
-- unused fault globals and signatures;
-- zero-valued instrumentation exports.
-
-This is definition-level whole-program elimination, constant-condition branch pruning, and runtime
-feature pruning. It is not a general SSA optimizer: other nodes inside a reachable definition remain
-available to structured expression emission, and all submitted definitions were already typechecked.
-
-### 10.3 Strict representation
-
-Strict, captureless, effect-free integer functions are candidates for native `i32` workers. Eligible
-workers:
-
-- omit an environment parameter;
-- accept and return native `i32` values internally;
-- receive known strict numeric arguments eagerly;
-- keep numeric loop state unboxed;
-- lower saturated tail recursion to structured Wasm loops;
-- can be fused into a caller when a recursive worker has one saturated use.
-
-Boxing occurs at lazy, aggregate, higher-order, or public tagged-value boundaries. These decisions
-are made from checked Core types and evaluation modes, never from source spelling.
-
-#### Fixed-vector representation
-
-`fixed_vector_contract.ts` defines the reserved names shared by the surface library and backend.
-`fixed_vector.ts` defines `F32x4` and its mask as ordinary immutable four-field ADTs plus canonical
-surface definitions. Scalar inference, GPU evaluation, and default Wasm emission therefore need no
-vector-specific Core tags and provide the authoritative fallback semantics. The definitions are
-deeply immutable, and linker qualification preserves their reserved local names.
-
-The linear-memory backend can opt into native Wasm SIMD. In a fully strict module it recognizes the
-canonical arithmetic, comparison, selection, lane, reduction, `map`, `zip`, and `fold` definitions.
-Recognized chains remain as `v128` expressions, and eligible captureless single-vector functions
-receive private `v128 -> v128` workers. Boxing happens only when a vector reaches ordinary Core
-code. A module containing any lazy binding boundary conservatively retains scalar lowering because
-constructing a native vector would otherwise force all four lanes.
-
-The frontend still owns loop-vectorization legality and profitability. This backend recognition is a
-representation choice for operations the frontend has already selected; it does not infer aliasing,
-iteration counts, or floating-point reassociation from source loops. Native SIMD is also an explicit
-artifact option because Wasm engines without SIMD must be able to consume the portable scalar
-artifact.
-
-### 10.4 Lazy call-by-need representation
-
-Lazy globals, bindings, function arguments, and constructor fields compile to specialized thunks. A
-thunk stores its code slot, captures, state, and cached value. Forcing transitions through:
-
-```text
-unevaluated ─► evaluating ─► evaluated(value)
-                    │
-                    └─ recursive force ─► blackhole fault
-```
-
-The fast path observes an already evaluated thunk. The slow path evaluates once and updates the
-record, preserving sharing. Immediately applied lambdas and saturated constructors can bypass
-closure/thunk allocation where demand is statically known, provided the transformation preserves
-non-strictness.
-
-`surface.delay()` and `surface.force()` expose the same mechanism as an explicit nominal
-`Thunk value`. This is distinct from selecting a module-wide or per-boundary evaluation profile: the
-former is a value in the source program, while the latter defines implicit evaluation semantics.
-
-This operational model corresponds to the sharing requirement formalized by John Launchbury in
-[“A natural semantics for lazy evaluation”](https://doi.org/10.1145/158511.158618). Gpufuck uses an
-explicit Wasm heap representation rather than reproducing Launchbury's semantics as an
-implementation algorithm.
-
-### 10.5 Lambda-set specialization
-
-[`wasm_lambda_sets.ts`](src/functional/wasm_lambda_sets.ts) tracks which lambdas can flow to each
-higher-order call site.
-
-- A singleton set becomes a direct call.
-- A finite multi-lambda set becomes tagged direct dispatch.
-- Structurally known higher-order arguments can remain virtual and avoid closure allocation.
-- Incomplete, excessively wide, or code-growth-heavy flows retain `call_indirect`.
-
-The pass is based on Michael Vollmer et al.,
-[“Lambda Set Specialization”](https://www.cs.princeton.edu/~mpmilano/publication/lss/). Gpufuck
-keeps semantic function types unchanged; lambda sets are backend representation facts, not frontend
-ABI types.
-
-Specialization limits bound code growth. Constructors used as callables, host operations, very wide
-sets, and sites beyond the inline budget retain the general closure path without changing behavior.
-
-### 10.6 Storage planning and runtime memory
-
-[`storage_plan.ts`](src/functional/storage_plan.ts) runs after semantic Core resolution and before
-Wasm emission. It is deliberately a representation pass rather than a source ownership checker.
-Every closure, constructor function, and thunk that can require storage receives a durable decision:
-
-| Storage class      | Meaning                                                               |
-| ------------------ | --------------------------------------------------------------------- |
-| `static`           | Reachable for the lifetime of one instantiated module                 |
-| `scalar-local`     | Virtual/code-and-local representation with no allocation on that path |
-| `invocation-arena` | Immutable graph storage bounded by one logical invocation             |
-| `owned`            | A boundary transfers responsibility for eventual release              |
-| `host-managed`     | The host retains lifetime responsibility and promises safe sharing    |
-
-A scalar-local closure can carry `escapeStorage: "invocation-arena"`. That distinction is important:
-specialization may keep the common call path allocation-free without claiming that a first-class
-escape is stack-safe. Local recursive closures use invocation storage because their environment may
-contain a self reference. Global thunks remain static because memoized results can be reachable from
-the module's definition table after a call returns.
-
-The plan lowers into the target-neutral Storage Core in
-[`storage_core.ts`](src/functional/storage_core.ts). Storage Core is a linear sequence of
-declarations, references, arena entry/exit, promotion, retain/release, and use operations. It is
-deliberately separate from semantic Core: source evaluation and typechecking do not change when a
-frontend picks a region or ownership policy. The verifier enforces these invariants before code
-generation:
-
-- arena declarations name the innermost active lexical arena and arenas leave in LIFO order;
-- a longer-lived value cannot retain an arena value that expires first;
-- values cannot be used, retained, or released after their lifetime ends;
-- arena-to-owned promotion names an active source and a fresh target;
-- persistent ownership is rejected, delegated to host management, or balanced by explicit retains.
-
-Releasing an owned root retires its outgoing ownership edges recursively. Explicitly retained or
-multiply owned descendants remain active until their last root or owner releases them.
-
-[`storage_ownership_resolution.ts`](src/functional/storage_ownership_resolution.ts) derives final
-root releases from a complete linear trace under the no-sharing policy. A root stays live until the
-final recorded use of every transitively owned child. Explicit escapes and references held by
-non-owned values keep the whole graph alive. After Storage Core verification,
-[`storage_reuse_plan.ts`](src/functional/storage_reuse_plan.ts) computes exact reference counts and
-pairs a last release with a later same-sized declaration. These optional Perceus-style passes
-provide proof and planning for strict owned traces; they do not yet rewrite general Core allocation
-sites.
-
-[`wasm_unique_reuse_analysis.ts`](src/functional/wasm_unique_reuse_analysis.ts) supplies the
-narrower proof used by Wasm emission. It identifies constructor results that are fresh in the
-current invocation, follows de Bruijn binders in resolved Core, and computes the maximum number of
-consuming case uses on any control-flow path. Mutually exclusive arms contribute their maximum
-rather than their sum. A lambda capture or any non-case reference invalidates the proof. When the
-selected case returns a constructor with the same field count, code generation loads the old fields,
-evaluates all new fields, and only then rewrites the header and payload at the old pointer.
-Different layouts, lazy modules, owned exports, and ambiguous origins use the allocator. This
-boundary follows the ordering in Perceus—precise release evidence first, reuse second—without
-claiming cycle collection or uniqueness that was not proved.
-
-Failures carry `F6001`–`F6006`, the failing operation, an optional semantic Core node, and the names
-that violated the invariant. `planFunctionalModuleStorage()` returns the derived operations and
-successful verification alongside its summary. A frontend that introduces more lexical arenas can
-submit its own `FunctionalStorageCoreProgram` to the same verifier before emission.
-
-[`storage_reference_analysis.ts`](src/functional/storage_reference_analysis.ts) derives every
-reference whose runtime owner and target have stable resolved-Core identities. This includes lexical
-closure and thunk captures, recursive self environments, retained constructor arguments, and global
-definitions. Values produced only through an opaque call have no stable local identity; their
-frontend must name the later boundary declaration or promotion explicitly. When a frontend supplies
-Storage Core to Wasm compilation, its declarations and references must be a superset of this derived
-graph with identical physical lifetimes. Verification is therefore an emission precondition rather
-than an optional audit.
-
-Code generation consumes the derived plan and treats a missing decision as an invariant violation
-with the value kind and Core node attached. A Rust-like frontend can compare its move/borrow proof
-with the selected representation; a lazy frontend can inspect where thunks introduce invocation
-storage. Neither needs to encode those language-specific rules into Functional Core.
-
-General modules use aligned growing linear memory for closures, environments, constructors, thunks,
-text, bytes, arrays, slices, and boxed wide values. Allocation checks are reduced only where
-analysis proves a group of writes fits after one check.
-
-The runtime exposes an explicit reusable free list for transferred host values and scratch-region
-markers for temporary boundary allocations. It is not a tracing collector. Functional evaluation
-allocates immutable graph objects, while ownership-transfer values can be reclaimed at explicit
-boundary points.
-
-Persistent sharing has three explicit policies. `reject` diagnoses a second durable owner.
-`host-managed` requires the shared value to cross the boundary with host-managed lifetime.
-`explicit-reference-counting` requires enough retains for the recorded owners. The Wasm embedding
-implements the last policy with independent `FunctionalWasmOwnedValue` leases; the final release
-recursively frees every encoded block and calls frontend-provided drop glue for opaque resources.
-This is deterministic destruction, not cycle collection. A language requiring cyclic persistent
-heaps must lower a collector or reject that shape.
-
-An explicitly configured strict module can emit typed `retain_<name>` and `drop_<name>` exports.
-Each wrapper names the exact owned declaration or promotion target that authorizes it in verified
-Storage Core. The wrappers share one recursive runtime implementation and are generated only for
-requested first-order types. Reference counts occupy the final word of the public object header. A
-final drop returns a parent block before visiting fields in reverse order, preserving allocation
-order and preventing repeated aggregate ownership cycles from growing the heap. Internal thunks have
-a different header and cannot cross this first-order owned boundary. Opaque resource wrappers are
-reclaimed, but destroying the host resource itself remains a declared host operation. A JavaScript
-owned value with a `dropResource` callback therefore cannot transfer into standalone Wasm drop glue.
-
-Scratch arenas can reclaim a region only when no static definition, memoized global, result, or host
-borrow points into it. Gpufuck therefore does not reset the entire heap at an arbitrary public call
-boundary: doing so would invalidate global call-by-need results. Functional Core does not silently
-choose one memory-management policy for every language.
-
-The standard runner initializes static values before opening the invocation arena. When the plan
-contains no static thunk, it resets that region after decoding the public result, including failure
-paths and temporary encoded arguments. If a static thunk exists, the plan sets `automaticArenaReset`
-to false and preserves the heap so memoized pointers remain valid. The explicit scratch API remains
-available to an embedding with stronger reachability knowledge.
-
-[`wasm_arena.ts`](src/functional/wasm_arena.ts) owns the runtime lifecycle. Arenas are nested and
-must reset in LIFO order. Opening one snapshots both the bump frontier and owned free-list head,
-then hides pre-existing free blocks so temporary allocation cannot consume storage whose ownership
-predates the arena. Reset discards encoded-value ownership records created above the mark and
-restores both frontiers. The standard runner and the compatibility scratch-mark API use this same
-path.
-
-`withFunctionalWasmArena()` holds a lexical arena across synchronous or asynchronous embedding code
-and resets it in `finally`. Boundary values are encoded explicitly into the active arena. Promotion
-decodes the selected graph, resets the source region, and re-encodes it into its parent or into
-owned storage. Partial encoding failures release every block already allocated. Owned encoding is
-rejected while any arena is active, preventing a temporary pointer from being mislabeled as
-persistent.
-
-The async runner does not keep a Wasm arena alive while a host promise is pending. Each replay
-attempt closes its invocation arena before awaiting the suspension. An `AbortSignal` races the wait;
-cancellation rejects with the signal reason, and a later invocation starts with independent replay
-records and storage. Wasm itself remains synchronous, so cancellation cannot preempt instructions
-inside one direct Wasm call.
-
-This supplies invocation and embedding arenas without adding an arena opcode to semantic Core. A
-source language that exposes lexically nested arenas lowers its proven scopes into Storage Core and
-the explicit runtime operations; the generic compiler does not infer that source-level lifetime
-promise from ordinary function types.
-
-### 10.7 Public value ABI
-
-[`wasm_abi.ts`](src/functional/wasm_abi.ts) defines Functional Wasm Value ABI v1. Scalars use native
-Wasm values where the entry permits it. General structured values use an eight-byte tagged value and
-aligned objects with a sixteen-byte header:
-
-| Byte offset |    Width | Meaning                                                     |
-| ----------: | -------: | ----------------------------------------------------------- |
-|           0 |        4 | Object kind                                                 |
-|           4 |        4 | Constructor index, state, numeric kind, or resource ID      |
-|           8 |        4 | Field count or byte length                                  |
-|          12 |        4 | Owned reference count; internal thunks use their own layout |
-|          16 | variable | Contiguous fields or bytes                                  |
-
-[`wasm_value_codec.ts`](src/functional/wasm_value_codec.ts) validates and encodes arguments, forces
-structured results as required, decodes fields within `maximumResultNodes`, and rejects cyclic or
-higher-order public results.
-
-Higher-order closures remain internal because a stable cross-runtime closure ABI would expose the
-backend's environment and code-table representation. One concrete first-order argument and result,
-or an `Init -> result` entry, keeps the deployment boundary explicit.
-
-### 10.8 Host capabilities and ownership
-
-Host capabilities are declared values and operations, collected into one reserved nominal `Init`
-constructor. User Core destructures that constructor like ordinary algebraic data, so inference
-needs no host-specific opcode.
-
-`hostDefinitions` is the alternate boundary for languages whose external functions are ordinary
-top-level names. The GPU checks a normal annotated definition; after successful resolution the Wasm
-initializer binds that definition's global slot directly to the declared capability field. The
-placeholder body is unreachable in a valid emitted module. This keeps host identity out of the GPU
-IR while avoiding implicit `Init` threading through every source function.
-
-Each operation declares semantic input/output types, purity, and sync or suspending execution.
-Polymorphic declarations are specialized to concrete substitutions before module construction.
-Optional representation schemas decouple that semantic contract from the Wasm boundary: opaque types
-can use resource handles, while erased values carry a checked canonical runtime type descriptor.
-Pure intrinsics such as byte length or indexing may lower entirely into the module. Other operations
-become Wasm imports under a capability-qualified namespace.
-
-Bit-precise buffers remain ordinary first-order values represented as `(Bytes, bitLength)`. This
-keeps padding validation and bit counts explicit without introducing a language-specific primitive
-or changing the Wasm object ABI.
-
-`FunctionalHostOwnership` records bounded-borrow, frozen-shareable, ownership-transfer, and unique
-contracts. The host adapter verifies the selected representation and lifetime. The source frontend
-decides whether its program is legally allowed to select that contract.
-
-Purity is never inferred from JavaScript behavior. A frontend with no effect proof must label an
-operation conservatively.
-
-### 10.9 Effects and async replay
-
-Handled algebraic effects lower inside the module. Operations that escape become explicit `Init`
-requirements recorded on `GpuFunctionalModule.entryEffects`.
-
-The synchronous runner rejects suspending host operations. `runFunctionalWasmModuleAsync()` uses
-bounded deterministic replay:
-
-1. run until an unresolved host Promise is encountered;
-2. unwind the Wasm call;
-3. await the Promise;
-4. memoize its completed result;
-5. restart deterministically, replaying completed effects without invoking them again;
-6. continue until completion or the suspension budget is exhausted.
-
-Replay avoids stackful continuation machinery and keeps the Wasm artifact portable, at the cost of
-re-executing pure work between suspension points. The runner detects replay divergence and reports
-it as a structured runtime failure.
-
-The algebraic-effect boundary is informed by Plotkin and Pretnar,
-[“Handling Algebraic Effects”](https://doi.org/10.2168/LMCS-9(4:23)2013), while the concrete replay
-protocol is a gpufuck portability choice rather than an implementation of that paper's calculus.
-
-### 10.10 Component Model boundary
-
-The core backend remains the stable deployment primitive. `functionalWitWorld()` optionally derives
-a WebAssembly Component Model world from concrete public types, resources, capability imports, and
-sync or async operations. Named types live in a shared WIT interface so imports and exports refer to
-one nominal identity. Generic and erased boundary values are rejected until a frontend monomorphizes
-or selects a concrete representation.
-
-`compileFunctionalComponentBoundary()` returns the ordinary core Wasm bytes and the WIT package as
-one artifact. It does not pretend those core bytes are already a component binary; standard
-component tooling performs canonical-ABI adaptation and component encoding. Keeping this optional
-preserves the compact raw-Wasm path and avoids coupling semantic Core to a changing deployment ABI.
-
-## 11. Diagnostics
-
-Errors are divided by trust boundary.
-
-| Class               | Meaning                                                     | Channel                                  |
-| ------------------- | ----------------------------------------------------------- | ---------------------------------------- |
-| `F1xxx`             | Structural, resolution, or work-limit diagnostic            | Compile result                           |
-| `F2xxx`             | Type, annotation, indexed coverage, or inference diagnostic | Compile result                           |
-| `F3xxx`             | Evaluation/runtime semantic fault                           | Fault result or translated runtime error |
-| `F4xxx`             | Module link or Wasm boundary contract failure               | Typed exception                          |
-| `F5xxx`             | Compile-time value or output-limit failure                  | Comptime result                          |
-| WebGPU/device error | Infrastructure or unavailable execution substrate           | Rejected/thrown error with cause         |
-| Invariant failure   | Backend bug or corrupt trusted state                        | Thrown error                             |
-
-Source spans are UTF-8 byte offsets because packed source evidence must be independent of JavaScript
-UTF-16 indexing. Linked modules retain aggregate byte ranges. `locateFunctionalSpan()` and
-`locateFunctionalDiagnostic()` map neutral evidence back to a module; the frontend maps the
-module-relative offset to lines, columns, excerpts, and its own wording.
-
-Conflicts can carry related declaration spans. Runtime-generated modules export fault code and Core
-node evidence so a host not using gpufuck's runner can build equivalent translation.
-
-Cancellation is not a source diagnostic. It rejects with the caller's abort reason. A host exception
-is wrapped with capability and operation evidence while remaining accessible as `cause`.
-
-## 12. Resource ownership and failure safety
-
-Ownership follows the layer that allocates a resource:
-
-| Resource                                | Owner                                       | Release point                                |
-| --------------------------------------- | ------------------------------------------- | -------------------------------------------- |
-| `GPUDevice`                             | Application                                 | Application shutdown                         |
-| Compiler pipelines                      | `GpuFunctionalCompiler`/device lifetime     | Device destruction                           |
-| Surface upload and inference workspaces | One compilation                             | Every success, failure, or cancellation path |
-| Compiled Core buffers                   | Successful `GpuFunctionalModule`            | `module.destroy()`                           |
-| Evaluator heap/stack/readback           | One evaluation                              | Evaluator `finally` path                     |
-| Emitted Wasm bytes                      | Caller                                      | JavaScript lifetime                          |
-| Compiled `WebAssembly.Module` cache     | Backend bounded cache                       | Cache eviction                               |
-| Wasm instance state                     | One run unless caller instantiates directly | Run completion/GC                            |
-| Directory incremental entries           | Build cache                                 | Frontend cache policy                        |
-
-Workspace growth temporarily owns both old and replacement buffers. Ownership transfers only after
-the copy and state patch complete. Catch blocks cannot continue with ambiguous ownership.
-
-Compiled-module destruction is idempotent. Public Wasm byte arrays are independent copies so a
-caller may transfer or mutate one without corrupting a later emission.
-
-## 13. Lazuli's role
-
-Lazuli is the reference language and compatibility API, not the definition of Functional Core. Its
-Baba-generated parser runs on the host, lowers to the same neutral surface as other frontends, and
-uses lazy call-by-need by default.
-
-Lazuli exercises:
-
-- inferred functions and recursive data;
-- explicit specialization descriptors and partial type holes;
-- indexed equality proofs and impossible cases;
-- built-in text, bytes, and lists;
-- host `Init` values;
-- a compiler written in Lazuli that emits Wasm text bytes.
-
-The shared physical machinery lives under `src/semantic/`. `src/lazuli/` preserves historical import
-paths as thin adapters. New semantic features must be exposed through `src/functional/` contracts
-and must not depend on Lazuli keywords or parser structures.
-
-The repository's Baba-generated Gleam parser demonstrates the intended separation at module scale:
-its adapter owns Gleam syntax, visibility, labels, records, bit-array syntax, external annotations,
-pipeline desugaring, and Gleam's f64-backed JavaScript `Int` model. Text and byte concatenation are
-direct Functional Core operations; no host callback is required. Public annotations become stable
-artifact interfaces when present; otherwise the neutral linker keeps the boundary open and the GPU
-infers the linked program. Incremental fingerprints include the defining expression for an inferred
-export, conservatively rechecking dependents instead of treating an unknown schema as stable. A
-smaller Baba-generated PureScript grammar parses an explicit-layout profile that exercises open
-rows, associated results, recursive capability evidence, and rank-2 checking without claiming full
-PureScript compatibility. Together they distinguish a usable source adapter from a
-backend-representation experiment.
-
-Gleam compatibility is checked in two directions. A pinned upstream task discovers all 1,521
-JavaScript-targeted tests, parses and lowers their 19 unmodified `stdlib` modules, GPU-compiles the
-tests in bounded batches, and executes the 444 tests whose reachable definitions need no Gleam
-runtime adapter. A differential test compares gpufuck Wasm results with the official Gleam
-JavaScript backend. This establishes complete compile coverage for that pinned package revision, not
-complete runtime parity: generic opaque runtime values, bit-array matching, and JavaScript externals
-still require host implementations, and the adapter does not implement Gleam's package manager or
-Gleam/OTP.
-
-The old Brainfuck compiler remains only as historical and benchmark context. Its instruction format
-is not an intermediate representation for other languages.
-
-## 14. Architectural decisions
-
-This section records decisions that are easy to accidentally reverse in a local patch.
-
-### 14.1 Frontend syntax stays host-side
-
-**Decision:** parse and desugar on the host; upload flat semantic records.
-
-**Why:** source grammars, filesystem lookup, recovery, macros, and diagnostics are language-specific
-and branch-heavy. Moving them to WGSL would couple every syntax change to shader pipelines and make
-the target unusable by existing frontends.
-
-**Cost:** frontend preparation remains CPU work and each language needs an adapter.
-
-**Revisit when:** a common pre-parsed binary frontend format needs direct ingestion—not merely when
-one parser becomes slow.
-
-### 14.2 Resolution and inference stay GPU-side
-
-**Decision:** production name resolution, dependency analysis, inference, coverage, and Core
-lowering execute in persistent GPU machines.
-
-**Why:** these stages are the shared semantic workload gpufuck is designed to batch. Resolving names
-again on the host would create two authorities and make traces, diagnostics, and performance depend
-on a hidden CPU compiler.
-
-**Cost:** algorithms must be expressed without recursion, with explicit arenas and frames, under
-WGSL's portable type limits.
-
-**Revisit when:** a fallback backend implements the same state-machine contract and is explicitly
-selected, not silently used after a GPU failure.
-
-### 14.3 One canonical schema format
-
-**Decision:** input annotations, nominal metadata, and inferred output share six-word
-linked-preorder records.
-
-**Why:** duplicate host/shader encodings previously risked semantic drift and extra repacking.
-
-**Cost:** the shared decoder must validate every role and the schema ABI cannot be changed casually.
-
-**Revisit when:** a versioned successor demonstrates a measurable bottleneck or expressiveness gap.
-
-### 14.4 Constant-bounded transitions
-
-**Decision:** no input-sized loop is allowed inside one charged transition.
-
-**Why:** fuel, cancellation, and dispatch quanta must bound wall-clock latency as well as total
-semantic work.
-
-**Cost:** simple recursive algorithms become explicit frame machines with larger durable state.
-
-**Revisit when:** never as a hidden optimization; a wider transition would need an explicit bounded
-constant and preserved cancellation guarantee.
-
-### 14.5 Elastic region-specific growth
-
-**Decision:** begin with input-derived arenas and double only the exhausted region.
-
-**Why:** fixed worst-case multipliers waste device memory and reduce useful concurrency.
-
-**Cost:** growth needs copy/patch/resume logic and meticulous failure cleanup.
-
-**Revisit when:** profiling shows a stable arena-specific sizing formula can avoid copies without
-inflating ordinary programs.
-
-### 14.6 Frontend-selected strictness
-
-**Decision:** the frontend selects strict or lazy defaults and may annotate binding boundaries;
-explicit thunks remain ordinary typed values.
-
-**Why:** strictness is source-language semantics. Treating every value as a thunk penalizes strict
-languages; forcing everything changes Haskell-like programs.
-
-**Cost:** evaluators and Wasm emission support mixed representation.
-
-**Revisit when:** a frontend requires a thunk operation beyond deterministic call-by-need
-`delay`/`force`, not merely another spelling for implicit laziness.
-
-### 14.7 Whole-program Wasm after incremental checking
-
-**Decision:** cache resolved module SCCs, relink them, then perform whole-program backend analysis.
-
-**Why:** source modules need incremental builds, while DCE, capture analysis, lambda sets, and
-worker specialization benefit from seeing the final entry closure.
-
-**Cost:** Wasm emission is repeated after relinking and there is no public object-file linker.
-
-**Revisit when:** emission dominates real incremental builds enough to justify a versioned
-relocatable format without losing cross-module optimization.
-
-### 14.8 Explicit effects and host capabilities
-
-**Decision:** effects use Effect Core or explicit host operations; `Init` carries capabilities.
-
-**Why:** the backend cannot infer purity from an arbitrary host implementation, and different
-languages assign different meanings to `IO` and sequencing.
-
-**Cost:** frontends must classify operations or conservatively mark them effectful.
-
-**Revisit when:** richer effect rows are added to a versioned neutral contract, not for
-language-specific syntax.
-
-### 14.9 Deterministic replay for suspension
-
-**Decision:** async execution unwinds and replays instead of storing stackful continuations.
-
-**Why:** replay works with ordinary Wasm engines and keeps the emitted binary independent of a
-continuation proposal or custom runtime stack.
-
-**Cost:** pure work between suspensions can run more than once and replay must detect divergence.
-
-**Revisit when:** portable continuation support is available on target runtimes and measurements
-justify a second execution protocol.
-
-### 14.10 No implicit CPU fallback
-
-**Decision:** semantic compilation fails clearly when no WebGPU adapter exists.
-
-**Why:** a silent fallback would have different performance, cancellation, higher-rank coverage, and
-possibly diagnostic behavior. The TypeScript inferencer is an oracle, not a production authority.
-
-**Cost:** CPU-only build machines need a software adapter or remote/prebuilt Wasm artifacts.
-
-**Revisit when:** a CPU implementation passes the same differential, bounded-work, fuel, and
-diagnostic contracts and is exposed as an explicit backend choice.
-
-### 14.11 Wasm fallback for wide numeric evaluation
-
-**Decision:** portable GPU evaluation delegates operations unavailable or insufficiently exact in
-WGSL to fuel-instrumented Wasm.
-
-**Why:** WGSL lacks portable `i64` and `f64`; pretending otherwise would produce backend-dependent
-semantics.
-
-**Cost:** evaluator execution substrate can vary by operation even though the checked Core is one
-semantic program.
-
-**Revisit when:** the WebGPU/WGSL portability baseline exposes the required scalar operations.
-
-### 14.12 Explicit allocator by default; optional engine GC
-
-**Decision:** generated general Wasm uses an explicit arena/free-list runtime.
-
-**Why:** a tracing collector would add binary size, pauses, roots, and language policy even for
-small pure programs. Strict scalar paths should not pay for it.
-
-**Cost:** long-lived allocation-heavy programs need frontend/runtime cooperation or a different
-memory strategy.
-
-The optional WasmGC backend implements that different strategy without changing Functional Core or
-the default ABI. It relies on the engine to trace typed values, closure environments, shared thunks,
-and recursive closure cycles. Consumers opt in per artifact, and unsupported boundaries fail during
-emission instead of silently falling back to linear memory.
-
-**Revisit when:** host component boundaries and engine availability justify a shared ABI between the
-two memory models.
-
-### 14.13 Fixed vectors are a library contract with optional native lowering
-
-**Decision:** fixed `F32x4` values and masks are canonical immutable ADTs, while native Wasm SIMD is
-an explicit backend representation option for strict modules.
-
-**Why:** frontends and the GPU evaluator retain one portable semantic program, engines without SIMD
-retain a correct scalar artifact, and the Wasm backend can still keep recognized vector chains and
-workers unboxed.
-
-**Cost:** frontends must select vectorized operations explicitly, only the canonical four-lane
-Float32 family is recognized today, and any lazy binding boundary disables native lowering for the
-module.
-
-**Revisit when:** measurements justify more lane shapes or a typed vector IR shared by several
-backends without weakening portable fallback behavior.
-
-## 15. Limits and safety properties
-
-Current structural limits include 1 MiB of source evidence, 65,536 surface nodes, semantic depth
-512, constructor arity 256, and device-derived buffer maxima. Each optional Wasm constant proof
-inspects at most 4,096 nodes before preserving the runtime expression. Runtime and compile-time APIs
-add explicit fuel, heap, stack, dispatch, output-node, output-byte, output-depth, and suspension
-limits.
-
-These limits serve several purposes:
-
-- prevent integer overflow in byte-size calculations;
-- ensure every GPU index fits the packed representation;
-- keep host validation and decoding bounded;
-- bound denial-of-service exposure for untrusted programs;
-- make cancellation intervals configurable;
-- turn device limitations into reproducible evidence.
-
-The project does not claim that arbitrary untrusted Wasm host functions are safe. Host capabilities
-are application code and run with the authority provided by the embedding runtime. Gpufuck validates
-types and boundary shapes, not the behavior of a host implementation.
-
-Proof witnesses and capability dictionaries are ordinary values unless a frontend/backend pass
-explicitly erases them. Recursive proof programs can diverge. Typechecking does not imply totality.
-
-## 16. Extending the architecture
-
-### Add a source construct
-
-First ask whether it is syntax, semantics shared by several languages, or runtime policy.
-
-- Syntax or sugar belongs in the frontend and lowers to existing surface nodes.
-- A shared type-level decision may belong in Type Core, normalization, or capability evidence.
-- A shared effect construct may belong in Effect Core.
-- A runtime host facility belongs in an explicit capability and Wasm ABI contract.
-- A genuinely new Core semantic requires coordinated ABI, resolution, inference, evaluator, Wasm,
-  diagnostic, trace, and compatibility changes.
-
-### Add a primitive operation
-
-Define its source-independent types and semantics first. Then update the surface operator, packed
-ABI, GPU verifier/inferencer, evaluator or justified fallback, Wasm emitter, fault translation,
-differential oracle, malformed-input tests, and end-to-end execution tests.
-
-Do not add a primitive merely because one frontend has convenient syntax for it. Records, lists,
-methods, and modules already demonstrate that many features lower cleanly without new opcodes.
-
-### Add a type-system feature
-
-Choose the lowest sufficient layer:
-
-- deterministic type reduction: `FunctionalTypeNormalizer`;
-- bounded fact or implementation discovery: capability rules and evidence;
-- pure closed type execution: Type Core;
-- runtime type inference shared by ordinary functions: GPU inference;
-- frontend-specific elaboration, universes, totality, or coherence: frontend.
-
-Only the last shared case should enlarge the packed inference ABI.
-
-### Add a Wasm optimization
-
-State the semantic preconditions in terms of resolved Core types, evaluation modes, captures, and
-effects. Add a negative case that violates one precondition and must retain the general path.
-Measure source-to-Wasm latency, artifact size, instantiation, first execution, warm execution,
-allocations, and thunk forces separately.
-
-## 17. Internal source map
-
-| Concern                   | Primary modules                                                                                             |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Public types and ABI      | `src/functional/abi.ts`, `functional.ts`                                                                    |
-| Surface packing           | `src/functional/surface_builder.ts`                                                                         |
-| Static linking            | `src/functional/module_linker.ts`                                                                           |
-| Incremental graph/cache   | `src/functional/incremental_graph.ts`, `incremental_compiler.ts`, `incremental_cache.ts`                    |
-| Compiler facade/admission | `src/functional/compiler.ts`, `compilation_admission.ts`                                                    |
-| GPU resolution            | `src/semantic/compiler_shader.ts`, `gpu_semantic_compiler.ts`                                               |
-| GPU inference             | `src/semantic/type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts`  |
-| Canonical schemas         | `src/semantic/type_schema_abi.ts`                                                                           |
-| Type services             | `src/functional/type_program.ts`, `type_core.ts`, `capability_resolver.ts`                                  |
-| Effects                   | `src/functional/effect_core.ts`, `effect_core_lowering.ts`, `effect_lowering.ts`                            |
-| Comptime                  | `src/functional/comptime.ts`, `comptime_constant.ts`, `comptime_ir.ts`, `partial_evaluation.ts`             |
-| Compiled module/evaluator | `src/functional/compiler_module.ts`, `evaluator.ts`                                                         |
-| Host contracts/runtime    | `src/functional/host_contract.ts`, `host_specialization.ts`, `opaque_resource.ts`, `bit_buffer.ts`          |
-| Fixed vectors             | `src/functional/fixed_vector_contract.ts`, `fixed_vector.ts`, `wasm_simd.ts`, `wasm_codegen.ts`             |
-| Wasm analyses             | `src/functional/wasm_backend_plan.ts`, `wasm_function_analysis.ts`, `wasm_capture_analysis.ts`              |
-| Wasm emission/runtime     | `src/functional/wasm_codegen.ts`, `wasm_binary.ts`, `wasm_structural_equality.ts`, `wasm_runtime_binary.ts` |
-| Wasm boundary/execution   | `src/functional/wasm_component_boundary.ts`, `wasm_value_codec.ts`, `wasm_execution.ts`                     |
-| Diagnostics               | `src/functional/diagnostics.ts`, `src/semantic/compilation_diagnostics.ts`                                  |
-
-## 18. Technical references
-
-The implementation is not a direct transcription of any one paper. These sources explain the
-standards and algorithms that shaped specific decisions:
-
-### Platform standards
-
-- W3C, [WebGPU](https://www.w3.org/TR/webgpu/) — device, queue, buffer, pipeline, command, error
-  scope, and limit model used by semantic compilation.
-- W3C, [WebGPU Shading Language](https://www.w3.org/TR/WGSL/) — portable compute language and scalar
-  type constraints behind explicit frames and wide-numeric fallbacks.
-- WebAssembly Community Group,
-  [WebAssembly Core Specification](https://webassembly.github.io/spec/core/) — binary format,
-  validation, execution, numeric behavior, memory, tables, and control flow emitted by the backend.
-- WebAssembly Community Group,
-  [WebAssembly Interface Types](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md)
-  — package, interface, world, resource, and async function syntax emitted by the optional component
-  boundary.
-
-### Names, graphs, and inference
-
+into one command buffer, and [`compilation_admission.ts`](src/functional/compilation_admission.ts)
+bounds concurrency by request count and estimated transient bytes. Cancellation is checked while
+queued, before submission, and after the validation scope resolves; a submitted dispatch cannot be
+interrupted mid-command, so bounded quanta set the observation interval.
+[`definition_wavefront.ts`](src/semantic/definition_wavefront.ts) schedules the condensed dependency
+graph in deterministic waves on host and GPU; the GPU seam is a reusable device-resident plan whose
+wave buffer can feed later passes, not a lower-latency replacement for the host algorithm.
+
+## 6. Measured cost
+
+[BASELINE.md](BASELINE.md) is authoritative and reproducible with `deno task bench:throughput`. The
+summary below exists so this document is not read in isolation. Marginal cost per module at batch
+1024, on a Ryzen 7 7800X3D with an RTX 4080 SUPER and Deno 2.9.2:
+
+| Work                                 | Runs on | Per module |
+| ------------------------------------ | ------- | ---------: |
+| Parsing plus inference               | CPU     |    39.3 µs |
+| Hindley–Milner inference alone       | CPU     |    10.2 µs |
+| Host symbol lookup and lowering plan | CPU     |     3.6 µs |
+| Hindley–Milner inference             | GPU     |    99.7 µs |
+
+Three conclusions, none of them flattering.
+
+The GPU is **9.7× slower** than the CPU at the one phase it exclusively owns, and loses at every
+batch size measured — marginal GPU cost per module exceeds total CPU cost per module, so the curves
+converge rather than crossing. Both columns do the same work: the CPU baseline is `inferLazuliTypes`
+in [`type_inference.ts`](src/semantic/type_inference.ts), differentially tested against the shader.
+
+Single-compile latency is a separate defect. Deno's `mapAsync` stalls roughly **11.4 ms per await**
+even on a buffer with nothing submitted, and concurrent awaits do not amortize it. That floor is the
+entire one-module number. It is a runtime property, not a compiler one, but any design that reads
+back between phases pays it per phase.
+
+Parsing is **74%** of the CPU path and stays on the CPU, so by Amdahl's law a free instantaneous GPU
+inference would only take that path from 39.3 to 29.1 µs/module — a **1.35×** ceiling. The retarget
+is worth doing because the GPU phase is currently a regression, not because the ceiling above it is
+high. A faster parser would outweigh the entire retarget.
+
+## 7. Evaluator and the capability regression
+
+A successful `GpuFunctionalModule` owns resolved node, definition, and constructor buffers, plus
+counts, roots, qualified names, arities, the entry and its inferred type, nominal declarations, host
+capability contracts, source ranges, evaluation profile, and an idempotent `destroy()`.
+[`evaluator.ts`](src/functional/evaluator.ts) is a bounded graph reducer over that Core supporting
+strict and call-by-need binding, lane-local fuel, bounded heap and stack, cancellation, and
+deep-result limits. With the Wasm backend gone it is the only runtime.
+
+Portable WGSL exposes no `i64` or `f64`, and its floating-point rules do not promise host-Wasm
+rounding. The evaluator represents wrapping `i64` with two words and handles a safe `f32` subset.
+Every operation that previously delegated to fuel-instrumented Wasm now has nowhere to go.
+`inspectModuleNumericRequirements` reads resolved Core before dispatch and names the first construct
+it cannot run; `GpuFunctionalEvaluator.evaluate` then throws a `TypeError`. The rejected set is
+64-bit float and portable whole-number f64 literals; text, bytes, runtime faults, buffer append, and
+all five `Store` operations; 64-bit float and portable whole-number arithmetic; structural equality;
+32-bit float division and square root; and every numeric conversion touching `f64`.
+
+Such programs still compile and typecheck; they cannot be evaluated. Host capability declarations
+and `wasmExports` metadata likewise still typecheck with no backend to consume them. This is a real,
+deliberate loss and should not be documented away.
+
+## 8. The retarget
+
+The current shape — one lane per module running a serial `loop { if phase == … }` state machine over
+a large `var<private>` struct — is why section 6 reads the way it does. The direction is bulk
+data-parallel kernels whose unit of parallelism is a **node**, a **definition**, or a
+**constraint**, not a module:
+
+- kernels sized to the work item, dispatched over all items in a batch;
+- phases sequenced in a single command buffer with no host readback between them, so `mapAsync` is
+  paid once per compilation rather than once per phase;
+- indirect dispatch, each phase writing its successor's workgroup count into a buffer;
+- union-find over type variables driven by atomics rather than a serial walk.
+
+A capability spike on Deno 2.9.2 with an RTX 4080 SUPER confirmed the two behaviours this depends
+on. Indirect dispatch arguments written by one dispatch are visible to `dispatchWorkgroupsIndirect`
+within the same compute pass, so a phase can size its successor without a readback. And
+`atomicCompareExchangeWeak`-based union-find converges under contention. Neither needed host
+involvement.
+
+One WGSL constraint shapes the implementation: a value-returning function may not contain an
+unbounded `loop`. Find and path-compression walks must be written with an explicit bounded iteration
+count — compatible with the constant-bounded-transition invariant, but stated in code rather than
+assumed.
+
+The retarget is judged on the GPU inference share, not total wall time. Below 10.2 µs/module it
+beats the single-threaded CPU it replaces; the honest bar is the ~1.3 µs/module a multi-threaded
+host reaches. If node-parallel validation and constraint generation cannot bring 99.7 µs under about
+30 µs, unification and generalization will not close the gap either, since they are strictly harder
+to parallelize. BASELINE.md records that criterion so it cannot be quietly relaxed.
+
+## 9. Diagnostics and resource ownership
+
+`F1xxx` covers structural, resolution, and work-limit diagnostics and `F2xxx` covers type,
+annotation, coverage, and inference diagnostics; both arrive in the compile result. `F3001`–`F3012`
+are evaluation faults, and `F4001`–`F4007` are `FunctionalLinkError`. WebGPU and device errors
+reject or throw with a `cause`, and a compiler bug or corrupt trusted state throws. Spans are UTF-8
+byte offsets because packed source evidence must be independent of JavaScript UTF-16 indexing;
+`locateFunctionalSpan()` and `locateFunctionalDiagnostic()` map neutral evidence back to a module,
+and the frontend maps that offset to lines, columns, and its own wording. Cancellation is not a
+diagnostic — it rejects with the caller's abort reason.
+
+The application owns the `GPUDevice`; pipelines live for the device's lifetime; upload and inference
+workspaces belong to one compilation and are released on every success, failure, and cancellation
+path; Core buffers belong to a successful `GpuFunctionalModule` until `destroy()`; evaluator heap,
+stack, and readback belong to one evaluation. Workspace growth temporarily owns both old and
+replacement buffers, transferring only after the copy and state patch complete. Catch blocks cannot
+continue with ambiguous ownership, and module destruction is idempotent.
+
+## 10. Frontends
+
+Three live in the repository; none is part of the published entry point. **Lazuli** is the reference
+language and compatibility API, not the definition of Functional Core: its Baba-generated parser
+runs on the host, defaults to lazy call-by-need, and exercises inferred functions and recursive
+data, partial type holes, indexed equality proofs, built-in text, bytes, and lists, and host `Init`
+values. **Gleam** demonstrates the separation at module scale — its adapter owns syntax, visibility,
+labels, records, bit arrays, external annotations, pipeline desugaring, and Gleam's f64-backed
+JavaScript `Int` model. **JavaScript AOT** is the largest frontend and the reason `Store` and
+continuation sharing exist in Core: it lifts statement tails and repeated call, construction,
+accessor, and coercion resumptions into explicit functions so continuation-passing lowering does not
+expand the input tree, and its call frames carry the callable object as well as its target, captured
+realm and environment, receiver, and arguments, preserving `arguments.callee` identity without a
+global lookup.
+
+New semantic features must be exposed through `src/functional/` contracts and must not depend on any
+frontend's keywords or parser structures.
+
+## 11. Architectural decisions
+
+Decisions that are easy to reverse accidentally in a local patch.
+
+**Frontend syntax stays host-side.** Source grammars, filesystem lookup, recovery, macros, and
+diagnostics are language-specific and branch-heavy; moving them to WGSL would couple every syntax
+change to shader pipelines. The cost is now visible: parsing is the majority of the CPU path, which
+bounds what the rest of the retarget can achieve.
+
+**Inference stays GPU-side.** This is the workload the project exists to test, and two authorities
+would make traces, diagnostics, and measurements depend on a hidden CPU compiler. The TypeScript
+inferencer is a differential oracle, never an implicit fallback. The cost is that algorithms must be
+expressed without recursion under WGSL's type limits — and are currently 9.7× slower than the
+oracle. Revisit when the node-parallel retarget either closes that gap or proves it cannot.
+
+**Constant-bounded transitions.** No input-sized loop inside one charged transition, because fuel,
+cancellation, and quanta must bound wall-clock latency and not just total work. Simple recursive
+algorithms become explicit frame machines with larger durable state, and WGSL independently forbids
+unbounded `loop` in value-returning functions.
+
+**Elastic region-specific growth.** Input-derived arenas, doubling only the exhausted region,
+because fixed worst-case multipliers waste device memory and reduce concurrency. The cost is
+copy/patch/resume logic and meticulous failure cleanup.
+
+**Frontend-selected strictness.** The frontend picks strict or lazy defaults and may annotate
+binding boundaries; explicit thunks stay ordinary typed values. Strictness is source-language
+semantics — treating every value as a thunk penalizes strict languages, and forcing everything
+changes Haskell-like programs.
+
+**No implicit CPU fallback.** Compilation fails clearly when no adapter exists. A silent fallback
+would have different performance and cancellation behaviour, and would make every number in section
+6 meaningless. The cost is that CPU-only machines cannot use the compiler at all.
+
+**One runtime, with its gaps stated.** Constructs WGSL cannot express fail loudly at `evaluate()`
+rather than being approximated, because approximating `f64` or structural equality would give a
+checked Core program substrate-dependent semantics. The cost is section 7. Revisit when the WGSL
+portability baseline exposes the required scalar operations, or an explicitly selected second
+backend returns.
+
+## 12. Limits and safety properties
+
+1 MiB of source evidence, 65,536 surface nodes, semantic depth 512, constructor arity 256, stores of
+16,777,216 elements, and device-derived buffer maxima. Runtime APIs add explicit fuel, heap, stack,
+dispatch, output-node, output-byte, and output-depth limits. These prevent integer overflow in
+byte-size calculations, keep every GPU index inside the packed representation, bound host validation
+and decoding, bound denial-of-service exposure for untrusted programs, make cancellation intervals
+configurable, and turn device limitations into reproducible evidence. Proof witnesses and capability
+dictionaries are ordinary values; recursive proof programs can diverge, and typechecking does not
+imply totality.
+
+## 13. Internal source map
+
+| Concern                | Primary modules                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| Public API and ABI     | `functional.ts`, `core.ts`, `src/functional/abi.ts`                                           |
+| Surface and linking    | `surface_builder.ts`, `recursive_groups.ts`, `surface_reachability.ts`, `module_linker.ts`    |
+| Facade and admission   | `compiler.ts`, `compilation_admission.ts`, `gpu_dispatch_scheduler.ts`                        |
+| Host lowering plan     | `src/semantic/symbol_lookup.ts`                                                               |
+| GPU lowering           | `compiler_shader.ts`, `gpu_semantic_compiler.ts`, `gpu_batch_compiler.ts`                     |
+| GPU inference          | `type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts` |
+| CPU oracle and schemas | `src/semantic/type_inference.ts`, `type_schema_abi.ts`                                        |
+| Evaluation             | `src/functional/evaluator.ts`, `src/semantic/evaluator_shader.ts`                             |
+| Diagnostics and device | `src/functional/diagnostics.ts`, `compilation_diagnostics.ts`, `src/webgpu.ts`                |
+
+## 14. Technical references
+
+Not a transcription of any one paper; these explain specific decisions.
+
+- W3C, [WebGPU](https://www.w3.org/TR/webgpu/) and [WGSL](https://www.w3.org/TR/WGSL/) — device,
+  buffer, pipeline, and limit model; scalar type constraints and the loop restrictions behind
+  explicit frames and bounded walks.
 - N. G. de Bruijn,
-  [“Lambda calculus notation with nameless dummies”](https://doi.org/10.1016/1385-7258(72)90034-0) —
-  numeric lexical binding representation.
-- Robert Tarjan, [“Depth-first search and linear graph algorithms”](https://doi.org/10.1137/0201010)
-  — strongly connected components for recursive dependency groups.
+  ["Lambda calculus notation with nameless dummies"](https://doi.org/10.1016/1385-7258(72)90034-0) —
+  numeric lexical binding.
+- Robert Tarjan, ["Depth-first search and linear graph algorithms"](https://doi.org/10.1137/0201010)
+  and, with Jan van Leeuwen,
+  ["Worst-case analysis of set union algorithms"](https://doi.org/10.1145/62.2160) — SCCs and
+  union-find behind dependency groups and unification.
 - Luis Damas and Robin Milner,
-  [“Principal type-schemes for functional programs”](https://doi.org/10.1145/582153.582176) —
+  ["Principal type-schemes for functional programs"](https://doi.org/10.1145/582153.582176) —
   principal Hindley–Milner inference.
-- Robert Tarjan and Jan van Leeuwen,
-  [“Worst-case analysis of set union algorithms”](https://doi.org/10.1145/62.2160) — union-find
-  structure underlying representative traversal and unification.
 - Simon Peyton Jones et al.,
-  [“Simple unification-based type inference for GADTs”](https://www.microsoft.com/en-us/research/publication/simple-unification-based-type-inference-for-gadts/)
-  — scoped equality refinement and the limits of principal inference.
-- Dimitrios Vytiniotis et al.,
-  [“OutsideIn(X): Modular type inference with local assumptions”](https://www.microsoft.com/en-us/research/publication/outsideinx-modular-type-inference-with-local-assumptions/)
-  — local assumptions, constraints, and annotation boundaries relevant to indexed cases.
-
-### Evaluation and optimization
-
+  ["Simple unification-based type inference for GADTs"](https://www.microsoft.com/en-us/research/publication/simple-unification-based-type-inference-for-gadts/)
+  and Dimitrios Vytiniotis et al.,
+  ["OutsideIn(X)"](https://www.microsoft.com/en-us/research/publication/outsideinx-modular-type-inference-with-local-assumptions/)
+  — scoped equality refinement, local assumptions, and annotation boundaries.
 - John Launchbury,
-  [“A natural semantics for lazy evaluation”](https://doi.org/10.1145/158511.158618) — call-by-need
-  sharing semantics motivating updateable thunks and blackhole detection.
-- Michael Vollmer et al.,
-  [“Lambda Set Specialization”](https://www.cs.princeton.edu/~mpmilano/publication/lss/) — finite
-  callee-set analysis and direct higher-order dispatch.
-- Alex Reinking et al.,
-  [“Perceus: Garbage Free Reference Counting with Reuse”](https://doi.org/10.1145/3453483.3454032) —
-  precise reference counting followed by same-shape reuse planning for strict functional values.
-- Gordon Plotkin and Matija Pretnar,
-  [“Handling Algebraic Effects”](https://doi.org/10.2168/LMCS-9(4:23)2013) — algebraic operations
-  and handlers informing the neutral Effect Core boundary.
-- Andrey Mokhov, Neil Mitchell, and Simon Peyton Jones,
-  [“Build Systems à la Carte”](https://www.microsoft.com/en-us/research/publication/build-systems-la-carte/)
-  — separating dependency graphs, incremental validity, and build execution.
+  ["A natural semantics for lazy evaluation"](https://doi.org/10.1145/158511.158618) — call-by-need
+  sharing behind updateable thunks and blackhole detection.
 
-### Source adapter contracts
-
-- Gleam documentation, [External functions](https://gleam.run/documentation/externals/) — mandatory
-  annotations and target/module/function identity at the external boundary.
-- Gleam language tour, [Bit arrays](https://tour.gleam.run/data-types/bit-arrays/) — segment options
-  and the JavaScript target's portable-representation constraints.
-
-When a new algorithm or platform proposal materially shapes an invariant, add the primary source
-next to the relevant design section and to this index. References document rationale; tests and the
-versioned contracts remain the executable specification.
+References document rationale; tests and the versioned contracts are the executable specification.
