@@ -32,3 +32,8 @@ export * from "./src/functional/wasm_contract.ts";
 export * from "./src/functional/wasm_execution.ts";
 export * from "./src/functional/comptime.ts";
 export * from "./src/functional/comptime_contract.ts";
+export * from "./src/functional/capability_contract.ts";
+export * from "./src/functional/capability_resolver.ts";
+export * from "./src/functional/fixed_vector.ts";
+export * from "./src/functional/type_core.ts";
+export * from "./src/functional/type_core_contract.ts";
