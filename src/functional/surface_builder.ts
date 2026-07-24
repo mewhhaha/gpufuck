@@ -1447,7 +1447,15 @@ export const surface: Readonly<{
   bytes(value: Uint8Array): FunctionalSurfaceExpression;
   runtimeFault(message: string): FunctionalSurfaceExpression;
   name(name: string): FunctionalSurfaceExpression;
-  lambda(parameter: string, body: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
+  /**
+   * Definitions and recursive bindings already take a parameter list, and `apply` already folds a
+   * spine, so accepting one here keeps the builder consistent instead of making every frontend
+   * curry by hand.
+   */
+  lambda(
+    parameters: string | readonly string[],
+    body: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
   delay(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
   force(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
   apply(
@@ -1517,10 +1525,15 @@ export const surface: Readonly<{
     return { kind: "name", name };
   },
   lambda(
-    parameter: string,
+    parameters: string | readonly string[],
     body: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression {
-    return { kind: "lambda", parameter, body };
+    if (typeof parameters === "string") return { kind: "lambda", parameter: parameters, body };
+    let expression = body;
+    for (let index = parameters.length - 1; index >= 0; index--) {
+      expression = { kind: "lambda", parameter: parameters[index]!, body: expression };
+    }
+    return expression;
   },
   delay(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
     return {
