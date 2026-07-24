@@ -36,6 +36,7 @@ import {
   type FunctionalSurfaceModuleOptions,
   normalizeFunctionalHostCapabilities,
 } from "./host_contract.ts";
+import { elaborateFunctionalCaseDefaults } from "./case_defaults.ts";
 import { elaborateFunctionalRecursiveGroups } from "./recursive_groups.ts";
 import { functionalBytesLiteralSymbol } from "./static_literals.ts";
 import type {
@@ -58,6 +59,7 @@ export type {
 const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
 const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
 const SURFACE_FEATURE_STORE = 1 << 2;
+const SURFACE_FEATURE_CASE_DEFAULT = 1 << 3;
 const MAXIMUM_SURFACE_EXPRESSION_DEPTH = 1_024;
 const MAXIMUM_SURFACE_TYPE_DEPTH = 512;
 const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
@@ -113,9 +115,12 @@ export function buildFunctionalSurfaceModule(
   for (const definition of definitions) {
     surfaceFeatures |= expressionFeatureMask(definition.body);
   }
-  const elaboratedDefinitions = surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP
-    ? elaborateFunctionalRecursiveGroups(definitions)
+  const withCaseDefaults = surfaceFeatures & SURFACE_FEATURE_CASE_DEFAULT
+    ? elaborateFunctionalCaseDefaults(definitions, typeDeclarations)
     : definitions;
+  const elaboratedDefinitions = surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP
+    ? elaborateFunctionalRecursiveGroups(withCaseDefaults)
+    : withCaseDefaults;
   if ((surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP) !== 0) {
     for (const definition of elaboratedDefinitions) expressionFeatureMask(definition.body);
   }
@@ -630,6 +635,7 @@ function collectBoundaryTypeNames(
       case "case":
         visitExpression(expression.value);
         for (const arm of expression.arms) visitExpression(arm.body);
+        if (expression.otherwise !== undefined) visitExpression(expression.otherwise.body);
         return;
       case "integer":
       case "signed-integer-64":
@@ -759,6 +765,10 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
         break;
       case "case":
         for (const arm of nested.arms) visit(arm.body);
+        if (nested.otherwise !== undefined) {
+          features |= SURFACE_FEATURE_CASE_DEFAULT;
+          visit(nested.otherwise.body);
+        }
         visit(nested.value);
         break;
       case "integer":
