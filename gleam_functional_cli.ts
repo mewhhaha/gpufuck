@@ -74,7 +74,8 @@ export async function main(
             value: evaluation.value,
             stats: evaluation.stats,
           },
-          null,
+          // Gleam Int lowers to i64, so values arrive as BigInt, which JSON cannot serialize.
+          (_key, value) => typeof value === "bigint" ? value.toString() : value,
           2,
         ));
         return 0;

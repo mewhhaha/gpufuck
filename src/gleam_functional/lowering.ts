@@ -101,18 +101,17 @@ const GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT = "$gleam_bit_array_from_utf8_codepoin
 const binaryOperators: Readonly<Record<string, FunctionalBinaryOperator>> = {
   "==": FunctionalBinaryOperator.StructuralEqual,
   "!=": FunctionalBinaryOperator.StructuralNotEqual,
-  "<": FunctionalBinaryOperator.LessWholeNumberF64,
-  "<=": FunctionalBinaryOperator.LessEqualWholeNumberF64,
-  ">": FunctionalBinaryOperator.GreaterWholeNumberF64,
-  ">=": FunctionalBinaryOperator.GreaterEqualWholeNumberF64,
+  "<": FunctionalBinaryOperator.LessSignedInteger64,
+  "<=": FunctionalBinaryOperator.LessEqualSignedInteger64,
+  ">": FunctionalBinaryOperator.GreaterSignedInteger64,
+  ">=": FunctionalBinaryOperator.GreaterEqualSignedInteger64,
   "<.": FunctionalBinaryOperator.LessFloat64,
   "<=.": FunctionalBinaryOperator.LessEqualFloat64,
   ">.": FunctionalBinaryOperator.GreaterFloat64,
   ">=.": FunctionalBinaryOperator.GreaterEqualFloat64,
-  "+": FunctionalBinaryOperator.AddWholeNumberF64,
-  "-": FunctionalBinaryOperator.SubtractWholeNumberF64,
-  "*": FunctionalBinaryOperator.MultiplyWholeNumberF64,
-  "/": FunctionalBinaryOperator.DivideWholeNumberF64,
+  "+": FunctionalBinaryOperator.AddSignedInteger64,
+  "-": FunctionalBinaryOperator.SubtractSignedInteger64,
+  "*": FunctionalBinaryOperator.MultiplySignedInteger64,
   "+.": FunctionalBinaryOperator.AddFloat64,
   "-.": FunctionalBinaryOperator.SubtractFloat64,
   "*.": FunctionalBinaryOperator.MultiplyFloat64,
@@ -897,7 +896,11 @@ class GleamFunctionalLowering {
   private lowerExpression(expression: GleamFunctionalExpression): FunctionalSurfaceExpression {
     switch (expression.kind) {
       case "integer":
-        return { kind: "whole-number-f64", value: expression.value, span: expression.span };
+        return {
+          kind: "signed-integer-64",
+          value: BigInt(expression.value),
+          span: expression.span,
+        };
       case "boolean":
         return { ...expression };
       case "float":
@@ -1350,12 +1353,26 @@ class GleamFunctionalLowering {
         span: expression.span,
       };
     }
-    if (expression.operator === "%") {
+    if (expression.operator === "/" || expression.operator === "%") {
       return {
-        kind: "binary",
-        operator: FunctionalBinaryOperator.RemainderWholeNumberF64,
-        left,
-        right,
+        kind: "if",
+        condition: {
+          kind: "binary",
+          operator: FunctionalBinaryOperator.EqualSignedInteger64,
+          left: right,
+          right: { kind: "signed-integer-64", value: 0n, span: expression.right.span },
+          span: expression.span,
+        },
+        consequent: { kind: "signed-integer-64", value: 0n, span: expression.span },
+        alternate: {
+          kind: "binary",
+          operator: expression.operator === "/"
+            ? FunctionalBinaryOperator.DivideSignedInteger64
+            : FunctionalBinaryOperator.RemainderSignedInteger64,
+          left,
+          right,
+          span: expression.span,
+        },
         span: expression.span,
       };
     }
@@ -1735,7 +1752,7 @@ class GleamFunctionalLowering {
         condition: {
           kind: "binary",
           operator: pattern.kind === "integer"
-            ? FunctionalBinaryOperator.EqualWholeNumberF64
+            ? FunctionalBinaryOperator.EqualSignedInteger64
             : pattern.kind === "float"
             ? FunctionalBinaryOperator.EqualFloat64
             : FunctionalBinaryOperator.StructuralEqual,
@@ -1862,7 +1879,7 @@ class GleamFunctionalLowering {
     const segmentTypes = pattern.segments.map((segment): FunctionalTypeSchema =>
       segment.options.some((option) => option.name === "bits" || option.name === "bytes")
         ? bitArray
-        : wholeNumberF64Type()
+        : signedInteger64Type()
     );
     const payload = segmentTypes.length === 1 ? segmentTypes[0]! : nestedTupleSchema(segmentTypes);
     const optionArguments = pattern.segments.flatMap((segment) =>
@@ -1870,7 +1887,7 @@ class GleamFunctionalLowering {
     );
     const parameter = optionArguments.length === 0
       ? bitArray
-      : nestedTupleSchema([bitArray, ...optionArguments.map(() => wholeNumberF64Type())]);
+      : nestedTupleSchema([bitArray, ...optionArguments.map(() => signedInteger64Type())]);
     const result: FunctionalTypeSchema = {
       kind: "named",
       name: GLEAM_RESULT_TYPE,
@@ -1964,7 +1981,7 @@ class GleamFunctionalLowering {
       );
     }
 
-    const parameter = wholeNumberF64Type();
+    const parameter = signedInteger64Type();
     const result = { kind: "named" as const, name: GLEAM_BIT_ARRAY_TYPE, arguments: [] };
     if (!this.#externalCapabilities.has(GLEAM_BIT_ARRAY_INTRINSIC_CAPABILITY)) {
       this.#externalCapabilities.set(
@@ -2138,7 +2155,7 @@ class GleamFunctionalLowering {
         condition: {
           kind: "binary",
           operator: pattern.kind === "integer"
-            ? FunctionalBinaryOperator.EqualWholeNumberF64
+            ? FunctionalBinaryOperator.EqualSignedInteger64
             : pattern.kind === "float"
             ? FunctionalBinaryOperator.EqualFloat64
             : FunctionalBinaryOperator.StructuralEqual,
@@ -2449,7 +2466,7 @@ class GleamTypeResolver {
       case "unit":
         return { kind: type.kind };
       case "integer":
-        return wholeNumberF64Type();
+        return signedInteger64Type();
       case "float":
         return { kind: "float-64" };
       case "parameter":
@@ -2776,7 +2793,7 @@ function scalarPatternValue(
   >,
 ): FunctionalSurfaceExpression {
   if (pattern.kind === "integer") {
-    return { kind: "whole-number-f64", value: pattern.value, span: pattern.span };
+    return { kind: "signed-integer-64", value: BigInt(pattern.value), span: pattern.span };
   }
   if (pattern.kind === "float") {
     return { kind: "float-64", value: pattern.value, span: pattern.span };
@@ -2815,7 +2832,7 @@ function bitArrayExpression(
     name(GLEAM_BIT_ARRAY_VALUE, span),
     [
       { kind: "bytes", value: bytes, span },
-      { kind: "whole-number-f64", value: bitLength, span },
+      { kind: "signed-integer-64", value: BigInt(bitLength), span },
     ],
     span,
   );
@@ -2864,7 +2881,7 @@ function gleamBitArrayDeclaration(sourceByteLength: number): FunctionalSurfaceTy
           type: { kind: "named", name: FUNCTIONAL_BYTES_TYPE_NAME, arguments: [] },
           span,
         },
-        { name: "bitLength", type: wholeNumberF64Type(), span },
+        { name: "bitLength", type: signedInteger64Type(), span },
       ],
     }],
   };
@@ -2915,12 +2932,8 @@ function gleamTupleOneDeclaration(sourceByteLength: number): FunctionalSurfaceTy
   };
 }
 
-function wholeNumberF64Type(): FunctionalTypeSchema {
-  return {
-    kind: "named",
-    name: FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
-    arguments: [],
-  };
+function signedInteger64Type(): FunctionalTypeSchema {
+  return { kind: "signed-integer-64" };
 }
 
 function requireUniqueNames(
