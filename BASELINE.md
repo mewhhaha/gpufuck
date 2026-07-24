@@ -29,6 +29,14 @@ Marginal cost per module at N=1024:
 | GPU batch total       | 103.4     |                                             |
 | GPU inference share   | 99.7      | **9.7x the CPU work it replaces**           |
 
+## Noise
+
+GPU batch timings spread roughly 30% run to run on this machine: the same tree measured 96.6, 101.2,
+108.3, 117.1, and 129.7 µs/module across separate runs. **A single run cannot distinguish a real
+change from noise.** Compare medians across at least three runs, and treat anything under about 20%
+as unmeasured. The flat-grid lowering change looked like a 14% win on one run and was flat under a
+proper A/B.
+
 ## What these numbers mean
 
 **The GPU loses at every batch size, and the gap converges rather than crossing.** Its marginal cost
@@ -45,8 +53,8 @@ both columns do the same work.
 2. _Slope (~9.7x)._ The semantic, inference, and evaluator kernels are all
    `@compute @workgroup_size(1)`, one lane per module, running a serial `loop { if phase == … }`
    state machine over a 74-field `var<private>` struct. The one exception, `lower_planned_lazuli` at
-   `workgroup_size(64)`, only copies a lowering plan the host already computed, and is disabled
-   above four batch lanes. This survives any runtime fix.
+   `workgroup_size(64)`, only copies a lowering plan the host already computed — about 2,300 of the
+   ~28,800 GPU transitions per module. This survives any runtime fix.
 
 **The Amdahl ceiling is 1.35x.** Parsing is 74% of the CPU path and stays on the CPU (baba). Even a
 free, instantaneous GPU inference would only take the CPU path from 39.3 to 29.1 µs/module. Every

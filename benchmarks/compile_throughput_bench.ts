@@ -13,7 +13,11 @@ import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
 import { requestWebGpuDevice } from "../src/webgpu.ts";
 
 const SIZES = [1, 16, 64, 256, 1024] as const;
-const REPETITIONS = 5;
+/**
+ * GPU batch timings spread roughly 30% run to run, so a handful of samples cannot distinguish a
+ * real change from noise. Compare medians across repeated runs before believing any delta.
+ */
+const REPETITIONS = 15;
 
 function program(index: number): string {
   return `fn helper${index} n = n * ${index % 7 + 1};\nfn main = helper${index} ${index};`;

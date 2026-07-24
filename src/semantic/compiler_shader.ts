@@ -996,23 +996,46 @@ fn compile_lazuli(@builtin(global_invocation_id) invocation: vec3<u32>) {
   compilation_states[lane_index] = state;
 }
 
+/**
+ * Lanes are packed into the surface buffer in ascending base order, so a node's global index
+ * locates its lane by binary search. A two-dimensional grid over (widest lane, lane count) would
+ * instead scale with the widest lane in the batch, which is why lowering used to fall back to the
+ * serial path once a batch held more than a few lanes.
+ */
+fn lane_of_node(global_node: u32) -> u32 {
+  var low = 0u;
+  var high = arrayLength(&compilation_states);
+  for (var step = 0u; step < 32u; step += 1u) {
+    if low + 1u >= high { break; }
+    let middle = low + (high - low) / 2u;
+    if compilation_states[middle].surface_node_base <= global_node {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+}
+
 @compute @workgroup_size(${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE})
 fn lower_planned_lazuli(
   @builtin(workgroup_id) workgroup: vec3<u32>,
   @builtin(local_invocation_index) local_invocation: u32,
 ) {
-  let lane_index = workgroup.y;
-  if lane_index >= arrayLength(&compilation_states) {
+  if arrayLength(&compilation_states) == 0u {
     return;
   }
-  state = compilation_states[lane_index];
+  let global_node = workgroup.x * ${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE}u + local_invocation;
+  state = compilation_states[lane_of_node(global_node)];
   if state.resolution_symbol != PLANNED_LOWERING_READY ||
-    !indexed_local_resolutions_are_available() {
+    !indexed_local_resolutions_are_available() ||
+    global_node < state.surface_node_base {
     return;
   }
 
-  let node = workgroup.x * ${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE}u + local_invocation;
-  if node < state.resolution_parent ||
+  let node = global_node - state.surface_node_base;
+  if node >= state.node_count ||
+    node < state.resolution_parent ||
     node >= state.resolution_child ||
     (state.resolution_depth != NO_INDEX && node >= state.resolution_depth) {
     return;

@@ -349,7 +349,7 @@ function encodeSemanticCompilation(
   });
   lowering.setPipeline(semanticPass.pipelines.plannedLowering);
   lowering.setBindGroup(0, semanticPass.bindGroup);
-  lowering.dispatchWorkgroups(semanticPass.plannedLoweringWorkgroups, laneCount);
+  lowering.dispatchWorkgroups(semanticPass.plannedLoweringWorkgroups);
   lowering.end();
 }
 
