@@ -180,6 +180,43 @@ lists, records, and source modules are not Core primitives. `linkFunctionalModul
 several `FunctionalModuleArtifact` values into one whole program before GPU compilation, qualifying
 names and checking typed imports against exports.
 
+### Surface primitives
+
+The `surface` builder covers literals, `name`, `lambda`, `apply`, `binary`, `unary`, `convert`,
+`equal`, `structuralEqual`, `store*`, and `runtimeFault`. Three of its features exist because two
+unrelated frontends independently hand-rolled the same workaround, and each of them deletes frontend
+code:
+
+```ts
+// Spans: every surface node kind carries an optional span, and `at` stamps it.
+const at = surface.at({ startByte: 42, endByte: 47 });
+at.binary(FunctionalBinaryOperator.Add, at.integer(20), at.integer(22));
+
+// Parameter lists fold right, so a frontend does not curry by hand.
+surface.lambda(["x", "y"], surface.name("y"));
+
+// A case default: the arms it omits are filled in, and the fallback binds once.
+({
+  kind: "case",
+  value: subject,
+  arms: [{ constructor: "Red", binders: [], body: surface.integer(1) }],
+  otherwise: { binder: "other", body: surface.integer(0) },
+});
+```
+
+`at` stamps only the outermost node of a fold or desugaring — attributing a source range to a node
+the builder synthesized would be a wrong location, which is worse than none. A `case` default needs
+at least one arm naming a declared constructor, since that is how the owning type is found. `let`,
+`if`, `case`, and `let-rec-group` have no builder yet; frontends write those node literals directly.
+
+Traps do not need a host capability. `surface.runtimeFault(message)` is a first-class node that
+infers as a fresh variable, so it typechecks wherever a diverging expression belongs.
+
+`F32x4` is name-based: build it with `functionalF32x4`, splice in
+`FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS` and `FUNCTIONAL_FIXED_VECTOR_DEFINITIONS`, and compile
+with `{ simd: "wasm-simd" }` to get native `v128` instructions. A frontend that declares its own
+four-field vector type instead gets scalar-correct results and no SIMD.
+
 The module's evaluation profile defaults to `StrictEager`; a Haskell-like frontend selects
 `LazyCallByNeed`, and individual binding boundaries can override it. That choice is recorded in
 resolved Core and controls implicit evaluation. Explicit laziness is separate: `surface.delay()`

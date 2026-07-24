@@ -399,9 +399,16 @@ imply totality.
 | Storage and comptime   | `storage_plan.ts`, `storage_core.ts`, `comptime.ts`                                           |
 | Diagnostics and device | `src/functional/diagnostics.ts`, `compilation_diagnostics.ts`, `src/webgpu.ts`                |
 
-`src/functional/effect_core*.ts` and `effect_contract.ts` are in the tree but dormant: nothing
-imports them and neither entry point exports them. Of Type Core only `type_core_contract.ts`
-survives, and it exists because `comptime_constant.ts` needs its value and type shapes.
+Of Type Core only `type_core.ts` and `type_core_contract.ts` survive, alongside
+`capability_resolver.ts`. The resolver is the type-resolution primitive — bounded search over
+frontend-defined predicates returning a replayable evidence tree, which is what a frontend with
+traits or `derive` needs. Nothing calls it today; the frontends that did were removed.
+
+Effect Core was deleted rather than kept dormant. It lowered a handler to a closed `A -> B` with no
+`resume` parameter, so it could not abort, resume later, or resume twice — which is what exceptions,
+generators, async and backtracking all require — and it capped effects at a 32-bit mask. Frontends
+elaborate effects themselves instead, as Koka and Eff do. A target-level effect system needs
+delimited control in Core, which is a separate project.
 
 ## 15. Technical references
 
