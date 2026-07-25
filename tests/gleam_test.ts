@@ -772,15 +772,32 @@ Deno.test("rejects unsupported Gleam bit-array segment encodings", () => {
   match(frontend.diagnostics[0].message, /supports only|must use the utf8 encoding/);
 });
 
-Deno.test("rejects negative static Gleam bit-array segment sizes", () => {
+/**
+ * A negative segment size is legal Gleam contributing no bits, not a syntax error. Upstream's own
+ * suite pins it: `bit_array_test.gleam` asserts `bit_size(<<0:-8>>) == 0` and
+ * `bit_size(<<0:-1>>) == 0`. This test used to assert the opposite, which rejected the whole
+ * module.
+ */
+Deno.test("treats a negative static Gleam bit-array segment size as empty", async () => {
   const frontend = lowerGleamSource(
     "bit_arrays",
-    `pub fn main() { <<1:-1>> }\n`,
-  );
+    `pub fn main() { bit_array_size(<<1:-1, 2:-8, 3:8>>) }
 
-  ok(!frontend.ok);
-  if (frontend.ok) return;
-  match(frontend.diagnostics[0].message, /cannot have negative size -1/);
+@external(javascript, "", "")
+fn bit_array_size(array: BitArray) -> Int {
+  case array {
+    <<>> -> 0
+    _ -> 1
+  }
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  // Only the 3:8 segment contributes, so the array is one byte rather than empty or rejected.
+  const evaluation = await evaluate(frontend.lowered);
+  deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 1n });
 });
 
 Deno.test("merges Gleam externals from one host module into one capability", async () => {

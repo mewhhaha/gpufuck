@@ -63,6 +63,197 @@ kernel-level improvement is bounded by this until parsing moves or gets faster.
 For reference, baba parses at ~0.43 µs/byte (≈2.3 MB/s) with a ~17 µs fixed cost per call, where
 tree-sitter does 10–30 MB/s. A 10x parser improvement would outweigh the entire retarget.
 
+## 2026-07-25 — against the Gleam compiler, on one large real module
+
+The throughput numbers above use a synthetic corpus of two-definition modules, which measures
+_batching_. This measures the opposite case, and the one a language implementer actually has: a
+single large program, compiled once, against the production compiler for that language.
+
+Corpus: `gleam-lang/stdlib` at `bacc20c`, nineteen source modules, 252 KB, all reachable — the entry
+binds every one of the 353 public functions, so nothing is pruned. Reproduce with
+`deno task bench:gleam-stdlib <checkout> <entry.gleam>`. Same machine as above; Gleam 1.17.0.
+
+| Compiler                          | Cold, whole process |
+| --------------------------------- | ------------------: |
+| `gleam build --target javascript` |              146 ms |
+| gpufuck                           |            4,890 ms |
+
+**gpufuck is ~33x slower**, and it is doing strictly less: Gleam typechecks _and_ emits 49
+JavaScript files to disk, while gpufuck writes nothing and its Gleam frontend covers a subset of the
+language. Gleam's warm incremental build is 23 ms.
+
+Where gpufuck's time goes (medians of 9, 49,964 surface nodes):
+
+| Phase                               |       Median |   Share |
+| ----------------------------------- | -----------: | ------: |
+| Parse (baba)                        |        83 ms |      2% |
+| Lower to surface                    |        67 ms |      2% |
+| **GPU name resolution + inference** | **3,806 ms** | **96%** |
+| Emit WebAssembly (1.7 MB)           |        25 ms |      1% |
+| WebGPU device and pipeline setup    |       250 ms |       — |
+
+The GPU phase alone is **26x Gleam's entire build**. This is the same defect the table above
+records, seen without batching to hide it: the resolve-and-infer kernel is one lane running a serial
+state machine, so a 49,964-node module is 49,964 sequential transitions on a single GPU thread — the
+worst possible shape for the hardware. Batch throughput was 9.7x slower than the CPU;
+single-large-module latency is 33x, because there is nothing to amortize the per-transition cost
+against.
+
+Note the inversion against the synthetic corpus: there, parsing was 74% of the CPU path and the
+Amdahl ceiling was the story. Here parsing is 2%. On real input the GPU phase _is_ the cost, so the
+ceiling argument does not apply and node-level parallelism is worth the whole budget.
+
+### Where the 3.8 seconds actually goes
+
+Instrumenting the dispatch loop (`observeDispatch`, same corpus, quantum 524,288) splits the GPU
+phase cleanly, and the split is lopsided:
+
+| GPU phase                         | Work                  |         Time |   Per unit |
+| --------------------------------- | --------------------- | -----------: | ---------: |
+| Core lowering and name resolution | 668,619 steps         |       141 ms |     211 ns |
+| **Hindley-Milner inference**      | 6,112,582 transitions | **4,048 ms** | **662 ns** |
+
+That is 13.4 semantic steps and **122.3 inference transitions per surface node**. Inference is 96%
+of the GPU time; the resolution phase everyone assumes is the problem costs 141 ms.
+
+**It is not round-trip bound.** The whole compile takes 14 dispatches, so `mapAsync` accounts for
+about 160 ms of the 3,800. Sweeping the dispatch quantum confirms it, and incidentally re-measures
+the stall:
+
+| Quantum |    Median |
+| ------: | --------: |
+|  16,384 | 10,585 ms |
+|  65,536 |  5,410 ms |
+| 131,072 |  4,683 ms |
+| 262,144 |  3,787 ms |
+| 524,288 |  3,926 ms |
+
+The curve flattens by 262,144 — the default of 524,288 is already at the plateau, so ~3,800 ms is a
+genuine compute floor. The excess at 16,384 works out to 6,785 ms over ~610 dispatches, or 11.1 ms
+each, which matches the 11.4 ms `mapAsync` figure measured independently above.
+
+### Against our own CPU, and against Gleam
+
+`inferTypes` is the differential oracle — the same Hindley-Milner, the same input — so the ratio
+isolates the GPU rather than comparing two algorithms:
+
+|                                              |     Time | vs Gleam |
+| -------------------------------------------- | -------: | -------: |
+| `gleam build` (typecheck **and** JS codegen) |   146 ms |       1x |
+| gpufuck CPU Hindley-Milner alone             |   766 ms |     5.2x |
+| gpufuck GPU full compile                     | 3,607 ms |      25x |
+
+Two separate problems, and the smaller one is the GPU. **The GPU is 4.7x our own CPU** — better than
+the 9.7x the synthetic batch corpus reported, because a large module amortizes fixed cost. But our
+CPU inference is already **5.2x slower than Gleam's entire build**, codegen included. Making the GPU
+match the CPU would still leave the compiler five times slower than the thing it is competing with.
+The inference implementation is a target independent of where it runs.
+
+### The GPU curve is transition count, not transition cost
+
+Sweeping module size on the GPU path separates the two possible causes:
+
+| Surface nodes | Inference transitions | Per node | ns per transition |
+| ------------: | --------------------: | -------: | ----------------: |
+|         2,343 |                53,566 |     22.9 |             1,205 |
+|         4,417 |               105,344 |     23.8 |               834 |
+|        33,864 |             5,739,578 |    169.5 |               576 |
+|        49,964 |             6,112,582 |    122.3 |               568 |
+
+**Per-transition cost falls as the module grows** (1,205 -> 568 ns), so this is not a
+memory-hierarchy effect and not fixed overhead per transition; the shader gets _more_ efficient per
+step at scale. All of the superlinearity is in the transition count, which scales as **n^1.68**.
+
+At the small-module rate the full corpus would take 1.14 million transitions instead of 6.11 million
+— a **5.4x excess**, worth ~2,800 ms of the 3,469 ms inference phase. Work per node jumps sevenfold
+between 4,417 and 33,864 nodes, so there is a threshold effect worth isolating rather than a smooth
+constant-factor drift.
+
+This is the defect on the production path, and it is independent of the single-lane occupancy
+problem. Fixing transition count and parallelising the kernel multiply.
+
+### The CPU oracle is separately quadratic, and it is not on the compile path
+
+`inferTypes` scales as **n^1.30** (nine points, 1,334 to 49,964 nodes; the exponent holds at 1.29
+when the same roots are spread across 71 small functions instead of one, so it is not an artifact of
+the benchmark entry). The cause is structural rather than subtle: `generalize` calls
+`freeEnvironmentParameters`, which walks every type in the whole environment on every `let`; six
+sites copy the entire environment with `new Map(environment)` to add one binding; and
+`globalEnvironment()` is rebuilt per SCC component. There are no Remy levels, no path compression in
+`prune`, and no visited-set memoization in `occurs`/`replaceParameters`.
+
+**The shader does not share this algorithm.** It has Remy levels, epoch-marked traversal, a
+persistent skip-list environment, and lazy instantiation. The two paths are differentially tested on
+_results_, not asymptotics, and they curve alike for unrelated reasons — n^1.30 from environment
+scans on the CPU, n^1.68 from transition count on the GPU.
+
+So fixing the oracle speeds up the differential tests and this benchmark's CPU column. It does not
+make compilation faster: `inferTypes` appears only in `tests/`, `benchmarks/`, and its own file.
+
+### Why "2x faster than Gleam" is not reachable
+
+The CPU-side work alone — parse 71 ms, lower 58 ms, emit Wasm 23 ms warm — totals **152 ms**, which
+already exceeds Gleam's entire 146 ms cold build including JavaScript codegen. An infinitely fast
+GPU still loses. Stacking every plausible win (5.4x from transition count, 20x from parallelising
+the kernel, 4x on the parser, 2x on lowering) lands around 124 ms warm against Gleam's 23 ms warm.
+
+The reachable goal is closing the gap from **33x to roughly 2-6x**, which needs, in order of
+measured value: the n^1.68 transition count, the single-lane kernel, then the parser at 3.5 MB/s
+against tree-sitter's 10-30.
+
+Two measurement traps this benchmark hit, recorded so the next person does not:
+
+- Lowering prunes to what the entry reaches. A small `main` lowered 252 KB of Gleam to **66 surface
+  nodes** and produced a meaningless 124 ms. The entry must root every export.
+- `compileModuleToWasm` memoizes per module, so a median over repeats times a cache hit and reports
+  0.8 ms for a 25 ms operation. Each sample needs a freshly compiled module.
+
+## 2026-07-25 — throughput, where the GPU wins
+
+Everything above measures latency: one large program, compiled once. That is the case gpufuck loses
+badly. This measures the opposite, and the conclusion reverses.
+
+`gleam build` has no cross-package batching, so its per-package cost is a floor. Measured cold five
+times on a minimal package containing the identical program: **11 ms**. Reproduce the gpufuck side
+with `deno task bench:gleam-batch`.
+
+| Batch | Serial frontend | Parallel frontend |    GPU | Wasm emit | Per module |  vs Gleam |
+| ----: | --------------: | ----------------: | -----: | --------: | ---------: | --------: |
+|     1 |           25 ms |              2 ms |  13 ms |      0 ms |  15,562 µs |      0.7x |
+|    32 |           27 ms |              7 ms |  17 ms |      2 ms |     806 µs |     13.6x |
+|   512 |          323 ms |             76 ms |  60 ms |    237 ms |     729 µs |     15.1x |
+| 1,024 |          649 ms |            156 ms | 104 ms |    453 ms |     697 µs | **15.8x** |
+
+Wasm emission is included because Gleam writes JavaScript to disk. The one-time WebGPU setup is
+excluded; at batch 1,024 it amortizes to under a microsecond per module.
+
+**Latency and throughput point opposite ways, and both are real.** One large module: 33x slower than
+Gleam. A thousand independent modules: 15.8x faster. Which number matters depends entirely on
+whether the workload is "build this project" or "compile these thousand programs" — a playground, a
+package registry, a CI corpus, a Test262-style sweep.
+
+### What the batch profile says to do next
+
+At batch 1,024 the cost is **22% frontend, 15% GPU, 63% Wasm emission**. The GPU is the cheapest
+phase in the pipeline. Two things follow.
+
+`ParallelGleamFrontend` (`src/gleam/parallel_frontend.ts`) took the frontend from 649 ms to 156 ms,
+a **4.2x** speedup on 16 cores. Parsing and lowering are pure functions of a source string, so they
+parallelise across compilation units with nothing shared. The gap from the theoretical 15x is worker
+message copying and per-worker JIT warmup, not contention.
+
+Wasm emission is now the dominant cost at 442 µs/module, and it is worth knowing what it is _not_:
+Core readback from the GPU is 1 µs, the three runtime body builders are 22 µs, and the
+content-addressed fingerprint (`JSON.stringify` plus SHA-256 over every Core node) is 34 µs. The
+remaining ~540 µs is instruction emission, and it is mostly **fixed per module** — `40 + 2` lowers
+to 8 Core nodes and still emits a 1,244-byte code section, because every module carries its own
+allocator, free list, and thunk-forcing runtime. The code section is 91-98% of every artifact.
+
+That points at two different fixes with different shapes. Emitting bodies on the GPU is the
+data-parallel one: the Core is already in GPU buffers, emission is a local per-node mapping, and
+LEB128's data-dependent offsets are a size pass plus a prefix sum plus a write pass. Not re-emitting
+an identical runtime per module is the cheaper one. The batch case wants the second first.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
