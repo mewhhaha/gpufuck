@@ -65,9 +65,12 @@ lambda-valued `let-rec`, and local mutually recursive groups; `if`, primitive op
 numeric conversions; nominal constructors and flat constructor cases; persistent indexed `Store`
 operations; definitions, annotations, nominal declarations, and an entry. Every node carries source
 spans and an explicit evaluation mode. [`surface_builder.ts`](src/functional/surface_builder.ts)
-offers ergonomic objects and packs them; [`abi.ts`](src/functional/abi.ts) is the portable boundary.
-Lists, records, traits, source modules, and multi-argument functions are not Core primitives — they
-lower into nominal declarations, explicit dictionaries, linked artifacts, and unary functions, and
+offers ergonomic objects and packs them; [`abi.ts`](src/functional/abi.ts) is the portable boundary,
+and it re-exports rather than restates — the word layouts, tags, operators, and size constants are
+declared once in [`src/semantic/abi.ts`](src/semantic/abi.ts), so an ABI change is made in one place
+instead of two files agreeing by convention. Lists, records, traits, source modules, and
+multi-argument functions are not Core primitives — they lower into nominal declarations, explicit
+dictionaries, linked artifacts, and unary functions, and
 [`recursive_groups.ts`](src/functional/recursive_groups.ts) lambda-lifts local SCCs into top-level
 ones with captures made explicit.
 
@@ -86,6 +89,15 @@ already took one; and the `case` default, because exhaustiveness is enforced and
 therefore enumerated a type's constructors itself. Sugar that only one frontend wants belongs in
 that frontend. Deleted Effect Core is the counterexample: a subsystem shaped around one idea of
 effects that no frontend adopted.
+
+Builder coverage is a separate question from sugar. The `let`, `let-rec`, `if`, and `case` helpers
+elaborate nothing — they emit the Core shape directly, and only the `otherwise` arm a `case` may
+carry goes through `case_defaults.ts` — but until they existed a lowering that needed one of those
+shapes fell back to a hand-written node literal and had to remember the span on it, which defeats
+`at`. `let-rec-group` is the one node kind that still has no helper. Relatedly, `at` stamps the
+whole interior spine of a fold rather than its outermost node: a curried lambda or an application
+spine is one source construct, and dropping a span per parameter is not a more honest location than
+reusing the construct's.
 
 **Type schemas** are structural trees over primitives, parameters, tuples, named applications,
 functions, and explicit `forall`, encoded in one canonical linked preorder. Each six-word record
@@ -129,19 +141,21 @@ failure and impossible internal state propagate as infrastructure errors.
 
 [`compiler.ts`](src/functional/compiler.ts) is the language-neutral facade: it validates options and
 device-derived size limits, normalizes host contracts, admits work under a transient memory budget,
-and delegates to `src/semantic/`. Some internal names retain `Lazuli` for ABI compatibility, but no
-source syntax reaches the shaders. `GpuCompiler.create(device)` builds and validates the pipelines
-once, reading shader compilation messages before asynchronous pipeline creation so invalid WGSL
-fails at initialization rather than on the first user source; device limits determine maximum node,
-definition, type, constructor, and transient storage. [`webgpu.ts`](src/webgpu.ts) requests
-`maxStorageBuffersPerShaderStage` of 16 (clamped to adapter support) because the existing kernels
-already bind all eight WebGPU guarantees by default, and opts into `timestamp-query` when available.
+and delegates to `src/semantic/`. That layer names itself after what it is — `SemanticValue`,
+`GpuSemanticModule`, `GpuSemanticEvaluator`, and unprefixed ABI declarations — rather than after
+Lazuli, which used to own it; no source syntax reaches the shaders. `GpuCompiler.create(device)`
+builds and validates the pipelines once, reading shader compilation messages before asynchronous
+pipeline creation so invalid WGSL fails at initialization rather than on the first user source;
+device limits determine maximum node, definition, type, constructor, and transient storage.
+[`webgpu.ts`](src/webgpu.ts) requests `maxStorageBuffersPerShaderStage` of 16 (clamped to adapter
+support) because the existing kernels already bind all eight WebGPU guarantees by default, and opts
+into `timestamp-query` when available.
 
 **Core lowering** validates node tags, children, symbols, and declaration ranges; checks case binder
 and constructor shape; records definition dependency edges; and retains both span ends and the
 evaluation mode. When the host lowering plan is present it supplies the resolved tag and payload.
-Two kernels exist: `compile_lazuli` is the persistent per-lane state machine at
-`@compute @workgroup_size(1)`, and `lower_planned_lazuli` is the one data-parallel production kernel
+Two kernels exist: `compile_module` is the persistent per-lane state machine at
+`@compute @workgroup_size(1)`, and `lower_planned_module` is the one data-parallel production kernel
 — at `@compute @workgroup_size(64)` it copies the plan for every `(program, node)` pair in a single
 dispatch, gated on the remaining plan fitting the current fuel and quantum. Programs under 64
 remaining nodes use the serial path, and packed batches use it for at most four lanes because wider
@@ -172,7 +186,7 @@ both buffers until both are destroyed.
 **Batching.** `compileBatch()` packs independent programs into lanes; one mapped state readback
 observes the batch at a quantum boundary, results preserve input order, and successful lanes are
 copied into independently owned buffers only after their terminal state is known.
-[`gpu_dispatch_scheduler.ts`](src/functional/gpu_dispatch_scheduler.ts) coalesces ready dispatches
+[`gpu_dispatch_scheduler.ts`](src/semantic/gpu_dispatch_scheduler.ts) coalesces ready dispatches
 into one command buffer, and [`compilation_admission.ts`](src/functional/compilation_admission.ts)
 bounds concurrency by request count and estimated transient bytes. Cancellation is checked while
 queued, before submission, and after the validation scope resolves; a submitted dispatch cannot be
@@ -198,8 +212,8 @@ Three conclusions, none of them flattering.
 
 The GPU is **9.7× slower** than the CPU at the one phase it exclusively owns, and loses at every
 batch size measured — marginal GPU cost per module exceeds total CPU cost per module, so the curves
-converge rather than crossing. Both columns do the same work: the CPU baseline is `inferLazuliTypes`
-in [`type_inference.ts`](src/semantic/type_inference.ts), differentially tested against the shader.
+converge rather than crossing. Both columns do the same work: the CPU baseline is `inferTypes` in
+[`type_inference.ts`](src/semantic/type_inference.ts), differentially tested against the shader.
 
 Single-compile latency is a separate defect. Deno's `mapAsync` stalls roughly **11.4 ms per await**
 even on a buffer with nothing submitted, and concurrent awaits do not amortize it. That floor is the
@@ -230,9 +244,10 @@ What it imports from `functional.ts`: `GpuCompiler` and `requestWebGpuDevice`, `
 `init` and host-value types, `planModuleStorage`, and `GpuComptimeExecutor`. Storage planning,
 comptime, and the host boundary are load-bearing for it, not vestigial.
 
-The coupling is a **relative import**, `../../../gpufuck/functional.ts`, not a JSR version range.
-There is no pin and no release step between the two projects: a change here reaches Ducklang on its
-next compile, and a removed export breaks it immediately.
+The coupling is a **relative import**, `../../../gpufuck/functional.ts`. It could not be a version
+range even in principle: gpufuck is no longer published, so there is nothing to pin to and no
+release step between the two projects. A change here reaches Ducklang on its next compile, and a
+removed export breaks it immediately.
 [`tests/functional_wasm_smoke_test.ts`](tests/functional_wasm_smoke_test.ts) is the in-repo guard —
 nothing else in the suite emits WebAssembly, so without it the code generator can be deleted or
 broken and the suite stays green.
@@ -323,21 +338,23 @@ with ambiguous ownership, and module destruction is idempotent.
 
 ## 11. Frontends
 
-Three live in the repository; none is reachable from the entry point. **Lazuli** is the reference
-language and compatibility API, not the definition of Functional Core: its Baba-generated parser
-runs on the host, defaults to lazy call-by-need, and exercises inferred functions and recursive
-data, partial type holes, indexed equality proofs, built-in text, bytes, and lists, and host `Init`
-values. **Gleam** demonstrates the separation at module scale — its adapter owns syntax, visibility,
-labels, records, bit arrays, external annotations, and pipeline desugaring. Its `Int` lowers to
-64-bit integers rather than the f64-backed JavaScript model: a semantics choice, made because the
-corpus is integer arithmetic and `i64` keeps it on the GPU evaluator. Division and remainder keep
-Gleam's rules — the frontend guards a zero divisor and yields `0`, so `42 / 0 == 0`, and `i64`
-division truncates toward zero, so `-7 / 2 == -3`. **JavaScript AOT** is the largest frontend and
-the reason `Store` and continuation sharing exist in Core: it lifts statement tails and repeated
-call, construction, accessor, and coercion resumptions into explicit functions so
-continuation-passing lowering does not expand the input tree, and its call frames carry the callable
-object as well as its target, captured realm and environment, receiver, and arguments, preserving
-`arguments.callee` identity without a global lookup.
+Three live in the repository — `src/lazuli/`, `src/gleam/`, and `examples/javascript-aot/` — and
+none is reachable from the entry point. Lazuli keeps its name because it is a sample language, not a
+layer; the GPU layer it grew out of is now `src/semantic/`. **Lazuli** is the reference language and
+compatibility API, not the definition of Functional Core: its Baba-generated parser runs on the
+host, defaults to lazy call-by-need, and exercises inferred functions and recursive data, partial
+type holes, indexed equality proofs, built-in text, bytes, and lists, and host `Init` values.
+**Gleam** demonstrates the separation at module scale — its adapter owns syntax, visibility, labels,
+records, bit arrays, external annotations, and pipeline desugaring. Its `Int` lowers to 64-bit
+integers rather than the f64-backed JavaScript model: a semantics choice, made because the corpus is
+integer arithmetic and `i64` keeps it on the GPU evaluator. Division and remainder keep Gleam's
+rules — the frontend guards a zero divisor and yields `0`, so `42 / 0 == 0`, and `i64` division
+truncates toward zero, so `-7 / 2 == -3`. **JavaScript AOT** is the largest frontend and the reason
+`Store` and continuation sharing exist in Core: it lifts statement tails and repeated call,
+construction, accessor, and coercion resumptions into explicit functions so continuation-passing
+lowering does not expand the input tree, and its call frames carry the callable object as well as
+its target, captured realm and environment, receiver, and arguments, preserving `arguments.callee`
+identity without a global lookup.
 
 New semantic features must be exposed through `src/functional/` contracts and must not depend on any
 frontend's keywords or parser structures.
@@ -398,20 +415,20 @@ imply totality.
 
 ## 14. Internal source map
 
-| Concern                | Primary modules                                                                               |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| Public API and ABI     | `functional.ts`, `src/functional/abi.ts`                                                      |
-| Surface and linking    | `surface_builder.ts`, `recursive_groups.ts`, `surface_reachability.ts`, `module_linker.ts`    |
-| Facade and admission   | `compiler.ts`, `compilation_admission.ts`, `gpu_dispatch_scheduler.ts`                        |
-| Host lowering plan     | `src/semantic/symbol_lookup.ts`                                                               |
-| GPU lowering           | `compiler_shader.ts`, `gpu_semantic_compiler.ts`, `gpu_batch_compiler.ts`                     |
-| GPU inference          | `type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts` |
-| CPU oracle and schemas | `src/semantic/type_inference.ts`, `type_schema_abi.ts`                                        |
-| Evaluation             | `src/functional/evaluator.ts`, `src/semantic/evaluator_shader.ts`                             |
-| Wasm backend           | `wasm_artifacts.ts`, `wasm_codegen.ts`, `wasm_gc_codegen.ts`, `wasm_binary.ts`                |
-| Wasm runtime and hosts | `wasm_execution.ts`, `wasm_host_emitter.ts`, `wasm_value_codec.ts`, `wasm_arena.ts`           |
-| Storage and comptime   | `storage_plan.ts`, `storage_core.ts`, `comptime.ts`                                           |
-| Diagnostics and device | `src/functional/diagnostics.ts`, `compilation_diagnostics.ts`, `src/webgpu.ts`                |
+| Concern                | Primary modules                                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Public API and ABI     | `functional.ts`, `src/functional/abi.ts`, `src/semantic/abi.ts`                                                |
+| Surface and linking    | `surface_builder.ts`, `case_defaults.ts`, `recursive_groups.ts`, `surface_reachability.ts`, `module_linker.ts` |
+| Facade and admission   | `compiler.ts`, `compilation_admission.ts`, `src/semantic/gpu_dispatch_scheduler.ts`                            |
+| Host lowering plan     | `src/semantic/symbol_lookup.ts`                                                                                |
+| GPU lowering           | `compiler_shader.ts`, `gpu_semantic_compiler.ts`, `gpu_batch_compiler.ts`                                      |
+| GPU inference          | `type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts`                  |
+| CPU oracle and schemas | `src/semantic/type_inference.ts`, `type_schema_abi.ts`                                                         |
+| Evaluation             | `src/functional/evaluator.ts`, `src/semantic/evaluator_shader.ts`                                              |
+| Wasm backend           | `wasm_artifacts.ts`, `wasm_codegen.ts`, `wasm_gc_codegen.ts`, `wasm_binary.ts`                                 |
+| Wasm runtime and hosts | `wasm_execution.ts`, `wasm_host_emitter.ts`, `wasm_value_codec.ts`, `wasm_arena.ts`                            |
+| Storage and comptime   | `storage_plan.ts`, `storage_core.ts`, `comptime.ts`                                                            |
+| Diagnostics and device | `src/functional/diagnostics.ts`, `compilation_diagnostics.ts`, `src/webgpu.ts`                                 |
 
 Of Type Core only `type_core.ts` and `type_core_contract.ts` survive, alongside
 `capability_resolver.ts`. The resolver is the type-resolution primitive — bounded search over

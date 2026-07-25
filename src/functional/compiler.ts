@@ -19,7 +19,6 @@ import {
   DEFINITION_WORD_LENGTH,
   DefinitionWord,
   type Diagnostic,
-  type DiagnosticCode,
   type EncodedModule,
   EvaluationProfile,
   ExpressionTag,

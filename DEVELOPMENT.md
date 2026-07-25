@@ -19,18 +19,22 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 
 | Path                         | Responsibility                                                      |
 | ---------------------------- | ------------------------------------------------------------------- |
-| `functional.ts`              | The complete language-neutral API, and the only entry point         |
+| `functional.ts`              | The complete language-neutral API, and the only entry point for it  |
 | `src/functional/`            | Functional ABI, compiler facade, linking, contracts, evaluator      |
 | `src/functional/wasm_*.ts`   | WebAssembly code generators, binary emitter, runtime, host boundary |
 | `src/functional/storage_*`   | Storage plan and Storage Core verification behind the backend       |
 | `src/functional/comptime*`   | Bounded compile-time execution over compiled Core                   |
 | `src/semantic/`              | Host lowering plan, GPU shaders, runners, and the inference oracle  |
 | `src/webgpu.ts`              | Device request, required limits, and setup diagnostics              |
-| `src/gleam_functional/`      | Repository-only Gleam parser, lowering, and trace adapter           |
+| `src/lazuli/`                | Repository-only Lazuli parser, compiler, and surface adapter        |
+| `src/gleam/`                 | Repository-only Gleam parser, lowering, and trace adapter           |
+| `mod.ts`, `lazuli_cli.ts`    | The Lazuli frontend's own entry point and CLI; not part of the API  |
+| `gleam.ts`, `gleam_cli.ts`   | The Gleam frontend's own entry point and CLI; not part of the API   |
 | `language/lazuli/`, `gleam/` | Baba grammars and generated parser/editor artifacts                 |
 | `examples/lazuli/`           | Lazuli sample programs                                              |
-| `examples/gleam-functional/` | Gleam sample modules and traces                                     |
+| `examples/gleam/`            | Gleam sample modules and traces                                     |
 | `examples/javascript-aot/`   | JavaScript frontend, grammar, and the pinned Test262 harness        |
+| `playground/`                | Browser page bundling the compiler with `deno bundle`, no npm deps  |
 | `tests/`                     | Behavioral, differential, stress, growth, and cancellation tests    |
 | `benchmarks/`                | Deno benchmark entry points                                         |
 | `tools/`                     | Profiling, Gleam stdlib check, and editor-support scripts           |
@@ -65,7 +69,7 @@ deno task check:javascript-test262
 
 `check:gleam-stdlib` accepts an existing checkout as its first argument and requires the commit the
 tool records, so results cannot silently change with upstream `main`. It compiles the pinned corpus
-and does not run it; single-program execution is covered by `deno task run:gleam-functional`.
+and does not run it; single-program execution is covered by `deno task run:gleam`.
 
 `check:javascript-test262` pins the Test262 checkout and inventories every standalone test under
 `test/language`. Its counts are a frontend-readiness baseline, not conformance results: positive
@@ -82,17 +86,43 @@ expected when the test name describes one of those boundaries, and it is not the
 compilation. Do not raise `DENO_JOBS` blindly — each worker owns WebGPU pipelines and buffers, and
 more workers can increase device contention. Measure the full suite on the active adapter first.
 
+### A red suite under VRAM pressure is not a regression
+
+An intermittent red suite cost a long debugging session before the cause turned out to be outside
+the repository. Device creation fails when another process is holding the card — a game holding 11
+GB of this machine's 16 GB was enough to make WebGPU device creation fail inside tests — and it
+looks like a race because which worker loses the allocation depends on scheduling, so the failing
+test names move between runs. The dose-response settled it: on the same tree, default parallelism
+produced 70 failures, `DENO_JOBS=2` produced 2, and `DENO_JOBS=1` produced 0 of 325.
+
+So before investigating the diff, re-run with `DENO_JOBS=1` and check what else is holding VRAM.
+Only a failure that survives `DENO_JOBS=1` on an otherwise idle adapter is evidence of a regression.
+
 ## Test ownership
 
-Tests are grouped by externally observable contract: `functional_compiler_test.ts` for surface
-packing, GPU diagnostics, inference, batches, and cancellation;
-`functional_language_features_test.ts` for Core semantics through compile-and-evaluate;
-`functional_wasm_smoke_test.ts` for the WebAssembly backend — it is the only test that emits a
-binary, so a deleted or broken code generator is invisible without it;
-`lazuli_gpu_workspace_test.ts` for arena growth, device bounds, cleanup, and exact fuel;
-`lazuli_gpu_diagnostic_parity_test.ts` for shader-versus-oracle parity; `semantic_*_test.ts` for
-host lowering plans and dependency-wave schedules; and the frontend-named files for source-language
-behavior and trace stability.
+Tests are grouped by externally observable contract, and the prefix names the layer under test, not
+the language a test happens to compile.
+
+`functional_*_test.ts` owns the public API: `functional_compiler_test.ts` for surface packing, GPU
+diagnostics, inference, batches, and cancellation; `functional_language_features_test.ts` for Core
+semantics through compile-and-evaluate; `functional_surface_builder_test.ts` and
+`functional_case_default_test.ts` for the builder and the sugar `buildSurfaceModule` elaborates;
+`functional_simd_test.ts` for the `F32x4` path; and `functional_wasm_smoke_test.ts` for the
+WebAssembly backend — it is the only test that emits a binary, so a deleted or broken code generator
+is invisible without it.
+
+`semantic_*_test.ts` owns the GPU layer: `semantic_gpu_workspace_test.ts` for arena growth, device
+bounds, cleanup, and exact fuel; `semantic_gpu_diagnostic_parity_test.ts` for shader-versus-oracle
+parity; `semantic_symbol_lookup_test.ts`, `semantic_definition_wavefront_test.ts`, and
+`semantic_parallelism_profile_test.ts` for host lowering plans and dependency-wave schedules; and
+`semantic_concurrent_compilation_test.ts`, `semantic_type_inference_test.ts`, and
+`semantic_type_schema_abi_test.ts` for dispatch scheduling, inference results, and the
+linked-preorder type ABI. Five of these were `lazuli_*` until the layer stopped being called Lazuli;
+the point of the rename is that a frontend-named test file now really does test that frontend.
+
+`webgpu_test.ts` covers device request, required limits, and setup diagnostics. The frontend-named
+files — `lazuli_test.ts`, `lazuli_cli_test.ts`, `gleam_test.ts`, and the `javascript_*` files —
+cover source-language behavior and trace stability.
 
 `inferTypes` in `src/semantic/type_inference.ts` is a differential oracle and the CPU column in
 BASELINE.md. Production inference must remain on the GPU path; do not turn the oracle into an
@@ -107,7 +137,7 @@ Canonical grammars are `language/<name>/grammar.baba` and
 `generate:gleam`, or `generate:javascript-aot` after a grammar or metadata change, and review both
 the grammar diff and the generated diff. Generated output is excluded from formatting.
 `just install` builds and installs the Tree-sitter parser and Helix queries into the user's Helix
-configuration; it is a local developer action and must never run in automated tests or publishing.
+configuration; it is a local developer action and must never run in automated tests or CI.
 
 ## Adding or changing a frontend
 
@@ -128,9 +158,12 @@ The packed surface, resolved Core, and type metadata are compatibility boundarie
 one: identify every encoder, shader decoder, host decoder, trace renderer, and test that consumes
 the record; reuse reserved words when the change is compatible; increment the ABI version when old
 data cannot be interpreted safely; add malformed-buffer and round-trip coverage; and verify
-evaluator, WebAssembly-backend, and inference behavior separately from each other. The module ABI is
-`src/functional/abi.ts` and the canonical linked-preorder type metadata is
-`src/semantic/type_schema_abi.ts`. Never silently accept a record from an unknown ABI version.
+evaluator, WebAssembly-backend, and inference behavior separately from each other. The word layouts,
+tags, operators, and size constants are declared once in `src/semantic/abi.ts` and re-exported by
+`src/functional/abi.ts`, which is the public boundary — change the declaration, not the re-export,
+and do not reintroduce a second set of names for the same records. The canonical linked-preorder
+type metadata is `src/semantic/type_schema_abi.ts`. Never silently accept a record from an unknown
+ABI version.
 
 ## Changing GPU semantic compilation
 
@@ -162,7 +195,7 @@ check`, the GPU parity, workspace, and concurrent-compilation tests, and then
 deno task bench:throughput
 deno task bench:lazuli
 deno task bench:semantic-wavefront
-deno task profile:lazuli-compiler
+deno task profile:semantic-compiler
 ```
 
 `bench:throughput` produces the numbers in [BASELINE.md](BASELINE.md) and decides whether a change
@@ -170,7 +203,7 @@ to the GPU path was worth making. Report **marginal cost per module**, not total
 paths pay the same host parse, so a total-wall-time ratio flatters the GPU. Update BASELINE.md in
 the same commit as any change that moves it.
 
-`profile:lazuli-compiler` separates cold WebGPU initialization, frontend preparation, semantic
+`profile:semantic-compiler` separates cold WebGPU initialization, frontend preparation, semantic
 dispatch, readback, batch behavior, and definition-level work and span. `bench:semantic-wavefront`
 separates latency from sustained device-resident throughput — do not use a resident-throughput
 number to claim lower single-compilation latency. Record the adapter description and whether it is a
@@ -204,8 +237,9 @@ observable at the consumer's next compile, which makes Ducklang's `just typechec
 that a version bump would otherwise be.
 
 Keep the boundary honest: the README examples must use only exports reachable from `functional.ts`,
-repository-only frontends (`src/lazuli/`, `src/gleam_functional/`, `examples/`) must stay out of it,
-and an ABI change must be documented with its version increment.
+repository-only frontends (`src/lazuli/`, `src/gleam/`, `examples/`) must stay out of it, and an ABI
+change must be documented with its version increment. `mod.ts`, `gleam.ts`, and the two CLIs are
+frontend entry points, not second API boundaries — nothing outside this repository imports them.
 
 ## Commit scope
 

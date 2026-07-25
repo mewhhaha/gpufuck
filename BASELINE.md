@@ -42,8 +42,8 @@ proper A/B.
 **The GPU loses at every batch size, and the gap converges rather than crossing.** Its marginal cost
 per module exceeds the CPU's total cost per module, so no batch size wins. The CPU baseline is
 `inferTypes` in `src/semantic/type_inference.ts` — the host Hindley-Milner implementation that the
-GPU shader is differentially tested against in `tests/lazuli_gpu_diagnostic_parity_test.ts`, so both
-columns do the same work.
+GPU shader is differentially tested against in `tests/semantic_gpu_diagnostic_parity_test.ts`, so
+both columns do the same work.
 
 **Two independent causes, with different fixes.**
 

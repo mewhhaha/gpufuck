@@ -6,9 +6,8 @@ portable Functional Surface, resolves and typechecks it on WebGPU, and produces 
 Functional Core. Core programs are executed by the GPU Core evaluator or compiled to WebAssembly.
 
 Much of what did not serve that question has been removed — five frontends, the Brainfuck GPU
-compiler, incremental compilation, row types, existentials, and the browser playground are gone. The
-WebAssembly backend is not: it is the code generator
-[Ducklang](ARCHITECTURE.md#7-external-consumers) compiles through.
+compiler, incremental compilation, row types, and existentials are gone. The WebAssembly backend is
+not: it is the code generator [Ducklang](ARCHITECTURE.md#7-external-consumers) compiles through.
 
 ```text
 source text
@@ -82,10 +81,11 @@ Your `deno.json` needs the unstable WebGPU API:
 }
 ```
 
-`functional.ts` is the whole language-neutral API — compilation, linking, evaluation, the
-WebAssembly backend, storage planning, and the comptime executor. The bundled Lazuli, Gleam, and
-JavaScript AOT frontends are repository examples that live outside it; a consumer never imports
-`src/` directly.
+`functional.ts` is the whole language-neutral API and the only entry point. Its re-exports are
+grouped by concern — the device and the ABI, building a surface module, compiling it, running it on
+the GPU, running it as WebAssembly, storage, and compile-time work — so a new addition has an
+obvious home. The bundled Lazuli, Gleam, and JavaScript AOT frontends are repository examples that
+live outside it; a consumer never imports `src/` directly.
 
 ## Compile and run a first module
 
@@ -186,10 +186,10 @@ typed imports against exports.
 
 ### Surface primitives
 
-The `surface` builder covers literals, `name`, `lambda`, `apply`, `binary`, `unary`, `convert`,
-`equal`, `structuralEqual`, `store*`, and `runtimeFault`. Three of its features exist because two
-unrelated frontends independently hand-rolled the same workaround, and each of them deletes frontend
-code:
+The `surface` builder covers literals, `name`, `lambda`, `apply`, `let`, `letRec`, `if`, `case`,
+`binary`, `unary`, `convert`, `equal`, `structuralEqual`, `delay`, `force`, `store*`, and
+`runtimeFault`. Several of its features exist because two unrelated frontends independently
+hand-rolled the same workaround, and each of them deletes frontend code:
 
 ```ts
 // Spans: every surface node kind carries an optional span, and `at` stamps it.
@@ -200,18 +200,21 @@ at.binary(BinaryOperator.Add, at.integer(20), at.integer(22));
 surface.lambda(["x", "y"], surface.name("y"));
 
 // A case default: the arms it omits are filled in, and the fallback binds once.
-({
-  kind: "case",
-  value: subject,
-  arms: [{ constructor: "Red", binders: [], body: surface.integer(1) }],
-  otherwise: { binder: "other", body: surface.integer(0) },
-});
+surface.case(
+  subject,
+  [{ constructor: "Red", binders: [], body: surface.integer(1) }],
+  { binder: "other", body: surface.integer(0) },
+);
 ```
 
-`at` stamps only the outermost node of a fold or desugaring — attributing a source range to a node
-the builder synthesized would be a wrong location, which is worse than none. A `case` default needs
-at least one arm naming a declared constructor, since that is how the owning type is found. `let`,
-`if`, `case`, and `let-rec-group` have no builder yet; frontends write those node literals directly.
+`at` stamps every node its helpers produce, including the interior spine of a fold or desugaring: on
+`lambda(["x", "y"], body)` each curried lambda carries the span, and on `apply(callee, a, b)` each
+application node does. Stamping only the outermost node would silently drop one span per parameter
+and per extra argument — spans a frontend writing the literals by hand would have kept. `case` arms
+and the `otherwise` default carry spans of their own, so `at` fills in only the ones a caller left
+blank rather than overwriting a more precise arm span. A `case` default needs at least one arm
+naming a declared constructor, since that is how the owning type is found. `let-rec-group` is the
+only node kind with no builder; a frontend needing one writes that node literal directly.
 
 Traps do not need a host capability. `surface.runtimeFault(message)` is a first-class node that
 infers as a fresh variable, so it typechecks wherever a diverging expression belongs.
@@ -260,7 +263,7 @@ compatibility with their source languages.
 | Frontend                                            | Boundary demonstrated                                          |
 | --------------------------------------------------- | -------------------------------------------------------------- |
 | [Lazuli](examples/lazuli/)                          | Reference syntax, indexed proofs, host values, and laziness    |
-| [Gleam](examples/gleam-functional/README.md)        | Strict inference, module linking, and pinned stdlib coverage   |
+| [Gleam](examples/gleam/README.md)                   | Strict inference, module linking, and pinned stdlib coverage   |
 | [JavaScript AOT](examples/javascript-aot/README.md) | Baba parsing, control flow, lexical exceptions, and strict f64 |
 
 ## Documentation
@@ -268,8 +271,9 @@ compatibility with their source languages.
 - [BASELINE.md](BASELINE.md) — the measured performance record every claim is judged against.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — stage boundaries, the GPU machines, the retarget plan, and
   the decision record.
-- [DEVELOPMENT.md](DEVELOPMENT.md) — setup, generated files, tests, benchmarks, and publishing.
-- [CHANGELOG.md](CHANGELOG.md) — public release changes.
+- [DEVELOPMENT.md](DEVELOPMENT.md) — setup, generated files, tests, benchmarks, and the API
+  boundary.
+- [CHANGELOG.md](CHANGELOG.md) — dated changes to the API and the compiler.
 
 ## License
 

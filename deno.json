@@ -18,7 +18,7 @@
       "language/lazuli/generated",
       "language/gleam/generated",
       "examples/javascript-aot/language/generated",
-      "examples/gleam-functional/*.trace.md",
+      "examples/gleam/*.trace.md",
       ".claude"
     ],
     "lineWidth": 100,
@@ -30,23 +30,23 @@
     "bench:lazuli": "deno bench --allow-read=language/lazuli/generated benchmarks/lazuli_compiler_bench.ts",
     "bench:semantic-wavefront": "deno bench benchmarks/semantic_wavefront_bench.ts",
     "bench:throughput": "deno run --unstable-webgpu --allow-read=language/lazuli/generated benchmarks/compile_throughput_bench.ts",
-    "check": "deno check mod.ts functional.ts gleam_functional.ts gleam_functional_cli.ts lazuli_cli.ts benchmarks/*.ts examples/javascript-aot/*.ts tests/*.ts tools/*.ts playground/build.ts",
+    "check": "deno check mod.ts functional.ts gleam.ts gleam_cli.ts lazuli_cli.ts benchmarks/*.ts examples/javascript-aot/*.ts tests/*.ts tools/*.ts playground/build.ts",
     "check:gleam-stdlib": "deno run --allow-read --allow-run=git --allow-write=/tmp tools/check_gleam_stdlib.ts",
     "check:javascript-test262": "deno run --allow-read --allow-run=git,deno,ps --allow-write=/tmp examples/javascript-aot/check_test262.ts",
     "compile:lazuli": "deno run --allow-read lazuli_cli.ts compile",
     "fmt": "deno fmt --check",
-    "generate:gleam": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@5.1.0/cli language/gleam/grammar.baba --metadata language/gleam/baba.json --out language/gleam/generated --name gleam-functional --root module --target wasm",
+    "generate:gleam": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@5.1.0/cli language/gleam/grammar.baba --metadata language/gleam/baba.json --out language/gleam/generated --name gleam --root module --target wasm",
     "generate:javascript-aot": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@5.1.0/cli examples/javascript-aot/language/grammar.baba --metadata examples/javascript-aot/language/baba.json --out examples/javascript-aot/language/generated --name javascript-aot --root module --target wasm",
     "generate:lazuli": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@5.1.0/cli language/lazuli/grammar.baba --metadata language/lazuli/baba.json --out language/lazuli/generated --name lazuli --root module --target wasm",
     "lint": "deno lint",
     "playground:build": "deno run -A playground/build.ts",
     "playground:serve": "deno run -A playground/build.ts && deno run -A jsr:@std/http/file-server --port 8080 playground/dist",
-    "profile:lazuli-compiler": "deno run --allow-read tools/profile_lazuli_compiler.ts",
-    "run:gleam-functional": "deno run --allow-read gleam_functional_cli.ts run",
+    "profile:semantic-compiler": "deno run --allow-read tools/profile_semantic_compiler.ts",
+    "run:gleam": "deno run --allow-read gleam_cli.ts run",
     "run:javascript-aot": "deno run --allow-read examples/javascript-aot/cli.ts",
     "run:lazuli": "deno run --allow-read lazuli_cli.ts run",
     "run:lazuli-batch": "deno run --allow-read lazuli_cli.ts run-batch",
     "test": "DENO_JOBS=2 deno test --parallel --allow-read tests/*.ts",
-    "trace:gleam-functional": "deno run --allow-read --allow-write gleam_functional_cli.ts trace"
+    "trace:gleam": "deno run --allow-read --allow-write gleam_cli.ts trace"
   }
 }

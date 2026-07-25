@@ -1,8 +1,4 @@
-import type {
-  EncodedSemanticSurface,
-  SemanticDiagnostic,
-  SemanticDiagnosticCode,
-} from "../semantic/abi.ts";
+import type { EncodedSemanticSurface, SemanticDiagnostic } from "../semantic/abi.ts";
 import {
   CORE_V1_PRIMITIVE_CAPABILITIES,
   type Diagnostic,

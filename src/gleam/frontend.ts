@@ -5,44 +5,40 @@ import {
   LinkError,
   linkModules,
 } from "../functional/module_linker.ts";
-import type { GleamFunctionalModule } from "./ast.ts";
+import type { GleamModule } from "./ast.ts";
+import { type GleamDiagnostic, GleamLoweringError, GleamSyntaxError } from "./diagnostic.ts";
 import {
-  type GleamFunctionalDiagnostic,
-  GleamFunctionalLoweringError,
-  GleamFunctionalSyntaxError,
-} from "./diagnostic.ts";
-import {
-  type GleamFunctionalExportSignature,
-  gleamFunctionalNominalExportSignatures,
-  gleamFunctionalPreludeArtifact,
-  gleamFunctionalValueExportSignatures,
-  type LoweredGleamFunctionalModule,
-  lowerGleamFunctionalModule,
+  type GleamExportSignature,
+  gleamNominalExportSignatures,
+  gleamPreludeArtifact,
+  gleamValueExportSignatures,
+  type LoweredGleamModule,
+  lowerGleamModule,
 } from "./lowering.ts";
-import { parseGleamFunctionalModule } from "./parser.ts";
+import { parseGleamModule } from "./parser.ts";
 
-export interface GleamFunctionalSourceModule {
+export interface GleamSourceModule {
   readonly name: string;
   readonly source: string;
 }
 
-export interface LoweredGleamFunctionalProgram {
-  readonly modules: readonly LoweredGleamFunctionalModule[];
+export interface LoweredGleamProgram {
+  readonly modules: readonly LoweredGleamModule[];
   readonly linked: LinkedModule;
   readonly module: EncodedModule;
 }
 
-export type GleamFunctionalFrontendResult =
-  | { readonly ok: true; readonly lowered: LoweredGleamFunctionalProgram }
+export type GleamFrontendResult =
+  | { readonly ok: true; readonly lowered: LoweredGleamProgram }
   | {
     readonly ok: false;
-    readonly diagnostics: readonly [GleamFunctionalDiagnostic, ...GleamFunctionalDiagnostic[]];
+    readonly diagnostics: readonly [GleamDiagnostic, ...GleamDiagnostic[]];
   };
 
-export function lowerGleamFunctionalSources(
-  sources: readonly GleamFunctionalSourceModule[],
+export function lowerGleamSources(
+  sources: readonly GleamSourceModule[],
   entry: { readonly module: string; readonly exportName: string },
-): GleamFunctionalFrontendResult {
+): GleamFrontendResult {
   if (sources.length === 0) {
     return {
       ok: false,
@@ -56,7 +52,7 @@ export function lowerGleamFunctionalSources(
     };
   }
 
-  const modules: GleamFunctionalModule[] = [];
+  const modules: GleamModule[] = [];
   const names = new Set<string>();
   for (const source of sources) {
     if (names.has(source.name)) {
@@ -73,9 +69,9 @@ export function lowerGleamFunctionalSources(
     }
     names.add(source.name);
     try {
-      modules.push(parseGleamFunctionalModule(source.name, source.source));
+      modules.push(parseGleamModule(source.name, source.source));
     } catch (error) {
-      if (error instanceof GleamFunctionalSyntaxError) {
+      if (error instanceof GleamSyntaxError) {
         return {
           ok: false,
           diagnostics: [{
@@ -91,27 +87,27 @@ export function lowerGleamFunctionalSources(
     }
   }
 
-  const signatures: GleamFunctionalExportSignature[] = [];
+  const signatures: GleamExportSignature[] = [];
   for (const module of modules) {
-    signatures.push(...gleamFunctionalNominalExportSignatures(module));
+    signatures.push(...gleamNominalExportSignatures(module));
   }
   for (const module of modules) {
     try {
-      signatures.push(...gleamFunctionalValueExportSignatures(module, signatures));
+      signatures.push(...gleamValueExportSignatures(module, signatures));
     } catch (error) {
-      if (error instanceof GleamFunctionalLoweringError) {
+      if (error instanceof GleamLoweringError) {
         return { ok: false, diagnostics: [lowerDiagnostic(module.name, error)] };
       }
       throw error;
     }
   }
 
-  const loweredModules: LoweredGleamFunctionalModule[] = [];
+  const loweredModules: LoweredGleamModule[] = [];
   for (const module of modules) {
     try {
-      loweredModules.push(lowerGleamFunctionalModule(module, signatures));
+      loweredModules.push(lowerGleamModule(module, signatures));
     } catch (error) {
-      if (error instanceof GleamFunctionalLoweringError) {
+      if (error instanceof GleamLoweringError) {
         return { ok: false, diagnostics: [lowerDiagnostic(module.name, error)] };
       }
       throw error;
@@ -151,7 +147,7 @@ export function lowerGleamFunctionalSources(
       : null;
     const linked = linkModules(
       [
-        gleamFunctionalPreludeArtifact(),
+        gleamPreludeArtifact(),
         ...loweredModules.map((lowered) => lowered.artifact),
         ...(entryArtifact === null ? [] : [entryArtifact]),
       ],
@@ -179,18 +175,18 @@ export function lowerGleamFunctionalSources(
   }
 }
 
-export function lowerGleamFunctionalSource(
+export function lowerGleamSource(
   name: string,
   source: string,
   exportName = "main",
-): GleamFunctionalFrontendResult {
-  return lowerGleamFunctionalSources([{ name, source }], { module: name, exportName });
+): GleamFrontendResult {
+  return lowerGleamSources([{ name, source }], { module: name, exportName });
 }
 
 function lowerDiagnostic(
   module: string,
-  error: GleamFunctionalLoweringError,
-): GleamFunctionalDiagnostic {
+  error: GleamLoweringError,
+): GleamDiagnostic {
   return {
     stage: "lower",
     code: "G1002",

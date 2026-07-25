@@ -1,4 +1,4 @@
-import type { SourceType, Span, Type, TypeDeclaration, TypeSchema } from "../semantic/abi.ts";
+import type { Type, TypeSchema } from "../semantic/abi.ts";
 
 export type { SourceType, Span, Type, TypeDeclaration, TypeSchema } from "../semantic/abi.ts";
 

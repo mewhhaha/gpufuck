@@ -585,11 +585,11 @@ Deno.test("GPU inference rejects a constructor result root outside the schema ta
   const device = await requestWebGpuDevice();
   try {
     const shader = device.createShaderModule({
-      label: "Lazuli malformed result metadata test shader",
+      label: "semantic malformed result metadata test shader",
       code: TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
-      label: "Lazuli malformed result metadata test pipeline",
+      label: "semantic malformed result metadata test pipeline",
       layout: "auto",
       compute: { module: shader, entryPoint: "infer_types" },
     });
@@ -629,11 +629,11 @@ Deno.test("GPU inference validates the shape of sentinel-marked constructor resu
   const device = await requestWebGpuDevice();
   try {
     const shader = device.createShaderModule({
-      label: "Lazuli malformed synthetic result shader",
+      label: "semantic malformed synthetic result shader",
       code: TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
-      label: "Lazuli malformed synthetic result pipeline",
+      label: "semantic malformed synthetic result pipeline",
       layout: "auto",
       compute: { module: shader, entryPoint: "infer_types" },
     });
@@ -718,11 +718,11 @@ Deno.test("GPU inference cancels after an observed dispatch and leaves the compi
   const device = await requestWebGpuDevice();
   try {
     const shader = device.createShaderModule({
-      label: "Lazuli cancellation test shader",
+      label: "semantic cancellation test shader",
       code: TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
-      label: "Lazuli cancellation test pipeline",
+      label: "semantic cancellation test pipeline",
       layout: "auto",
       compute: { module: shader, entryPoint: "infer_types" },
     });
@@ -757,11 +757,11 @@ Deno.test("GPU inference observer aborts a terminal dispatch before returning ou
   const device = await requestWebGpuDevice();
   try {
     const shader = device.createShaderModule({
-      label: "Lazuli terminal cancellation test shader",
+      label: "semantic terminal cancellation test shader",
       code: TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
-      label: "Lazuli terminal cancellation test pipeline",
+      label: "semantic terminal cancellation test pipeline",
       layout: "auto",
       compute: { module: shader, entryPoint: "infer_types" },
     });
@@ -797,11 +797,11 @@ Deno.test("GPU inference observer aborts an exhausted dispatch before arena grow
   const device = await requestWebGpuDevice();
   try {
     const shader = device.createShaderModule({
-      label: "Lazuli exhausted cancellation test shader",
+      label: "semantic exhausted cancellation test shader",
       code: TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
-      label: "Lazuli exhausted cancellation test pipeline",
+      label: "semantic exhausted cancellation test pipeline",
       layout: "auto",
       compute: { module: shader, entryPoint: "infer_types" },
     });
@@ -841,11 +841,11 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
   const device = await requestWebGpuDevice();
   try {
     const shader = device.createShaderModule({
-      label: "Lazuli workspace growth test shader",
+      label: "semantic workspace growth test shader",
       code: TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
-      label: "Lazuli workspace growth test pipeline",
+      label: "semantic workspace growth test pipeline",
       layout: "auto",
       compute: { module: shader, entryPoint: "infer_types" },
     });
@@ -1077,11 +1077,11 @@ Deno.test("GPU inference transition counts are invariant across dispatch quanta"
   const device = await requestWebGpuDevice();
   try {
     const shader = device.createShaderModule({
-      label: "Lazuli transition invariance test shader",
+      label: "semantic transition invariance test shader",
       code: TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
-      label: "Lazuli transition invariance test pipeline",
+      label: "semantic transition invariance test pipeline",
       layout: "auto",
       compute: { module: shader, entryPoint: "infer_types" },
     });

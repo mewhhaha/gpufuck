@@ -1,12 +1,4 @@
-import type {
-  CoreTag,
-  Diagnostic,
-  EvaluationMode,
-  EvaluationProfile,
-  SourceRange,
-  Type,
-  TypeDeclaration,
-} from "./abi.ts";
+import type { Diagnostic, EvaluationProfile, SourceRange, Type, TypeDeclaration } from "./abi.ts";
 import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
 
 export interface WasmExport {

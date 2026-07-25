@@ -1,4 +1,4 @@
-# Gleam functional frontend
+# Gleam frontend
 
 This directory exercises a practical pure subset of Gleam as a gpufuck frontend. A Baba-generated
 parser produces the syntax tree; the Gleam adapter lowers it into the neutral surface. The frontend
@@ -7,33 +7,30 @@ generic algebraic types and aliases, constants, string concatenation and prefix 
 arrays, panic, annotated JavaScript externals with source fallbacks, labeled calls and records,
 tuple projections, destructuring lets, exhaustive nested patterns, guards, multiple subjects, list
 spreads, arbitrary tuples, zero-argument functions, anonymous functions, captures, `use`, pipelines,
-recursion, and Gleam's strict evaluation order. `Int` uses portable f64-backed whole-number
-operators to match the JavaScript target beyond i32, aggregate equality is structural, and
-floating-point division by zero produces zero.
+recursion, and Gleam's strict evaluation order. `Int` lowers to 64-bit integers, keeping Gleam's
+arithmetic rules — a zero divisor yields `0`, and division truncates toward zero. Aggregate equality
+is structural, and floating-point division by zero produces zero.
 
 Run a single module:
 
 ```sh
-deno task run:gleam-functional option_map examples/gleam-functional/option_map.gleam
+deno task run:gleam option_map examples/gleam/option_map.gleam
 ```
 
 Run the linked three-module kernel:
 
 ```sh
-deno task run:gleam-functional kernel/main \
-  kernel/math=examples/gleam-functional/kernel/math.gleam \
-  kernel/program=examples/gleam-functional/kernel/program.gleam \
-  kernel/main=examples/gleam-functional/kernel/main.gleam
+deno task run:gleam kernel/main \
+  kernel/math=examples/gleam/kernel/math.gleam \
+  kernel/program=examples/gleam/kernel/program.gleam \
+  kernel/main=examples/gleam/kernel/main.gleam
 ```
 
-Public functions and constants may omit annotations. Their linked types are inferred on the GPU;
-incremental compilation conservatively invalidates dependents when an inferred export changes.
-Explicit annotations still provide narrower interface fingerprints.
+Public functions and constants may omit annotations; their linked types are inferred on the GPU.
 
-Run the official-backend differential check and the pinned upstream standard-library probe with:
+Run the pinned upstream standard-library probe with:
 
 ```sh
-deno task test:gleam-differential
 deno task check:gleam-stdlib
 ```
 

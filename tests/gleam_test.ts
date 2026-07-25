@@ -8,20 +8,20 @@ import {
   runWasmModule,
 } from "../functional.ts";
 import {
-  type GleamFunctionalSourceModule,
-  type LoweredGleamFunctionalProgram,
-  lowerGleamFunctionalSource,
-  lowerGleamFunctionalSources,
-  renderGleamFunctionalTrace,
-} from "../gleam_functional.ts";
+  type GleamSourceModule,
+  type LoweredGleamProgram,
+  lowerGleamSource,
+  lowerGleamSources,
+  renderGleamTrace,
+} from "../gleam.ts";
 
-interface GleamFunctionalRuntime {
+interface GleamRuntime {
   readonly device: GPUDevice;
   readonly compiler: GpuCompiler;
   readonly evaluator: GpuEvaluator;
 }
 
-let runtime: GleamFunctionalRuntime | undefined;
+let runtime: GleamRuntime | undefined;
 
 /**
  * Gleam `Int` lowers to boxed i64, so the kernel example allocates past the evaluator's default
@@ -44,25 +44,25 @@ Deno.test.afterAll(() => {
 });
 
 Deno.test("infers and evaluates a generic Gleam algebraic transformation", async () => {
-  const evaluation = await evaluateSingleExample("examples/gleam-functional/option_map.gleam");
+  const evaluation = await evaluateSingleExample("examples/gleam/option_map.gleam");
 
   deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("infers a recursive higher-order Gleam list fold", async () => {
-  const evaluation = await evaluateSingleExample("examples/gleam-functional/list_fold.gleam");
+  const evaluation = await evaluateSingleExample("examples/gleam/list_fold.gleam");
 
   deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("desugars Gleam pipelines in source order", async () => {
-  const evaluation = await evaluateSingleExample("examples/gleam-functional/pipeline.gleam");
+  const evaluation = await evaluateSingleExample("examples/gleam/pipeline.gleam");
 
   deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("compares the completed Gleam pipeline result", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "pipeline_comparison",
     `
 fn increment(value: Int) -> Int {
@@ -85,7 +85,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("evaluates Gleam float arithmetic with native f64 operators", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "float_arithmetic",
     `
 pub fn main() -> Float {
@@ -103,7 +103,7 @@ pub fn main() -> Float {
 });
 
 Deno.test("matches exhaustive Gleam float patterns", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "float_pattern",
     `
 pub fn main() -> Int {
@@ -121,7 +121,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("preserves UTF-8 Gleam string literals through WASM", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "string_literal",
     `pub fn main() -> String { "Zażółć 🦆" }\n`,
   );
@@ -135,7 +135,7 @@ Deno.test("preserves UTF-8 Gleam string literals through WASM", async () => {
 });
 
 Deno.test("distinguishes Gleam Unicode escapes from escaped backslashes", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "string_escapes",
     `pub fn main() -> String { "\\u{1F986}" <> "\\\\u{41}" }\n`,
   );
@@ -149,7 +149,7 @@ Deno.test("distinguishes Gleam Unicode escapes from escaped backslashes", async 
 });
 
 Deno.test("evaluates portable Gleam integers beyond the i32 range", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "wide_integers",
     `
 pub fn main() -> Int {
@@ -169,7 +169,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("lowers Gleam string concatenation and exact string patterns", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "string_patterns",
     `
 fn classify(value: String) -> String {
@@ -192,7 +192,7 @@ pub fn main() -> String {
 });
 
 Deno.test("destructures Gleam tuples and constructors in let bindings", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "let_patterns",
     `
 pub type Box(value) { Box(value) }
@@ -210,7 +210,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("projects pair fields with Gleam tuple indices", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "tuple_indices",
     `
 fn total(pair: #(Int, Int)) -> Int {
@@ -229,7 +229,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("evaluates the final value after sequential Gleam block expressions", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "block_sequence",
     `pub fn main() -> Int { 20 + 20 42 }\n`,
   );
@@ -240,7 +240,7 @@ Deno.test("evaluates the final value after sequential Gleam block expressions", 
 });
 
 Deno.test("selects JavaScript-targeted declarations before lowering", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "target_selection",
     `
 @target(erlang)
@@ -259,7 +259,7 @@ pub fn main() -> Int { answer() }
 });
 
 Deno.test("infers missing pieces of partially annotated Gleam functions", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "partial_annotations",
     `
 fn choose(left: Int, right) -> Int { right }
@@ -274,7 +274,7 @@ pub fn main() -> Int { choose(0, 42) }
 });
 
 Deno.test("projects keyword-named fields after function calls", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "postfix_fields",
     `
 pub type Decoder { Decoder(function: fn(Int) -> Int) }
@@ -291,7 +291,7 @@ pub fn main() -> Int { decoder().function(40) }
 });
 
 Deno.test("compares nested Gleam algebraic values structurally", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "structural_equality",
     `
 pub type Tree(value) {
@@ -314,7 +314,7 @@ pub fn main() {
 });
 
 Deno.test("matches multiple subjects, alternatives, and guards in source order", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "case_features",
     `
 fn classify(left: Int, right: Int) -> Int {
@@ -338,7 +338,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("matches nested exact lists and accepts a final list spread", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "list_patterns",
     `
 fn sum(values: List(Int), total: Int) -> Int {
@@ -367,7 +367,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("recognizes exhaustive nested constructor patterns without a catch-all", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "nested_coverage",
     `
 pub type Maybe(value) { None Some(value) }
@@ -392,7 +392,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("keeps nested Gleam constructor recursion stack safe", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "nested_tail_recursion",
     `
 fn repeat(value, count, values) {
@@ -426,7 +426,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("keeps multiple-subject Gleam recursion stack safe", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "multiple_subject_tail_recursion",
     `
 fn repeat(value, count, values) {
@@ -461,7 +461,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("keeps guarded Gleam constructor recursion stack safe", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "guarded_tail_recursion",
     `
 fn repeat(value, count, values) {
@@ -492,7 +492,7 @@ pub fn main() -> Bool {
 });
 
 Deno.test("keeps recursive names outside exact-list pattern bindings", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "exact_list_binding_scope",
     `
 fn last(values) {
@@ -518,7 +518,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("desugars use bindings and function captures to ordinary callbacks", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "callbacks",
     `
 fn with_value(value, callback) {
@@ -543,7 +543,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("lowers arbitrary tuple arity through nested portable pairs", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "tuples",
     `
 fn middle(value: #(Int, Int, Int)) -> Int {
@@ -565,7 +565,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("lowers zero and one element Gleam tuples", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "small_tuples",
     `
 pub fn main() -> Int {
@@ -582,7 +582,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("orders local, constructor, and imported labeled arguments", async () => {
-  const frontend = lowerGleamFunctionalSources([
+  const frontend = lowerGleamSources([
     {
       name: "labels/library",
       source: `
@@ -618,7 +618,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("links annotated public constants as ordinary immutable definitions", async () => {
-  const frontend = lowerGleamFunctionalSources([
+  const frontend = lowerGleamSources([
     {
       name: "constants/library",
       source: `pub const forty: Int = 40\n`,
@@ -643,7 +643,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("links public Gleam types and constructors through nominal imports", async () => {
-  const frontend = lowerGleamFunctionalSources([
+  const frontend = lowerGleamSources([
     {
       name: "option/library",
       source: `
@@ -682,7 +682,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("keeps opaque Gleam constructors private across modules", () => {
-  const frontend = lowerGleamFunctionalSources([
+  const frontend = lowerGleamSources([
     {
       name: "secret/library",
       source: `pub opaque type Secret { Secret(Int) }\n`,
@@ -700,7 +700,7 @@ Deno.test("keeps opaque Gleam constructors private across modules", () => {
 
 Deno.test("reports Gleam panic messages as located runtime faults", async () => {
   const source = `pub fn main() -> Int { panic as "missing duck" }\n`;
-  const frontend = lowerGleamFunctionalSource("panic/main", source);
+  const frontend = lowerGleamSource("panic/main", source);
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
   const { compiler } = gleamRuntime();
@@ -723,7 +723,7 @@ Deno.test("reports Gleam panic messages as located runtime faults", async () => 
 });
 
 Deno.test("evaluates a dynamic Gleam panic message before the outer panic", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "panic/dynamic",
     `pub fn main() -> Int { panic as panic as "inner panic" }\n`,
   );
@@ -744,7 +744,7 @@ Deno.test("evaluates a dynamic Gleam panic message before the outer panic", asyn
 });
 
 Deno.test("constructs and exactly matches portable Gleam bit arrays", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "bit_arrays",
     `
 pub fn main() -> Int {
@@ -762,7 +762,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("rejects unsupported Gleam bit-array segment encodings", () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "bit_arrays",
     `pub fn main() { <<"duck":utf16>> }\n`,
   );
@@ -773,7 +773,7 @@ Deno.test("rejects unsupported Gleam bit-array segment encodings", () => {
 });
 
 Deno.test("rejects negative static Gleam bit-array segment sizes", () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "bit_arrays",
     `pub fn main() { <<1:-1>> }\n`,
   );
@@ -784,7 +784,7 @@ Deno.test("rejects negative static Gleam bit-array segment sizes", () => {
 });
 
 Deno.test("merges Gleam externals from one host module into one capability", async () => {
-  const frontend = lowerGleamFunctionalSources([
+  const frontend = lowerGleamSources([
     {
       name: "external/add",
       source: `
@@ -851,7 +851,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("expands generic type aliases before creating module contracts", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "aliases",
     `
 type PairOf(value) = #(value, value)
@@ -876,7 +876,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("rejects cyclic Gleam type aliases with their expansion path", () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "alias_cycle",
     `
 type First = Second
@@ -894,7 +894,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("preserves labeled Gleam constructor fields through Baba parsing", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "labeled",
     `
 pub type Box {
@@ -916,7 +916,7 @@ pub fn main() -> Int {
 });
 
 Deno.test("resolves local Gleam record access and update", async () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "record_access",
     `
 pub type Person {
@@ -949,7 +949,7 @@ Deno.test("links and evaluates a recursive three-module Gleam program", async ()
 });
 
 Deno.test("infers unannotated public types across Gleam module boundaries", async () => {
-  const frontend = lowerGleamFunctionalSources([
+  const frontend = lowerGleamSources([
     {
       name: "inferred/library",
       source: `
@@ -979,7 +979,7 @@ pub fn main() {
 
 Deno.test("maps Baba lexical failures to Gleam UTF-8 byte spans", () => {
   const source = `// λ\npub fn main() -> Int { @ }\n`;
-  const frontend = lowerGleamFunctionalSource("invalid", source);
+  const frontend = lowerGleamSource("invalid", source);
 
   equal(frontend.ok, false);
   if (frontend.ok) return;
@@ -993,7 +993,7 @@ Deno.test("maps Baba lexical failures to Gleam UTF-8 byte spans", () => {
 });
 
 Deno.test("reports a missing imported Gleam function with its module name", () => {
-  const frontend = lowerGleamFunctionalSources([
+  const frontend = lowerGleamSources([
     { name: "library", source: `pub fn present(value: Int) -> Int { value }\n` },
     {
       name: "application",
@@ -1008,7 +1008,7 @@ Deno.test("reports a missing imported Gleam function with its module name", () =
 });
 
 Deno.test("rejects a constructor arm after a Gleam catch-all", () => {
-  const frontend = lowerGleamFunctionalSource(
+  const frontend = lowerGleamSource(
     "case_order",
     `
 pub type Choice {
@@ -1035,14 +1035,14 @@ async function evaluateSingleExample(
 ): Promise<{ readonly kind: string; readonly value: unknown }> {
   const source = await Deno.readTextFile(path);
   const moduleName = path.split("/").at(-1)!.replace(".gleam", "");
-  const frontend = lowerGleamFunctionalSource(moduleName, source);
+  const frontend = lowerGleamSource(moduleName, source);
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) throw new Error(`Gleam example ${JSON.stringify(path)} did not lower.`);
   return await evaluate(frontend.lowered);
 }
 
 async function evaluate(
-  lowered: LoweredGleamFunctionalProgram,
+  lowered: LoweredGleamProgram,
   options: EvaluationOptions = {},
 ): Promise<{ readonly kind: string; readonly value: unknown }> {
   const { compiler, evaluator } = gleamRuntime();
@@ -1066,7 +1066,7 @@ async function evaluate(
 }
 
 async function evaluateWasm(
-  lowered: LoweredGleamFunctionalProgram,
+  lowered: LoweredGleamProgram,
 ): Promise<{ readonly kind: string; readonly value?: unknown }> {
   const { compiler } = gleamRuntime();
   const compilation = await compiler.compileModule(lowered.module);
@@ -1088,7 +1088,7 @@ Deno.test("renders linked Gleam source and both functional IR stages side by sid
   if (!compilation.ok) return;
 
   try {
-    const trace = renderGleamFunctionalTrace({
+    const trace = renderGleamTrace({
       title: "linked kernel",
       source: sources.map((module) => `// ${module.name}\n${module.source}`).join("\n"),
       lowered,
@@ -1106,20 +1106,20 @@ Deno.test("renders linked Gleam source and both functional IR stages side by sid
   }
 });
 
-async function readKernelSources(): Promise<readonly GleamFunctionalSourceModule[]> {
+async function readKernelSources(): Promise<readonly GleamSourceModule[]> {
   return await Promise.all(
     ["math", "program", "main"].map(async (name) => ({
       name: `kernel/${name}`,
-      source: await Deno.readTextFile(`examples/gleam-functional/kernel/${name}.gleam`),
+      source: await Deno.readTextFile(`examples/gleam/kernel/${name}.gleam`),
     })),
   );
 }
 
 function requireLinked(
-  sources: readonly GleamFunctionalSourceModule[],
+  sources: readonly GleamSourceModule[],
   entryModule: string,
-): LoweredGleamFunctionalProgram {
-  const frontend = lowerGleamFunctionalSources(sources, {
+): LoweredGleamProgram {
+  const frontend = lowerGleamSources(sources, {
     module: entryModule,
     exportName: "main",
   });
@@ -1128,7 +1128,7 @@ function requireLinked(
   return frontend.lowered;
 }
 
-function gleamRuntime(): GleamFunctionalRuntime {
+function gleamRuntime(): GleamRuntime {
   if (runtime === undefined) throw new Error("Gleam functional test runtime was not initialized");
   return runtime;
 }

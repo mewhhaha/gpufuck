@@ -41,6 +41,7 @@ import { elaborateRecursiveGroups } from "./recursive_groups.ts";
 import { functionalBytesLiteralSymbol } from "./static_literals.ts";
 import type {
   SurfaceCaseArm,
+  SurfaceCaseDefault,
   SurfaceDefinition,
   SurfaceExpression,
   SurfaceTypeDeclaration,
@@ -1443,9 +1444,11 @@ function parentSpan(words: readonly number[], parent: number): Span | undefined 
 
 export type SurfaceBuilder = Readonly<{
   /**
-   * Returns a builder that stamps `span` on the node each helper produces. Every surface node kind
-   * already carries an optional span; without this a frontend that tracks source locations has to
-   * abandon the builder and hand-write node literals.
+   * Returns a builder that stamps `span` on *every* node each helper produces, including the
+   * interior spine of a fold or desugaring. Every surface node kind already carries an optional
+   * span; without this a frontend that tracks source locations has to abandon the builder and
+   * hand-write node literals, and stamping only the outermost node would silently lose a span per
+   * curried lambda parameter and per extra application argument.
    */
   at(span: Span): SurfaceBuilder;
   integer(value: number): SurfaceExpression;
@@ -1461,7 +1464,7 @@ export type SurfaceBuilder = Readonly<{
   /**
    * Definitions and recursive bindings already take a parameter list, and `apply` already folds a
    * spine, so accepting one here keeps the builder consistent instead of making every frontend
-   * curry by hand.
+   * curry by hand. Under `at` every curried lambda carries the span, not just the outermost one.
    */
   lambda(
     parameters: string | readonly string[],
@@ -1469,9 +1472,35 @@ export type SurfaceBuilder = Readonly<{
   ): SurfaceExpression;
   delay(value: SurfaceExpression): SurfaceExpression;
   force(value: SurfaceExpression): SurfaceExpression;
+  /** Folds a left-associated application spine; under `at` every node in it carries the span. */
   apply(
     callee: SurfaceExpression,
     ...arguments_: readonly SurfaceExpression[]
+  ): SurfaceExpression;
+  /**
+   * `let`, `if`, and `case` are the three shapes a frontend cannot express with the value helpers,
+   * so without them a lowering falls back to hand-written node literals and has to remember the
+   * span on each one by hand.
+   */
+  let(
+    name: string,
+    value: SurfaceExpression,
+    body: SurfaceExpression,
+    valueEvaluation?: EvaluationProfile,
+  ): SurfaceExpression;
+  if(
+    condition: SurfaceExpression,
+    consequent: SurfaceExpression,
+    alternate: SurfaceExpression,
+  ): SurfaceExpression;
+  /**
+   * Arms and the `otherwise` default carry their own optional spans, so `at` fills in only the ones
+   * a caller left blank rather than overwriting a more precise arm span.
+   */
+  case(
+    value: SurfaceExpression,
+    arms: readonly SurfaceCaseArm[],
+    otherwise?: SurfaceCaseDefault,
   ): SurfaceExpression;
   binary(
     operator: BinaryOperator,
@@ -1515,6 +1544,10 @@ export type SurfaceBuilder = Readonly<{
   ): SurfaceExpression;
 }>;
 
+function stampSpan<Value extends { readonly span?: Span }>(value: Value, span: Span): Value {
+  return value.span === undefined ? { ...value, span } : value;
+}
+
 function createSurface(span: Span | undefined): SurfaceBuilder {
   const spanned = span === undefined ? {} : { span };
   return {
@@ -1547,18 +1580,16 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       body: SurfaceExpression,
     ): SurfaceExpression {
       const names = typeof parameters === "string" ? [parameters] : parameters;
-      const outermost = names[0];
-      if (outermost === undefined) return body;
       let expression = body;
-      for (let index = names.length - 1; index >= 1; index--) {
-        expression = { kind: "lambda", parameter: names[index]!, body: expression };
+      for (let index = names.length - 1; index >= 0; index--) {
+        expression = { kind: "lambda", parameter: names[index]!, body: expression, ...spanned };
       }
-      return { kind: "lambda", parameter: outermost, body: expression, ...spanned, ...spanned };
+      return expression;
     },
     delay(value: SurfaceExpression): SurfaceExpression {
       return {
         kind: "apply",
-        callee: { kind: "name", name: THUNK_CONSTRUCTOR_NAME },
+        callee: { kind: "name", name: THUNK_CONSTRUCTOR_NAME, ...spanned },
         argument: value,
         argumentEvaluation: EvaluationProfile.LazyCallByNeed,
         ...spanned,
@@ -1572,7 +1603,8 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
         arms: [{
           constructor: THUNK_CONSTRUCTOR_NAME,
           binders: [valueName],
-          body: { kind: "name", name: valueName },
+          body: { kind: "name", name: valueName, ...spanned },
+          ...spanned,
         }],
         ...spanned,
       };
@@ -1581,13 +1613,48 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       callee: SurfaceExpression,
       ...arguments_: readonly SurfaceExpression[]
     ): SurfaceExpression {
-      const last = arguments_.at(-1);
-      if (last === undefined) return callee;
       let expression = callee;
-      for (let index = 0; index < arguments_.length - 1; index++) {
-        expression = { kind: "apply", callee: expression, argument: arguments_[index]! };
+      for (const argument of arguments_) {
+        expression = { kind: "apply", callee: expression, argument, ...spanned };
       }
-      return { kind: "apply", callee: expression, argument: last, ...spanned, ...spanned };
+      return expression;
+    },
+    let(
+      name: string,
+      value: SurfaceExpression,
+      body: SurfaceExpression,
+      valueEvaluation?: EvaluationProfile,
+    ): SurfaceExpression {
+      return {
+        kind: "let",
+        name,
+        value,
+        body,
+        ...(valueEvaluation === undefined ? {} : { valueEvaluation }),
+        ...spanned,
+      };
+    },
+    if(
+      condition: SurfaceExpression,
+      consequent: SurfaceExpression,
+      alternate: SurfaceExpression,
+    ): SurfaceExpression {
+      return { kind: "if", condition, consequent, alternate, ...spanned };
+    },
+    case(
+      value: SurfaceExpression,
+      arms: readonly SurfaceCaseArm[],
+      otherwise?: SurfaceCaseDefault,
+    ): SurfaceExpression {
+      return {
+        kind: "case",
+        value,
+        arms: span === undefined ? arms : arms.map((arm) => stampSpan(arm, span)),
+        ...(otherwise === undefined
+          ? {}
+          : { otherwise: span === undefined ? otherwise : stampSpan(otherwise, span) }),
+        ...spanned,
+      };
     },
     binary(
       operator: BinaryOperator,

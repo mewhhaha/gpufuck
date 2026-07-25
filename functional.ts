@@ -6,7 +6,7 @@
  * WebAssembly.
  *
  * This is the only entry point. Everything under `src/` that is not re-exported here is internal,
- * and the frontends in `src/lazuli/`, `src/gleam_functional/`, and `examples/` are deliberately
+ * and the frontends in `src/lazuli/`, `src/gleam/`, and `examples/` are deliberately
  * absent — they are samples, not API.
  *
  * @module

@@ -1946,9 +1946,31 @@ export class GpuSemanticEvaluator {
       HARD_MAXIMUM_STEPS,
       Math.max(10_000, module.nodeCount * 64 + module.definitionCount * 8),
     );
+    // A boxed i64 occupies exactly one heap slot: `HeapSlot` is a fixed eight-word record and
+    // `allocate_heap_slot` bumps `heap_top` by one for every kind, `HEAP_WIDE_VALUE` included.
+    // What boxing changed is the allocation *count*, not the slot width. `VALUE_INTEGER` (i32) is
+    // returned as an immediate payload and allocates nothing, whereas `TAG_SIGNED_INTEGER_64` and
+    // every 64-bit arithmetic result go through `return_wide_value`, which takes a fresh slot each
+    // time. The heap is a bump allocator with no reclamation inside a run, so an arithmetic-heavy
+    // module burns one slot per i64 value *produced*, and a node inside a loop or a recursive
+    // function produces one on every evaluation of it -- not once per node. No static per-node
+    // factor is therefore exact; the 8x below is a budget, matching the multiplier gleam_cli.ts
+    // arrived at empirically after its kernel example exhausted the old default.
+    //
+    // The floor is deliberately 1024 and not the CLI's 4096. `evaluateBatch` sums per-lane heap
+    // slots into one buffer and *throws* a RangeError past `maxStorageBufferBindingSize`, so the
+    // floor sets the batch ceiling: at 32 bytes per slot and a 128 MiB binding limit, 4096 slots
+    // caps a batch at 1024 lanes (measured) while 1024 slots caps it at 4096. The floor only binds
+    // for modules under roughly 128 nodes, which the multiplier would otherwise leave under 512
+    // slots -- and those tiny modules are exactly the ones a caller batches by the thousand.
+    // Real programs clear the floor on the multiplier alone.
+    //
+    // Neither number is principled. Heap demand tracks i64 values produced during evaluation, so
+    // it correlates with the step budget above, not with node count; a step-proportional heap is
+    // the honest fix and a larger change than this one.
     const defaultHeapSlots = Math.min(
       this.#maximumHeapSlots,
-      Math.max(256, module.definitionCount + module.nodeCount * 4),
+      Math.max(1024, (module.definitionCount + module.nodeCount * 4) * 8),
     );
     const defaultStackFrames = Math.min(
       this.#maximumStackFrames,

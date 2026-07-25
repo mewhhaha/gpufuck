@@ -63,7 +63,7 @@ for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
 
 const deviceStart = performance.now();
 const adapter = await navigator.gpu.requestAdapter();
-if (adapter === null) throw new Error("Lazuli compiler profile could not find a WebGPU adapter");
+if (adapter === null) throw new Error("semantic compiler profile could not find a WebGPU adapter");
 const device = await adapter.requestDevice();
 const deviceInitializationMilliseconds = performance.now() - deviceStart;
 try {
@@ -73,7 +73,7 @@ try {
 
   const warmupSource = "fn main = 0;";
   const warmupParsed = parseLazuliSource(warmupSource);
-  if (!warmupParsed.ok) throw new Error("internal Lazuli profiling warmup did not parse");
+  if (!warmupParsed.ok) throw new Error("internal profiling warmup did not parse");
   const warmupSurface = semanticSurfaceFromModule(
     lazuliSurfaceToModule(
       warmupParsed.surface,
@@ -318,7 +318,9 @@ try {
 function median(samples: readonly number[]): number {
   const ordered = [...samples].sort((left, right) => left - right);
   const middle = ordered[Math.floor(ordered.length / 2)];
-  if (middle === undefined) throw new Error("Lazuli profile requires at least one sample");
+  if (middle === undefined) {
+    throw new Error("semantic compiler profile requires at least one sample");
+  }
   return middle;
 }
 

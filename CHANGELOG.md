@@ -18,13 +18,22 @@ path, so there is no version for it to pin to.
 
 ### Added
 
-Three surface primitives, each because two unrelated frontends hand-rolled the same workaround.
+Surface builder coverage, each addition because two unrelated frontends hand-rolled the same
+workaround.
 
-- `surface.at(span)` returns a builder that stamps a span on the node each helper produces. Every
-  surface node kind already carried an optional span, but no builder emitted one, so Gleam abandoned
-  the builder and hand-wrote node literals at 116 span sites while Ducklang emitted no spans at all
-  and got location-free diagnostics. Only the outermost node of a fold or desugaring is stamped;
-  attributing a source range to a node the builder synthesized would be a wrong location.
+- `surface.at(span)` returns a builder that stamps a span on every node each helper produces,
+  including the interior spine of a fold or desugaring. Every surface node kind already carried an
+  optional span, but no builder emitted one, so Gleam abandoned the builder and hand-wrote node
+  literals at 116 span sites while Ducklang emitted no spans at all and got location-free
+  diagnostics. Stamping only the outermost node lost one span per curried lambda parameter and per
+  extra application argument, which is exactly what the hand-written literals had kept. `case` arms
+  and the `otherwise` default carry spans of their own, so `at` fills in only the ones a caller left
+  blank rather than overwriting a more precise arm span.
+- `surface.let`, `surface.if`, and `surface.case` cover the binding, branching, and matching shapes
+  the value helpers could not reach. They elaborate nothing — these are Core shapes already — but
+  without them a lowering fell back to hand-written node literals and had to remember the span on
+  each one, which defeats `at`. `let-rec` and `let-rec-group` have no builder because no frontend
+  emits them.
 - `surface.lambda` accepts a parameter list as well as a single name, folding right. Definitions and
   recursive bindings already took a list and `apply` already folded a spine, so the inline lambda
   was the only binding form that made a frontend curry by hand.
@@ -80,12 +89,45 @@ Three surface primitives, each because two unrelated frontends hand-rolled the s
   codes are now `F####` too, so the mapped type, the three remaps, and a
   `replaceAll("Lazuli", "functional")` over fault messages are all deleted — the messages say what
   they mean at the point they are written.
+- **The Gleam frontend lost the prefix as well.** It was held back from the API-wide rename because
+  `GleamFunctional*` plausibly meant "Gleam lowered to Functional Core" — but that is what every
+  frontend here does, so the word distinguished nothing. `gleam_functional.ts` and
+  `gleam_functional_cli.ts` are now `gleam.ts` and `gleam_cli.ts`, `src/gleam_functional/` is
+  `src/gleam/`, `examples/gleam-functional/` is `examples/gleam/`, and all 34 `Gleam*Functional*`
+  identifiers dropped the word — `GleamFunctionalExpression` is `GleamExpression`,
+  `lowerGleamFunctionalSource` is `lowerGleamSource`, `renderGleamFunctionalTrace` is
+  `renderGleamTrace`. The `run:gleam-functional` and `trace:gleam-functional` tasks are `run:gleam`
+  and `trace:gleam`, and `generate:gleam` names the generated parser `gleam`.
+- **Five test files moved from `lazuli_*` to `semantic_*`.** `concurrent_compilation`,
+  `gpu_diagnostic_parity`, `gpu_workspace`, `type_inference`, and `type_schema_abi` test the GPU
+  semantic layer, not the Lazuli frontend, and were named after the layer's old name.
+  `gleam_functional_test.ts` is `gleam_test.ts` and `tools/profile_lazuli_compiler.ts` is
+  `tools/profile_semantic_compiler.ts`, behind the renamed `profile:semantic-compiler` task. The
+  files that really do test a frontend — `lazuli_test.ts`, `lazuli_cli_test.ts`, `gleam_test.ts`,
+  and the `javascript_*` files — keep their names.
 - `GpuEvaluator.evaluate` now selects a runtime instead of rejecting programs. It inspects resolved
   Core before dispatch and delegates programs needing 64-bit floats, portable whole-number f64,
   text, bytes, runtime faults, buffer append, stores, structural equality, 32-bit float division, or
   32-bit square root to bounded WebAssembly execution; everything else runs on the GPU evaluator.
   Callers pass no flag. The delegated path rejects the GPU-only dispatch, heap, and stack options
   with a `TypeError` and caps semantic steps at 1,000,000.
+- The GPU evaluator's default heap budget went from `max(256, definitions + nodes * 4)` slots to
+  `max(1024, (definitions + nodes * 4) * 8)`. Boxing 64-bit integers did not widen a heap slot — a
+  slot is a fixed eight-word record for every kind — it changed how many are allocated: an `i32`
+  result is an immediate payload and allocates nothing, while every 64-bit result takes a fresh
+  slot, and the heap is a bump allocator with no reclamation inside a run. A node inside a loop or a
+  recursive function therefore consumes a slot per evaluation, not one per node, so no static
+  per-node factor is exact and the multiplier is a budget, matching the one the Gleam CLI arrived at
+  empirically after its kernel example exhausted the old default.
+
+  The floor stays at 1024 rather than following the CLI to 4096, because it sets the batch ceiling:
+  `evaluateBatch` sums per-lane heap slots into one buffer and throws a `RangeError` past
+  `maxStorageBufferBindingSize`. Measured on a 128 MiB binding limit, a 4096-slot floor caps a batch
+  at 1024 lanes and a 1024-slot floor caps it at 4096. The floor only binds for modules under
+  roughly 128 nodes, and those are exactly the ones a caller batches by the thousand; real programs
+  clear it on the multiplier alone. Neither number is principled — heap demand tracks the i64 values
+  produced during evaluation, so it correlates with the step budget rather than the node count, and
+  a step-proportional heap is the honest fix.
 - Gleam's `Int` now lowers to 64-bit integers instead of the f64-backed JavaScript model. Division
   and remainder keep Gleam's rules: a zero divisor yields `0`, and division truncates toward zero.
 - `renderCompilationTrace` renders 64-bit values as exact unquoted digits. They arrive as BigInt,
