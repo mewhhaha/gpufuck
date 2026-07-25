@@ -1,0 +1,279 @@
+-- The pure core of a terminal editor: a text buffer, a cursor, and an edit loop.
+--
+-- Sweep has no I/O, no strings, and no built-in collections, so everything here is
+-- built from nominal data and recursion. That is deliberate -- it makes this the
+-- largest thing the language can express, which is what a benchmark wants.
+--
+-- A real editor would wrap this with a terminal driver that turns keypresses into
+-- `Key` values and renders `Buffer` back out. None of that logic would live here.
+
+-- A line is a cons list of character codes. Reversed lines are used for the text
+-- before the cursor, so an insert is O(1) instead of a walk to the end.
+type Line = Empty | Char(code: Int, rest: Line);
+
+-- A zipper: `before` is reversed, `after` is in order. The cursor sits between
+-- them, so moving left or right is one cons and one uncons.
+type Zipper = Zipper(before: Line, after: Line);
+
+type Buffer = NoLines | Lines(head: Zipper, tail: Buffer);
+
+-- The whole document, plus which line the cursor is on.
+type Document = Document(above: Buffer, current: Zipper, below: Buffer);
+
+type Key =
+    MoveLeft
+  | MoveRight
+  | MoveUp
+  | MoveDown
+  | MoveHome
+  | MoveEnd
+  | Insert(code: Int)
+  | Backspace
+  | Delete
+  | SplitLine
+  | JoinLine;
+
+type Keys = NoKeys | Press(key: Key, rest: Keys);
+
+export apply, run, documentLength;
+
+-- ---------------------------------------------------------------- line helpers
+
+fn lineLength(line: Line) -> Int =
+  match line {
+    Empty -> 0;
+    Char(code, rest) -> 1 + lineLength(rest);
+  };
+
+fn lineAppend(front: Line, back: Line) -> Line =
+  match front {
+    Empty -> back;
+    Char(code, rest) -> Char(code, lineAppend(rest, back));
+  };
+
+-- `before` is stored reversed, so restoring reading order means reversing it onto
+-- an accumulator.
+fn lineReverseOnto(line: Line, accumulator: Line) -> Line =
+  match line {
+    Empty -> accumulator;
+    Char(code, rest) -> lineReverseOnto(rest, Char(code, accumulator));
+  };
+
+fn lineChecksum(line: Line, position: Int) -> Int =
+  match line {
+    Empty -> 0;
+    Char(code, rest) -> code * position + lineChecksum(rest, position + 1);
+  };
+
+-- ---------------------------------------------------------------- zipper moves
+
+fn zipperText(zipper: Zipper) -> Line =
+  match zipper {
+    Zipper(before, after) -> lineReverseOnto(before, after);
+  };
+
+fn zipperColumn(zipper: Zipper) -> Int =
+  match zipper {
+    Zipper(before, after) -> lineLength(before);
+  };
+
+fn zipperWidth(zipper: Zipper) -> Int =
+  match zipper {
+    Zipper(before, after) -> lineLength(before) + lineLength(after);
+  };
+
+fn zipperLeft(zipper: Zipper) -> Zipper =
+  match zipper {
+    Zipper(before, after) ->
+      match before {
+        Empty -> Zipper(Empty, after);
+        Char(code, rest) -> Zipper(rest, Char(code, after));
+      };
+  };
+
+fn zipperRight(zipper: Zipper) -> Zipper =
+  match zipper {
+    Zipper(before, after) ->
+      match after {
+        Empty -> Zipper(before, Empty);
+        Char(code, rest) -> Zipper(Char(code, before), rest);
+      };
+  };
+
+fn zipperHome(zipper: Zipper) -> Zipper =
+  match zipper {
+    Zipper(before, after) -> Zipper(Empty, lineReverseOnto(before, after));
+  };
+
+fn zipperEnd(zipper: Zipper) -> Zipper =
+  match zipper {
+    Zipper(before, after) -> Zipper(lineReverseOnto(after, before), Empty);
+  };
+
+fn zipperInsert(zipper: Zipper, code: Int) -> Zipper =
+  match zipper {
+    Zipper(before, after) -> Zipper(Char(code, before), after);
+  };
+
+fn zipperBackspace(zipper: Zipper) -> Zipper =
+  match zipper {
+    Zipper(before, after) ->
+      match before {
+        Empty -> Zipper(Empty, after);
+        Char(code, rest) -> Zipper(rest, after);
+      };
+  };
+
+fn zipperDelete(zipper: Zipper) -> Zipper =
+  match zipper {
+    Zipper(before, after) ->
+      match after {
+        Empty -> Zipper(before, Empty);
+        Char(code, rest) -> Zipper(before, rest);
+      };
+  };
+
+-- Splitting keeps the text left of the cursor on this line; the caller takes the
+-- remainder as the new line below.
+fn zipperKeepBefore(zipper: Zipper) -> Zipper =
+  match zipper {
+    Zipper(before, after) -> Zipper(before, Empty);
+  };
+
+fn zipperTakeAfter(zipper: Zipper) -> Zipper =
+  match zipper {
+    Zipper(before, after) -> Zipper(Empty, after);
+  };
+
+fn zipperJoin(left: Zipper, right: Zipper) -> Zipper =
+  match left {
+    Zipper(before, after) -> Zipper(before, lineAppend(after, zipperText(right)));
+  };
+
+-- ---------------------------------------------------------------- buffer walks
+
+fn bufferLength(buffer: Buffer) -> Int =
+  match buffer {
+    NoLines -> 0;
+    Lines(head, tail) -> 1 + bufferLength(tail);
+  };
+
+fn bufferPush(buffer: Buffer, zipper: Zipper) -> Buffer = Lines(zipper, buffer);
+
+fn bufferChecksum(buffer: Buffer, position: Int) -> Int =
+  match buffer {
+    NoLines -> 0;
+    Lines(head, tail) ->
+      lineChecksum(zipperText(head), position) + bufferChecksum(tail, position + 1);
+  };
+
+-- ------------------------------------------------------------ vertical motion
+
+-- Moving up pops the nearest line above and pushes the current one below. The
+-- column is not preserved, which is the simplification that keeps this pure.
+fn documentUp(document: Document) -> Document =
+  match document {
+    Document(above, current, below) ->
+      match above {
+        NoLines -> Document(NoLines, current, below);
+        Lines(head, tail) -> Document(tail, head, bufferPush(below, current));
+      };
+  };
+
+fn documentDown(document: Document) -> Document =
+  match document {
+    Document(above, current, below) ->
+      match below {
+        NoLines -> Document(above, current, NoLines);
+        Lines(head, tail) -> Document(bufferPush(above, current), head, tail);
+      };
+  };
+
+fn documentSplit(document: Document) -> Document =
+  match document {
+    Document(above, current, below) ->
+      Document(
+        bufferPush(above, zipperKeepBefore(current)),
+        zipperTakeAfter(current),
+        below,
+      );
+  };
+
+fn documentJoin(document: Document) -> Document =
+  match document {
+    Document(above, current, below) ->
+      match below {
+        NoLines -> Document(above, current, NoLines);
+        Lines(head, tail) -> Document(above, zipperJoin(current, head), tail);
+      };
+  };
+
+fn documentEdit(document: Document, edited: Zipper) -> Document =
+  match document {
+    Document(above, current, below) -> Document(above, edited, below);
+  };
+
+fn documentCurrent(document: Document) -> Zipper =
+  match document {
+    Document(above, current, below) -> current;
+  };
+
+-- ------------------------------------------------------------------ the driver
+
+fn apply(document: Document, key: Key) -> Document =
+  match key {
+    MoveLeft -> documentEdit(document, zipperLeft(documentCurrent(document)));
+    MoveRight -> documentEdit(document, zipperRight(documentCurrent(document)));
+    MoveUp -> documentUp(document);
+    MoveDown -> documentDown(document);
+    MoveHome -> documentEdit(document, zipperHome(documentCurrent(document)));
+    MoveEnd -> documentEdit(document, zipperEnd(documentCurrent(document)));
+    Insert(code) -> documentEdit(document, zipperInsert(documentCurrent(document), code));
+    Backspace -> documentEdit(document, zipperBackspace(documentCurrent(document)));
+    Delete -> documentEdit(document, zipperDelete(documentCurrent(document)));
+    SplitLine -> documentSplit(document);
+    JoinLine -> documentJoin(document);
+  };
+
+fn run(document: Document, keys: Keys) -> Document =
+  match keys {
+    NoKeys -> document;
+    Press(key, rest) -> run(apply(document, key), rest);
+  };
+
+-- Total characters in the document, used as a cheap observable result.
+fn documentLength(document: Document) -> Int =
+  match document {
+    Document(above, current, below) ->
+      bufferCharacters(above) + zipperWidth(current) + bufferCharacters(below);
+  };
+
+fn bufferCharacters(buffer: Buffer) -> Int =
+  match buffer {
+    NoLines -> 0;
+    Lines(head, tail) -> zipperWidth(head) + bufferCharacters(tail);
+  };
+
+-- ------------------------------------------------------------------- a session
+
+fn emptyDocument() -> Document = Document(NoLines, Zipper(Empty, Empty), NoLines);
+
+fn typeWord() -> Keys =
+  Press(Insert(104),
+    Press(Insert(101),
+      Press(Insert(108),
+        Press(Insert(108),
+          Press(Insert(111), NoKeys)))));
+
+fn session() -> Keys =
+  Press(Insert(102),
+    Press(Insert(110), Press(SplitLine,
+      Press(Insert(120), Press(MoveHome,
+        Press(MoveRight, Press(Insert(121),
+          Press(MoveUp, Press(MoveEnd,
+            Press(Backspace, Press(MoveDown,
+              Press(JoinLine, typeWord()))))))))))));
+
+fn main() -> Int =
+  let finished: Document = run(emptyDocument(), session()) in
+  documentLength(finished);

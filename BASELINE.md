@@ -474,6 +474,43 @@ ratios matter at batch scale or on large modules, not for one small compile. And
 language design is lower than the ceiling on the kernel: avoiding the expensive constructs is worth
 maybe 2–4x on inference, where parallelising the single-lane kernel is worth 10–50x.
 
+## 2026-07-25 — Sweep at a realistic size
+
+`examples/sweep/editor.sweep` is the pure core of a terminal editor: a zipper buffer, a cursor, and
+an edit loop over eleven key commands, in 280 lines with no I/O, no strings, and no built-in
+collections. It is the largest thing the language can express, and it exists because the other
+samples are too small to say anything. Reproduce with `deno task bench:sweep-editor`.
+
+| Measure                    |                  Value |
+| -------------------------- | ---------------------: |
+| Source                     | 280 lines, 8,707 bytes |
+| Surface nodes              |                    718 |
+| Definitions / constructors |                34 / 21 |
+| Parse and lower            |                0.93 ms |
+| GPU compile                |                23.7 ms |
+| Emit WebAssembly           |       21.7 ms, 24.8 KB |
+| Inference transitions      |                 15,537 |
+| Dependency waves           |                      7 |
+| Available parallelism      |                   3.6x |
+| Largest definition         |                    13% |
+
+**One number here is a real result and one is a trap.**
+
+The real one is parse throughput: **0.106 µs/byte against baba's 1.20 µs/byte** on the Gleam stdlib,
+the same measurement on both sides. A hand-written recursive-descent parser for a small grammar is
+**12x** faster than the generated one, which is the same finding as the parser entry in TASKS and
+now has a second data point.
+
+The trap is transitions-per-node. 21.6 looks excellent against the Gleam stdlib's 122.3, and it is
+not a language result at all: the n^1.68 curve means small programs score well whatever they are
+written in, and Gleam at 2,343 nodes measures 22.9. Sweep at 718 nodes sitting at 21.6 is the curve,
+not the design.
+
+The structural figures are somewhere between the two. 13% largest definition and 3.6x available
+parallelism beat the Gleam stdlib's 52% and 1.9x, but that reflects a program written as many small
+functions rather than anything the language enforces — Sweep has no rule against a 26,000-node
+function, it just did not happen to contain one.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

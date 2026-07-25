@@ -213,7 +213,7 @@ class Parser {
           const fieldName = this.#takeName("a field name").text;
           this.#take(":");
           fields.push({ name: fieldName, type: this.#parseTypeExpression(typeParameters) });
-        } while (this.#at(",") && (this.#take(","), true));
+        } while (this.#at(",") && (this.#take(","), !this.#at(")")));
       }
       this.#take(")");
     }
@@ -227,7 +227,7 @@ class Parser {
       const parameters: SweepType[] = [];
       if (!this.#at(")")) {
         do parameters.push(this.#parseTypeExpression(typeParameters)); while (
-          this.#at(",") && (this.#take(","), true)
+          this.#at(",") && (this.#take(","), !this.#at(")"))
         );
       }
       this.#take(")");
@@ -240,7 +240,7 @@ class Parser {
     if (this.#at("[")) {
       this.#take("[");
       do args.push(this.#parseTypeExpression(typeParameters)); while (
-        this.#at(",") && (this.#take(","), true)
+        this.#at(",") && (this.#take(","), !this.#at("]"))
       );
       this.#take("]");
     }
@@ -268,7 +268,7 @@ class Parser {
         // Rule 1: there is no syntax for an unannotated parameter.
         this.#take(":");
         parameters.push({ name: parameterName, type: this.#parseTypeExpression(typeParameters) });
-      } while (this.#at(",") && (this.#take(","), true));
+      } while (this.#at(",") && (this.#take(","), !this.#at(")")));
     }
     this.#take(")");
     this.#take("->");
@@ -373,7 +373,7 @@ class Parser {
     if (this.#at("[")) {
       this.#take("[");
       do typeArguments.push(this.#parseTypeExpression(typeParameters)); while (
-        this.#at(",") && (this.#take(","), true)
+        this.#at(",") && (this.#take(","), !this.#at("]"))
       );
       this.#take("]");
     }
@@ -382,7 +382,7 @@ class Parser {
       const args: SweepExpression[] = [];
       if (!this.#at(")")) {
         do args.push(this.#parseExpression(typeParameters)); while (
-          this.#at(",") && (this.#take(","), true)
+          this.#at(",") && (this.#take(","), !this.#at(")"))
         );
       }
       const close = this.#take(")");
@@ -445,7 +445,7 @@ class Parser {
         this.#take("(");
         if (!this.#at(")")) {
           do binders.push(this.#takeName("a binder").text); while (
-            this.#at(",") && (this.#take(","), true)
+            this.#at(",") && (this.#take(","), !this.#at(")"))
           );
         }
         this.#take(")");

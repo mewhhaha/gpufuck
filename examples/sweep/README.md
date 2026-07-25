@@ -15,6 +15,7 @@ deno task run:sweep examples/sweep/shapes.sweep
 | [`option.sweep`](option.sweep)             | A generic nominal type and explicit type arguments |     42 |
 | [`shapes.sweep`](shapes.sweep)             | Single-level matching, exports, flat locals        |     42 |
 | [`higher_order.sweep`](higher_order.sweep) | Function types and n-ary parameter lists           |     43 |
+| [`editor.sweep`](editor.sweep)             | 280 lines: a terminal editor's pure core           |      8 |
 
 ## The whole language
 
@@ -62,6 +63,19 @@ Rule 4 is the one that pays, and it pays by exclusion rather than by speed. Ther
 the multi-subject or-pattern that costs Gleam 13–16x per arm and hard-fails at four
 ([BASELINE.md](../../BASELINE.md)), because the grammar has no or-patterns and no nesting. Programs
 that do not compile at all in Gleam compile here.
+
+## A realistic size
+
+[`editor.sweep`](editor.sweep) is the pure core of a terminal editor — a zipper buffer, a cursor,
+and an edit loop over eleven key commands — in 280 lines with no I/O, no strings, and no built-in
+collections. Everything is nominal data and recursion, which is what the language has.
+`deno task bench:sweep-editor` measures it: 718 surface nodes, 34 definitions, 0.93 ms to parse and
+lower, 23.7 ms on the GPU, 24.8 KB of WebAssembly.
+
+The one figure there worth quoting is parse throughput, **0.106 µs/byte against baba's 1.20** — the
+same measurement on both sides, so a hand-written parser for a small grammar really is 12x faster.
+Transitions-per-node looks good too and should be ignored; BASELINE.md explains why it is an
+artifact of program size rather than of language design.
 
 ## It is not faster
 
