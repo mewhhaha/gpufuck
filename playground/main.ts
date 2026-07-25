@@ -5,9 +5,9 @@ import type { Diagnostic } from "../src/functional/abi.ts";
 import { GpuCompiler } from "../src/functional/compiler.ts";
 import { runWasmModule } from "../src/functional/wasm_execution.ts";
 import { describeType } from "../src/functional/wasm_value_codec.ts";
-import type { LazuliDiagnostic } from "../src/semantic/abi.ts";
+import type { SemanticDiagnostic } from "../src/semantic/abi.ts";
 import { initializeLazuliParser, parseLazuliSourceForCompilation } from "../src/lazuli/frontend.ts";
-import { lazuliSurfaceToFunctionalModule } from "../src/lazuli/functional_adapter.ts";
+import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
 
 interface Example {
   readonly name: string;
@@ -65,7 +65,7 @@ function renderStages(timings: ReadonlyMap<Stage, number>, reached: Stage | unde
 
 function renderDiagnostics(
   heading: string,
-  diagnostics: readonly (LazuliDiagnostic | Diagnostic)[],
+  diagnostics: readonly (SemanticDiagnostic | Diagnostic)[],
 ): void {
   resultPanel.replaceChildren();
   resultPanel.dataset.state = "error";
@@ -181,7 +181,7 @@ async function compileAndRun(): Promise<void> {
     reached = "infer";
     const inferStart = performance.now();
     const compilation = await compiler.compileModule(
-      lazuliSurfaceToFunctionalModule(parsed.frontend.surface, parsed.sourceByteLength),
+      lazuliSurfaceToModule(parsed.frontend.surface, parsed.sourceByteLength),
     );
     if (!compilation.ok) {
       renderStages(timings, reached);

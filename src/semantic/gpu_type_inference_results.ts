@@ -1,14 +1,14 @@
 import {
-  type EncodedLazuliSurface,
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_NO_INDEX,
-  LAZULI_TYPE_WORD_LENGTH,
-  LazuliConstructorWord,
-  type LazuliDiagnostic,
-  type LazuliType,
-  type LazuliTypeDeclaration,
-  type LazuliTypeSchema,
-  LazuliTypeWord,
+  AlgebraicTypeWord,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  type EncodedSemanticSurface,
+  NO_INDEX,
+  type SemanticDiagnostic,
+  type Type,
+  TYPE_WORD_LENGTH,
+  type TypeDeclaration,
+  type TypeSchema,
 } from "./abi.ts";
 import type { GpuSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 import type {
@@ -30,7 +30,7 @@ import {
   type InferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 import type { TypeInferenceSuccess } from "./type_inference.ts";
-import { decodeLazuliType } from "./type_schema_abi.ts";
+import { decodeType } from "./type_schema_abi.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 
@@ -46,9 +46,9 @@ export function syntheticSemanticState(
     entrySymbol: options.surface.entrySymbol,
     status: CompilationStatus.Ok,
     errorCode: 0,
-    errorSource: LAZULI_NO_INDEX,
-    errorDetail: LAZULI_NO_INDEX,
-    entryDefinition: LAZULI_NO_INDEX,
+    errorSource: NO_INDEX,
+    errorDetail: NO_INDEX,
+    entryDefinition: NO_INDEX,
     totalSteps: initialSteps,
     maximumSteps: options.maximumSteps,
     maximumStepsPerDispatch: options.maximumStepsPerDispatch,
@@ -89,7 +89,7 @@ export function fuelExhausted(
   initialSteps: number,
 ): GpuTypeInferenceRun {
   const sourceByteLength = options.sourceByteLength ?? largestSourceOffset(options.surface);
-  const diagnostic: LazuliDiagnostic = {
+  const diagnostic: SemanticDiagnostic = {
     stage: "compile",
     code: "L1003",
     message: `program exhausted the compiler limit after ${
@@ -112,7 +112,7 @@ export function compilerWorkspaceExhausted(
   reason?: string,
 ): GpuTypeInferenceRun {
   const sourceByteLength = options.sourceByteLength ?? largestSourceOffset(options.surface);
-  const diagnostic: LazuliDiagnostic = {
+  const diagnostic: SemanticDiagnostic = {
     stage: "compile",
     code: "L1003",
     message: `program exhausted the GPU compiler ${
@@ -136,7 +136,7 @@ export function compilerWorkspacePreflightFailed(
   reason: string,
 ): GpuTypeInferenceRun {
   const sourceByteLength = options.sourceByteLength ?? largestSourceOffset(options.surface);
-  const diagnostic: LazuliDiagnostic = {
+  const diagnostic: SemanticDiagnostic = {
     stage: "compile",
     code: "L1003",
     message: `program exceeds the GPU compiler workspace limit: ${reason}`,
@@ -156,7 +156,7 @@ export function compilerInferenceAllocationFailed(
   reason: string,
 ): GpuTypeInferenceRun {
   const sourceByteLength = options.sourceByteLength ?? largestSourceOffset(options.surface);
-  const diagnostic: LazuliDiagnostic = {
+  const diagnostic: SemanticDiagnostic = {
     stage: "compile",
     code: "L1003",
     message: `program exhausted GPU memory before type inference: ${reason}`,
@@ -172,10 +172,10 @@ export function compilerInferenceAllocationFailed(
 
 export function diagnosticFromState(
   state: InferenceStateSnapshot,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   metadata: InferenceShaderMetadata,
   workspace: DataView | undefined,
-): LazuliDiagnostic {
+): SemanticDiagnostic {
   const span = { startByte: state.errorStartByte, endByte: state.errorEndByte };
   switch (state.errorCode) {
     case InferenceDiagnosticCode.NonExhaustiveCase:
@@ -261,7 +261,7 @@ export function diagnosticFromState(
       return {
         stage: "compile",
         code: "L2104",
-        message: state.errorOperand0 === LAZULI_NO_INDEX
+        message: state.errorOperand0 === NO_INDEX
           ? "main has no inferred type"
           : `main must have a concrete type; inferred ${
             formatWorkspaceType(
@@ -284,7 +284,7 @@ function metadataFailureMessage(
   state: InferenceStateSnapshot,
   metadata: InferenceShaderMetadata,
   workspace: DataView | undefined,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): string {
   const identifierNames = metadata.identifierNames;
   const name = (identifier: number): string => identifierName(identifierNames, identifier);
@@ -379,7 +379,7 @@ function metadataFailureMessage(
 function invalidConstructorResultMessage(
   state: InferenceStateSnapshot,
   metadata: InferenceShaderMetadata,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): string {
   const constructor = constructorName(surface, state.errorDetail);
   if (state.errorOperand0 >= metadata.schemaNodeCount) {
@@ -387,14 +387,14 @@ function invalidConstructorResultMessage(
       JSON.stringify(constructor)
     } references invalid result schema ${state.errorOperand0}`;
   }
-  const constructorBase = state.errorDetail * LAZULI_CONSTRUCTOR_WORD_LENGTH;
-  const typeIndex = surface.constructorWords[constructorBase + LazuliConstructorWord.Type];
+  const constructorBase = state.errorDetail * CONSTRUCTOR_WORD_LENGTH;
+  const typeIndex = surface.constructorWords[constructorBase + ConstructorWord.Type];
   if (typeIndex === undefined || typeIndex >= surface.typeCount) {
     throw new Error(
       `GPU Lazuli result diagnostic references missing constructor type ${typeIndex}`,
     );
   }
-  const typeSymbol = surface.typeWords[typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.Symbol];
+  const typeSymbol = surface.typeWords[typeIndex * TYPE_WORD_LENGTH + AlgebraicTypeWord.Symbol];
   if (typeSymbol === undefined) {
     throw new Error(`GPU Lazuli result diagnostic references missing type ${typeIndex}`);
   }
@@ -427,7 +427,7 @@ function describeResultSchema(
   if (tag === InferenceSchemaTag.Named) {
     let argumentCount = 0;
     let argument = word(root, InferenceSchemaWord.FirstChild);
-    while (argument !== LAZULI_NO_INDEX) {
+    while (argument !== NO_INDEX) {
       argumentCount++;
       argument = word(argument, InferenceSchemaWord.NextSibling);
     }
@@ -453,9 +453,9 @@ function describeResultSchema(
   return `a ${kind} result`;
 }
 
-function constructorName(surface: EncodedLazuliSurface, constructorIndex: number): string {
+function constructorName(surface: EncodedSemanticSurface, constructorIndex: number): string {
   const symbol = surface.constructorWords[
-    constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH + LazuliConstructorWord.Symbol
+    constructorIndex * CONSTRUCTOR_WORD_LENGTH + ConstructorWord.Symbol
   ];
   if (symbol === undefined) {
     throw new Error(`GPU Lazuli inference returned unknown constructor ${constructorIndex}`);
@@ -466,20 +466,20 @@ function constructorName(surface: EncodedLazuliSurface, constructorIndex: number
 export function decodeMainType(
   output: DataView,
   state: InferenceStateSnapshot,
-  surface: EncodedLazuliSurface,
-): LazuliType {
+  surface: EncodedSemanticSurface,
+): Type {
   const byteLength = state.outputCount * INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
   const schemaWords = new Uint32Array(
     output.buffer.slice(output.byteOffset, output.byteOffset + byteLength),
   );
-  return decodeLazuliType(schemaWords, state.outputRoot, surface.symbolNames);
+  return decodeType(schemaWords, state.outputRoot, surface.symbolNames);
 }
 
-export function publicTypeMetadata(surface: EncodedLazuliSurface): Pick<
+export function publicTypeMetadata(surface: EncodedSemanticSurface): Pick<
   TypeInferenceSuccess,
   "typeDeclarations" | "constructorFieldTypes"
 > {
-  const copySchema = (schema: LazuliTypeSchema): LazuliTypeSchema => {
+  const copySchema = (schema: TypeSchema): TypeSchema => {
     switch (schema.kind) {
       case "integer":
       case "signed-integer-64":
@@ -494,7 +494,7 @@ export function publicTypeMetadata(surface: EncodedLazuliSurface): Pick<
         return Object.freeze({
           kind: "tuple",
           values: Object.freeze([copySchema(schema.values[0]), copySchema(schema.values[1])]),
-        }) as LazuliTypeSchema;
+        }) as TypeSchema;
       case "named":
         return Object.freeze({
           kind: "named",
@@ -515,8 +515,8 @@ export function publicTypeMetadata(surface: EncodedLazuliSurface): Pick<
         });
     }
   };
-  const typeDeclarations: LazuliTypeDeclaration[] = [];
-  const constructorFieldTypes: (readonly LazuliTypeSchema[])[] = [];
+  const typeDeclarations: TypeDeclaration[] = [];
+  const constructorFieldTypes: (readonly TypeSchema[])[] = [];
   for (const declaration of surface.typeDeclarations) {
     const constructors = declaration.constructors.map((constructor) => {
       const fields = Object.freeze(
@@ -550,7 +550,7 @@ export function publicTypeMetadata(surface: EncodedLazuliSurface): Pick<
 function formatWorkspaceType(
   root: number,
   workspace: DataView | undefined,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   identifierNames: readonly string[],
 ): string {
   const maximumCharacterLength = 4096;
@@ -580,8 +580,8 @@ function formatWorkspaceType(
         ? typeWord(current, 1)
         : kind === 3
         ? typeWord(current, 3)
-        : LAZULI_NO_INDEX;
-      if (replacement === LAZULI_NO_INDEX) return current;
+        : NO_INDEX;
+      if (replacement === NO_INDEX) return current;
       if (seen.has(current)) {
         throw new Error(`GPU Lazuli diagnostic contains cyclic type link at type ${current}`);
       }
@@ -653,7 +653,7 @@ function formatWorkspaceType(
         const arguments_: string[] = [];
         let list = typeWord(typeIndex, 2);
         const seenLists = new Set<number>();
-        while (list !== LAZULI_NO_INDEX) {
+        while (list !== NO_INDEX) {
           if (seenLists.has(list) || typeWord(list, 0) !== 10) {
             throw new Error(
               `GPU Lazuli diagnostic named type ${typeIndex} has invalid argument list`,
@@ -700,7 +700,7 @@ function formatWorkspaceType(
         }
         let list = typeWord(typeIndex, 3);
         const seenLists = new Set<number>();
-        while (list !== LAZULI_NO_INDEX) {
+        while (list !== NO_INDEX) {
           if (seenLists.has(list) || typeWord(list, 0) !== 10) {
             throw new Error(
               `GPU Lazuli diagnostic lazy constructor ${typeIndex} has invalid argument list`,
@@ -734,13 +734,13 @@ function identifierName(identifierNames: readonly string[], identifier: number):
   return name;
 }
 
-function symbolName(surface: EncodedLazuliSurface, symbol: number): string {
+function symbolName(surface: EncodedSemanticSurface, symbol: number): string {
   const name = surface.symbolNames[symbol];
   if (name === undefined) throw new Error(`GPU Lazuli inference returned unknown symbol ${symbol}`);
   return name;
 }
 
-function largestSourceOffset(surface: EncodedLazuliSurface): number {
+function largestSourceOffset(surface: EncodedSemanticSurface): number {
   let largest = 0;
   for (let node = 0; node < surface.nodeCount; node++) {
     const end = surface.nodeWords[node * 8 + 2];

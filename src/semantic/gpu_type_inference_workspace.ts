@@ -1,8 +1,4 @@
-import {
-  type EncodedLazuliSurface,
-  LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
-  LAZULI_NO_INDEX,
-} from "./abi.ts";
+import { type EncodedSemanticSurface, MAXIMUM_CONSTRUCTOR_ARITY, NO_INDEX } from "./abi.ts";
 import { CompilationStateWord, CompilationStatus } from "./compiler_shader.ts";
 import type {
   GpuTypeInferenceOptions,
@@ -23,7 +19,7 @@ import {
   InferenceSchedulerWord,
   InferenceStateWord,
   InferenceStatus,
-  type prepareLazuliInferenceShaderMetadata,
+  type prepareInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
@@ -62,7 +58,7 @@ export function validateFuel(
 }
 
 export function workspaceLayout(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   schemaNodeCount: number,
   typeParameterCount: number,
   limits: GPUSupportedLimits,
@@ -104,7 +100,7 @@ export function workspaceLayout(
     "schema scratch capacity",
     checkedProduct("schema parameter mapping", Math.max(schemaNodeCount, typeParameterCount), 2),
     checkedProduct("schema traversal", schemaNodeCount, 3),
-    LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
+    MAXIMUM_CONSTRUCTOR_ARITY,
     32,
   );
   const inferredTypeTraversalCapacity = checkedSum(
@@ -121,7 +117,7 @@ export function workspaceLayout(
       ),
       3,
     ),
-    LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
+    MAXIMUM_CONSTRUCTOR_ARITY,
   );
   const defaultScratchCapacity = checkedSum(
     "scratch arena capacity",
@@ -158,7 +154,7 @@ function optionsWorkspaceCapacities(
 ): WorkspaceCapacities {
   const capacity = (name: string, value: number | undefined, fallback: number): number => {
     const selected = value ?? fallback;
-    if (!Number.isSafeInteger(selected) || selected < 0 || selected > LAZULI_NO_INDEX) {
+    if (!Number.isSafeInteger(selected) || selected < 0 || selected > NO_INDEX) {
       throw new RangeError(`${name} must be an unsigned 32-bit integer; received ${selected}`);
     }
     return selected;
@@ -260,7 +256,7 @@ export function createInitialState(
     GpuTypeInferenceOptions,
     "surface" | "maximumSteps" | "maximumStepsPerDispatch" | "initialSteps"
   >,
-  metadata: ReturnType<typeof prepareLazuliInferenceShaderMetadata>,
+  metadata: ReturnType<typeof prepareInferenceShaderMetadata>,
   layout: WorkspaceLayout,
   syntheticSemanticSuccess: boolean,
 ): ArrayBuffer {
@@ -304,9 +300,9 @@ export function createInitialState(
   );
   set(InferenceStateWord.ConstructorResultBase, metadata.constructorResultBase);
   set(InferenceStateWord.IndexedMetadataFooterBase, metadata.indexedMetadataFooterBase);
-  set(InferenceStateWord.UntouchableTypeCutoff, LAZULI_NO_INDEX);
+  set(InferenceStateWord.UntouchableTypeCutoff, NO_INDEX);
   set(InferenceStateWord.IndexedEliminationAllowed, 1);
-  set(InferenceStateWord.IndexedEliminationRestrictionSymbol, LAZULI_NO_INDEX);
+  set(InferenceStateWord.IndexedEliminationRestrictionSymbol, NO_INDEX);
   const initialSteps = syntheticSemanticSuccess ? options.initialSteps ?? 0 : 0;
   set(InferenceSchedulerWord.PreviousSemanticSteps, initialSteps);
   const setSemantic = (word: number, value: number) =>
@@ -320,9 +316,9 @@ export function createInitialState(
     CompilationStateWord.Status,
     syntheticSemanticSuccess ? CompilationStatus.Ok : CompilationStatus.Pending,
   );
-  setSemantic(CompilationStateWord.ErrorSource, LAZULI_NO_INDEX);
-  setSemantic(CompilationStateWord.ErrorDetail, LAZULI_NO_INDEX);
-  setSemantic(CompilationStateWord.EntryDefinition, LAZULI_NO_INDEX);
+  setSemantic(CompilationStateWord.ErrorSource, NO_INDEX);
+  setSemantic(CompilationStateWord.ErrorDetail, NO_INDEX);
+  setSemantic(CompilationStateWord.EntryDefinition, NO_INDEX);
   setSemantic(CompilationStateWord.TotalSteps, initialSteps);
   setSemantic(CompilationStateWord.MaximumSteps, options.maximumSteps);
   setSemantic(
@@ -341,7 +337,7 @@ export function dispatchOutputReadbackCapacity(
     INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY,
   );
   return outputByteLength <= limits.maxBufferSize - INFERENCE_INTERNAL_STATE_BYTE_LENGTH &&
-      outputByteLength <= LAZULI_NO_INDEX - INFERENCE_INTERNAL_STATE_BYTE_LENGTH
+      outputByteLength <= NO_INDEX - INFERENCE_INTERNAL_STATE_BYTE_LENGTH
     ? INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY
     : 0;
 }
@@ -699,7 +695,7 @@ export async function createExpandedWorkspace(
   layout: WorkspaceLayout,
   expandedLayout: WorkspaceLayout,
   state: InferenceStateSnapshot,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): Promise<BufferAllocation> {
   const byteLength = storageBytes(expandedLayout.workspaceWordLength);
   device.pushErrorScope("validation");
@@ -857,7 +853,7 @@ export async function copyOutputForGrowth(
   source: GPUBuffer,
   destination: GPUBuffer,
   outputCount: number,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): Promise<void> {
   const byteLength = checkedProduct(
     "live output growth bytes",
@@ -908,9 +904,9 @@ export function resumeOutputAfterGrowth(
       [InferenceStateWord.ErrorCode, InferenceDiagnosticCode.None],
       [InferenceStateWord.ErrorStartByte, 0],
       [InferenceStateWord.ErrorEndByte, 0],
-      [InferenceStateWord.ErrorDetail, LAZULI_NO_INDEX],
-      [InferenceStateWord.ErrorOperand0, LAZULI_NO_INDEX],
-      [InferenceStateWord.ErrorOperand1, LAZULI_NO_INDEX],
+      [InferenceStateWord.ErrorDetail, NO_INDEX],
+      [InferenceStateWord.ErrorOperand0, NO_INDEX],
+      [InferenceStateWord.ErrorOperand1, NO_INDEX],
       [InferenceStateWord.ErrorContext, 0],
     ] as const
   ) {
@@ -995,9 +991,9 @@ export function resumeWorkspaceAfterGrowth(
       [InferenceStateWord.ErrorCode, InferenceDiagnosticCode.None],
       [InferenceStateWord.ErrorStartByte, 0],
       [InferenceStateWord.ErrorEndByte, 0],
-      [InferenceStateWord.ErrorDetail, LAZULI_NO_INDEX],
-      [InferenceStateWord.ErrorOperand0, LAZULI_NO_INDEX],
-      [InferenceStateWord.ErrorOperand1, LAZULI_NO_INDEX],
+      [InferenceStateWord.ErrorDetail, NO_INDEX],
+      [InferenceStateWord.ErrorOperand0, NO_INDEX],
+      [InferenceStateWord.ErrorOperand1, NO_INDEX],
       [InferenceStateWord.ErrorContext, 0],
     ] as const
   ) {
@@ -1055,7 +1051,7 @@ export function inferenceArenaName(errorCode: number): string {
 
 function checkedSum(name: string, ...values: readonly number[]): number {
   const result = values.reduce((sum, value) => sum + value, 0);
-  if (!Number.isSafeInteger(result) || result < 0 || result > LAZULI_NO_INDEX) {
+  if (!Number.isSafeInteger(result) || result < 0 || result > NO_INDEX) {
     throw new RangeError(`${name} cannot be represented as a u32: ${result}`);
   }
   return result;
@@ -1063,7 +1059,7 @@ function checkedSum(name: string, ...values: readonly number[]): number {
 
 export function checkedProduct(name: string, left: number, right: number): number {
   const result = left * right;
-  if (!Number.isSafeInteger(result) || result < 0 || result > LAZULI_NO_INDEX) {
+  if (!Number.isSafeInteger(result) || result < 0 || result > NO_INDEX) {
     throw new RangeError(`${name} cannot be represented as a u32: ${left} * ${right}`);
   }
   return result;

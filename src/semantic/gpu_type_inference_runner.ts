@@ -1,4 +1,4 @@
-import { LAZULI_NO_INDEX, LAZULI_NODE_BYTE_LENGTH } from "./abi.ts";
+import { NO_INDEX, NODE_BYTE_LENGTH } from "./abi.ts";
 import { CompilationStatus } from "./compiler_shader.ts";
 import type { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
 import type { GpuSemanticCompilationPass } from "./gpu_semantic_contract.ts";
@@ -59,9 +59,9 @@ import {
   InferenceDiagnosticCode,
   InferenceMetadataFailure,
   InferenceStatus,
-  prepareLazuliInferenceShaderMetadata,
+  prepareInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
-import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
+import { flattenTypeSchemas } from "./type_schema_abi.ts";
 
 /**
  * Runs the persistent GPU Hindley-Milner inference machine until it produces a
@@ -71,10 +71,10 @@ import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
  * runner creates is destroyed before this promise settles, including failed or
  * aborted runs.
  */
-export async function runGpuLazuliTypeInference(
+export async function runGpuSemanticTypeInference(
   options: GpuTypeInferenceOptions,
 ): Promise<GpuTypeInferenceRun> {
-  const run = await runGpuLazuliTypeInferenceMachine(options);
+  const run = await runGpuSemanticTypeInferenceMachine(options);
   if (run.inference === undefined) {
     throw new Error(
       `synthetic semantic compilation did not succeed: status=${run.semanticState.status}`,
@@ -83,15 +83,15 @@ export async function runGpuLazuliTypeInference(
   return run.inference;
 }
 
-export async function runGpuLazuliCompilationInference(
+export async function runGpuSemanticCompilationInference(
   options: GpuTypeInferenceOptions,
   semanticPass: GpuSemanticCompilationPass,
   dispatchScheduler?: GpuDispatchScheduler,
 ): Promise<GpuCompilationInferenceRun> {
-  return await runGpuLazuliTypeInferenceMachine(options, semanticPass, dispatchScheduler);
+  return await runGpuSemanticTypeInferenceMachine(options, semanticPass, dispatchScheduler);
 }
 
-async function runGpuLazuliTypeInferenceMachine(
+async function runGpuSemanticTypeInferenceMachine(
   options: GpuTypeInferenceOptions,
   semanticPass?: GpuSemanticCompilationPass,
   dispatchScheduler?: GpuDispatchScheduler,
@@ -100,9 +100,9 @@ async function runGpuLazuliTypeInferenceMachine(
   validateFuel(options.maximumSteps, options.maximumStepsPerDispatch, initialSteps);
   options.signal?.throwIfAborted();
 
-  const metadata = prepareLazuliInferenceShaderMetadata(
+  const metadata = prepareInferenceShaderMetadata(
     options.surface,
-    flattenLazuliTypeSchemas(options.surface),
+    flattenTypeSchemas(options.surface),
   );
   if (options.mutateMetadataForTest !== undefined) {
     options.mutateMetadataForTest(metadata.words);
@@ -172,7 +172,7 @@ async function runGpuLazuliTypeInferenceMachine(
     );
     const coreNodeByteLength = semanticPass === undefined || outputReadbackCapacity === 0
       ? 0
-      : options.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH;
+      : options.surface.nodeCount * NODE_BYTE_LENGTH;
     const coreReadbackByteOffset = inferenceReadbackCoreByteOffset(outputReadbackCapacity);
     let coreReadbackByteLength = coreNodeByteLength <=
         options.device.limits.maxBufferSize - coreReadbackByteOffset
@@ -390,7 +390,7 @@ async function runGpuLazuliTypeInferenceMachine(
                 state.errorContext >=
                   InferenceMetadataFailure.IndexedExpectedTypeUnresolved)) ||
             (state.errorCode === InferenceDiagnosticCode.NonConcreteMain &&
-              state.errorOperand0 !== LAZULI_NO_INDEX)
+              state.errorOperand0 !== NO_INDEX)
           ? await readDiagnosticWorkspace(
             options.device,
             workspaceBuffer,

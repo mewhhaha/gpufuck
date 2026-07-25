@@ -1,4 +1,4 @@
-import type { EncodedLazuliSurface } from "./abi.ts";
+import type { EncodedSemanticSurface } from "./abi.ts";
 import type { GpuSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 import type { TypeInferenceResult } from "./type_inference.ts";
 
@@ -12,7 +12,7 @@ export interface GpuTypeInferenceBuffers {
 export interface GpuTypeInferenceOptions extends GpuTypeInferenceBuffers {
   readonly device: GPUDevice;
   readonly pipeline: GPUComputePipeline;
-  readonly surface: EncodedLazuliSurface;
+  readonly surface: EncodedSemanticSurface;
   readonly maximumSteps: number;
   readonly maximumStepsPerDispatch: number;
   /** Work already consumed by semantic resolution in the enclosing compilation. */

@@ -1,14 +1,14 @@
 import {
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_DEFINITION_WORD_LENGTH,
-  LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
-  LAZULI_NO_INDEX,
-  LAZULI_NODE_WORD_LENGTH,
-  LazuliBinaryOperator,
-  LazuliCoreTag,
-  LazuliEvaluationMode,
-  LazuliNumericConversion,
-  LazuliUnaryOperator,
+  BinaryOperator,
+  CONSTRUCTOR_WORD_LENGTH,
+  CoreTag,
+  DEFINITION_WORD_LENGTH,
+  EvaluationMode,
+  MAXIMUM_CONSTRUCTOR_ARITY,
+  NO_INDEX,
+  NODE_WORD_LENGTH,
+  NumericConversion,
+  UnaryOperator,
 } from "./abi.ts";
 
 export const EVALUATOR_SHADER = /* wgsl */ `
@@ -159,11 +159,11 @@ var<storage, read_write> value_nodes: array<ValueNode>;
 
 var<private> evaluation: EvaluationState;
 
-const NO_INDEX: u32 = ${LAZULI_NO_INDEX}u;
-const NODE_WORD_LENGTH: u32 = ${LAZULI_NODE_WORD_LENGTH}u;
-const DEFINITION_WORD_LENGTH: u32 = ${LAZULI_DEFINITION_WORD_LENGTH}u;
-const CONSTRUCTOR_WORD_LENGTH: u32 = ${LAZULI_CONSTRUCTOR_WORD_LENGTH}u;
-const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${LAZULI_MAXIMUM_CONSTRUCTOR_ARITY}u;
+const NO_INDEX: u32 = ${NO_INDEX}u;
+const NODE_WORD_LENGTH: u32 = ${NODE_WORD_LENGTH}u;
+const DEFINITION_WORD_LENGTH: u32 = ${DEFINITION_WORD_LENGTH}u;
+const CONSTRUCTOR_WORD_LENGTH: u32 = ${CONSTRUCTOR_WORD_LENGTH}u;
+const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${MAXIMUM_CONSTRUCTOR_ARITY}u;
 
 const STATUS_UNINITIALIZED: u32 = 0u;
 const STATUS_PENDING: u32 = 1u;
@@ -235,88 +235,88 @@ const EXPECT_CONSTRUCTOR: u32 = 4u;
 const EXPECT_SIGNED_INTEGER_64: u32 = 5u;
 const EXPECT_FLOAT_32: u32 = 6u;
 
-const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
-const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
-const TAG_LET: u32 = ${LazuliCoreTag.Let}u;
-const TAG_IF: u32 = ${LazuliCoreTag.If}u;
-const TAG_LAMBDA: u32 = ${LazuliCoreTag.Lambda}u;
-const TAG_APPLY: u32 = ${LazuliCoreTag.Apply}u;
-const TAG_UNARY: u32 = ${LazuliCoreTag.Unary}u;
-const TAG_BINARY: u32 = ${LazuliCoreTag.Binary}u;
-const TAG_CASE: u32 = ${LazuliCoreTag.Case}u;
-const TAG_CASE_ARM: u32 = ${LazuliCoreTag.CaseArm}u;
-const TAG_PATTERN_BIND: u32 = ${LazuliCoreTag.PatternBind}u;
-const TAG_LOCAL: u32 = ${LazuliCoreTag.Local}u;
-const TAG_GLOBAL: u32 = ${LazuliCoreTag.Global}u;
-const TAG_CONSTRUCTOR: u32 = ${LazuliCoreTag.Constructor}u;
-const TAG_LET_REC: u32 = ${LazuliCoreTag.LetRec}u;
-const TAG_SIGNED_INTEGER_64: u32 = ${LazuliCoreTag.SignedInteger64}u;
-const TAG_FLOAT_32: u32 = ${LazuliCoreTag.Float32}u;
-const TAG_FLOAT_64: u32 = ${LazuliCoreTag.Float64}u;
-const TAG_NUMERIC_CONVERT: u32 = ${LazuliCoreTag.NumericConvert}u;
+const TAG_INTEGER: u32 = ${CoreTag.Integer}u;
+const TAG_BOOLEAN: u32 = ${CoreTag.Boolean}u;
+const TAG_LET: u32 = ${CoreTag.Let}u;
+const TAG_IF: u32 = ${CoreTag.If}u;
+const TAG_LAMBDA: u32 = ${CoreTag.Lambda}u;
+const TAG_APPLY: u32 = ${CoreTag.Apply}u;
+const TAG_UNARY: u32 = ${CoreTag.Unary}u;
+const TAG_BINARY: u32 = ${CoreTag.Binary}u;
+const TAG_CASE: u32 = ${CoreTag.Case}u;
+const TAG_CASE_ARM: u32 = ${CoreTag.CaseArm}u;
+const TAG_PATTERN_BIND: u32 = ${CoreTag.PatternBind}u;
+const TAG_LOCAL: u32 = ${CoreTag.Local}u;
+const TAG_GLOBAL: u32 = ${CoreTag.Global}u;
+const TAG_CONSTRUCTOR: u32 = ${CoreTag.Constructor}u;
+const TAG_LET_REC: u32 = ${CoreTag.LetRec}u;
+const TAG_SIGNED_INTEGER_64: u32 = ${CoreTag.SignedInteger64}u;
+const TAG_FLOAT_32: u32 = ${CoreTag.Float32}u;
+const TAG_FLOAT_64: u32 = ${CoreTag.Float64}u;
+const TAG_NUMERIC_CONVERT: u32 = ${CoreTag.NumericConvert}u;
 
-const EVALUATION_LAZY: u32 = ${LazuliEvaluationMode.LazyCallByNeed}u;
-const EVALUATION_STRICT: u32 = ${LazuliEvaluationMode.StrictEager}u;
+const EVALUATION_LAZY: u32 = ${EvaluationMode.LazyCallByNeed}u;
+const EVALUATION_STRICT: u32 = ${EvaluationMode.StrictEager}u;
 
-const UNARY_NEGATE: u32 = ${LazuliUnaryOperator.Negate}u;
-const UNARY_NEGATE_SIGNED_INTEGER_64: u32 = ${LazuliUnaryOperator.NegateSignedInteger64}u;
-const UNARY_NEGATE_FLOAT_32: u32 = ${LazuliUnaryOperator.NegateFloat32}u;
-const UNARY_NEGATE_FLOAT_64: u32 = ${LazuliUnaryOperator.NegateFloat64}u;
-const UNARY_SQUARE_ROOT_FLOAT_32: u32 = ${LazuliUnaryOperator.SquareRootFloat32}u;
-const BINARY_EQUAL: u32 = ${LazuliBinaryOperator.Equal}u;
-const BINARY_NOT_EQUAL: u32 = ${LazuliBinaryOperator.NotEqual}u;
-const BINARY_LESS: u32 = ${LazuliBinaryOperator.Less}u;
-const BINARY_LESS_EQUAL: u32 = ${LazuliBinaryOperator.LessEqual}u;
-const BINARY_GREATER: u32 = ${LazuliBinaryOperator.Greater}u;
-const BINARY_GREATER_EQUAL: u32 = ${LazuliBinaryOperator.GreaterEqual}u;
-const BINARY_ADD: u32 = ${LazuliBinaryOperator.Add}u;
-const BINARY_SUBTRACT: u32 = ${LazuliBinaryOperator.Subtract}u;
-const BINARY_MULTIPLY: u32 = ${LazuliBinaryOperator.Multiply}u;
-const BINARY_DIVIDE: u32 = ${LazuliBinaryOperator.Divide}u;
-const BINARY_REMAINDER: u32 = ${LazuliBinaryOperator.Remainder}u;
-const BINARY_BITWISE_AND: u32 = ${LazuliBinaryOperator.BitwiseAnd}u;
-const BINARY_BITWISE_OR: u32 = ${LazuliBinaryOperator.BitwiseOr}u;
-const BINARY_BITWISE_XOR: u32 = ${LazuliBinaryOperator.BitwiseXor}u;
-const BINARY_SHIFT_LEFT: u32 = ${LazuliBinaryOperator.ShiftLeft}u;
-const BINARY_SHIFT_RIGHT_UNSIGNED: u32 = ${LazuliBinaryOperator.ShiftRightUnsigned}u;
-const BINARY_EQUAL_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.EqualSignedInteger64}u;
-const BINARY_NOT_EQUAL_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.NotEqualSignedInteger64}u;
-const BINARY_LESS_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.LessSignedInteger64}u;
-const BINARY_LESS_EQUAL_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.LessEqualSignedInteger64}u;
-const BINARY_GREATER_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.GreaterSignedInteger64}u;
-const BINARY_GREATER_EQUAL_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.GreaterEqualSignedInteger64}u;
-const BINARY_ADD_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.AddSignedInteger64}u;
-const BINARY_SUBTRACT_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.SubtractSignedInteger64}u;
-const BINARY_MULTIPLY_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.MultiplySignedInteger64}u;
-const BINARY_DIVIDE_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.DivideSignedInteger64}u;
-const BINARY_EQUAL_FLOAT_32: u32 = ${LazuliBinaryOperator.EqualFloat32}u;
-const BINARY_NOT_EQUAL_FLOAT_32: u32 = ${LazuliBinaryOperator.NotEqualFloat32}u;
-const BINARY_LESS_FLOAT_32: u32 = ${LazuliBinaryOperator.LessFloat32}u;
-const BINARY_LESS_EQUAL_FLOAT_32: u32 = ${LazuliBinaryOperator.LessEqualFloat32}u;
-const BINARY_GREATER_FLOAT_32: u32 = ${LazuliBinaryOperator.GreaterFloat32}u;
-const BINARY_GREATER_EQUAL_FLOAT_32: u32 = ${LazuliBinaryOperator.GreaterEqualFloat32}u;
-const BINARY_ADD_FLOAT_32: u32 = ${LazuliBinaryOperator.AddFloat32}u;
-const BINARY_SUBTRACT_FLOAT_32: u32 = ${LazuliBinaryOperator.SubtractFloat32}u;
-const BINARY_MULTIPLY_FLOAT_32: u32 = ${LazuliBinaryOperator.MultiplyFloat32}u;
-const BINARY_DIVIDE_FLOAT_32: u32 = ${LazuliBinaryOperator.DivideFloat32}u;
-const BINARY_EQUAL_FLOAT_64: u32 = ${LazuliBinaryOperator.EqualFloat64}u;
-const BINARY_DIVIDE_FLOAT_64: u32 = ${LazuliBinaryOperator.DivideFloat64}u;
-const BINARY_REMAINDER_FLOAT_64: u32 = ${LazuliBinaryOperator.RemainderFloat64}u;
-const BINARY_REMAINDER_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.RemainderSignedInteger64}u;
-const BINARY_BITWISE_AND_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.BitwiseAndSignedInteger64}u;
-const BINARY_BITWISE_OR_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.BitwiseOrSignedInteger64}u;
-const BINARY_BITWISE_XOR_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.BitwiseXorSignedInteger64}u;
-const BINARY_SHIFT_LEFT_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.ShiftLeftSignedInteger64}u;
-const BINARY_SHIFT_RIGHT_UNSIGNED_SIGNED_INTEGER_64: u32 = ${LazuliBinaryOperator.ShiftRightUnsignedSignedInteger64}u;
+const UNARY_NEGATE: u32 = ${UnaryOperator.Negate}u;
+const UNARY_NEGATE_SIGNED_INTEGER_64: u32 = ${UnaryOperator.NegateSignedInteger64}u;
+const UNARY_NEGATE_FLOAT_32: u32 = ${UnaryOperator.NegateFloat32}u;
+const UNARY_NEGATE_FLOAT_64: u32 = ${UnaryOperator.NegateFloat64}u;
+const UNARY_SQUARE_ROOT_FLOAT_32: u32 = ${UnaryOperator.SquareRootFloat32}u;
+const BINARY_EQUAL: u32 = ${BinaryOperator.Equal}u;
+const BINARY_NOT_EQUAL: u32 = ${BinaryOperator.NotEqual}u;
+const BINARY_LESS: u32 = ${BinaryOperator.Less}u;
+const BINARY_LESS_EQUAL: u32 = ${BinaryOperator.LessEqual}u;
+const BINARY_GREATER: u32 = ${BinaryOperator.Greater}u;
+const BINARY_GREATER_EQUAL: u32 = ${BinaryOperator.GreaterEqual}u;
+const BINARY_ADD: u32 = ${BinaryOperator.Add}u;
+const BINARY_SUBTRACT: u32 = ${BinaryOperator.Subtract}u;
+const BINARY_MULTIPLY: u32 = ${BinaryOperator.Multiply}u;
+const BINARY_DIVIDE: u32 = ${BinaryOperator.Divide}u;
+const BINARY_REMAINDER: u32 = ${BinaryOperator.Remainder}u;
+const BINARY_BITWISE_AND: u32 = ${BinaryOperator.BitwiseAnd}u;
+const BINARY_BITWISE_OR: u32 = ${BinaryOperator.BitwiseOr}u;
+const BINARY_BITWISE_XOR: u32 = ${BinaryOperator.BitwiseXor}u;
+const BINARY_SHIFT_LEFT: u32 = ${BinaryOperator.ShiftLeft}u;
+const BINARY_SHIFT_RIGHT_UNSIGNED: u32 = ${BinaryOperator.ShiftRightUnsigned}u;
+const BINARY_EQUAL_SIGNED_INTEGER_64: u32 = ${BinaryOperator.EqualSignedInteger64}u;
+const BINARY_NOT_EQUAL_SIGNED_INTEGER_64: u32 = ${BinaryOperator.NotEqualSignedInteger64}u;
+const BINARY_LESS_SIGNED_INTEGER_64: u32 = ${BinaryOperator.LessSignedInteger64}u;
+const BINARY_LESS_EQUAL_SIGNED_INTEGER_64: u32 = ${BinaryOperator.LessEqualSignedInteger64}u;
+const BINARY_GREATER_SIGNED_INTEGER_64: u32 = ${BinaryOperator.GreaterSignedInteger64}u;
+const BINARY_GREATER_EQUAL_SIGNED_INTEGER_64: u32 = ${BinaryOperator.GreaterEqualSignedInteger64}u;
+const BINARY_ADD_SIGNED_INTEGER_64: u32 = ${BinaryOperator.AddSignedInteger64}u;
+const BINARY_SUBTRACT_SIGNED_INTEGER_64: u32 = ${BinaryOperator.SubtractSignedInteger64}u;
+const BINARY_MULTIPLY_SIGNED_INTEGER_64: u32 = ${BinaryOperator.MultiplySignedInteger64}u;
+const BINARY_DIVIDE_SIGNED_INTEGER_64: u32 = ${BinaryOperator.DivideSignedInteger64}u;
+const BINARY_EQUAL_FLOAT_32: u32 = ${BinaryOperator.EqualFloat32}u;
+const BINARY_NOT_EQUAL_FLOAT_32: u32 = ${BinaryOperator.NotEqualFloat32}u;
+const BINARY_LESS_FLOAT_32: u32 = ${BinaryOperator.LessFloat32}u;
+const BINARY_LESS_EQUAL_FLOAT_32: u32 = ${BinaryOperator.LessEqualFloat32}u;
+const BINARY_GREATER_FLOAT_32: u32 = ${BinaryOperator.GreaterFloat32}u;
+const BINARY_GREATER_EQUAL_FLOAT_32: u32 = ${BinaryOperator.GreaterEqualFloat32}u;
+const BINARY_ADD_FLOAT_32: u32 = ${BinaryOperator.AddFloat32}u;
+const BINARY_SUBTRACT_FLOAT_32: u32 = ${BinaryOperator.SubtractFloat32}u;
+const BINARY_MULTIPLY_FLOAT_32: u32 = ${BinaryOperator.MultiplyFloat32}u;
+const BINARY_DIVIDE_FLOAT_32: u32 = ${BinaryOperator.DivideFloat32}u;
+const BINARY_EQUAL_FLOAT_64: u32 = ${BinaryOperator.EqualFloat64}u;
+const BINARY_DIVIDE_FLOAT_64: u32 = ${BinaryOperator.DivideFloat64}u;
+const BINARY_REMAINDER_FLOAT_64: u32 = ${BinaryOperator.RemainderFloat64}u;
+const BINARY_REMAINDER_SIGNED_INTEGER_64: u32 = ${BinaryOperator.RemainderSignedInteger64}u;
+const BINARY_BITWISE_AND_SIGNED_INTEGER_64: u32 = ${BinaryOperator.BitwiseAndSignedInteger64}u;
+const BINARY_BITWISE_OR_SIGNED_INTEGER_64: u32 = ${BinaryOperator.BitwiseOrSignedInteger64}u;
+const BINARY_BITWISE_XOR_SIGNED_INTEGER_64: u32 = ${BinaryOperator.BitwiseXorSignedInteger64}u;
+const BINARY_SHIFT_LEFT_SIGNED_INTEGER_64: u32 = ${BinaryOperator.ShiftLeftSignedInteger64}u;
+const BINARY_SHIFT_RIGHT_UNSIGNED_SIGNED_INTEGER_64: u32 = ${BinaryOperator.ShiftRightUnsignedSignedInteger64}u;
 
-const CONVERT_SIGNED_INTEGER_32_TO_SIGNED_INTEGER_64: u32 = ${LazuliNumericConversion.SignedInteger32ToSignedInteger64}u;
-const CONVERT_SIGNED_INTEGER_64_TO_SIGNED_INTEGER_32: u32 = ${LazuliNumericConversion.SignedInteger64ToSignedInteger32}u;
-const CONVERT_SIGNED_INTEGER_32_TO_FLOAT_32: u32 = ${LazuliNumericConversion.SignedInteger32ToFloat32}u;
-const CONVERT_SIGNED_INTEGER_64_TO_FLOAT_32: u32 = ${LazuliNumericConversion.SignedInteger64ToFloat32}u;
-const CONVERT_FLOAT_32_TO_SIGNED_INTEGER_32: u32 = ${LazuliNumericConversion.Float32ToSignedInteger32}u;
-const CONVERT_FLOAT_32_TO_SIGNED_INTEGER_64: u32 = ${LazuliNumericConversion.Float32ToSignedInteger64}u;
-const CONVERT_REINTERPRET_FLOAT_32_AS_SIGNED_INTEGER_32: u32 = ${LazuliNumericConversion.ReinterpretFloat32AsSignedInteger32}u;
-const CONVERT_REINTERPRET_SIGNED_INTEGER_32_AS_FLOAT_32: u32 = ${LazuliNumericConversion.ReinterpretSignedInteger32AsFloat32}u;
+const CONVERT_SIGNED_INTEGER_32_TO_SIGNED_INTEGER_64: u32 = ${NumericConversion.SignedInteger32ToSignedInteger64}u;
+const CONVERT_SIGNED_INTEGER_64_TO_SIGNED_INTEGER_32: u32 = ${NumericConversion.SignedInteger64ToSignedInteger32}u;
+const CONVERT_SIGNED_INTEGER_32_TO_FLOAT_32: u32 = ${NumericConversion.SignedInteger32ToFloat32}u;
+const CONVERT_SIGNED_INTEGER_64_TO_FLOAT_32: u32 = ${NumericConversion.SignedInteger64ToFloat32}u;
+const CONVERT_FLOAT_32_TO_SIGNED_INTEGER_32: u32 = ${NumericConversion.Float32ToSignedInteger32}u;
+const CONVERT_FLOAT_32_TO_SIGNED_INTEGER_64: u32 = ${NumericConversion.Float32ToSignedInteger64}u;
+const CONVERT_REINTERPRET_FLOAT_32_AS_SIGNED_INTEGER_32: u32 = ${NumericConversion.ReinterpretFloat32AsSignedInteger32}u;
+const CONVERT_REINTERPRET_SIGNED_INTEGER_32_AS_FLOAT_32: u32 = ${NumericConversion.ReinterpretSignedInteger32AsFloat32}u;
 
 fn region_contains(base: u32, index: u32, storage_length: u32) -> bool {
   if base > storage_length {
@@ -2368,7 +2368,7 @@ fn evaluate_lane() {
 }
 
 @compute @workgroup_size(1)
-fn evaluate_lazuli(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
+fn evaluate_module(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
   let lane_index = global_invocation_id.x;
   if lane_index >= arrayLength(&evaluation_states) {
     return;

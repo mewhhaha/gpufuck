@@ -1,10 +1,6 @@
-import type {
-  LazuliSourceType,
-  LazuliSpan,
-  LazuliType,
-  LazuliTypeDeclaration,
-  LazuliTypeSchema,
-} from "../semantic/abi.ts";
+import type { SourceType, Span, Type, TypeDeclaration, TypeSchema } from "../semantic/abi.ts";
+
+export type { SourceType, Span, Type, TypeDeclaration, TypeSchema } from "../semantic/abi.ts";
 
 export const EvaluationProfile = {
   LazyCallByNeed: "lazy-call-by-need-v1",
@@ -19,12 +15,6 @@ export const TypecheckingProfile = {
 } as const;
 
 export type TypecheckingProfile = (typeof TypecheckingProfile)[keyof typeof TypecheckingProfile];
-
-export type Span = LazuliSpan;
-export type Type = LazuliType;
-export type TypeSchema = LazuliTypeSchema;
-export type SourceType = LazuliSourceType;
-export type TypeDeclaration = LazuliTypeDeclaration;
 
 /**
  * Instantiates a closed schema into a concrete type. Schemas reaching a public boundary carry no

@@ -15,16 +15,9 @@ export interface WasmExport {
   readonly type: Type;
 }
 
-export interface CoreNode {
-  readonly tag: CoreTag;
-  readonly payload: number;
-  readonly child0: number;
-  readonly child1: number;
-  readonly child2: number;
-  readonly sourceByteOffset: number;
-  readonly sourceEndByte: number;
-  readonly evaluationMode: EvaluationMode;
-}
+/** Declared once in the semantic layer; the two used to be field-identical twins. */
+export type { CoreNode } from "../semantic/compiler_module.ts";
+import type { CoreNode } from "../semantic/compiler_module.ts";
 
 export interface GpuModule {
   readonly nodeBuffer: GPUBuffer;

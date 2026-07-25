@@ -1,7 +1,7 @@
 import { deepStrictEqual } from "node:assert/strict";
 
 import { CoreTag, EvaluationMode } from "../functional.ts";
-import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";
+import type { CoreNode } from "../src/semantic/compiler_module.ts";
 import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
 
 Deno.test("definition parallelism profiles report work, span, width, and recursive bottlenecks", () => {
@@ -31,7 +31,7 @@ Deno.test("definition parallelism profiles report work, span, width, and recursi
   );
 });
 
-function globalNode(definition: number): LazuliCoreNode {
+function globalNode(definition: number): CoreNode {
   return {
     tag: CoreTag.Global,
     payload: definition,
@@ -44,7 +44,7 @@ function globalNode(definition: number): LazuliCoreNode {
   };
 }
 
-function integerNode(): LazuliCoreNode {
+function integerNode(): CoreNode {
   return {
     tag: CoreTag.Integer,
     payload: 42,

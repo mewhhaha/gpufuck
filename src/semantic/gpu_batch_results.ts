@@ -1,8 +1,8 @@
 import {
-  LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-  LAZULI_DEFINITION_BYTE_LENGTH,
-  LAZULI_NO_INDEX,
-  LAZULI_NODE_BYTE_LENGTH,
+  CONSTRUCTOR_BYTE_LENGTH,
+  DEFINITION_BYTE_LENGTH,
+  NO_INDEX,
+  NODE_BYTE_LENGTH,
 } from "./abi.ts";
 import { CompilationStatus } from "./compiler_shader.ts";
 import {
@@ -11,7 +11,7 @@ import {
   formatSemanticState,
   semanticWorkLimitDiagnostic,
 } from "./compilation_diagnostics.ts";
-import { CompiledGpuLazuliModule, type LazuliCompileResult } from "./compiler_module.ts";
+import { CompiledGpuSemanticModule, type SemanticCompileResult } from "./compiler_module.ts";
 import type { BatchLane } from "./gpu_batch_compiler.ts";
 import type { GpuSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 import type { InferenceStateSnapshot } from "./gpu_type_inference_contract.ts";
@@ -48,7 +48,7 @@ export async function finishBatchInferenceResults(
   terminal: readonly (TerminalInference | undefined)[],
   terminalOutputs: readonly (ArrayBuffer | undefined)[],
   terminalCoreNodes: readonly (ArrayBuffer | undefined)[],
-  results: (LazuliCompileResult | undefined)[],
+  results: (SemanticCompileResult | undefined)[],
   workspaceBuffer: GPUBuffer,
   outputBuffer: GPUBuffer,
   coreSource: GPUBuffer,
@@ -72,7 +72,7 @@ export async function finishBatchInferenceResults(
   let outputReadback: GPUBuffer | undefined;
   let outputMapped = false;
   const createdBuffers: GPUBuffer[] = [];
-  const completedModules: CompiledGpuLazuliModule[] = [];
+  const completedModules: CompiledGpuSemanticModule[] = [];
   const moduleBuffers = new Map<number, ModuleBuffers>();
   try {
     let outputView: DataView | undefined;
@@ -140,30 +140,30 @@ export async function finishBatchInferenceResults(
         if (lane.surface.nodeCount > 0) {
           commands.copyBufferToBuffer(
             coreSource,
-            lane.nodeBase * LAZULI_NODE_BYTE_LENGTH,
+            lane.nodeBase * NODE_BYTE_LENGTH,
             buffers.nodes,
             0,
-            lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH,
+            lane.surface.nodeCount * NODE_BYTE_LENGTH,
           );
           commandsRequired = true;
         }
         if (lane.surface.definitionCount > 0) {
           commands.copyBufferToBuffer(
             definitionSource,
-            lane.definitionBase * LAZULI_DEFINITION_BYTE_LENGTH,
+            lane.definitionBase * DEFINITION_BYTE_LENGTH,
             buffers.definitions,
             0,
-            lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
+            lane.surface.definitionCount * DEFINITION_BYTE_LENGTH,
           );
           commandsRequired = true;
         }
         if (lane.surface.constructorCount > 0) {
           commands.copyBufferToBuffer(
             constructorSource,
-            lane.constructorBase * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+            lane.constructorBase * CONSTRUCTOR_BYTE_LENGTH,
             buffers.constructors,
             0,
-            lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+            lane.surface.constructorCount * CONSTRUCTOR_BYTE_LENGTH,
           );
           commandsRequired = true;
         }
@@ -201,7 +201,7 @@ export async function finishBatchInferenceResults(
         if (buffers === undefined) {
           throw new Error(`GPU Lazuli packed lane ${lane.resultIndex} omitted module buffers`);
         }
-        const module = new CompiledGpuLazuliModule(
+        const module = new CompiledGpuSemanticModule(
           device,
           buffers.nodes,
           buffers.definitions,
@@ -260,22 +260,22 @@ function allocateModuleBuffers(device: GPUDevice, lane: BatchLane): ModuleBuffer
   try {
     nodes = device.createBuffer({
       label: `Lazuli packed lane ${lane.resultIndex} core nodes`,
-      size: Math.max(LAZULI_NODE_BYTE_LENGTH, lane.surface.nodeCount * LAZULI_NODE_BYTE_LENGTH),
+      size: Math.max(NODE_BYTE_LENGTH, lane.surface.nodeCount * NODE_BYTE_LENGTH),
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
     definitions = device.createBuffer({
       label: `Lazuli packed lane ${lane.resultIndex} definitions`,
       size: Math.max(
-        LAZULI_DEFINITION_BYTE_LENGTH,
-        lane.surface.definitionCount * LAZULI_DEFINITION_BYTE_LENGTH,
+        DEFINITION_BYTE_LENGTH,
+        lane.surface.definitionCount * DEFINITION_BYTE_LENGTH,
       ),
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
     constructors = device.createBuffer({
       label: `Lazuli packed lane ${lane.resultIndex} constructors`,
       size: Math.max(
-        LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-        lane.surface.constructorCount * LAZULI_CONSTRUCTOR_BYTE_LENGTH,
+        CONSTRUCTOR_BYTE_LENGTH,
+        lane.surface.constructorCount * CONSTRUCTOR_BYTE_LENGTH,
       ),
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
@@ -291,7 +291,7 @@ function allocateModuleBuffers(device: GPUDevice, lane: BatchLane): ModuleBuffer
 export function batchSemanticFailure(
   lane: BatchLane,
   state: GpuSemanticStateSnapshot,
-): LazuliCompileResult {
+): SemanticCompileResult {
   if (state.status === CompilationStatus.Diagnostic) {
     const diagnostic = diagnosticFromSemanticState(
       state,
@@ -334,7 +334,7 @@ function requiresDiagnosticWorkspace(state: InferenceStateSnapshot): boolean {
       (state.errorContext === InferenceMetadataFailure.InvalidEmptyCaseScrutinee ||
         state.errorContext >= InferenceMetadataFailure.IndexedExpectedTypeUnresolved)) ||
     (state.errorCode === InferenceDiagnosticCode.NonConcreteMain &&
-      state.errorOperand0 !== LAZULI_NO_INDEX);
+      state.errorOperand0 !== NO_INDEX);
 }
 
 async function readLaneTypeWorkspace(

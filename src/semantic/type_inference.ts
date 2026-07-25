@@ -1,35 +1,35 @@
 import {
-  type EncodedLazuliSurface,
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_DEFINITION_WORD_LENGTH,
-  LAZULI_NO_INDEX,
-  LAZULI_NODE_WORD_LENGTH,
-  LAZULI_TYPE_WORD_LENGTH,
-  LazuliBinaryOperator,
-  LazuliConstructorWord,
-  LazuliDefinitionWord,
-  type LazuliDiagnostic,
-  type LazuliSourceType,
-  LazuliSurfaceTag,
-  LazuliSurfaceWord,
-  type LazuliType,
-  type LazuliTypeDeclaration,
-  type LazuliTypeSchema,
-  LazuliTypeWord,
-  LazuliUnaryOperator,
+  AlgebraicTypeWord,
+  BinaryOperator,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  DEFINITION_WORD_LENGTH,
+  DefinitionWord,
+  type EncodedSemanticSurface,
+  ExpressionTag,
+  NO_INDEX,
+  NODE_WORD_LENGTH,
+  NodeWord,
+  type SemanticDiagnostic,
+  type SourceType,
+  type Type,
+  TYPE_WORD_LENGTH,
+  type TypeDeclaration,
+  type TypeSchema,
+  UnaryOperator,
 } from "./abi.ts";
 
 export interface TypeInferenceSuccess {
   readonly ok: true;
-  readonly mainType: LazuliType;
-  readonly typeDeclarations: readonly LazuliTypeDeclaration[];
+  readonly mainType: Type;
+  readonly typeDeclarations: readonly TypeDeclaration[];
   /** Indexed by the stable constructor index in `surface.constructorWords`. */
-  readonly constructorFieldTypes: readonly (readonly LazuliTypeSchema[])[];
+  readonly constructorFieldTypes: readonly (readonly TypeSchema[])[];
 }
 
 export interface TypeInferenceFailure {
   readonly ok: false;
-  readonly diagnostic: LazuliDiagnostic;
+  readonly diagnostic: SemanticDiagnostic;
 }
 
 export type TypeInferenceResult =
@@ -170,14 +170,14 @@ function numericTypeForBinaryOperator(operator: number): InferenceType {
   if (operator <= 40) return FLOAT_64;
   if (operator <= 46) return INTEGER;
   if (operator <= 52) return SIGNED_INTEGER_64;
-  if (operator === LazuliBinaryOperator.RemainderFloat64) return FLOAT_64;
+  if (operator === BinaryOperator.RemainderFloat64) return FLOAT_64;
   throw new Error(`Unsupported Lazuli binary operator ${operator}.`);
 }
 
 function binaryOperatorIsComparison(operator: number): boolean {
   return operator <= 40 && (operator - 1) % 10 < 6 ||
-    operator >= LazuliBinaryOperator.EqualWholeNumberF64 &&
-      operator <= LazuliBinaryOperator.GreaterEqualWholeNumberF64;
+    operator >= BinaryOperator.EqualWholeNumberF64 &&
+      operator <= BinaryOperator.GreaterEqualWholeNumberF64;
 }
 
 function numericConversionTypes(operator: number): readonly [InferenceType, InferenceType] {
@@ -216,25 +216,25 @@ function numericConversionTypes(operator: number): readonly [InferenceType, Infe
 }
 
 class InferenceDiagnostic extends Error {
-  constructor(readonly diagnostic: LazuliDiagnostic) {
+  constructor(readonly diagnostic: SemanticDiagnostic) {
     super(diagnostic.message);
   }
 }
 
 class InferenceContext {
-  readonly #surface: EncodedLazuliSurface;
+  readonly #surface: EncodedSemanticSurface;
   readonly #definitionBySymbol = new Map<number, number>();
   readonly #constructorBySymbol = new Map<number, ConstructorTyping>();
   readonly #typeByName = new Map<string, TypeDeclarationShape>();
   readonly #definitionSchemes = new Map<number, TypeScheme>();
-  readonly #constructorFieldTypes: LazuliTypeSchema[][] = [];
-  readonly #publicTypeDeclarations: LazuliTypeDeclaration[] = [];
+  readonly #constructorFieldTypes: TypeSchema[][] = [];
+  readonly #publicTypeDeclarations: TypeDeclaration[] = [];
   readonly #refinementTrail: RigidRefinement[] = [];
   #nextTypeVariable = 0;
   #rigidScope = 0;
   #untouchableTypeVariableCutoff: number | null = null;
 
-  constructor(surface: EncodedLazuliSurface) {
+  constructor(surface: EncodedSemanticSurface) {
     this.#surface = surface;
   }
 
@@ -290,7 +290,7 @@ class InferenceContext {
       definitionIndex < this.#surface.definitionCount;
       definitionIndex++
     ) {
-      const symbol = this.definitionWord(definitionIndex, LazuliDefinitionWord.Symbol);
+      const symbol = this.definitionWord(definitionIndex, DefinitionWord.Symbol);
       this.#definitionBySymbol.set(symbol, definitionIndex);
     }
   }
@@ -302,7 +302,7 @@ class InferenceContext {
         throw new Error(`Lazuli type metadata omitted type ${typeIndex}.`);
       }
       const span = this.typeSpan(typeIndex);
-      const encodedSymbol = this.typeWord(typeIndex, LazuliTypeWord.Symbol);
+      const encodedSymbol = this.typeWord(typeIndex, AlgebraicTypeWord.Symbol);
       const encodedName = this.symbolName(encodedSymbol);
       if (declaration.name !== encodedName) {
         throw this.invalidTypeMetadata(
@@ -330,8 +330,8 @@ class InferenceContext {
         }
         parameters.add(parameter);
       }
-      const firstConstructor = this.typeWord(typeIndex, LazuliTypeWord.FirstConstructor);
-      const constructorCount = this.typeWord(typeIndex, LazuliTypeWord.ConstructorCount);
+      const firstConstructor = this.typeWord(typeIndex, AlgebraicTypeWord.FirstConstructor);
+      const constructorCount = this.typeWord(typeIndex, AlgebraicTypeWord.ConstructorCount);
       const constructors = Array.from(
         { length: constructorCount },
         (_, offset) => firstConstructor + offset,
@@ -359,8 +359,8 @@ class InferenceContext {
         parameterScope.set(name, parameter);
         return parameter;
       });
-      const firstConstructor = this.typeWord(typeIndex, LazuliTypeWord.FirstConstructor);
-      const constructorCount = this.typeWord(typeIndex, LazuliTypeWord.ConstructorCount);
+      const firstConstructor = this.typeWord(typeIndex, AlgebraicTypeWord.FirstConstructor);
+      const constructorCount = this.typeWord(typeIndex, AlgebraicTypeWord.ConstructorCount);
       if (declaration.constructors.length !== constructorCount) {
         throw this.invalidTypeMetadata(
           `type ${
@@ -370,7 +370,7 @@ class InferenceContext {
         );
       }
 
-      const publicConstructors: LazuliTypeDeclaration["constructors"][number][] = [];
+      const publicConstructors: TypeDeclaration["constructors"][number][] = [];
       for (let constructorOffset = 0; constructorOffset < constructorCount; constructorOffset++) {
         const constructorIndex = firstConstructor + constructorOffset;
         const constructor = declaration.constructors[constructorOffset];
@@ -378,9 +378,9 @@ class InferenceContext {
           throw new Error(`Lazuli type metadata omitted constructor ${constructorIndex}.`);
         }
         const constructorSpan = this.constructorSpan(constructorIndex);
-        const encodedTypeIndex = this.constructorWord(constructorIndex, LazuliConstructorWord.Type);
-        const encodedArity = this.constructorWord(constructorIndex, LazuliConstructorWord.Arity);
-        const symbol = this.constructorWord(constructorIndex, LazuliConstructorWord.Symbol);
+        const encodedTypeIndex = this.constructorWord(constructorIndex, ConstructorWord.Type);
+        const encodedArity = this.constructorWord(constructorIndex, ConstructorWord.Arity);
+        const symbol = this.constructorWord(constructorIndex, ConstructorWord.Symbol);
         const encodedName = this.symbolName(symbol);
         if (encodedTypeIndex !== typeIndex || encodedName !== constructor.name) {
           throw this.invalidTypeMetadata(
@@ -429,7 +429,7 @@ class InferenceContext {
           }
 
           const resultParameters = new Set<string>();
-          const pendingResultTypes: LazuliTypeSchema[] = [...constructor.result.arguments]
+          const pendingResultTypes: TypeSchema[] = [...constructor.result.arguments]
             .reverse();
           while (pendingResultTypes.length > 0) {
             const resultType = pendingResultTypes.pop();
@@ -456,8 +456,8 @@ class InferenceContext {
                 break;
             }
           }
-          const fieldParameters = new Map<string, LazuliTypeSchema>();
-          const pendingFieldTypes: LazuliTypeSchema[] = constructor.fields
+          const fieldParameters = new Map<string, TypeSchema>();
+          const pendingFieldTypes: TypeSchema[] = constructor.fields
             .map((field) => field.type)
             .reverse();
           while (pendingFieldTypes.length > 0) {
@@ -557,7 +557,7 @@ class InferenceContext {
       definitionIndex < this.#surface.definitionCount;
       definitionIndex++
     ) {
-      const rootNode = this.definitionWord(definitionIndex, LazuliDefinitionWord.RootNode);
+      const rootNode = this.definitionWord(definitionIndex, DefinitionWord.RootNode);
       dependencies.set(definitionIndex, this.definitionDependencies(rootNode));
     }
 
@@ -624,82 +624,82 @@ class InferenceContext {
   private definitionDependencies(rootNode: number): ReadonlySet<number> {
     const dependencies = new Set<number>();
     const visit = (nodeIndex: number, boundSymbols: ReadonlySet<number>): void => {
-      const tag = this.nodeWord(nodeIndex, LazuliSurfaceWord.Tag);
-      const payload = this.nodeWord(nodeIndex, LazuliSurfaceWord.Payload);
+      const tag = this.nodeWord(nodeIndex, NodeWord.Tag);
+      const payload = this.nodeWord(nodeIndex, NodeWord.Payload);
       switch (tag) {
-        case LazuliSurfaceTag.Integer:
-        case LazuliSurfaceTag.SignedInteger64:
-        case LazuliSurfaceTag.Float32:
-        case LazuliSurfaceTag.Float64:
-        case LazuliSurfaceTag.WholeNumberF64:
-        case LazuliSurfaceTag.Boolean:
-        case LazuliSurfaceTag.Text:
-        case LazuliSurfaceTag.Bytes:
-        case LazuliSurfaceTag.RuntimeFault:
+        case ExpressionTag.Integer:
+        case ExpressionTag.SignedInteger64:
+        case ExpressionTag.Float32:
+        case ExpressionTag.Float64:
+        case ExpressionTag.WholeNumberF64:
+        case ExpressionTag.Boolean:
+        case ExpressionTag.Text:
+        case ExpressionTag.Bytes:
+        case ExpressionTag.RuntimeFault:
           return;
-        case LazuliSurfaceTag.Name: {
+        case ExpressionTag.Name: {
           if (boundSymbols.has(payload)) return;
           const dependency = this.#definitionBySymbol.get(payload);
           if (dependency !== undefined) dependencies.add(dependency);
           return;
         }
-        case LazuliSurfaceTag.Let:
-        case LazuliSurfaceTag.StrictLet: {
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
+        case ExpressionTag.Let:
+        case ExpressionTag.StrictLet: {
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
           visit(
-            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+            this.requiredChild(nodeIndex, NodeWord.Child1),
             this.withBoundSymbol(boundSymbols, payload),
           );
           return;
         }
-        case LazuliSurfaceTag.LetRec: {
+        case ExpressionTag.LetRec: {
           const recursiveScope = this.withBoundSymbol(boundSymbols, payload);
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), recursiveScope);
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), recursiveScope);
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), recursiveScope);
+          visit(this.requiredChild(nodeIndex, NodeWord.Child1), recursiveScope);
           return;
         }
-        case LazuliSurfaceTag.Lambda:
+        case ExpressionTag.Lambda:
           visit(
-            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+            this.requiredChild(nodeIndex, NodeWord.Child0),
             this.withBoundSymbol(boundSymbols, payload),
           );
           return;
-        case LazuliSurfaceTag.If:
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), boundSymbols);
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2), boundSymbols);
+        case ExpressionTag.If:
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
+          visit(this.requiredChild(nodeIndex, NodeWord.Child1), boundSymbols);
+          visit(this.requiredChild(nodeIndex, NodeWord.Child2), boundSymbols);
           return;
-        case LazuliSurfaceTag.Apply:
-        case LazuliSurfaceTag.StrictApply:
-        case LazuliSurfaceTag.Binary:
-        case LazuliSurfaceTag.BufferAppend:
-        case LazuliSurfaceTag.StoreNew:
-        case LazuliSurfaceTag.StoreRead:
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), boundSymbols);
+        case ExpressionTag.Apply:
+        case ExpressionTag.StrictApply:
+        case ExpressionTag.Binary:
+        case ExpressionTag.BufferAppend:
+        case ExpressionTag.StoreNew:
+        case ExpressionTag.StoreRead:
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
+          visit(this.requiredChild(nodeIndex, NodeWord.Child1), boundSymbols);
           return;
-        case LazuliSurfaceTag.StoreWrite:
-        case LazuliSurfaceTag.StoreGrow:
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1), boundSymbols);
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2), boundSymbols);
+        case ExpressionTag.StoreWrite:
+        case ExpressionTag.StoreGrow:
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
+          visit(this.requiredChild(nodeIndex, NodeWord.Child1), boundSymbols);
+          visit(this.requiredChild(nodeIndex, NodeWord.Child2), boundSymbols);
           return;
-        case LazuliSurfaceTag.Unary:
-        case LazuliSurfaceTag.NumericConvert:
-        case LazuliSurfaceTag.StoreLength:
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
+        case ExpressionTag.Unary:
+        case ExpressionTag.NumericConvert:
+        case ExpressionTag.StoreLength:
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
           return;
-        case LazuliSurfaceTag.Case: {
-          visit(this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0), boundSymbols);
-          let armIndex = this.nodeWord(nodeIndex, LazuliSurfaceWord.Child1);
-          while (armIndex !== LAZULI_NO_INDEX) {
+        case ExpressionTag.Case: {
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
+          let armIndex = this.nodeWord(nodeIndex, NodeWord.Child1);
+          while (armIndex !== NO_INDEX) {
             const arm = this.caseArmBody(armIndex);
             let armScope = boundSymbols;
             for (const binder of arm.binders) {
               armScope = this.withBoundSymbol(armScope, binder.symbol);
             }
             visit(arm.body, armScope);
-            armIndex = this.nodeWord(armIndex, LazuliSurfaceWord.Child1);
+            armIndex = this.nodeWord(armIndex, NodeWord.Child1);
           }
           return;
         }
@@ -717,7 +717,7 @@ class InferenceContext {
     const placeholders = new Map<number, InferenceVariable>();
 
     for (const definitionIndex of component) {
-      const symbol = this.definitionWord(definitionIndex, LazuliDefinitionWord.Symbol);
+      const symbol = this.definitionWord(definitionIndex, DefinitionWord.Symbol);
       const placeholder = this.inferenceVariable();
       placeholders.set(definitionIndex, placeholder);
       componentEnvironment.set(symbol, { parameters: [], type: placeholder });
@@ -741,14 +741,14 @@ class InferenceContext {
     }
 
     for (const definitionIndex of component) {
-      const rootNode = this.definitionWord(definitionIndex, LazuliDefinitionWord.RootNode);
+      const rootNode = this.definitionWord(definitionIndex, DefinitionWord.RootNode);
       const placeholder = this.requiredMapValue(placeholders, definitionIndex);
       const inferred = this.inferNode(rootNode, componentEnvironment, placeholder);
       this.unify(placeholder, inferred, this.nodeSpan(rootNode));
     }
 
     for (const definitionIndex of component) {
-      const symbol = this.definitionWord(definitionIndex, LazuliDefinitionWord.Symbol);
+      const symbol = this.definitionWord(definitionIndex, DefinitionWord.Symbol);
       const scheme = this.generalize(
         this.requiredMapValue(placeholders, definitionIndex),
         outerEnvironment,
@@ -762,35 +762,35 @@ class InferenceContext {
     environment: TypeEnvironment,
     expected: InferenceType | null = null,
   ): InferenceType {
-    const tag = this.nodeWord(nodeIndex, LazuliSurfaceWord.Tag);
-    const payload = this.nodeWord(nodeIndex, LazuliSurfaceWord.Payload);
+    const tag = this.nodeWord(nodeIndex, NodeWord.Tag);
+    const payload = this.nodeWord(nodeIndex, NodeWord.Payload);
     const span = this.nodeSpan(nodeIndex);
     switch (tag) {
-      case LazuliSurfaceTag.Integer:
+      case ExpressionTag.Integer:
         return INTEGER;
-      case LazuliSurfaceTag.SignedInteger64:
+      case ExpressionTag.SignedInteger64:
         return SIGNED_INTEGER_64;
-      case LazuliSurfaceTag.Float32:
+      case ExpressionTag.Float32:
         return FLOAT_32;
-      case LazuliSurfaceTag.Float64:
+      case ExpressionTag.Float64:
         return FLOAT_64;
-      case LazuliSurfaceTag.WholeNumberF64:
-        return this.namedNodeType(nodeIndex, LazuliSurfaceWord.Child1, span);
-      case LazuliSurfaceTag.Text:
-      case LazuliSurfaceTag.Bytes: {
+      case ExpressionTag.WholeNumberF64:
+        return this.namedNodeType(nodeIndex, NodeWord.Child1, span);
+      case ExpressionTag.Text:
+      case ExpressionTag.Bytes: {
         const declaration = this.#surface.typeDeclarations[
-          this.nodeWord(nodeIndex, LazuliSurfaceWord.Child0)
+          this.nodeWord(nodeIndex, NodeWord.Child0)
         ];
         if (declaration === undefined) {
           throw this.invalidTypeMetadata("literal references unknown type", span);
         }
         return { kind: "named", name: declaration.name, arguments: [] };
       }
-      case LazuliSurfaceTag.RuntimeFault:
+      case ExpressionTag.RuntimeFault:
         return this.inferenceVariable();
-      case LazuliSurfaceTag.Boolean:
+      case ExpressionTag.Boolean:
         return BOOLEAN;
-      case LazuliSurfaceTag.Name: {
+      case ExpressionTag.Name: {
         const scheme = environment.get(payload);
         if (scheme === undefined) {
           throw this.invalidTypeMetadata(
@@ -800,27 +800,27 @@ class InferenceContext {
         }
         return this.instantiateScheme(scheme);
       }
-      case LazuliSurfaceTag.Let:
-      case LazuliSurfaceTag.StrictLet: {
+      case ExpressionTag.Let:
+      case ExpressionTag.StrictLet: {
         const value = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
         );
         const scheme = this.generalize(value, environment);
         const bodyEnvironment = new Map(environment);
         bodyEnvironment.set(payload, scheme);
         return this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          this.requiredChild(nodeIndex, NodeWord.Child1),
           bodyEnvironment,
           expected,
         );
       }
-      case LazuliSurfaceTag.LetRec: {
+      case ExpressionTag.LetRec: {
         const recursiveType = this.inferenceVariable();
         const recursiveEnvironment = new Map(environment);
         recursiveEnvironment.set(payload, { parameters: [], type: recursiveType });
         const value = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           recursiveEnvironment,
           recursiveType,
         );
@@ -828,23 +828,23 @@ class InferenceContext {
         const bodyEnvironment = new Map(environment);
         bodyEnvironment.set(payload, this.generalize(recursiveType, environment));
         return this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          this.requiredChild(nodeIndex, NodeWord.Child1),
           bodyEnvironment,
           expected,
         );
       }
-      case LazuliSurfaceTag.If: {
+      case ExpressionTag.If: {
         const condition = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           BOOLEAN,
         );
         this.unify(BOOLEAN, condition, span);
-        const consequentNode = this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1);
-        const alternateNode = this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2);
+        const consequentNode = this.requiredChild(nodeIndex, NodeWord.Child1);
+        const alternateNode = this.requiredChild(nodeIndex, NodeWord.Child2);
         const inferAlternateFirst =
-          this.nodeWord(consequentNode, LazuliSurfaceWord.Tag) === LazuliSurfaceTag.Case &&
-          this.nodeWord(alternateNode, LazuliSurfaceWord.Tag) !== LazuliSurfaceTag.Case;
+          this.nodeWord(consequentNode, NodeWord.Tag) === ExpressionTag.Case &&
+          this.nodeWord(alternateNode, NodeWord.Tag) !== ExpressionTag.Case;
         const firstNode = inferAlternateFirst ? alternateNode : consequentNode;
         const secondNode = inferAlternateFirst ? consequentNode : alternateNode;
         const first = this.inferNode(firstNode, environment, expected);
@@ -854,7 +854,7 @@ class InferenceContext {
         this.unify(result, second, this.nodeSpan(secondNode));
         return result;
       }
-      case LazuliSurfaceTag.Lambda: {
+      case ExpressionTag.Lambda: {
         let expectedFunction = expected === null ? null : this.prune(expected);
         if (expectedFunction?.kind === "variable") {
           const parameter = this.inferenceVariable();
@@ -869,31 +869,31 @@ class InferenceContext {
         const bodyEnvironment = new Map(environment);
         bodyEnvironment.set(payload, { parameters: [], type: parameter });
         const body = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           bodyEnvironment,
           expectedFunction?.kind === "function" ? expectedFunction.result : null,
         );
         return { kind: "function", parameter, result: body };
       }
-      case LazuliSurfaceTag.Apply:
-      case LazuliSurfaceTag.StrictApply: {
+      case ExpressionTag.Apply:
+      case ExpressionTag.StrictApply: {
         const callee = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
         );
         const argument = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          this.requiredChild(nodeIndex, NodeWord.Child1),
           environment,
         );
         const result = expected ?? this.inferenceVariable();
         this.unify(callee, { kind: "function", parameter: argument, result }, span);
         return result;
       }
-      case LazuliSurfaceTag.Unary: {
-        if (payload === LazuliUnaryOperator.NegateWholeNumberF64) {
-          const operandType = this.namedNodeType(nodeIndex, LazuliSurfaceWord.Child1, span);
+      case ExpressionTag.Unary: {
+        if (payload === UnaryOperator.NegateWholeNumberF64) {
+          const operandType = this.namedNodeType(nodeIndex, NodeWord.Child1, span);
           const body = this.inferNode(
-            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+            this.requiredChild(nodeIndex, NodeWord.Child0),
             environment,
             operandType,
           );
@@ -902,24 +902,24 @@ class InferenceContext {
         }
         const operandType = numericTypeForUnaryOperator(payload);
         const body = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           operandType,
         );
         this.unify(operandType, body, span);
         return operandType;
       }
-      case LazuliSurfaceTag.Binary: {
+      case ExpressionTag.Binary: {
         if (
-          payload === LazuliBinaryOperator.StructuralEqual ||
-          payload === LazuliBinaryOperator.StructuralNotEqual
+          payload === BinaryOperator.StructuralEqual ||
+          payload === BinaryOperator.StructuralNotEqual
         ) {
           const left = this.inferNode(
-            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+            this.requiredChild(nodeIndex, NodeWord.Child0),
             environment,
           );
           const right = this.inferNode(
-            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+            this.requiredChild(nodeIndex, NodeWord.Child1),
             environment,
             left,
           );
@@ -927,17 +927,17 @@ class InferenceContext {
           return BOOLEAN;
         }
         if (
-          payload >= LazuliBinaryOperator.EqualWholeNumberF64 &&
-          payload <= LazuliBinaryOperator.RemainderWholeNumberF64
+          payload >= BinaryOperator.EqualWholeNumberF64 &&
+          payload <= BinaryOperator.RemainderWholeNumberF64
         ) {
-          const operandType = this.namedNodeType(nodeIndex, LazuliSurfaceWord.Child2, span);
+          const operandType = this.namedNodeType(nodeIndex, NodeWord.Child2, span);
           const left = this.inferNode(
-            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+            this.requiredChild(nodeIndex, NodeWord.Child0),
             environment,
             operandType,
           );
           const right = this.inferNode(
-            this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+            this.requiredChild(nodeIndex, NodeWord.Child1),
             environment,
             operandType,
           );
@@ -947,12 +947,12 @@ class InferenceContext {
         }
         const operandType = numericTypeForBinaryOperator(payload);
         const left = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           operandType,
         );
         const right = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          this.requiredChild(nodeIndex, NodeWord.Child1),
           environment,
           operandType,
         );
@@ -960,15 +960,15 @@ class InferenceContext {
         this.unify(operandType, right, span);
         return binaryOperatorIsComparison(payload) ? BOOLEAN : operandType;
       }
-      case LazuliSurfaceTag.BufferAppend: {
-        const operandType = this.namedNodeType(nodeIndex, LazuliSurfaceWord.Child2, span);
+      case ExpressionTag.BufferAppend: {
+        const operandType = this.namedNodeType(nodeIndex, NodeWord.Child2, span);
         const left = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           operandType,
         );
         const right = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          this.requiredChild(nodeIndex, NodeWord.Child1),
           environment,
           operandType,
         );
@@ -976,40 +976,40 @@ class InferenceContext {
         this.unify(operandType, right, span);
         return operandType;
       }
-      case LazuliSurfaceTag.StoreNew: {
+      case ExpressionTag.StoreNew: {
         const length = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           INTEGER,
         );
         this.unify(INTEGER, length, span);
         const element = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          this.requiredChild(nodeIndex, NodeWord.Child1),
           environment,
         );
         return this.storeType(nodeIndex, element, span);
       }
-      case LazuliSurfaceTag.StoreLength: {
+      case ExpressionTag.StoreLength: {
         const element = this.inferenceVariable();
         const storeType = this.storeType(nodeIndex, element, span);
         const store = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           storeType,
         );
         this.unify(storeType, store, span);
         return INTEGER;
       }
-      case LazuliSurfaceTag.StoreRead: {
+      case ExpressionTag.StoreRead: {
         const element = this.inferenceVariable();
         const storeType = this.storeType(nodeIndex, element, span);
         const store = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           storeType,
         );
         const index = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          this.requiredChild(nodeIndex, NodeWord.Child1),
           environment,
           INTEGER,
         );
@@ -1017,22 +1017,22 @@ class InferenceContext {
         this.unify(INTEGER, index, span);
         return element;
       }
-      case LazuliSurfaceTag.StoreWrite:
-      case LazuliSurfaceTag.StoreGrow: {
+      case ExpressionTag.StoreWrite:
+      case ExpressionTag.StoreGrow: {
         const element = this.inferenceVariable();
         const storeType = this.storeType(nodeIndex, element, span);
         const store = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           storeType,
         );
         const indexOrLength = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child1),
+          this.requiredChild(nodeIndex, NodeWord.Child1),
           environment,
           INTEGER,
         );
         const value = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child2),
+          this.requiredChild(nodeIndex, NodeWord.Child2),
           environment,
           element,
         );
@@ -1041,17 +1041,17 @@ class InferenceContext {
         this.unify(element, value, span);
         return storeType;
       }
-      case LazuliSurfaceTag.NumericConvert: {
+      case ExpressionTag.NumericConvert: {
         const [source, result] = numericConversionTypes(payload);
         const value = this.inferNode(
-          this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+          this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
           source,
         );
         this.unify(source, value, span);
         return result;
       }
-      case LazuliSurfaceTag.Case:
+      case ExpressionTag.Case:
         return this.inferCase(nodeIndex, environment, expected);
       default:
         throw new Error(`Unsupported Lazuli expression tag ${tag} at node ${nodeIndex}.`);
@@ -1061,7 +1061,7 @@ class InferenceContext {
   private namedNodeType(
     nodeIndex: number,
     word: 4 | 5 | 6,
-    span: LazuliDiagnostic["span"],
+    span: SemanticDiagnostic["span"],
   ): InferenceType {
     const declaration = this.#surface.typeDeclarations[this.nodeWord(nodeIndex, word)];
     if (declaration === undefined) {
@@ -1073,10 +1073,10 @@ class InferenceContext {
   private storeType(
     nodeIndex: number,
     element: InferenceType,
-    span: LazuliDiagnostic["span"],
+    span: SemanticDiagnostic["span"],
   ): InferenceType {
     const declaration = this.#surface.typeDeclarations[
-      this.nodeWord(nodeIndex, LazuliSurfaceWord.Payload)
+      this.nodeWord(nodeIndex, NodeWord.Payload)
     ];
     if (declaration === undefined || declaration.parameters.length !== 1) {
       throw this.invalidTypeMetadata("store expression references an invalid Store type", span);
@@ -1091,7 +1091,7 @@ class InferenceContext {
   ): InferenceType {
     const span = this.nodeSpan(nodeIndex);
     const scrutinee = this.inferNode(
-      this.requiredChild(nodeIndex, LazuliSurfaceWord.Child0),
+      this.requiredChild(nodeIndex, NodeWord.Child0),
       environment,
     );
     const indexedShape = this.indexedCaseShape(nodeIndex, scrutinee);
@@ -1105,13 +1105,13 @@ class InferenceContext {
     nodeIndex: number,
     environment: TypeEnvironment,
     scrutinee: InferenceType,
-    span: LazuliDiagnostic["span"],
+    span: SemanticDiagnostic["span"],
   ): InferenceType {
     const result = this.inferenceVariable();
     const matchedConstructors = new Set<number>();
     let matchedTypeIndex: number | null = null;
-    let armIndex = this.nodeWord(nodeIndex, LazuliSurfaceWord.Child1);
-    if (armIndex === LAZULI_NO_INDEX) {
+    let armIndex = this.nodeWord(nodeIndex, NodeWord.Child1);
+    if (armIndex === NO_INDEX) {
       const scrutineeType = this.prune(scrutinee);
       const shape = scrutineeType.kind === "named"
         ? this.#typeByName.get(scrutineeType.name)
@@ -1119,7 +1119,7 @@ class InferenceContext {
       if (shape !== undefined && shape.constructors.length === 0) return result;
       const firstConstructor = shape?.constructors[0];
       if (firstConstructor !== undefined) {
-        const symbol = this.constructorWord(firstConstructor, LazuliConstructorWord.Symbol);
+        const symbol = this.constructorWord(firstConstructor, ConstructorWord.Symbol);
         throw this.failure(
           "L2010",
           `non-exhaustive case; missing constructor ${JSON.stringify(this.symbolName(symbol))}`,
@@ -1133,8 +1133,8 @@ class InferenceContext {
         span,
       );
     }
-    while (armIndex !== LAZULI_NO_INDEX) {
-      const constructorSymbol = this.nodeWord(armIndex, LazuliSurfaceWord.Payload);
+    while (armIndex !== NO_INDEX) {
+      const constructorSymbol = this.nodeWord(armIndex, NodeWord.Payload);
       const constructor = this.#constructorBySymbol.get(constructorSymbol);
       if (constructor === undefined) {
         throw this.invalidTypeMetadata(
@@ -1166,7 +1166,7 @@ class InferenceContext {
       this.unify(result, body, this.nodeSpan(armIndex));
       matchedConstructors.add(constructorSymbol);
       matchedTypeIndex ??= constructor.typeIndex;
-      armIndex = this.nodeWord(armIndex, LazuliSurfaceWord.Child1);
+      armIndex = this.nodeWord(armIndex, NodeWord.Child1);
     }
 
     if (matchedTypeIndex !== null) {
@@ -1178,7 +1178,7 @@ class InferenceContext {
         throw new Error(`Lazuli case refers to missing type ${matchedTypeIndex}.`);
       }
       for (const constructorIndex of shape.constructors) {
-        const symbol = this.constructorWord(constructorIndex, LazuliConstructorWord.Symbol);
+        const symbol = this.constructorWord(constructorIndex, ConstructorWord.Symbol);
         if (matchedConstructors.has(symbol)) continue;
         throw this.failure(
           "L2010",
@@ -1199,17 +1199,17 @@ class InferenceContext {
       const shape = this.#typeByName.get(scrutineeType.name);
       if (shape?.indexed === true) return shape;
     }
-    let armIndex = this.nodeWord(nodeIndex, LazuliSurfaceWord.Child1);
-    while (armIndex !== LAZULI_NO_INDEX) {
+    let armIndex = this.nodeWord(nodeIndex, NodeWord.Child1);
+    while (armIndex !== NO_INDEX) {
       const constructor = this.#constructorBySymbol.get(
-        this.nodeWord(armIndex, LazuliSurfaceWord.Payload),
+        this.nodeWord(armIndex, NodeWord.Payload),
       );
       const declaration = constructor === undefined
         ? undefined
         : this.#surface.typeDeclarations[constructor.typeIndex];
       const shape = declaration === undefined ? undefined : this.#typeByName.get(declaration.name);
       if (shape?.indexed === true) return shape;
-      armIndex = this.nodeWord(armIndex, LazuliSurfaceWord.Child1);
+      armIndex = this.nodeWord(armIndex, NodeWord.Child1);
     }
     return null;
   }
@@ -1266,9 +1266,9 @@ class InferenceContext {
     }
 
     const matchedConstructors = new Set<number>();
-    let armIndex = this.nodeWord(nodeIndex, LazuliSurfaceWord.Child1);
-    while (armIndex !== LAZULI_NO_INDEX) {
-      const constructorSymbol = this.nodeWord(armIndex, LazuliSurfaceWord.Payload);
+    let armIndex = this.nodeWord(nodeIndex, NodeWord.Child1);
+    while (armIndex !== NO_INDEX) {
+      const constructorSymbol = this.nodeWord(armIndex, NodeWord.Payload);
       const constructor = this.#constructorBySymbol.get(constructorSymbol);
       if (constructor === undefined) {
         throw this.invalidTypeMetadata(
@@ -1346,13 +1346,13 @@ class InferenceContext {
         this.unify(deferredExpected, inferredResult, this.nodeSpan(armIndex));
         deferredExpected = null;
       }
-      armIndex = this.nodeWord(armIndex, LazuliSurfaceWord.Child1);
+      armIndex = this.nodeWord(armIndex, NodeWord.Child1);
     }
 
     for (const constructorIndex of shape.constructors) {
       const constructorSymbol = this.constructorWord(
         constructorIndex,
-        LazuliConstructorWord.Symbol,
+        ConstructorWord.Symbol,
       );
       const constructor = this.#constructorBySymbol.get(constructorSymbol);
       if (constructor === undefined) {
@@ -1698,7 +1698,7 @@ class InferenceContext {
   private unify(
     expected: InferenceType,
     received: InferenceType,
-    span: LazuliDiagnostic["span"],
+    span: SemanticDiagnostic["span"],
   ): void {
     const left = this.prune(expected);
     const right = this.prune(received);
@@ -1755,7 +1755,7 @@ class InferenceContext {
   private bindVariable(
     variable: InferenceVariable,
     type: InferenceType,
-    span: LazuliDiagnostic["span"],
+    span: SemanticDiagnostic["span"],
   ): void {
     if (
       this.#untouchableTypeVariableCutoff !== null &&
@@ -1809,10 +1809,10 @@ class InferenceContext {
   }
 
   private typeFromSchema(
-    schema: LazuliTypeSchema,
+    schema: TypeSchema,
     parameters: Map<string, TypeParameter>,
     parameterPolicy: "declared" | "implicit",
-    fallbackSpan: LazuliDiagnostic["span"],
+    fallbackSpan: SemanticDiagnostic["span"],
   ): InferenceType {
     const span = this.sourceSpan(schema, fallbackSpan);
     switch (schema.kind) {
@@ -1891,7 +1891,7 @@ class InferenceContext {
     }
   }
 
-  private copySchema(schema: LazuliTypeSchema): LazuliTypeSchema {
+  private copySchema(schema: TypeSchema): TypeSchema {
     switch (schema.kind) {
       case "integer":
       case "signed-integer-64":
@@ -1908,7 +1908,7 @@ class InferenceContext {
           values: Object.freeze([
             this.copySchema(schema.values[0]),
             this.copySchema(schema.values[1]),
-          ]) as readonly [LazuliTypeSchema, LazuliTypeSchema],
+          ]) as readonly [TypeSchema, TypeSchema],
         });
       case "named":
         return Object.freeze({
@@ -1931,7 +1931,7 @@ class InferenceContext {
     }
   }
 
-  private toPublicType(type: InferenceType): LazuliType {
+  private toPublicType(type: InferenceType): Type {
     const pruned = this.prune(type);
     switch (pruned.kind) {
       case "integer":
@@ -1947,7 +1947,7 @@ class InferenceContext {
           values: Object.freeze([
             this.toPublicType(pruned.values[0]),
             this.toPublicType(pruned.values[1]),
-          ]) as readonly [LazuliType, LazuliType],
+          ]) as readonly [Type, Type],
         });
       case "named":
         return Object.freeze({
@@ -2036,7 +2036,7 @@ class InferenceContext {
   private typeMismatch(
     expected: InferenceType,
     received: InferenceType,
-    span: LazuliDiagnostic["span"],
+    span: SemanticDiagnostic["span"],
   ): InferenceDiagnostic {
     return this.failure(
       "L2102",
@@ -2047,7 +2047,7 @@ class InferenceContext {
 
   private invalidTypeMetadata(
     message: string,
-    span: LazuliDiagnostic["span"],
+    span: SemanticDiagnostic["span"],
   ): InferenceDiagnostic {
     return this.failure("L2101", message, span);
   }
@@ -2055,7 +2055,7 @@ class InferenceContext {
   private failure(
     code: "L2010" | "L2101" | "L2102" | "L2103" | "L2104",
     message: string,
-    span: LazuliDiagnostic["span"],
+    span: SemanticDiagnostic["span"],
   ): InferenceDiagnostic {
     return new InferenceDiagnostic({ stage: "compile", code, message, span });
   }
@@ -2090,13 +2090,13 @@ class InferenceContext {
     readonly body: number;
   } {
     const binders: { symbol: number; nodeIndex: number }[] = [];
-    let body = this.requiredChild(armIndex, LazuliSurfaceWord.Child0);
-    while (this.nodeWord(body, LazuliSurfaceWord.Tag) === LazuliSurfaceTag.PatternBind) {
+    let body = this.requiredChild(armIndex, NodeWord.Child0);
+    while (this.nodeWord(body, NodeWord.Tag) === ExpressionTag.PatternBind) {
       binders.push({
-        symbol: this.nodeWord(body, LazuliSurfaceWord.Payload),
+        symbol: this.nodeWord(body, NodeWord.Payload),
         nodeIndex: body,
       });
-      body = this.requiredChild(body, LazuliSurfaceWord.Child0);
+      body = this.requiredChild(body, NodeWord.Child0);
     }
     // Surface encoding nests pattern binders right-to-left; field schemas stay source-ordered.
     binders.reverse();
@@ -2105,21 +2105,21 @@ class InferenceContext {
 
   private requiredChild(nodeIndex: number, word: 4 | 5 | 6): number {
     const child = this.nodeWord(nodeIndex, word);
-    if (child === LAZULI_NO_INDEX) {
+    if (child === NO_INDEX) {
       throw new Error(`Lazuli node ${nodeIndex} omitted child word ${word}.`);
     }
     return child;
   }
 
   private nodeWord(nodeIndex: number, word: number): number {
-    const value = this.#surface.nodeWords[nodeIndex * LAZULI_NODE_WORD_LENGTH + word];
+    const value = this.#surface.nodeWords[nodeIndex * NODE_WORD_LENGTH + word];
     if (value === undefined) throw new Error(`Lazuli node ${nodeIndex} omitted word ${word}.`);
     return value;
   }
 
   private definitionWord(definitionIndex: number, word: number): number {
     const value = this.#surface.definitionWords[
-      definitionIndex * LAZULI_DEFINITION_WORD_LENGTH + word
+      definitionIndex * DEFINITION_WORD_LENGTH + word
     ];
     if (value === undefined) {
       throw new Error(`Lazuli definition ${definitionIndex} omitted word ${word}.`);
@@ -2128,14 +2128,14 @@ class InferenceContext {
   }
 
   private typeWord(typeIndex: number, word: number): number {
-    const value = this.#surface.typeWords[typeIndex * LAZULI_TYPE_WORD_LENGTH + word];
+    const value = this.#surface.typeWords[typeIndex * TYPE_WORD_LENGTH + word];
     if (value === undefined) throw new Error(`Lazuli type ${typeIndex} omitted word ${word}.`);
     return value;
   }
 
   private constructorWord(constructorIndex: number, word: number): number {
     const value = this.#surface.constructorWords[
-      constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH + word
+      constructorIndex * CONSTRUCTOR_WORD_LENGTH + word
     ];
     if (value === undefined) {
       throw new Error(`Lazuli constructor ${constructorIndex} omitted word ${word}.`);
@@ -2143,40 +2143,40 @@ class InferenceContext {
     return value;
   }
 
-  private nodeSpan(nodeIndex: number): LazuliDiagnostic["span"] {
+  private nodeSpan(nodeIndex: number): SemanticDiagnostic["span"] {
     return {
-      startByte: this.nodeWord(nodeIndex, LazuliSurfaceWord.StartByte),
-      endByte: this.nodeWord(nodeIndex, LazuliSurfaceWord.EndByte),
+      startByte: this.nodeWord(nodeIndex, NodeWord.StartByte),
+      endByte: this.nodeWord(nodeIndex, NodeWord.EndByte),
     };
   }
 
-  private definitionSpan(definitionIndex: number | undefined): LazuliDiagnostic["span"] {
+  private definitionSpan(definitionIndex: number | undefined): SemanticDiagnostic["span"] {
     if (definitionIndex === undefined) return { startByte: 0, endByte: 0 };
     return {
-      startByte: this.definitionWord(definitionIndex, LazuliDefinitionWord.StartByte),
-      endByte: this.definitionWord(definitionIndex, LazuliDefinitionWord.EndByte),
+      startByte: this.definitionWord(definitionIndex, DefinitionWord.StartByte),
+      endByte: this.definitionWord(definitionIndex, DefinitionWord.EndByte),
     };
   }
 
-  private typeSpan(typeIndex: number): LazuliDiagnostic["span"] {
+  private typeSpan(typeIndex: number): SemanticDiagnostic["span"] {
     return {
-      startByte: this.typeWord(typeIndex, LazuliTypeWord.StartByte),
-      endByte: this.typeWord(typeIndex, LazuliTypeWord.EndByte),
+      startByte: this.typeWord(typeIndex, AlgebraicTypeWord.StartByte),
+      endByte: this.typeWord(typeIndex, AlgebraicTypeWord.EndByte),
     };
   }
 
-  private constructorSpan(constructorIndex: number): LazuliDiagnostic["span"] {
+  private constructorSpan(constructorIndex: number): SemanticDiagnostic["span"] {
     return {
-      startByte: this.constructorWord(constructorIndex, LazuliConstructorWord.StartByte),
-      endByte: this.constructorWord(constructorIndex, LazuliConstructorWord.EndByte),
+      startByte: this.constructorWord(constructorIndex, ConstructorWord.StartByte),
+      endByte: this.constructorWord(constructorIndex, ConstructorWord.EndByte),
     };
   }
 
   private sourceSpan(
-    schema: LazuliTypeSchema,
-    fallback: LazuliDiagnostic["span"],
-  ): LazuliDiagnostic["span"] {
-    const source = schema as Partial<LazuliSourceType>;
+    schema: TypeSchema,
+    fallback: SemanticDiagnostic["span"],
+  ): SemanticDiagnostic["span"] {
+    const source = schema as Partial<SourceType>;
     return typeof source.startByte === "number" && typeof source.endByte === "number"
       ? { startByte: source.startByte, endByte: source.endByte }
       : fallback;
@@ -2204,7 +2204,7 @@ class InferenceContext {
  * `definitionTypes` entry per definition and one `typeDeclarations` entry per encoded type;
  * constructors and their fields remain in the same order as the word-buffer ABI.
  */
-export function inferLazuliTypes(surface: EncodedLazuliSurface): TypeInferenceResult {
+export function inferTypes(surface: EncodedSemanticSurface): TypeInferenceResult {
   try {
     return new InferenceContext(surface).infer();
   } catch (error) {

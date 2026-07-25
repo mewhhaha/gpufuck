@@ -2,26 +2,26 @@ import { deepStrictEqual, equal, ok } from "node:assert/strict";
 
 import {
   GpuLazuliCompiler,
-  type LazuliCompilationOptions,
-  type LazuliDiagnostic,
-  type LazuliType,
-  type LazuliTypeDeclaration,
   requestWebGpuDevice,
+  type SemanticCompilationOptions,
+  type SemanticDiagnostic,
+  type Type,
+  type TypeDeclaration,
 } from "../mod.ts";
 import { buildSurfaceModule, surface } from "../functional.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
-import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
+import { inferTypes } from "../src/semantic/type_inference.ts";
 
 interface InferenceSnapshotSuccess {
   readonly ok: true;
-  readonly mainType: LazuliType;
-  readonly typeDeclarations: readonly LazuliTypeDeclaration[];
+  readonly mainType: Type;
+  readonly typeDeclarations: readonly TypeDeclaration[];
 }
 
 interface InferenceSnapshotFailure {
   readonly ok: false;
-  readonly diagnostics: readonly LazuliDiagnostic[];
+  readonly diagnostics: readonly SemanticDiagnostic[];
 }
 
 interface CorpusProgram {
@@ -44,13 +44,13 @@ function inferWithHostOracle(source: string) {
   const parsing = parseLazuliSource(source);
   ok(parsing.ok, `expected parity fixture to parse: ${source}`);
   if (!parsing.ok) throw new Error("unreachable");
-  return inferLazuliTypes(parsing.surface);
+  return inferTypes(parsing.surface);
 }
 
 async function compilerInferenceSnapshot(
   compiler: GpuLazuliCompiler,
   source: string,
-  options: LazuliCompilationOptions,
+  options: SemanticCompilationOptions,
 ): Promise<InferenceSnapshot> {
   const expected = inferWithHostOracle(source);
   const compilation = await compiler.compile(source, options);
@@ -153,7 +153,7 @@ Deno.test("host type inference treats runtime faults as dependency leaves", () =
     0,
   );
 
-  const inference = inferLazuliTypes(semanticSurfaceFromModule(module));
+  const inference = inferTypes(semanticSurfaceFromModule(module));
 
   ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
   if (!inference.ok) return;
@@ -185,7 +185,7 @@ Deno.test("host type inference preserves Store element types through persistent 
     0,
   );
 
-  const inference = inferLazuliTypes(semanticSurfaceFromModule(module));
+  const inference = inferTypes(semanticSurfaceFromModule(module));
 
   ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
   if (inference.ok) deepStrictEqual(inference.mainType, { kind: "boolean" });

@@ -1,23 +1,23 @@
 import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
 
 import {
+  CoreTag,
   GpuLazuliCompiler,
-  GpuLazuliEvaluator,
-  type GpuLazuliModule,
-  LAZULI_NO_INDEX,
-  LazuliCoreTag,
-  type LazuliEvaluationOptions,
-  type LazuliEvaluationResult,
-  type LazuliInputValue,
+  GpuSemanticEvaluator,
+  type GpuSemanticModule,
+  NO_INDEX,
   parseLazuliSource,
   requestWebGpuDevice,
+  type SemanticEvaluationOptions,
+  type SemanticEvaluationResult,
+  type SemanticInputValue,
 } from "../mod.ts";
-import { LAZULI_TYPE_WORD_LENGTH, LazuliTypeWord } from "../src/semantic/abi.ts";
+import { AlgebraicTypeWord, TYPE_WORD_LENGTH } from "../src/semantic/abi.ts";
 
 interface LazuliRuntime {
   readonly device: GPUDevice;
   readonly compiler: GpuLazuliCompiler;
-  readonly evaluator: GpuLazuliEvaluator;
+  readonly evaluator: GpuSemanticEvaluator;
 }
 
 let lazuliRuntime: LazuliRuntime | undefined;
@@ -26,7 +26,7 @@ Deno.test.beforeAll(async () => {
   const device = await requestWebGpuDevice();
   const [compiler, evaluator] = await Promise.all([
     GpuLazuliCompiler.create(device),
-    GpuLazuliEvaluator.create(device),
+    GpuSemanticEvaluator.create(device),
   ]);
   lazuliRuntime = { device, compiler, evaluator };
 });
@@ -46,7 +46,7 @@ async function withLazuliRuntime(
 async function compileModule(
   compiler: GpuLazuliCompiler,
   source: string,
-): Promise<GpuLazuliModule> {
+): Promise<GpuSemanticModule> {
   const compilation = await compiler.compile(source);
   ok(
     compilation.ok,
@@ -57,7 +57,7 @@ async function compileModule(
 
 async function readCoreNodeWords(
   device: GPUDevice,
-  module: GpuLazuliModule,
+  module: GpuSemanticModule,
 ): Promise<Uint32Array> {
   const byteLength = module.nodeCount * 8 * Uint32Array.BYTES_PER_ELEMENT;
   const readback = device.createBuffer({
@@ -80,8 +80,8 @@ async function readCoreNodeWords(
 async function evaluateSource(
   runtime: LazuliRuntime,
   source: string,
-  options: LazuliEvaluationOptions = {},
-): Promise<LazuliEvaluationResult> {
+  options: SemanticEvaluationOptions = {},
+): Promise<SemanticEvaluationResult> {
   const module = await compileModule(runtime.compiler, source);
   try {
     return await runtime.evaluator.evaluate(module, options);
@@ -257,7 +257,7 @@ Deno.test("encodes empty algebraic types without constructors", () => {
   deepStrictEqual(parsing.surface.typeDeclarations[typeIndex]?.constructors, []);
   equal(
     parsing.surface.typeWords[
-      typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.ConstructorCount
+      typeIndex * TYPE_WORD_LENGTH + AlgebraicTypeWord.ConstructorCount
     ],
     0,
   );
@@ -309,9 +309,9 @@ Deno.test("compiles annotated elimination from an empty type with no case arms",
       ok(declaration);
       deepStrictEqual(declaration.constructors, []);
       const nodes = await compilation.module.readCoreNodes();
-      const emptyCase = nodes.find((node) => node.tag === LazuliCoreTag.Case);
+      const emptyCase = nodes.find((node) => node.tag === CoreTag.Case);
       ok(emptyCase);
-      equal(emptyCase.child1, LAZULI_NO_INDEX);
+      equal(emptyCase.child1, NO_INDEX);
     } finally {
       compilation.module.destroy();
     }
@@ -394,7 +394,7 @@ Deno.test("rejects a cyclic host input value before GPU evaluation", async () =>
       "let main : List (List Int) -> Int = values => 42;",
     );
     try {
-      const cyclic = { kind: "list" as const, values: [] as LazuliInputValue[] };
+      const cyclic = { kind: "list" as const, values: [] as SemanticInputValue[] };
       cyclic.values.push(cyclic);
       const result = await runtime.evaluator.evaluate(module, { input: cyclic });
 
@@ -781,14 +781,14 @@ Deno.test("reads UTF-8 core spans and resolved name payloads", async () => {
 
       ok(caseOffset > 0);
       ok(byteOffset(caseOffset) > caseOffset, "the leading é must shift UTF-8 byte offsets");
-      ok(nodeAt(LazuliCoreTag.Constructor, 0, constructorOffset, "Box".length));
-      ok(nodeAt(LazuliCoreTag.Global, 0, answerOffset, "answer".length));
-      ok(nodeAt(LazuliCoreTag.Local, 0, finalLocalOffset, "local".length));
+      ok(nodeAt(CoreTag.Constructor, 0, constructorOffset, "Box".length));
+      ok(nodeAt(CoreTag.Global, 0, answerOffset, "answer".length));
+      ok(nodeAt(CoreTag.Local, 0, finalLocalOffset, "local".length));
 
       const caseArmStartByte = byteOffset(caseArmOffset);
       const caseArmEndByte = byteOffset(source.indexOf("end"));
       const caseArmIndex = nodes.findIndex((node) =>
-        node.tag === LazuliCoreTag.CaseArm && node.payload === 0 &&
+        node.tag === CoreTag.CaseArm && node.payload === 0 &&
         node.sourceByteOffset === caseArmStartByte
       );
       ok(caseArmIndex >= 0 && nodeWords[caseArmIndex * 8 + 6] === caseArmEndByte);
@@ -824,7 +824,7 @@ Deno.test("rejects malformed core child edges as invalid modules", async () => {
     const evaluateMalformedCore = async (
       nodeWords: Uint32Array<ArrayBuffer>,
       rootNode: number,
-    ): Promise<LazuliEvaluationResult> => {
+    ): Promise<SemanticEvaluationResult> => {
       const nodeBuffer = uploadStorageBuffer("Malformed Lazuli core nodes", nodeWords);
       const definitionBuffer = uploadStorageBuffer(
         "Malformed Lazuli definitions",
@@ -835,7 +835,7 @@ Deno.test("rejects malformed core child edges as invalid modules", async () => {
         new Uint32Array(5),
       );
       let destroyed = false;
-      const malformedModule: GpuLazuliModule = {
+      const malformedModule: GpuSemanticModule = {
         nodeBuffer,
         definitionBuffer,
         constructorBuffer,
@@ -870,19 +870,19 @@ Deno.test("rejects malformed core child edges as invalid modules", async () => {
 
     const selfEdge = await evaluateMalformedCore(
       new Uint32Array([
-        LazuliCoreTag.Apply,
+        CoreTag.Apply,
         0,
         0,
         1,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
-        LazuliCoreTag.Integer,
+        CoreTag.Integer,
         42,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
@@ -891,27 +891,27 @@ Deno.test("rejects malformed core child edges as invalid modules", async () => {
     );
     const backwardEdge = await evaluateMalformedCore(
       new Uint32Array([
-        LazuliCoreTag.Integer,
+        CoreTag.Integer,
         1,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
-        LazuliCoreTag.Apply,
+        CoreTag.Apply,
         0,
         0,
         2,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
-        LazuliCoreTag.Integer,
+        CoreTag.Integer,
         42,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
@@ -920,19 +920,19 @@ Deno.test("rejects malformed core child edges as invalid modules", async () => {
     );
     const extraneousLeafChild = await evaluateMalformedCore(
       new Uint32Array([
-        LazuliCoreTag.Integer,
+        CoreTag.Integer,
         42,
         1,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
-        LazuliCoreTag.Integer,
+        CoreTag.Integer,
         0,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
@@ -969,19 +969,19 @@ Deno.test("faults safely if a constructor reaches a zero-arm core case", async (
     const nodeBuffer = uploadStorageBuffer(
       "Hostile zero-arm Lazuli core nodes",
       new Uint32Array([
-        LazuliCoreTag.Case,
+        CoreTag.Case,
         0,
         1,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
-        LazuliCoreTag.Constructor,
+        CoreTag.Constructor,
         0,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
         0,
         0,
         0,
@@ -996,7 +996,7 @@ Deno.test("faults safely if a constructor reaches a zero-arm core case", async (
       new Uint32Array([0, 0, 0, 0, 0]),
     );
     let destroyed = false;
-    const module: GpuLazuliModule = {
+    const module: GpuSemanticModule = {
       nodeBuffer,
       definitionBuffer,
       constructorBuffer,
@@ -1743,7 +1743,7 @@ Deno.test("applies batch fuel and heap limits independently to every evaluation"
 Deno.test("rejects malformed metadata for only the affected Lazuli batch member", async () => {
   await withLazuliRuntime(async (runtime) => {
     const module = await compileModule(runtime.compiler, "data Unit = Unit; fn main = Unit;");
-    const malformedModule: GpuLazuliModule = {
+    const malformedModule: GpuSemanticModule = {
       nodeBuffer: module.nodeBuffer,
       definitionBuffer: module.definitionBuffer,
       constructorBuffer: module.constructorBuffer,

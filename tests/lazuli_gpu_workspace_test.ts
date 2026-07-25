@@ -2,20 +2,20 @@ import { deepStrictEqual, equal, ok, rejects } from "node:assert/strict";
 
 import {
   GpuLazuliCompiler,
-  LAZULI_NO_INDEX,
-  type LazuliType,
+  NO_INDEX,
   parseLazuliSource,
   requestWebGpuDevice,
+  type Type,
 } from "../mod.ts";
 import type {
   GpuCompilationDispatchObservation,
   GpuTypeInferenceDispatchObservation,
   GpuTypeInferenceWorkspaceCapacities,
 } from "../src/semantic/gpu_type_inference_contract.ts";
-import { runGpuLazuliTypeInference } from "../src/semantic/gpu_type_inference_runner.ts";
+import { runGpuSemanticTypeInference } from "../src/semantic/gpu_type_inference_runner.ts";
 import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
 import { CompilationStatus } from "../src/semantic/compiler_shader.ts";
-import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
+import { inferTypes } from "../src/semantic/type_inference.ts";
 import {
   INFERENCE_DEFINITION_SCRATCH_VECTORS,
   INFERENCE_ENVIRONMENT_WORD_LENGTH,
@@ -74,7 +74,7 @@ async function runInferenceWithCapacities(
   const observations: GpuTypeInferenceDispatchObservation[] = [];
   const compilationObservations: GpuCompilationDispatchObservation[] = [];
   try {
-    const result = await runGpuLazuliTypeInference({
+    const result = await runGpuSemanticTypeInference({
       device,
       pipeline,
       surface,
@@ -120,14 +120,14 @@ function assertSuccessfulInference(
   const parsing = parseLazuliSource(source);
   ok(parsing.ok);
   if (!parsing.ok) throw new Error("unreachable");
-  const expected = inferLazuliTypes(parsing.surface);
+  const expected = inferTypes(parsing.surface);
   ok(expected.ok);
   ok(result.ok, result.ok ? undefined : result.diagnostic.message);
   if (!expected.ok || !result.ok) throw new Error("unreachable");
   deepStrictEqual(result.mainType, expected.mainType);
 }
 
-function typeNodeCount(type: LazuliType): number {
+function typeNodeCount(type: Type): number {
   const pending = [type];
   let count = 0;
   while (pending.length > 0) {
@@ -591,7 +591,7 @@ Deno.test("GPU inference rejects a constructor result root outside the schema ta
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli malformed result metadata test pipeline",
       layout: "auto",
-      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+      compute: { module: shader, entryPoint: "infer_types" },
     });
     const compiler = await GpuLazuliCompiler.create(device);
     const source = "data Box a = Box(value: a); let main = 0;";
@@ -607,7 +607,7 @@ Deno.test("GPU inference rejects a constructor result root outside the schema ta
             TypeSchemaMetadataWord.ConstructorResultRootsOffset
           ];
           ok(resultBase !== undefined);
-          words[resultBase] = LAZULI_NO_INDEX;
+          words[resultBase] = NO_INDEX;
         },
       },
     );
@@ -635,7 +635,7 @@ Deno.test("GPU inference validates the shape of sentinel-marked constructor resu
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli malformed synthetic result pipeline",
       layout: "auto",
-      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+      compute: { module: shader, entryPoint: "infer_types" },
     });
     const compiler = await GpuLazuliCompiler.create(device);
     const source = "data Box a = Box(value: a); let main = 0;";
@@ -652,7 +652,7 @@ Deno.test("GPU inference validates the shape of sentinel-marked constructor resu
           ];
           ok(schemaBase !== undefined && resultBase !== undefined);
           const root = words[resultBase];
-          ok(root !== undefined && root !== LAZULI_NO_INDEX);
+          ok(root !== undefined && root !== NO_INDEX);
           words[
             schemaBase + root * TYPE_SCHEMA_WORD_LENGTH + TypeSchemaWord.Tag
           ] = 99;
@@ -724,7 +724,7 @@ Deno.test("GPU inference cancels after an observed dispatch and leaves the compi
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli cancellation test pipeline",
       layout: "auto",
-      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+      compute: { module: shader, entryPoint: "infer_types" },
     });
     const compiler = await GpuLazuliCompiler.create(device);
     const source = "let identity = value => value; let main = identity 42;";
@@ -763,7 +763,7 @@ Deno.test("GPU inference observer aborts a terminal dispatch before returning ou
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli terminal cancellation test pipeline",
       layout: "auto",
-      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+      compute: { module: shader, entryPoint: "infer_types" },
     });
     const compiler = await GpuLazuliCompiler.create(device);
     const source = "let main = 42;";
@@ -803,7 +803,7 @@ Deno.test("GPU inference observer aborts an exhausted dispatch before arena grow
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli exhausted cancellation test pipeline",
       layout: "auto",
-      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+      compute: { module: shader, entryPoint: "infer_types" },
     });
     const compiler = await GpuLazuliCompiler.create(device);
     const source = "let main = (1, 2);";
@@ -847,7 +847,7 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli workspace growth test pipeline",
       layout: "auto",
-      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+      compute: { module: shader, entryPoint: "infer_types" },
     });
     const compiler = await GpuLazuliCompiler.create(device);
 
@@ -1083,7 +1083,7 @@ Deno.test("GPU inference transition counts are invariant across dispatch quanta"
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli transition invariance test pipeline",
       layout: "auto",
-      compute: { module: shader, entryPoint: "infer_lazuli_types" },
+      compute: { module: shader, entryPoint: "infer_types" },
     });
     const compiler = await GpuLazuliCompiler.create(device);
 

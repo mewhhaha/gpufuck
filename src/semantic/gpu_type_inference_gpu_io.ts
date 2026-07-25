@@ -1,4 +1,4 @@
-import type { EncodedLazuliSurface } from "./abi.ts";
+import type { EncodedSemanticSurface } from "./abi.ts";
 import {
   COMPILATION_STATE_BYTE_LENGTH,
   CompilationStateWord,
@@ -31,8 +31,8 @@ const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 export const SEMANTIC_SNAPSHOT_BYTE_OFFSET = InferenceSchedulerWord.SemanticState *
   WORD_BYTES;
 
-/** Creates the shader module used with {@link runGpuLazuliTypeInference}. */
-export function createLazuliTypeInferenceShaderModule(device: GPUDevice): GPUShaderModule {
+/** Creates the shader module used with {@link runGpuSemanticTypeInference}. */
+export function createTypeInferenceShaderModule(device: GPUDevice): GPUShaderModule {
   return device.createShaderModule({
     label: "Lazuli type inference",
     code: TYPE_INFERENCE_SHADER,
@@ -203,7 +203,7 @@ export async function dispatchForReadback(
   coreNodeBuffer: GPUBuffer,
   coreReadbackByteOffset: number,
   coreReadbackByteLength: number,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   semanticPass: GpuSemanticCompilationPass | undefined,
   signal: AbortSignal | undefined,
   dispatchScheduler: GpuDispatchScheduler | undefined,
@@ -358,7 +358,7 @@ export async function copyOutputForReadback(
   outputBuffer: GPUBuffer,
   outputReadbackBuffer: GPUBuffer,
   outputCount: number,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): Promise<void> {
   const byteLength = inferredTypeOutputByteLength(outputCount);
   if (byteLength === 0) {
@@ -396,7 +396,7 @@ export async function readDiagnosticWorkspace(
   workspaceBuffer: GPUBuffer,
   state: InferenceStateSnapshot,
   layout: WorkspaceLayout,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): Promise<DataView> {
   const byteLength = checkedProduct(
     "type diagnostic workspace bytes",

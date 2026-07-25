@@ -1,27 +1,24 @@
-import { LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH } from "../semantic/abi.ts";
+import { MAXIMUM_SOURCE_BYTE_LENGTH } from "../semantic/abi.ts";
 import { sourceTooLargeDiagnostic } from "../semantic/compilation_diagnostics.ts";
 import type {
-  GpuLazuliModule,
-  LazuliCompilationOptions,
-  LazuliCompileResult,
+  GpuSemanticModule,
+  SemanticCompilationOptions,
+  SemanticCompileResult,
 } from "../semantic/compiler_module.ts";
 import { parseLazuliSourceForCompilation } from "./frontend.ts";
-import {
-  lazuliDiagnosticFromFunctional,
-  lazuliSurfaceToFunctionalModule,
-} from "./functional_adapter.ts";
+import { lazuliDiagnosticFromFunctional, lazuliSurfaceToModule } from "./functional_adapter.ts";
 import { GpuCompiler, validateCompilationOptions } from "../functional/compiler.ts";
 
 export type {
-  GpuLazuliModule,
-  LazuliCompilationOptions,
-  LazuliCompileResult,
-  LazuliCoreNode,
+  CoreNode,
+  GpuSemanticModule,
+  SemanticCompilationOptions,
+  SemanticCompileResult,
 } from "../semantic/compiler_module.ts";
 
 type PreparedLazuliSource =
-  | { readonly ok: true; readonly module: ReturnType<typeof lazuliSurfaceToFunctionalModule> }
-  | { readonly ok: false; readonly result: LazuliCompileResult };
+  | { readonly ok: true; readonly module: ReturnType<typeof lazuliSurfaceToModule> }
+  | { readonly ok: false; readonly result: SemanticCompileResult };
 
 export class GpuLazuliCompiler {
   readonly #compiler: GpuCompiler;
@@ -36,17 +33,17 @@ export class GpuLazuliCompiler {
 
   async compile(
     source: string,
-    options: LazuliCompilationOptions = {},
-  ): Promise<LazuliCompileResult> {
+    options: SemanticCompilationOptions = {},
+  ): Promise<SemanticCompileResult> {
     validateCompilationOptions(options);
     options.signal?.throwIfAborted();
     const parsed = parseLazuliSourceForCompilation(source);
     const sourceByteLength = parsed.sourceByteLength;
-    if (sourceByteLength > LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH) {
+    if (sourceByteLength > MAXIMUM_SOURCE_BYTE_LENGTH) {
       return {
         ok: false,
         diagnostics: [
-          sourceTooLargeDiagnostic(sourceByteLength, LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH),
+          sourceTooLargeDiagnostic(sourceByteLength, MAXIMUM_SOURCE_BYTE_LENGTH),
         ],
       };
     }
@@ -54,11 +51,11 @@ export class GpuLazuliCompiler {
     const frontend = parsed.frontend;
     if (!frontend.ok) return frontend;
     const result = await this.#compiler.compileModule(
-      lazuliSurfaceToFunctionalModule(frontend.surface, sourceByteLength),
+      lazuliSurfaceToModule(frontend.surface, sourceByteLength),
       options,
     );
     if (result.ok) {
-      return { ok: true, module: result.module as unknown as GpuLazuliModule };
+      return { ok: true, module: result.module as unknown as GpuSemanticModule };
     }
     return {
       ok: false,
@@ -71,24 +68,24 @@ export class GpuLazuliCompiler {
 
   async compileBatch(
     sources: readonly string[],
-    options: LazuliCompilationOptions = {},
-  ): Promise<readonly LazuliCompileResult[]> {
+    options: SemanticCompilationOptions = {},
+  ): Promise<readonly SemanticCompileResult[]> {
     validateCompilationOptions(options);
     options.signal?.throwIfAborted();
     if (sources.length === 0) return [];
     if (sources.length === 1) return [await this.compile(sources[0]!, options)];
 
-    const results: (LazuliCompileResult | undefined)[] = new Array(sources.length);
+    const results: (SemanticCompileResult | undefined)[] = new Array(sources.length);
     const accepted: {
       readonly resultIndex: number;
-      readonly module: ReturnType<typeof lazuliSurfaceToFunctionalModule>;
+      readonly module: ReturnType<typeof lazuliSurfaceToModule>;
     }[] = [];
     const preparedSources = new Map<string, PreparedLazuliSource>();
     for (const [resultIndex, source] of sources.entries()) {
       let prepared = preparedSources.get(source);
       if (prepared === undefined) {
         const parsed = parseLazuliSourceForCompilation(source);
-        if (parsed.sourceByteLength > LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH) {
+        if (parsed.sourceByteLength > MAXIMUM_SOURCE_BYTE_LENGTH) {
           prepared = {
             ok: false,
             result: {
@@ -96,7 +93,7 @@ export class GpuLazuliCompiler {
               diagnostics: [
                 sourceTooLargeDiagnostic(
                   parsed.sourceByteLength,
-                  LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH,
+                  MAXIMUM_SOURCE_BYTE_LENGTH,
                 ),
               ],
             },
@@ -106,7 +103,7 @@ export class GpuLazuliCompiler {
         } else {
           prepared = {
             ok: true,
-            module: lazuliSurfaceToFunctionalModule(
+            module: lazuliSurfaceToModule(
               parsed.frontend.surface,
               parsed.sourceByteLength,
             ),
@@ -142,7 +139,7 @@ export class GpuLazuliCompiler {
           throw new Error(`Lazuli batch compiler omitted accepted source ${acceptedIndex}`);
         }
         results[entry.resultIndex] = result.ok
-          ? { ok: true, module: result.module as unknown as GpuLazuliModule }
+          ? { ok: true, module: result.module as unknown as GpuSemanticModule }
           : {
             ok: false,
             diagnostics: result.diagnostics.map(lazuliDiagnosticFromFunctional) as [
@@ -160,8 +157,8 @@ export class GpuLazuliCompiler {
 }
 
 function completedBatchResults(
-  results: readonly (LazuliCompileResult | undefined)[],
-): readonly LazuliCompileResult[] {
+  results: readonly (SemanticCompileResult | undefined)[],
+): readonly SemanticCompileResult[] {
   return results.map((result, index) => {
     if (result === undefined) throw new Error(`Lazuli batch compiler omitted result ${index}`);
     return result;

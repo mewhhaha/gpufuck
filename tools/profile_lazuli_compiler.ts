@@ -1,9 +1,9 @@
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
-import { lazuliSurfaceToFunctionalModule } from "../src/lazuli/functional_adapter.ts";
+import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
-import { LAZULI_DEFINITION_WORD_LENGTH, LazuliDefinitionWord } from "../src/semantic/abi.ts";
-import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";
+import { DEFINITION_WORD_LENGTH, DefinitionWord } from "../src/semantic/abi.ts";
+import type { CoreNode } from "../src/semantic/compiler_module.ts";
 import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
 import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
 import type { GpuCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
@@ -45,7 +45,7 @@ if (!parsed.ok) {
 }
 
 const adapterStart = performance.now();
-const functionalModule = lazuliSurfaceToFunctionalModule(parsed.surface, sourceBytes);
+const functionalModule = lazuliSurfaceToModule(parsed.surface, sourceBytes);
 const semanticSurface = semanticSurfaceFromModule(functionalModule);
 const functionalAdapterMilliseconds = performance.now() - adapterStart;
 
@@ -57,7 +57,7 @@ for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
   warmParseAndSurfacePackingMilliseconds.push(performance.now() - warmParseStart);
   if (!warmParsed.ok) throw new Error("profile source stopped parsing during warm samples");
   const warmAdapterStart = performance.now();
-  semanticSurfaceFromModule(lazuliSurfaceToFunctionalModule(warmParsed.surface, sourceBytes));
+  semanticSurfaceFromModule(lazuliSurfaceToModule(warmParsed.surface, sourceBytes));
   warmAdapterMilliseconds.push(performance.now() - warmAdapterStart);
 }
 
@@ -75,7 +75,7 @@ try {
   const warmupParsed = parseLazuliSource(warmupSource);
   if (!warmupParsed.ok) throw new Error("internal Lazuli profiling warmup did not parse");
   const warmupSurface = semanticSurfaceFromModule(
-    lazuliSurfaceToFunctionalModule(
+    lazuliSurfaceToModule(
       warmupParsed.surface,
       new TextEncoder().encode(warmupSource).byteLength,
     ),
@@ -96,7 +96,7 @@ try {
     const samples: number[] = [];
     let representativeDispatches: readonly DispatchProfile[] = [];
     let representativeCoreReadbackMilliseconds = 0;
-    let representativeCoreNodes: readonly LazuliCoreNode[] = [];
+    let representativeCoreNodes: readonly CoreNode[] = [];
     for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
       const dispatches: DispatchProfile[] = [];
       let previousDispatch = performance.now();
@@ -325,7 +325,7 @@ function median(samples: readonly number[]): number {
 function definitionRoots(surface: typeof semanticSurface): readonly number[] {
   return Array.from({ length: surface.definitionCount }, (_, definition) => {
     const root = surface.definitionWords[
-      definition * LAZULI_DEFINITION_WORD_LENGTH + LazuliDefinitionWord.RootNode
+      definition * DEFINITION_WORD_LENGTH + DefinitionWord.RootNode
     ];
     if (root === undefined) {
       throw new Error(`profile surface omits the root node for definition ${definition}`);

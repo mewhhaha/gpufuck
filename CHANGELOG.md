@@ -64,6 +64,16 @@ Three surface primitives, each because two unrelated frontends hand-rolled the s
   `WasmFunctionType` is the unrelated signature interface in the same file, and the private
   `GpuEvaluator.createBackend` overload became `createWithCollectionSyntax` to make room for the
   public one.
+- **The GPU semantic layer no longer speaks a second vocabulary.** `src/semantic/` was named
+  `Lazuli*` throughout, from when it was the Lazuli-specific compiler, and `src/functional/abi.ts`
+  was a wall of aliases bridging the two. Inspecting the pairs showed they were not all the same
+  thing: the word layouts, tags, operators, size constants, `Span`, `Type`, `TypeSchema`,
+  `SourceType`, `TypeDeclaration`, and `CoreNode` were genuinely one declaration wearing two names,
+  and those collapsed — the wall is now a re-export list. The rest were not aliases at all.
+  `LazuliValue` carries `text` and no `float-64`; `GpuLazuliModule` lacks ten fields `GpuModule`
+  has; `GpuEvaluator` _wraps_ the GPU backend and adds the Wasm fallback. Those are two layers, not
+  two names, so they are now `SemanticValue`, `GpuSemanticModule`, and `GpuSemanticEvaluator` —
+  named for the layer they belong to.
 - `GpuEvaluator.evaluate` now selects a runtime instead of rejecting programs. It inspects resolved
   Core before dispatch and delegates programs needing 64-bit floats, portable whole-number f64,
   text, bytes, runtime faults, buffer append, stores, structural equality, 32-bit float division, or

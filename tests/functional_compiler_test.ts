@@ -23,7 +23,7 @@ import {
   type TypeSchema,
   WasmIntrinsic,
 } from "../functional.ts";
-import { GpuLazuliCompiler, lazuliSurfaceToFunctionalModule, parseLazuliSource } from "../mod.ts";
+import { GpuLazuliCompiler, lazuliSurfaceToModule, parseLazuliSource } from "../mod.ts";
 
 interface Runtime {
   readonly device: GPUDevice;
@@ -694,7 +694,7 @@ Deno.test("preserves Lazuli compatibility across the functional module boundary"
   if (!parsing.ok) return;
   const [functional, lazuli] = await Promise.all([
     compiler.compileModule(
-      lazuliSurfaceToFunctionalModule(
+      lazuliSurfaceToModule(
         parsing.surface,
         new TextEncoder().encode(source).byteLength,
       ),
@@ -803,7 +803,7 @@ Deno.test("keeps frontend collection names as ordinary constructors", async () =
   ok(parsing.ok);
   if (!parsing.ok) return;
   const compilation = await compiler.compileModule(
-    lazuliSurfaceToFunctionalModule(
+    lazuliSurfaceToModule(
       parsing.surface,
       new TextEncoder().encode(source).byteLength,
     ),
@@ -835,7 +835,7 @@ Deno.test("reports functional runtime faults without frontend-specific prefixes"
   ok(parsing.ok);
   if (!parsing.ok) return;
   const compilation = await compiler.compileModule(
-    lazuliSurfaceToFunctionalModule(
+    lazuliSurfaceToModule(
       parsing.surface,
       new TextEncoder().encode(source).byteLength,
     ),

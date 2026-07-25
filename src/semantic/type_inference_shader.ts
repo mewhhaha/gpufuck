@@ -1,21 +1,21 @@
 import {
-  type EncodedLazuliSurface,
-  LAZULI_ABI_VERSION,
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_DEFINITION_WORD_LENGTH,
-  LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
-  LAZULI_NO_INDEX,
-  LAZULI_NODE_WORD_LENGTH,
-  LAZULI_TYPE_WORD_LENGTH,
-  LazuliBinaryOperator,
-  LazuliConstructorWord,
-  LazuliCoreTag,
-  LazuliTypeWord,
-  LazuliUnaryOperator,
+  AlgebraicTypeWord,
+  BinaryOperator,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  CoreTag,
+  DEFINITION_WORD_LENGTH,
+  type EncodedSemanticSurface,
+  MAXIMUM_CONSTRUCTOR_ARITY,
+  MODULE_ABI_VERSION,
+  NO_INDEX,
+  NODE_WORD_LENGTH,
+  TYPE_WORD_LENGTH,
+  UnaryOperator,
 } from "./abi.ts";
 import { COMPILATION_STATE_WORD_LENGTH, CompilationStatus } from "./compiler_shader.ts";
 import {
-  type FlattenedLazuliTypeSchemas,
+  type FlattenedTypeSchemas,
   TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
   TYPE_SCHEMA_WORD_LENGTH,
   TypeSchemaMetadataWord,
@@ -223,7 +223,7 @@ export const InferenceMetadataFailure = {
  * - L2102: `ErrorOperand0/1` are the expected/received internal type roots.
  * - L2103: `ErrorOperand0/1` are the variable/candidate internal type roots.
  * - L2104: `ErrorDetail` is the main symbol and `ErrorOperand0` is its inferred
- *   type root, or `LAZULI_NO_INDEX` when main has no definition.
+ *   type root, or `NO_INDEX` when main has no definition.
  */
 export const INFERENCE_STATE_WORD_LENGTH = 73;
 export const INFERENCE_SCHEDULER_WORD_LENGTH = 1 +
@@ -347,14 +347,14 @@ const ValidationRecordWord = {
 } as const;
 
 function prepareIndexedInferenceMetadata(
-  surface: EncodedLazuliSurface,
-  flattened: FlattenedLazuliTypeSchemas,
+  surface: EncodedSemanticSurface,
+  flattened: FlattenedTypeSchemas,
 ): { readonly words: Uint32Array; readonly footerBase: number } {
   const typeLookup = new Uint32Array(flattened.identifierNames.length);
-  typeLookup.fill(LAZULI_NO_INDEX);
+  typeLookup.fill(NO_INDEX);
   for (let typeIndex = 0; typeIndex < surface.typeCount; typeIndex++) {
-    const symbol = surface.typeWords[typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.Symbol]!;
-    if (symbol < typeLookup.length && typeLookup[symbol] === LAZULI_NO_INDEX) {
+    const symbol = surface.typeWords[typeIndex * TYPE_WORD_LENGTH + AlgebraicTypeWord.Symbol]!;
+    if (symbol < typeLookup.length && typeLookup[symbol] === NO_INDEX) {
       typeLookup[symbol] = typeIndex;
     }
   }
@@ -381,10 +381,10 @@ function prepareIndexedInferenceMetadata(
     records[base + ValidationRecordWord.Operand1] = operand1;
   };
   for (let typeIndex = 0; typeIndex < surface.typeCount; typeIndex++) {
-    const typeBase = typeIndex * LAZULI_TYPE_WORD_LENGTH;
-    const symbol = surface.typeWords[typeBase + LazuliTypeWord.Symbol]!;
-    const startByte = surface.typeWords[typeBase + LazuliTypeWord.StartByte]!;
-    const endByte = surface.typeWords[typeBase + LazuliTypeWord.EndByte]!;
+    const typeBase = typeIndex * TYPE_WORD_LENGTH;
+    const symbol = surface.typeWords[typeBase + AlgebraicTypeWord.Symbol]!;
+    const startByte = surface.typeWords[typeBase + AlgebraicTypeWord.StartByte]!;
+    const endByte = surface.typeWords[typeBase + AlgebraicTypeWord.EndByte]!;
     if (symbol < typeLookup.length && typeLookup[symbol] !== typeIndex) {
       writeFailure(
         typeValidation,
@@ -423,9 +423,9 @@ function prepareIndexedInferenceMetadata(
 
   const schemaCount = flattened.schemaWords.length / TYPE_SCHEMA_WORD_LENGTH;
   const schemaParameterPositions = new Uint32Array(schemaCount);
-  schemaParameterPositions.fill(LAZULI_NO_INDEX);
+  schemaParameterPositions.fill(NO_INDEX);
   const syntheticSchemaConstructors = new Uint32Array(schemaCount);
-  syntheticSchemaConstructors.fill(LAZULI_NO_INDEX);
+  syntheticSchemaConstructors.fill(NO_INDEX);
   const typesWithExplicitResults = new Uint32Array(surface.typeCount);
   const schemaWord = (schemaIndex: number, word: number): number =>
     flattened.schemaWords[schemaIndex * TYPE_SCHEMA_WORD_LENGTH + word]!;
@@ -442,7 +442,7 @@ function prepareIndexedInferenceMetadata(
       }
       const children: number[] = [];
       let child = schemaWord(schemaIndex, TypeSchemaWord.FirstChild);
-      while (child !== LAZULI_NO_INDEX) {
+      while (child !== NO_INDEX) {
         children.push(child);
         child = schemaWord(child, TypeSchemaWord.NextSibling);
       }
@@ -452,7 +452,7 @@ function prepareIndexedInferenceMetadata(
   };
 
   for (const root of flattened.definitionAnnotationRoots) {
-    if (root === LAZULI_NO_INDEX) continue;
+    if (root === NO_INDEX) continue;
     const parameterPositions = new Map<number, number>();
     const pending = [root];
     while (pending.length !== 0) {
@@ -475,7 +475,7 @@ function prepareIndexedInferenceMetadata(
       }
       const children: number[] = [];
       let child = schemaWord(schemaIndex, TypeSchemaWord.FirstChild);
-      while (child !== LAZULI_NO_INDEX) {
+      while (child !== NO_INDEX) {
         children.push(child);
         child = schemaWord(child, TypeSchemaWord.NextSibling);
       }
@@ -496,12 +496,12 @@ function prepareIndexedInferenceMetadata(
     surface.constructorCount * VALIDATION_RECORD_WORD_LENGTH,
   );
   for (let constructorIndex = 0; constructorIndex < surface.constructorCount; constructorIndex++) {
-    const constructorBase = constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH;
+    const constructorBase = constructorIndex * CONSTRUCTOR_WORD_LENGTH;
     const typeIndex = surface.constructorWords[
-      constructorBase + LazuliConstructorWord.Type
+      constructorBase + ConstructorWord.Type
     ]!;
     const constructorSymbol = surface.constructorWords[
-      constructorBase + LazuliConstructorWord.Symbol
+      constructorBase + ConstructorWord.Symbol
     ]!;
     const firstParameter = flattened.typeParameterOffsets[typeIndex]!;
     const parameterEnd = flattened.typeParameterOffsets[typeIndex + 1]!;
@@ -518,8 +518,8 @@ function prepareIndexedInferenceMetadata(
     const resultRoot = flattened.constructorResultRoots[constructorIndex]!;
     syntheticSchemaConstructors[resultRoot] = constructorIndex;
     if (
-      schemaWord(resultRoot, TypeSchemaWord.StartByte) !== LAZULI_NO_INDEX ||
-      schemaWord(resultRoot, TypeSchemaWord.EndByte) !== LAZULI_NO_INDEX
+      schemaWord(resultRoot, TypeSchemaWord.StartByte) !== NO_INDEX ||
+      schemaWord(resultRoot, TypeSchemaWord.EndByte) !== NO_INDEX
     ) {
       typesWithExplicitResults[typeIndex] = 1;
     }
@@ -550,7 +550,7 @@ function prepareIndexedInferenceMetadata(
     const resultTag = schemaWord(resultRoot, TypeSchemaWord.Tag);
     const resultSymbol = schemaWord(resultRoot, TypeSchemaWord.Symbol);
     const declaredSymbol = surface.typeWords[
-      typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.Symbol
+      typeIndex * TYPE_WORD_LENGTH + AlgebraicTypeWord.Symbol
     ]!;
     let resultHeadIsValid = resultTag === InferenceSchemaTag.Named &&
       resultSymbol === declaredSymbol;
@@ -628,9 +628,9 @@ function prepareIndexedInferenceMetadata(
  * It does not parse types, alter parameter identity, resolve named types, or
  * repack the seven metadata tables.
  */
-export function prepareLazuliInferenceShaderMetadata(
-  surface: EncodedLazuliSurface,
-  flattened: FlattenedLazuliTypeSchemas,
+export function prepareInferenceShaderMetadata(
+  surface: EncodedSemanticSurface,
+  flattened: FlattenedTypeSchemas,
 ): InferenceShaderMetadata {
   const schemaCount = flattened.schemaWords.length / TYPE_SCHEMA_WORD_LENGTH;
   if (!Number.isInteger(schemaCount)) {
@@ -694,7 +694,7 @@ export function prepareLazuliInferenceShaderMetadata(
 
   const header = flattened.metadataWords;
   if (
-    header[TypeSchemaMetadataWord.AbiVersion] !== LAZULI_ABI_VERSION ||
+    header[TypeSchemaMetadataWord.AbiVersion] !== MODULE_ABI_VERSION ||
     header[TypeSchemaMetadataWord.HeaderWordLength] !==
       TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH
   ) {
@@ -910,12 +910,12 @@ struct InferenceState {
 
 var<private> state: InferenceState;
 
-const NO_INDEX: u32 = ${LAZULI_NO_INDEX}u;
-const NODE_WORD_LENGTH: u32 = ${LAZULI_NODE_WORD_LENGTH}u;
-const DEFINITION_WORD_LENGTH: u32 = ${LAZULI_DEFINITION_WORD_LENGTH}u;
-const TYPE_WORD_LENGTH: u32 = ${LAZULI_TYPE_WORD_LENGTH}u;
-const CONSTRUCTOR_WORD_LENGTH: u32 = ${LAZULI_CONSTRUCTOR_WORD_LENGTH}u;
-const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${LAZULI_MAXIMUM_CONSTRUCTOR_ARITY}u;
+const NO_INDEX: u32 = ${NO_INDEX}u;
+const NODE_WORD_LENGTH: u32 = ${NODE_WORD_LENGTH}u;
+const DEFINITION_WORD_LENGTH: u32 = ${DEFINITION_WORD_LENGTH}u;
+const TYPE_WORD_LENGTH: u32 = ${TYPE_WORD_LENGTH}u;
+const CONSTRUCTOR_WORD_LENGTH: u32 = ${CONSTRUCTOR_WORD_LENGTH}u;
+const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${MAXIMUM_CONSTRUCTOR_ARITY}u;
 
 const STATUS_UNINITIALIZED: u32 = 0u;
 const STATUS_PENDING: u32 = 1u;
@@ -1084,41 +1084,41 @@ fn type_kind_is_primitive(kind: u32) -> bool {
     kind == TYPE_SIGNED_INTEGER_64 || kind == TYPE_FLOAT_32 || kind == TYPE_FLOAT_64;
 }
 
-const TAG_INTEGER: u32 = ${LazuliCoreTag.Integer}u;
-const TAG_BOOLEAN: u32 = ${LazuliCoreTag.Boolean}u;
-const TAG_LET: u32 = ${LazuliCoreTag.Let}u;
-const TAG_IF: u32 = ${LazuliCoreTag.If}u;
-const TAG_LAMBDA: u32 = ${LazuliCoreTag.Lambda}u;
-const TAG_APPLY: u32 = ${LazuliCoreTag.Apply}u;
-const TAG_UNARY: u32 = ${LazuliCoreTag.Unary}u;
-const TAG_BINARY: u32 = ${LazuliCoreTag.Binary}u;
-const BINARY_STRUCTURAL_EQUAL: u32 = ${LazuliBinaryOperator.StructuralEqual}u;
-const BINARY_STRUCTURAL_NOT_EQUAL: u32 = ${LazuliBinaryOperator.StructuralNotEqual}u;
-const BINARY_EQUAL_WHOLE_NUMBER_F64: u32 = ${LazuliBinaryOperator.EqualWholeNumberF64}u;
-const BINARY_GREATER_EQUAL_WHOLE_NUMBER_F64: u32 = ${LazuliBinaryOperator.GreaterEqualWholeNumberF64}u;
-const BINARY_REMAINDER_WHOLE_NUMBER_F64: u32 = ${LazuliBinaryOperator.RemainderWholeNumberF64}u;
-const BINARY_REMAINDER_FLOAT_64: u32 = ${LazuliBinaryOperator.RemainderFloat64}u;
-const TAG_CASE: u32 = ${LazuliCoreTag.Case}u;
-const TAG_CASE_ARM: u32 = ${LazuliCoreTag.CaseArm}u;
-const TAG_PATTERN_BIND: u32 = ${LazuliCoreTag.PatternBind}u;
-const TAG_LOCAL: u32 = ${LazuliCoreTag.Local}u;
-const TAG_GLOBAL: u32 = ${LazuliCoreTag.Global}u;
-const TAG_CONSTRUCTOR: u32 = ${LazuliCoreTag.Constructor}u;
-const TAG_LET_REC: u32 = ${LazuliCoreTag.LetRec}u;
-const TAG_SIGNED_INTEGER_64: u32 = ${LazuliCoreTag.SignedInteger64}u;
-const TAG_FLOAT_32: u32 = ${LazuliCoreTag.Float32}u;
-const TAG_FLOAT_64: u32 = ${LazuliCoreTag.Float64}u;
-const TAG_NUMERIC_CONVERT: u32 = ${LazuliCoreTag.NumericConvert}u;
-const TAG_TEXT: u32 = ${LazuliCoreTag.Text}u;
-const TAG_BYTES: u32 = ${LazuliCoreTag.Bytes}u;
-const TAG_RUNTIME_FAULT: u32 = ${LazuliCoreTag.RuntimeFault}u;
-const TAG_WHOLE_NUMBER_F64: u32 = ${LazuliCoreTag.WholeNumberF64}u;
-const TAG_BUFFER_APPEND: u32 = ${LazuliCoreTag.BufferAppend}u;
-const TAG_STORE_NEW: u32 = ${LazuliCoreTag.StoreNew}u;
-const TAG_STORE_LENGTH: u32 = ${LazuliCoreTag.StoreLength}u;
-const TAG_STORE_READ: u32 = ${LazuliCoreTag.StoreRead}u;
-const TAG_STORE_WRITE: u32 = ${LazuliCoreTag.StoreWrite}u;
-const TAG_STORE_GROW: u32 = ${LazuliCoreTag.StoreGrow}u;
+const TAG_INTEGER: u32 = ${CoreTag.Integer}u;
+const TAG_BOOLEAN: u32 = ${CoreTag.Boolean}u;
+const TAG_LET: u32 = ${CoreTag.Let}u;
+const TAG_IF: u32 = ${CoreTag.If}u;
+const TAG_LAMBDA: u32 = ${CoreTag.Lambda}u;
+const TAG_APPLY: u32 = ${CoreTag.Apply}u;
+const TAG_UNARY: u32 = ${CoreTag.Unary}u;
+const TAG_BINARY: u32 = ${CoreTag.Binary}u;
+const BINARY_STRUCTURAL_EQUAL: u32 = ${BinaryOperator.StructuralEqual}u;
+const BINARY_STRUCTURAL_NOT_EQUAL: u32 = ${BinaryOperator.StructuralNotEqual}u;
+const BINARY_EQUAL_WHOLE_NUMBER_F64: u32 = ${BinaryOperator.EqualWholeNumberF64}u;
+const BINARY_GREATER_EQUAL_WHOLE_NUMBER_F64: u32 = ${BinaryOperator.GreaterEqualWholeNumberF64}u;
+const BINARY_REMAINDER_WHOLE_NUMBER_F64: u32 = ${BinaryOperator.RemainderWholeNumberF64}u;
+const BINARY_REMAINDER_FLOAT_64: u32 = ${BinaryOperator.RemainderFloat64}u;
+const TAG_CASE: u32 = ${CoreTag.Case}u;
+const TAG_CASE_ARM: u32 = ${CoreTag.CaseArm}u;
+const TAG_PATTERN_BIND: u32 = ${CoreTag.PatternBind}u;
+const TAG_LOCAL: u32 = ${CoreTag.Local}u;
+const TAG_GLOBAL: u32 = ${CoreTag.Global}u;
+const TAG_CONSTRUCTOR: u32 = ${CoreTag.Constructor}u;
+const TAG_LET_REC: u32 = ${CoreTag.LetRec}u;
+const TAG_SIGNED_INTEGER_64: u32 = ${CoreTag.SignedInteger64}u;
+const TAG_FLOAT_32: u32 = ${CoreTag.Float32}u;
+const TAG_FLOAT_64: u32 = ${CoreTag.Float64}u;
+const TAG_NUMERIC_CONVERT: u32 = ${CoreTag.NumericConvert}u;
+const TAG_TEXT: u32 = ${CoreTag.Text}u;
+const TAG_BYTES: u32 = ${CoreTag.Bytes}u;
+const TAG_RUNTIME_FAULT: u32 = ${CoreTag.RuntimeFault}u;
+const TAG_WHOLE_NUMBER_F64: u32 = ${CoreTag.WholeNumberF64}u;
+const TAG_BUFFER_APPEND: u32 = ${CoreTag.BufferAppend}u;
+const TAG_STORE_NEW: u32 = ${CoreTag.StoreNew}u;
+const TAG_STORE_LENGTH: u32 = ${CoreTag.StoreLength}u;
+const TAG_STORE_READ: u32 = ${CoreTag.StoreRead}u;
+const TAG_STORE_WRITE: u32 = ${CoreTag.StoreWrite}u;
+const TAG_STORE_GROW: u32 = ${CoreTag.StoreGrow}u;
 
 const OUTPUT_INTEGER: u32 = 1u;
 const OUTPUT_BOOLEAN: u32 = 2u;
@@ -3478,7 +3478,7 @@ fn expression_transition() {
       return;
     }
     if node.tag == TAG_UNARY {
-      let whole_number = node.payload == ${LazuliUnaryOperator.NegateWholeNumberF64}u;
+      let whole_number = node.payload == ${UnaryOperator.NegateWholeNumberF64}u;
       if !require_frame_slots(1u) || (whole_number && !require_type_slots(1u)) { return; }
       frame_set(frame, 1u, 50u);
       var operand_type = numeric_type_index_for_unary(node.payload);
@@ -4562,7 +4562,7 @@ fn node_shape_is_valid(node_index: u32) -> bool {
   if node.tag == TAG_LAMBDA || node.tag == TAG_UNARY ||
     node.tag == TAG_NUMERIC_CONVERT || node.tag == TAG_PATTERN_BIND {
     let whole_number = node.tag == TAG_UNARY &&
-      node.payload == ${LazuliUnaryOperator.NegateWholeNumberF64}u;
+      node.payload == ${UnaryOperator.NegateWholeNumberF64}u;
     return required_child_is_valid(node_index, node.child0) &&
       select(node.child1 == NO_INDEX, node.child1 < state.type_count, whole_number) &&
       node.child2 == NO_INDEX && node.evaluation_mode == 0u &&
@@ -5538,7 +5538,7 @@ fn infer_lane() {
 }
 
 @compute @workgroup_size(1)
-fn infer_lazuli_types(@builtin(global_invocation_id) invocation: vec3<u32>) {
+fn infer_types(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let lane_index = invocation.x;
   if lane_index >= arrayLength(&inference_states) {
     return;

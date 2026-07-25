@@ -2,7 +2,7 @@ import { deepStrictEqual, equal, ok } from "node:assert/strict";
 
 import { GpuLazuliCompiler, requestWebGpuDevice } from "../mod.ts";
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
-import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
+import { inferTypes } from "../src/semantic/type_inference.ts";
 
 interface CorpusProgram {
   readonly name: string;
@@ -47,7 +47,7 @@ Deno.test("GPU diagnostics match the host oracle for the 64-program single-fault
       ok(parsing.ok, `expected ${program.name} to parse`);
       if (!parsing.ok) throw new Error("unreachable");
 
-      const expected = inferLazuliTypes(parsing.surface);
+      const expected = inferTypes(parsing.surface);
       ok(!expected.ok, `expected host inference to reject ${program.name}`);
       if (expected.ok) throw new Error("unreachable");
 

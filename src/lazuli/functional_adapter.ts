@@ -1,7 +1,7 @@
 import type {
-  EncodedLazuliSurface,
-  LazuliDiagnostic,
-  LazuliDiagnosticCode,
+  EncodedSemanticSurface,
+  SemanticDiagnostic,
+  SemanticDiagnosticCode,
 } from "../semantic/abi.ts";
 import {
   CORE_V1_PRIMITIVE_CAPABILITIES,
@@ -12,8 +12,8 @@ import {
   TypecheckingProfile,
 } from "../functional/abi.ts";
 
-export function lazuliSurfaceToFunctionalModule(
-  surface: EncodedLazuliSurface,
+export function lazuliSurfaceToModule(
+  surface: EncodedSemanticSurface,
   sourceByteLength: number,
 ): EncodedModule {
   return {
@@ -40,10 +40,10 @@ export function lazuliSurfaceToFunctionalModule(
 
 export function lazuliDiagnosticFromFunctional(
   diagnostic: Diagnostic,
-): LazuliDiagnostic {
+): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: `L${diagnostic.code.slice(1)}` as LazuliDiagnosticCode,
+    code: `L${diagnostic.code.slice(1)}` as SemanticDiagnosticCode,
     message: diagnostic.message,
     span: diagnostic.span,
   };

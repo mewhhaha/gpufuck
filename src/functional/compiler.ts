@@ -1,5 +1,5 @@
-import type { EncodedLazuliSurface, LazuliDiagnostic } from "../semantic/abi.ts";
-import { CompiledGpuLazuliModule, type GpuLazuliModule } from "../semantic/compiler_module.ts";
+import type { EncodedSemanticSurface, SemanticDiagnostic } from "../semantic/abi.ts";
+import { CompiledGpuSemanticModule, type GpuSemanticModule } from "../semantic/compiler_module.ts";
 import {
   constructorLimitDiagnostic,
   definitionLimitDiagnostic,
@@ -229,7 +229,7 @@ export class GpuCompiler {
           throw new Error(`functional batch compiler omitted accepted module ${acceptedIndex}`);
         }
         results[entry.resultIndex] = result.ok
-          ? { ok: true, module: functionalModule(result.module, entry.module) }
+          ? { ok: true, module: publicModule(result.module, entry.module) }
           : {
             ok: false,
             diagnostics: result.diagnostics.map(functionalDiagnostic) as [
@@ -301,7 +301,7 @@ export class GpuCompiler {
       for (const buffer of buffers) buffer.destroy();
       throw new Error("functional compiled Core restoration omitted a module buffer");
     }
-    const lazuliModule = new CompiledGpuLazuliModule(
+    const semanticModule = new CompiledGpuSemanticModule(
       this.#device,
       nodeBuffer,
       definitionBuffer,
@@ -312,7 +312,7 @@ export class GpuCompiler {
       publicTypeMetadata(surface).typeDeclarations,
       coreNodeBytes.slice(0, encodedModule.nodeCount * NODE_BYTE_LENGTH),
     );
-    return functionalModule(lazuliModule, encodedModule);
+    return publicModule(semanticModule, encodedModule);
   }
 }
 
@@ -357,8 +357,8 @@ function completedBatchResults(
   });
 }
 
-function functionalModule(
-  module: GpuLazuliModule,
+function publicModule(
+  module: GpuSemanticModule,
   encodedModule: EncodedModule,
 ): GpuModule {
   const definitionRoots = Array.from(
@@ -801,7 +801,7 @@ function validateRecordTable(
  * exported because it is part of the published surface, and it keeps the widening explicit at the
  * call sites that pass a module where a surface is expected.
  */
-export function semanticSurfaceFromModule(module: EncodedModule): EncodedLazuliSurface {
+export function semanticSurfaceFromModule(module: EncodedModule): EncodedSemanticSurface {
   return module;
 }
 
@@ -821,11 +821,11 @@ function failedLimit(
   };
 }
 
-function functionalFailure(diagnostic: LazuliDiagnostic): CompileResult {
+function functionalFailure(diagnostic: SemanticDiagnostic): CompileResult {
   return { ok: false, diagnostics: [functionalDiagnostic(diagnostic)] };
 }
 
-function functionalDiagnostic(diagnostic: LazuliDiagnostic): Diagnostic {
+function functionalDiagnostic(diagnostic: SemanticDiagnostic): Diagnostic {
   return {
     stage: "compile",
     code: `F${diagnostic.code.slice(1)}` as DiagnosticCode,

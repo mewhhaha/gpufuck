@@ -1,35 +1,41 @@
-import {
-  type EncodedLazuliDefinitionType,
-  type EncodedLazuliTypeDeclaration,
-  LAZULI_ABI_VERSION,
-  LAZULI_CONSTRUCTOR_BYTE_LENGTH,
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_DEFINITION_BYTE_LENGTH,
-  LAZULI_DEFINITION_WORD_LENGTH,
-  LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
-  LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH,
-  LAZULI_MAXIMUM_SURFACE_NODES,
-  LAZULI_NO_INDEX,
-  LAZULI_NODE_BYTE_LENGTH,
-  LAZULI_NODE_WORD_LENGTH,
-  LAZULI_TYPE_BYTE_LENGTH,
-  LAZULI_TYPE_WORD_LENGTH,
-  LazuliBinaryOperator,
-  LazuliConstructorWord,
-  LazuliCoreTag,
-  LazuliDefinitionWord,
-  type LazuliDiagnosticCode,
-  LazuliEvaluationMode,
-  LazuliNumericConversion,
-  LazuliSurfaceTag,
-  LazuliSurfaceWord,
-  LazuliTypeWord,
-  LazuliUnaryOperator,
+/**
+ * The public surface ABI: the packed module contract a frontend encodes to, and the diagnostics it
+ * decodes back.
+ *
+ * The word layouts, tags, operators, and size constants are declared once in `../semantic/abi.ts`
+ * and re-exported here. They used to be re-declared under a second set of names, which meant every
+ * ABI change had to be made twice and agreeing was a convention rather than a fact.
+ *
+ * @module
+ */
+export {
+  AlgebraicTypeWord,
+  BinaryOperator,
+  CONSTRUCTOR_BYTE_LENGTH,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  CoreTag,
+  DEFINITION_BYTE_LENGTH,
+  DEFINITION_WORD_LENGTH,
+  DefinitionWord,
+  type EncodedDefinitionType,
+  type EncodedTypeDeclaration,
+  EvaluationMode,
+  ExpressionTag,
+  MAXIMUM_CONSTRUCTOR_ARITY,
+  MAXIMUM_EXPRESSION_NODES,
+  MAXIMUM_SOURCE_BYTE_LENGTH,
+  MODULE_ABI_VERSION,
+  NO_INDEX,
+  NODE_BYTE_LENGTH,
+  NODE_WORD_LENGTH,
+  NodeWord,
+  NumericConversion,
+  TYPE_BYTE_LENGTH,
+  TYPE_WORD_LENGTH,
+  UnaryOperator,
 } from "../semantic/abi.ts";
-import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
-import type { SourceRange, WasmExportDeclaration } from "./module_contract.ts";
-import type { EvaluationProfile, Span, TypecheckingProfile } from "./schema_contract.ts";
-
+export { EvaluationProfile, TypecheckingProfile } from "./schema_contract.ts";
 export { type SourceRange, type WasmExportDeclaration } from "./module_contract.ts";
 export {
   type SourceType,
@@ -39,44 +45,20 @@ export {
   type TypeSchema,
 } from "./schema_contract.ts";
 
-export const MODULE_ABI_VERSION = LAZULI_ABI_VERSION;
-export const NO_INDEX = LAZULI_NO_INDEX;
-export const MAXIMUM_SOURCE_BYTE_LENGTH = LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH;
-export const MAXIMUM_EXPRESSION_NODES = LAZULI_MAXIMUM_SURFACE_NODES;
-export const MAXIMUM_CONSTRUCTOR_ARITY = LAZULI_MAXIMUM_CONSTRUCTOR_ARITY;
+import type {
+  EncodedDefinitionType,
+  EncodedTypeDeclaration,
+  SemanticDiagnosticCode,
+} from "../semantic/abi.ts";
+import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
+import type { SourceRange, WasmExportDeclaration } from "./module_contract.ts";
+import type { EvaluationProfile, Span, TypecheckingProfile } from "./schema_contract.ts";
+
+/** Reserved nominal names the surface builder installs; a frontend cannot declare them. */
 export const UNIT_CONSTRUCTOR_NAME = "$Unit";
 export const PAIR_CONSTRUCTOR_NAME = "$Tuple";
 export const THUNK_TYPE_NAME = "$ThunkType";
 export const THUNK_CONSTRUCTOR_NAME = "$Thunk";
-
-export const NODE_WORD_LENGTH = LAZULI_NODE_WORD_LENGTH;
-export const NODE_BYTE_LENGTH = LAZULI_NODE_BYTE_LENGTH;
-export const DEFINITION_WORD_LENGTH = LAZULI_DEFINITION_WORD_LENGTH;
-export const DEFINITION_BYTE_LENGTH = LAZULI_DEFINITION_BYTE_LENGTH;
-export const TYPE_WORD_LENGTH = LAZULI_TYPE_WORD_LENGTH;
-export const TYPE_BYTE_LENGTH = LAZULI_TYPE_BYTE_LENGTH;
-export const CONSTRUCTOR_WORD_LENGTH = LAZULI_CONSTRUCTOR_WORD_LENGTH;
-export const CONSTRUCTOR_BYTE_LENGTH = LAZULI_CONSTRUCTOR_BYTE_LENGTH;
-
-export const NodeWord = LazuliSurfaceWord;
-export const DefinitionWord = LazuliDefinitionWord;
-export const AlgebraicTypeWord = LazuliTypeWord;
-export const ConstructorWord = LazuliConstructorWord;
-export const ExpressionTag = LazuliSurfaceTag;
-export const CoreTag = LazuliCoreTag;
-export const UnaryOperator = LazuliUnaryOperator;
-export const BinaryOperator = LazuliBinaryOperator;
-export const EvaluationMode = LazuliEvaluationMode;
-export const NumericConversion = LazuliNumericConversion;
-
-export type ExpressionTag = (typeof ExpressionTag)[keyof typeof ExpressionTag];
-export type CoreTag = (typeof CoreTag)[keyof typeof CoreTag];
-export type UnaryOperator = (typeof UnaryOperator)[keyof typeof UnaryOperator];
-export type BinaryOperator = (typeof BinaryOperator)[keyof typeof BinaryOperator];
-export type EvaluationMode = (typeof EvaluationMode)[keyof typeof EvaluationMode];
-export type NumericConversion = (typeof NumericConversion)[keyof typeof NumericConversion];
-
-export { EvaluationProfile, TypecheckingProfile } from "./schema_contract.ts";
 
 export const PrimitiveCapability = {
   SignedInteger32: "signed-integer-i32",
@@ -120,13 +102,10 @@ export const CORE_V1_PRIMITIVE_CAPABILITIES: readonly PrimitiveCapability[] = Ob
   ] as const,
 );
 
-export type EncodedDefinitionType = EncodedLazuliDefinitionType;
-export type EncodedTypeDeclaration = EncodedLazuliTypeDeclaration;
-
 type DiagnosticCodeOf<Code extends string> = Code extends `L${infer Suffix}` ? `F${Suffix}`
   : never;
 
-export type DiagnosticCode = DiagnosticCodeOf<LazuliDiagnosticCode>;
+export type DiagnosticCode = DiagnosticCodeOf<SemanticDiagnosticCode>;
 
 export interface RelatedDiagnostic {
   readonly message: string;

@@ -1,4 +1,4 @@
-import { LAZULI_MAXIMUM_CONSTRUCTOR_ARITY, LazuliBinaryOperator, LazuliCoreTag } from "./abi.ts";
+import { BinaryOperator, CoreTag, MAXIMUM_CONSTRUCTOR_ARITY } from "./abi.ts";
 import {
   INDEXED_LOCAL_RESOLUTION_MAGIC,
   INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC,
@@ -170,7 +170,7 @@ var<storage, read_write> symbol_lookups: array<SymbolLookup>;
 var<private> state: CompilationState;
 
 const NO_INDEX: u32 = 0xffffffffu;
-const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${LAZULI_MAXIMUM_CONSTRUCTOR_ARITY}u;
+const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${MAXIMUM_CONSTRUCTOR_ARITY}u;
 const INDEXED_LOCAL_RESOLUTION_MAGIC: u32 = ${INDEXED_LOCAL_RESOLUTION_MAGIC}u;
 const INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC: u32 = ${INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC}u;
 const PLANNED_LOWERING_READY: u32 = 0x4c5a5052u;
@@ -222,11 +222,11 @@ const SURFACE_BYTES: u32 = 24u;
 const SURFACE_RUNTIME_FAULT: u32 = 25u;
 const SURFACE_WHOLE_NUMBER_F64: u32 = 26u;
 const SURFACE_BUFFER_APPEND: u32 = 27u;
-const SURFACE_STORE_NEW: u32 = ${LazuliCoreTag.StoreNew}u;
-const SURFACE_STORE_LENGTH: u32 = ${LazuliCoreTag.StoreLength}u;
-const SURFACE_STORE_READ: u32 = ${LazuliCoreTag.StoreRead}u;
-const SURFACE_STORE_WRITE: u32 = ${LazuliCoreTag.StoreWrite}u;
-const SURFACE_STORE_GROW: u32 = ${LazuliCoreTag.StoreGrow}u;
+const SURFACE_STORE_NEW: u32 = ${CoreTag.StoreNew}u;
+const SURFACE_STORE_LENGTH: u32 = ${CoreTag.StoreLength}u;
+const SURFACE_STORE_READ: u32 = ${CoreTag.StoreRead}u;
+const SURFACE_STORE_WRITE: u32 = ${CoreTag.StoreWrite}u;
+const SURFACE_STORE_GROW: u32 = ${CoreTag.StoreGrow}u;
 
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
@@ -410,10 +410,10 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_BINARY: {
-      let whole_number = node.payload >= ${LazuliBinaryOperator.EqualWholeNumberF64}u &&
-        node.payload <= ${LazuliBinaryOperator.RemainderWholeNumberF64}u;
+      let whole_number = node.payload >= ${BinaryOperator.EqualWholeNumberF64}u &&
+        node.payload <= ${BinaryOperator.RemainderWholeNumberF64}u;
       return node.payload >= 1u &&
-        node.payload <= ${LazuliBinaryOperator.RemainderFloat64}u &&
+        node.payload <= ${BinaryOperator.RemainderFloat64}u &&
         required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) &&
         select(node.child2 == NO_INDEX, node.child2 < state.type_count, whole_number);
@@ -983,7 +983,7 @@ fn prepare_inference_state() {
 }
 
 @compute @workgroup_size(1)
-fn compile_lazuli(@builtin(global_invocation_id) invocation: vec3<u32>) {
+fn compile_module(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let lane_index = invocation.x;
   if lane_index >= arrayLength(&compilation_states) {
     return;
@@ -1018,7 +1018,7 @@ fn lane_of_node(global_node: u32) -> u32 {
 }
 
 @compute @workgroup_size(${PLANNED_LOWERING_WORKGROUP_SIZE})
-fn lower_planned_lazuli(
+fn lower_planned_module(
   @builtin(workgroup_id) workgroup: vec3<u32>,
   @builtin(local_invocation_index) local_invocation: u32,
 ) {

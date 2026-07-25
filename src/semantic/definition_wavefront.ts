@@ -1,5 +1,5 @@
-import { LAZULI_NO_INDEX, LazuliCoreTag } from "./abi.ts";
-import type { LazuliCoreNode } from "./compiler_module.ts";
+import { CoreTag, NO_INDEX } from "./abi.ts";
+import type { CoreNode } from "./compiler_module.ts";
 
 const NO_WAVE = 0xffff_ffff;
 const GPU_UNSCHEDULED_WAVE = 0;
@@ -55,7 +55,7 @@ interface SemanticDefinitionGraphBatchShape {
 
 export function semanticDefinitionDependencyGraph(
   definitionRoots: readonly number[],
-  nodes: readonly LazuliCoreNode[],
+  nodes: readonly CoreNode[],
 ): SemanticDefinitionDependencyGraph {
   const dependencies = definitionRoots.map((root, definition) =>
     definitionDependencies(definition, root, definitionRoots.length, nodes)
@@ -65,7 +65,7 @@ export function semanticDefinitionDependencyGraph(
 
 export function semanticDefinitionParallelismProfile(
   definitionRoots: readonly number[],
-  nodes: readonly LazuliCoreNode[],
+  nodes: readonly CoreNode[],
 ): SemanticDefinitionParallelismProfile {
   const definitionWork = definitionRoots.map((root, definition) =>
     definitionNodeWork(definition, root, nodes)
@@ -577,7 +577,7 @@ function definitionDependencies(
   definition: number,
   root: number,
   definitionCount: number,
-  nodes: readonly LazuliCoreNode[],
+  nodes: readonly CoreNode[],
 ): readonly number[] {
   const dependencies = new Set<number>();
   const visited = new Set<number>();
@@ -592,7 +592,7 @@ function definitionDependencies(
         `semantic definition d${definition} reaches core node ${nodeIndex} beyond ${nodes.length} nodes`,
       );
     }
-    if (node.tag === LazuliCoreTag.Global) {
+    if (node.tag === CoreTag.Global) {
       if (node.payload >= definitionCount) {
         throw new Error(
           `semantic definition d${definition} references d${node.payload} beyond ${definitionCount} definitions`,
@@ -602,7 +602,7 @@ function definitionDependencies(
       continue;
     }
     for (const child of coreChildren(node)) {
-      if (child !== LAZULI_NO_INDEX) pending.push(child);
+      if (child !== NO_INDEX) pending.push(child);
     }
   }
   return Object.freeze([...dependencies].sort((left, right) => left - right));
@@ -611,7 +611,7 @@ function definitionDependencies(
 function definitionNodeWork(
   definition: number,
   root: number,
-  nodes: readonly LazuliCoreNode[],
+  nodes: readonly CoreNode[],
 ): number {
   const visited = new Set<number>();
   const pending = [root];
@@ -625,48 +625,48 @@ function definitionNodeWork(
         `semantic definition d${definition} reaches core node ${nodeIndex} beyond ${nodes.length} nodes`,
       );
     }
-    if (node.tag === LazuliCoreTag.Global) continue;
+    if (node.tag === CoreTag.Global) continue;
     for (const child of coreChildren(node)) {
-      if (child !== LAZULI_NO_INDEX) pending.push(child);
+      if (child !== NO_INDEX) pending.push(child);
     }
   }
   return visited.size;
 }
 
-function coreChildren(node: LazuliCoreNode): readonly number[] {
+function coreChildren(node: CoreNode): readonly number[] {
   switch (node.tag) {
-    case LazuliCoreTag.Integer:
-    case LazuliCoreTag.SignedInteger64:
-    case LazuliCoreTag.Float32:
-    case LazuliCoreTag.Float64:
-    case LazuliCoreTag.WholeNumberF64:
-    case LazuliCoreTag.Boolean:
-    case LazuliCoreTag.Text:
-    case LazuliCoreTag.Bytes:
-    case LazuliCoreTag.RuntimeFault:
-    case LazuliCoreTag.Local:
-    case LazuliCoreTag.Global:
-    case LazuliCoreTag.Constructor:
+    case CoreTag.Integer:
+    case CoreTag.SignedInteger64:
+    case CoreTag.Float32:
+    case CoreTag.Float64:
+    case CoreTag.WholeNumberF64:
+    case CoreTag.Boolean:
+    case CoreTag.Text:
+    case CoreTag.Bytes:
+    case CoreTag.RuntimeFault:
+    case CoreTag.Local:
+    case CoreTag.Global:
+    case CoreTag.Constructor:
       return [];
-    case LazuliCoreTag.Lambda:
-    case LazuliCoreTag.Unary:
-    case LazuliCoreTag.NumericConvert:
-    case LazuliCoreTag.StoreLength:
-    case LazuliCoreTag.PatternBind:
+    case CoreTag.Lambda:
+    case CoreTag.Unary:
+    case CoreTag.NumericConvert:
+    case CoreTag.StoreLength:
+    case CoreTag.PatternBind:
       return [node.child0];
-    case LazuliCoreTag.Apply:
-    case LazuliCoreTag.Let:
-    case LazuliCoreTag.LetRec:
-    case LazuliCoreTag.Binary:
-    case LazuliCoreTag.BufferAppend:
-    case LazuliCoreTag.StoreNew:
-    case LazuliCoreTag.StoreRead:
-    case LazuliCoreTag.Case:
-    case LazuliCoreTag.CaseArm:
+    case CoreTag.Apply:
+    case CoreTag.Let:
+    case CoreTag.LetRec:
+    case CoreTag.Binary:
+    case CoreTag.BufferAppend:
+    case CoreTag.StoreNew:
+    case CoreTag.StoreRead:
+    case CoreTag.Case:
+    case CoreTag.CaseArm:
       return [node.child0, node.child1];
-    case LazuliCoreTag.If:
-    case LazuliCoreTag.StoreWrite:
-    case LazuliCoreTag.StoreGrow:
+    case CoreTag.If:
+    case CoreTag.StoreWrite:
+    case CoreTag.StoreGrow:
       return [node.child0, node.child1, node.child2];
   }
 }

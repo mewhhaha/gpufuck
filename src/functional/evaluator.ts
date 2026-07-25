@@ -1,9 +1,9 @@
-import type { GpuLazuliModule, LazuliCoreNode } from "../semantic/compiler_module.ts";
+import type { CoreNode, GpuSemanticModule } from "../semantic/compiler_module.ts";
 import {
-  GpuLazuliEvaluator,
-  type LazuliDeepEvaluationResult,
-  type LazuliEvaluationResult,
-  type LazuliRuntimeFault,
+  GpuSemanticEvaluator,
+  type SemanticDeepEvaluationResult,
+  type SemanticEvaluationResult,
+  type SemanticRuntimeFault,
 } from "../semantic/evaluator.ts";
 import type { GpuModule } from "./compiler_module.ts";
 import { BinaryOperator, CoreTag, NumericConversion, UnaryOperator } from "./abi.ts";
@@ -146,15 +146,15 @@ const numericRequirementsByModule = new WeakMap<
 >();
 
 export class GpuEvaluator {
-  readonly #evaluator: GpuLazuliEvaluator;
+  readonly #evaluator: GpuSemanticEvaluator;
 
-  private constructor(evaluator: GpuLazuliEvaluator) {
+  private constructor(evaluator: GpuSemanticEvaluator) {
     this.#evaluator = evaluator;
   }
 
   static async create(device: GPUDevice): Promise<GpuEvaluator> {
     return new GpuEvaluator(
-      await GpuLazuliEvaluator.createBackend(device),
+      await GpuSemanticEvaluator.createBackend(device),
     );
   }
 
@@ -175,13 +175,13 @@ export class GpuEvaluator {
       return await evaluateModuleWithBoundedWasm(module, options);
     }
     const result = await this.#evaluator.evaluate(
-      lazuliRuntimeModule(module),
+      semanticRuntimeModule(module),
       {
         ...options,
         ...(numerics.signedInteger64 && options.resultForm !== "deep"
           ? { resultForm: "deep" as const }
           : {}),
-      } as Parameters<GpuLazuliEvaluator["evaluate"]>[1],
+      } as Parameters<GpuSemanticEvaluator["evaluate"]>[1],
     );
     const converted = functionalResult(result);
     return numerics.signedInteger64 && options.resultForm !== "deep" && converted.ok
@@ -216,8 +216,8 @@ export class GpuEvaluator {
       ));
     }
     const results = await this.#evaluator.evaluateBatch(
-      modules.map(lazuliRuntimeModule),
-      options as Parameters<GpuLazuliEvaluator["evaluateBatch"]>[1],
+      modules.map(semanticRuntimeModule),
+      options as Parameters<GpuSemanticEvaluator["evaluateBatch"]>[1],
     );
     return results.map(functionalResult);
   }
@@ -501,7 +501,7 @@ function functionalValueFromWasm(
   return convert(execution.value);
 }
 
-function lazuliRuntimeModule(module: GpuModule): GpuLazuliModule {
+function semanticRuntimeModule(module: GpuModule): GpuSemanticModule {
   return {
     nodeBuffer: module.nodeBuffer,
     definitionBuffer: module.definitionBuffer,
@@ -515,13 +515,13 @@ function lazuliRuntimeModule(module: GpuModule): GpuLazuliModule {
     entryDefinition: module.entryDefinition,
     mainType: module.entryType,
     typeDeclarations: module.typeDeclarations,
-    readCoreNodes: async () => await module.readCoreNodes() as readonly LazuliCoreNode[],
+    readCoreNodes: async () => await module.readCoreNodes() as readonly CoreNode[],
     destroy: () => module.destroy(),
   };
 }
 
 function functionalResult(
-  result: LazuliEvaluationResult | LazuliDeepEvaluationResult,
+  result: SemanticEvaluationResult | SemanticDeepEvaluationResult,
 ): AnyEvaluationResult {
   if (result.ok) return result as AnyEvaluationResult;
   return {
@@ -531,7 +531,7 @@ function functionalResult(
   };
 }
 
-function functionalFault(fault: LazuliRuntimeFault): RuntimeFault {
+function functionalFault(fault: SemanticRuntimeFault): RuntimeFault {
   return {
     ...fault,
     code: `F${fault.code.slice(1)}`,

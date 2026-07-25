@@ -94,8 +94,8 @@ binary, so a deleted or broken code generator is invisible without it;
 host lowering plans and dependency-wave schedules; and the frontend-named files for source-language
 behavior and trace stability.
 
-`inferLazuliTypes` in `src/semantic/type_inference.ts` is a differential oracle and the CPU column
-in BASELINE.md. Production inference must remain on the GPU path; do not turn the oracle into an
+`inferTypes` in `src/semantic/type_inference.ts` is a differential oracle and the CPU column in
+BASELINE.md. Production inference must remain on the GPU path; do not turn the oracle into an
 implicit CPU fallback. When adding a regression test, assert through a public boundary. Internal
 instrumentation exists for deterministic dispatch, fuel, workspace, and cancellation tests, but must
 not be exported through `functional.ts`.

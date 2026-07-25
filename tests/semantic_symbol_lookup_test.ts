@@ -2,16 +2,16 @@ import { deepStrictEqual, equal, ok } from "node:assert/strict";
 
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import {
-  type EncodedLazuliSurface,
-  LAZULI_NO_INDEX,
-  LAZULI_NODE_WORD_LENGTH,
-  LazuliCoreTag,
-  LazuliSurfaceTag,
-  LazuliSurfaceWord,
+  CoreTag,
+  type EncodedSemanticSurface,
+  ExpressionTag,
+  NO_INDEX,
+  NODE_WORD_LENGTH,
+  NodeWord,
 } from "../src/semantic/abi.ts";
 import { SemanticCompilerErrorCode } from "../src/semantic/compilation_diagnostics.ts";
 import {
-  createLazuliSymbolLookup,
+  createSymbolLookup,
   INDEXED_LOCAL_RESOLUTION_MAGIC,
   SYMBOL_LOOKUP_WORD_LENGTH,
   SymbolLookupWord,
@@ -21,8 +21,8 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
   const surface = parseSurface(
     "data Maybe a = None | Some(value: a); let id = x => x; let main = id (Some 1);",
   );
-  const lookup = createLazuliSymbolLookup(surface);
-  const names = surfaceNodes(surface, LazuliSurfaceTag.Name).map((node) => ({
+  const lookup = createSymbolLookup(surface);
+  const names = surfaceNodes(surface, ExpressionTag.Name).map((node) => ({
     symbol: surface.symbolNames[node.payload],
     lowering: loweringRecord(lookup, surface, node.index),
   }));
@@ -31,28 +31,28 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
     {
       symbol: "x",
       lowering: {
-        coreTag: LazuliCoreTag.Local,
+        coreTag: CoreTag.Local,
         corePayload: 0,
         errorCode: SemanticCompilerErrorCode.None,
-        errorDetail: LAZULI_NO_INDEX,
+        errorDetail: NO_INDEX,
       },
     },
     {
       symbol: "id",
       lowering: {
-        coreTag: LazuliCoreTag.Global,
+        coreTag: CoreTag.Global,
         corePayload: 0,
         errorCode: SemanticCompilerErrorCode.None,
-        errorDetail: LAZULI_NO_INDEX,
+        errorDetail: NO_INDEX,
       },
     },
     {
       symbol: "Some",
       lowering: {
-        coreTag: LazuliCoreTag.Constructor,
+        coreTag: CoreTag.Constructor,
         corePayload: 1,
         errorCode: SemanticCompilerErrorCode.None,
-        errorDetail: LAZULI_NO_INDEX,
+        errorDetail: NO_INDEX,
       },
     },
   ]);
@@ -60,12 +60,12 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
 
 Deno.test("indexed lowering plans retain the first deterministic semantic diagnostic", () => {
   const unknownSurface = parseSurface("let main = missing;");
-  const unknownLookup = createLazuliSymbolLookup(unknownSurface);
-  const unknownNode = surfaceNodes(unknownSurface, LazuliSurfaceTag.Name)[0];
+  const unknownLookup = createSymbolLookup(unknownSurface);
+  const unknownNode = surfaceNodes(unknownSurface, ExpressionTag.Name)[0];
   ok(unknownNode);
   equal(loweringHeader(unknownLookup, unknownSurface).errorNode, unknownNode.index);
   deepStrictEqual(loweringRecord(unknownLookup, unknownSurface, unknownNode.index), {
-    coreTag: LazuliSurfaceTag.Name,
+    coreTag: ExpressionTag.Name,
     corePayload: unknownNode.payload,
     errorCode: SemanticCompilerErrorCode.UnknownName,
     errorDetail: unknownNode.payload,
@@ -74,8 +74,8 @@ Deno.test("indexed lowering plans retain the first deterministic semantic diagno
   const duplicateSurface = parseSurface(
     "data Flag = Off | On; let main = case Off of | Off -> 0 | Off -> 1 | On -> 2 end;",
   );
-  const duplicateLookup = createLazuliSymbolLookup(duplicateSurface);
-  const duplicateArms = surfaceNodes(duplicateSurface, LazuliSurfaceTag.CaseArm);
+  const duplicateLookup = createSymbolLookup(duplicateSurface);
+  const duplicateArms = surfaceNodes(duplicateSurface, ExpressionTag.CaseArm);
   const repeatedArm = duplicateArms[1];
   ok(repeatedArm);
   equal(loweringHeader(duplicateLookup, duplicateSurface).errorNode, repeatedArm.index);
@@ -97,7 +97,7 @@ interface LoweringRecord {
   readonly errorDetail: number;
 }
 
-function parseSurface(source: string): EncodedLazuliSurface {
+function parseSurface(source: string): EncodedSemanticSurface {
   const parsed = parseLazuliSource(source);
   ok(parsed.ok, parsed.ok ? undefined : parsed.diagnostics[0]?.message);
   if (!parsed.ok) throw new Error("semantic lowering fixture did not parse");
@@ -105,14 +105,14 @@ function parseSurface(source: string): EncodedLazuliSurface {
 }
 
 function surfaceNodes(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   tag: number,
 ): readonly SurfaceNodeSummary[] {
   const nodes: SurfaceNodeSummary[] = [];
   for (let index = 0; index < surface.nodeCount; index++) {
-    const offset = index * LAZULI_NODE_WORD_LENGTH;
-    if (surface.nodeWords[offset + LazuliSurfaceWord.Tag] !== tag) continue;
-    const payload = surface.nodeWords[offset + LazuliSurfaceWord.Payload];
+    const offset = index * NODE_WORD_LENGTH;
+    if (surface.nodeWords[offset + NodeWord.Tag] !== tag) continue;
+    const payload = surface.nodeWords[offset + NodeWord.Payload];
     if (payload === undefined) throw new Error(`surface node ${index} omits its payload`);
     nodes.push({ index, payload });
   }
@@ -121,7 +121,7 @@ function surfaceNodes(
 
 function loweringHeader(
   lookup: Uint32Array,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): { readonly errorNode: number } {
   const offset = surface.symbolNames.length * SYMBOL_LOOKUP_WORD_LENGTH;
   equal(
@@ -135,7 +135,7 @@ function loweringHeader(
 
 function loweringRecord(
   lookup: Uint32Array,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   node: number,
 ): LoweringRecord {
   const offset = (surface.symbolNames.length + 1 + node) *

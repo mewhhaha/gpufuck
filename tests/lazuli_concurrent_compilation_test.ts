@@ -1,7 +1,7 @@
 import { deepStrictEqual, equal, match, notStrictEqual, ok, rejects } from "node:assert/strict";
 
 import { GpuLazuliCompiler, requestWebGpuDevice } from "../mod.ts";
-import { LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH } from "../src/semantic/abi.ts";
+import { MAXIMUM_SOURCE_BYTE_LENGTH } from "../src/semantic/abi.ts";
 import {
   GpuDispatchScheduler,
   MAXIMUM_GPU_DISPATCH_BATCH_SIZE,
@@ -211,7 +211,7 @@ Deno.test("same GPU compiler batches concurrent results and remains reusable aft
     }
 
     const weightedProgram = "let main = 0;";
-    const weightedSourceByteLength = LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH / 4;
+    const weightedSourceByteLength = MAXIMUM_SOURCE_BYTE_LENGTH / 4;
     const weightedSource = weightedProgram +
       " ".repeat(weightedSourceByteLength - weightedProgram.length);
     const weightedAllocationStart = surfaceNodeAllocations;
