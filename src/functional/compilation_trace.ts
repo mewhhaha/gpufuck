@@ -209,7 +209,12 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
           formatExpression(arm.body, depth + 2)
         })`
       );
-      return `${indent}(case\n${nested(expression.value)}\n${arms.join("\n")})`;
+      const otherwise = expression.otherwise === undefined ? [] : [
+        `${"  ".repeat(depth + 1)}(_ ${expression.otherwise.binder ?? ""} ->\n${
+          formatExpression(expression.otherwise.body, depth + 2)
+        })`,
+      ];
+      return `${indent}(case\n${nested(expression.value)}\n${[...arms, ...otherwise].join("\n")})`;
     }
   }
 }

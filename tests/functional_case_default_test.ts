@@ -10,6 +10,7 @@ import {
   FunctionalEvaluationProfile,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
+  linkFunctionalModules,
   requestWebGpuDevice,
   surface,
 } from "../functional.ts";
@@ -40,13 +41,6 @@ const COLOUR = {
     { name: "Blue", fields: [{ name: "shade", type: { kind: "integer" as const } }] },
   ],
 };
-
-function colourModule(
-  subject: string,
-  otherwise: Parameters<typeof buildFunctionalSurfaceModule>[0],
-) {
-  return otherwise;
-}
 
 async function runColour(subject: string, binder?: string) {
   const module = buildFunctionalSurfaceModule(
@@ -121,4 +115,66 @@ Deno.test("a case default needs an arm naming a declared constructor", () => {
       ),
     /needs at least one arm naming a declared constructor/,
   );
+});
+
+Deno.test("a default body's names survive linking and reachability", async () => {
+  // The default body is the only reference to an imported definition, so reachability has to walk
+  // `otherwise` or the definition is pruned and the name is unresolvable. Reverting that walk fails
+  // this test with `unknown name "colours::$import$borrowedFallback"`. The linker's matching rewrite
+  // of the default body is exercised too, though an unqualified alias happens to resolve anyway, so
+  // this test does not isolate it.
+  const linked = linkFunctionalModules([
+    {
+      name: "support",
+      definitions: [{
+        name: "fallbackValue",
+        parameters: [],
+        annotation: { kind: "integer" },
+        body: surface.integer(77),
+      }],
+      typeDeclarations: [],
+      imports: [],
+      exports: [{ name: "fallbackValue", definition: "fallbackValue", type: { kind: "integer" } }],
+      sourceByteLength: 0,
+      options: { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    },
+    {
+      name: "colours",
+      definitions: [{
+        name: "main",
+        parameters: [],
+        annotation: { kind: "integer" },
+        body: {
+          kind: "case",
+          value: surface.name("Green"),
+          arms: [{ constructor: "Red", binders: [], body: surface.integer(1) }],
+          otherwise: { body: surface.name("borrowedFallback") },
+        },
+      }],
+      typeDeclarations: [COLOUR],
+      imports: [{
+        name: "borrowedFallback",
+        fromModule: "support",
+        exportName: "fallbackValue",
+        type: { kind: "integer" },
+      }],
+      exports: [{ name: "main", definition: "main", type: { kind: "integer" } }],
+      sourceByteLength: 0,
+      options: { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    },
+  ], { module: "colours", exportName: "main" });
+
+  const compilation = await compiler!.compileModule(linked.module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
+  if (!compilation.ok) return;
+  try {
+    const execution = await evaluator!.evaluate(compilation.module);
+    ok(execution.ok, "evaluation failed");
+    equal(
+      execution.ok && execution.value.kind === "integer" ? execution.value.value : undefined,
+      77,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
 });

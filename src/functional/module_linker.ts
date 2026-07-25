@@ -14,6 +14,7 @@ import { analyzeFunctionalSurfaceReachability } from "./surface_reachability.ts"
 import {
   buildFunctionalSurfaceModule,
   type FunctionalSurfaceCaseArm,
+  type FunctionalSurfaceCaseDefault,
   type FunctionalSurfaceDefinition,
   type FunctionalSurfaceExpression,
   type FunctionalSurfaceTypeDeclaration,
@@ -735,9 +736,41 @@ function rewriteExpression(
         arms: expression.arms.map((arm) =>
           rewriteCaseArm(arm, boundNames, definitions, imports, constructors, sourceBase)
         ),
+        ...(expression.otherwise === undefined ? {} : {
+          otherwise: rewriteCaseDefault(
+            expression.otherwise,
+            boundNames,
+            definitions,
+            imports,
+            constructors,
+            sourceBase,
+          ),
+        }),
         span,
       };
   }
+}
+
+function rewriteCaseDefault(
+  otherwise: FunctionalSurfaceCaseDefault,
+  boundNames: Map<string, number>,
+  definitions: ReadonlyMap<string, string>,
+  imports: ReadonlyMap<string, string>,
+  constructors: ReadonlyMap<string, string>,
+  sourceBase: number,
+): FunctionalSurfaceCaseDefault {
+  const binders = otherwise.binder === undefined ? [] : [otherwise.binder];
+  addBoundNames(boundNames, binders);
+  const body = rewriteExpression(
+    otherwise.body,
+    boundNames,
+    definitions,
+    imports,
+    constructors,
+    sourceBase,
+  );
+  removeBoundNames(boundNames, binders);
+  return { ...otherwise, body };
 }
 
 function rewriteCaseArm(

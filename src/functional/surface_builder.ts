@@ -49,6 +49,7 @@ import { FUNCTIONAL_STORE_TYPE_NAME } from "./store_contract.ts";
 
 export type {
   FunctionalSurfaceCaseArm,
+  FunctionalSurfaceCaseDefault,
   FunctionalSurfaceDefinition,
   FunctionalSurfaceExpression,
   FunctionalSurfaceRecursiveBinding,
