@@ -114,8 +114,20 @@ export type FunctionalSurfaceExpression =
     readonly kind: "case";
     readonly value: FunctionalSurfaceExpression;
     readonly arms: readonly FunctionalSurfaceCaseArm[];
+    /**
+     * Covers every constructor the arms omit. Cases must be exhaustive, so without this a frontend
+     * has to enumerate the owner's full constructor list itself and hoist the fallback into a thunk
+     * to avoid duplicating it per arm. The scrutinee is evaluated once and passed to `binder`.
+     */
+    readonly otherwise?: FunctionalSurfaceCaseDefault;
     readonly span?: FunctionalSpan;
   };
+
+export interface FunctionalSurfaceCaseDefault {
+  readonly binder?: string;
+  readonly body: FunctionalSurfaceExpression;
+  readonly span?: FunctionalSpan;
+}
 
 export interface FunctionalSurfaceRecursiveBinding {
   readonly name: string;

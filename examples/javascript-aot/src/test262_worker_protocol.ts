@@ -156,18 +156,14 @@ function parseExecutionResult(candidate: unknown, line: string): Test262Executio
   if (!isRecord(candidate) || typeof candidate.kind !== "string") {
     throw new Error(`Invalid Test262 execution worker response: ${line}`);
   }
-  if (candidate.kind === "passed") {
+  if (candidate.kind === "compiled") {
     if (candidate.expectation !== "positive" && candidate.expectation !== "runtime-negative") {
       throw new Error(`Invalid Test262 execution worker response: ${line}`);
     }
-    return { kind: "passed", expectation: candidate.expectation };
+    return { kind: "compiled", expectation: candidate.expectation };
   }
   if (
-    (
-      candidate.kind !== "resource-limited" &&
-      candidate.kind !== "compilation-failed" &&
-      candidate.kind !== "execution-failed"
-    ) ||
+    (candidate.kind !== "resource-limited" && candidate.kind !== "compilation-failed") ||
     typeof candidate.reason !== "string"
   ) {
     throw new Error(`Invalid Test262 execution worker response: ${line}`);

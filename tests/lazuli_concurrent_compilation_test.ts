@@ -1,7 +1,7 @@
 import { deepStrictEqual, equal, match, notStrictEqual, ok, rejects } from "node:assert/strict";
 
 import { GpuLazuliCompiler, requestWebGpuDevice } from "../mod.ts";
-import { LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH } from "../src/lazuli/abi.ts";
+import { LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH } from "../src/semantic/abi.ts";
 import {
   GpuDispatchScheduler,
   MAXIMUM_GPU_DISPATCH_BATCH_SIZE,

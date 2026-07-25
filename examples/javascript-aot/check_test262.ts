@@ -108,10 +108,10 @@ class Test262ExecutionWorker {
     }
   }
 
-  async execute(
+  async compile(
     testCase: Test262ExecutionCase,
     entryName: string,
-  ): Promise<Test262WorkerExecutionOutcome> {
+  ): Promise<Test262WorkerCompilationOutcome> {
     if (this.#closed) {
       throw new Error(`Test262 execution worker ${this.workerNumber} is closed.`);
     }
@@ -133,12 +133,12 @@ class Test262ExecutionWorker {
       );
     }
 
-    let executionFinished = false;
+    let compilationFinished = false;
     let resourceFailure: string | null = null;
     let monitorFailure: string | null = null;
     let memoryMeasurementPending = false;
     const caseTimeout = setTimeout(() => {
-      if (executionFinished) return;
+      if (compilationFinished) return;
       resourceFailure = `execution worker exceeded ${
         EXECUTION_CASE_TIMEOUT_MILLISECONDS / 1_000
       } seconds`;
@@ -146,11 +146,11 @@ class Test262ExecutionWorker {
       if (terminationFailure !== null) resourceFailure += `; ${terminationFailure}`;
     }, EXECUTION_CASE_TIMEOUT_MILLISECONDS);
     const memoryMonitor = setInterval(async () => {
-      if (executionFinished || memoryMeasurementPending) return;
+      if (compilationFinished || memoryMeasurementPending) return;
       memoryMeasurementPending = true;
       try {
         const rssKiB = await residentSetSizeKiB(this.#workerProcess.pid);
-        if (executionFinished) return;
+        if (compilationFinished) return;
         const rssHeadroomKiB = rssKiB - this.#readyRssKiB;
         if (rssHeadroomKiB <= EXECUTION_POST_READY_RSS_HEADROOM_KIB) return;
         resourceFailure =
@@ -161,7 +161,7 @@ class Test262ExecutionWorker {
         const terminationFailure = this.#terminate();
         if (terminationFailure !== null) resourceFailure += `; ${terminationFailure}`;
       } catch (error) {
-        if (executionFinished || resourceFailure !== null) return;
+        if (compilationFinished || resourceFailure !== null) return;
         monitorFailure = error instanceof Error ? error.message : String(error);
         const terminationFailure = this.#terminate();
         if (terminationFailure !== null) monitorFailure += `; ${terminationFailure}`;
@@ -174,17 +174,17 @@ class Test262ExecutionWorker {
     try {
       responseLine = await this.#responseLines.next();
     } catch (error) {
-      executionFinished = true;
+      compilationFinished = true;
       clearTimeout(caseTimeout);
       clearInterval(memoryMonitor);
       throw new Error(
-        `Test262 execution worker ${this.workerNumber} failed while executing ${
+        `Test262 execution worker ${this.workerNumber} failed while compiling ${
           JSON.stringify(testCase.path)
         } in ${testCase.mode} mode.`,
         { cause: error },
       );
     }
-    executionFinished = true;
+    compilationFinished = true;
     clearTimeout(caseTimeout);
     clearInterval(memoryMonitor);
 
@@ -198,14 +198,14 @@ class Test262ExecutionWorker {
     if (monitorFailure !== null) {
       await this.#finishTerminatedWorker();
       throw new Error(
-        `Test262 execution worker ${this.workerNumber} could not monitor RSS while executing ${
+        `Test262 execution worker ${this.workerNumber} could not monitor RSS while compiling ${
           JSON.stringify(testCase.path)
         } in ${testCase.mode} mode: ${monitorFailure}`,
       );
     }
     if (responseLine.done) {
       throw await this.#unexpectedExit(
-        `while executing ${JSON.stringify(testCase.path)} in ${testCase.mode} mode`,
+        `while compiling ${JSON.stringify(testCase.path)} in ${testCase.mode} mode`,
       );
     }
 
@@ -491,24 +491,23 @@ try {
     }
   }
 
-  const execution = await executeReadyCases(readyCases);
-  const successfulApplicableModeCount = negativePhasePassedCount + execution.passed;
+  const compilation = await compileReadyCases(readyCases);
+  const successfulApplicableModeCount = negativePhasePassedCount + compilation.compiled;
   const failedApplicableModeCount = parseUnsupportedCount +
     lowerUnsupportedCount +
-    execution.resourceLimited +
-    execution.compilationFailed +
-    execution.executionFailed;
+    compilation.resourceLimited +
+    compilation.compilationFailed;
   if (
     successfulApplicableModeCount + failedApplicableModeCount !== applicableExecutionCount
   ) {
     throw new Error(
       `Test262 applicable-mode accounting is unbalanced: ` +
         `applicable=${applicableExecutionCount}, successful=${successfulApplicableModeCount} ` +
-        `(negative-phase=${negativePhasePassedCount}, execution=${execution.passed}), ` +
+        `(negative-phase=${negativePhasePassedCount}, compiled=${compilation.compiled}), ` +
         `failed=${failedApplicableModeCount} (parse-unsupported=${parseUnsupportedCount}, ` +
         `lower-unsupported=${lowerUnsupportedCount}, ` +
-        `resource-limited=${execution.resourceLimited}, ` +
-        `compilation=${execution.compilationFailed}, execution=${execution.executionFailed}).`,
+        `resource-limited=${compilation.resourceLimited}, ` +
+        `compilation=${compilation.compilationFailed}).`,
     );
   }
   const applicableModeAccounting = {
@@ -551,7 +550,7 @@ try {
       fullyReadyFiles: fullyReadyNegativeFileCount,
     },
     applicableModeAccounting,
-    adaptedExecution: execution,
+    adaptedCompilation: compilation,
     mostCommonParseFailureTokens: [...parseFailureTokens]
       .sort((left, right) => right[1] - left[1])
       .slice(0, FAILURE_EXAMPLE_LIMIT)
@@ -681,37 +680,32 @@ function normalizeLowerFailureReason(message: string): string {
   return message.replace(/module "(?:[^"\\]|\\.)*"/, 'module "…"');
 }
 
-async function executeReadyCases(cases: readonly Test262ExecutionCase[]): Promise<{
+async function compileReadyCases(cases: readonly Test262ExecutionCase[]): Promise<{
   readonly note: string;
-  readonly passed: number;
-  readonly positivePassed: number;
-  readonly runtimeNegativePassed: number;
+  readonly compiled: number;
+  readonly positiveCompiled: number;
+  readonly runtimeNegativeCompiled: number;
   readonly resourceLimited: number;
   readonly compilationFailed: number;
-  readonly executionFailed: number;
   readonly resourceLimitExamples: readonly string[];
   readonly compilationFailureExamples: readonly string[];
-  readonly executionFailureExamples: readonly string[];
 }> {
   const totals = {
-    passed: 0,
-    positivePassed: 0,
-    runtimeNegativePassed: 0,
+    compiled: 0,
+    positiveCompiled: 0,
+    runtimeNegativeCompiled: 0,
     resourceLimited: 0,
     compilationFailed: 0,
-    executionFailed: 0,
   };
   const resourceLimitExamples: string[] = [];
   const compilationFailureExamples: string[] = [];
-  const executionFailureExamples: string[] = [];
   if (cases.length === 0) {
     return {
       note:
-        "Each ready positive or runtime-negative mode compiles to a fresh artifact and executes once; exact Realm and harness parity remain pending.",
+        "Each ready positive or runtime-negative mode compiles to a fresh artifact; compiled modules are never executed.",
       ...totals,
       resourceLimitExamples,
       compilationFailureExamples,
-      executionFailureExamples,
     };
   }
 
@@ -742,14 +736,14 @@ async function executeReadyCases(cases: readonly Test262ExecutionCase[]): Promis
         const testCase = cases[nextCaseIndex++];
         if (testCase === undefined) return;
         worker ??= await Test262ExecutionWorker.start(workerNumber);
-        const outcome = await worker.execute(testCase, PROBE_ENTRY);
+        const outcome = await worker.compile(testCase, PROBE_ENTRY);
         if (!outcome.workerReusable) worker = null;
 
         switch (outcome.result.kind) {
-          case "passed":
-            totals.passed++;
-            if (outcome.result.expectation === "positive") totals.positivePassed++;
-            else totals.runtimeNegativePassed++;
+          case "compiled":
+            totals.compiled++;
+            if (outcome.result.expectation === "positive") totals.positiveCompiled++;
+            else totals.runtimeNegativeCompiled++;
             break;
           case "resource-limited":
             totals.resourceLimited++;
@@ -767,19 +761,11 @@ async function executeReadyCases(cases: readonly Test262ExecutionCase[]): Promis
               );
             }
             break;
-          case "execution-failed":
-            totals.executionFailed++;
-            if (executionFailureExamples.length < FAILURE_EXAMPLE_LIMIT) {
-              executionFailureExamples.push(
-                `${testCase.path} [${testCase.mode}]: execution failed: ${outcome.result.reason}`,
-              );
-            }
-            break;
         }
 
         completedCaseCount++;
         if (reportProgress) {
-          console.error(`Test262 adapted executions ${completedCaseCount}/${cases.length}`);
+          console.error(`Test262 adapted compilations ${completedCaseCount}/${cases.length}`);
         }
       }
     } finally {
@@ -792,15 +778,14 @@ async function executeReadyCases(cases: readonly Test262ExecutionCase[]): Promis
 
   return {
     note:
-      "Each ready positive or runtime-negative mode uses one request through a pool of up to two persistent GPU compiler workers, compiles to a fresh artifact, and executes once; exact Realm and harness parity remain pending.",
+      "Each ready positive or runtime-negative mode uses one request through a pool of up to two persistent GPU compiler workers and compiles to a fresh artifact; compiled modules are never executed.",
     ...totals,
     resourceLimitExamples,
     compilationFailureExamples,
-    executionFailureExamples,
   };
 }
 
-interface Test262WorkerExecutionOutcome {
+interface Test262WorkerCompilationOutcome {
   readonly result: Test262ExecutionCaseResult;
   readonly workerReusable: boolean;
 }

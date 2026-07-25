@@ -45,7 +45,7 @@ export async function planFunctionalModuleStorage(
 export function createFunctionalStoragePlan(
   module: GpuFunctionalModule,
   nodes: readonly FunctionalCoreNode[],
-  captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes),
+  captureAnalysis: FunctionalWasmCaptureAnalysis = new FunctionalWasmCaptureAnalysis(nodes),
   options: FunctionalStoragePlanningOptions = {},
 ): FunctionalStoragePlan {
   const definitionByRoot = new Map<number, number>();

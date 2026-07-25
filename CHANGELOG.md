@@ -5,21 +5,70 @@ All notable changes to gpufuck are documented here. The project follows
 
 ## Unreleased
 
-- Added a portable immutable `F32x4` library and opt-in native Wasm SIMD lowering for arithmetic,
-  masks, lane operations, reductions, vectorizable higher-order operations, and private unboxed
-  vector workers, including linked modules, with automatic scalar fallback at lazy boundaries.
-- Expanded the experimental Haskell frontend with transparent type synonyms, `newtype`, Unicode
-  `Char` and `String` literals, predicative rank-N signatures, and mutually recursive local groups.
-- Added an explicit, non-default WasmGC backend for pure closed Functional Core modules, including
-  typed algebraic values, closures, shared lazy thunks, recursive closure cycles, wide numerics,
-  bounded structured-result decoding, and blackhole diagnostics.
-- Added conservative unique-ownership resolution for complete immutable Storage Core traces,
-  including transitive last-use releases, escaping graphs, and exact-size reuse planning.
-- Added resolved-Core uniqueness and path-liveness analysis that reuses compatible strict
-  constructor allocations in Wasm while retaining fresh allocation for aliases, lazy values, owned
-  exports, captures, and layout changes.
-- Hardened Component Model WIT generation against identifier collisions, malformed resources, empty
-  variants, and cyclic or excessively deep type schemas.
+This release narrows the project toward one purpose: being a fast compiler on the GPU. Roughly
+45,000 net lines of non-documentation code were removed, taking `src/` from 78,209 to 61,195 lines.
+It is a large, deliberate reduction in capability, and **the compiler is not yet fast** — nothing in
+this release improved compile throughput. See [BASELINE.md](BASELINE.md) for the measurements and
+the criteria that would call the approach dead.
+
+The WebAssembly backend was removed during this cycle and restored before release. It stays because
+Ducklang compiles through it and has no other code generator; it imports `functional.ts` by relative
+path, so there is no version for it to pin to.
+
+### Added
+
+Three surface primitives, each because two unrelated frontends hand-rolled the same workaround.
+
+- `surface.at(span)` returns a builder that stamps a span on the node each helper produces. Every
+  surface node kind already carried an optional span, but no builder emitted one, so Gleam abandoned
+  the builder and hand-wrote node literals at 116 span sites while Ducklang emitted no spans at all
+  and got location-free diagnostics. Only the outermost node of a fold or desugaring is stamped;
+  attributing a source range to a node the builder synthesized would be a wrong location.
+- `surface.lambda` accepts a parameter list as well as a single name, folding right. Definitions and
+  recursive bindings already took a list and `apply` already folded a spine, so the inline lambda
+  was the only binding form that made a frontend curry by hand.
+- A `case` takes an optional `otherwise` arm. Inference rejects a non-exhaustive case, so a frontend
+  wanting a fallback had to enumerate the owning type's constructors itself and hoist the fallback
+  into a thunk to avoid duplicating it per arm. The expansion binds the scrutinee once, so it is
+  evaluated once and can be handed to the arm's binder.
+
+`fixed_vector.ts` and the native SIMD path are exported again, so a frontend can reach `F32x4` with
+`{ simd: "wasm-simd" }` and get real `v128` instructions instead of four scalar operations.
+`capability_resolver.ts` is also back as the type-resolution primitive.
+
+### Removed
+
+- Removed the Haskell, OCaml, Rust, 1SubML, and PureScript frontends and the Brainfuck GPU compiler.
+- Removed incremental compilation and its persistent caches, so every compilation is cold.
+- Removed row types, existentials, and constraint elaboration.
+- Removed Effect Core. A handler lowered to a closed `A -> B` with no `resume`, so it could not
+  express exceptions, generators, async or backtracking, and effects were capped at a 32-bit mask.
+  Frontends elaborate effects themselves, as Koka and Eff do.
+- Removed partial evaluation.
+- Removed the browser playground and its GitHub Pages workflow.
+- Removed the `src/lazuli/` re-export shim; its implementation files now live in `src/semantic/`.
+- Reduced the published subpaths to `.` (`functional.ts`) and `./core` (`core.ts`). The `wasm`,
+  `comptime`, `effects`, and `type-services` subpaths no longer exist; the WebAssembly backend,
+  storage planning, and the comptime executor are exported from the root instead.
+
+### Changed
+
+- `GpuFunctionalEvaluator.evaluate` now selects a runtime instead of rejecting programs. It inspects
+  resolved Core before dispatch and delegates programs needing 64-bit floats, portable whole-number
+  f64, text, bytes, runtime faults, buffer append, stores, structural equality, 32-bit float
+  division, or 32-bit square root to bounded WebAssembly execution; everything else runs on the GPU
+  evaluator. Callers pass no flag. The delegated path rejects the GPU-only dispatch, heap, and stack
+  options with a `TypeError` and caps semantic steps at 1,000,000.
+- Gleam's `Int` now lowers to 64-bit integers instead of the f64-backed JavaScript model. Division
+  and remainder keep Gleam's rules: a zero divisor yields `0`, and division truncates toward zero.
+- `renderFunctionalCompilationTrace` renders 64-bit values as exact unquoted digits. They arrive as
+  BigInt, which `JSON.stringify` refuses; quoting them would change the shape every checked-in trace
+  uses and routing them through `Number` would lose precision past 2^53.
+- `requestWebGpuDevice()` now requests `maxStorageBuffersPerShaderStage` of 16, clamped to adapter
+  support, and opts into `timestamp-query` when the adapter exposes it.
+- Documented the measured baseline and its kill criteria in `BASELINE.md`, and corrected the
+  long-standing claim that name resolution runs on the GPU. It runs on the host, in
+  `src/semantic/symbol_lookup.ts`; the shader copies the resulting lowering plan.
 
 ## 0.3.0 - 2026-07-19
 

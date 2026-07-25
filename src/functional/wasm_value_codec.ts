@@ -5,6 +5,7 @@ import {
   type FunctionalTypeSchema,
 } from "./abi.ts";
 import { completeFunctionalTypeDeclarations, type GpuFunctionalModule } from "./compiler_module.ts";
+import { instantiateSchema } from "./schema_contract.ts";
 import type { FunctionalWasmHostValue } from "./wasm_contract.ts";
 import {
   FUNCTIONAL_ARRAY_TYPE_NAME,
@@ -1035,10 +1036,6 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
   return decodedResult;
 }
 
-export function concreteFunctionalType(schema: FunctionalTypeSchema): FunctionalType {
-  return instantiateSchema(schema, new Map());
-}
-
 export function requireFirstOrderFunctionalWasmType(
   module: GpuFunctionalModule,
   type: FunctionalType,
@@ -1336,54 +1333,6 @@ function sameFunctionalType(left: FunctionalType, right: FunctionalType): boolea
       return right.kind === "function" &&
         sameFunctionalType(left.parameter, right.parameter) &&
         sameFunctionalType(left.result, right.result);
-  }
-}
-
-function instantiateSchema(
-  schema: FunctionalTypeSchema,
-  parameters: ReadonlyMap<string, FunctionalType>,
-): FunctionalType {
-  switch (schema.kind) {
-    case "integer":
-    case "signed-integer-64":
-    case "float-32":
-    case "float-64":
-    case "boolean":
-    case "unit":
-      return { kind: schema.kind };
-    case "parameter": {
-      const type = parameters.get(schema.name);
-      if (type === undefined) {
-        throw new Error(
-          `functional WASM structured value contains unresolved parameter ${
-            JSON.stringify(schema.name)
-          }`,
-        );
-      }
-      return type;
-    }
-    case "tuple":
-      return {
-        kind: "tuple",
-        values: [
-          instantiateSchema(schema.values[0], parameters),
-          instantiateSchema(schema.values[1], parameters),
-        ],
-      };
-    case "named":
-      return {
-        kind: "named",
-        name: schema.name,
-        arguments: schema.arguments.map((argument) => instantiateSchema(argument, parameters)),
-      };
-    case "function":
-      return {
-        kind: "function",
-        parameter: instantiateSchema(schema.parameter, parameters),
-        result: instantiateSchema(schema.result, parameters),
-      };
-    case "forall":
-      throw new TypeError("functional WASM structured values cannot retain forall schemas");
   }
 }
 

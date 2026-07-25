@@ -25,8 +25,8 @@ import {
   WASM_FAULT_OUT_OF_FUEL,
   WASM_FAULT_OUT_OF_MEMORY,
 } from "./wasm_runtime_binary.ts";
+import { concreteFunctionalType } from "./schema_contract.ts";
 import {
-  concreteFunctionalType,
   decodeFunctionalWasmBoxedValue,
   decodeFunctionalWasmValue,
   describeFunctionalType,

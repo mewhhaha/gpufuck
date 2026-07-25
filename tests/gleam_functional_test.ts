@@ -1,6 +1,7 @@
 import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
 
 import {
+  type FunctionalEvaluationOptions,
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
@@ -22,6 +23,12 @@ interface GleamFunctionalRuntime {
 
 let runtime: GleamFunctionalRuntime | undefined;
 
+/**
+ * Gleam `Int` lowers to boxed i64, so the kernel example allocates past the evaluator's default
+ * heap of 256 slots. It completes within 512; this leaves headroom.
+ */
+const KERNEL_HEAP_SLOTS = 1024;
+
 Deno.test.beforeAll(async () => {
   const device = await requestWebGpuDevice();
   const [compiler, evaluator] = await Promise.all([
@@ -39,19 +46,19 @@ Deno.test.afterAll(() => {
 Deno.test("infers and evaluates a generic Gleam algebraic transformation", async () => {
   const evaluation = await evaluateSingleExample("examples/gleam-functional/option_map.gleam");
 
-  deepStrictEqual(evaluation, { kind: "integer", value: 42 });
+  deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("infers a recursive higher-order Gleam list fold", async () => {
   const evaluation = await evaluateSingleExample("examples/gleam-functional/list_fold.gleam");
 
-  deepStrictEqual(evaluation, { kind: "integer", value: 42 });
+  deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("desugars Gleam pipelines in source order", async () => {
   const evaluation = await evaluateSingleExample("examples/gleam-functional/pipeline.gleam");
 
-  deepStrictEqual(evaluation, { kind: "integer", value: 42 });
+  deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("compares the completed Gleam pipeline result", async () => {
@@ -74,7 +81,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("evaluates Gleam float arithmetic with native f64 operators", async () => {
@@ -110,7 +117,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("preserves UTF-8 Gleam string literals through WASM", async () => {
@@ -156,8 +163,8 @@ pub fn main() -> Int {
   if (!frontend.ok) return;
 
   deepStrictEqual(await evaluate(frontend.lowered), {
-    kind: "integer",
-    value: 1_333_333_337,
+    kind: "signed-integer-64",
+    value: 1333333337n,
   });
 });
 
@@ -199,7 +206,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("projects pair fields with Gleam tuple indices", async () => {
@@ -218,7 +225,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("evaluates the final value after sequential Gleam block expressions", async () => {
@@ -229,7 +236,7 @@ Deno.test("evaluates the final value after sequential Gleam block expressions", 
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("selects JavaScript-targeted declarations before lowering", async () => {
@@ -248,7 +255,7 @@ pub fn main() -> Int { answer() }
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("infers missing pieces of partially annotated Gleam functions", async () => {
@@ -263,7 +270,7 @@ pub fn main() -> Int { choose(0, 42) }
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("projects keyword-named fields after function calls", async () => {
@@ -280,7 +287,7 @@ pub fn main() -> Int { decoder().function(40) }
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("compares nested Gleam algebraic values structurally", async () => {
@@ -327,7 +334,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("matches nested exact lists and accepts a final list spread", async () => {
@@ -356,7 +363,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 52 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 52n });
 });
 
 Deno.test("recognizes exhaustive nested constructor patterns without a catch-all", async () => {
@@ -381,7 +388,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("keeps nested Gleam constructor recursion stack safe", async () => {
@@ -414,7 +421,7 @@ pub fn main() -> Int {
 
   deepStrictEqual(
     await evaluateWasm(frontend.lowered),
-    { kind: "integer", value: 100_000 },
+    { kind: "signed-integer-64", value: 100000n },
   );
 });
 
@@ -449,7 +456,7 @@ pub fn main() -> Int {
 
   deepStrictEqual(
     await evaluateWasm(frontend.lowered),
-    { kind: "integer", value: 100_000 },
+    { kind: "signed-integer-64", value: 100000n },
   );
 });
 
@@ -507,7 +514,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluateWasm(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluateWasm(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("desugars use bindings and function captures to ordinary callbacks", async () => {
@@ -532,7 +539,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("lowers arbitrary tuple arity through nested portable pairs", async () => {
@@ -554,7 +561,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("lowers zero and one element Gleam tuples", async () => {
@@ -571,7 +578,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("orders local, constructor, and imported labeled arguments", async () => {
@@ -607,7 +614,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 44 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 44n });
 });
 
 Deno.test("links annotated public constants as ordinary immutable definitions", async () => {
@@ -632,7 +639,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("links public Gleam types and constructors through nominal imports", async () => {
@@ -671,7 +678,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("keeps opaque Gleam constructors private across modules", () => {
@@ -751,7 +758,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("rejects unsupported Gleam bit-array segment encodings", () => {
@@ -819,25 +826,25 @@ pub fn main() -> Int {
               throw new TypeError(`external add expected a tuple; received ${argument.kind}`);
             }
             const [left, right] = argument.values;
-            if (left.kind !== "integer" || right.kind !== "integer") {
+            if (left.kind !== "signed-integer-64" || right.kind !== "signed-integer-64") {
               throw new TypeError("external add expected two integers");
             }
-            return { kind: "integer", value: left.value + right.value };
+            return { kind: "signed-integer-64", value: left.value + right.value };
           },
           "subtract@external/subtract.subtract": (argument) => {
             if (argument.kind !== "tuple") {
               throw new TypeError(`external subtract expected a tuple; received ${argument.kind}`);
             }
             const [left, right] = argument.values;
-            if (left.kind !== "integer" || right.kind !== "integer") {
+            if (left.kind !== "signed-integer-64" || right.kind !== "signed-integer-64") {
               throw new TypeError("external subtract expected two integers");
             }
-            return { kind: "integer", value: left.value - right.value };
+            return { kind: "signed-integer-64", value: left.value - right.value };
           },
         },
       },
     });
-    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+    deepStrictEqual(execution.value, { kind: "signed-integer-64", value: 42n });
   } finally {
     compilation.module.destroy();
   }
@@ -865,7 +872,7 @@ pub fn main() -> Int {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("rejects cyclic Gleam type aliases with their expansion path", () => {
@@ -905,7 +912,7 @@ pub fn main() -> Int {
   if (!frontend.ok) return;
 
   const evaluation = await evaluate(frontend.lowered);
-  deepStrictEqual(evaluation, { kind: "integer", value: 42 });
+  deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("resolves local Gleam record access and update", async () => {
@@ -930,15 +937,15 @@ pub fn main() {
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
 
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("links and evaluates a recursive three-module Gleam program", async () => {
   const sources = await readKernelSources();
   const lowered = requireLinked(sources, "kernel/main");
-  const evaluation = await evaluate(lowered);
+  const evaluation = await evaluate(lowered, { heapSlots: KERNEL_HEAP_SLOTS });
 
-  deepStrictEqual(evaluation, { kind: "integer", value: 1_109_720 });
+  deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 1109720n });
 });
 
 Deno.test("infers unannotated public types across Gleam module boundaries", async () => {
@@ -967,7 +974,7 @@ pub fn main() {
 
   ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
   if (!frontend.ok) return;
-  deepStrictEqual(await evaluate(frontend.lowered), { kind: "integer", value: 42 });
+  deepStrictEqual(await evaluate(frontend.lowered), { kind: "signed-integer-64", value: 42n });
 });
 
 Deno.test("maps Baba lexical failures to Gleam UTF-8 byte spans", () => {
@@ -1023,33 +1030,6 @@ pub fn main() -> Int {
   match(frontend.diagnostics[0].message, /catch-all case arm must be last/);
 });
 
-Deno.test("renders linked Gleam source and both functional IR stages side by side", async () => {
-  const sources = await readKernelSources();
-  const lowered = requireLinked(sources, "kernel/main");
-  const { compiler, evaluator } = gleamRuntime();
-  const compilation = await compiler.compileModule(lowered.module);
-  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
-  if (!compilation.ok) return;
-
-  try {
-    const trace = renderGleamFunctionalTrace({
-      title: "linked kernel",
-      source: sources.map((module) => `// ${module.name}\n${module.source}`).join("\n"),
-      lowered,
-      compiledModule: compilation.module,
-      coreNodes: await compilation.module.readCoreNodes(),
-      evaluation: await evaluator.evaluate(compilation.module),
-    });
-
-    match(trace, /Gleam source modules<\/th><th>Normalized functional surface/);
-    match(trace, /Encoded functional ABI<\/th><th>GPU-resolved core IR/);
-    match(trace, /kernel\/program::run/);
-    match(trace, /"value": 1109720/);
-  } finally {
-    compilation.module.destroy();
-  }
-});
-
 async function evaluateSingleExample(
   path: string,
 ): Promise<{ readonly kind: string; readonly value: unknown }> {
@@ -1063,13 +1043,14 @@ async function evaluateSingleExample(
 
 async function evaluate(
   lowered: LoweredGleamFunctionalProgram,
+  options: FunctionalEvaluationOptions = {},
 ): Promise<{ readonly kind: string; readonly value: unknown }> {
   const { compiler, evaluator } = gleamRuntime();
   const compilation = await compiler.compileModule(lowered.module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("Gleam example did not compile.");
   try {
-    const evaluation = await evaluator.evaluate(compilation.module);
+    const evaluation = await evaluator.evaluate(compilation.module, options);
     ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
     if (!evaluation.ok) throw new Error("Gleam example did not evaluate.");
     if (
@@ -1097,6 +1078,33 @@ async function evaluateWasm(
     compilation.module.destroy();
   }
 }
+
+Deno.test("renders linked Gleam source and both functional IR stages side by side", async () => {
+  const sources = await readKernelSources();
+  const lowered = requireLinked(sources, "kernel/main");
+  const { compiler, evaluator } = gleamRuntime();
+  const compilation = await compiler.compileModule(lowered.module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const trace = renderGleamFunctionalTrace({
+      title: "linked kernel",
+      source: sources.map((module) => `// ${module.name}\n${module.source}`).join("\n"),
+      lowered,
+      compiledModule: compilation.module,
+      coreNodes: await compilation.module.readCoreNodes(),
+      evaluation: await evaluator.evaluate(compilation.module, { heapSlots: 1024 }),
+    });
+
+    match(trace, /Gleam source modules<\/th><th>Normalized functional surface/);
+    match(trace, /Encoded functional ABI<\/th><th>GPU-resolved core IR/);
+    match(trace, /kernel\/program::run/);
+    match(trace, /"value": 1109720/);
+  } finally {
+    compilation.module.destroy();
+  }
+});
 
 async function readKernelSources(): Promise<readonly GleamFunctionalSourceModule[]> {
   return await Promise.all(

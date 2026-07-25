@@ -39,21 +39,15 @@ import {
   encodeFunctionalCoreArtifact,
   type FunctionalCompiledCoreArtifact,
 } from "./core_artifact.ts";
-import type { FunctionalEffectCoreModule } from "./effect_core_contract.ts";
-import {
-  FUNCTIONAL_EFFECT_CORE_MAXIMUM_TRANSITIONS_PER_DISPATCH,
-  GpuFunctionalEffectCoreVerifier,
-} from "./effect_core.ts";
 import { normalizeFunctionalHostCapabilities } from "./host_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
-import { buildFunctionalSurfaceModule } from "./surface_builder.ts";
 import type {
   FunctionalCompilationOptions,
   FunctionalCompileResult,
   GpuFunctionalModule,
 } from "./compiler_module.ts";
 import { registerCompleteFunctionalTypeDeclarations } from "./compiler_module.ts";
-import { concreteFunctionalType } from "./wasm_value_codec.ts";
+import { concreteFunctionalType } from "./schema_contract.ts";
 
 export type {
   FunctionalCompilationOptions,
@@ -75,7 +69,6 @@ const COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH = 16_384;
 export class GpuFunctionalCompiler {
   readonly #device: GPUDevice;
   readonly #semanticCompiler: GpuLazuliSemanticCompiler;
-  #effectVerifier: Promise<GpuFunctionalEffectCoreVerifier> | undefined;
   readonly #compilationAdmission: CompilationAdmissionQueue;
   readonly #maximumNodeCount: number;
   readonly #maximumDefinitionCount: number;
@@ -147,71 +140,6 @@ export class GpuFunctionalCompiler {
       maximumConstructorCount,
       maximumConcurrentCompilationWeight,
     );
-  }
-
-  async compileEffectModule(
-    effectModule: FunctionalEffectCoreModule,
-    options: FunctionalCompilationOptions = {},
-  ): Promise<FunctionalCompileResult> {
-    const limits = compilationLimits(options);
-    options.signal?.throwIfAborted();
-    const evaluationProfile = effectModule.evaluationProfile ??
-      FunctionalEvaluationProfile.LazyCallByNeed;
-    requireFunctionalEvaluationProfile(evaluationProfile, "Functional Effect Core module");
-    if (!Number.isSafeInteger(effectModule.sourceByteLength) || effectModule.sourceByteLength < 0) {
-      throw new Error(
-        `functional effect module has invalid source byte length ${effectModule.sourceByteLength}`,
-      );
-    }
-    if (effectModule.sourceByteLength > FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH) {
-      return failedLimit(
-        `module spans ${effectModule.sourceByteLength} UTF-8 source bytes; this compiler accepts at most ${FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH}`,
-        FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH,
-        effectModule.sourceByteLength,
-      );
-    }
-    this.#effectVerifier ??= GpuFunctionalEffectCoreVerifier.create(this.#device);
-    const effectVerifier = await this.#effectVerifier;
-    const effect = await effectVerifier.verifyAndLower(effectModule, {
-      maximumTransitions: limits.maximumSteps,
-      maximumTransitionsPerDispatch: Math.min(
-        limits.maximumStepsPerDispatch,
-        FUNCTIONAL_EFFECT_CORE_MAXIMUM_TRANSITIONS_PER_DISPATCH,
-      ),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
-    if (!effect.ok) return { ok: false, diagnostics: [effect.diagnostic] };
-    const remainingSteps = limits.maximumSteps - effect.transitions;
-    if (remainingSteps < 1) {
-      return failedLimit(
-        `Functional Effect Core used all ${limits.maximumSteps} compiler transitions before semantic inference`,
-        0,
-        effectModule.sourceByteLength,
-      );
-    }
-    const encoded = buildFunctionalSurfaceModule(
-      effect.lowered.definitions,
-      effect.lowered.typeDeclarations,
-      effect.lowered.entryName,
-      effect.lowered.sourceByteLength,
-      {
-        hostCapabilities: effect.lowered.hostCapabilities,
-        evaluationProfile,
-      },
-    );
-    const compilation = await this.compileModule(encoded, {
-      maximumSteps: remainingSteps,
-      maximumStepsPerDispatch: limits.maximumStepsPerDispatch,
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
-    if (!compilation.ok) return compilation;
-    return {
-      ok: true,
-      module: {
-        ...compilation.module,
-        entryEffects: effect.lowered.computationType.effects,
-      },
-    };
   }
 
   async compileModule(

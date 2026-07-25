@@ -7,15 +7,15 @@ import {
   parseLazuliSource,
   requestWebGpuDevice,
 } from "../mod.ts";
-import {
-  type GpuLazuliCompilationDispatchObservation,
-  type GpuLazuliTypeInferenceDispatchObservation,
-  type GpuLazuliTypeInferenceWorkspaceCapacities,
-  runGpuLazuliTypeInference,
-} from "../src/lazuli/gpu_type_inference.ts";
-import { GpuLazuliSemanticCompiler } from "../src/lazuli/gpu_semantic_compiler.ts";
-import { LazuliCompilationStatus } from "../src/lazuli/compiler_shader.ts";
-import { inferLazuliTypes } from "../src/lazuli/type_inference.ts";
+import type {
+  GpuLazuliCompilationDispatchObservation,
+  GpuLazuliTypeInferenceDispatchObservation,
+  GpuLazuliTypeInferenceWorkspaceCapacities,
+} from "../src/semantic/gpu_type_inference_contract.ts";
+import { runGpuLazuliTypeInference } from "../src/semantic/gpu_type_inference_runner.ts";
+import { GpuLazuliSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
+import { LazuliCompilationStatus } from "../src/semantic/compiler_shader.ts";
+import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
 import {
   LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
   LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
@@ -29,12 +29,12 @@ import {
   LazuliInferenceDiagnosticCode,
   LazuliInferenceSchedulerWord,
   LazuliInferenceStatus,
-} from "../src/lazuli/type_inference_shader.ts";
+} from "../src/semantic/type_inference_shader.ts";
 import {
   LAZULI_TYPE_SCHEMA_WORD_LENGTH,
   LazuliTypeSchemaMetadataWord,
   LazuliTypeSchemaWord,
-} from "../src/lazuli/type_schema_abi.ts";
+} from "../src/semantic/type_schema_abi.ts";
 
 interface InferenceControls {
   readonly capacities?: GpuLazuliTypeInferenceWorkspaceCapacities;
@@ -552,7 +552,7 @@ Deno.test("packed inference keeps 512 representative programs in one GPU pack", 
   const device = await requestWebGpuDevice();
   try {
     const compiler = await GpuLazuliSemanticCompiler.create(device);
-    const source = await Deno.readTextFile("examples/lazuli-brainfuck/compiler.laz");
+    const source = await Deno.readTextFile("examples/lazuli/brainfuck_compiler.laz");
     const parsed = parseLazuliSource(source);
     ok(parsed.ok);
     if (!parsed.ok) throw new Error("representative packed fixture did not parse");

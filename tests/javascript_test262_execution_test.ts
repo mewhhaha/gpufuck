@@ -2,7 +2,7 @@ import { deepStrictEqual, equal, match, throws } from "node:assert/strict";
 
 import type { GpuFunctionalCompiler } from "../functional.ts";
 import {
-  executeTest262Case,
+  compileTest262Case,
   type Test262ExecutionCase,
 } from "../examples/javascript-aot/src/test262_execute.ts";
 import {
@@ -51,7 +51,7 @@ Deno.test("round-trips Test262 worker execute and result messages", () => {
     requestId: 7,
     response: {
       ok: true,
-      result: { kind: "passed", expectation: "positive" },
+      result: { kind: "compiled", expectation: "positive" },
     },
   })).trimEnd();
 
@@ -65,7 +65,7 @@ Deno.test("round-trips Test262 worker execute and result messages", () => {
     requestId: 7,
     response: {
       ok: true,
-      result: { kind: "passed", expectation: "positive" },
+      result: { kind: "compiled", expectation: "positive" },
     },
   });
 });
@@ -75,7 +75,7 @@ Deno.test("rejects malformed Test262 worker protocol messages at the process bou
     () =>
       parseTest262WorkerResponse(
         '{"type":"result","requestId":3,"response":{"ok":true,' +
-          '"result":{"kind":"passed"}}}',
+          '"result":{"kind":"compiled"}}}',
       ),
     /Invalid Test262 execution worker response/,
   );
@@ -101,7 +101,7 @@ Deno.test("reports compiler fuel exhaustion as a resource limit", async () => {
     },
   } as unknown as GpuFunctionalCompiler;
 
-  const result = await executeTest262Case(compiler, {
+  const result = await compileTest262Case(compiler, {
     executionCase: {
       absolutePath: "tests/fixtures/javascript_test262_resource_limit.js",
       path: "test/language/resource-limit.js",

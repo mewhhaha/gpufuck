@@ -1,18 +1,59 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpufuck — compile Lazuli on the GPU</title>
     <meta
       name="description"
-      content="Compile Lazuli to Functional Core on WebGPU, emit WebAssembly, and run it in your browser."
+      content="Resolve names and infer types on WebGPU, then emit and run WebAssembly, entirely in the browser tab."
     />
-    <meta name="theme-color" content="#0b0d11" />
-    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-    <title>gpufuck — WebGPU compiler playground</title>
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <header>
+      <h1>gpufuck</h1>
+      <p>
+        Hindley–Milner inference runs on your GPU. The emitted WebAssembly needs no GPU to run.
+        Everything below stays in this tab.
+      </p>
+    </header>
+
+    <main>
+      <section class="pane">
+        <div class="pane-head">
+          <h2>Lazuli source</h2>
+          <div id="examples" class="examples"></div>
+        </div>
+        <textarea id="source" spellcheck="false" aria-label="Lazuli source"></textarea>
+        <div class="actions">
+          <button id="run" type="button">Run</button>
+          <a id="download" href="#" hidden>Download .wasm</a>
+        </div>
+      </section>
+
+      <section class="pane">
+        <div class="pane-head">
+          <h2>Pipeline</h2>
+        </div>
+        <dl id="stages" class="stages"></dl>
+        <p id="status" class="status" role="status"></p>
+        <div id="result" class="result"></div>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        The compiler is not fast yet — a single small module is dominated by one GPU readback, which
+        costs about 11 ms in Deno. The measurements and the criteria that would call the approach
+        dead live in <code>BASELINE.md</code>.
+      </p>
+      <p>
+        <a href="https://github.com/mewhhaha/gpufuck">Source</a> ·
+        <a href="https://jsr.io/@mewhhaha/gpufuck">JSR</a>
+      </p>
+    </footer>
+
+    <script type="module" src="./main.js"></script>
   </body>
 </html>

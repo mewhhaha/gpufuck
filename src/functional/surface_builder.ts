@@ -36,6 +36,7 @@ import {
   type FunctionalSurfaceModuleOptions,
   normalizeFunctionalHostCapabilities,
 } from "./host_contract.ts";
+import { elaborateFunctionalCaseDefaults } from "./case_defaults.ts";
 import { elaborateFunctionalRecursiveGroups } from "./recursive_groups.ts";
 import { functionalBytesLiteralSymbol } from "./static_literals.ts";
 import type {
@@ -48,6 +49,7 @@ import { FUNCTIONAL_STORE_TYPE_NAME } from "./store_contract.ts";
 
 export type {
   FunctionalSurfaceCaseArm,
+  FunctionalSurfaceCaseDefault,
   FunctionalSurfaceDefinition,
   FunctionalSurfaceExpression,
   FunctionalSurfaceRecursiveBinding,
@@ -58,6 +60,7 @@ export type {
 const SURFACE_FEATURE_RECURSIVE_GROUP = 1 << 0;
 const SURFACE_FEATURE_EXPLICIT_THUNK = 1 << 1;
 const SURFACE_FEATURE_STORE = 1 << 2;
+const SURFACE_FEATURE_CASE_DEFAULT = 1 << 3;
 const MAXIMUM_SURFACE_EXPRESSION_DEPTH = 1_024;
 const MAXIMUM_SURFACE_TYPE_DEPTH = 512;
 const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
@@ -113,9 +116,12 @@ export function buildFunctionalSurfaceModule(
   for (const definition of definitions) {
     surfaceFeatures |= expressionFeatureMask(definition.body);
   }
-  const elaboratedDefinitions = surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP
-    ? elaborateFunctionalRecursiveGroups(definitions)
+  const withCaseDefaults = surfaceFeatures & SURFACE_FEATURE_CASE_DEFAULT
+    ? elaborateFunctionalCaseDefaults(definitions, typeDeclarations)
     : definitions;
+  const elaboratedDefinitions = surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP
+    ? elaborateFunctionalRecursiveGroups(withCaseDefaults)
+    : withCaseDefaults;
   if ((surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP) !== 0) {
     for (const definition of elaboratedDefinitions) expressionFeatureMask(definition.body);
   }
@@ -630,6 +636,7 @@ function collectBoundaryTypeNames(
       case "case":
         visitExpression(expression.value);
         for (const arm of expression.arms) visitExpression(arm.body);
+        if (expression.otherwise !== undefined) visitExpression(expression.otherwise.body);
         return;
       case "integer":
       case "signed-integer-64":
@@ -759,6 +766,10 @@ function expressionFeatureMask(expression: FunctionalSurfaceExpression): number 
         break;
       case "case":
         for (const arm of nested.arms) visit(arm.body);
+        if (nested.otherwise !== undefined) {
+          features |= SURFACE_FEATURE_CASE_DEFAULT;
+          visit(nested.otherwise.body);
+        }
         visit(nested.value);
         break;
       case "integer":
@@ -1436,7 +1447,13 @@ function parentSpan(words: readonly number[], parent: number): FunctionalSpan | 
   return { startByte, endByte };
 }
 
-export const surface: Readonly<{
+export type FunctionalSurfaceBuilder = Readonly<{
+  /**
+   * Returns a builder that stamps `span` on the node each helper produces. Every surface node kind
+   * already carries an optional span; without this a frontend that tracks source locations has to
+   * abandon the builder and hand-write node literals.
+   */
+  at(span: FunctionalSpan): FunctionalSurfaceBuilder;
   integer(value: number): FunctionalSurfaceExpression;
   signedInteger64(value: bigint): FunctionalSurfaceExpression;
   float32(value: number): FunctionalSurfaceExpression;
@@ -1447,7 +1464,15 @@ export const surface: Readonly<{
   bytes(value: Uint8Array): FunctionalSurfaceExpression;
   runtimeFault(message: string): FunctionalSurfaceExpression;
   name(name: string): FunctionalSurfaceExpression;
-  lambda(parameter: string, body: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
+  /**
+   * Definitions and recursive bindings already take a parameter list, and `apply` already folds a
+   * spine, so accepting one here keeps the builder consistent instead of making every frontend
+   * curry by hand.
+   */
+  lambda(
+    parameters: string | readonly string[],
+    body: FunctionalSurfaceExpression,
+  ): FunctionalSurfaceExpression;
   delay(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
   force(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
   apply(
@@ -1494,137 +1519,161 @@ export const surface: Readonly<{
     length: FunctionalSurfaceExpression,
     initial: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression;
-}> = {
-  integer(value: number): FunctionalSurfaceExpression {
-    return { kind: "integer", value };
-  },
-  signedInteger64(value: bigint): FunctionalSurfaceExpression {
-    return { kind: "signed-integer-64", value };
-  },
-  float32(value: number): FunctionalSurfaceExpression {
-    return { kind: "float-32", value };
-  },
-  float64(value: number): FunctionalSurfaceExpression {
-    return { kind: "float-64", value };
-  },
-  wholeNumberF64(value: number): FunctionalSurfaceExpression {
-    return { kind: "whole-number-f64", value };
-  },
-  boolean(value: boolean): FunctionalSurfaceExpression {
-    return { kind: "boolean", value };
-  },
-  name(name: string): FunctionalSurfaceExpression {
-    return { kind: "name", name };
-  },
-  lambda(
-    parameter: string,
-    body: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "lambda", parameter, body };
-  },
-  delay(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
-    return {
-      kind: "apply",
-      callee: { kind: "name", name: FUNCTIONAL_THUNK_CONSTRUCTOR_NAME },
-      argument: value,
-      argumentEvaluation: FunctionalEvaluationProfile.LazyCallByNeed,
-    };
-  },
-  force(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
-    const valueName = "$forcedThunkValue";
-    return {
-      kind: "case",
-      value,
-      arms: [{
-        constructor: FUNCTIONAL_THUNK_CONSTRUCTOR_NAME,
-        binders: [valueName],
-        body: { kind: "name", name: valueName },
-      }],
-    };
-  },
-  apply(
-    callee: FunctionalSurfaceExpression,
-    ...arguments_: readonly FunctionalSurfaceExpression[]
-  ): FunctionalSurfaceExpression {
-    let expression = callee;
-    for (const argument of arguments_) expression = { kind: "apply", callee: expression, argument };
-    return expression;
-  },
-  binary(
-    operator: FunctionalBinaryOperator,
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "binary", operator, left, right };
-  },
-  unary(
-    operator: FunctionalUnaryOperator,
-    value: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "unary", operator, value };
-  },
-  convert(
-    conversion: FunctionalNumericConversion,
-    value: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "numeric-convert", conversion, value };
-  },
-  equal(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "binary", operator: FunctionalBinaryOperator.Equal, left, right };
-  },
-  structuralEqual(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return {
-      kind: "binary",
-      operator: FunctionalBinaryOperator.StructuralEqual,
-      left,
-      right,
-    };
-  },
-  storeNew(
-    length: FunctionalSurfaceExpression,
-    initial: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "store-new", length, initial };
-  },
-  storeLength(store: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
-    return { kind: "store-length", store };
-  },
-  storeRead(
-    store: FunctionalSurfaceExpression,
-    index: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "store-read", store, index };
-  },
-  storeWrite(
-    store: FunctionalSurfaceExpression,
-    index: FunctionalSurfaceExpression,
-    value: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "store-write", store, index, value };
-  },
-  storeGrow(
-    store: FunctionalSurfaceExpression,
-    length: FunctionalSurfaceExpression,
-    initial: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
-    return { kind: "store-grow", store, length, initial };
-  },
-  text(value: string): FunctionalSurfaceExpression {
-    return { kind: "text", value };
-  },
-  bytes(value: Uint8Array): FunctionalSurfaceExpression {
-    return { kind: "bytes", value: value.slice() };
-  },
-  runtimeFault(message: string): FunctionalSurfaceExpression {
-    return { kind: "runtime-fault", message };
-  },
-};
+}>;
+
+function createSurface(span: FunctionalSpan | undefined): FunctionalSurfaceBuilder {
+  const spanned = span === undefined ? {} : { span };
+  return {
+    at(next: FunctionalSpan): FunctionalSurfaceBuilder {
+      return createSurface(next);
+    },
+    integer(value: number): FunctionalSurfaceExpression {
+      return { kind: "integer", value, ...spanned };
+    },
+    signedInteger64(value: bigint): FunctionalSurfaceExpression {
+      return { kind: "signed-integer-64", value, ...spanned };
+    },
+    float32(value: number): FunctionalSurfaceExpression {
+      return { kind: "float-32", value, ...spanned };
+    },
+    float64(value: number): FunctionalSurfaceExpression {
+      return { kind: "float-64", value, ...spanned };
+    },
+    wholeNumberF64(value: number): FunctionalSurfaceExpression {
+      return { kind: "whole-number-f64", value, ...spanned };
+    },
+    boolean(value: boolean): FunctionalSurfaceExpression {
+      return { kind: "boolean", value, ...spanned };
+    },
+    name(name: string): FunctionalSurfaceExpression {
+      return { kind: "name", name, ...spanned };
+    },
+    lambda(
+      parameters: string | readonly string[],
+      body: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      const names = typeof parameters === "string" ? [parameters] : parameters;
+      const outermost = names[0];
+      if (outermost === undefined) return body;
+      let expression = body;
+      for (let index = names.length - 1; index >= 1; index--) {
+        expression = { kind: "lambda", parameter: names[index]!, body: expression };
+      }
+      return { kind: "lambda", parameter: outermost, body: expression, ...spanned, ...spanned };
+    },
+    delay(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+      return {
+        kind: "apply",
+        callee: { kind: "name", name: FUNCTIONAL_THUNK_CONSTRUCTOR_NAME },
+        argument: value,
+        argumentEvaluation: FunctionalEvaluationProfile.LazyCallByNeed,
+        ...spanned,
+      };
+    },
+    force(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+      const valueName = "$forcedThunkValue";
+      return {
+        kind: "case",
+        value,
+        arms: [{
+          constructor: FUNCTIONAL_THUNK_CONSTRUCTOR_NAME,
+          binders: [valueName],
+          body: { kind: "name", name: valueName },
+        }],
+        ...spanned,
+      };
+    },
+    apply(
+      callee: FunctionalSurfaceExpression,
+      ...arguments_: readonly FunctionalSurfaceExpression[]
+    ): FunctionalSurfaceExpression {
+      const last = arguments_.at(-1);
+      if (last === undefined) return callee;
+      let expression = callee;
+      for (let index = 0; index < arguments_.length - 1; index++) {
+        expression = { kind: "apply", callee: expression, argument: arguments_[index]! };
+      }
+      return { kind: "apply", callee: expression, argument: last, ...spanned, ...spanned };
+    },
+    binary(
+      operator: FunctionalBinaryOperator,
+      left: FunctionalSurfaceExpression,
+      right: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return { kind: "binary", operator, left, right, ...spanned };
+    },
+    unary(
+      operator: FunctionalUnaryOperator,
+      value: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return { kind: "unary", operator, value, ...spanned };
+    },
+    convert(
+      conversion: FunctionalNumericConversion,
+      value: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return { kind: "numeric-convert", conversion, value, ...spanned };
+    },
+    equal(
+      left: FunctionalSurfaceExpression,
+      right: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return { kind: "binary", operator: FunctionalBinaryOperator.Equal, left, right, ...spanned };
+    },
+    structuralEqual(
+      left: FunctionalSurfaceExpression,
+      right: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return {
+        kind: "binary",
+        operator: FunctionalBinaryOperator.StructuralEqual,
+        left,
+        right,
+        ...spanned,
+      };
+    },
+    storeNew(
+      length: FunctionalSurfaceExpression,
+      initial: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return { kind: "store-new", length, initial, ...spanned };
+    },
+    storeLength(store: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+      return { kind: "store-length", store, ...spanned };
+    },
+    storeRead(
+      store: FunctionalSurfaceExpression,
+      index: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return { kind: "store-read", store, index, ...spanned };
+    },
+    storeWrite(
+      store: FunctionalSurfaceExpression,
+      index: FunctionalSurfaceExpression,
+      value: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return { kind: "store-write", store, index, value, ...spanned };
+    },
+    storeGrow(
+      store: FunctionalSurfaceExpression,
+      length: FunctionalSurfaceExpression,
+      initial: FunctionalSurfaceExpression,
+    ): FunctionalSurfaceExpression {
+      return { kind: "store-grow", store, length, initial, ...spanned };
+    },
+    text(value: string): FunctionalSurfaceExpression {
+      return { kind: "text", value, ...spanned };
+    },
+    bytes(value: Uint8Array): FunctionalSurfaceExpression {
+      return { kind: "bytes", value: value.slice(), ...spanned };
+    },
+    runtimeFault(message: string): FunctionalSurfaceExpression {
+      return { kind: "runtime-fault", message, ...spanned };
+    },
+  };
+}
+
+export const surface: FunctionalSurfaceBuilder = createSurface(undefined);
 
 function float32Bits(value: number): number {
   const bytes = new ArrayBuffer(4);

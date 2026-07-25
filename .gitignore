@@ -4,4 +4,3 @@ node_modules
 /language/lazuli/generated/tree-sitter/
 /_site/
 /playground/dist/
-/playground/public/generated/

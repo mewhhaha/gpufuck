@@ -166,6 +166,17 @@ function elaborateExpression(
           ...arm,
           body: elaborate(arm.body, withNames(lexicalNames, arm.binders)),
         })),
+        ...(expression.otherwise === undefined ? {} : {
+          otherwise: {
+            ...expression.otherwise,
+            body: elaborate(
+              expression.otherwise.body,
+              expression.otherwise.binder === undefined
+                ? lexicalNames
+                : withNames(lexicalNames, [expression.otherwise.binder]),
+            ),
+          },
+        }),
       };
   }
 }
@@ -361,6 +372,19 @@ function rewriteNames(
       return {
         ...expression,
         value: rewrite(expression.value),
+        ...(expression.otherwise === undefined ? {} : {
+          otherwise: {
+            ...expression.otherwise,
+            body: rewrite(
+              expression.otherwise.body,
+              withReplacementNames(
+                boundNames,
+                expression.otherwise.binder === undefined ? [] : [expression.otherwise.binder],
+                replacements,
+              ),
+            ),
+          },
+        }),
         arms: expression.arms.map((arm) => ({
           ...arm,
           body: rewrite(
@@ -456,6 +480,14 @@ function freeNames(
       case "case":
         visit(nested.value, scope);
         for (const arm of nested.arms) visit(arm.body, withNames(scope, arm.binders));
+        if (nested.otherwise !== undefined) {
+          visit(
+            nested.otherwise.body,
+            nested.otherwise.binder === undefined
+              ? scope
+              : withNames(scope, [nested.otherwise.binder]),
+          );
+        }
         return;
     }
   };

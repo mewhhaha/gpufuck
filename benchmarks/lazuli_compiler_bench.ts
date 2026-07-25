@@ -1,9 +1,4 @@
-import {
-  GpuLazuliCompiler,
-  GpuTypeCoreExecutor,
-  requestWebGpuDevice,
-  type TypeCoreProgram,
-} from "../mod.ts";
+import { GpuLazuliCompiler, requestWebGpuDevice } from "../mod.ts";
 
 interface CompilationBenchmark {
   readonly name: string;
@@ -96,7 +91,6 @@ const benchmarks: readonly CompilationBenchmark[] = [
 
 const device = await requestWebGpuDevice();
 const compiler = await GpuLazuliCompiler.create(device);
-const typeCore = await GpuTypeCoreExecutor.create(device);
 globalThis.addEventListener("unload", () => device.destroy(), { once: true });
 
 for (const benchmark of benchmarks) {
@@ -140,55 +134,3 @@ for (const batchSize of [8, 16, 64] as const) {
     },
   });
 }
-
-const typeCoreProgram: TypeCoreProgram = {
-  typeConstructors: [{ name: "Vector", parameterKinds: ["type", "integer"] }],
-  functions: [],
-  entry: {
-    kind: "type",
-    type: {
-      kind: "named",
-      name: "Vector",
-      arguments: [
-        { kind: "type", type: { kind: "integer" } },
-        { kind: "integer", value: 42 },
-      ],
-    },
-  },
-};
-
-Deno.bench("execute Type Core: kinded Vector", async () => {
-  const result = await typeCore.execute(typeCoreProgram);
-  if (!result.ok) throw new Error(`Type Core benchmark failed during ${result.stage}`);
-});
-
-Deno.bench("execute Type Core: batch of 32 repeated kinded Vectors", async () => {
-  const results = await typeCore.executeBatch(
-    Array.from({ length: 32 }, () => typeCoreProgram),
-  );
-  for (const result of results) {
-    if (!result.ok) throw new Error(`Type Core batch benchmark failed during ${result.stage}`);
-  }
-});
-
-Deno.bench("execute Type Core: packed batch of 32 distinct kinded Vectors", async () => {
-  const results = await typeCore.executeBatch(
-    Array.from({ length: 32 }, (_, length) => ({
-      ...typeCoreProgram,
-      entry: {
-        kind: "type" as const,
-        type: {
-          kind: "named" as const,
-          name: "Vector",
-          arguments: [
-            { kind: "type" as const, type: { kind: "integer" as const } },
-            { kind: "integer" as const, value: length },
-          ],
-        },
-      },
-    })),
-  );
-  for (const result of results) {
-    if (!result.ok) throw new Error(`distinct Type Core batch failed during ${result.stage}`);
-  }
-});

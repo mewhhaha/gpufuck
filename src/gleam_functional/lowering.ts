@@ -18,11 +18,12 @@ import {
   type FunctionalHostOperationDeclaration,
   FunctionalWasmIntrinsic,
 } from "../functional/host_contract.ts";
-import type {
-  FunctionalSurfaceCaseArm,
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceTypeDeclaration,
+import {
+  type FunctionalSurfaceCaseArm,
+  type FunctionalSurfaceDefinition,
+  type FunctionalSurfaceExpression,
+  type FunctionalSurfaceTypeDeclaration,
+  surface,
 } from "../functional/surface_builder.ts";
 import type {
   GleamFunctionalConstant,
@@ -101,18 +102,17 @@ const GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT = "$gleam_bit_array_from_utf8_codepoin
 const binaryOperators: Readonly<Record<string, FunctionalBinaryOperator>> = {
   "==": FunctionalBinaryOperator.StructuralEqual,
   "!=": FunctionalBinaryOperator.StructuralNotEqual,
-  "<": FunctionalBinaryOperator.LessWholeNumberF64,
-  "<=": FunctionalBinaryOperator.LessEqualWholeNumberF64,
-  ">": FunctionalBinaryOperator.GreaterWholeNumberF64,
-  ">=": FunctionalBinaryOperator.GreaterEqualWholeNumberF64,
+  "<": FunctionalBinaryOperator.LessSignedInteger64,
+  "<=": FunctionalBinaryOperator.LessEqualSignedInteger64,
+  ">": FunctionalBinaryOperator.GreaterSignedInteger64,
+  ">=": FunctionalBinaryOperator.GreaterEqualSignedInteger64,
   "<.": FunctionalBinaryOperator.LessFloat64,
   "<=.": FunctionalBinaryOperator.LessEqualFloat64,
   ">.": FunctionalBinaryOperator.GreaterFloat64,
   ">=.": FunctionalBinaryOperator.GreaterEqualFloat64,
-  "+": FunctionalBinaryOperator.AddWholeNumberF64,
-  "-": FunctionalBinaryOperator.SubtractWholeNumberF64,
-  "*": FunctionalBinaryOperator.MultiplyWholeNumberF64,
-  "/": FunctionalBinaryOperator.DivideWholeNumberF64,
+  "+": FunctionalBinaryOperator.AddSignedInteger64,
+  "-": FunctionalBinaryOperator.SubtractSignedInteger64,
+  "*": FunctionalBinaryOperator.MultiplySignedInteger64,
   "+.": FunctionalBinaryOperator.AddFloat64,
   "-.": FunctionalBinaryOperator.SubtractFloat64,
   "*.": FunctionalBinaryOperator.MultiplyFloat64,
@@ -800,11 +800,9 @@ class GleamFunctionalLowering {
           ? ["$gleam_unit_parameter"]
           : declaration.parameters.map((parameter) => parameter.name),
         annotation: declaredFunctionType(declaration, this.#typeResolver),
-        body: {
-          kind: "runtime-fault",
-          message: `unbound Gleam external ${external.target}:${external.module}.${external.name}`,
-          span: declaration.span,
-        },
+        body: surface.at(declaration.span).runtimeFault(
+          `unbound Gleam external ${external.target}:${external.module}.${external.name}`,
+        ),
         span: declaration.span,
       }];
     }
@@ -839,21 +837,15 @@ class GleamFunctionalLowering {
       field: operation.name,
     });
     const parameterValues = declaration.parameters.length === 0
-      ? [{
-        kind: "name" as const,
-        name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
-        span: declaration.span,
-      }]
+      ? [name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, declaration.span)]
       : declaration.parameters.map((parameter) => name(parameter.name, parameter.span));
     return [{
       name: hostDefinition,
       parameters: [],
       annotation: { kind: "function", parameter: hostParameter, result },
-      body: {
-        kind: "runtime-fault",
-        message: `unbound Gleam external ${external.module}.${external.name}`,
-        span: declaration.span,
-      },
+      body: surface.at(declaration.span).runtimeFault(
+        `unbound Gleam external ${external.module}.${external.name}`,
+      ),
       span: declaration.span,
     }, {
       name: declaration.name,
@@ -861,14 +853,11 @@ class GleamFunctionalLowering {
         ? ["$gleam_unit_parameter"]
         : declaration.parameters.map((parameter) => parameter.name),
       annotation: declaredFunctionType(declaration, this.#typeResolver),
-      body: applyMany(
+      body: surface.at(declaration.span).apply(
         name(hostDefinition, declaration.span),
-        [
-          parameters.length === 0
-            ? parameterValues[0]!
-            : nestedTupleExpression(parameterValues, declaration.span),
-        ],
-        declaration.span,
+        parameters.length === 0
+          ? parameterValues[0]!
+          : nestedTupleExpression(parameterValues, declaration.span),
       ),
       span: declaration.span,
     }];
@@ -897,57 +886,43 @@ class GleamFunctionalLowering {
   private lowerExpression(expression: GleamFunctionalExpression): FunctionalSurfaceExpression {
     switch (expression.kind) {
       case "integer":
-        return { kind: "whole-number-f64", value: expression.value, span: expression.span };
+        return surface.at(expression.span).signedInteger64(BigInt(expression.value));
       case "boolean":
         return { ...expression };
       case "float":
-        return { kind: "float-64", value: expression.value, span: expression.span };
+        return surface.at(expression.span).float64(expression.value);
       case "string":
-        return { kind: "text", value: expression.value, span: expression.span };
+        return surface.at(expression.span).text(expression.value);
       case "bit-array":
         return bitArrayExpression(expression.bytes, expression.bitLength, expression.span);
       case "bit-array-build":
         return this.lowerBitArrayBuild(expression);
       case "panic":
         if (expression.message === null || expression.message.kind === "string") {
-          return {
-            kind: "runtime-fault",
-            message: expression.message?.value ?? "Gleam panic",
-            span: expression.span,
-          };
+          return surface.at(expression.span).runtimeFault(
+            expression.message?.value ?? "Gleam panic",
+          );
         }
         return {
           kind: "let",
           name: this.discardName(),
           value: this.lowerExpression(expression.message),
-          body: {
-            kind: "runtime-fault",
-            message: "Gleam panic",
-            span: expression.span,
-          },
+          body: surface.at(expression.span).runtimeFault("Gleam panic"),
           span: expression.span,
         };
       case "unit":
-        return { kind: "name", name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, span: expression.span };
+        return name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, expression.span);
       case "capture":
         throw new GleamFunctionalLoweringError(
           expression.span,
           "A Gleam function capture placeholder must appear in a function call.",
         );
-      case "name":
-        if (this.#qualifiedImports.has(expression.name)) {
-          return {
-            kind: "name",
-            name: this.#qualifiedImports.get(expression.name)!,
-            span: expression.span,
-          };
-        }
+      case "name": {
+        const qualified = this.#qualifiedImports.get(expression.name);
+        if (qualified !== undefined) return name(qualified, expression.span);
         if (expression.name.includes(".")) return this.lowerRecordAccess(expression);
-        return {
-          kind: "name",
-          name: expression.name,
-          span: expression.span,
-        };
+        return name(expression.name, expression.span);
+      }
       case "field-access":
         return this.lowerRecordField(
           this.lowerExpression(expression.value),
@@ -980,16 +955,15 @@ class GleamFunctionalLowering {
           return name(GLEAM_TUPLE_ZERO_VALUE, expression.span);
         }
         if (expression.values.length === 1) {
-          return applyMany(
+          return surface.at(expression.span).apply(
             name(GLEAM_TUPLE_ONE_VALUE, expression.span),
-            [this.lowerExpression(expression.values[0]!)],
-            expression.span,
+            this.lowerExpression(expression.values[0]!),
           );
         }
         let result = this.lowerExpression(expression.values.at(-1)!);
         for (let index = expression.values.length - 2; index >= 0; index--) {
           result = applyMany(
-            { kind: "name", name: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME, span: expression.span },
+            name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME, expression.span),
             [this.lowerExpression(expression.values[index]!), result],
             expression.span,
           );
@@ -998,15 +972,11 @@ class GleamFunctionalLowering {
       }
       case "list": {
         let result: FunctionalSurfaceExpression = expression.tail === null
-          ? {
-            kind: "name",
-            name: GLEAM_LIST_NIL,
-            span: expression.span,
-          }
+          ? name(GLEAM_LIST_NIL, expression.span)
           : this.lowerExpression(expression.tail);
         for (let index = expression.values.length - 1; index >= 0; index--) {
           result = applyMany(
-            { kind: "name", name: GLEAM_LIST_CONS, span: expression.span },
+            name(GLEAM_LIST_CONS, expression.span),
             [this.lowerExpression(expression.values[index]!), result],
             expression.span,
           );
@@ -1014,22 +984,15 @@ class GleamFunctionalLowering {
         return result;
       }
       case "lambda": {
+        const at = surface.at(expression.span);
         let result = this.lowerExpression(expression.body);
-        if (expression.parameters.length === 0) {
-          return {
-            kind: "lambda",
-            parameter: `$gleam_unit_${this.#discardIndex++}`,
-            body: result,
-            span: expression.span,
-          };
-        }
-        for (let index = expression.parameters.length - 1; index >= 0; index--) {
-          result = {
-            kind: "lambda",
-            parameter: expression.parameters[index]!,
-            body: result,
-            span: expression.span,
-          };
+        const parameters = expression.parameters.length === 0
+          ? [`$gleam_unit_${this.#discardIndex++}`]
+          : expression.parameters;
+        // Each curried lambda carries the whole expression's span, so `at.lambda` folds one
+        // parameter at a time rather than taking the list, which would span only the outermost.
+        for (let index = parameters.length - 1; index >= 0; index--) {
+          result = at.lambda(parameters[index]!, result);
         }
         return result;
       }
@@ -1039,10 +1002,9 @@ class GleamFunctionalLowering {
         }
         const arguments_ = this.orderedCallArguments(expression);
         if (arguments_.length === 0) {
-          return applyMany(
+          return surface.at(expression.span).apply(
             this.lowerExpression(expression.callee),
-            [{ kind: "name", name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, span: expression.span }],
-            expression.span,
+            name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, expression.span),
           );
         }
         const captures = arguments_.filter((argument) => argument.kind === "capture");
@@ -1060,10 +1022,9 @@ class GleamFunctionalLowering {
           );
         }
         const parameter = `$gleam_capture_${this.#discardIndex++}`;
-        return {
-          kind: "lambda",
+        return surface.at(expression.span).lambda(
           parameter,
-          body: applyMany(
+          applyMany(
             this.lowerExpression(expression.callee),
             arguments_.map((argument) =>
               argument.kind === "capture"
@@ -1072,8 +1033,7 @@ class GleamFunctionalLowering {
             ),
             expression.span,
           ),
-          span: expression.span,
-        };
+        );
       }
       case "let": {
         if (expression.pattern.kind === "variable") {
@@ -1094,11 +1054,7 @@ class GleamFunctionalLowering {
             subjectName,
             expression.pattern,
             this.lowerExpression(expression.body),
-            {
-              kind: "runtime-fault",
-              message: "Gleam let pattern did not match",
-              span: expression.pattern.span,
-            },
+            surface.at(expression.pattern.span).runtimeFault("Gleam let pattern did not match"),
           ),
           span: expression.span,
         };
@@ -1330,6 +1286,7 @@ class GleamFunctionalLowering {
   private lowerBinary(
     expression: Extract<GleamFunctionalExpression, { readonly kind: "binary" }>,
   ): FunctionalSurfaceExpression {
+    const at = surface.at(expression.span);
     const left = this.lowerExpression(expression.left);
     const right = this.lowerExpression(expression.right);
     if (expression.operator === "&&") {
@@ -1337,7 +1294,7 @@ class GleamFunctionalLowering {
         kind: "if",
         condition: left,
         consequent: right,
-        alternate: { kind: "boolean", value: false, span: expression.span },
+        alternate: at.boolean(false),
         span: expression.span,
       };
     }
@@ -1345,17 +1302,27 @@ class GleamFunctionalLowering {
       return {
         kind: "if",
         condition: left,
-        consequent: { kind: "boolean", value: true, span: expression.span },
+        consequent: at.boolean(true),
         alternate: right,
         span: expression.span,
       };
     }
-    if (expression.operator === "%") {
+    if (expression.operator === "/" || expression.operator === "%") {
       return {
-        kind: "binary",
-        operator: FunctionalBinaryOperator.RemainderWholeNumberF64,
-        left,
-        right,
+        kind: "if",
+        condition: at.binary(
+          FunctionalBinaryOperator.EqualSignedInteger64,
+          right,
+          surface.at(expression.right.span).signedInteger64(0n),
+        ),
+        consequent: at.signedInteger64(0n),
+        alternate: at.binary(
+          expression.operator === "/"
+            ? FunctionalBinaryOperator.DivideSignedInteger64
+            : FunctionalBinaryOperator.RemainderSignedInteger64,
+          left,
+          right,
+        ),
         span: expression.span,
       };
     }
@@ -1365,31 +1332,17 @@ class GleamFunctionalLowering {
     if (expression.operator === "/.") {
       return {
         kind: "if",
-        condition: {
-          kind: "binary",
-          operator: FunctionalBinaryOperator.EqualFloat64,
-          left: right,
-          right: { kind: "float-64", value: 0, span: expression.right.span },
-          span: expression.span,
-        },
-        consequent: { kind: "float-64", value: 0, span: expression.span },
-        alternate: {
-          kind: "binary",
-          operator: FunctionalBinaryOperator.DivideFloat64,
-          left,
+        condition: at.binary(
+          FunctionalBinaryOperator.EqualFloat64,
           right,
-          span: expression.span,
-        },
+          surface.at(expression.right.span).float64(0),
+        ),
+        consequent: at.float64(0),
+        alternate: at.binary(FunctionalBinaryOperator.DivideFloat64, left, right),
         span: expression.span,
       };
     }
-    return {
-      kind: "binary",
-      operator: binaryOperators[expression.operator]!,
-      left,
-      right,
-      span: expression.span,
-    };
+    return at.binary(binaryOperators[expression.operator]!, left, right);
   }
 
   private lowerCase(
@@ -1496,11 +1449,9 @@ class GleamFunctionalLowering {
     const loweredArms = constructors.map((constructor) => {
       const shape = this.#constructors.get(constructor)!;
       const binders = shape.fields.map(() => this.discardName());
-      let body: FunctionalSurfaceExpression = {
-        kind: "runtime-fault",
-        message: "unreachable exhaustive Gleam constructor case",
-        span,
-      };
+      let body: FunctionalSurfaceExpression = surface.at(span).runtimeFault(
+        "unreachable exhaustive Gleam constructor case",
+      );
       for (let index = arms.length - 1; index >= 0; index--) {
         const sourcePattern = patterns[index]!;
         const pattern = normalizedPatterns[index]!;
@@ -1523,15 +1474,7 @@ class GleamFunctionalLowering {
             span: arm.span,
           };
         }
-        if (sourcePattern.kind === "variable") {
-          success = {
-            kind: "let",
-            name: sourcePattern.name,
-            value: name(subjectName, sourcePattern.span),
-            body: success,
-            span: sourcePattern.span,
-          };
-        } else if (sourcePattern.kind === "alias") {
+        if (sourcePattern.kind === "variable" || sourcePattern.kind === "alias") {
           success = {
             kind: "let",
             name: sourcePattern.name,
@@ -1566,19 +1509,17 @@ class GleamFunctionalLowering {
       );
     }
     const subjectNames = expression.subjects.map(() => `$gleam_case_${this.#discardIndex++}`);
-    let result: FunctionalSurfaceExpression = {
-      kind: "runtime-fault",
-      message: "unreachable exhaustive Gleam case",
-      span: expression.span,
-    };
+    let result: FunctionalSurfaceExpression = surface.at(expression.span).runtimeFault(
+      "unreachable exhaustive Gleam case",
+    );
     for (let index = expression.arms.length - 1; index >= 0; index--) {
       const arm = expression.arms[index]!;
+      const at = surface.at(arm.span);
       const fallbackName = `$gleam_case_fallback_${this.#discardIndex++}`;
       const fallbackParameter = this.discardName();
-      const fallback = applyMany(
+      const fallback = at.apply(
         name(fallbackName, arm.span),
-        [name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, arm.span)],
-        arm.span,
+        name(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME, arm.span),
       );
       const body = this.lowerExpression(arm.body);
       const success = arm.guard === null ? body : {
@@ -1597,12 +1538,7 @@ class GleamFunctionalLowering {
       result = {
         kind: "let",
         name: fallbackName,
-        value: {
-          kind: "lambda",
-          parameter: fallbackParameter,
-          body: result,
-          span: arm.span,
-        },
+        value: at.lambda(fallbackParameter, result),
         body: attempt,
         span: arm.span,
       };
@@ -1732,17 +1668,11 @@ class GleamFunctionalLowering {
     ) {
       return {
         kind: "if",
-        condition: {
-          kind: "binary",
-          operator: pattern.kind === "integer"
-            ? FunctionalBinaryOperator.EqualWholeNumberF64
-            : pattern.kind === "float"
-            ? FunctionalBinaryOperator.EqualFloat64
-            : FunctionalBinaryOperator.StructuralEqual,
-          left: subject,
-          right: scalarPatternValue(pattern),
-          span: pattern.span,
-        },
+        condition: surface.at(pattern.span).binary(
+          scalarEqualityOperator(pattern.kind),
+          subject,
+          scalarPatternValue(pattern),
+        ),
         consequent: success,
         alternate: failure,
         span: pattern.span,
@@ -1794,47 +1724,38 @@ class GleamFunctionalLowering {
     failure: FunctionalSurfaceExpression,
   ): FunctionalSurfaceExpression {
     this.registerTextIntrinsics();
+    const at = surface.at(pattern.span);
     const prefixByteLength = new TextEncoder().encode(pattern.prefix).byteLength;
     const lengthName = `$gleam_prefix_length_${this.#discardIndex++}`;
     const restName = `$gleam_prefix_rest_${this.#discardIndex++}`;
     const subject = name(subjectName, pattern.span);
-    const prefixLength = { kind: "integer" as const, value: prefixByteLength, span: pattern.span };
+    const prefixLength = at.integer(prefixByteLength);
     const slice = (start: FunctionalSurfaceExpression, end: FunctionalSurfaceExpression) =>
-      applyMany(
+      at.apply(
         name(GLEAM_TEXT_BYTE_SLICE, pattern.span),
-        [nestedTupleExpression(
+        nestedTupleExpression(
           [subject, nestedTupleExpression([start, end], pattern.span)],
           pattern.span,
-        )],
-        pattern.span,
+        ),
       );
     const matchedRest = this.lowerPattern(restName, pattern.rest, success, failure);
     return {
       kind: "let",
       name: lengthName,
-      value: applyMany(
-        name(GLEAM_TEXT_BYTE_LENGTH, pattern.span),
-        [subject],
-        pattern.span,
-      ),
+      value: at.apply(name(GLEAM_TEXT_BYTE_LENGTH, pattern.span), subject),
       body: {
         kind: "if",
-        condition: {
-          kind: "binary",
-          operator: FunctionalBinaryOperator.GreaterEqual,
-          left: name(lengthName, pattern.span),
-          right: prefixLength,
-          span: pattern.span,
-        },
+        condition: at.binary(
+          FunctionalBinaryOperator.GreaterEqual,
+          name(lengthName, pattern.span),
+          prefixLength,
+        ),
         consequent: {
           kind: "if",
-          condition: {
-            kind: "binary",
-            operator: FunctionalBinaryOperator.StructuralEqual,
-            left: slice({ kind: "integer", value: 0, span: pattern.span }, prefixLength),
-            right: { kind: "text", value: pattern.prefix, span: pattern.span },
-            span: pattern.span,
-          },
+          condition: at.structuralEqual(
+            slice(at.integer(0), prefixLength),
+            at.text(pattern.prefix),
+          ),
           consequent: {
             kind: "let",
             name: restName,
@@ -1862,7 +1783,7 @@ class GleamFunctionalLowering {
     const segmentTypes = pattern.segments.map((segment): FunctionalTypeSchema =>
       segment.options.some((option) => option.name === "bits" || option.name === "bytes")
         ? bitArray
-        : wholeNumberF64Type()
+        : signedInteger64Type()
     );
     const payload = segmentTypes.length === 1 ? segmentTypes[0]! : nestedTupleSchema(segmentTypes);
     const optionArguments = pattern.segments.flatMap((segment) =>
@@ -1870,7 +1791,7 @@ class GleamFunctionalLowering {
     );
     const parameter = optionArguments.length === 0
       ? bitArray
-      : nestedTupleSchema([bitArray, ...optionArguments.map(() => wholeNumberF64Type())]);
+      : nestedTupleSchema([bitArray, ...optionArguments.map(() => signedInteger64Type())]);
     const result: FunctionalTypeSchema = {
       kind: "named",
       name: GLEAM_RESULT_TYPE,
@@ -1900,11 +1821,9 @@ class GleamFunctionalLowering {
       name: definitionName,
       parameters: [],
       annotation: { kind: "function", parameter, result },
-      body: {
-        kind: "runtime-fault",
-        message: `unbound Gleam bit-array pattern ${operationName}`,
-        span: definitionSpan,
-      },
+      body: surface.at(definitionSpan).runtimeFault(
+        `unbound Gleam bit-array pattern ${operationName}`,
+      ),
       span: definitionSpan,
     });
 
@@ -1925,14 +1844,11 @@ class GleamFunctionalLowering {
     ];
     return {
       kind: "case",
-      value: applyMany(
+      value: surface.at(pattern.span).apply(
         name(definitionName, pattern.span),
-        [
-          argumentValues.length === 1
-            ? argumentValues[0]!
-            : nestedTupleExpression(argumentValues, pattern.span),
-        ],
-        pattern.span,
+        argumentValues.length === 1
+          ? argumentValues[0]!
+          : nestedTupleExpression(argumentValues, pattern.span),
       ),
       arms: [{
         constructor: GLEAM_RESULT_OK,
@@ -1964,7 +1880,7 @@ class GleamFunctionalLowering {
       );
     }
 
-    const parameter = wholeNumberF64Type();
+    const parameter = signedInteger64Type();
     const result = { kind: "named" as const, name: GLEAM_BIT_ARRAY_TYPE, arguments: [] };
     if (!this.#externalCapabilities.has(GLEAM_BIT_ARRAY_INTRINSIC_CAPABILITY)) {
       this.#externalCapabilities.set(
@@ -1990,18 +1906,15 @@ class GleamFunctionalLowering {
         name: GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT,
         parameters: [],
         annotation: { kind: "function", parameter, result },
-        body: {
-          kind: "runtime-fault",
-          message: "unbound Gleam utf8_codepoint bit-array construction",
-          span: definitionSpan,
-        },
+        body: surface.at(definitionSpan).runtimeFault(
+          "unbound Gleam utf8_codepoint bit-array construction",
+        ),
         span: definitionSpan,
       });
     }
-    return applyMany(
+    return surface.at(expression.span).apply(
       name(GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT, expression.span),
-      [this.lowerExpression(segment.value)],
-      expression.span,
+      this.lowerExpression(segment.value),
     );
   }
 
@@ -2069,11 +1982,7 @@ class GleamFunctionalLowering {
         name: definition,
         parameters: [],
         annotation,
-        body: {
-          kind: "runtime-fault",
-          message: `unbound Gleam text intrinsic ${field}`,
-          span: definitionSpan,
-        },
+        body: surface.at(definitionSpan).runtimeFault(`unbound Gleam text intrinsic ${field}`),
         span: definitionSpan,
       });
     }
@@ -2094,7 +2003,7 @@ class GleamFunctionalLowering {
     const exhaustiveBoolean = booleanValues.size === 2 &&
       arms.every((arm) => arm.patterns[0]?.kind === "boolean");
     let fallback: FunctionalSurfaceExpression | null = exhaustiveBoolean
-      ? { kind: "runtime-fault", message: "unreachable exhaustive Bool case", span }
+      ? surface.at(span).runtimeFault("unreachable exhaustive Bool case")
       : null;
     for (let index = arms.length - 1; index >= 0; index--) {
       const arm = arms[index]!;
@@ -2135,17 +2044,11 @@ class GleamFunctionalLowering {
       }
       fallback = {
         kind: "if",
-        condition: {
-          kind: "binary",
-          operator: pattern.kind === "integer"
-            ? FunctionalBinaryOperator.EqualWholeNumberF64
-            : pattern.kind === "float"
-            ? FunctionalBinaryOperator.EqualFloat64
-            : FunctionalBinaryOperator.StructuralEqual,
-          left: name(subjectName, pattern.span),
-          right: scalarPatternValue(pattern),
-          span: pattern.span,
-        },
+        condition: surface.at(pattern.span).binary(
+          scalarEqualityOperator(pattern.kind),
+          name(subjectName, pattern.span),
+          scalarPatternValue(pattern),
+        ),
         consequent: body,
         alternate: fallback,
         span: arm.span,
@@ -2449,7 +2352,7 @@ class GleamTypeResolver {
       case "unit":
         return { kind: type.kind };
       case "integer":
-        return wholeNumberF64Type();
+        return signedInteger64Type();
       case "float":
         return { kind: "float-64" };
       case "parameter":
@@ -2769,41 +2672,45 @@ function isIrrefutablePattern(pattern: GleamFunctionalPattern): boolean {
   return pattern.kind === "alias" && isIrrefutablePattern(pattern.pattern);
 }
 
+function scalarEqualityOperator(
+  kind: "integer" | "float" | "boolean" | "bit-array" | "string",
+): FunctionalBinaryOperator {
+  if (kind === "integer") return FunctionalBinaryOperator.EqualSignedInteger64;
+  if (kind === "float") return FunctionalBinaryOperator.EqualFloat64;
+  return FunctionalBinaryOperator.StructuralEqual;
+}
+
 function scalarPatternValue(
   pattern: Extract<
     GleamFunctionalPattern,
     { readonly kind: "integer" | "float" | "boolean" | "bit-array" | "string" }
   >,
 ): FunctionalSurfaceExpression {
-  if (pattern.kind === "integer") {
-    return { kind: "whole-number-f64", value: pattern.value, span: pattern.span };
-  }
-  if (pattern.kind === "float") {
-    return { kind: "float-64", value: pattern.value, span: pattern.span };
-  }
-  if (pattern.kind === "boolean") {
-    return { kind: "boolean", value: pattern.value, span: pattern.span };
-  }
-  if (pattern.kind === "string") {
-    return { kind: "text", value: pattern.value, span: pattern.span };
-  }
+  const at = surface.at(pattern.span);
+  if (pattern.kind === "integer") return at.signedInteger64(BigInt(pattern.value));
+  if (pattern.kind === "float") return at.float64(pattern.value);
+  if (pattern.kind === "boolean") return at.boolean(pattern.value);
+  if (pattern.kind === "string") return at.text(pattern.value);
   return bitArrayExpression(pattern.bytes, pattern.bitLength, pattern.span);
 }
 
+/**
+ * `surface.at(span).apply` stamps only the outermost node of a variadic spine, but Gleam stamps
+ * every node of the spine with the call's span, so the fold stays here and applies one argument at
+ * a time.
+ */
 function applyMany(
   callee: FunctionalSurfaceExpression,
   arguments_: readonly FunctionalSurfaceExpression[],
   span: FunctionalSpan,
 ): FunctionalSurfaceExpression {
   let result = callee;
-  for (const argument of arguments_) {
-    result = { kind: "apply", callee: result, argument, span };
-  }
+  for (const argument of arguments_) result = surface.at(span).apply(result, argument);
   return result;
 }
 
 function name(value: string, span: FunctionalSpan): FunctionalSurfaceExpression {
-  return { kind: "name", name: value, span };
+  return surface.at(span).name(value);
 }
 
 function bitArrayExpression(
@@ -2811,12 +2718,10 @@ function bitArrayExpression(
   bitLength: number,
   span: FunctionalSpan,
 ): FunctionalSurfaceExpression {
+  const at = surface.at(span);
   return applyMany(
     name(GLEAM_BIT_ARRAY_VALUE, span),
-    [
-      { kind: "bytes", value: bytes, span },
-      { kind: "whole-number-f64", value: bitLength, span },
-    ],
+    [at.bytes(bytes), at.signedInteger64(BigInt(bitLength))],
     span,
   );
 }
@@ -2864,7 +2769,7 @@ function gleamBitArrayDeclaration(sourceByteLength: number): FunctionalSurfaceTy
           type: { kind: "named", name: FUNCTIONAL_BYTES_TYPE_NAME, arguments: [] },
           span,
         },
-        { name: "bitLength", type: wholeNumberF64Type(), span },
+        { name: "bitLength", type: signedInteger64Type(), span },
       ],
     }],
   };
@@ -2915,12 +2820,8 @@ function gleamTupleOneDeclaration(sourceByteLength: number): FunctionalSurfaceTy
   };
 }
 
-function wholeNumberF64Type(): FunctionalTypeSchema {
-  return {
-    kind: "named",
-    name: FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
-    arguments: [],
-  };
+function signedInteger64Type(): FunctionalTypeSchema {
+  return { kind: "signed-integer-64" };
 }
 
 function requireUniqueNames(

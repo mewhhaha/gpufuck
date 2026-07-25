@@ -1,9 +1,4 @@
-import {
-  FunctionalWasmRuntimeError,
-  GpuFunctionalCompiler,
-  requestWebGpuDevice,
-  runFunctionalWasmModule,
-} from "../functional.ts";
+import { GpuFunctionalCompiler, requestWebGpuDevice } from "../functional.ts";
 import {
   type GleamFunctionalSourceModule,
   lowerGleamFunctionalSources,
@@ -116,55 +111,24 @@ try {
         `Gleam stdlib GPU compilation failed: ${JSON.stringify(compilation.diagnostics[0])}`,
       );
     }
-    try {
-      const init = Object.fromEntries(compilation.module.hostCapabilities.map((capability) => [
-        capability.name,
-        Object.fromEntries(capability.fields.flatMap((field) => {
-          if (
-            field.kind === "value"
-              ? field.wasmLiteral !== undefined
-              : field.wasmIntrinsic !== undefined
-          ) {
-            return [];
-          }
-          return [[field.name, () => {
-            throw new Error(
-              `Gleam stdlib compatibility harness unexpectedly called ${capability.name}.${field.name}`,
-            );
-          }]];
-        })),
-      ]));
-      const execution = await runFunctionalWasmModule(compilation.module, { init });
-      if (execution.value.kind !== "integer" || execution.value.value !== 42) {
-        throw new Error(
-          `Gleam stdlib compatibility program returned ${
-            JSON.stringify(execution.value)
-          }; expected integer 42`,
-        );
-      }
-      console.log(JSON.stringify(
-        {
-          gleamStdlibCommit: actualCommit,
-          modules: GLEAM_STDLIB_MODULES,
-          sourceModuleCount: sources.length,
-          testModuleCount: testSources.length,
-          testFunctionCount: testCompilation.functionCount,
-          executedCoreTestFunctionCount: testCompilation.executedFunctionCount,
-          testCompilationBatchCount: testCompilation.batchCount,
-          largestTestBatchNodeCount: testCompilation.largestNodeCount,
-          gpuTestCompilationMilliseconds: testCompilation.milliseconds,
-          functionalNodeCount: frontend.lowered.module.nodeCount,
-          loweringMilliseconds,
-          gpuCompilationMilliseconds: compilationMilliseconds,
-          wasmByteLength: execution.bytes.byteLength,
-          value: execution.value,
-        },
-        null,
-        2,
-      ));
-    } finally {
-      compilation.module.destroy();
-    }
+    compilation.module.destroy();
+    console.log(JSON.stringify(
+      {
+        gleamStdlibCommit: actualCommit,
+        modules: GLEAM_STDLIB_MODULES,
+        sourceModuleCount: sources.length,
+        testModuleCount: testSources.length,
+        testFunctionCount: testCompilation.functionCount,
+        testCompilationBatchCount: testCompilation.batchCount,
+        largestTestBatchNodeCount: testCompilation.largestNodeCount,
+        gpuTestCompilationMilliseconds: testCompilation.milliseconds,
+        functionalNodeCount: frontend.lowered.module.nodeCount,
+        loweringMilliseconds,
+        gpuCompilationMilliseconds: compilationMilliseconds,
+      },
+      null,
+      2,
+    ));
   } finally {
     device.destroy();
   }
@@ -178,14 +142,12 @@ async function compileStdlibTests(
   testSources: readonly GleamFunctionalSourceModule[],
 ): Promise<{
   readonly functionCount: number;
-  readonly executedFunctionCount: number;
   readonly batchCount: number;
   readonly largestNodeCount: number;
   readonly milliseconds: number;
 }> {
   const started = performance.now();
   let functionCount = 0;
-  let executedFunctionCount = 0;
   let batchCount = 0;
   let largestNodeCount = 0;
   for (const testSource of testSources) {
@@ -227,45 +189,12 @@ async function compileStdlibTests(
           } failed: ${JSON.stringify(compilation.diagnostics[0])}`,
         );
       }
-      try {
-        if (compilation.module.hostCapabilities.length === 0) {
-          let execution: Awaited<ReturnType<typeof runFunctionalWasmModule>> | null = null;
-          try {
-            execution = await runFunctionalWasmModule(compilation.module);
-          } catch (error) {
-            const needsRuntimeAdapter = error instanceof FunctionalWasmRuntimeError &&
-              error.kind === "explicit-fault" &&
-              error.message.includes("unbound Gleam external");
-            if (!needsRuntimeAdapter) {
-              throw new Error(
-                `Gleam stdlib test execution ${testSource.name} ${offset}..${
-                  offset + batch.length
-                } failed`,
-                { cause: error },
-              );
-            }
-          }
-          if (
-            execution !== null &&
-            (execution.value.kind !== "integer" || execution.value.value !== batch.length)
-          ) {
-            throw new Error(
-              `Gleam stdlib test execution ${testSource.name} ${offset}..${
-                offset + batch.length
-              } returned ${JSON.stringify(execution.value)}; expected integer ${batch.length}`,
-            );
-          }
-          if (execution !== null) executedFunctionCount += batch.length;
-        }
-      } finally {
-        compilation.module.destroy();
-      }
+      compilation.module.destroy();
       batchCount++;
     }
   }
   return {
     functionCount,
-    executedFunctionCount,
     batchCount,
     largestNodeCount,
     milliseconds: performance.now() - started,

@@ -19,82 +19,101 @@ pub fn main() -&gt; Int {
   19
   |&gt; add(2)
   |&gt; twice
-}</code></pre></td><td><pre><code>type $GleamList&lt;value&gt; =
-  | $GleamNil
-  | $GleamCons(head: value, tail: $GleamList&lt;value&gt;)
-
-fn twice(value) : &lt;inferred&gt; =
-  (Multiply
+}</code></pre></td><td><pre><code>fn twice(value) : &lt;inferred&gt; =
+  (MultiplySignedInteger64
     value
-    2)
+    2i64)
 
 fn add(value, increment) : &lt;inferred&gt; =
-  (Add
+  (AddSignedInteger64
     value
     increment)
 
-fn main() : i32 =
+fn main($gleam_unit_parameter) : () -&gt; i64 =
   (apply
     twice
     (apply
       (apply
         add
-        19)
-      2))</code></pre></td></tr>
+        19i64)
+      2i64))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v5; entry=pipeline::main
+<tr><td><pre><code>ABI v5; entry=$gleam/entry::main
 
 definitions:
   d0 pipeline::twice root=n0 bytes=0..31 : &lt;inferred&gt;
   d1 pipeline::add root=n4 bytes=33..81 : &lt;inferred&gt;
-  d2 pipeline::main root=n9 bytes=83..135 : i32
+  d2 pipeline::main root=n9 bytes=83..135 : () -&gt; i64
+  d3 $gleam/entry::$import$sourceEntry root=n17 bytes=136..136 : &lt;inferred&gt;
+  d4 $gleam/entry::main root=n18 bytes=136..136 : &lt;inferred&gt;
 
 types:
-  t0 pipeline::$GleamList constructors=[c0,c2)
-  t1 $UnitType constructors=[c2,c3)
-  t2 $TupleType constructors=[c3,c4)
+  t0 $gleam/prelude::$GleamList constructors=[c0,c2)
+  t1 $gleam/prelude::$GleamBitArray constructors=[c2,c3)
+  t2 $gleam/prelude::$GleamResult constructors=[c3,c5)
+  t3 $gleam/prelude::$GleamTupleZero constructors=[c5,c6)
+  t4 $gleam/prelude::$GleamTupleOne constructors=[c6,c7)
+  t5 $FunctionalBytes constructors=[c7,c8)
+  t6 $UnitType constructors=[c8,c9)
+  t7 $TupleType constructors=[c9,c10)
 
 constructors:
-  c0 pipeline::$GleamNil owner=t0 arity=0
-  c1 pipeline::$GleamCons owner=t0 arity=2
-  c2 $Unit owner=t1 arity=0
-  c3 $Tuple owner=t2 arity=2
+  c0 $gleam/prelude::$GleamNil owner=t0 arity=0
+  c1 $gleam/prelude::$GleamCons owner=t0 arity=2
+  c2 $gleam/prelude::$GleamBitArrayValue owner=t1 arity=2
+  c3 $gleam/prelude::Ok owner=t2 arity=1
+  c4 $gleam/prelude::Error owner=t2 arity=1
+  c5 $gleam/prelude::$GleamTupleZeroValue owner=t3 arity=0
+  c6 $gleam/prelude::$GleamTupleOneValue owner=t4 arity=1
+  c7 $FunctionalBytesValue owner=t5 arity=0
+  c8 $Unit owner=t6 arity=0
+  c9 $Tuple owner=t7 arity=2
 
 nodes:
   n0 Lambda symbol=value children=[n1] parent=- bytes=0..31
-  n1 Binary operator=Multiply children=[n2,n3] parent=n0 bytes=16..31
+  n1 Binary operator=MultiplySignedInteger64 children=[n2,n3] parent=n0 bytes=16..31
   n2 Name symbol=value children=[] parent=n1 bytes=20..26
-  n3 Integer value=2 children=[] parent=n1 bytes=28..29
+  n3 SignedInteger64  children=[n0] parent=n1 bytes=28..29
   n4 Lambda symbol=value children=[n5] parent=- bytes=33..81
   n5 Lambda symbol=increment children=[n6] parent=n4 bytes=33..81
-  n6 Binary operator=Add children=[n7,n8] parent=n5 bytes=58..81
+  n6 Binary operator=AddSignedInteger64 children=[n7,n8] parent=n5 bytes=58..81
   n7 Name symbol=value children=[] parent=n6 bytes=62..68
   n8 Name symbol=increment children=[] parent=n6 bytes=70..80
-  n9 StrictApply evaluation=strict children=[n10,n11] parent=- bytes=104..135
-  n10 Name symbol=pipeline::twice children=[] parent=n9 bytes=128..134
-  n11 StrictApply evaluation=strict children=[n12,n15] parent=n9 bytes=108..125
-  n12 StrictApply evaluation=strict children=[n13,n14] parent=n11 bytes=108..125
-  n13 Name symbol=pipeline::add children=[] parent=n12 bytes=116..119
-  n14 Integer value=19 children=[] parent=n12 bytes=108..110
-  n15 Integer value=2 children=[] parent=n11 bytes=120..121</code></pre></td><td><pre><code>entry=d2; type=i32; effects=[]
+  n9 Lambda symbol=$gleam_unit_parameter children=[n10] parent=- bytes=83..135
+  n10 StrictApply evaluation=strict children=[n11,n12] parent=n9 bytes=104..135
+  n11 Name symbol=pipeline::twice children=[] parent=n10 bytes=128..134
+  n12 StrictApply evaluation=strict children=[n13,n16] parent=n10 bytes=108..125
+  n13 StrictApply evaluation=strict children=[n14,n15] parent=n12 bytes=108..125
+  n14 Name symbol=pipeline::add children=[] parent=n13 bytes=116..119
+  n15 SignedInteger64  children=[n0] parent=n13 bytes=108..110
+  n16 SignedInteger64  children=[n0] parent=n12 bytes=120..121
+  n17 Name symbol=pipeline::main children=[] parent=- bytes=136..136
+  n18 StrictApply evaluation=strict children=[n19,n20] parent=- bytes=136..136
+  n19 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n18 bytes=136..136
+  n20 Name symbol=$Unit children=[] parent=n18 bytes=136..136</code></pre></td><td><pre><code>entry=d4; type=i64; effects=[]
 
 nodes:
   n0 Lambda symbol=value children=[n1] sourceByte=0
-  n1 Binary operator=Multiply children=[n2,n3] sourceByte=16
+  n1 Binary operator=MultiplySignedInteger64 children=[n2,n3] sourceByte=16
   n2 Local depth=0 children=[] sourceByte=20
-  n3 Integer value=2 children=[] sourceByte=28
+  n3 SignedInteger64 payload=2 children=[n0] sourceByte=28
   n4 Lambda symbol=value children=[n5] sourceByte=33
   n5 Lambda symbol=increment children=[n6] sourceByte=33
-  n6 Binary operator=Add children=[n7,n8] sourceByte=58
+  n6 Binary operator=AddSignedInteger64 children=[n7,n8] sourceByte=58
   n7 Local depth=1 children=[] sourceByte=62
   n8 Local depth=0 children=[] sourceByte=70
-  n9 Apply evaluation=strict children=[n10,n11] sourceByte=104
-  n10 Global definition=d0 children=[] sourceByte=128
-  n11 Apply evaluation=strict children=[n12,n15] sourceByte=108
-  n12 Apply evaluation=strict children=[n13,n14] sourceByte=108
-  n13 Global definition=d1 children=[] sourceByte=116
-  n14 Integer value=19 children=[] sourceByte=108
-  n15 Integer value=2 children=[] sourceByte=120</code></pre></td></tr>
+  n9 Lambda symbol=$gleam_unit_parameter children=[n10] sourceByte=83
+  n10 Apply evaluation=strict children=[n11,n12] sourceByte=104
+  n11 Global definition=d0 children=[] sourceByte=128
+  n12 Apply evaluation=strict children=[n13,n16] sourceByte=108
+  n13 Apply evaluation=strict children=[n14,n15] sourceByte=108
+  n14 Global definition=d1 children=[] sourceByte=116
+  n15 SignedInteger64 payload=19 children=[n0] sourceByte=108
+  n16 SignedInteger64 payload=2 children=[n0] sourceByte=120
+  n17 Global definition=d2 children=[] sourceByte=136
+  n18 Apply evaluation=strict children=[n19,n20] sourceByte=136
+  n19 Global definition=d3 children=[] sourceByte=136
+  n20 Constructor constructor=c8:$Unit children=[] sourceByte=136</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -102,17 +121,17 @@ nodes:
 ```json
 {
   "entryType": {
-    "kind": "integer"
+    "kind": "signed-integer-64"
   },
   "value": {
-    "kind": "integer",
+    "kind": "signed-integer-64",
     "value": 42
   },
   "stats": {
-    "steps": 40,
-    "allocations": 12,
+    "steps": 54,
+    "allocations": 23,
     "peakStack": 5,
-    "thunkEvaluations": 3
+    "thunkEvaluations": 5
   }
 }
 ```

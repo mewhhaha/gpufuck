@@ -26,93 +26,89 @@ import kernel/program
 
 pub fn main() -&gt; Int {
   program.run(17, 10)
-}</code></pre></td><td><pre><code>type $GleamList&lt;value&gt; =
-  | $GleamNil
-  | $GleamCons(head: value, tail: $GleamList&lt;value&gt;)
-
-type $GleamList&lt;value&gt; =
-  | $GleamNil
-  | $GleamCons(head: value, tail: $GleamList&lt;value&gt;)
-
-type $GleamList&lt;value&gt; =
-  | $GleamNil
-  | $GleamCons(head: value, tail: $GleamList&lt;value&gt;)
-
-fn mix(state, instruction) : i32 -&gt; i32 -&gt; i32 =
-  (Add
-    (Multiply
+}</code></pre></td><td><pre><code>fn mix(state, instruction) : i64 -&gt; i64 -&gt; i64 =
+  (AddSignedInteger64
+    (MultiplySignedInteger64
       state
-      3)
+      3i64)
     instruction)
 
-fn run(state, remaining) : i32 -&gt; i32 -&gt; i32 =
+fn run(state, remaining) : i64 -&gt; i64 -&gt; i64 =
   (let $gleam_case_0
     remaining
     (if
-      (Equal
+      (EqualSignedInteger64
         $gleam_case_0
-        0)
+        0i64)
       state
       (apply
         (apply
           run
           (apply
             (apply
-              $gleam_qualified_0_0
+              $gleam_value:kernel/math.mix
               state)
-            (Add
-              (Subtract
-                remaining
-                (Multiply
-                  (Divide
-                    remaining
-                    7)
-                  7))
-              1)))
-        (Subtract
+            (AddSignedInteger64
+              (if
+                (EqualSignedInteger64
+                  7i64
+                  0i64)
+                0i64
+                (RemainderSignedInteger64
+                  remaining
+                  7i64))
+              1i64)))
+        (SubtractSignedInteger64
           remaining
-          1))))
+          1i64))))
 
-fn main() : i32 =
+fn main($gleam_unit_parameter) : () -&gt; i64 =
   (apply
     (apply
-      $gleam_qualified_0_0
-      17)
-    10)</code></pre></td></tr>
+      $gleam_value:kernel/program.run
+      17i64)
+    10i64)</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v5; entry=kernel/main::main
+<tr><td><pre><code>ABI v5; entry=$gleam/entry::main
 
 definitions:
-  d0 kernel/math::mix root=n0 bytes=0..77 : i32 -&gt; i32 -&gt; i32
-  d1 kernel/program::$import$$gleam_qualified_0_0 root=n7 bytes=78..78 : i32 -&gt; i32 -&gt; i32
-  d2 kernel/program::run root=n8 bytes=98..249 : i32 -&gt; i32 -&gt; i32
-  d3 kernel/main::$import$$gleam_qualified_0_0 root=n36 bytes=250..250 : i32 -&gt; i32 -&gt; i32
-  d4 kernel/main::main root=n37 bytes=273..319 : i32
+  d0 kernel/math::mix root=n0 bytes=0..77 : i64 -&gt; i64 -&gt; i64
+  d1 kernel/program::$import$$gleam_value:kernel/math.mix root=n7 bytes=78..78 : i64 -&gt; i64 -&gt; i64
+  d2 kernel/program::run root=n8 bytes=98..249 : i64 -&gt; i64 -&gt; i64
+  d3 kernel/main::$import$$gleam_value:kernel/program.run root=n37 bytes=250..250 : i64 -&gt; i64 -&gt; i64
+  d4 kernel/main::main root=n38 bytes=273..319 : () -&gt; i64
+  d5 $gleam/entry::$import$sourceEntry root=n44 bytes=320..320 : &lt;inferred&gt;
+  d6 $gleam/entry::main root=n45 bytes=320..320 : &lt;inferred&gt;
 
 types:
-  t0 kernel/math::$GleamList constructors=[c0,c2)
-  t1 kernel/program::$GleamList constructors=[c2,c4)
-  t2 kernel/main::$GleamList constructors=[c4,c6)
-  t3 $UnitType constructors=[c6,c7)
-  t4 $TupleType constructors=[c7,c8)
+  t0 $gleam/prelude::$GleamList constructors=[c0,c2)
+  t1 $gleam/prelude::$GleamBitArray constructors=[c2,c3)
+  t2 $gleam/prelude::$GleamResult constructors=[c3,c5)
+  t3 $gleam/prelude::$GleamTupleZero constructors=[c5,c6)
+  t4 $gleam/prelude::$GleamTupleOne constructors=[c6,c7)
+  t5 $FunctionalBytes constructors=[c7,c8)
+  t6 $UnitType constructors=[c8,c9)
+  t7 $TupleType constructors=[c9,c10)
 
 constructors:
-  c0 kernel/math::$GleamNil owner=t0 arity=0
-  c1 kernel/math::$GleamCons owner=t0 arity=2
-  c2 kernel/program::$GleamNil owner=t1 arity=0
-  c3 kernel/program::$GleamCons owner=t1 arity=2
-  c4 kernel/main::$GleamNil owner=t2 arity=0
-  c5 kernel/main::$GleamCons owner=t2 arity=2
-  c6 $Unit owner=t3 arity=0
-  c7 $Tuple owner=t4 arity=2
+  c0 $gleam/prelude::$GleamNil owner=t0 arity=0
+  c1 $gleam/prelude::$GleamCons owner=t0 arity=2
+  c2 $gleam/prelude::$GleamBitArrayValue owner=t1 arity=2
+  c3 $gleam/prelude::Ok owner=t2 arity=1
+  c4 $gleam/prelude::Error owner=t2 arity=1
+  c5 $gleam/prelude::$GleamTupleZeroValue owner=t3 arity=0
+  c6 $gleam/prelude::$GleamTupleOneValue owner=t4 arity=1
+  c7 $FunctionalBytesValue owner=t5 arity=0
+  c8 $Unit owner=t6 arity=0
+  c9 $Tuple owner=t7 arity=2
 
 nodes:
   n0 Lambda symbol=state children=[n1] parent=- bytes=0..77
   n1 Lambda symbol=instruction children=[n2] parent=n0 bytes=0..77
-  n2 Binary operator=Add children=[n3,n6] parent=n1 bytes=48..77
-  n3 Binary operator=Multiply children=[n4,n5] parent=n2 bytes=52..62
+  n2 Binary operator=AddSignedInteger64 children=[n3,n6] parent=n1 bytes=48..77
+  n3 Binary operator=MultiplySignedInteger64 children=[n4,n5] parent=n2 bytes=52..62
   n4 Name symbol=state children=[] parent=n3 bytes=52..58
-  n5 Integer value=3 children=[] parent=n3 bytes=60..61
+  n5 SignedInteger64  children=[n0] parent=n3 bytes=60..61
   n6 Name symbol=instruction children=[] parent=n2 bytes=64..76
   n7 Name symbol=kernel/math::mix children=[] parent=- bytes=78..78
   n8 Lambda symbol=state children=[n9] parent=- bytes=98..249
@@ -120,79 +116,91 @@ nodes:
   n10 StrictLet symbol=$gleam_case_0 children=[n11,n12] parent=n9 bytes=144..249
   n11 Name symbol=remaining children=[] parent=n10 bytes=153..163
   n12 If  children=[n13,n16,n17] parent=n10 bytes=169..184
-  n13 Binary operator=Equal children=[n14,n15] parent=n12 bytes=169..170
+  n13 Binary operator=EqualSignedInteger64 children=[n14,n15] parent=n12 bytes=169..170
   n14 Name symbol=$gleam_case_0 children=[] parent=n13 bytes=169..170
-  n15 Integer value=0 children=[] parent=n13 bytes=169..170
+  n15 SignedInteger64  children=[n0] parent=n13 bytes=169..170
   n16 Name symbol=state children=[] parent=n12 bytes=174..184
-  n17 StrictApply evaluation=strict children=[n18,n33] parent=n12 bytes=189..243
+  n17 StrictApply evaluation=strict children=[n18,n34] parent=n12 bytes=189..243
   n18 StrictApply evaluation=strict children=[n19,n20] parent=n17 bytes=189..243
   n19 Name symbol=kernel/program::run children=[] parent=n18 bytes=189..192
   n20 StrictApply evaluation=strict children=[n21,n24] parent=n18 bytes=193..227
   n21 StrictApply evaluation=strict children=[n22,n23] parent=n20 bytes=193..227
-  n22 Name symbol=kernel/program::$import$$gleam_qualified_0_0 children=[] parent=n21 bytes=193..201
+  n22 Name symbol=kernel/program::$import$$gleam_value:kernel/math.mix children=[] parent=n21 bytes=193..201
   n23 Name symbol=state children=[] parent=n21 bytes=202..207
-  n24 Binary operator=Add children=[n25,n32] parent=n20 bytes=209..226
-  n25 Binary operator=Subtract children=[n26,n27] parent=n24 bytes=209..223
-  n26 Name symbol=remaining children=[] parent=n25 bytes=209..219
-  n27 Binary operator=Multiply children=[n28,n31] parent=n25 bytes=209..223
-  n28 Binary operator=Divide children=[n29,n30] parent=n27 bytes=209..223
-  n29 Name symbol=remaining children=[] parent=n28 bytes=209..219
-  n30 Integer value=7 children=[] parent=n28 bytes=221..222
-  n31 Integer value=7 children=[] parent=n27 bytes=221..222
-  n32 Integer value=1 children=[] parent=n24 bytes=225..226
-  n33 Binary operator=Subtract children=[n34,n35] parent=n17 bytes=229..242
-  n34 Name symbol=remaining children=[] parent=n33 bytes=229..239
-  n35 Integer value=1 children=[] parent=n33 bytes=241..242
-  n36 Name symbol=kernel/program::run children=[] parent=- bytes=250..250
-  n37 StrictApply evaluation=strict children=[n38,n41] parent=- bytes=294..319
-  n38 StrictApply evaluation=strict children=[n39,n40] parent=n37 bytes=294..319
-  n39 Name symbol=kernel/main::$import$$gleam_qualified_0_0 children=[] parent=n38 bytes=298..309
-  n40 Integer value=17 children=[] parent=n38 bytes=310..312
-  n41 Integer value=10 children=[] parent=n37 bytes=314..316</code></pre></td><td><pre><code>entry=d4; type=i32; effects=[]
+  n24 Binary operator=AddSignedInteger64 children=[n25,n33] parent=n20 bytes=209..226
+  n25 If  children=[n26,n29,n30] parent=n24 bytes=209..223
+  n26 Binary operator=EqualSignedInteger64 children=[n27,n28] parent=n25 bytes=209..223
+  n27 SignedInteger64  children=[n0] parent=n26 bytes=221..222
+  n28 SignedInteger64  children=[n0] parent=n26 bytes=221..222
+  n29 SignedInteger64  children=[n0] parent=n25 bytes=209..223
+  n30 Binary operator=RemainderSignedInteger64 children=[n31,n32] parent=n25 bytes=209..223
+  n31 Name symbol=remaining children=[] parent=n30 bytes=209..219
+  n32 SignedInteger64  children=[n0] parent=n30 bytes=221..222
+  n33 SignedInteger64  children=[n0] parent=n24 bytes=225..226
+  n34 Binary operator=SubtractSignedInteger64 children=[n35,n36] parent=n17 bytes=229..242
+  n35 Name symbol=remaining children=[] parent=n34 bytes=229..239
+  n36 SignedInteger64  children=[n0] parent=n34 bytes=241..242
+  n37 Name symbol=kernel/program::run children=[] parent=- bytes=250..250
+  n38 Lambda symbol=$gleam_unit_parameter children=[n39] parent=- bytes=273..319
+  n39 StrictApply evaluation=strict children=[n40,n43] parent=n38 bytes=294..319
+  n40 StrictApply evaluation=strict children=[n41,n42] parent=n39 bytes=294..319
+  n41 Name symbol=kernel/main::$import$$gleam_value:kernel/program.run children=[] parent=n40 bytes=298..309
+  n42 SignedInteger64  children=[n0] parent=n40 bytes=310..312
+  n43 SignedInteger64  children=[n0] parent=n39 bytes=314..316
+  n44 Name symbol=kernel/main::main children=[] parent=- bytes=320..320
+  n45 StrictApply evaluation=strict children=[n46,n47] parent=- bytes=320..320
+  n46 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n45 bytes=320..320
+  n47 Name symbol=$Unit children=[] parent=n45 bytes=320..320</code></pre></td><td><pre><code>entry=d6; type=i64; effects=[]
 
 nodes:
   n0 Lambda symbol=state children=[n1] sourceByte=0
   n1 Lambda symbol=instruction children=[n2] sourceByte=0
-  n2 Binary operator=Add children=[n3,n6] sourceByte=48
-  n3 Binary operator=Multiply children=[n4,n5] sourceByte=52
+  n2 Binary operator=AddSignedInteger64 children=[n3,n6] sourceByte=48
+  n3 Binary operator=MultiplySignedInteger64 children=[n4,n5] sourceByte=52
   n4 Local depth=1 children=[] sourceByte=52
-  n5 Integer value=3 children=[] sourceByte=60
+  n5 SignedInteger64 payload=3 children=[n0] sourceByte=60
   n6 Local depth=0 children=[] sourceByte=64
   n7 Global definition=d0 children=[] sourceByte=78
   n8 Lambda symbol=state children=[n9] sourceByte=98
   n9 Lambda symbol=remaining children=[n10] sourceByte=98
-  n10 Let symbol=$gleam_case_0 evaluation=strict children=[n11,n12] sourceByte=144
+  n10 Let symbol=kernel/program::$import$$gleam_value:kernel/math.mix evaluation=strict children=[n11,n12] sourceByte=144
   n11 Local depth=0 children=[] sourceByte=153
   n12 If  children=[n13,n16,n17] sourceByte=169
-  n13 Binary operator=Equal children=[n14,n15] sourceByte=169
+  n13 Binary operator=EqualSignedInteger64 children=[n14,n15] sourceByte=169
   n14 Local depth=0 children=[] sourceByte=169
-  n15 Integer value=0 children=[] sourceByte=169
+  n15 SignedInteger64  children=[n0] sourceByte=169
   n16 Local depth=2 children=[] sourceByte=174
-  n17 Apply evaluation=strict children=[n18,n33] sourceByte=189
+  n17 Apply evaluation=strict children=[n18,n34] sourceByte=189
   n18 Apply evaluation=strict children=[n19,n20] sourceByte=189
   n19 Global definition=d2 children=[] sourceByte=189
   n20 Apply evaluation=strict children=[n21,n24] sourceByte=193
   n21 Apply evaluation=strict children=[n22,n23] sourceByte=193
   n22 Global definition=d1 children=[] sourceByte=193
   n23 Local depth=2 children=[] sourceByte=202
-  n24 Binary operator=Add children=[n25,n32] sourceByte=209
-  n25 Binary operator=Subtract children=[n26,n27] sourceByte=209
-  n26 Local depth=1 children=[] sourceByte=209
-  n27 Binary operator=Multiply children=[n28,n31] sourceByte=209
-  n28 Binary operator=Divide children=[n29,n30] sourceByte=209
-  n29 Local depth=1 children=[] sourceByte=209
-  n30 Integer value=7 children=[] sourceByte=221
-  n31 Integer value=7 children=[] sourceByte=221
-  n32 Integer value=1 children=[] sourceByte=225
-  n33 Binary operator=Subtract children=[n34,n35] sourceByte=229
-  n34 Local depth=1 children=[] sourceByte=229
-  n35 Integer value=1 children=[] sourceByte=241
-  n36 Global definition=d2 children=[] sourceByte=250
-  n37 Apply evaluation=strict children=[n38,n41] sourceByte=294
-  n38 Apply evaluation=strict children=[n39,n40] sourceByte=294
-  n39 Global definition=d3 children=[] sourceByte=298
-  n40 Integer value=17 children=[] sourceByte=310
-  n41 Integer value=10 children=[] sourceByte=314</code></pre></td></tr>
+  n24 Binary operator=AddSignedInteger64 children=[n25,n33] sourceByte=209
+  n25 If  children=[n26,n29,n30] sourceByte=209
+  n26 Binary operator=EqualSignedInteger64 children=[n27,n28] sourceByte=209
+  n27 SignedInteger64 payload=7 children=[n0] sourceByte=221
+  n28 SignedInteger64  children=[n0] sourceByte=221
+  n29 SignedInteger64  children=[n0] sourceByte=209
+  n30 Binary operator=RemainderSignedInteger64 children=[n31,n32] sourceByte=209
+  n31 Local depth=1 children=[] sourceByte=209
+  n32 SignedInteger64 payload=7 children=[n0] sourceByte=221
+  n33 SignedInteger64 payload=1 children=[n0] sourceByte=225
+  n34 Binary operator=SubtractSignedInteger64 children=[n35,n36] sourceByte=229
+  n35 Local depth=1 children=[] sourceByte=229
+  n36 SignedInteger64 payload=1 children=[n0] sourceByte=241
+  n37 Global definition=d2 children=[] sourceByte=250
+  n38 Lambda symbol=$gleam_unit_parameter children=[n39] sourceByte=273
+  n39 Apply evaluation=strict children=[n40,n43] sourceByte=294
+  n40 Apply evaluation=strict children=[n41,n42] sourceByte=294
+  n41 Global definition=d3 children=[] sourceByte=298
+  n42 SignedInteger64 payload=17 children=[n0] sourceByte=310
+  n43 SignedInteger64 payload=10 children=[n0] sourceByte=314
+  n44 Global definition=d4 children=[] sourceByte=320
+  n45 Apply evaluation=strict children=[n46,n47] sourceByte=320
+  n46 Global definition=d5 children=[] sourceByte=320
+  n47 Constructor constructor=c8:$Unit children=[] sourceByte=320</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -200,17 +208,17 @@ nodes:
 ```json
 {
   "entryType": {
-    "kind": "integer"
+    "kind": "signed-integer-64"
   },
   "value": {
-    "kind": "integer",
+    "kind": "signed-integer-64",
     "value": 1109720
   },
   "stats": {
-    "steps": 785,
-    "allocations": 134,
-    "peakStack": 8,
-    "thunkEvaluations": 5
+    "steps": 718,
+    "allocations": 263,
+    "peakStack": 7,
+    "thunkEvaluations": 7
   }
 }
 ```

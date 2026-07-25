@@ -41,6 +41,23 @@ export interface FunctionalCompilationTraceInput {
   readonly evaluation: FunctionalEvaluationResult;
 }
 
+/** `JSON.stringify` escapes control characters, so the marker has to survive as printable text. */
+const BIGINT_MARKER = "@@functional-bigint@@";
+
+/**
+ * 64-bit values arrive as BigInt, which `JSON.stringify` refuses outright. Quoting them would change
+ * the shape of every checked-in trace, and routing them through `Number` would lose precision past
+ * 2^53, so the exact digits are marked during serialization and unquoted afterwards.
+ */
+function formatOutcome(outcome: unknown): string {
+  const marked = JSON.stringify(
+    outcome,
+    (_key, value) => typeof value === "bigint" ? `${BIGINT_MARKER}${value}` : value,
+    2,
+  );
+  return marked.replaceAll(new RegExp(`"${BIGINT_MARKER}(-?\\d+)"`, "g"), "$1");
+}
+
 export function renderFunctionalCompilationTrace(input: FunctionalCompilationTraceInput): string {
   const normalized = formatNormalizedSurface(
     input.surface.definitions,
@@ -49,20 +66,15 @@ export function renderFunctionalCompilationTrace(input: FunctionalCompilationTra
   const encoded = formatEncodedModule(input.surface.module);
   const core = formatCoreModule(input.compiledModule, input.surface.module, input.coreNodes);
   const outcome = input.evaluation.ok
-    ? JSON.stringify(
-      {
-        entryType: input.compiledModule.entryType,
-        value: input.evaluation.value,
-        stats: input.evaluation.stats,
-      },
-      null,
-      2,
-    )
-    : JSON.stringify(
-      { entryType: input.compiledModule.entryType, fault: input.evaluation.fault },
-      null,
-      2,
-    );
+    ? formatOutcome({
+      entryType: input.compiledModule.entryType,
+      value: input.evaluation.value,
+      stats: input.evaluation.stats,
+    })
+    : formatOutcome({
+      entryType: input.compiledModule.entryType,
+      fault: input.evaluation.fault,
+    });
 
   return `# ${input.title}
 
@@ -197,7 +209,12 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
           formatExpression(arm.body, depth + 2)
         })`
       );
-      return `${indent}(case\n${nested(expression.value)}\n${arms.join("\n")})`;
+      const otherwise = expression.otherwise === undefined ? [] : [
+        `${"  ".repeat(depth + 1)}(_ ${expression.otherwise.binder ?? ""} ->\n${
+          formatExpression(expression.otherwise.body, depth + 2)
+        })`,
+      ];
+      return `${indent}(case\n${nested(expression.value)}\n${[...arms, ...otherwise].join("\n")})`;
     }
   }
 }

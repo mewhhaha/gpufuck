@@ -2,7 +2,6 @@ import {
   GpuFunctionalCompiler,
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
-  runFunctionalWasmModule,
 } from "./functional.ts";
 import {
   type GleamFunctionalSourceModule,
@@ -59,23 +58,31 @@ export async function main(
       return 1;
     }
     try {
+      const evaluator = await GpuFunctionalEvaluator.create(device);
+      const evaluation = await evaluator.evaluate(compilation.module, {
+        heapSlots: gleamHeapSlots(compilation.module),
+      });
       if (command === "run") {
-        const execution = await runFunctionalWasmModule(compilation.module);
+        if (!evaluation.ok) {
+          const location = evaluation.fault.sourceByteOffset === null
+            ? ""
+            : ` byte ${evaluation.fault.sourceByteOffset}`;
+          output.error(`error[${evaluation.fault.code}]${location}: ${evaluation.fault.message}`);
+          return 1;
+        }
         output.log(JSON.stringify(
           {
             entryType: compilation.module.entryType,
-            value: execution.value,
-            stats: execution.stats,
-            wasmByteLength: execution.bytes.byteLength,
+            value: evaluation.value,
+            stats: evaluation.stats,
           },
-          null,
+          // Gleam Int lowers to i64, so values arrive as BigInt, which JSON cannot serialize.
+          (_key, value) => typeof value === "bigint" ? value.toString() : value,
           2,
         ));
         return 0;
       }
 
-      const evaluator = await GpuFunctionalEvaluator.create(device);
-      const evaluation = await evaluator.evaluate(compilation.module);
       const source = sources.map((module) => `// ${module.name}\n${module.source.trimEnd()}`).join(
         "\n\n",
       );
@@ -95,6 +102,17 @@ export async function main(
   } finally {
     device.destroy();
   }
+}
+
+/**
+ * The evaluator sizes its default heap from the node count, but Gleam lowers `Int` to i64 and i64
+ * values are boxed, so an arithmetic-heavy module allocates far more per node than that default
+ * assumes. The kernel example otherwise fails with `evaluation exhausted its heap of 256 slots`.
+ */
+function gleamHeapSlots(
+  module: { readonly nodeCount: number; readonly definitionCount: number },
+): number {
+  return Math.max(4096, (module.definitionCount + module.nodeCount * 4) * 8);
 }
 
 async function readModuleSource(

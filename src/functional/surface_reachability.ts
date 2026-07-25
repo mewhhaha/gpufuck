@@ -76,6 +76,7 @@ export function analyzeFunctionalSurfaceReachability(
           break;
         case "case":
           expressions.push(expression.value, ...expression.arms.map((arm) => arm.body));
+          if (expression.otherwise !== undefined) expressions.push(expression.otherwise.body);
           for (const arm of expression.arms) referencedSymbols.add(arm.constructor);
           break;
         case "integer":

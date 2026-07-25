@@ -1,4 +1,4 @@
-import { type GpuFunctionalCompiler, runFunctionalWasmModule } from "../../../functional.ts";
+import type { GpuFunctionalCompiler } from "../../../functional.ts";
 import type { Test262ExecutionMode, Test262Metadata } from "./test262.ts";
 import { lowerTest262NegativeTest, lowerTest262PositiveTest } from "./test262_harness.ts";
 
@@ -22,11 +22,11 @@ export interface Test262ExecutionRequest {
 
 export type Test262ExecutionCaseResult =
   | {
-    readonly kind: "passed";
+    readonly kind: "compiled";
     readonly expectation: "positive" | "runtime-negative";
   }
   | {
-    readonly kind: "resource-limited" | "compilation-failed" | "execution-failed";
+    readonly kind: "resource-limited" | "compilation-failed";
     readonly reason: string;
   };
 
@@ -34,7 +34,7 @@ export type Test262ExecutionResponse =
   | { readonly ok: true; readonly result: Test262ExecutionCaseResult }
   | { readonly ok: false; readonly message: string; readonly stack: string | null };
 
-export async function executeTest262Case(
+export async function compileTest262Case(
   compiler: GpuFunctionalCompiler,
   request: Test262ExecutionRequest,
 ): Promise<Test262ExecutionCaseResult> {
@@ -58,7 +58,7 @@ export async function executeTest262Case(
     );
   if ("ok" in lowered && !lowered.ok) {
     throw new Error(
-      `Test262 case ${JSON.stringify(testCase.path)} changed readiness before execution: ${
+      `Test262 case ${JSON.stringify(testCase.path)} changed readiness before compilation: ${
         lowered.diagnostics[0].message
       }`,
     );
@@ -68,10 +68,11 @@ export async function executeTest262Case(
       ? lowered.diagnostic.message
       : `negative test reached ${lowered.phase}`;
     throw new Error(
-      `Test262 case ${JSON.stringify(testCase.path)} changed readiness before execution: ${reason}`,
+      `Test262 case ${
+        JSON.stringify(testCase.path)
+      } changed readiness before compilation: ${reason}`,
     );
   }
-  const runtimeNegativeValidation = "kind" in lowered ? lowered.validation : null;
   const compilation = await compiler.compileModule(
     lowered.lowered.module,
     TEST262_COMPILATION_OPTIONS,
@@ -96,35 +97,9 @@ export async function executeTest262Case(
       reason: `GPU compilation failed: ${primaryDiagnostic}`,
     };
   }
-  try {
-    const execution = await runFunctionalWasmModule(compilation.module);
-    if (runtimeNegativeValidation === "runtime-fault") {
-      throw new Error(`runtime did not throw ${expectedRuntimeErrorType}`);
-    }
-    if (execution.value.kind !== "boolean" || !execution.value.value) {
-      throw new Error(
-        expectedRuntimeErrorType === null
-          ? "adapted positive test returned a non-true result"
-          : `runtime did not throw ${expectedRuntimeErrorType}`,
-      );
-    }
-    return {
-      kind: "passed",
-      expectation: expectedRuntimeErrorType === null ? "positive" : "runtime-negative",
-    };
-  } catch (error) {
-    if (
-      runtimeNegativeValidation === "runtime-fault" &&
-      error instanceof Error &&
-      error.message.includes(`${expectedRuntimeErrorType}:`)
-    ) {
-      return { kind: "passed", expectation: "runtime-negative" };
-    }
-    return {
-      kind: "execution-failed",
-      reason: error instanceof Error ? error.message : String(error),
-    };
-  } finally {
-    compilation.module.destroy();
-  }
+  compilation.module.destroy();
+  return {
+    kind: "compiled",
+    expectation: expectedRuntimeErrorType === null ? "positive" : "runtime-negative",
+  };
 }

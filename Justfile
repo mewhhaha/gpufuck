@@ -16,7 +16,6 @@ generate-lazuli:
 
 generate-frontends:
   @deno task generate:gleam
-  @deno task generate:purescript
 
 # Install the Lazuli parser, queries, and language registration into Helix's user config.
 install-helix: helix

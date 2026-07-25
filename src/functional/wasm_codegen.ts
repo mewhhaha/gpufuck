@@ -35,7 +35,8 @@ import {
   WasmValueType,
 } from "./wasm_binary.ts";
 import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
-import { concreteFunctionalType, requireFirstOrderFunctionalWasmType } from "./wasm_value_codec.ts";
+import { concreteFunctionalType } from "./schema_contract.ts";
+import { requireFirstOrderFunctionalWasmType } from "./wasm_value_codec.ts";
 import type { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import { type FunctionalLambdaSet, FunctionalLambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 import type {
