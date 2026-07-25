@@ -425,6 +425,55 @@ first would be building a supply with no demand. The consumer has to exist: eith
 submodules and batch them through the path that already beats `gleam build` by 17x, or parallelise
 inference across definitions within a module.
 
+## 2026-07-25 — what each language feature costs to compile
+
+If a language is to be designed for this pipeline, the question is which constructs are expensive.
+Measured on Lazuli: one program per feature, the feature repeated 30 times, so the figure is
+marginal cost per use rather than fixed overhead.
+
+| Feature                      | Nodes/use | Inference transitions/use |
+| ---------------------------- | --------: | ------------------------: |
+| `let` binding                |       4.0 |                        23 |
+| Arithmetic on literals       |       6.0 |                        29 |
+| Polymorphic instantiation    |       4.0 |                        48 |
+| `if` / `then` / `else`       |       7.0 |                        51 |
+| Top-level definition         |       5.0 |                        63 |
+| Annotated 1-param function   |       8.0 |                       123 |
+| Unannotated 1-param function |       8.0 |                       135 |
+| Constructor plus `case`      |       8.0 |                       166 |
+| Unannotated 3-param function |      18.0 |                       323 |
+
+**Arity is the dominant cost, and it is exactly linear.** Core has only unary lambdas, so an
+n-parameter function is n nested ones:
+
+| Parameters | Nodes/use | Transitions/use | Marginal      |
+| ---------: | --------: | --------------: | ------------- |
+|          1 |       8.0 |             135 | —             |
+|          2 |      13.0 |             233 | +5 nodes, +98 |
+|          3 |      18.0 |             323 | +5 nodes, +90 |
+|          4 |      23.0 |             413 | +5 nodes, +90 |
+|          5 |      28.0 |             503 | +5 nodes, +90 |
+
+A five-parameter function costs 3.7x the inference of a one-parameter function. This is a property
+of the Core ABI, not of Lazuli: every frontend pays it. An n-ary lambda and application node would
+remove it for all of them.
+
+Two results worth stating because they contradict what looked obvious:
+
+**Annotations buy about 9%**, not the step change assumed when "mandatory top-level annotations" was
+floated as the Go/Zig trade. Annotated and unannotated one-parameter functions are 123 and 135
+transitions. Annotations may still change _wave_ structure, which this does not measure, but the
+per-definition inference saving is marginal.
+
+**Sharing beats duplicating.** One polymorphic function instantiated 30 times costs 1,449
+transitions; thirty monomorphic functions used once each cost 4,050. Polymorphism is cheaper than
+the duplication it avoids, by 2.8x here.
+
+Scale caveat: these compiles run 12.5–18.6 ms against an ~11.4 ms fixed `mapAsync` floor, so the
+ratios matter at batch scale or on large modules, not for one small compile. And the ceiling on
+language design is lower than the ceiling on the kernel: avoiding the expensive constructs is worth
+maybe 2–4x on inference, where parallelising the single-lane kernel is worth 10–50x.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
