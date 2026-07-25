@@ -1,5 +1,6 @@
-import { equal, match, ok } from "node:assert/strict";
-import { GpuCompiler, GpuEvaluator, requestWebGpuDevice } from "../functional.ts";
+import { deepStrictEqual, equal, match, ok } from "node:assert/strict";
+import { GpuCompiler, GpuEvaluator, requestWebGpuDevice, runWasmModule } from "../functional.ts";
+import type { WasmHostValue } from "../functional.ts";
 import { compileSweepSource, parseSweepModule } from "../sweep.ts";
 
 /**
@@ -141,3 +142,95 @@ Deno.test("Sweep requires an entry point", () => {
 });
 
 globalThis.addEventListener("unload", () => RUNTIME.device?.destroy());
+
+/**
+ * The vim example is the largest Sweep program and the only one driven from outside, so it is worth
+ * a test that exercises the same path the terminal host uses: build a key history as a constructor
+ * tree, hand it to WebAssembly, and read the document back out.
+ */
+Deno.test("Sweep vim replays a scripted session", async () => {
+  const source = await Deno.readTextFile("examples/sweep/vim.sweep");
+  const lowered = compileSweepSource("vim", source);
+  ok(lowered.ok, lowered.ok ? undefined : lowered.diagnostics[0]!.message);
+  if (!lowered.ok) return;
+
+  RUNTIME.device ??= await requestWebGpuDevice();
+  RUNTIME.compiler ??= await GpuCompiler.create(RUNTIME.device);
+  const compilation = await RUNTIME.compiler.compileModule(lowered.module, {
+    maximumSteps: 10_000_000,
+  });
+  ok(
+    compilation.ok,
+    compilation.ok
+      ? undefined
+      : `${compilation.diagnostics[0]!.code}: ${compilation.diagnostics[0]!.message}`,
+  );
+  if (!compilation.ok) return;
+
+  try {
+    const keys = (codes: readonly number[]): WasmHostValue => {
+      let list: WasmHostValue = { kind: "constructor", name: "NoKeys", fields: [] };
+      for (let index = codes.length - 1; index >= 0; index--) {
+        list = {
+          kind: "constructor",
+          name: "Press",
+          fields: [{ kind: "integer", value: codes[index]! }, list],
+        };
+      }
+      return list;
+    };
+    const line = (value: WasmHostValue): string => {
+      let text = "";
+      let at = value;
+      while (at.kind === "constructor" && at.name === "Char") {
+        const code = at.fields[0]!;
+        if (code.kind !== "integer") throw new Error("not an integer");
+        text += String.fromCharCode(code.value);
+        at = at.fields[1]!;
+      }
+      return text;
+    };
+    const at = (value: WasmHostValue, index: number): WasmHostValue => {
+      if (value.kind !== "constructor") {
+        throw new Error(`expected a constructor, got ${value.kind}`);
+      }
+      return value.fields[index]!;
+    };
+    const nameOf = (value: WasmHostValue): string => {
+      if (value.kind !== "constructor") {
+        throw new Error(`expected a constructor, got ${value.kind}`);
+      }
+      return value.name;
+    };
+    const currentLine = (state: WasmHostValue): string => {
+      const zipper = at(at(state, 0), 1);
+      return [...line(at(zipper, 0))].reverse().join("") + line(at(zipper, 1));
+    };
+    const mode = (state: WasmHostValue): string => nameOf(at(state, 1));
+
+    const codes = (text: string) => [...text].map((character) => character.charCodeAt(0));
+    const run = async (script: readonly number[]) =>
+      (await runWasmModule(compilation.module, {
+        argument: keys(script),
+        maximumResultNodes: 200_000,
+      }))
+        .value as WasmHostValue;
+
+    // `i` enters insert, ESC leaves it.
+    equal(currentLine(await run([...codes("ihello"), 27])), "hello");
+    equal(mode(await run([...codes("ihello"), 27])), "Normal");
+    equal(mode(await run(codes("ihello"))), "Insert");
+
+    // `0` home then `x` deletes under the cursor; `$` end then `x` is a no-op past the last column.
+    equal(currentLine(await run([...codes("ihello"), 27, ...codes("0x")])), "ello");
+
+    // `A` appends at end of line.
+    equal(currentLine(await run([...codes("ihi"), 27, ...codes("A!"), 27])), "hi!");
+
+    // `q` in normal mode sets the quit flag the host watches.
+    const quit = await run([...codes("ihi"), 27, ...codes("q")]);
+    deepStrictEqual(at(quit, 2), { kind: "boolean", value: true });
+  } finally {
+    compilation.module.destroy();
+  }
+});

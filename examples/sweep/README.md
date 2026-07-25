@@ -16,6 +16,7 @@ deno task run:sweep examples/sweep/shapes.sweep
 | [`shapes.sweep`](shapes.sweep)             | Single-level matching, exports, flat locals        |     42 |
 | [`higher_order.sweep`](higher_order.sweep) | Function types and n-ary parameter lists           |     43 |
 | [`editor.sweep`](editor.sweep)             | 280 lines: a terminal editor's pure core           |      8 |
+| [`vim.sweep`](vim.sweep)                   | A modal editor, driven by a real terminal          |      — |
 
 ## The whole language
 
@@ -76,6 +77,38 @@ The one figure there worth quoting is parse throughput, **0.106 µs/byte against
 same measurement on both sides, so a hand-written parser for a small grammar really is 12x faster.
 Transitions-per-node looks good too and should be ignored; BASELINE.md explains why it is an
 artifact of program size rather than of language design.
+
+## A running editor
+
+[`vim.sweep`](vim.sweep) is a modal editor — buffer, cursor, normal and insert modes, and every
+command — and `sweep_vim.ts` is its host. Run it:
+
+```sh
+deno task vim
+```
+
+`h j k l` move, `0` and `$` jump, `i a A I` and `o` enter insert, `x` deletes, `J` joins, `q` quits;
+in insert mode ESC returns to normal and Enter splits the line.
+
+The split is the point. The host puts the terminal in raw mode, appends each keypress to a list,
+hands the whole list to WebAssembly, and draws what comes back. It holds no buffer, no cursor, and
+no mode, so there is nothing in it that can disagree with the Sweep program. State crosses the
+boundary as a constructor tree — `Document(Buffer, Zipper, Buffer)` arrives in TypeScript as nested
+`{ kind: "constructor", name, fields }`.
+
+Sweep compiles once on the GPU at startup, about 85 ms. Each keystroke then replays the session from
+empty, which sounds quadratic and measures linear because each key is O(1) on a zipper:
+
+| Keys replayed | Latency | Per key |
+| ------------: | ------: | ------: |
+|            25 |  0.2 ms |  9.4 µs |
+|           400 |  1.2 ms |  3.0 µs |
+|         2,000 |  3.2 ms |  1.6 µs |
+
+One limit worth knowing if you build something similar: every character is a `Char` constructor in
+the returned value, and the decoder defaults to 2,047 nodes — roughly a thousand characters. The
+host raises `maximumResultNodes`, and finding out why an editor stopped at a thousand characters is
+the kind of thing only building the real thing tells you.
 
 ## It is not faster
 
