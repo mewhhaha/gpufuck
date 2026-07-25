@@ -103,6 +103,52 @@ Note the inversion against the synthetic corpus: there, parsing was 74% of the C
 Amdahl ceiling was the story. Here parsing is 2%. On real input the GPU phase _is_ the cost, so the
 ceiling argument does not apply and node-level parallelism is worth the whole budget.
 
+### Where the 3.8 seconds actually goes
+
+Instrumenting the dispatch loop (`observeDispatch`, same corpus, quantum 524,288) splits the GPU
+phase cleanly, and the split is lopsided:
+
+| GPU phase                         | Work                  |         Time |   Per unit |
+| --------------------------------- | --------------------- | -----------: | ---------: |
+| Core lowering and name resolution | 668,619 steps         |       141 ms |     211 ns |
+| **Hindley-Milner inference**      | 6,112,582 transitions | **4,048 ms** | **662 ns** |
+
+That is 13.4 semantic steps and **122.3 inference transitions per surface node**. Inference is 96%
+of the GPU time; the resolution phase everyone assumes is the problem costs 141 ms.
+
+**It is not round-trip bound.** The whole compile takes 14 dispatches, so `mapAsync` accounts for
+about 160 ms of the 3,800. Sweeping the dispatch quantum confirms it, and incidentally re-measures
+the stall:
+
+| Quantum |    Median |
+| ------: | --------: |
+|  16,384 | 10,585 ms |
+|  65,536 |  5,410 ms |
+| 131,072 |  4,683 ms |
+| 262,144 |  3,787 ms |
+| 524,288 |  3,926 ms |
+
+The curve flattens by 262,144 — the default of 524,288 is already at the plateau, so ~3,800 ms is a
+genuine compute floor. The excess at 16,384 works out to 6,785 ms over ~610 dispatches, or 11.1 ms
+each, which matches the 11.4 ms `mapAsync` figure measured independently above.
+
+### Against our own CPU, and against Gleam
+
+`inferTypes` is the differential oracle — the same Hindley-Milner, the same input — so the ratio
+isolates the GPU rather than comparing two algorithms:
+
+|                                              |     Time | vs Gleam |
+| -------------------------------------------- | -------: | -------: |
+| `gleam build` (typecheck **and** JS codegen) |   146 ms |       1x |
+| gpufuck CPU Hindley-Milner alone             |   766 ms |     5.2x |
+| gpufuck GPU full compile                     | 3,607 ms |      25x |
+
+Two separate problems, and the smaller one is the GPU. **The GPU is 4.7x our own CPU** — better than
+the 9.7x the synthetic batch corpus reported, because a large module amortizes fixed cost. But our
+CPU inference is already **5.2x slower than Gleam's entire build**, codegen included. Making the GPU
+match the CPU would still leave the compiler five times slower than the thing it is competing with.
+The inference implementation is a target independent of where it runs.
+
 Two measurement traps this benchmark hit, recorded so the next person does not:
 
 - Lowering prunes to what the entry reaches. A small `main` lowered 252 KB of Gleam to **66 surface

@@ -17,6 +17,9 @@
 import { compileModuleToWasm, GpuCompiler, requestWebGpuDevice } from "../functional.ts";
 import { type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
 import { parseGleamModule } from "../src/gleam/parser.ts";
+// The CPU oracle the shader is differentially tested against: same Hindley-Milner, same input, so
+// the ratio isolates the GPU rather than comparing two different algorithms.
+import { inferTypes } from "../src/semantic/type_inference.ts";
 
 const MODULES = [
   "bit_array",
@@ -133,6 +136,13 @@ try {
   wasmSamples.sort((left, right) => left - right);
   const wasmMilliseconds = wasmSamples[Math.floor(wasmSamples.length / 2)]!;
 
+  const cpuInferenceMilliseconds = await median(() => {
+    const inferred = inferTypes(frontend.lowered.module);
+    if (!inferred.ok) {
+      throw new Error(`CPU inference failed: ${JSON.stringify(inferred.diagnostic)}`);
+    }
+  });
+
   const frontendTotal = lowerMilliseconds;
   const comparable = frontendTotal + gpuMilliseconds;
 
@@ -146,10 +156,12 @@ try {
         parse: Number(parseMilliseconds.toFixed(1)),
         parseAndLower: Number(lowerMilliseconds.toFixed(1)),
         gpuResolveAndInfer: Number(gpuMilliseconds.toFixed(1)),
+        cpuHindleyMilnerOracle: Number(cpuInferenceMilliseconds.toFixed(1)),
         comparableToGleamBuild: Number(comparable.toFixed(1)),
         emitWasm: Number(wasmMilliseconds.toFixed(1)),
       },
       wasmKilobytes: Number((wasmBytes / 1024).toFixed(1)),
+      gpuSlowerThanCpuOracle: Number((gpuMilliseconds / cpuInferenceMilliseconds).toFixed(1)),
       microsecondsPerSourceByte: Number(((comparable * 1000) / sourceBytes).toFixed(3)),
     },
     null,
