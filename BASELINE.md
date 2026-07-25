@@ -149,6 +149,58 @@ CPU inference is already **5.2x slower than Gleam's entire build**, codegen incl
 match the CPU would still leave the compiler five times slower than the thing it is competing with.
 The inference implementation is a target independent of where it runs.
 
+### The GPU curve is transition count, not transition cost
+
+Sweeping module size on the GPU path separates the two possible causes:
+
+| Surface nodes | Inference transitions | Per node | ns per transition |
+| ------------: | --------------------: | -------: | ----------------: |
+|         2,343 |                53,566 |     22.9 |             1,205 |
+|         4,417 |               105,344 |     23.8 |               834 |
+|        33,864 |             5,739,578 |    169.5 |               576 |
+|        49,964 |             6,112,582 |    122.3 |               568 |
+
+**Per-transition cost falls as the module grows** (1,205 -> 568 ns), so this is not a
+memory-hierarchy effect and not fixed overhead per transition; the shader gets _more_ efficient per
+step at scale. All of the superlinearity is in the transition count, which scales as **n^1.68**.
+
+At the small-module rate the full corpus would take 1.14 million transitions instead of 6.11 million
+— a **5.4x excess**, worth ~2,800 ms of the 3,469 ms inference phase. Work per node jumps sevenfold
+between 4,417 and 33,864 nodes, so there is a threshold effect worth isolating rather than a smooth
+constant-factor drift.
+
+This is the defect on the production path, and it is independent of the single-lane occupancy
+problem. Fixing transition count and parallelising the kernel multiply.
+
+### The CPU oracle is separately quadratic, and it is not on the compile path
+
+`inferTypes` scales as **n^1.30** (nine points, 1,334 to 49,964 nodes; the exponent holds at 1.29
+when the same roots are spread across 71 small functions instead of one, so it is not an artifact of
+the benchmark entry). The cause is structural rather than subtle: `generalize` calls
+`freeEnvironmentParameters`, which walks every type in the whole environment on every `let`; six
+sites copy the entire environment with `new Map(environment)` to add one binding; and
+`globalEnvironment()` is rebuilt per SCC component. There are no Remy levels, no path compression in
+`prune`, and no visited-set memoization in `occurs`/`replaceParameters`.
+
+**The shader does not share this algorithm.** It has Remy levels, epoch-marked traversal, a
+persistent skip-list environment, and lazy instantiation. The two paths are differentially tested on
+_results_, not asymptotics, and they curve alike for unrelated reasons — n^1.30 from environment
+scans on the CPU, n^1.68 from transition count on the GPU.
+
+So fixing the oracle speeds up the differential tests and this benchmark's CPU column. It does not
+make compilation faster: `inferTypes` appears only in `tests/`, `benchmarks/`, and its own file.
+
+### Why "2x faster than Gleam" is not reachable
+
+The CPU-side work alone — parse 71 ms, lower 58 ms, emit Wasm 23 ms warm — totals **152 ms**, which
+already exceeds Gleam's entire 146 ms cold build including JavaScript codegen. An infinitely fast
+GPU still loses. Stacking every plausible win (5.4x from transition count, 20x from parallelising
+the kernel, 4x on the parser, 2x on lowering) lands around 124 ms warm against Gleam's 23 ms warm.
+
+The reachable goal is closing the gap from **33x to roughly 2-6x**, which needs, in order of
+measured value: the n^1.68 transition count, the single-lane kernel, then the parser at 3.5 MB/s
+against tree-sitter's 10-30.
+
 Two measurement traps this benchmark hit, recorded so the next person does not:
 
 - Lowering prunes to what the entry reaches. A small `main` lowered 252 KB of Gleam to **66 surface
