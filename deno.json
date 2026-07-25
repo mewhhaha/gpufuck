@@ -37,8 +37,9 @@
     "bench:gleam-stdlib": "deno run --unstable-webgpu --allow-read benchmarks/gleam_stdlib_compile_bench.ts",
     "bench:lazuli": "deno bench --allow-read=language/lazuli/generated benchmarks/lazuli_compiler_bench.ts",
     "bench:semantic-wavefront": "deno bench benchmarks/semantic_wavefront_bench.ts",
+    "bench:sweep": "deno run --unstable-webgpu --allow-read benchmarks/sweep_vs_lazuli_bench.ts",
     "bench:throughput": "deno run --unstable-webgpu --allow-read=language/lazuli/generated benchmarks/compile_throughput_bench.ts",
-    "check": "deno check mod.ts functional.ts gleam.ts gleam_cli.ts lazuli_cli.ts benchmarks/*.ts examples/javascript-aot/*.ts tests/*.ts tools/*.ts playground/build.ts",
+    "check": "deno check mod.ts functional.ts gleam.ts gleam_cli.ts sweep.ts lazuli_cli.ts benchmarks/*.ts examples/javascript-aot/*.ts tests/*.ts tools/*.ts playground/build.ts",
     "check:gleam-stdlib": "deno run --allow-read --allow-run=git --allow-write=/tmp tools/check_gleam_stdlib.ts",
     "check:gleam-stdlib-wasm": "deno run --allow-read --allow-run=git --unstable-webgpu tools/check_gleam_stdlib_wasm.ts",
     "check:javascript-test262": "deno run --allow-read --allow-run=git,deno,ps --allow-write=/tmp examples/javascript-aot/check_test262.ts",
@@ -78,6 +79,8 @@
       "src/baba_frontend.ts",
       "src/gleam",
       "src/lazuli",
+      "src/sweep",
+      "sweep.ts",
       "tests",
       "tools"
     ]

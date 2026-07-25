@@ -106,6 +106,38 @@ until it measured. The cheapest experiment that would settle it is a checking-on
 deliberately trivial annotated language, benchmarked against the existing inference path on the same
 programs.
 
+## Built, and measured: the frontend half buys nothing
+
+Sweep (`sweep.ts`, `src/sweep/`) implements every rule the frontend can implement. Rules 2, 4, 5, 6
+and 7 are enforced — a violation is a diagnostic, tested in `tests/sweep_test.ts`, because a rule
+the compiler does not enforce is a comment. Rules 1 and 3 are expressed in the syntax but cannot be
+honoured by the backend: the engine still solves rather than checks, and Core arrows are still
+unary, so an n-ary signature still folds.
+
+The same computation in Sweep and Lazuli, `deno task bench:sweep`:
+
+| Functions | Sweep nodes | Lazuli nodes | Sweep transitions | Lazuli transitions | Ratio |
+| --------: | ----------: | -----------: | ----------------: | -----------------: | ----: |
+|         4 |          95 |           95 |             1,500 |              1,548 | 1.03x |
+|        16 |         383 |          383 |             5,652 |              5,664 | 1.00x |
+|        64 |       1,535 |        1,535 |            22,260 |             22,128 | 0.99x |
+
+**Identical.** Not close — the same node counts exactly, and transition counts within noise.
+
+That is the prediction at the bottom of this document, confirmed. Every rule either needs a backend
+change to pay (1 and 3), or prevents a pathology rather than accelerating the common case (4), or
+does not touch this pipeline at all (5, 6, 7). A language designed for a compiler that has not been
+changed to exploit it compiles exactly like one that was not.
+
+The value that remains is real but different in kind: Sweep _cannot_ express the multi-subject
+or-pattern that explodes 13–16x per arm and hard-fails at four arms, because the grammar has no
+or-patterns and no nesting. It is faster in the sense that a program which does not compile at all
+in Gleam compiles fine here — not in the sense that anything measured got quicker.
+
+An n-ary lambda node (TASKS item 3) and a checking-only kernel are what would make the rest of the
+design pay. Sweep is the frontend that would demonstrate it, sitting ready, which is the right order
+to have built things in even though the measurement is a flat line.
+
 ## What it gives up
 
 Type inference, which is most of the ergonomic appeal of an ML-family language. What is described

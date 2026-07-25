@@ -84,8 +84,11 @@ parallelising the single-lane kernel (item 7) is worth 10–50x. Design the lang
 not expect the language to be the win.
 
 [DESIGN.md](DESIGN.md) argues the other end of that: what a language would look like if compiling it
-were a parallel sweep rather than a solve. It is a sketch, unmeasured, and it names the cheapest
-experiment that would test it.
+were a parallel sweep rather than a solve. It is now built — Sweep, in `src/sweep/` — and measured:
+against Lazuli on equivalent programs the node counts are _identical_ and the transition counts
+within noise. Every rule needs a backend change to pay, prevents a pathology rather than
+accelerating the common case, or does not touch this pipeline. Item 3 and a checking-only kernel are
+what would make it pay; the frontend is ready and waiting for them.
 
 ### 4. WebAssembly emission is 63% of batch cost
 

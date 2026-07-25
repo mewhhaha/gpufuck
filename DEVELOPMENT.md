@@ -17,27 +17,28 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 
 ## Repository map
 
-| Path                         | Responsibility                                                      |
-| ---------------------------- | ------------------------------------------------------------------- |
-| `functional.ts`              | The complete language-neutral API, and the only entry point for it  |
-| `src/functional/`            | Functional ABI, compiler facade, linking, contracts, evaluator      |
-| `src/functional/wasm_*.ts`   | WebAssembly code generators, binary emitter, runtime, host boundary |
-| `src/functional/storage_*`   | Storage plan and Storage Core verification behind the backend       |
-| `src/functional/comptime*`   | Bounded compile-time execution over compiled Core                   |
-| `src/semantic/`              | Host lowering plan, GPU shaders, runners, and the inference oracle  |
-| `src/webgpu.ts`              | Device request, required limits, and setup diagnostics              |
-| `src/lazuli/`                | Repository-only Lazuli parser, compiler, and surface adapter        |
-| `src/gleam/`                 | Repository-only Gleam parser, lowering, worker pool, trace adapter  |
-| `mod.ts`, `lazuli_cli.ts`    | The Lazuli frontend's own entry point and CLI; not part of the API  |
-| `gleam.ts`, `gleam_cli.ts`   | The Gleam frontend's own entry point and CLI; not part of the API   |
-| `language/lazuli/`, `gleam/` | Baba grammars and generated parser/editor artifacts                 |
-| `examples/lazuli/`           | Lazuli sample programs                                              |
-| `examples/gleam/`            | Gleam sample modules and traces                                     |
-| `examples/javascript-aot/`   | JavaScript frontend, grammar, and the pinned Test262 harness        |
-| `playground/`                | Browser page bundling the compiler with `deno bundle`, no npm deps  |
-| `tests/`                     | Behavioral, differential, stress, growth, and cancellation tests    |
-| `benchmarks/`                | Deno benchmark entry points                                         |
-| `tools/`                     | Profiling, the two Gleam stdlib checks, and editor-support scripts  |
+| Path                         | Responsibility                                                         |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| `functional.ts`              | The complete language-neutral API, and the only entry point for it     |
+| `src/functional/`            | Functional ABI, compiler facade, linking, contracts, evaluator         |
+| `src/functional/wasm_*.ts`   | WebAssembly code generators, binary emitter, runtime, host boundary    |
+| `src/functional/storage_*`   | Storage plan and Storage Core verification behind the backend          |
+| `src/functional/comptime*`   | Bounded compile-time execution over compiled Core                      |
+| `src/semantic/`              | Host lowering plan, GPU shaders, runners, and the inference oracle     |
+| `src/webgpu.ts`              | Device request, required limits, and setup diagnostics                 |
+| `src/lazuli/`                | Repository-only Lazuli parser, compiler, and surface adapter           |
+| `src/sweep/`, `sweep.ts`     | Sweep: the language DESIGN.md argues for, with its parser and lowering |
+| `src/gleam/`                 | Repository-only Gleam parser, lowering, worker pool, trace adapter     |
+| `mod.ts`, `lazuli_cli.ts`    | The Lazuli frontend's own entry point and CLI; not part of the API     |
+| `gleam.ts`, `gleam_cli.ts`   | The Gleam frontend's own entry point and CLI; not part of the API      |
+| `language/lazuli/`, `gleam/` | Baba grammars and generated parser/editor artifacts                    |
+| `examples/lazuli/`           | Lazuli sample programs                                                 |
+| `examples/gleam/`            | Gleam sample modules and traces                                        |
+| `examples/javascript-aot/`   | JavaScript frontend, grammar, and the pinned Test262 harness           |
+| `playground/`                | Browser page bundling the compiler with `deno bundle`, no npm deps     |
+| `tests/`                     | Behavioral, differential, stress, growth, and cancellation tests       |
+| `benchmarks/`                | Deno benchmark entry points                                            |
+| `tools/`                     | Profiling, the two Gleam stdlib checks, and editor-support scripts     |
 
 All JavaScript-specific code lives under `examples/javascript-aot/`. The repository's `src/`
 directory stays language-neutral.
