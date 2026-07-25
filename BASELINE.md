@@ -317,6 +317,66 @@ data-parallel one: the Core is already in GPU buffers, emission is a local per-n
 LEB128's data-dependent offsets are a size pass plus a prefix sum plus a write pass. Not re-emitting
 an identical runtime per module is the cheaper one. The batch case wants the second first.
 
+## 2026-07-25 — how splittable is a large module?
+
+If batching 1,024 modules beats `gleam build` by 17x, the obvious question is whether a frontend can
+split one large module into submodules and batch those. The arithmetic is inviting: ~55,000 nodes as
+1,024 modules costs 645 ms, and ~50,000 nodes as one module costs 4,890 ms — **7.6x for the same
+node count**.
+
+`src/semantic/definition_wavefront.ts` already computes the dependency graph, SCC components, and a
+wave schedule. Nothing in the compiler uses it; only tests, a benchmark, and the profiler do. Asked
+about the Gleam stdlib corpus:
+
+| Measure                   |    Value |
+| ------------------------- | -------: |
+| Definitions               |    1,039 |
+| SCC components            |    1,035 |
+| Largest SCC               |        3 |
+| Dependency waves          |       21 |
+| Widest wave               |      246 |
+| Total work                |   49,964 |
+| Critical path work        |   26,845 |
+| **Available parallelism** | **1.9x** |
+
+Mutual recursion is not the obstacle — the largest SCC is three definitions, and the graph is 21
+shallow waves. The obstacle is that **one definition is 52% of the corpus**:
+
+| Definition              |  Nodes | Share |
+| ----------------------- | -----: | ----: |
+| `gleam/list::sequences` | 25,985 | 52.0% |
+| `gleam/uri::to_string`  |  5,480 | 11.0% |
+| `gleam/uri::origin`     |  1,505 |  3.0% |
+
+`list::sequences` alone is **97% of the critical path**. A single definition cannot be split across
+submodules, so splitting caps at 1.9x on this corpus regardless of how it is done. The figure is not
+an artifact of the benchmark entry: spreading the same 353 roots across 71 small functions gives the
+same 1.9x.
+
+### Why one function is half the corpus: pattern lowering explodes
+
+`sequences` is 62 lines of Gleam. It becomes 25,985 Core nodes — about 420 nodes per source line.
+The cause is a multi-subject `case` with or-patterns, which Gleam's stdlib uses freely:
+
+```gleam
+case compare(prev, new), direction {
+  order.Gt, Descending | order.Lt, Ascending | order.Eq, Ascending -> ...
+```
+
+Reduced, with two subjects and two or-alternatives per arm:
+
+| Arms | Surface nodes                   | Growth |
+| ---: | ------------------------------- | -----: |
+|    1 | 94                              |      — |
+|    2 | 1,214                           |    13x |
+|    3 | 19,134                          |    16x |
+|    4 | exceeds the 65,536-node ABI cap | throws |
+
+Each additional arm multiplies node count by 13–16x, and four arms is a hard failure rather than a
+slow compile. This is a correctness bug before it is a performance one, and it is the largest single
+lever on single-module compile time — the GPU is slow on this corpus partly because the corpus is
+26,000 nodes larger than it should be.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
