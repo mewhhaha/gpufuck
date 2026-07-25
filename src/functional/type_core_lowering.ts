@@ -1,4 +1,4 @@
-import { BinaryOperator, type EncodedFunctionalModule, EvaluationProfile } from "./abi.ts";
+import { BinaryOperator, type EncodedModule, EvaluationProfile } from "./abi.ts";
 import {
   buildSurfaceModule,
   surface,
@@ -24,7 +24,7 @@ import {
 import type { ValidatedTypeCoreProgram } from "./type_core_validation.ts";
 
 export interface LoweredTypeCoreProgram {
-  readonly module: EncodedFunctionalModule;
+  readonly module: EncodedModule;
   readonly symbolValues: readonly string[];
   readonly entryKind: TypeCoreKind;
 }

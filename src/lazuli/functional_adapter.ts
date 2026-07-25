@@ -6,7 +6,7 @@ import type {
 import {
   CORE_V1_PRIMITIVE_CAPABILITIES,
   type Diagnostic,
-  type EncodedFunctionalModule,
+  type EncodedModule,
   EvaluationProfile,
   MODULE_ABI_VERSION,
   TypecheckingProfile,
@@ -15,7 +15,7 @@ import {
 export function lazuliSurfaceToFunctionalModule(
   surface: EncodedLazuliSurface,
   sourceByteLength: number,
-): EncodedFunctionalModule {
+): EncodedModule {
   return {
     abiVersion: MODULE_ABI_VERSION,
     sourceByteLength,

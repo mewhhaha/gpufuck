@@ -22,7 +22,7 @@ interface StorageTraversal {
   readonly globalOwners: GlobalReferenceOwner | undefined;
 }
 
-export function analyzeFunctionalStorageReferences(
+export function analyzeStorageReferences(
   module: GpuModule,
   nodes: readonly CoreNode[],
   decisions: readonly StorageDecision[],

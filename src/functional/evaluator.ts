@@ -7,7 +7,7 @@ import {
 } from "../semantic/evaluator.ts";
 import type { GpuModule } from "./compiler_module.ts";
 import { BinaryOperator, CoreTag, NumericConversion, UnaryOperator } from "./abi.ts";
-import { runBoundedFunctionalWasmModule, type WasmExecution } from "./wasm_execution.ts";
+import { runBoundedWasmModule, type WasmExecution } from "./wasm_execution.ts";
 import { WasmRuntimeError } from "./wasm_host_boundary.ts";
 import type { WasmValue } from "./wasm_value_codec.ts";
 
@@ -136,7 +136,7 @@ export type DeepEvaluationResult =
     readonly stats: EvaluationStats;
   };
 
-type AnyFunctionalEvaluationResult =
+type AnyEvaluationResult =
   | EvaluationResult
   | DeepEvaluationResult;
 
@@ -169,10 +169,10 @@ export class GpuEvaluator {
   async evaluate(
     module: GpuModule,
     options: EvaluationOptions = {},
-  ): Promise<AnyFunctionalEvaluationResult> {
+  ): Promise<AnyEvaluationResult> {
     const numerics = await moduleNumericRequirements(module);
     if (numerics.boundedWasm) {
-      return await evaluateFunctionalModuleWithBoundedWasm(module, options);
+      return await evaluateModuleWithBoundedWasm(module, options);
     }
     const result = await this.#evaluator.evaluate(
       lazuliRuntimeModule(module),
@@ -185,7 +185,7 @@ export class GpuEvaluator {
     );
     const converted = functionalResult(result);
     return numerics.signedInteger64 && options.resultForm !== "deep" && converted.ok
-      ? { ...converted, value: shallowFunctionalValue(converted.value) }
+      ? { ...converted, value: shallowValue(converted.value) }
       : converted;
   }
 
@@ -200,7 +200,7 @@ export class GpuEvaluator {
   async evaluateBatch(
     modules: readonly GpuModule[],
     options: BatchEvaluationOptions = {},
-  ): Promise<readonly AnyFunctionalEvaluationResult[]> {
+  ): Promise<readonly AnyEvaluationResult[]> {
     const numericRequirements = await Promise.all(modules.map(moduleNumericRequirements));
     if (
       numericRequirements.some((requirements) =>
@@ -315,7 +315,7 @@ async function inspectModuleNumericRequirements(
   return { signedInteger64, boundedWasm };
 }
 
-function shallowFunctionalValue(
+function shallowValue(
   value: Value | DeepValue,
 ): Value {
   switch (value.kind) {
@@ -334,18 +334,18 @@ function shallowFunctionalValue(
   }
 }
 
-export function evaluateFunctionalModuleWithBoundedWasm(
+export function evaluateModuleWithBoundedWasm(
   module: GpuModule,
   options: DeepEvaluationOptions,
 ): Promise<DeepEvaluationResult>;
-export function evaluateFunctionalModuleWithBoundedWasm(
+export function evaluateModuleWithBoundedWasm(
   module: GpuModule,
   options: EvaluationOptions,
 ): Promise<EvaluationResult>;
-export async function evaluateFunctionalModuleWithBoundedWasm(
+export async function evaluateModuleWithBoundedWasm(
   module: GpuModule,
   options: EvaluationOptions,
-): Promise<AnyFunctionalEvaluationResult> {
+): Promise<AnyEvaluationResult> {
   options.signal?.throwIfAborted();
   if (
     options.maximumStepsPerDispatch !== undefined || options.heapSlots !== undefined ||
@@ -363,7 +363,7 @@ export async function evaluateFunctionalModuleWithBoundedWasm(
   const maximumSteps = options.maximumSteps ?? 1_000_000;
   let execution;
   try {
-    execution = await runBoundedFunctionalWasmModule(module, maximumSteps, {
+    execution = await runBoundedWasmModule(module, maximumSteps, {
       ...(options.input === undefined ? {} : { argument: wasmInputValue(options.input) }),
       ...(options.maximumResultNodes === undefined
         ? {}
@@ -522,8 +522,8 @@ function lazuliRuntimeModule(module: GpuModule): GpuLazuliModule {
 
 function functionalResult(
   result: LazuliEvaluationResult | LazuliDeepEvaluationResult,
-): AnyFunctionalEvaluationResult {
-  if (result.ok) return result as AnyFunctionalEvaluationResult;
+): AnyEvaluationResult {
+  if (result.ok) return result as AnyEvaluationResult;
   return {
     ok: false,
     fault: functionalFault(result.fault),

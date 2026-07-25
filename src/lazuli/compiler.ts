@@ -10,7 +10,7 @@ import {
   lazuliDiagnosticFromFunctional,
   lazuliSurfaceToFunctionalModule,
 } from "./functional_adapter.ts";
-import { GpuCompiler, validateFunctionalCompilationOptions } from "../functional/compiler.ts";
+import { GpuCompiler, validateCompilationOptions } from "../functional/compiler.ts";
 
 export type {
   GpuLazuliModule,
@@ -38,7 +38,7 @@ export class GpuLazuliCompiler {
     source: string,
     options: LazuliCompilationOptions = {},
   ): Promise<LazuliCompileResult> {
-    validateFunctionalCompilationOptions(options);
+    validateCompilationOptions(options);
     options.signal?.throwIfAborted();
     const parsed = parseLazuliSourceForCompilation(source);
     const sourceByteLength = parsed.sourceByteLength;
@@ -73,7 +73,7 @@ export class GpuLazuliCompiler {
     sources: readonly string[],
     options: LazuliCompilationOptions = {},
   ): Promise<readonly LazuliCompileResult[]> {
-    validateFunctionalCompilationOptions(options);
+    validateCompilationOptions(options);
     options.signal?.throwIfAborted();
     if (sources.length === 0) return [];
     if (sources.length === 1) return [await this.compile(sources[0]!, options)];

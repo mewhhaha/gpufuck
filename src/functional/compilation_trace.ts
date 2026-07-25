@@ -6,7 +6,7 @@ import {
   CoreTag,
   DEFINITION_WORD_LENGTH,
   DefinitionWord,
-  type EncodedFunctionalModule,
+  type EncodedModule,
   ExpressionTag,
   NO_INDEX,
   NODE_WORD_LENGTH,
@@ -27,7 +27,7 @@ import type {
 export interface CompilationTraceSurface {
   readonly definitions: readonly SurfaceDefinition[];
   readonly typeDeclarations: readonly SurfaceTypeDeclaration[];
-  readonly module: EncodedFunctionalModule;
+  readonly module: EncodedModule;
 }
 
 export interface CompilationTraceInput {
@@ -219,7 +219,7 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
   }
 }
 
-function formatEncodedModule(module: EncodedFunctionalModule): string {
+function formatEncodedModule(module: EncodedModule): string {
   const lines = [
     `ABI v${module.abiVersion}; entry=${symbol(module, module.entrySymbol)}`,
     "",
@@ -320,7 +320,7 @@ function formatEncodedModule(module: EncodedFunctionalModule): string {
   return lines.join("\n");
 }
 
-function formatDefinitionType(module: EncodedFunctionalModule, index: number): string {
+function formatDefinitionType(module: EncodedModule, index: number): string {
   const definitionType = module.definitionTypes[index];
   if (definitionType === undefined) {
     throw new Error(`Functional trace omitted definition type ${index}.`);
@@ -330,7 +330,7 @@ function formatDefinitionType(module: EncodedFunctionalModule, index: number): s
 
 function formatCoreModule(
   module: GpuModule,
-  encoded: EncodedFunctionalModule,
+  encoded: EncodedModule,
   nodes: readonly CoreNode[],
 ): string {
   const lines = [
@@ -350,7 +350,7 @@ function formatCoreModule(
   return lines.join("\n");
 }
 
-function surfacePayload(module: EncodedFunctionalModule, tag: number, payload: number): string {
+function surfacePayload(module: EncodedModule, tag: number, payload: number): string {
   switch (tag) {
     case ExpressionTag.Integer:
       return `value=${payload | 0}`;
@@ -375,7 +375,7 @@ function surfacePayload(module: EncodedFunctionalModule, tag: number, payload: n
 
 function corePayload(
   module: GpuModule,
-  encoded: EncodedFunctionalModule,
+  encoded: EncodedModule,
   node: CoreNode,
 ): string {
   switch (node.tag) {
@@ -484,7 +484,7 @@ function formatEdge(edge: number, prefix: string): string {
   return edge === NO_INDEX ? "-" : `${prefix}${edge}`;
 }
 
-function symbol(module: EncodedFunctionalModule, id: number): string {
+function symbol(module: EncodedModule, id: number): string {
   return module.symbolNames[id] ?? `<symbol ${id}>`;
 }
 

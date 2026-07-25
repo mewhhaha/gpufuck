@@ -11,7 +11,7 @@ import { WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { WasmFunctionAnalysis } from "./wasm_function_analysis.ts";
 import type { StoragePlan } from "./storage_contract.ts";
 import { createStoragePlan } from "./storage_plan.ts";
-import { requireFirstOrderFunctionalWasmType } from "./wasm_value_codec.ts";
+import { requireFirstOrderWasmType } from "./wasm_value_codec.ts";
 import { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
 
 export interface WasmBackendPlan {
@@ -34,7 +34,7 @@ export function createWasmBackendPlan(
   instrumentedFuel: boolean,
   options: WasmCompilationOptions,
 ): WasmBackendPlan {
-  validateFunctionalWasmSimdMode(options.simd);
+  validateWasmSimdMode(options.simd);
   const captureAnalysis = new WasmCaptureAnalysis(nodes);
   const constantAnalysis = new WasmConstantAnalysis(nodes);
   const storage = createStoragePlan(module, nodes, captureAnalysis, {
@@ -79,7 +79,7 @@ export function createWasmBackendPlan(
   });
 }
 
-export function validateFunctionalWasmSimdMode(
+export function validateWasmSimdMode(
   simd: WasmCompilationOptions["simd"],
 ): void {
   if (
@@ -156,7 +156,7 @@ function validateOwnedTypeExports(
       );
     }
     storageValues.add(owned.storageValue);
-    requireFirstOrderFunctionalWasmType(module, owned.type, `owned type ${owned.name}`);
+    requireFirstOrderWasmType(module, owned.type, `owned type ${owned.name}`);
     for (const generatedName of [`retain_${owned.name}`, `drop_${owned.name}`]) {
       if (exportNames.has(generatedName)) {
         throw new TypeError(

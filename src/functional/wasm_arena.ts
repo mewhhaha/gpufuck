@@ -1,4 +1,4 @@
-import { discardEncodedFunctionalWasmValuesFrom } from "./wasm_value_codec.ts";
+import { discardEncodedWasmValuesFrom } from "./wasm_value_codec.ts";
 
 interface WasmArenaState {
   readonly mark: number;
@@ -22,7 +22,7 @@ const arenaStacks = new WeakMap<WebAssembly.Instance, WasmArenaState[]>();
 const scratchArenas = new WeakMap<WebAssembly.Instance, Map<number, WasmArena[]>>();
 const arenaRecords = new WeakMap<WasmArena, WasmArenaRecord>();
 
-export function beginFunctionalWasmArena(
+export function beginWasmArena(
   instance: WebAssembly.Instance,
 ): WasmArena {
   const { heapTop, freeListHead, arenaDepth } = allocatorGlobals(instance);
@@ -74,11 +74,11 @@ export function functionalWasmInstanceArenaDepth(instance: WebAssembly.Instance)
   return arenaStacks.get(instance)?.length ?? 0;
 }
 
-export async function withFunctionalWasmArena<Result>(
+export async function withWasmArena<Result>(
   instance: WebAssembly.Instance,
   run: (arena: WasmArena) => Result | PromiseLike<Result>,
 ): Promise<Result> {
-  const arena = beginFunctionalWasmArena(instance);
+  const arena = beginWasmArena(instance);
   try {
     return await run(arena);
   } finally {
@@ -89,7 +89,7 @@ export async function withFunctionalWasmArena<Result>(
 function activeArenaRecord(arena: WasmArena): WasmArenaRecord {
   const record = arenaRecords.get(arena);
   if (record === undefined) {
-    throw new TypeError("functional WASM arena was not created by beginFunctionalWasmArena()");
+    throw new TypeError("functional WASM arena was not created by beginWasmArena()");
   }
   if (!record.state.active) {
     throw new Error(`functional WASM arena at heap mark ${record.state.mark} is not active`);
@@ -97,8 +97,8 @@ function activeArenaRecord(arena: WasmArena): WasmArenaRecord {
   return record;
 }
 
-export function markFunctionalWasmScratch(instance: WebAssembly.Instance): number {
-  const arena = beginFunctionalWasmArena(instance);
+export function markWasmScratch(instance: WebAssembly.Instance): number {
+  const arena = beginWasmArena(instance);
   let byMark = scratchArenas.get(instance);
   if (byMark === undefined) {
     byMark = new Map();
@@ -110,7 +110,7 @@ export function markFunctionalWasmScratch(instance: WebAssembly.Instance): numbe
   return arena.mark;
 }
 
-export function resetFunctionalWasmScratch(
+export function resetWasmScratch(
   instance: WebAssembly.Instance,
   mark: number,
 ): void {
@@ -155,7 +155,7 @@ function resetArena(
   heapTop.value = state.mark;
   freeListHead.value = state.savedFreeListHead;
   arenaDepth.value = state.depth - 1;
-  discardEncodedFunctionalWasmValuesFrom(instance, state.mark);
+  discardEncodedWasmValuesFrom(instance, state.mark);
   stack.pop();
   state.active = false;
 }

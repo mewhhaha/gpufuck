@@ -124,7 +124,7 @@ export class StorageCoreError extends Error {
   }
 }
 
-export function requireVerifiedFunctionalStorageCore(
+export function requireVerifiedStorageCore(
   program: StorageCoreProgram,
 ): void {
   const verification = verifyStorageCore(program);

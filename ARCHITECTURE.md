@@ -252,13 +252,12 @@ a safe `f32` subset.
 
 `moduleNumericRequirements` reads resolved Core once per module — cached in a `WeakMap` — and sets
 two flags. `signedInteger64` keeps evaluation on the GPU but forces a deep result form so 64-bit
-values survive readback. `boundedWasm` routes the whole program to
-`evaluateFunctionalModuleWithBoundedWasm`, which compiles it through the same backend and runs it
-under a fuel-instrumented module. That second set is 64-bit float and portable whole-number f64
-literals; text, bytes, runtime faults, buffer append, and all five `Store` operations; 64-bit float
-and portable whole-number arithmetic; structural equality; 32-bit float division and square root;
-and every numeric conversion touching `f64`. `evaluateBatch` splits the batch when any lane needs
-the delegated path.
+values survive readback. `boundedWasm` routes the whole program to `evaluateModuleWithBoundedWasm`,
+which compiles it through the same backend and runs it under a fuel-instrumented module. That second
+set is 64-bit float and portable whole-number f64 literals; text, bytes, runtime faults, buffer
+append, and all five `Store` operations; 64-bit float and portable whole-number arithmetic;
+structural equality; 32-bit float division and square root; and every numeric conversion touching
+`f64`. `evaluateBatch` splits the batch when any lane needs the delegated path.
 
 The delegation is not free of seams, and they are contract violations rather than diagnostics: the
 bounded-Wasm path throws a `TypeError` for the GPU-only `maximumStepsPerDispatch`, `heapSlots`, and
@@ -310,10 +309,10 @@ to parallelize. BASELINE.md records that criterion so it cannot be quietly relax
 annotation, coverage, and inference diagnostics; both arrive in the compile result. `F3001`–`F3012`
 are evaluation faults, and `F4001`–`F4007` are `LinkError`. WebGPU and device errors reject or throw
 with a `cause`, and a compiler bug or corrupt trusted state throws. Spans are UTF-8 byte offsets
-because packed source evidence must be independent of JavaScript UTF-16 indexing;
-`locateFunctionalSpan()` and `locateFunctionalDiagnostic()` map neutral evidence back to a module,
-and the frontend maps that offset to lines, columns, and its own wording. Cancellation is not a
-diagnostic — it rejects with the caller's abort reason.
+because packed source evidence must be independent of JavaScript UTF-16 indexing; `locateSpan()` and
+`locateDiagnostic()` map neutral evidence back to a module, and the frontend maps that offset to
+lines, columns, and its own wording. Cancellation is not a diagnostic — it rejects with the caller's
+abort reason.
 
 The application owns the `GPUDevice`; pipelines live for the device's lifetime; upload and inference
 workspaces belong to one compilation and are released on every success, failure, and cancellation

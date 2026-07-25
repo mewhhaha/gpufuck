@@ -11,11 +11,11 @@ export interface WasmExportDeclaration {
 
 const MODULE_NAME_SEPARATOR = "::";
 
-export function matchesFunctionalQualifiedName(actual: string, localName: string): boolean {
+export function matchesQualifiedName(actual: string, localName: string): boolean {
   return actual === localName || actual.endsWith(`${MODULE_NAME_SEPARATOR}${localName}`);
 }
 
-export function unqualifiedFunctionalName(name: string): string {
+export function unqualifiedName(name: string): string {
   const separator = name.lastIndexOf(MODULE_NAME_SEPARATOR);
   return separator < 0 ? name : name.slice(separator + MODULE_NAME_SEPARATOR.length);
 }

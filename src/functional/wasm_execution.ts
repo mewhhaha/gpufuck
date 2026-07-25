@@ -2,7 +2,7 @@ import type { GpuModule } from "./compiler_module.ts";
 import type { WasmAsyncInit, WasmHostValue, WasmInit, WasmInitBinding } from "./wasm_contract.ts";
 import {
   cachedExecutableWasm,
-  cachedFunctionalWasmArtifact,
+  cachedWasmArtifact,
   fuelInstrumentedWasm,
 } from "./wasm_artifacts.ts";
 import {
@@ -15,18 +15,18 @@ import {
   functionalWasmEntry,
   functionalWasmImports,
   hostFieldKey,
-  invalidFunctionalWasmInit,
-  throwFunctionalWasmTrap,
+  invalidWasmInit,
+  throwWasmTrap,
   WasmBoundaryError,
   WasmRuntimeError,
   WasmSuspension,
 } from "./wasm_host_boundary.ts";
-import { beginFunctionalWasmArena } from "./wasm_arena.ts";
+import { beginWasmArena } from "./wasm_arena.ts";
 import {
   decodeWasmValue,
   describeType,
   encodeWasmValue,
-  releaseEncodedFunctionalWasmValue,
+  releaseEncodedWasmValue,
   type WasmValue,
   WasmValueError,
 } from "./wasm_value_codec.ts";
@@ -71,7 +71,7 @@ export async function runWasmModule(
   return await runWasmAttempt(module, options, false);
 }
 
-export async function runBoundedFunctionalWasmModule(
+export async function runBoundedWasmModule(
   module: GpuModule,
   maximumSteps: number,
   options: WasmRunOptions = {},
@@ -95,7 +95,7 @@ async function runWasmAttempt(
   maximumSteps?: number,
 ): Promise<WasmExecution & { readonly semanticSteps?: number }> {
   options.signal?.throwIfAborted();
-  const { maximumResultNodes, maximumResultBytes } = validateFunctionalWasmRunControls(options);
+  const { maximumResultNodes, maximumResultBytes } = validateWasmRunControls(options);
   if (!allowSuspendingHostOperations) {
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
@@ -136,7 +136,7 @@ async function runWasmAttempt(
     ? undefined
     : await fuelInstrumentedWasm(module, nodes);
   const [artifact, executable] = instrumented === undefined
-    ? await Promise.all([cachedFunctionalWasmArtifact(module), cachedExecutableWasm(module)])
+    ? await Promise.all([cachedWasmArtifact(module), cachedExecutableWasm(module)])
     : [instrumented, instrumented.executable] as const;
   options.signal?.throwIfAborted();
   const { bytes } = artifact;
@@ -180,12 +180,12 @@ async function runWasmAttempt(
     try {
       initialize();
     } catch (cause) {
-      throwFunctionalWasmTrap(module, nodes, instance, cause);
+      throwWasmTrap(module, nodes, instance, cause);
     }
   }
   const invocationArena = heapTop instanceof WebAssembly.Global &&
       artifact.automaticArenaReset
-    ? beginFunctionalWasmArena(instance)
+    ? beginWasmArena(instance)
     : undefined;
   let argument: bigint | undefined;
   try {
@@ -199,7 +199,7 @@ async function runWasmAttempt(
         );
       } catch (cause) {
         if (cause instanceof WebAssembly.RuntimeError) {
-          throwFunctionalWasmTrap(module, nodes, instance, cause);
+          throwWasmTrap(module, nodes, instance, cause);
         }
         throw new WasmBoundaryError({
           code: "F4101",
@@ -223,7 +223,7 @@ async function runWasmAttempt(
         | number
         | bigint;
     } catch (cause) {
-      throwFunctionalWasmTrap(module, nodes, instance, cause);
+      throwWasmTrap(module, nodes, instance, cause);
     }
     let value: WasmValue;
     try {
@@ -245,7 +245,7 @@ async function runWasmAttempt(
           message: cause.message,
         }, cause);
       }
-      throwFunctionalWasmTrap(module, nodes, instance, cause);
+      throwWasmTrap(module, nodes, instance, cause);
     }
     const thunkEvaluations = instance.exports.thunkEvaluations;
     if (
@@ -280,7 +280,7 @@ async function runWasmAttempt(
   } finally {
     try {
       if (argument !== undefined && invocationArena === undefined) {
-        releaseEncodedFunctionalWasmValue(instance, argument);
+        releaseEncodedWasmValue(instance, argument);
       }
     } finally {
       invocationArena?.reset();
@@ -288,7 +288,7 @@ async function runWasmAttempt(
   }
 }
 
-function validateFunctionalWasmRunControls(
+function validateWasmRunControls(
   options: Pick<
     WasmRunOptions,
     "argumentOwnership" | "maximumResultBytes" | "maximumResultNodes"
@@ -341,7 +341,7 @@ export async function runWasmModuleAsync(
     );
   }
   options.signal?.throwIfAborted();
-  validateFunctionalWasmRunControls(options);
+  validateWasmRunControls(options);
   const records: WasmReplayRecord[] = [];
   let cursor = 0;
   const init: Record<string, Record<string, WasmInitBinding>> = {};
@@ -355,7 +355,7 @@ export async function runWasmModuleAsync(
     if (externalFields.length === 0) continue;
     const suppliedCapability = options.init[capability.name];
     if (suppliedCapability === undefined) {
-      throw invalidFunctionalWasmInit(
+      throw invalidWasmInit(
         capability.name,
         `functional WASM async init omitted capability ${JSON.stringify(capability.name)}`,
       );
@@ -367,7 +367,7 @@ export async function runWasmModuleAsync(
       const field = hostFieldKey(capability.name, declaration.name);
       if (declaration.kind === "value") {
         if (supplied === undefined || typeof supplied === "function") {
-          throw invalidFunctionalWasmInit(
+          throw invalidWasmInit(
             field,
             `functional WASM async init omitted value ${JSON.stringify(field)}`,
           );
@@ -376,7 +376,7 @@ export async function runWasmModuleAsync(
         continue;
       }
       if (typeof supplied !== "function") {
-        throw invalidFunctionalWasmInit(
+        throw invalidWasmInit(
           field,
           `functional WASM async init omitted operation ${JSON.stringify(field)}`,
         );
@@ -388,7 +388,7 @@ export async function runWasmModuleAsync(
         if (recorded !== undefined) {
           if (
             recorded.field !== field ||
-            !sameFunctionalWasmHostValue(recorded.argument, argument)
+            !sameWasmHostValue(recorded.argument, argument)
           ) {
             throw new WasmRuntimeError({
               code: "F3102",
@@ -405,7 +405,7 @@ export async function runWasmModuleAsync(
                 } with ${describeWasmHostValue(argument)}`,
             });
           }
-          return copyFunctionalWasmHostValue(recorded.result);
+          return copyWasmHostValue(recorded.result);
         }
         if (recordIndex !== records.length) {
           throw new WasmRuntimeError({
@@ -418,7 +418,7 @@ export async function runWasmModuleAsync(
             message: `functional WASM suspension replay omitted operation ${recordIndex}`,
           });
         }
-        const stableArgument = copyFunctionalWasmHostValue(argument);
+        const stableArgument = copyWasmHostValue(argument);
         let returned:
           | WasmHostValue
           | PromiseLike<WasmHostValue>;
@@ -442,7 +442,7 @@ export async function runWasmModuleAsync(
                 records.push({
                   field,
                   argument: stableArgument,
-                  result: copyFunctionalWasmHostValue(result),
+                  result: copyWasmHostValue(result),
                 });
               } catch (cause) {
                 throw functionalHostOperationError(
@@ -466,7 +466,7 @@ export async function runWasmModuleAsync(
         }
         let stableResult: WasmHostValue;
         try {
-          stableResult = copyFunctionalWasmHostValue(returned);
+          stableResult = copyWasmHostValue(returned);
         } catch (cause) {
           throw functionalHostOperationError(
             module,
@@ -506,13 +506,13 @@ export async function runWasmModuleAsync(
           message: `functional WASM execution exceeded maximumSuspensions ${maximumSuspensions}`,
         });
       }
-      await awaitFunctionalWasmSuspension(error.pending, options.signal);
+      await awaitWasmSuspension(error.pending, options.signal);
     }
   }
   throw new Error("functional WASM suspension loop exited without a result");
 }
 
-function awaitFunctionalWasmSuspension(
+function awaitWasmSuspension(
   pending: Promise<void>,
   signal: AbortSignal | undefined,
 ): Promise<void> {
@@ -534,7 +534,7 @@ function awaitFunctionalWasmSuspension(
   });
 }
 
-function sameFunctionalWasmHostValue(
+function sameWasmHostValue(
   left: WasmHostValue,
   right: WasmHostValue,
 ): boolean {
@@ -546,15 +546,15 @@ function sameFunctionalWasmHostValue(
   if (left.kind === "erased" && right.kind === "erased") {
     return functionalRuntimeTypeDescriptorKey(left.type) ===
         functionalRuntimeTypeDescriptorKey(right.type) &&
-      sameFunctionalWasmHostValue(left.value, right.value);
+      sameWasmHostValue(left.value, right.value);
   }
   if (left.kind === "bytes" && right.kind === "bytes") {
     if (left.value.length !== right.value.length) return false;
     return left.value.every((value, index) => value === right.value[index]);
   }
   if (left.kind === "tuple" && right.kind === "tuple") {
-    return sameFunctionalWasmHostValue(left.values[0], right.values[0]) &&
-      sameFunctionalWasmHostValue(left.values[1], right.values[1]);
+    return sameWasmHostValue(left.values[0], right.values[0]) &&
+      sameWasmHostValue(left.values[1], right.values[1]);
   }
   if (
     (left.kind === "array" && right.kind === "array") ||
@@ -563,7 +563,7 @@ function sameFunctionalWasmHostValue(
     return left.values.length === right.values.length &&
       left.values.every((value, index) => {
         const other = right.values[index];
-        return other !== undefined && sameFunctionalWasmHostValue(value, other);
+        return other !== undefined && sameWasmHostValue(value, other);
       });
   }
   if (left.kind === "constructor" && right.kind === "constructor") {
@@ -571,7 +571,7 @@ function sameFunctionalWasmHostValue(
       left.fields.length === right.fields.length &&
       left.fields.every((value, index) => {
         const other = right.fields[index];
-        return other !== undefined && sameFunctionalWasmHostValue(value, other);
+        return other !== undefined && sameWasmHostValue(value, other);
       });
   }
   if ("value" in left && "value" in right) {
@@ -580,7 +580,7 @@ function sameFunctionalWasmHostValue(
   return false;
 }
 
-function copyFunctionalWasmHostValue(
+function copyWasmHostValue(
   value: WasmHostValue,
 ): WasmHostValue {
   type CopyFrame =

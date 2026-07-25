@@ -112,7 +112,7 @@ export interface ComptimeInvocationStats {
   readonly memoized: boolean;
 }
 
-export interface CompiledFunctionalComptimeFunction {
+export interface CompiledComptimeFunction {
   readonly parameterType: Type;
   readonly resultType: Type;
   invoke(
@@ -125,7 +125,7 @@ export interface CompiledFunctionalComptimeFunction {
 export type ComptimeFunctionCompilationResult =
   | {
     readonly ok: true;
-    readonly compiledFunction: CompiledFunctionalComptimeFunction;
+    readonly compiledFunction: CompiledComptimeFunction;
   }
   | {
     readonly ok: false;

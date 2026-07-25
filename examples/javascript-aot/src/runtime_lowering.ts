@@ -1,6 +1,6 @@
 import {
   BinaryOperator,
-  type EncodedFunctionalModule,
+  type EncodedModule,
   NumericConversion,
   type SourceType,
   type TypeSchema,
@@ -12,7 +12,7 @@ import {
   type SurfaceDefinition,
   type SurfaceExpression,
 } from "../../../src/functional/surface_builder.ts";
-import { analyzeFunctionalSurfaceReachability } from "../../../src/functional/surface_reachability.ts";
+import { analyzeSurfaceReachability } from "../../../src/functional/surface_reachability.ts";
 import type {
   JavaScriptAotClassMethod,
   JavaScriptAotExpression,
@@ -52,7 +52,7 @@ import * as Runtime from "./runtime_contract.ts";
 export interface LoweredJavaScriptRuntimeModule {
   readonly sourceModule: JavaScriptAotModule;
   readonly definitions: readonly SurfaceDefinition[];
-  readonly module: EncodedFunctionalModule;
+  readonly module: EncodedModule;
 }
 
 export interface JavaScriptRuntimeLoweringOptions {
@@ -294,7 +294,7 @@ class JavaScriptRuntimeLowering {
       ...typeErrorDefinitions,
       ...runtime.definitions,
     ];
-    const reachability = analyzeFunctionalSurfaceReachability(candidateDefinitions, [entry.name]);
+    const reachability = analyzeSurfaceReachability(candidateDefinitions, [entry.name]);
     const definitions = candidateDefinitions.filter((definition) =>
       reachability.definitionNames.has(definition.name)
     );

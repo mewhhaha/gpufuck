@@ -5,12 +5,12 @@ import {
   buildSurfaceModule,
   CORE_V1_PRIMITIVE_CAPABILITIES,
   CoreTag,
-  type EncodedFunctionalModule,
+  type EncodedModule,
   EvaluationProfile,
   ExpressionTag,
   GpuCompiler,
   GpuEvaluator,
-  locateFunctionalDiagnostic,
+  locateDiagnostic,
   MAXIMUM_SOURCE_BYTE_LENGTH,
   MODULE_ABI_VERSION,
   NO_INDEX,
@@ -250,7 +250,7 @@ function functionalRuntime(): Runtime {
   return runtime;
 }
 
-function integerModule(value: number, entryName = "entry"): EncodedFunctionalModule {
+function integerModule(value: number, entryName = "entry"): EncodedModule {
   return {
     abiVersion: MODULE_ABI_VERSION,
     sourceByteLength: 2,
@@ -765,7 +765,7 @@ Deno.test("duplicate declarations report the original source span", async () => 
 });
 
 Deno.test("linked diagnostics map primary and related spans back to frontend modules", () => {
-  const located = locateFunctionalDiagnostic(
+  const located = locateDiagnostic(
     [
       { module: "library.duck", startByte: 0, endByte: 10 },
       { module: "application.duck", startByte: 10, endByte: 30 },

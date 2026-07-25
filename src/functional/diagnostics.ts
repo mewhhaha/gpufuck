@@ -13,7 +13,7 @@ export interface LocatedDiagnostic extends Omit<Diagnostic, "span" | "related"> 
   }[];
 }
 
-export function locateFunctionalSpan(
+export function locateSpan(
   sources: readonly SourceRange[],
   span: Span,
 ): SourceSpan | undefined {
@@ -41,14 +41,14 @@ export function locateFunctionalSpan(
   };
 }
 
-export function locateFunctionalDiagnostic(
+export function locateDiagnostic(
   sources: readonly SourceRange[],
   diagnostic: Diagnostic,
 ): LocatedDiagnostic | undefined {
-  const location = locateFunctionalSpan(sources, diagnostic.span);
+  const location = locateSpan(sources, diagnostic.span);
   if (location === undefined) return undefined;
   const related = diagnostic.related?.flatMap((entry) => {
-    const relatedLocation = locateFunctionalSpan(sources, entry.span);
+    const relatedLocation = locateSpan(sources, entry.span);
     return relatedLocation === undefined
       ? []
       : [{ message: entry.message, location: relatedLocation }];

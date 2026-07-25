@@ -1,5 +1,5 @@
 import {
-  type EncodedFunctionalModule,
+  type EncodedModule,
   EvaluationProfile,
   type SourceRange,
   type Span,
@@ -7,7 +7,7 @@ import {
 } from "./abi.ts";
 import type { HostCapabilityDeclaration, SurfaceModuleOptions } from "./host_contract.ts";
 import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
-import { analyzeFunctionalSurfaceReachability } from "./surface_reachability.ts";
+import { analyzeSurfaceReachability } from "./surface_reachability.ts";
 import {
   buildSurfaceModule,
   type SurfaceCaseArm,
@@ -108,12 +108,12 @@ export interface ModuleArtifact {
   readonly options: SurfaceModuleOptions;
 }
 
-const snapshottedFunctionalModules = new WeakSet<ModuleArtifact>();
+const snapshottedModules = new WeakSet<ModuleArtifact>();
 
 export type LinkedSource = SourceRange;
 
-export interface LinkedFunctionalModule {
-  readonly module: EncodedFunctionalModule;
+export interface LinkedModule {
+  readonly module: EncodedModule;
   readonly sources: readonly LinkedSource[];
 }
 
@@ -122,7 +122,7 @@ export function createModuleArtifact(
 ): ModuleArtifact {
   requireModuleName(artifact.name, "module name");
   if (!Number.isSafeInteger(artifact.sourceByteLength) || artifact.sourceByteLength < 0) {
-    throw invalidFunctionalArtifact(
+    throw invalidArtifact(
       artifact.name,
       `functional module ${
         JSON.stringify(artifact.name)
@@ -135,7 +135,7 @@ export function createModuleArtifact(
     requireModuleName(imported.fromModule, `import ${JSON.stringify(imported.name)} source module`);
     requireModuleName(imported.exportName, `import ${JSON.stringify(imported.name)} export name`);
     if (importNames.has(imported.name)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         artifact.name,
         `functional module ${JSON.stringify(artifact.name)} repeats import ${
           JSON.stringify(imported.name)
@@ -160,7 +160,7 @@ export function createModuleArtifact(
   const definitionNames = new Set(artifact.definitions.map((definition) => definition.name));
   for (const imported of artifact.imports) {
     if (definitionNames.has(imported.name)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         artifact.name,
         `functional module ${JSON.stringify(artifact.name)} import ${
           JSON.stringify(imported.name)
@@ -172,7 +172,7 @@ export function createModuleArtifact(
   for (const exported of artifact.exports) {
     requireModuleName(exported.name, `module ${JSON.stringify(artifact.name)} export name`);
     if (!definitionNames.has(exported.definition)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         artifact.name,
         `functional module ${JSON.stringify(artifact.name)} export ${
           JSON.stringify(exported.name)
@@ -232,14 +232,14 @@ export function createModuleArtifact(
     }
     if (!ArrayBuffer.isView(current)) Object.freeze(current);
   }
-  snapshottedFunctionalModules.add(snapshot);
+  snapshottedModules.add(snapshot);
   return snapshot;
 }
 
 export function linkModules(
   artifacts: readonly ModuleArtifact[],
   entry: { readonly module: string; readonly exportName: string },
-): LinkedFunctionalModule {
+): LinkedModule {
   if (artifacts.length === 0) {
     throw new LinkError({
       code: "F4001",
@@ -249,7 +249,7 @@ export function linkModules(
   }
   const modules = new Map<string, ModuleArtifact>();
   for (const candidate of artifacts) {
-    const artifact = snapshottedFunctionalModules.has(candidate)
+    const artifact = snapshottedModules.has(candidate)
       ? candidate
       : createModuleArtifact(candidate);
     if (modules.has(artifact.name)) {
@@ -325,7 +325,7 @@ export function linkModules(
     for (const binding of artifact.options.hostDefinitions ?? []) {
       const definition = definitionNames.get(binding.definition);
       if (definition === undefined) {
-        throw invalidFunctionalArtifact(
+        throw invalidArtifact(
           artifact.name,
           `functional module ${
             JSON.stringify(artifact.name)
@@ -337,7 +337,7 @@ export function linkModules(
     for (const exported of artifact.options.wasmExports ?? []) {
       const definition = definitionNames.get(exported.definition);
       if (definition === undefined) {
-        throw invalidFunctionalArtifact(
+        throw invalidArtifact(
           artifact.name,
           `functional module ${JSON.stringify(artifact.name)} WASM export ${
             JSON.stringify(exported.name)
@@ -539,7 +539,7 @@ export function linkModules(
       }`,
     });
   }
-  const reachability = analyzeFunctionalSurfaceReachability(linkedDefinitions, [
+  const reachability = analyzeSurfaceReachability(linkedDefinitions, [
     entryDefinition,
     ...linkedWasmExports.map((exported) => exported.definition),
   ]);
@@ -876,7 +876,7 @@ function validateNominalImports(
     requireModuleName(imported.fromModule, `${kind} import source module`);
     requireModuleName(imported.exportName, `${kind} import export name`);
     if (localNames.has(imported.name) || names.has(imported.name)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         module,
         `functional module ${JSON.stringify(module)} repeats ${kind} name ${
           JSON.stringify(imported.name)
@@ -899,7 +899,7 @@ function validateNominalExports<Export extends { readonly name: string }>(
     requireModuleName(exported.name, `module ${JSON.stringify(module)} ${kind} export name`);
     const declaration = declarationName(exported);
     if (!localNames.has(declaration)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         module,
         `functional module ${JSON.stringify(module)} ${kind} export ${
           JSON.stringify(exported.name)
@@ -948,7 +948,7 @@ function requireModuleName(name: string, location: string): void {
   }
 }
 
-function invalidFunctionalArtifact(module: string, message: string): LinkError {
+function invalidArtifact(module: string, message: string): LinkError {
   return new LinkError({
     code: "F4001",
     kind: "invalid-artifact",

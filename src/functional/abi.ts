@@ -120,8 +120,8 @@ export const CORE_V1_PRIMITIVE_CAPABILITIES: readonly PrimitiveCapability[] = Ob
   ] as const,
 );
 
-export type EncodedFunctionalDefinitionType = EncodedLazuliDefinitionType;
-export type EncodedFunctionalTypeDeclaration = EncodedLazuliTypeDeclaration;
+export type EncodedDefinitionType = EncodedLazuliDefinitionType;
+export type EncodedTypeDeclaration = EncodedLazuliTypeDeclaration;
 
 type DiagnosticCodeOf<Code extends string> = Code extends `L${infer Suffix}` ? `F${Suffix}`
   : never;
@@ -141,7 +141,7 @@ export interface Diagnostic {
   readonly related?: readonly RelatedDiagnostic[];
 }
 
-export interface EncodedFunctionalModule {
+export interface EncodedModule {
   readonly abiVersion: number;
   readonly sourceByteLength: number;
   readonly evaluationProfile: EvaluationProfile;
@@ -161,6 +161,6 @@ export interface EncodedFunctionalModule {
   readonly constructorCount: number;
   readonly entrySymbol: number;
   readonly symbolNames: readonly string[];
-  readonly definitionTypes: readonly EncodedFunctionalDefinitionType[];
-  readonly typeDeclarations: readonly EncodedFunctionalTypeDeclaration[];
+  readonly definitionTypes: readonly EncodedDefinitionType[];
+  readonly typeDeclarations: readonly EncodedTypeDeclaration[];
 }

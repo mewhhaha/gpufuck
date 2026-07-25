@@ -16,7 +16,7 @@ import {
   type StoragePlanningOptions,
   type StorageReference,
 } from "./storage_contract.ts";
-import { analyzeFunctionalStorageReferences } from "./storage_reference_analysis.ts";
+import { analyzeStorageReferences } from "./storage_reference_analysis.ts";
 import { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 
 export {
@@ -187,7 +187,7 @@ export function createStoragePlan(
   }
 
   const boundaries = boundaryStorageDecisions(module);
-  const references = analyzeFunctionalStorageReferences(
+  const references = analyzeStorageReferences(
     module,
     nodes,
     values,

@@ -2,7 +2,7 @@ import {
   BinaryOperator,
   CONSTRUCTOR_WORD_LENGTH,
   CORE_V1_PRIMITIVE_CAPABILITIES,
-  type EncodedFunctionalModule,
+  type EncodedModule,
   EvaluationProfile,
   ExpressionTag,
   MAXIMUM_EXPRESSION_NODES,
@@ -29,7 +29,7 @@ import {
   functionalHostFieldType,
   INIT_CONSTRUCTOR_NAME,
   INIT_TYPE_NAME,
-  normalizeFunctionalHostCapabilities,
+  normalizeHostCapabilities,
   RESOURCE_TYPE_PREFIX,
   SLICE_TYPE_NAME,
   type SurfaceModuleOptions,
@@ -84,7 +84,7 @@ export function buildSurfaceModule(
   entryName: string,
   sourceByteLength: number,
   options: SurfaceModuleOptions = {},
-): EncodedFunctionalModule {
+): EncodedModule {
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("functional surface module options must be an object");
   }
@@ -127,7 +127,7 @@ export function buildSurfaceModule(
   }
   const evaluationProfile = options.evaluationProfile ?? EvaluationProfile.StrictEager;
   requireEvaluationProfile(evaluationProfile, "functional surface module");
-  const hostCapabilities = normalizeFunctionalHostCapabilities(options.hostCapabilities);
+  const hostCapabilities = normalizeHostCapabilities(options.hostCapabilities);
   const hostDefinitions = normalizeHostDefinitions(
     elaboratedDefinitions,
     hostCapabilities,
@@ -383,7 +383,7 @@ function requireSurfaceTypeSchema(
 
 function normalizeHostDefinitions(
   definitions: readonly SurfaceDefinition[],
-  capabilities: ReturnType<typeof normalizeFunctionalHostCapabilities>,
+  capabilities: ReturnType<typeof normalizeHostCapabilities>,
   bindings: SurfaceModuleOptions["hostDefinitions"],
 ): NonNullable<SurfaceModuleOptions["hostDefinitions"]> {
   if (bindings === undefined) return Object.freeze([]);
@@ -522,7 +522,7 @@ function schemaContainsForall(schema: TypeSchema): boolean {
 }
 
 function hostInitTypeDeclaration(
-  capabilities: ReturnType<typeof normalizeFunctionalHostCapabilities>,
+  capabilities: ReturnType<typeof normalizeHostCapabilities>,
   sourceByteLength: number,
 ): SurfaceTypeDeclaration {
   const span = { startByte: sourceByteLength, endByte: sourceByteLength };
@@ -547,7 +547,7 @@ function hostInitTypeDeclaration(
 function collectBoundaryTypeNames(
   definitions: readonly SurfaceDefinition[],
   typeDeclarations: readonly SurfaceTypeDeclaration[],
-  capabilities: ReturnType<typeof normalizeFunctionalHostCapabilities>,
+  capabilities: ReturnType<typeof normalizeHostCapabilities>,
 ): ReadonlySet<string> {
   const names = new Set<string>();
   const visit = (schema: TypeSchema): void => {

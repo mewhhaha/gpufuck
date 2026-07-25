@@ -1,4 +1,4 @@
-import { matchesFunctionalQualifiedName } from "./module_contract.ts";
+import { matchesQualifiedName } from "./module_contract.ts";
 
 export const F32X4_TYPE_NAME = "$FunctionalF32x4";
 export const F32X4_CONSTRUCTOR_NAME = "$FunctionalF32x4Value";
@@ -40,15 +40,15 @@ const FIXED_VECTOR_NAMES: readonly string[] = Object.freeze([
   ...Object.values(F32x4Definition),
 ]);
 
-export function canonicalFunctionalFixedVectorName(name: string): string | undefined {
-  return FIXED_VECTOR_NAMES.find((candidate) => matchesFunctionalQualifiedName(name, candidate));
+export function canonicalFixedVectorName(name: string): string | undefined {
+  return FIXED_VECTOR_NAMES.find((candidate) => matchesQualifiedName(name, candidate));
 }
 
-export function correspondingFunctionalFixedVectorName(
+export function correspondingFixedVectorName(
   reference: string,
   sibling: string,
 ): string | undefined {
-  const canonicalReference = canonicalFunctionalFixedVectorName(reference);
+  const canonicalReference = canonicalFixedVectorName(reference);
   if (canonicalReference === undefined) return undefined;
   return `${reference.slice(0, -canonicalReference.length)}${sibling}`;
 }

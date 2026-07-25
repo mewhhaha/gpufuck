@@ -243,8 +243,8 @@ Expected failures are structured: `F1xxx` for structural and resolution diagnost
 type, annotation, and coverage diagnostics in the compile result; `F3001`–`F3012` as evaluation
 faults, from either runtime; `F4001`–`F4007` as `LinkError`. WebGPU setup and device failures throw
 or reject with a `cause`, and options a chosen runtime cannot honour throw a `TypeError`. Spans are
-UTF-8 byte offsets; `locateFunctionalDiagnostic()` maps an offset in a linked module back to the
-owning module, and filenames, line/column lookup, and wording stay in the frontend.
+UTF-8 byte offsets; `locateDiagnostic()` maps an offset in a linked module back to the owning
+module, and filenames, line/column lookup, and wording stay in the frontend.
 
 Source is capped at 1 MiB, surface trees at 65,536 nodes, semantic depth at 512, constructor arity
 at 256, and stores at 16,777,216 elements. Compilation defaults to 1,000,000 semantic transitions

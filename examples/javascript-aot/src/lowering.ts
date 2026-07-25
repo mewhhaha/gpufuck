@@ -1,6 +1,6 @@
 import {
   BinaryOperator,
-  type EncodedFunctionalModule,
+  type EncodedModule,
   EvaluationProfile,
   UnaryOperator,
 } from "../../../src/functional/abi.ts";
@@ -31,7 +31,7 @@ import { JavaScriptAotLoweringError } from "./diagnostic.ts";
 export interface LoweredJavaScriptAotModule {
   readonly sourceModule: JavaScriptAotModule;
   readonly definitions: readonly SurfaceDefinition[];
-  readonly module: EncodedFunctionalModule;
+  readonly module: EncodedModule;
 }
 
 export interface JavaScriptAotLoweringOptions {

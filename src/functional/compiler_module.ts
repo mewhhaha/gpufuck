@@ -53,25 +53,25 @@ export interface GpuModule {
   destroy(): void;
 }
 
-const completeTypeDeclarations = new WeakMap<
+const completedTypeDeclarationCache = new WeakMap<
   GpuModule,
   readonly TypeDeclaration[]
 >();
 
-export function registerCompleteFunctionalTypeDeclarations(
+export function registerCompleteTypeDeclarations(
   module: GpuModule,
   declarations: readonly TypeDeclaration[],
 ): void {
-  if (completeTypeDeclarations.has(module)) {
+  if (completedTypeDeclarationCache.has(module)) {
     throw new Error("functional module complete type declarations were registered twice");
   }
-  completeTypeDeclarations.set(module, declarations);
+  completedTypeDeclarationCache.set(module, declarations);
 }
 
-export function completeFunctionalTypeDeclarations(
+export function completeTypeDeclarations(
   module: GpuModule,
 ): readonly TypeDeclaration[] {
-  return completeTypeDeclarations.get(module) ?? module.typeDeclarations;
+  return completedTypeDeclarationCache.get(module) ?? module.typeDeclarations;
 }
 
 export interface CompilationOptions {

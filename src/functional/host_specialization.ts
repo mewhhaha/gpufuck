@@ -10,7 +10,7 @@ interface RuntimeTypeTraversal {
   remainingNodes: number;
 }
 
-export function specializeFunctionalHostOperation(
+export function specializeHostOperation(
   operation: HostOperationDeclaration,
   substitutions: Readonly<Record<string, HostType>>,
 ): HostOperationDeclaration {

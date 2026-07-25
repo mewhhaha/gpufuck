@@ -1,5 +1,5 @@
 import { PAIR_CONSTRUCTOR_NAME, type Type, type TypeSchema, UNIT_CONSTRUCTOR_NAME } from "./abi.ts";
-import { completeFunctionalTypeDeclarations, type GpuModule } from "./compiler_module.ts";
+import { completeTypeDeclarations, type GpuModule } from "./compiler_module.ts";
 import { instantiateSchema } from "./schema_contract.ts";
 import type { WasmHostValue } from "./wasm_contract.ts";
 import {
@@ -43,7 +43,7 @@ const allocationGroups = new WeakMap<
   Map<number, readonly { readonly pointer: number; readonly byteLength: number }[]>
 >();
 
-export function discardEncodedFunctionalWasmValuesFrom(
+export function discardEncodedWasmValuesFrom(
   instance: WebAssembly.Instance,
   mark: number,
 ): void {
@@ -56,7 +56,7 @@ export function discardEncodedFunctionalWasmValuesFrom(
   }
 }
 
-export function forgetEncodedFunctionalWasmValue(
+export function forgetEncodedWasmValue(
   instance: WebAssembly.Instance,
   encoded: bigint,
 ): void {
@@ -632,7 +632,7 @@ export function encodeWasmValue(
   return encoded;
 }
 
-export function releaseEncodedFunctionalWasmValue(
+export function releaseEncodedWasmValue(
   instance: WebAssembly.Instance,
   encoded: bigint,
 ): void {
@@ -1031,7 +1031,7 @@ function decodeWasmValueWithScalarRepresentation(
   return decodedResult;
 }
 
-export function requireFirstOrderFunctionalWasmType(
+export function requireFirstOrderWasmType(
   module: GpuModule,
   type: Type,
   location: string,
@@ -1069,7 +1069,7 @@ export function requireFirstOrderFunctionalWasmType(
         const key = JSON.stringify(current);
         if (visitedNamedTypes.has(key)) return;
         visitedNamedTypes.add(key);
-        const declaration = completeFunctionalTypeDeclarations(module).find((candidate) =>
+        const declaration = completeTypeDeclarations(module).find((candidate) =>
           candidate.name === current.name
         );
         if (declaration === undefined) {
@@ -1229,7 +1229,7 @@ export function functionalStructuredFieldTypes(
     }
     return type.values;
   }
-  const declaration = completeFunctionalTypeDeclarations(module).find((candidate) =>
+  const declaration = completeTypeDeclarations(module).find((candidate) =>
     candidate.name === type.name
   );
   if (declaration === undefined) {
@@ -1281,7 +1281,7 @@ function matchConstructorResult(
       return schema.kind === type.kind;
     case "parameter": {
       const existing = parameters.get(schema.name);
-      if (existing !== undefined) return sameFunctionalType(existing, type);
+      if (existing !== undefined) return sameType(existing, type);
       parameters.set(schema.name, type);
       return true;
     }
@@ -1304,7 +1304,7 @@ function matchConstructorResult(
   }
 }
 
-function sameFunctionalType(left: Type, right: Type): boolean {
+function sameType(left: Type, right: Type): boolean {
   if (left.kind !== right.kind) return false;
   switch (left.kind) {
     case "integer":
@@ -1316,18 +1316,16 @@ function sameFunctionalType(left: Type, right: Type): boolean {
       return true;
     case "tuple":
       return right.kind === "tuple" &&
-        sameFunctionalType(left.values[0], right.values[0]) &&
-        sameFunctionalType(left.values[1], right.values[1]);
+        sameType(left.values[0], right.values[0]) &&
+        sameType(left.values[1], right.values[1]);
     case "named":
       return right.kind === "named" && left.name === right.name &&
         left.arguments.length === right.arguments.length &&
-        left.arguments.every((argument, index) =>
-          sameFunctionalType(argument, right.arguments[index]!)
-        );
+        left.arguments.every((argument, index) => sameType(argument, right.arguments[index]!));
     case "function":
       return right.kind === "function" &&
-        sameFunctionalType(left.parameter, right.parameter) &&
-        sameFunctionalType(left.result, right.result);
+        sameType(left.parameter, right.parameter) &&
+        sameType(left.result, right.result);
   }
 }
 

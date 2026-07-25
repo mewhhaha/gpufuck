@@ -50,7 +50,7 @@ const semanticSurface = semanticSurfaceFromModule(functionalModule);
 const functionalAdapterMilliseconds = performance.now() - adapterStart;
 
 const warmParseAndSurfacePackingMilliseconds: number[] = [];
-const warmFunctionalAdapterMilliseconds: number[] = [];
+const warmAdapterMilliseconds: number[] = [];
 for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
   const warmParseStart = performance.now();
   const warmParsed = parseLazuliSource(source);
@@ -58,7 +58,7 @@ for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
   if (!warmParsed.ok) throw new Error("profile source stopped parsing during warm samples");
   const warmAdapterStart = performance.now();
   semanticSurfaceFromModule(lazuliSurfaceToFunctionalModule(warmParsed.surface, sourceBytes));
-  warmFunctionalAdapterMilliseconds.push(performance.now() - warmAdapterStart);
+  warmAdapterMilliseconds.push(performance.now() - warmAdapterStart);
 }
 
 const deviceStart = performance.now();
@@ -264,8 +264,8 @@ try {
       warmParseAndSurfacePackingMilliseconds,
       warmParseAndSurfacePackingMedianMilliseconds: median(warmParseAndSurfacePackingMilliseconds),
       functionalAdapterMilliseconds,
-      warmFunctionalAdapterMilliseconds,
-      warmFunctionalAdapterMedianMilliseconds: median(warmFunctionalAdapterMilliseconds),
+      warmAdapterMilliseconds,
+      warmAdapterMedianMilliseconds: median(warmAdapterMilliseconds),
       adapter: {
         vendor: adapter.info.vendor,
         architecture: adapter.info.architecture,

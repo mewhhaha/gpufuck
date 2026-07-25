@@ -31,8 +31,8 @@ import {
   WasmValueType,
 } from "./wasm_binary.ts";
 import { WasmValueAbi } from "./wasm_abi.ts";
-import { concreteFunctionalType } from "./schema_contract.ts";
-import { requireFirstOrderFunctionalWasmType } from "./wasm_value_codec.ts";
+import { concreteType } from "./schema_contract.ts";
+import { requireFirstOrderWasmType } from "./wasm_value_codec.ts";
 import type { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import { type LambdaSet, LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 import type {
@@ -84,8 +84,8 @@ import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import type { ConstantResolver, WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import {
-  canonicalFunctionalFixedVectorName,
-  correspondingFunctionalFixedVectorName,
+  canonicalFixedVectorName,
+  correspondingFixedVectorName,
   F32X4_CONSTRUCTOR_NAME,
   F32x4Definition,
   MASK32X4_CONSTRUCTOR_NAME,
@@ -207,7 +207,7 @@ function compiledSimdVector(
   definition: string,
   kind: CompiledSimdVector["kind"],
 ): CompiledSimdVector {
-  const constructorName = correspondingFunctionalFixedVectorName(
+  const constructorName = correspondingFixedVectorName(
     definition,
     kind === "f32x4" ? F32X4_CONSTRUCTOR_NAME : MASK32X4_CONSTRUCTOR_NAME,
   );
@@ -364,9 +364,9 @@ class WasmCompiler {
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
         if (declaration.kind === "value") {
-          requireFirstOrderFunctionalWasmType(
+          requireFirstOrderWasmType(
             module,
-            concreteFunctionalType(declaration.representation ?? declaration.type),
+            concreteType(declaration.representation ?? declaration.type),
             `host value ${JSON.stringify(`${capability.name}.${declaration.name}`)}`,
           );
         } else {
@@ -374,9 +374,9 @@ class WasmCompiler {
             declaration.wasmIntrinsic !==
               WasmIntrinsic.BufferGenerate
           ) {
-            requireFirstOrderFunctionalWasmType(
+            requireFirstOrderWasmType(
               module,
-              concreteFunctionalType(
+              concreteType(
                 declaration.parameterRepresentation ?? declaration.parameter,
               ),
               `host operation ${
@@ -384,9 +384,9 @@ class WasmCompiler {
               } parameter`,
             );
           }
-          requireFirstOrderFunctionalWasmType(
+          requireFirstOrderWasmType(
             module,
-            concreteFunctionalType(declaration.resultRepresentation ?? declaration.result),
+            concreteType(declaration.resultRepresentation ?? declaration.result),
             `host operation ${JSON.stringify(`${capability.name}.${declaration.name}`)} result`,
           );
         }
@@ -749,13 +749,13 @@ class WasmCompiler {
       result = result.result;
     }
     for (const [index, parameter] of parameters.entries()) {
-      requireFirstOrderFunctionalWasmType(
+      requireFirstOrderWasmType(
         this.#module,
         parameter,
         `export ${exported.name} input ${index}`,
       );
     }
-    requireFirstOrderFunctionalWasmType(
+    requireFirstOrderWasmType(
       this.#module,
       result,
       `export ${exported.name} result`,
@@ -3374,7 +3374,7 @@ class WasmCompiler {
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return undefined;
     const { definition, arguments: arguments_ } = application;
-    const canonicalDefinition = canonicalFunctionalFixedVectorName(definition);
+    const canonicalDefinition = canonicalFixedVectorName(definition);
     if (canonicalDefinition === F32x4Definition.Splat && arguments_.length === 1) {
       this.compileFloat32Expression(instructions, arguments_[0]!.node, environment);
       instructions.simd(WasmSimdOpcode.F32x4Splat);
@@ -3429,7 +3429,7 @@ class WasmCompiler {
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return false;
     const { definition, arguments: arguments_ } = application;
-    const canonicalDefinition = canonicalFunctionalFixedVectorName(definition);
+    const canonicalDefinition = canonicalFixedVectorName(definition);
     const extractedLane = f32x4ExtractedLane(definition);
     if (extractedLane !== undefined && arguments_.length === 1) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
@@ -3486,7 +3486,7 @@ class WasmCompiler {
     const constructor = this.constructorApplication(nodeIndex);
     if (
       constructor !== undefined && constructor.arguments.length === 4 &&
-      canonicalFunctionalFixedVectorName(
+      canonicalFixedVectorName(
           this.#module.constructorNames[constructor.constructorIndex]!,
         ) === F32X4_CONSTRUCTOR_NAME
     ) {
@@ -3567,14 +3567,14 @@ class WasmCompiler {
     const constructor = this.constructorApplication(nodeIndex);
     if (
       constructor !== undefined && constructor.arguments.length === 4 &&
-      canonicalFunctionalFixedVectorName(
+      canonicalFixedVectorName(
           this.#module.constructorNames[constructor.constructorIndex]!,
         ) === F32X4_CONSTRUCTOR_NAME
     ) return true;
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return false;
     const { definition, arguments: arguments_ } = application;
-    const canonicalDefinition = canonicalFunctionalFixedVectorName(definition);
+    const canonicalDefinition = canonicalFixedVectorName(definition);
     if (canonicalDefinition === F32x4Definition.Splat) return arguments_.length === 1;
     if (simdF32x4BinaryOpcode(definition) !== undefined) {
       return arguments_.length === 2 &&

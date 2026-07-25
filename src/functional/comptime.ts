@@ -7,11 +7,11 @@ import {
 import {
   encodeConstant,
   functionalConstantFromDeepValue,
-  measureFunctionalConstant,
-  validateFunctionalConstant,
+  measureConstant,
+  validateConstant,
 } from "./comptime_constant.ts";
 import type {
-  CompiledFunctionalComptimeFunction,
+  CompiledComptimeFunction,
   ComptimeDiagnostic,
   ComptimeExecutionOptions,
   ComptimeExecutionResult,
@@ -26,11 +26,7 @@ import type {
   Constant,
 } from "./comptime_contract.ts";
 import { GpuCompiler, type GpuModule } from "./compiler.ts";
-import {
-  type DeepValue,
-  evaluateFunctionalModuleWithBoundedWasm,
-  GpuEvaluator,
-} from "./evaluator.ts";
+import { type DeepValue, evaluateModuleWithBoundedWasm, GpuEvaluator } from "./evaluator.ts";
 import { createModuleArtifact, linkModules, type ModuleArtifact } from "./module_linker.ts";
 import type { SurfaceExpression, SurfaceTypeDeclaration } from "./surface_builder.ts";
 import { functionalResolvedCoreFingerprint } from "./wasm_artifacts.ts";
@@ -166,7 +162,7 @@ export class GpuComptimeExecutor {
       options.signal?.throwIfAborted();
       return {
         ok: true,
-        compiledFunction: new ReusableFunctionalComptimeFunction(
+        compiledFunction: new ReusableComptimeFunction(
           compilation.module,
           fingerprint,
           {
@@ -274,7 +270,7 @@ export class GpuComptimeExecutor {
           : await Promise.all(
             evaluable.map(({ module, program }) =>
               programProducesFirstOrderValues(program)
-                ? evaluateFunctionalModuleWithBoundedWasm(module, evaluationOptions)
+                ? evaluateModuleWithBoundedWasm(module, evaluationOptions)
                 : this.#evaluator.evaluate(module, evaluationOptions)
             ),
           );
@@ -314,7 +310,7 @@ export class GpuComptimeExecutor {
   }
 }
 
-class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFunction {
+class ReusableComptimeFunction implements CompiledComptimeFunction {
   readonly parameterType;
   readonly resultType;
   readonly #module: GpuModule;
@@ -345,7 +341,7 @@ class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFu
       );
     }
     options.signal?.throwIfAborted();
-    validateFunctionalConstant(argument);
+    validateConstant(argument);
     const maximumSteps = positiveLimit(
       "maximumExecutionSteps",
       options.maximumExecutionSteps,
@@ -383,7 +379,7 @@ class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFu
       }
       return completed.fault;
     }
-    const measurements = measureFunctionalConstant(completed.value);
+    const measurements = measureConstant(completed.value);
     const exceeded = exceededOutputLimit(
       this.#output,
       measurements.nodes,
@@ -424,7 +420,7 @@ class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFu
     maximumResultNodes: number,
     maximumResultBytes: number,
   ): Promise<MemoizedComptimeInvocation> {
-    const evaluation = await evaluateFunctionalModuleWithBoundedWasm(this.#module, {
+    const evaluation = await evaluateModuleWithBoundedWasm(this.#module, {
       resultForm: "deep",
       input: argument,
       maximumSteps,
@@ -672,7 +668,7 @@ function comptimeSuccess(
         stats: evaluation,
       };
     }
-    const measurements = measureFunctionalConstant(constant);
+    const measurements = measureConstant(constant);
     outputNodes += measurements.nodes;
     outputBytes += measurements.bytes;
     outputDepth = Math.max(outputDepth, measurements.depth);

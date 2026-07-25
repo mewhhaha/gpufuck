@@ -13,7 +13,7 @@ import type {
   WasmInitBinding,
   WasmRuntimeErrorDetails,
 } from "./wasm_contract.ts";
-import { locateFunctionalSpan } from "./diagnostics.ts";
+import { locateSpan } from "./diagnostics.ts";
 import { functionalRuntimeTypeDescriptorKey } from "./host_specialization.ts";
 import { WasmValueType } from "./wasm_binary.ts";
 import {
@@ -25,13 +25,13 @@ import {
   WASM_FAULT_OUT_OF_FUEL,
   WASM_FAULT_OUT_OF_MEMORY,
 } from "./wasm_runtime_binary.ts";
-import { concreteFunctionalType } from "./schema_contract.ts";
+import { concreteType } from "./schema_contract.ts";
 import {
   decodeWasmBoxedValue,
   decodeWasmValue,
   describeType,
   encodeWasmValue,
-  requireFirstOrderFunctionalWasmType,
+  requireFirstOrderWasmType,
 } from "./wasm_value_codec.ts";
 
 const HOST_IMPORT_MODULE_PREFIX = "functional_init:";
@@ -141,7 +141,7 @@ export function functionalWasmEntry(module: GpuModule): WasmEntry {
         `functional WASM entry d${module.entryDefinition} declares ${module.hostCapabilities.length} host capabilities but does not accept ${INIT_TYPE_NAME}`,
       );
     }
-    requireFirstOrderFunctionalWasmType(
+    requireFirstOrderWasmType(
       module,
       module.entryType,
       "entry result",
@@ -161,7 +161,7 @@ export function functionalWasmEntry(module: GpuModule): WasmEntry {
         `functional WASM entry d${module.entryDefinition} accepts ${INIT_TYPE_NAME} but declares no host capabilities`,
       );
     }
-    requireFirstOrderFunctionalWasmType(
+    requireFirstOrderWasmType(
       module,
       module.entryType.result,
       "entry result",
@@ -175,8 +175,8 @@ export function functionalWasmEntry(module: GpuModule): WasmEntry {
       } instead of ${INIT_TYPE_NAME}`,
     );
   }
-  requireFirstOrderFunctionalWasmType(module, parameter, "entry argument");
-  requireFirstOrderFunctionalWasmType(
+  requireFirstOrderWasmType(module, parameter, "entry argument");
+  requireFirstOrderWasmType(
     module,
     module.entryType.result,
     "entry result",
@@ -202,7 +202,7 @@ function functionalWasmRuntimeErrorDetails(
     span: { startByte: node.sourceByteOffset, endByte: node.sourceEndByte },
   };
   const span = nodeContext.span;
-  const location = span === undefined ? undefined : locateFunctionalSpan(module.sources, span);
+  const location = span === undefined ? undefined : locateSpan(module.sources, span);
   const context = {
     entryDefinition: module.entryDefinition,
     entryName,
@@ -284,7 +284,7 @@ function functionalWasmRuntimeErrorDetails(
   };
 }
 
-export function throwFunctionalWasmTrap(
+export function throwWasmTrap(
   module: GpuModule,
   nodes: readonly CoreNode[],
   instance: WebAssembly.Instance,
@@ -382,7 +382,7 @@ export function functionalWasmImports(
   })).filter((capability) => capability.fields.length > 0);
   if (externalCapabilities.length === 0) return bridge({});
   if (init === undefined || init === null || typeof init !== "object") {
-    throw invalidFunctionalWasmInit(
+    throw invalidWasmInit(
       "init",
       `functional WASM module requires init capabilities ${
         JSON.stringify(externalCapabilities.map((capability) => capability.name))
@@ -396,7 +396,7 @@ export function functionalWasmImports(
   for (const capability of externalCapabilities) {
     const fields = Object.hasOwn(init, capability.name) ? init[capability.name] : undefined;
     if (fields === undefined || fields === null || typeof fields !== "object") {
-      throw invalidFunctionalWasmInit(
+      throw invalidWasmInit(
         capability.name,
         `functional WASM init omitted capability ${JSON.stringify(capability.name)}; received ${
           describeHostBinding(fields)
@@ -415,7 +415,7 @@ export function functionalWasmImports(
       const key = hostFieldKey(capability.name, declaration.name);
       if (declaration.kind === "value") {
         if (typeof binding === "function" || binding === undefined) {
-          throw invalidFunctionalWasmInit(
+          throw invalidWasmInit(
             key,
             `functional WASM init value ${
               JSON.stringify(key)
@@ -434,7 +434,7 @@ export function functionalWasmImports(
             );
           } catch (cause) {
             if (cause instanceof WasmBoundaryError) throw cause;
-            throw invalidFunctionalWasmInit(
+            throw invalidWasmInit(
               key,
               cause instanceof Error
                 ? cause.message
@@ -446,7 +446,7 @@ export function functionalWasmImports(
         continue;
       }
       if (typeof binding !== "function") {
-        throw invalidFunctionalWasmInit(
+        throw invalidWasmInit(
           key,
           `functional WASM init operation ${JSON.stringify(key)} expected a function; received ${
             describeHostBinding(binding)
@@ -497,7 +497,7 @@ function decodeHostValue(
   value: number | bigint,
 ): WasmHostValue {
   if (isErasedRepresentation(representation)) {
-    const type = concreteFunctionalType(semanticType);
+    const type = concreteType(semanticType);
     return {
       kind: "erased",
       type,
@@ -508,7 +508,7 @@ function decodeHostValue(
     ? decodeWasmValue(
       instance,
       module,
-      concreteFunctionalType(representation),
+      concreteType(representation),
       value,
       2_047,
     )
@@ -531,7 +531,7 @@ function encodeHostValue(
         } expected erased; received ${value.kind}`,
       );
     }
-    const expected = concreteFunctionalType(semanticType);
+    const expected = concreteType(semanticType);
     if (
       functionalRuntimeTypeDescriptorKey(value.type) !==
         functionalRuntimeTypeDescriptorKey(expected)
@@ -548,7 +548,7 @@ function encodeHostValue(
     return encodeWasmValue(
       instance,
       module,
-      concreteFunctionalType(representation),
+      concreteType(representation),
       value,
     );
   }
@@ -677,7 +677,7 @@ function describeHostBinding(binding: unknown): string {
   return kind === undefined ? "object without a kind" : `object with kind ${JSON.stringify(kind)}`;
 }
 
-export function invalidFunctionalWasmInit(
+export function invalidWasmInit(
   path: string,
   message: string,
   cause?: unknown,

@@ -151,7 +151,7 @@ export interface SurfaceModuleOptions {
   readonly wasmExports?: readonly WasmExportDeclaration[];
 }
 
-export function normalizeFunctionalHostCapabilities(
+export function normalizeHostCapabilities(
   declarations: readonly HostCapabilityDeclaration[] | undefined,
 ): readonly HostCapabilityDeclaration[] {
   if (declarations === undefined) return Object.freeze([]);

@@ -30,7 +30,7 @@ export type TypeDeclaration = LazuliTypeDeclaration;
  * Instantiates a closed schema into a concrete type. Schemas reaching a public boundary carry no
  * free parameters, so an unresolved parameter or a retained `forall` is a packing defect.
  */
-export function concreteFunctionalType(schema: TypeSchema): Type {
+export function concreteType(schema: TypeSchema): Type {
   return instantiateSchema(schema, new Map());
 }
 

@@ -5,7 +5,7 @@ export interface SurfaceReachability {
   readonly referencedSymbols: ReadonlySet<string>;
 }
 
-export function analyzeFunctionalSurfaceReachability(
+export function analyzeSurfaceReachability(
   definitions: readonly SurfaceDefinition[],
   roots: readonly string[],
 ): SurfaceReachability {

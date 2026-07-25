@@ -20,7 +20,7 @@ import {
   DefinitionWord,
   type Diagnostic,
   type DiagnosticCode,
-  type EncodedFunctionalModule,
+  type EncodedModule,
   EvaluationProfile,
   ExpressionTag,
   MAXIMUM_EXPRESSION_NODES,
@@ -36,11 +36,11 @@ import {
 } from "./abi.ts";
 import { CompilationAdmissionQueue } from "./compilation_admission.ts";
 import { type CompiledCoreArtifact, encodeCoreArtifact } from "./core_artifact.ts";
-import { normalizeFunctionalHostCapabilities } from "./host_contract.ts";
+import { normalizeHostCapabilities } from "./host_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import type { CompilationOptions, CompileResult, GpuModule } from "./compiler_module.ts";
-import { registerCompleteFunctionalTypeDeclarations } from "./compiler_module.ts";
-import { concreteFunctionalType } from "./schema_contract.ts";
+import { registerCompleteTypeDeclarations } from "./compiler_module.ts";
+import { concreteType } from "./schema_contract.ts";
 
 export type { CompilationOptions, CompileResult, CoreNode, GpuModule } from "./compiler_module.ts";
 
@@ -131,7 +131,7 @@ export class GpuCompiler {
   }
 
   async compileModule(
-    module: EncodedFunctionalModule,
+    module: EncodedModule,
     options: CompilationOptions = {},
   ): Promise<CompileResult> {
     const results = await this.compileBatch([module], options);
@@ -143,7 +143,7 @@ export class GpuCompiler {
   }
 
   async compileBatch(
-    modules: readonly EncodedFunctionalModule[],
+    modules: readonly EncodedModule[],
     options: CompilationOptions = {},
   ): Promise<readonly CompileResult[]> {
     const limits = compilationLimits(options);
@@ -151,8 +151,7 @@ export class GpuCompiler {
     if (modules.length === 0) return [];
 
     const results: (CompileResult | undefined)[] = new Array(modules.length);
-    const accepted: { readonly resultIndex: number; readonly module: EncodedFunctionalModule }[] =
-      [];
+    const accepted: { readonly resultIndex: number; readonly module: EncodedModule }[] = [];
     let estimatedTransientByteLength = 0;
     for (const [resultIndex, module] of modules.entries()) {
       validateEncodedModule(module);
@@ -247,7 +246,7 @@ export class GpuCompiler {
   }
 
   async restoreCompiledCore(
-    encodedModule: EncodedFunctionalModule,
+    encodedModule: EncodedModule,
     artifact: CompiledCoreArtifact,
   ): Promise<GpuModule> {
     validateEncodedModule(encodedModule);
@@ -337,7 +336,7 @@ function createRestoredBuffer(
   return buffer;
 }
 
-function findEntryDefinition(module: EncodedFunctionalModule): number {
+function findEntryDefinition(module: EncodedModule): number {
   for (let definitionIndex = 0; definitionIndex < module.definitionCount; definitionIndex++) {
     const symbol = module.definitionWords[
       definitionIndex * DEFINITION_WORD_LENGTH + DefinitionWord.Symbol
@@ -360,7 +359,7 @@ function completedBatchResults(
 
 function functionalModule(
   module: GpuLazuliModule,
-  encodedModule: EncodedFunctionalModule,
+  encodedModule: EncodedModule,
 ): GpuModule {
   const definitionRoots = Array.from(
     { length: encodedModule.definitionCount },
@@ -419,10 +418,10 @@ function functionalModule(
     return Object.freeze({
       name: exported.name,
       definitionIndex,
-      type: concreteFunctionalType(annotation),
+      type: concreteType(annotation),
     });
   });
-  const hostCapabilities = normalizeFunctionalHostCapabilities(encodedModule.hostCapabilities);
+  const hostCapabilities = normalizeHostCapabilities(encodedModule.hostCapabilities);
   const boundDefinitions = new Set<string>();
   const hostDefinitions = (encodedModule.hostDefinitions ?? []).map((binding, index) => {
     const definitionIndex = definitionNames.indexOf(binding.definition);
@@ -484,7 +483,7 @@ function functionalModule(
     readCoreNodes: async () => await module.readCoreNodes(),
     destroy: () => module.destroy(),
   };
-  registerCompleteFunctionalTypeDeclarations(functional, encodedModule.typeDeclarations);
+  registerCompleteTypeDeclarations(functional, encodedModule.typeDeclarations);
   return functional;
 }
 
@@ -514,7 +513,7 @@ function schemaShape(schema: TypeSchema): unknown {
   }
 }
 
-export function validateFunctionalCompilationOptions(
+export function validateCompilationOptions(
   options: CompilationOptions,
 ): void {
   compilationLimits(options);
@@ -556,7 +555,7 @@ function boundedCompilationOption(
   return resolved;
 }
 
-function validateEncodedModule(module: EncodedFunctionalModule): void {
+function validateEncodedModule(module: EncodedModule): void {
   if (module.abiVersion !== MODULE_ABI_VERSION) {
     throw new Error(
       `functional module ABI version ${module.abiVersion} is unsupported; expected ${MODULE_ABI_VERSION}`,
@@ -567,7 +566,7 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
       `functional module has invalid source byte length ${module.sourceByteLength}`,
     );
   }
-  requireFunctionalEvaluationProfile(module.evaluationProfile, "functional module");
+  requireEvaluationProfile(module.evaluationProfile, "functional module");
   if (
     module.typecheckingProfile !== TypecheckingProfile.HindleyMilnerIndexed &&
     module.typecheckingProfile !== TypecheckingProfile.PredicativeRankNIndexed
@@ -602,14 +601,14 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
     );
   }
   validatePrimitiveCapabilities(module.primitiveCapabilities);
-  normalizeFunctionalHostCapabilities(module.hostCapabilities);
+  normalizeHostCapabilities(module.hostCapabilities);
   if (module.hostDefinitions !== undefined && !Array.isArray(module.hostDefinitions)) {
     throw new Error("functional module host definition bindings must be an array");
   }
   if (module.wasmExports !== undefined && !Array.isArray(module.wasmExports)) {
     throw new Error("functional module WASM exports must be an array");
   }
-  validateFunctionalSources(module.sources, module.sourceByteLength);
+  validateSources(module.sources, module.sourceByteLength);
   validateRecordTable("node", module.nodeWords, module.nodeCount, NODE_WORD_LENGTH);
   validateRecordTable(
     "definition",
@@ -675,8 +674,8 @@ function validateEncodedModule(module: EncodedFunctionalModule): void {
   }
 }
 
-function validateFunctionalSources(
-  sources: EncodedFunctionalModule["sources"],
+function validateSources(
+  sources: EncodedModule["sources"],
   sourceByteLength: number,
 ): void {
   if (sources === undefined) return;
@@ -708,7 +707,7 @@ function validateFunctionalSources(
   }
 }
 
-function requireFunctionalEvaluationProfile(
+function requireEvaluationProfile(
   profile: EvaluationProfile,
   location: string,
 ): void {
@@ -802,7 +801,7 @@ function validateRecordTable(
  * exported because it is part of the published surface, and it keeps the widening explicit at the
  * call sites that pass a module where a surface is expected.
  */
-export function semanticSurfaceFromModule(module: EncodedFunctionalModule): EncodedLazuliSurface {
+export function semanticSurfaceFromModule(module: EncodedModule): EncodedLazuliSurface {
   return module;
 }
 

@@ -1,10 +1,6 @@
-import {
-  completeFunctionalTypeDeclarations,
-  type CoreNode,
-  type GpuModule,
-} from "./compiler_module.ts";
+import { completeTypeDeclarations, type CoreNode, type GpuModule } from "./compiler_module.ts";
 import { compileWasmArtifact, type WasmArtifact } from "./wasm_codegen.ts";
-import { validateFunctionalWasmSimdMode } from "./wasm_backend_plan.ts";
+import { validateWasmSimdMode } from "./wasm_backend_plan.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import { compileWasmGc } from "./wasm_gc_codegen.ts";
 
@@ -50,7 +46,7 @@ export async function compileModuleToWasm(
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("functional WASM compilation options must be an object");
   }
-  validateFunctionalWasmSimdMode(options.simd);
+  validateWasmSimdMode(options.simd);
   const backend = options.backend ?? "linear-memory";
   if (backend !== "linear-memory" && backend !== "wasm-gc") {
     throw new TypeError(
@@ -68,12 +64,12 @@ export async function compileModuleToWasm(
         "functional WasmGC compilation does not accept linear-memory storage or SIMD options",
       );
     }
-    return (await cachedFunctionalWasmGcArtifact(module)).bytes.slice();
+    return (await cachedWasmGcArtifact(module)).bytes.slice();
   }
   const customStorage = options.storageCore !== undefined ||
     options.ownedTypeExports !== undefined;
   if (options.simd === "wasm-simd" && !customStorage) {
-    return (await cachedFunctionalSimdWasmArtifact(module)).bytes.slice();
+    return (await cachedSimdWasmArtifact(module)).bytes.slice();
   }
   if (customStorage) {
     return compileWasmArtifact(
@@ -83,10 +79,10 @@ export async function compileModuleToWasm(
       options,
     ).bytes.slice();
   }
-  return (await cachedFunctionalWasmArtifact(module)).bytes.slice();
+  return (await cachedWasmArtifact(module)).bytes.slice();
 }
 
-async function cachedFunctionalSimdWasmArtifact(
+async function cachedSimdWasmArtifact(
   module: GpuModule,
 ): Promise<WasmArtifact> {
   return await cachedModuleValue(
@@ -99,7 +95,7 @@ async function cachedFunctionalSimdWasmArtifact(
   );
 }
 
-export async function cachedFunctionalWasmGcArtifact(
+export async function cachedWasmGcArtifact(
   module: GpuModule,
 ): Promise<{
   readonly bytes: Uint8Array<ArrayBuffer>;
@@ -116,17 +112,17 @@ export async function cachedFunctionalWasmGcArtifact(
   );
 }
 
-export async function cachedFunctionalWasmArtifact(
+export async function cachedWasmArtifact(
   module: GpuModule,
 ): Promise<WasmArtifact> {
   return await cachedModuleValue(
     wasmArtifactsByModule,
     module,
-    () => module.readCoreNodes().then((nodes) => sharedFunctionalWasmArtifact(module, nodes)),
+    () => module.readCoreNodes().then((nodes) => sharedWasmArtifact(module, nodes)),
   );
 }
 
-async function sharedFunctionalWasmArtifact(
+async function sharedWasmArtifact(
   module: GpuModule,
   nodes: readonly CoreNode[],
 ): Promise<WasmArtifact> {
@@ -156,10 +152,7 @@ export async function cachedExecutableWasm(
   return await cachedModuleValue(
     executableWasmByModule,
     module,
-    () =>
-      cachedFunctionalWasmArtifact(module).then((artifact) =>
-        new WebAssembly.Module(artifact.bytes)
-      ),
+    () => cachedWasmArtifact(module).then((artifact) => new WebAssembly.Module(artifact.bytes)),
   );
 }
 
@@ -229,7 +222,7 @@ async function resolvedCoreFingerprint(
         entryDefinition: module.entryDefinition,
         entryType: module.entryType,
         entryEffects: module.entryEffects,
-        typeDeclarations: completeFunctionalTypeDeclarations(module),
+        typeDeclarations: completeTypeDeclarations(module),
         hostCapabilities: module.hostCapabilities,
         hostDefinitions: module.hostDefinitions,
         wasmExports: module.wasmExports,

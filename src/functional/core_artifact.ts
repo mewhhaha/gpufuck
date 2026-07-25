@@ -2,7 +2,7 @@ import {
   CoreTag,
   DEFINITION_WORD_LENGTH,
   DefinitionWord,
-  type EncodedFunctionalModule,
+  type EncodedModule,
   EvaluationMode,
   NO_INDEX,
   NODE_BYTE_LENGTH,
@@ -16,10 +16,10 @@ export interface CompiledCoreArtifact {
 }
 
 export function encodeCoreArtifact(
-  module: EncodedFunctionalModule,
+  module: EncodedModule,
   artifact: CompiledCoreArtifact,
 ): ArrayBuffer {
-  validateFunctionalCoreArtifact(module, artifact);
+  validateCoreArtifact(module, artifact);
   const bytes = new ArrayBuffer(
     Math.max(NODE_BYTE_LENGTH, artifact.nodes.length * NODE_BYTE_LENGTH),
   );
@@ -38,8 +38,8 @@ export function encodeCoreArtifact(
   return bytes;
 }
 
-export function validateFunctionalCoreArtifact(
-  module: EncodedFunctionalModule,
+export function validateCoreArtifact(
+  module: EncodedModule,
   artifact: CompiledCoreArtifact,
 ): void {
   if (artifact.nodes.length !== module.nodeCount) {

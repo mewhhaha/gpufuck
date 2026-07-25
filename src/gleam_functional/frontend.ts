@@ -1,7 +1,7 @@
-import { type EncodedFunctionalModule, UNIT_CONSTRUCTOR_NAME } from "../functional/abi.ts";
+import { type EncodedModule, UNIT_CONSTRUCTOR_NAME } from "../functional/abi.ts";
 import {
   createModuleArtifact,
-  type LinkedFunctionalModule,
+  type LinkedModule,
   LinkError,
   linkModules,
 } from "../functional/module_linker.ts";
@@ -28,8 +28,8 @@ export interface GleamFunctionalSourceModule {
 
 export interface LoweredGleamFunctionalProgram {
   readonly modules: readonly LoweredGleamFunctionalModule[];
-  readonly linked: LinkedFunctionalModule;
-  readonly module: EncodedFunctionalModule;
+  readonly linked: LinkedModule;
+  readonly module: EncodedModule;
 }
 
 export type GleamFunctionalFrontendResult =

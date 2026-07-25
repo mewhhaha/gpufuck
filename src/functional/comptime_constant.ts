@@ -1,7 +1,7 @@
 import { PAIR_CONSTRUCTOR_NAME, type Span, type TypeSchema, UNIT_CONSTRUCTOR_NAME } from "./abi.ts";
 import type { Constant } from "./comptime_contract.ts";
 import type { DeepValue } from "./evaluator.ts";
-import { matchesFunctionalQualifiedName } from "./module_contract.ts";
+import { matchesQualifiedName } from "./module_contract.ts";
 import type { TypeCoreType, TypeCoreValue } from "./type_core_contract.ts";
 import type { SurfaceExpression, SurfaceTypeDeclaration } from "./surface_builder.ts";
 
@@ -25,7 +25,7 @@ const BYTE_NIL = "$ComptimeByteNil";
 const BYTE_CONS = "$ComptimeByteCons";
 const DESCRIPTOR_NIL = "$ComptimeDescriptorNil";
 const DESCRIPTOR_CONS = "$ComptimeDescriptorCons";
-const MAXIMUM_FUNCTIONAL_CONSTANT_DEPTH = 512;
+const MAXIMUM_CONSTANT_DEPTH = 512;
 
 export const COMPTIME_DESCRIPTOR_TYPES: readonly SurfaceTypeDeclaration[] = Object.freeze([
   {
@@ -219,16 +219,16 @@ export function functionalConstantExpression(
   constant: Constant,
   span?: Span,
 ): SurfaceExpression {
-  validateFunctionalConstant(constant);
+  validateConstant(constant);
   return functionalConstantExpressionUnchecked(constant, span);
 }
 
-export function validateFunctionalConstant(constant: Constant): void {
+export function validateConstant(constant: Constant): void {
   const ancestors = new Set<Constant>();
   const visit = (value: Constant, depth: number): void => {
-    if (depth > MAXIMUM_FUNCTIONAL_CONSTANT_DEPTH) {
+    if (depth > MAXIMUM_CONSTANT_DEPTH) {
       throw new RangeError(
-        `functional constant depth ${depth} exceeds ${MAXIMUM_FUNCTIONAL_CONSTANT_DEPTH}`,
+        `functional constant depth ${depth} exceeds ${MAXIMUM_CONSTANT_DEPTH}`,
       );
     }
     if (ancestors.has(value)) {
@@ -339,10 +339,10 @@ function functionalConstantExpressionUnchecked(
   }
 }
 
-export function measureFunctionalConstant(
+export function measureConstant(
   constant: Constant,
 ): ConstantMeasurements {
-  validateFunctionalConstant(constant);
+  validateConstant(constant);
   let nodes = 0;
   let depth = 0;
   const visit = (value: Constant, currentDepth: number): void => {
@@ -356,15 +356,15 @@ export function measureFunctionalConstant(
     }
   };
   visit(constant, 1);
-  return { nodes, bytes: encodedFunctionalConstantBytes(constant).byteLength, depth };
+  return { nodes, bytes: encodedConstantBytes(constant).byteLength, depth };
 }
 
 export function encodeConstant(constant: Constant): Uint8Array {
-  validateFunctionalConstant(constant);
-  return encodedFunctionalConstantBytes(constant);
+  validateConstant(constant);
+  return encodedConstantBytes(constant);
 }
 
-function encodedFunctionalConstantBytes(constant: Constant): Uint8Array {
+function encodedConstantBytes(constant: Constant): Uint8Array {
   const envelope = {
     abiVersion: CONSTANT_ABI_VERSION,
     value: encodedConstant(constant),
@@ -420,11 +420,11 @@ export function functionalComptimeStringFromConstant(constant: Constant): string
 }
 
 export function functionalComptimeBytesFromConstant(constant: Constant): Uint8Array {
-  validateFunctionalConstant(constant);
+  validateConstant(constant);
   const bytes: number[] = [];
   let current = constant;
   while (
-    current.kind === "constructor" && matchesFunctionalQualifiedName(current.name, BYTE_CONS)
+    current.kind === "constructor" && matchesQualifiedName(current.name, BYTE_CONS)
   ) {
     if (current.fields.length !== 2) {
       throw new TypeError(
@@ -445,7 +445,7 @@ export function functionalComptimeBytesFromConstant(constant: Constant): Uint8Ar
     current = current.fields[1]!;
   }
   if (
-    current.kind !== "constructor" || !matchesFunctionalQualifiedName(current.name, BYTE_NIL) ||
+    current.kind !== "constructor" || !matchesQualifiedName(current.name, BYTE_NIL) ||
     current.fields.length !== 0
   ) {
     throw new TypeError(
@@ -547,7 +547,7 @@ function encodedConstant(constant: Constant): unknown {
 
 function decodedConstant(candidate: unknown, depth: number): Constant {
   if (
-    depth > MAXIMUM_FUNCTIONAL_CONSTANT_DEPTH || !isRecord(candidate) ||
+    depth > MAXIMUM_CONSTANT_DEPTH || !isRecord(candidate) ||
     typeof candidate.kind !== "string"
   ) {
     throw new Error("functional constant contains a malformed or excessively deep value");
