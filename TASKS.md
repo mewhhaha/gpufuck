@@ -83,6 +83,10 @@ Worth keeping in proportion: language-level choices look worth 2–4x on inferen
 parallelising the single-lane kernel (item 7) is worth 10–50x. Design the language for it, but do
 not expect the language to be the win.
 
+[DESIGN.md](DESIGN.md) argues the other end of that: what a language would look like if compiling it
+were a parallel sweep rather than a solve. It is a sketch, unmeasured, and it names the cheapest
+experiment that would test it.
+
 ### 4. WebAssembly emission is 63% of batch cost
 
 At batch 1,024 the split is 22% frontend, 15% GPU, **63% Wasm emission** (442 µs/module). It is also

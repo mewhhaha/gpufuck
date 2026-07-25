@@ -264,6 +264,7 @@ through the WebAssembly backend and has no other code generator.
 | Document                           | What it is                                                      |
 | ---------------------------------- | --------------------------------------------------------------- |
 | [TASKS.md](TASKS.md)               | Ranked future work, each item with the measurement behind it    |
+| [DESIGN.md](DESIGN.md)             | Sketch: what a language designed for this pipeline would be     |
 | [BASELINE.md](BASELINE.md)         | Every performance claim, how it was measured, and what failed   |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Implementation boundaries and why they are where they are       |
 | [DEVELOPMENT.md](DEVELOPMENT.md)   | Contributing: the verification loop, test ownership, publishing |
