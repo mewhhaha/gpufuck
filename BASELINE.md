@@ -276,11 +276,35 @@ from the Core tags. A conservative tag list guessed at it and broke `functional_
 compact path is live for F32x4 programs, which use `surface.apply` and still qualify because the
 callee is a direct call. That attempt is reverted.
 
-Two approaches remain, neither yet done. Bail early: track `usesMemory` incrementally so the attempt
-abandons at the first memory-using instruction instead of after emitting everything. Or find what in
-the Gleam lowering forces linear memory for a program that allocates nothing — the entry is wrapped
-as `Apply(Global, Constructor)`, which is the obvious suspect and would be worth fixing on its own
-merits.
+The causal chain is now fully traced, and both obvious fixes were tried and failed.
+
+A nullary Gleam function lowers to `Lambda(Unit)`, because Functional Core has no zero-argument
+functions. A synthetic `$gleam/entry` module (`src/gleam/frontend.ts`) then supplies the argument as
+`Apply(sourceEntry, Constructor $Unit)`. A nullary constructor is not allocated — it lives in a
+shared value slot and compiles to `i32Const(offset); i64Load(0)` — but that load is a _memory_
+instruction, which is what sets `usesMemory`.
+
+**Fixing the entry wrapper does not pay.** Every nullary constructor compiles to that same load, so
+any program mentioning `None`, `Nil`, or an enum tag uses memory regardless of how the entry is
+built. Removing the synthetic `$Unit` would only help programs that use no nullary constructor at
+all.
+
+**Aborting early does not pay either, and measurably hurts.** `usesMemory` is tracked incrementally,
+so a sentinel thrown from its setter does abandon the attempt — verified firing on 100% of modules,
+with byte-identical output. But the entry is a _direct_ call, so emission inlines the whole program
+and only reaches a memory instruction near the end; almost nothing is saved. Meanwhile converting
+`usesMemory` from a plain field to an accessor put a branch on every memory instruction in the
+backend. Measured over three runs each: baseline 419 ms, early-abort 444 ms. Net loss. Reverted.
+
+What the ceiling actually is, measured over three runs with the gate forced off: **347–357 ms
+against a 419 ms baseline**, or 577–600 µs/module against 631, which is **18.3–19.1x** rather than
+the 20.3x a single noisy run suggested. Roughly a 16% saving on emission is available to whoever
+finds a correct way to claim it — smaller than the 26% first measured, and the difference is
+run-to-run noise on a shared machine, which single-run comparisons in this file previously missed.
+
+A third approach remains untried: stop inlining through the entry's direct call during the
+speculative attempt, so the memory instruction is reached immediately rather than after the whole
+program has been emitted.
 
 That points at two different fixes with different shapes. Emitting bodies on the GPU is the
 data-parallel one: the Core is already in GPU buffers, emission is a local per-node mapping, and
