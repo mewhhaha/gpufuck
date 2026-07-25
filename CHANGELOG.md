@@ -1,10 +1,20 @@
 # Changelog
 
-All notable changes to gpufuck are documented here. Releases up to 0.3.0 were published to JSR under
-[Semantic Versioning](https://semver.org/); the project is no longer published, so entries below are
-dated rather than versioned.
+All notable changes to gpufuck are documented here. The project is published to JSR as
+`@mewhhaha/gpufuck` and follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.4.0 - 2026-07-25
+
+**Every public name changed.** This release is not source-compatible with 0.3.0; see "Every public
+name lost its `Functional`/`FUNCTIONAL_` prefix" below for the rule and the two exceptions. The
+subpath `./core` is gone — `.` (`functional.ts`) is the only entry point, and it is grouped by
+concern rather than by the order things were restored.
+
+Publishing itself was removed mid-cycle on the reasoning that nothing consumed the package, then
+restored. The release workflow, the version, the `publish` include/exclude, and
+`deno task publish:dry-run` are all back; `src/lazuli/`, `src/gleam/`, `src/baba_frontend.ts`, the
+CLIs, `language/`, and `examples/` stay out of the tarball, which `deno publish --dry-run` enforces
+by typechecking the published graph.
 
 This release narrows the project toward one purpose: being a fast compiler on the GPU. Roughly
 45,000 net lines of non-documentation code were removed, taking `src/` from 78,209 to 61,195 lines.
@@ -57,11 +67,10 @@ workaround.
 - Removed partial evaluation.
 - Removed the `src/lazuli/` re-export shim. `src/lazuli/` is now the Lazuli frontend itself, moved
   out of `src/semantic/` so the neutral layer holds only the GPU semantic compiler.
-- Stopped publishing to JSR, and deleted the release workflow, the version field, and the subpath
-  exports with it. Nothing consumed the package: Ducklang, the only external consumer, imports
-  `functional.ts` by relative path. `functional.ts` is now the sole entry point — `core.ts` and the
-  `wasm`, `comptime`, `effects`, and `type-services` subpaths are gone, and the WebAssembly backend,
-  storage planning, and the comptime executor are reachable from the root.
+- Reduced the published surface to a single entry point. `core.ts` and the `wasm`, `comptime`,
+  `effects`, and `type-services` subpaths are gone; the WebAssembly backend, storage planning, and
+  the comptime executor are all reachable from `.`. Every module `./core` exported was already in
+  `functional.ts` and nothing imported the subpath.
 
 ### Changed
 

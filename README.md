@@ -28,27 +28,25 @@ resolved Functional Core
 
 This is a research project mid-retarget. Two things are true and worth stating before the API.
 
-**It is not yet fast.** [BASELINE.md](BASELINE.md) is the measured record, reproducible with
-`deno task bench:throughput`. On a Ryzen 7 7800X3D with an RTX 4080 SUPER and Deno 2.9.2, marginal
-cost per module at batch 1024:
+**Speed depends entirely on the workload, and the two answers point opposite ways.**
+[BASELINE.md](BASELINE.md) is the measured record; both figures are against the Gleam compiler
+(1.17.0) on the same input, on a Ryzen 7 7800X3D with an RTX 4080 SUPER.
 
-| Work                                 | Runs on | Per module |
-| ------------------------------------ | ------- | ---------: |
-| Parsing plus inference               | CPU     |    39.3 µs |
-| Hindley–Milner inference alone       | CPU     |    10.2 µs |
-| Host symbol lookup and lowering plan | CPU     |     3.6 µs |
-| Hindley–Milner inference             | GPU     |    99.7 µs |
+| Workload                                                | Reproduce with                 |          Result |
+| ------------------------------------------------------- | ------------------------------ | --------------: |
+| One large module (Gleam's 252 KB stdlib, compiled once) | `deno task bench:gleam-stdlib` |  **33× slower** |
+| 1,024 independent modules, batched                      | `deno task bench:gleam-batch`  | **~17× faster** |
 
-The GPU is **9.7× slower** than the CPU at the one phase it replaces, and it loses at every batch
-size — the gap converges rather than crossing. Single-compile latency is a separate problem: Deno's
-`mapAsync` stalls about 11.4 ms per await even with nothing submitted, which is the whole of the
-one-module number. And because parsing is 74% of the CPU path and stays on the CPU, a free
-instantaneous GPU would still cap end-to-end speedup at **1.35×**.
+Batching is where a GPU wins: `gleam build` has no cross-package batching, so its 11 ms per-package
+cost is a floor, while gpufuck amortizes to roughly 630 µs per module. Single-module latency is the
+opposite case, and it is bad — GPU inference is 96% of that compile, running one lane of a serial
+state machine, and its transition count scales as n^1.68.
 
-The cause of the slope is structural. The persistent Core-lowering, inference, and evaluator kernels
-are all `@compute @workgroup_size(1)` — one lane per module running a serial state machine, with no
-data parallelism inside a program. The single exception only copies a lowering plan the host already
-computed. Fixing that is the point of the current work, and BASELINE.md records its kill criteria.
+At batch scale the GPU is no longer the bottleneck at all: the split is roughly 22% frontend, 15%
+GPU, 63% WebAssembly emission. `ParallelGleamFrontend` exists because of that measurement.
+
+Correctness against a real corpus: 547 of Gleam's own 1,521 standard-library tests compile to
+WebAssembly and pass upstream's own assertions — 97% of those that need no JavaScript FFI adapter.
 
 **Execution spans two runtimes.** Portable WGSL has no `i64` or `f64` and does not promise host-Wasm
 rounding, so the GPU evaluator cannot execute 64-bit floats, portable whole-number f64, text, bytes,
@@ -66,20 +64,20 @@ fallback: `requestWebGpuDevice()` throws with setup evidence when WebGPU is disa
 discovery fails, or no adapter is available. A software adapter works for correctness but does not
 predict hardware latency.
 
-gpufuck is not published to a registry. It is consumed by importing `functional.ts` from a checkout
-beside your own, which is how Ducklang uses it:
-
-```ts
-import { GpuCompiler, requestWebGpuDevice } from "../gpufuck/functional.ts";
+```sh
+deno add jsr:@mewhhaha/gpufuck
 ```
 
-Your `deno.json` needs the unstable WebGPU API:
+Your `deno.json` also needs the unstable WebGPU API:
 
 ```json
 {
   "unstable": ["webgpu"]
 }
 ```
+
+A checkout beside your own works too, importing `functional.ts` by relative path — that is how
+Ducklang consumes it, tracking the working tree with no version pin.
 
 `functional.ts` is the whole language-neutral API and the only entry point. Its re-exports are
 grouped by concern — the device and the ABI, building a surface module, compiling it, running it on
@@ -100,7 +98,7 @@ import {
   GpuEvaluator,
   requestWebGpuDevice,
   surface,
-} from "../gpufuck/functional.ts";
+} from "@mewhhaha/gpufuck";
 
 const source = "main = 40 + 2";
 const module = buildSurfaceModule(
@@ -156,7 +154,7 @@ The same compiled module is the backend's input. `compileModuleToWasm()` returns
 and decodes the result:
 
 ```ts
-import { compileModuleToWasm, runWasmModule } from "../gpufuck/functional.ts";
+import { compileModuleToWasm, runWasmModule } from "@mewhhaha/gpufuck";
 
 const bytes = await compileModuleToWasm(compilation.module);
 await Deno.writeFile("main.wasm", bytes);

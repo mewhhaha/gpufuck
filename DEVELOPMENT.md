@@ -228,18 +228,25 @@ workspace replacement owns both buffers until a successful copy transfers the ac
 catch a WebGPU error merely to return a generic source diagnostic — enrich and rethrow it, or
 translate it at the boundary with its original `cause` preserved.
 
-## The API boundary
+## Publishing
 
-gpufuck is not published to a registry and carries no version number. `functional.ts` is the API
-boundary, and consumers reach it by relative path against the working tree — so there is no
-deprecation window and no pin to shield anyone from a change. Removing or renaming an export is
-observable at the consumer's next compile, which makes Ducklang's `just typecheck` the release gate
-that a version bump would otherwise be.
+The manifest is `deno.json` and the public entry is `functional.ts`, published to JSR as
+`@mewhhaha/gpufuck`. Run `deno task fmt`, `lint`, `check`, and `test`, then `git diff --check` and
+`deno task publish:dry-run`. Before changing the version, confirm the README examples use only
+exports reachable from `functional.ts`, confirm no module reachable from it is caught by
+`publish.exclude`, document ABI changes, and inspect the dry-run file list for repository-only
+frontends or generated artifacts that should not ship. The release workflow publishes only tags
+whose `v<version>` name matches `deno.json`.
 
-Keep the boundary honest: the README examples must use only exports reachable from `functional.ts`,
-repository-only frontends (`src/lazuli/`, `src/gleam/`, `examples/`) must stay out of it, and an ABI
-change must be documented with its version increment. `mod.ts`, `gleam.ts`, and the two CLIs are
-frontend entry points, not second API boundaries — nothing outside this repository imports them.
+The exclude list is what keeps the frontends out: `src/lazuli/`, `src/gleam/`,
+`src/baba_frontend.ts`, `examples/`, `language/`, and the CLIs are repository samples, not API.
+`deno publish --dry-run` typechecks the published graph, so a stray import from `functional.ts` into
+any of them fails there rather than after release.
+
+Ducklang does not consume the published package. It imports `functional.ts` by relative path against
+the working tree, with no version pin, which makes its `just typecheck` a stricter gate than any
+release check: removing or renaming an export is observable at its next compile with no deprecation
+window.
 
 ## Commit scope
 
