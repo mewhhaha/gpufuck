@@ -1,28 +1,28 @@
 import {
-  type EncodedLazuliSurface,
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_NODE_BYTE_LENGTH,
-  LazuliConstructorWord,
-  LazuliCoreTag,
-  type LazuliCoreTag as KnownLazuliCoreTag,
-  type LazuliDiagnostic,
-  type LazuliEvaluationMode,
-  type LazuliType,
-  type LazuliTypeDeclaration,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  CoreTag,
+  type CoreTag as KnownCoreTag,
+  type EncodedSemanticSurface,
+  type EvaluationMode,
+  NODE_BYTE_LENGTH,
+  type SemanticDiagnostic,
+  type Type,
+  type TypeDeclaration,
 } from "./abi.ts";
 
-export interface LazuliCoreNode {
-  readonly tag: LazuliCoreTag;
+export interface CoreNode {
+  readonly tag: CoreTag;
   readonly payload: number;
   readonly child0: number;
   readonly child1: number;
   readonly child2: number;
   readonly sourceByteOffset: number;
   readonly sourceEndByte: number;
-  readonly evaluationMode: LazuliEvaluationMode;
+  readonly evaluationMode: EvaluationMode;
 }
 
-export interface GpuLazuliModule {
+export interface GpuSemanticModule {
   readonly nodeBuffer: GPUBuffer;
   readonly definitionBuffer: GPUBuffer;
   readonly constructorBuffer: GPUBuffer;
@@ -33,26 +33,26 @@ export interface GpuLazuliModule {
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly entryDefinition: number;
-  readonly mainType: LazuliType;
-  readonly typeDeclarations: readonly LazuliTypeDeclaration[];
-  readCoreNodes(): Promise<readonly LazuliCoreNode[]>;
+  readonly mainType: Type;
+  readonly typeDeclarations: readonly TypeDeclaration[];
+  readCoreNodes(): Promise<readonly CoreNode[]>;
   destroy(): void;
 }
 
-export interface LazuliCompilationOptions {
+export interface SemanticCompilationOptions {
   readonly maximumSteps?: number;
   readonly maximumStepsPerDispatch?: number;
   readonly signal?: AbortSignal;
 }
 
-export type LazuliCompileResult =
-  | { readonly ok: true; readonly module: GpuLazuliModule }
+export type SemanticCompileResult =
+  | { readonly ok: true; readonly module: GpuSemanticModule }
   | {
     readonly ok: false;
-    readonly diagnostics: readonly [LazuliDiagnostic, ...LazuliDiagnostic[]];
+    readonly diagnostics: readonly [SemanticDiagnostic, ...SemanticDiagnostic[]];
   };
 
-export class CompiledGpuLazuliModule implements GpuLazuliModule {
+export class CompiledGpuSemanticModule implements GpuSemanticModule {
   readonly nodeBuffer: GPUBuffer;
   readonly definitionBuffer: GPUBuffer;
   readonly constructorBuffer: GPUBuffer;
@@ -63,12 +63,12 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly entryDefinition: number;
-  readonly entryType: LazuliType;
-  readonly mainType: LazuliType;
-  readonly typeDeclarations: readonly LazuliTypeDeclaration[];
+  readonly entryType: Type;
+  readonly mainType: Type;
+  readonly typeDeclarations: readonly TypeDeclaration[];
 
   readonly #device: GPUDevice;
-  #coreNodes: readonly LazuliCoreNode[] | undefined;
+  #coreNodes: readonly CoreNode[] | undefined;
   #destroyed = false;
 
   constructor(
@@ -76,10 +76,10 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
     nodeBuffer: GPUBuffer,
     definitionBuffer: GPUBuffer,
     constructorBuffer: GPUBuffer,
-    surface: EncodedLazuliSurface,
+    surface: EncodedSemanticSurface,
     entryDefinition: number,
-    mainType: LazuliType,
-    typeDeclarations: readonly LazuliTypeDeclaration[],
+    mainType: Type,
+    typeDeclarations: readonly TypeDeclaration[],
     coreNodeBytes?: ArrayBuffer,
   ) {
     this.#device = device;
@@ -101,9 +101,9 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
     }
   }
 
-  async readCoreNodes(): Promise<readonly LazuliCoreNode[]> {
+  async readCoreNodes(): Promise<readonly CoreNode[]> {
     if (this.#destroyed) {
-      throw new Error("cannot read a destroyed GPU Lazuli module");
+      throw new Error("cannot read a destroyed GPU module");
     }
     if (this.#coreNodes !== undefined) {
       return this.#coreNodes;
@@ -113,7 +113,7 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
       return this.#coreNodes;
     }
 
-    const byteLength = this.nodeCount * LAZULI_NODE_BYTE_LENGTH;
+    const byteLength = this.nodeCount * NODE_BYTE_LENGTH;
     let readbackBuffer: GPUBuffer | undefined;
     let mapped = false;
 
@@ -122,12 +122,12 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
       let validation: Promise<GPUError | null>;
       try {
         readbackBuffer = this.#device.createBuffer({
-          label: "Lazuli core node readback",
+          label: "core node readback",
           size: byteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
         const commandEncoder = this.#device.createCommandEncoder({
-          label: "Lazuli core node readback commands",
+          label: "core node readback commands",
         });
         commandEncoder.copyBufferToBuffer(this.nodeBuffer, 0, readbackBuffer, 0, byteLength);
         this.#device.queue.submit([commandEncoder.finish()]);
@@ -136,7 +136,7 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
         const validationError = await this.#device.popErrorScope();
         if (validationError !== null) {
           throw new Error(
-            `WebGPU rejected Lazuli core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
+            `WebGPU rejected core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
             { cause },
           );
         }
@@ -146,7 +146,7 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
       const validationError = await validation;
       if (validationError !== null) {
         throw new Error(
-          `WebGPU rejected Lazuli core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
+          `WebGPU rejected core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
         );
       }
       await readbackBuffer.mapAsync(GPUMapMode.READ);
@@ -171,16 +171,16 @@ export class CompiledGpuLazuliModule implements GpuLazuliModule {
   }
 }
 
-function decodeCoreNodes(words: DataView, nodeCount: number): readonly LazuliCoreNode[] {
-  const expectedByteLength = nodeCount * LAZULI_NODE_BYTE_LENGTH;
+function decodeCoreNodes(words: DataView, nodeCount: number): readonly CoreNode[] {
+  const expectedByteLength = nodeCount * NODE_BYTE_LENGTH;
   if (words.byteLength !== expectedByteLength) {
     throw new Error(
-      `GPU Lazuli core readback has ${words.byteLength} bytes for ${nodeCount} nodes; expected ${expectedByteLength}`,
+      `GPU core readback has ${words.byteLength} bytes for ${nodeCount} nodes; expected ${expectedByteLength}`,
     );
   }
-  const nodes = new Array<LazuliCoreNode>(nodeCount);
+  const nodes = new Array<CoreNode>(nodeCount);
   for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex++) {
-    const byteOffset = nodeIndex * LAZULI_NODE_BYTE_LENGTH;
+    const byteOffset = nodeIndex * NODE_BYTE_LENGTH;
     const tag = decodeCoreTag(words.getUint32(byteOffset, true), nodeIndex);
     nodes[nodeIndex] = Object.freeze({
       tag,
@@ -196,10 +196,10 @@ function decodeCoreNodes(words: DataView, nodeCount: number): readonly LazuliCor
   return Object.freeze(nodes);
 }
 
-function decodeEvaluationMode(value: number, nodeIndex: number): LazuliEvaluationMode {
+function decodeEvaluationMode(value: number, nodeIndex: number): EvaluationMode {
   if (value === 0 || value === 1) return value;
   throw new Error(
-    `GPU Lazuli module contains unknown evaluation mode ${value} at node ${nodeIndex}`,
+    `GPU module contains unknown evaluation mode ${value} at node ${nodeIndex}`,
   );
 }
 
@@ -209,48 +209,48 @@ function deepFreeze<Value>(value: Value): Value {
   return Object.freeze(value);
 }
 
-function decodeCoreTag(tag: number, nodeIndex: number): KnownLazuliCoreTag {
+function decodeCoreTag(tag: number, nodeIndex: number): KnownCoreTag {
   switch (tag) {
-    case LazuliCoreTag.Integer:
-    case LazuliCoreTag.SignedInteger64:
-    case LazuliCoreTag.Float32:
-    case LazuliCoreTag.Float64:
-    case LazuliCoreTag.WholeNumberF64:
-    case LazuliCoreTag.BufferAppend:
-    case LazuliCoreTag.StoreNew:
-    case LazuliCoreTag.StoreLength:
-    case LazuliCoreTag.StoreRead:
-    case LazuliCoreTag.StoreWrite:
-    case LazuliCoreTag.StoreGrow:
-    case LazuliCoreTag.Text:
-    case LazuliCoreTag.Bytes:
-    case LazuliCoreTag.RuntimeFault:
-    case LazuliCoreTag.NumericConvert:
-    case LazuliCoreTag.Boolean:
-    case LazuliCoreTag.Let:
-    case LazuliCoreTag.If:
-    case LazuliCoreTag.Lambda:
-    case LazuliCoreTag.Apply:
-    case LazuliCoreTag.Unary:
-    case LazuliCoreTag.Binary:
-    case LazuliCoreTag.Case:
-    case LazuliCoreTag.CaseArm:
-    case LazuliCoreTag.PatternBind:
-    case LazuliCoreTag.LetRec:
-    case LazuliCoreTag.Local:
-    case LazuliCoreTag.Global:
-    case LazuliCoreTag.Constructor:
+    case CoreTag.Integer:
+    case CoreTag.SignedInteger64:
+    case CoreTag.Float32:
+    case CoreTag.Float64:
+    case CoreTag.WholeNumberF64:
+    case CoreTag.BufferAppend:
+    case CoreTag.StoreNew:
+    case CoreTag.StoreLength:
+    case CoreTag.StoreRead:
+    case CoreTag.StoreWrite:
+    case CoreTag.StoreGrow:
+    case CoreTag.Text:
+    case CoreTag.Bytes:
+    case CoreTag.RuntimeFault:
+    case CoreTag.NumericConvert:
+    case CoreTag.Boolean:
+    case CoreTag.Let:
+    case CoreTag.If:
+    case CoreTag.Lambda:
+    case CoreTag.Apply:
+    case CoreTag.Unary:
+    case CoreTag.Binary:
+    case CoreTag.Case:
+    case CoreTag.CaseArm:
+    case CoreTag.PatternBind:
+    case CoreTag.LetRec:
+    case CoreTag.Local:
+    case CoreTag.Global:
+    case CoreTag.Constructor:
       return tag;
     default:
-      throw new Error(`GPU Lazuli module contains unknown core tag ${tag} at node ${nodeIndex}`);
+      throw new Error(`GPU module contains unknown core tag ${tag} at node ${nodeIndex}`);
   }
 }
 
-function constructorNames(surface: EncodedLazuliSurface): string[] {
+function constructorNames(surface: EncodedSemanticSurface): string[] {
   const names: string[] = [];
   for (let constructorIndex = 0; constructorIndex < surface.constructorCount; constructorIndex++) {
     const symbol = surface.constructorWords[
-      constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH + LazuliConstructorWord.Symbol
+      constructorIndex * CONSTRUCTOR_WORD_LENGTH + ConstructorWord.Symbol
     ];
     if (symbol === undefined) {
       throw new Error(`frontend omitted constructor symbol ${constructorIndex}`);
@@ -260,11 +260,11 @@ function constructorNames(surface: EncodedLazuliSurface): string[] {
   return names;
 }
 
-function constructorArities(surface: EncodedLazuliSurface): number[] {
+function constructorArities(surface: EncodedSemanticSurface): number[] {
   const arities: number[] = [];
   for (let constructorIndex = 0; constructorIndex < surface.constructorCount; constructorIndex++) {
     const arity = surface.constructorWords[
-      constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH + LazuliConstructorWord.Arity
+      constructorIndex * CONSTRUCTOR_WORD_LENGTH + ConstructorWord.Arity
     ];
     if (arity === undefined) {
       throw new Error(`frontend omitted constructor arity ${constructorIndex}`);

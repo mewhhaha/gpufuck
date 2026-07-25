@@ -1,19 +1,19 @@
 import {
-  type EncodedLazuliSurface,
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_DEFINITION_WORD_LENGTH,
-  LAZULI_NO_INDEX,
-  LAZULI_NODE_WORD_LENGTH,
-  LAZULI_TYPE_WORD_LENGTH,
-  LazuliConstructorWord,
-  type LazuliDiagnostic,
-  LazuliSurfaceTag,
-  LazuliSurfaceWord,
-  LazuliTypeWord,
+  AlgebraicTypeWord,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  DEFINITION_WORD_LENGTH,
+  type EncodedSemanticSurface,
+  ExpressionTag,
+  NO_INDEX,
+  NODE_WORD_LENGTH,
+  NodeWord,
+  type SemanticDiagnostic,
+  TYPE_WORD_LENGTH,
 } from "./abi.ts";
-import type { GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
+import type { GpuSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 
-export const LazuliSemanticCompilerErrorCode = {
+export const SemanticCompilerErrorCode = {
   None: 0,
   UnknownName: 1,
   DuplicateDefinition: 2,
@@ -32,29 +32,29 @@ export const LazuliSemanticCompilerErrorCode = {
 } as const;
 
 export function diagnosticFromSemanticState(
-  state: GpuLazuliSemanticStateSnapshot,
-  surface: EncodedLazuliSurface,
+  state: GpuSemanticStateSnapshot,
+  surface: EncodedSemanticSurface,
   sourceByteLength: number,
-): LazuliDiagnostic | undefined {
+): SemanticDiagnostic | undefined {
   const symbolName = symbolNameFor(surface, state.errorDetail);
   switch (state.errorCode) {
-    case LazuliSemanticCompilerErrorCode.UnknownName: {
+    case SemanticCompilerErrorCode.UnknownName: {
       const span = nodeSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       return {
         stage: "compile",
-        code: "L2001",
+        code: "F2001",
         message: `unknown name ${symbolName}`,
         span,
       };
     }
-    case LazuliSemanticCompilerErrorCode.DuplicateDefinition: {
+    case SemanticCompilerErrorCode.DuplicateDefinition: {
       const span = definitionSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       const previous = previousDefinitionSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
-        code: "L2002",
+        code: "F2002",
         message: `duplicate top-level definition ${symbolName}`,
         span,
         ...(previous === undefined
@@ -62,23 +62,23 @@ export function diagnosticFromSemanticState(
           : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
-    case LazuliSemanticCompilerErrorCode.MissingMain:
-      if (state.errorSource !== LAZULI_NO_INDEX || state.errorDetail !== surface.mainSymbol) {
+    case SemanticCompilerErrorCode.MissingMain:
+      if (state.errorSource !== NO_INDEX || state.errorDetail !== surface.entrySymbol) {
         return undefined;
       }
       return {
         stage: "compile",
-        code: "L2003",
+        code: "F2003",
         message: `missing required entry definition ${symbolName}`,
         span: { startByte: sourceByteLength, endByte: sourceByteLength },
       };
-    case LazuliSemanticCompilerErrorCode.DuplicateType: {
+    case SemanticCompilerErrorCode.DuplicateType: {
       const span = typeSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       const previous = previousTypeSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
-        code: "L2004",
+        code: "F2004",
         message: `duplicate algebraic type ${symbolName}`,
         span,
         ...(previous === undefined
@@ -86,13 +86,13 @@ export function diagnosticFromSemanticState(
           : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
-    case LazuliSemanticCompilerErrorCode.DuplicateConstructor: {
+    case SemanticCompilerErrorCode.DuplicateConstructor: {
       const span = constructorSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       const previous = previousConstructorSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
-        code: "L2005",
+        code: "F2005",
         message: `duplicate constructor ${symbolName}`,
         span,
         ...(previous === undefined
@@ -100,13 +100,13 @@ export function diagnosticFromSemanticState(
           : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
-    case LazuliSemanticCompilerErrorCode.DefinitionConstructorCollision: {
+    case SemanticCompilerErrorCode.DefinitionConstructorCollision: {
       const span = topLevelSymbolSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       const previous = previousTopLevelSymbolSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
-        code: "L2006",
+        code: "F2006",
         message: `top-level function and constructor share the name ${symbolName}`,
         span,
         ...(previous === undefined
@@ -114,44 +114,44 @@ export function diagnosticFromSemanticState(
           : { related: [{ message: "conflicting declaration", span: previous }] }),
       };
     }
-    case LazuliSemanticCompilerErrorCode.UnknownCaseConstructor: {
+    case SemanticCompilerErrorCode.UnknownCaseConstructor: {
       const span = surfaceNodeSpanAt(
         surface,
         state.errorSource,
         state.errorDetail,
-        LazuliSurfaceTag.CaseArm,
+        ExpressionTag.CaseArm,
       );
       if (span === undefined) return undefined;
       return {
         stage: "compile",
-        code: "L2007",
+        code: "F2007",
         message: `unknown case constructor ${symbolName}`,
         span,
       };
     }
-    case LazuliSemanticCompilerErrorCode.PatternArityMismatch: {
+    case SemanticCompilerErrorCode.PatternArityMismatch: {
       const arm = caseArmDetails(surface, state.errorSource, state.errorDetail);
       if (arm === undefined) return undefined;
       return {
         stage: "compile",
-        code: "L2008",
+        code: "F2008",
         message: `constructor ${
           symbolNameFor(surface, arm.constructorSymbol)
         } expects ${arm.arity} pattern binders, received ${arm.binderCount}`,
         span: arm.span,
       };
     }
-    case LazuliSemanticCompilerErrorCode.DuplicateCaseArm: {
+    case SemanticCompilerErrorCode.DuplicateCaseArm: {
       const span = surfaceNodeSpanAt(
         surface,
         state.errorSource,
         state.errorDetail,
-        LazuliSurfaceTag.CaseArm,
+        ExpressionTag.CaseArm,
       );
       if (span === undefined) return undefined;
       return {
         stage: "compile",
-        code: "L2009",
+        code: "F2009",
         message: `duplicate case arm for constructor ${symbolName}`,
         span,
       };
@@ -164,10 +164,10 @@ export function diagnosticFromSemanticState(
 export function sourceTooLargeDiagnostic(
   sourceByteLength: number,
   maximumSourceByteLength: number,
-): LazuliDiagnostic {
+): SemanticDiagnostic {
   return {
     stage: "parse",
-    code: "L1003",
+    code: "F1003",
     message:
       `source is ${sourceByteLength} UTF-8 bytes; this compiler accepts at most ${maximumSourceByteLength}`,
     span: { startByte: maximumSourceByteLength, endByte: sourceByteLength },
@@ -177,10 +177,10 @@ export function sourceTooLargeDiagnostic(
 export function nodeLimitDiagnostic(
   nodeCount: number,
   maximumNodeCount: number,
-): LazuliDiagnostic {
+): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program has ${nodeCount} surface nodes; this device accepts at most ${maximumNodeCount}`,
     span: { startByte: 0, endByte: 0 },
@@ -190,10 +190,10 @@ export function nodeLimitDiagnostic(
 export function definitionLimitDiagnostic(
   definitionCount: number,
   maximumDefinitionCount: number,
-): LazuliDiagnostic {
+): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program has ${definitionCount} definitions; this device accepts at most ${maximumDefinitionCount}`,
     span: { startByte: 0, endByte: 0 },
@@ -203,10 +203,10 @@ export function definitionLimitDiagnostic(
 export function typeLimitDiagnostic(
   typeCount: number,
   maximumTypeCount: number,
-): LazuliDiagnostic {
+): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program has ${typeCount} algebraic types; this device accepts at most ${maximumTypeCount}`,
     span: { startByte: 0, endByte: 0 },
@@ -216,10 +216,10 @@ export function typeLimitDiagnostic(
 export function constructorLimitDiagnostic(
   constructorCount: number,
   maximumConstructorCount: number,
-): LazuliDiagnostic {
+): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program has ${constructorCount} constructors; this device accepts at most ${maximumConstructorCount}`,
     span: { startByte: 0, endByte: 0 },
@@ -230,32 +230,32 @@ export function semanticWorkLimitDiagnostic(
   completedTransitions: number,
   sourceByteLength: number,
   maximumSteps: number,
-): LazuliDiagnostic {
+): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program exhausted the compiler limit after ${completedTransitions} serial semantic transitions; the limit is ${maximumSteps}`,
     span: { startByte: 0, endByte: sourceByteLength },
   };
 }
 
-export function formatSemanticState(state: GpuLazuliSemanticStateSnapshot): string {
+export function formatSemanticState(state: GpuSemanticStateSnapshot): string {
   return `nodeCount=${state.nodeCount}, definitionCount=${state.definitionCount}, typeCount=${state.typeCount}, constructorCount=${state.constructorCount}, entrySymbol=${state.entrySymbol}, status=${state.status}, errorCode=${state.errorCode}, errorSource=${state.errorSource}, errorDetail=${state.errorDetail}, entryDefinition=${state.entryDefinition}`;
 }
 
-export function formatInvalidSurfaceState(state: GpuLazuliSemanticStateSnapshot): string {
+export function formatInvalidSurfaceState(state: GpuSemanticStateSnapshot): string {
   const reason = (() => {
     switch (state.errorCode) {
-      case LazuliSemanticCompilerErrorCode.InvalidCounts:
+      case SemanticCompilerErrorCode.InvalidCounts:
         return "record counts exceed their bound storage buffers";
-      case LazuliSemanticCompilerErrorCode.InvalidNode:
+      case SemanticCompilerErrorCode.InvalidNode:
         return `node ${state.errorDetail} violates a tag, child, parent, or preorder invariant`;
-      case LazuliSemanticCompilerErrorCode.InvalidDefinition:
+      case SemanticCompilerErrorCode.InvalidDefinition:
         return `definition ${state.errorDetail} violates a root or source-order invariant`;
-      case LazuliSemanticCompilerErrorCode.InvalidType:
+      case SemanticCompilerErrorCode.InvalidType:
         return `type ${state.errorDetail} violates a constructor-range or source-order invariant`;
-      case LazuliSemanticCompilerErrorCode.InvalidConstructor:
+      case SemanticCompilerErrorCode.InvalidConstructor:
         return `constructor ${state.errorDetail} violates a type, arity, or source-order invariant`;
       default:
         return `unknown invariant error ${state.errorCode}`;
@@ -265,18 +265,18 @@ export function formatInvalidSurfaceState(state: GpuLazuliSemanticStateSnapshot)
 }
 
 function nodeSpanAt(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   startByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   for (let nodeIndex = 0; nodeIndex < surface.nodeCount; nodeIndex++) {
-    const wordOffset = nodeIndex * LAZULI_NODE_WORD_LENGTH;
+    const wordOffset = nodeIndex * NODE_WORD_LENGTH;
     if (
-      surface.nodeWords[wordOffset + LazuliSurfaceWord.Tag] === LazuliSurfaceTag.Name &&
-      surface.nodeWords[wordOffset + LazuliSurfaceWord.StartByte] === startByte &&
-      surface.nodeWords[wordOffset + LazuliSurfaceWord.Payload] === symbol
+      surface.nodeWords[wordOffset + NodeWord.Tag] === ExpressionTag.Name &&
+      surface.nodeWords[wordOffset + NodeWord.StartByte] === startByte &&
+      surface.nodeWords[wordOffset + NodeWord.Payload] === symbol
     ) {
-      const endByte = surface.nodeWords[wordOffset + LazuliSurfaceWord.EndByte];
+      const endByte = surface.nodeWords[wordOffset + NodeWord.EndByte];
       if (endByte === undefined) return undefined;
       return { startByte, endByte };
     }
@@ -285,12 +285,12 @@ function nodeSpanAt(
 }
 
 function definitionSpanAt(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   startByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   for (let definitionIndex = 0; definitionIndex < surface.definitionCount; definitionIndex++) {
-    const wordOffset = definitionIndex * LAZULI_DEFINITION_WORD_LENGTH;
+    const wordOffset = definitionIndex * DEFINITION_WORD_LENGTH;
     if (
       surface.definitionWords[wordOffset] === symbol &&
       surface.definitionWords[wordOffset + 2] === startByte
@@ -304,14 +304,14 @@ function definitionSpanAt(
 }
 
 function previousDefinitionSpan(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   beforeStartByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   return previousRecordSpan(
     surface.definitionWords,
     surface.definitionCount,
-    LAZULI_DEFINITION_WORD_LENGTH,
+    DEFINITION_WORD_LENGTH,
     symbol,
     beforeStartByte,
     0,
@@ -321,17 +321,17 @@ function previousDefinitionSpan(
 }
 
 function typeSpanAt(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   startByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   for (let typeIndex = 0; typeIndex < surface.typeCount; typeIndex++) {
-    const wordOffset = typeIndex * LAZULI_TYPE_WORD_LENGTH;
+    const wordOffset = typeIndex * TYPE_WORD_LENGTH;
     if (
-      surface.typeWords[wordOffset + LazuliTypeWord.Symbol] === symbol &&
-      surface.typeWords[wordOffset + LazuliTypeWord.StartByte] === startByte
+      surface.typeWords[wordOffset + AlgebraicTypeWord.Symbol] === symbol &&
+      surface.typeWords[wordOffset + AlgebraicTypeWord.StartByte] === startByte
     ) {
-      const endByte = surface.typeWords[wordOffset + LazuliTypeWord.EndByte];
+      const endByte = surface.typeWords[wordOffset + AlgebraicTypeWord.EndByte];
       if (endByte === undefined) return undefined;
       return { startByte, endByte };
     }
@@ -340,34 +340,34 @@ function typeSpanAt(
 }
 
 function previousTypeSpan(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   beforeStartByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   return previousRecordSpan(
     surface.typeWords,
     surface.typeCount,
-    LAZULI_TYPE_WORD_LENGTH,
+    TYPE_WORD_LENGTH,
     symbol,
     beforeStartByte,
-    LazuliTypeWord.Symbol,
-    LazuliTypeWord.StartByte,
-    LazuliTypeWord.EndByte,
+    AlgebraicTypeWord.Symbol,
+    AlgebraicTypeWord.StartByte,
+    AlgebraicTypeWord.EndByte,
   );
 }
 
 function constructorSpanAt(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   startByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   for (let constructorIndex = 0; constructorIndex < surface.constructorCount; constructorIndex++) {
-    const wordOffset = constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH;
+    const wordOffset = constructorIndex * CONSTRUCTOR_WORD_LENGTH;
     if (
-      surface.constructorWords[wordOffset + LazuliConstructorWord.Symbol] === symbol &&
-      surface.constructorWords[wordOffset + LazuliConstructorWord.StartByte] === startByte
+      surface.constructorWords[wordOffset + ConstructorWord.Symbol] === symbol &&
+      surface.constructorWords[wordOffset + ConstructorWord.StartByte] === startByte
     ) {
-      const endByte = surface.constructorWords[wordOffset + LazuliConstructorWord.EndByte];
+      const endByte = surface.constructorWords[wordOffset + ConstructorWord.EndByte];
       if (endByte === undefined) return undefined;
       return { startByte, endByte };
     }
@@ -376,36 +376,36 @@ function constructorSpanAt(
 }
 
 function previousConstructorSpan(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   beforeStartByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   return previousRecordSpan(
     surface.constructorWords,
     surface.constructorCount,
-    LAZULI_CONSTRUCTOR_WORD_LENGTH,
+    CONSTRUCTOR_WORD_LENGTH,
     symbol,
     beforeStartByte,
-    LazuliConstructorWord.Symbol,
-    LazuliConstructorWord.StartByte,
-    LazuliConstructorWord.EndByte,
+    ConstructorWord.Symbol,
+    ConstructorWord.StartByte,
+    ConstructorWord.EndByte,
   );
 }
 
 function topLevelSymbolSpanAt(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   startByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   return definitionSpanAt(surface, startByte, symbol) ??
     constructorSpanAt(surface, startByte, symbol);
 }
 
 function previousTopLevelSymbolSpan(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   beforeStartByte: number,
   symbol: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   const definition = previousDefinitionSpan(surface, beforeStartByte, symbol);
   const constructor = previousConstructorSpan(surface, beforeStartByte, symbol);
   if (definition === undefined) return constructor;
@@ -422,8 +422,8 @@ function previousRecordSpan(
   symbolWord: number,
   startWord: number,
   endWord: number,
-): LazuliDiagnostic["span"] | undefined {
-  let previous: LazuliDiagnostic["span"] | undefined;
+): SemanticDiagnostic["span"] | undefined {
+  let previous: SemanticDiagnostic["span"] | undefined;
   for (let index = 0; index < count; index++) {
     const wordOffset = index * wordLength;
     const startByte = words[wordOffset + startWord];
@@ -440,19 +440,19 @@ function previousRecordSpan(
 }
 
 function surfaceNodeSpanAt(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   startByte: number,
   symbol: number,
   tag: number,
-): LazuliDiagnostic["span"] | undefined {
+): SemanticDiagnostic["span"] | undefined {
   for (let nodeIndex = 0; nodeIndex < surface.nodeCount; nodeIndex++) {
-    const wordOffset = nodeIndex * LAZULI_NODE_WORD_LENGTH;
+    const wordOffset = nodeIndex * NODE_WORD_LENGTH;
     if (
-      surface.nodeWords[wordOffset + LazuliSurfaceWord.Tag] === tag &&
-      surface.nodeWords[wordOffset + LazuliSurfaceWord.StartByte] === startByte &&
-      surface.nodeWords[wordOffset + LazuliSurfaceWord.Payload] === symbol
+      surface.nodeWords[wordOffset + NodeWord.Tag] === tag &&
+      surface.nodeWords[wordOffset + NodeWord.StartByte] === startByte &&
+      surface.nodeWords[wordOffset + NodeWord.Payload] === symbol
     ) {
-      const endByte = surface.nodeWords[wordOffset + LazuliSurfaceWord.EndByte];
+      const endByte = surface.nodeWords[wordOffset + NodeWord.EndByte];
       if (endByte === undefined) return undefined;
       return { startByte, endByte };
     }
@@ -461,26 +461,26 @@ function surfaceNodeSpanAt(
 }
 
 function caseArmDetails(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   startByte: number,
   armIndex: number,
 ): {
   readonly constructorSymbol: number;
   readonly arity: number;
   readonly binderCount: number;
-  readonly span: LazuliDiagnostic["span"];
+  readonly span: SemanticDiagnostic["span"];
 } | undefined {
   if (armIndex >= surface.nodeCount) return undefined;
-  const armOffset = armIndex * LAZULI_NODE_WORD_LENGTH;
+  const armOffset = armIndex * NODE_WORD_LENGTH;
   if (
-    surface.nodeWords[armOffset + LazuliSurfaceWord.Tag] !== LazuliSurfaceTag.CaseArm ||
-    surface.nodeWords[armOffset + LazuliSurfaceWord.StartByte] !== startByte
+    surface.nodeWords[armOffset + NodeWord.Tag] !== ExpressionTag.CaseArm ||
+    surface.nodeWords[armOffset + NodeWord.StartByte] !== startByte
   ) {
     return undefined;
   }
-  const constructorSymbol = surface.nodeWords[armOffset + LazuliSurfaceWord.Payload];
-  const endByte = surface.nodeWords[armOffset + LazuliSurfaceWord.EndByte];
-  const firstPatternOrBody = surface.nodeWords[armOffset + LazuliSurfaceWord.Child0];
+  const constructorSymbol = surface.nodeWords[armOffset + NodeWord.Payload];
+  const endByte = surface.nodeWords[armOffset + NodeWord.EndByte];
+  const firstPatternOrBody = surface.nodeWords[armOffset + NodeWord.Child0];
   if (
     constructorSymbol === undefined || endByte === undefined || firstPatternOrBody === undefined
   ) {
@@ -490,12 +490,12 @@ function caseArmDetails(
   let binderCount = 0;
   let nodeIndex: number = firstPatternOrBody;
   while (nodeIndex < surface.nodeCount) {
-    const nodeOffset: number = nodeIndex * LAZULI_NODE_WORD_LENGTH;
-    if (surface.nodeWords[nodeOffset + LazuliSurfaceWord.Tag] !== LazuliSurfaceTag.PatternBind) {
+    const nodeOffset: number = nodeIndex * NODE_WORD_LENGTH;
+    if (surface.nodeWords[nodeOffset + NodeWord.Tag] !== ExpressionTag.PatternBind) {
       break;
     }
     binderCount++;
-    const child: number | undefined = surface.nodeWords[nodeOffset + LazuliSurfaceWord.Child0];
+    const child: number | undefined = surface.nodeWords[nodeOffset + NodeWord.Child0];
     if (child === undefined) return undefined;
     nodeIndex = child;
   }
@@ -503,7 +503,7 @@ function caseArmDetails(
   const constructorIndex = findConstructor(surface, constructorSymbol);
   if (constructorIndex === undefined) return undefined;
   const arity = surface.constructorWords[
-    constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH + LazuliConstructorWord.Arity
+    constructorIndex * CONSTRUCTOR_WORD_LENGTH + ConstructorWord.Arity
   ];
   if (arity === undefined) return undefined;
   return {
@@ -514,17 +514,17 @@ function caseArmDetails(
   };
 }
 
-function findConstructor(surface: EncodedLazuliSurface, symbol: number): number | undefined {
+function findConstructor(surface: EncodedSemanticSurface, symbol: number): number | undefined {
   for (let constructorIndex = 0; constructorIndex < surface.constructorCount; constructorIndex++) {
-    const wordOffset = constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH;
-    if (surface.constructorWords[wordOffset + LazuliConstructorWord.Symbol] === symbol) {
+    const wordOffset = constructorIndex * CONSTRUCTOR_WORD_LENGTH;
+    if (surface.constructorWords[wordOffset + ConstructorWord.Symbol] === symbol) {
       return constructorIndex;
     }
   }
   return undefined;
 }
 
-function symbolNameFor(surface: EncodedLazuliSurface, symbol: number): string {
+function symbolNameFor(surface: EncodedSemanticSurface, symbol: number): string {
   const symbolName = surface.symbolNames[symbol];
   return symbolName === undefined ? `<symbol ${symbol}>` : JSON.stringify(symbolName);
 }

@@ -1,22 +1,22 @@
-export const LAZULI_ABI_VERSION = 5;
-export const LAZULI_NO_INDEX = 0xffffffff;
-export const LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
-export const LAZULI_MAXIMUM_SURFACE_NODES = 65_536;
-export const LAZULI_MAXIMUM_PARSE_DEPTH = 512;
-export const LAZULI_MAXIMUM_CONSTRUCTOR_ARITY = 256;
+export const MODULE_ABI_VERSION = 5;
+export const NO_INDEX = 0xffffffff;
+export const MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
+export const MAXIMUM_EXPRESSION_NODES = 65_536;
+export const MAXIMUM_PARSE_DEPTH = 512;
+export const MAXIMUM_CONSTRUCTOR_ARITY = 256;
 
-export const LAZULI_NODE_WORD_LENGTH = 8;
-export const LAZULI_NODE_BYTE_LENGTH = LAZULI_NODE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
-export const LAZULI_DEFINITION_WORD_LENGTH = 4;
-export const LAZULI_DEFINITION_BYTE_LENGTH = LAZULI_DEFINITION_WORD_LENGTH *
+export const NODE_WORD_LENGTH = 8;
+export const NODE_BYTE_LENGTH = NODE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
+export const DEFINITION_WORD_LENGTH = 4;
+export const DEFINITION_BYTE_LENGTH = DEFINITION_WORD_LENGTH *
   Uint32Array.BYTES_PER_ELEMENT;
-export const LAZULI_TYPE_WORD_LENGTH = 5;
-export const LAZULI_TYPE_BYTE_LENGTH = LAZULI_TYPE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
-export const LAZULI_CONSTRUCTOR_WORD_LENGTH = 5;
-export const LAZULI_CONSTRUCTOR_BYTE_LENGTH = LAZULI_CONSTRUCTOR_WORD_LENGTH *
+export const TYPE_WORD_LENGTH = 5;
+export const TYPE_BYTE_LENGTH = TYPE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
+export const CONSTRUCTOR_WORD_LENGTH = 5;
+export const CONSTRUCTOR_BYTE_LENGTH = CONSTRUCTOR_WORD_LENGTH *
   Uint32Array.BYTES_PER_ELEMENT;
 
-export const LazuliSurfaceWord = {
+export const NodeWord = {
   Tag: 0,
   StartByte: 1,
   EndByte: 2,
@@ -27,14 +27,14 @@ export const LazuliSurfaceWord = {
   Parent: 7,
 } as const;
 
-export const LazuliDefinitionWord = {
+export const DefinitionWord = {
   Symbol: 0,
   RootNode: 1,
   StartByte: 2,
   EndByte: 3,
 } as const;
 
-export const LazuliTypeWord = {
+export const AlgebraicTypeWord = {
   Symbol: 0,
   FirstConstructor: 1,
   ConstructorCount: 2,
@@ -42,7 +42,7 @@ export const LazuliTypeWord = {
   EndByte: 4,
 } as const;
 
-export const LazuliConstructorWord = {
+export const ConstructorWord = {
   Symbol: 0,
   Type: 1,
   Arity: 2,
@@ -50,7 +50,7 @@ export const LazuliConstructorWord = {
   EndByte: 4,
 } as const;
 
-export const LazuliSurfaceTag = {
+export const ExpressionTag = {
   Integer: 1,
   Boolean: 2,
   Name: 3,
@@ -82,50 +82,50 @@ export const LazuliSurfaceTag = {
   StoreGrow: 32,
 } as const;
 
-export type LazuliSurfaceTag = (typeof LazuliSurfaceTag)[keyof typeof LazuliSurfaceTag];
+export type ExpressionTag = (typeof ExpressionTag)[keyof typeof ExpressionTag];
 
-export const LazuliCoreTag = {
-  Integer: LazuliSurfaceTag.Integer,
-  Boolean: LazuliSurfaceTag.Boolean,
-  Let: LazuliSurfaceTag.Let,
-  If: LazuliSurfaceTag.If,
-  Lambda: LazuliSurfaceTag.Lambda,
-  Apply: LazuliSurfaceTag.Apply,
-  Unary: LazuliSurfaceTag.Unary,
-  Binary: LazuliSurfaceTag.Binary,
-  Case: LazuliSurfaceTag.Case,
-  CaseArm: LazuliSurfaceTag.CaseArm,
-  PatternBind: LazuliSurfaceTag.PatternBind,
+export const CoreTag = {
+  Integer: ExpressionTag.Integer,
+  Boolean: ExpressionTag.Boolean,
+  Let: ExpressionTag.Let,
+  If: ExpressionTag.If,
+  Lambda: ExpressionTag.Lambda,
+  Apply: ExpressionTag.Apply,
+  Unary: ExpressionTag.Unary,
+  Binary: ExpressionTag.Binary,
+  Case: ExpressionTag.Case,
+  CaseArm: ExpressionTag.CaseArm,
+  PatternBind: ExpressionTag.PatternBind,
   Local: 13,
   Global: 14,
   Constructor: 15,
-  LetRec: LazuliSurfaceTag.LetRec,
-  SignedInteger64: LazuliSurfaceTag.SignedInteger64,
-  Float32: LazuliSurfaceTag.Float32,
-  Float64: LazuliSurfaceTag.Float64,
-  NumericConvert: LazuliSurfaceTag.NumericConvert,
-  Text: LazuliSurfaceTag.Text,
-  Bytes: LazuliSurfaceTag.Bytes,
-  RuntimeFault: LazuliSurfaceTag.RuntimeFault,
-  WholeNumberF64: LazuliSurfaceTag.WholeNumberF64,
-  BufferAppend: LazuliSurfaceTag.BufferAppend,
-  StoreNew: LazuliSurfaceTag.StoreNew,
-  StoreLength: LazuliSurfaceTag.StoreLength,
-  StoreRead: LazuliSurfaceTag.StoreRead,
-  StoreWrite: LazuliSurfaceTag.StoreWrite,
-  StoreGrow: LazuliSurfaceTag.StoreGrow,
+  LetRec: ExpressionTag.LetRec,
+  SignedInteger64: ExpressionTag.SignedInteger64,
+  Float32: ExpressionTag.Float32,
+  Float64: ExpressionTag.Float64,
+  NumericConvert: ExpressionTag.NumericConvert,
+  Text: ExpressionTag.Text,
+  Bytes: ExpressionTag.Bytes,
+  RuntimeFault: ExpressionTag.RuntimeFault,
+  WholeNumberF64: ExpressionTag.WholeNumberF64,
+  BufferAppend: ExpressionTag.BufferAppend,
+  StoreNew: ExpressionTag.StoreNew,
+  StoreLength: ExpressionTag.StoreLength,
+  StoreRead: ExpressionTag.StoreRead,
+  StoreWrite: ExpressionTag.StoreWrite,
+  StoreGrow: ExpressionTag.StoreGrow,
 } as const;
 
-export type LazuliCoreTag = (typeof LazuliCoreTag)[keyof typeof LazuliCoreTag];
+export type CoreTag = (typeof CoreTag)[keyof typeof CoreTag];
 
-export const LazuliEvaluationMode = {
+export const EvaluationMode = {
   LazyCallByNeed: 0,
   StrictEager: 1,
 } as const;
 
-export type LazuliEvaluationMode = (typeof LazuliEvaluationMode)[keyof typeof LazuliEvaluationMode];
+export type EvaluationMode = (typeof EvaluationMode)[keyof typeof EvaluationMode];
 
-export const LazuliUnaryOperator = {
+export const UnaryOperator = {
   Negate: 1,
   NegateSignedInteger64: 2,
   NegateFloat32: 3,
@@ -134,9 +134,9 @@ export const LazuliUnaryOperator = {
   NegateWholeNumberF64: 6,
 } as const;
 
-export type LazuliUnaryOperator = (typeof LazuliUnaryOperator)[keyof typeof LazuliUnaryOperator];
+export type UnaryOperator = (typeof UnaryOperator)[keyof typeof UnaryOperator];
 
-export const LazuliBinaryOperator = {
+export const BinaryOperator = {
   Equal: 1,
   NotEqual: 2,
   Less: 3,
@@ -205,9 +205,9 @@ export const LazuliBinaryOperator = {
   RemainderFloat64: 66,
 } as const;
 
-export type LazuliBinaryOperator = (typeof LazuliBinaryOperator)[keyof typeof LazuliBinaryOperator];
+export type BinaryOperator = (typeof BinaryOperator)[keyof typeof BinaryOperator];
 
-export const LazuliNumericConversion = {
+export const NumericConversion = {
   SignedInteger32ToSignedInteger64: 1,
   SignedInteger64ToSignedInteger32: 2,
   SignedInteger32ToFloat32: 3,
@@ -224,49 +224,48 @@ export const LazuliNumericConversion = {
   ReinterpretSignedInteger32AsFloat32: 14,
 } as const;
 
-export type LazuliNumericConversion =
-  (typeof LazuliNumericConversion)[keyof typeof LazuliNumericConversion];
+export type NumericConversion = (typeof NumericConversion)[keyof typeof NumericConversion];
 
-export interface LazuliSpan {
+export interface Span {
   readonly startByte: number;
   readonly endByte: number;
 }
 
-export type LazuliDiagnosticCode =
-  | "L1001"
-  | "L1002"
-  | "L1003"
-  | "L2001"
-  | "L2002"
-  | "L2003"
-  | "L2004"
-  | "L2005"
-  | "L2006"
-  | "L2007"
-  | "L2008"
-  | "L2009"
-  | "L2010"
-  | "L2101"
-  | "L2102"
-  | "L2103"
-  | "L2104";
+export type SemanticDiagnosticCode =
+  | "F1001"
+  | "F1002"
+  | "F1003"
+  | "F2001"
+  | "F2002"
+  | "F2003"
+  | "F2004"
+  | "F2005"
+  | "F2006"
+  | "F2007"
+  | "F2008"
+  | "F2009"
+  | "F2010"
+  | "F2101"
+  | "F2102"
+  | "F2103"
+  | "F2104";
 
-export type LazuliType =
+export type Type =
   | { readonly kind: "integer" }
   | { readonly kind: "signed-integer-64" }
   | { readonly kind: "float-32" }
   | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" }
-  | { readonly kind: "tuple"; readonly values: readonly [LazuliType, LazuliType] }
+  | { readonly kind: "tuple"; readonly values: readonly [Type, Type] }
   | {
     readonly kind: "named";
     readonly name: string;
-    readonly arguments: readonly LazuliType[];
+    readonly arguments: readonly Type[];
   }
-  | { readonly kind: "function"; readonly parameter: LazuliType; readonly result: LazuliType };
+  | { readonly kind: "function"; readonly parameter: Type; readonly result: Type };
 
-export type LazuliTypeSchema =
+export type TypeSchema =
   | { readonly kind: "integer" }
   | { readonly kind: "signed-integer-64" }
   | { readonly kind: "float-32" }
@@ -276,72 +275,72 @@ export type LazuliTypeSchema =
   | { readonly kind: "parameter"; readonly name: string }
   | {
     readonly kind: "tuple";
-    readonly values: readonly [LazuliTypeSchema, LazuliTypeSchema];
+    readonly values: readonly [TypeSchema, TypeSchema];
   }
   | {
     readonly kind: "named";
     readonly name: string;
-    readonly arguments: readonly LazuliTypeSchema[];
+    readonly arguments: readonly TypeSchema[];
   }
   | {
     readonly kind: "function";
-    readonly parameter: LazuliTypeSchema;
-    readonly result: LazuliTypeSchema;
+    readonly parameter: TypeSchema;
+    readonly result: TypeSchema;
   }
   | {
     readonly kind: "forall";
     readonly parameters: readonly string[];
-    readonly body: LazuliTypeSchema;
+    readonly body: TypeSchema;
   };
 
-export interface LazuliConstructorFieldDeclaration {
+export interface ConstructorFieldDeclaration {
   readonly name: string;
-  readonly type: LazuliTypeSchema;
+  readonly type: TypeSchema;
 }
 
-export interface LazuliConstructorDeclaration {
+export interface ConstructorDeclaration {
   readonly name: string;
-  readonly fields: readonly LazuliConstructorFieldDeclaration[];
-  readonly result?: LazuliTypeSchema;
+  readonly fields: readonly ConstructorFieldDeclaration[];
+  readonly result?: TypeSchema;
 }
 
-export interface LazuliTypeDeclaration {
+export interface TypeDeclaration {
   readonly name: string;
   readonly parameters: readonly string[];
-  readonly constructors: readonly LazuliConstructorDeclaration[];
+  readonly constructors: readonly ConstructorDeclaration[];
 }
 
-export type LazuliSourceType = LazuliTypeSchema & LazuliSpan;
+export type SourceType = TypeSchema & Span;
 
-export interface EncodedLazuliDefinitionType {
-  readonly annotation: LazuliSourceType | null;
+export interface EncodedDefinitionType {
+  readonly annotation: SourceType | null;
 }
 
-export interface EncodedLazuliTypeDeclaration {
+export interface EncodedTypeDeclaration {
   readonly name: string;
   readonly parameters: readonly string[];
   readonly constructors: readonly {
     readonly name: string;
     readonly fields: readonly {
       readonly name: string;
-      readonly type: LazuliSourceType;
+      readonly type: SourceType;
     }[];
-    readonly result?: LazuliSourceType;
+    readonly result?: SourceType;
   }[];
 }
 
-export interface LazuliDiagnostic {
+export interface SemanticDiagnostic {
   readonly stage: "parse" | "compile";
-  readonly code: LazuliDiagnosticCode;
+  readonly code: SemanticDiagnosticCode;
   readonly message: string;
-  readonly span: LazuliSpan;
+  readonly span: Span;
   readonly related?: readonly {
     readonly message: string;
-    readonly span: LazuliSpan;
+    readonly span: Span;
   }[];
 }
 
-export interface EncodedLazuliSurface {
+export interface EncodedSemanticSurface {
   readonly nodeWords: Uint32Array;
   readonly definitionWords: Uint32Array;
   readonly typeWords: Uint32Array;
@@ -350,15 +349,15 @@ export interface EncodedLazuliSurface {
   readonly definitionCount: number;
   readonly typeCount: number;
   readonly constructorCount: number;
-  readonly mainSymbol: number;
+  readonly entrySymbol: number;
   readonly symbolNames: readonly string[];
-  readonly definitionTypes: readonly EncodedLazuliDefinitionType[];
-  readonly typeDeclarations: readonly EncodedLazuliTypeDeclaration[];
+  readonly definitionTypes: readonly EncodedDefinitionType[];
+  readonly typeDeclarations: readonly EncodedTypeDeclaration[];
 }
 
-export type LazuliFrontendResult =
-  | { readonly ok: true; readonly surface: EncodedLazuliSurface }
+export type FrontendResult =
+  | { readonly ok: true; readonly surface: EncodedSemanticSurface }
   | {
     readonly ok: false;
-    readonly diagnostics: readonly [LazuliDiagnostic, ...LazuliDiagnostic[]];
+    readonly diagnostics: readonly [SemanticDiagnostic, ...SemanticDiagnostic[]];
   };

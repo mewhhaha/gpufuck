@@ -1,9 +1,6 @@
-import { GpuFunctionalCompiler, requestWebGpuDevice } from "../functional.ts";
-import {
-  type GleamFunctionalSourceModule,
-  lowerGleamFunctionalSources,
-} from "../gleam_functional.ts";
-import { parseGleamFunctionalModule } from "../src/gleam_functional/parser.ts";
+import { GpuCompiler, requestWebGpuDevice } from "../functional.ts";
+import { type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
+import { parseGleamModule } from "../src/gleam/parser.ts";
 
 const GLEAM_STDLIB_REPOSITORY = "https://github.com/gleam-lang/stdlib.git";
 const GLEAM_STDLIB_COMMIT = "bacc20c7c857c52dff6bd5ce336d067404884e60";
@@ -70,13 +67,13 @@ try {
     );
   }
 
-  const stdlibSources: GleamFunctionalSourceModule[] = await Promise.all(
+  const stdlibSources: GleamSourceModule[] = await Promise.all(
     GLEAM_STDLIB_MODULES.map(async (name) => ({
       name: `gleam/${name}`,
       source: await Deno.readTextFile(`${checkout}/src/gleam/${name}.gleam`),
     })),
   );
-  const testSources: GleamFunctionalSourceModule[] = await Promise.all(
+  const testSources: GleamSourceModule[] = await Promise.all(
     GLEAM_STDLIB_TEST_MODULES.map(async (name) => ({
       name: `gleam/${name}`,
       source: await Deno.readTextFile(`${checkout}/test/gleam/${name}.gleam`),
@@ -85,7 +82,7 @@ try {
   const sources = [...stdlibSources, { name: "stdlib_check", source: stdlibCheckSource() }];
 
   const loweringStart = performance.now();
-  const frontend = lowerGleamFunctionalSources(sources, {
+  const frontend = lowerGleamSources(sources, {
     module: "stdlib_check",
     exportName: "main",
   });
@@ -99,7 +96,7 @@ try {
 
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuFunctionalCompiler.create(device);
+    const compiler = await GpuCompiler.create(device);
     const testCompilation = await compileStdlibTests(compiler, stdlibSources, testSources);
     const compilationStart = performance.now();
     const compilation = await compiler.compileModule(frontend.lowered.module, {
@@ -137,9 +134,9 @@ try {
 }
 
 async function compileStdlibTests(
-  compiler: GpuFunctionalCompiler,
-  stdlibSources: readonly GleamFunctionalSourceModule[],
-  testSources: readonly GleamFunctionalSourceModule[],
+  compiler: GpuCompiler,
+  stdlibSources: readonly GleamSourceModule[],
+  testSources: readonly GleamSourceModule[],
 ): Promise<{
   readonly functionCount: number;
   readonly batchCount: number;
@@ -152,7 +149,7 @@ async function compileStdlibTests(
   let largestNodeCount = 0;
   for (const testSource of testSources) {
     console.error(`Checking ${testSource.name}...`);
-    const parsed = parseGleamFunctionalModule(testSource.name, testSource.source);
+    const parsed = parseGleamModule(testSource.name, testSource.source);
     const testFunctions = parsed.declarations.flatMap((declaration) =>
       declaration.kind === "function" && declaration.public &&
         declaration.name.endsWith("_test")
@@ -162,11 +159,11 @@ async function compileStdlibTests(
     functionCount += testFunctions.length;
     for (let offset = 0; offset < testFunctions.length; offset += TEST_COMPILATION_BATCH_SIZE) {
       const batch = testFunctions.slice(offset, offset + TEST_COMPILATION_BATCH_SIZE);
-      const harness: GleamFunctionalSourceModule = {
+      const harness: GleamSourceModule = {
         name: "stdlib_test_check",
         source: stdlibTestCheckSource(testSource.name, batch),
       };
-      const frontend = lowerGleamFunctionalSources(
+      const frontend = lowerGleamSources(
         [...stdlibSources, testSource, harness],
         { module: harness.name, exportName: "main" },
       );

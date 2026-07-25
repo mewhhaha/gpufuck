@@ -1,11 +1,5 @@
-import {
-  FUNCTIONAL_NO_INDEX,
-  FunctionalBinaryOperator,
-  FunctionalCoreTag,
-  FunctionalEvaluationMode,
-  FunctionalUnaryOperator,
-} from "./abi.ts";
-import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
+import { BinaryOperator, CoreTag, EvaluationMode, NO_INDEX, UnaryOperator } from "./abi.ts";
+import type { CoreNode, GpuModule } from "./compiler_module.ts";
 import {
   float32FromBits,
   float64FromBits,
@@ -17,8 +11,8 @@ import {
   wideLiteralBits,
 } from "./wasm_numeric.ts";
 import { functionalWasmEntry } from "./wasm_host_boundary.ts";
-import { FUNCTIONAL_WASM_GC_ABI_VERSION, FunctionalWasmGcValueKind } from "./wasm_gc_contract.ts";
-import { FUNCTIONAL_MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
+import { WASM_GC_ABI_VERSION, WasmGcValueKind } from "./wasm_gc_contract.ts";
+import { MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
 import { WASM_FAULT_OUT_OF_BOUNDS } from "./wasm_runtime_binary.ts";
 
 const VALUE_TYPE_INDEX = 0;
@@ -45,14 +39,14 @@ interface GcFunctionBody {
   readonly instructions: readonly number[];
 }
 
-interface FunctionalStoreUpdate {
-  readonly node: FunctionalCoreNode;
+interface StoreUpdate {
+  readonly node: CoreNode;
   readonly nodeIndex: number;
 }
 
-export function compileFunctionalWasmGc(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
+export function compileWasmGc(
+  module: GpuModule,
+  nodes: readonly CoreNode[],
 ): Uint8Array<ArrayBuffer> {
   if (module.entryEffects.length !== 0) {
     throw new Error(
@@ -97,8 +91,8 @@ export function compileFunctionalWasmGc(
 }
 
 class GcCoreEmitter {
-  readonly #module: GpuFunctionalModule;
-  readonly #nodes: readonly FunctionalCoreNode[];
+  readonly #module: GpuModule;
+  readonly #nodes: readonly CoreNode[];
   #instructions = new GcInstructions();
   readonly #activeNodes = new Set<number>();
   readonly #lambdaWorkers = new Map<
@@ -112,7 +106,7 @@ class GcCoreEmitter {
   >();
   readonly #workers: (GcFunctionBody | undefined)[] = [];
 
-  constructor(module: GpuFunctionalModule, nodes: readonly FunctionalCoreNode[]) {
+  constructor(module: GpuModule, nodes: readonly CoreNode[]) {
     this.#module = module;
     this.#nodes = nodes;
   }
@@ -158,33 +152,33 @@ class GcCoreEmitter {
   emitAcyclicExpression(nodeIndex: number, environment: readonly number[]): void {
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Integer:
-        this.emitLiteralValue(FunctionalWasmGcValueKind.Integer, node.payload | 0);
+      case CoreTag.Integer:
+        this.emitLiteralValue(WasmGcValueKind.Integer, node.payload | 0);
         return;
-      case FunctionalCoreTag.Boolean:
-        this.emitLiteralValue(FunctionalWasmGcValueKind.Boolean, node.payload);
+      case CoreTag.Boolean:
+        this.emitLiteralValue(WasmGcValueKind.Boolean, node.payload);
         return;
-      case FunctionalCoreTag.SignedInteger64:
+      case CoreTag.SignedInteger64:
         this.emitNumericValue("signed-integer-64", () => {
           this.#instructions.i64Const(wideLiteralBits(node));
         });
         return;
-      case FunctionalCoreTag.Float32:
+      case CoreTag.Float32:
         this.emitNumericValue("float-32", () => {
           this.#instructions.f32Const(float32FromBits(node.payload));
         });
         return;
-      case FunctionalCoreTag.Float64:
+      case CoreTag.Float64:
         this.emitNumericValue("float-64", () => {
           this.#instructions.f64Const(float64FromBits(wideLiteralBits(node)));
         });
         return;
-      case FunctionalCoreTag.WholeNumberF64:
+      case CoreTag.WholeNumberF64:
         this.emitNumericValue("whole-number-f64", () => {
           this.#instructions.f64Const(float64FromBits(wideLiteralBits(node)));
         });
         return;
-      case FunctionalCoreTag.Local: {
+      case CoreTag.Local: {
         const localIndex = environment[node.payload];
         if (localIndex === undefined) {
           throw new Error(
@@ -196,7 +190,7 @@ class GcCoreEmitter {
         this.#instructions.call(2);
         return;
       }
-      case FunctionalCoreTag.Global:
+      case CoreTag.Global:
         if (node.payload >= this.#module.definitionCount) {
           throw new Error(
             `functional WasmGC backend global ${node.payload} at core node ${nodeIndex} exceeds ${this.#module.definitionCount} definitions`,
@@ -206,30 +200,30 @@ class GcCoreEmitter {
         this.#instructions.refAsNonNull();
         this.#instructions.call(2);
         return;
-      case FunctionalCoreTag.Constructor: {
+      case CoreTag.Constructor: {
         const arity = this.constructorArity(node.payload, nodeIndex);
         if (arity === 0) {
-          this.emitLiteralValue(FunctionalWasmGcValueKind.Constructor, node.payload);
+          this.emitLiteralValue(WasmGcValueKind.Constructor, node.payload);
         } else {
           this.emitClosure(this.constructorWorker(node.payload, 0), []);
         }
         return;
       }
-      case FunctionalCoreTag.Apply:
+      case CoreTag.Apply:
         if (this.constructorApplication(nodeIndex) !== undefined) {
           this.emitConstructorApplication(nodeIndex, environment);
         } else {
           this.emitApplication(node, environment);
         }
         return;
-      case FunctionalCoreTag.Lambda:
+      case CoreTag.Lambda:
         this.emitClosure(
           this.lambdaWorker(nodeIndex, environment.length),
           environment,
         );
         return;
-      case FunctionalCoreTag.Let: {
-        if (node.evaluationMode === FunctionalEvaluationMode.StrictEager) {
+      case CoreTag.Let: {
+        if (node.evaluationMode === EvaluationMode.StrictEager) {
           this.emitExpression(node.child0, environment);
         } else {
           this.emitThunk(node.child0, environment);
@@ -239,10 +233,10 @@ class GcCoreEmitter {
         this.emitExpression(node.child1, [valueLocal, ...environment]);
         return;
       }
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.LetRec:
         this.emitLetRec(nodeIndex, node, environment);
         return;
-      case FunctionalCoreTag.If:
+      case CoreTag.If:
         this.emitPayload(node.child0, environment);
         this.#instructions.ifValue();
         this.emitExpression(node.child1, environment);
@@ -250,33 +244,33 @@ class GcCoreEmitter {
         this.emitExpression(node.child2, environment);
         this.#instructions.end();
         return;
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         this.emitBinary(nodeIndex, node, environment);
         return;
-      case FunctionalCoreTag.Unary:
+      case CoreTag.Unary:
         this.emitUnary(nodeIndex, node, environment);
         return;
-      case FunctionalCoreTag.NumericConvert:
+      case CoreTag.NumericConvert:
         this.emitNumericConversion(nodeIndex, node, environment);
         return;
-      case FunctionalCoreTag.StoreNew:
+      case CoreTag.StoreNew:
         this.emitStoreNew(nodeIndex, node, environment);
         return;
-      case FunctionalCoreTag.StoreLength:
+      case CoreTag.StoreLength:
         this.emitStoreLength(node, environment);
         return;
-      case FunctionalCoreTag.StoreRead:
+      case CoreTag.StoreRead:
         this.emitStoreRead(nodeIndex, node, environment);
         return;
-      case FunctionalCoreTag.StoreWrite:
-      case FunctionalCoreTag.StoreGrow:
+      case CoreTag.StoreWrite:
+      case CoreTag.StoreGrow:
         this.emitStoreUpdates(nodeIndex, environment);
         return;
-      case FunctionalCoreTag.Case:
+      case CoreTag.Case:
         this.emitCase(nodeIndex, node, environment);
         return;
-      case FunctionalCoreTag.CaseArm:
-      case FunctionalCoreTag.PatternBind:
+      case CoreTag.CaseArm:
+      case CoreTag.PatternBind:
         throw new Error(
           `functional WasmGC backend found structural core tag ${node.tag} in expression position at node ${nodeIndex}`,
         );
@@ -290,11 +284,11 @@ class GcCoreEmitter {
   emitConstructorApplication(nodeIndex: number, environment: readonly number[]): void {
     const reverseArguments: {
       readonly node: number;
-      readonly evaluationMode: FunctionalCoreNode["evaluationMode"];
+      readonly evaluationMode: CoreNode["evaluationMode"];
     }[] = [];
     let calleeIndex = nodeIndex;
     let callee = this.node(calleeIndex);
-    while (callee.tag === FunctionalCoreTag.Apply) {
+    while (callee.tag === CoreTag.Apply) {
       reverseArguments.push({
         node: callee.child1,
         evaluationMode: callee.evaluationMode,
@@ -302,7 +296,7 @@ class GcCoreEmitter {
       calleeIndex = callee.child0;
       callee = this.node(calleeIndex);
     }
-    if (callee.tag !== FunctionalCoreTag.Constructor) {
+    if (callee.tag !== CoreTag.Constructor) {
       throw new Error(
         `functional WasmGC backend only supports constructor application; core node ${nodeIndex} resolves to tag ${callee.tag} at node ${calleeIndex}`,
       );
@@ -317,7 +311,7 @@ class GcCoreEmitter {
     const argumentsInSourceOrder = reverseArguments.reverse();
     const argumentLocals: number[] = [];
     for (const argument of argumentsInSourceOrder) {
-      if (argument.evaluationMode === FunctionalEvaluationMode.StrictEager) {
+      if (argument.evaluationMode === EvaluationMode.StrictEager) {
         this.emitExpression(argument.node, environment);
       } else {
         this.emitThunk(argument.node, environment);
@@ -334,7 +328,7 @@ class GcCoreEmitter {
       return;
     }
 
-    this.#instructions.i32Const(FunctionalWasmGcValueKind.Constructor);
+    this.#instructions.i32Const(WasmGcValueKind.Constructor);
     this.#instructions.i32Const(callee.payload);
     this.emitEmptyNumericFields();
     for (const argumentLocal of argumentLocals) {
@@ -347,18 +341,18 @@ class GcCoreEmitter {
 
   constructorApplication(nodeIndex: number): boolean | undefined {
     let callee = this.node(nodeIndex);
-    while (callee.tag === FunctionalCoreTag.Apply) callee = this.node(callee.child0);
-    return callee.tag === FunctionalCoreTag.Constructor ? true : undefined;
+    while (callee.tag === CoreTag.Apply) callee = this.node(callee.child0);
+    return callee.tag === CoreTag.Constructor ? true : undefined;
   }
 
   emitApplication(
-    node: FunctionalCoreNode,
+    node: CoreNode,
     environment: readonly number[],
   ): void {
     this.emitExpression(node.child0, environment);
     const calleeLocal = this.#instructions.addValueLocal();
     this.#instructions.localSet(calleeLocal);
-    if (node.evaluationMode === FunctionalEvaluationMode.StrictEager) {
+    if (node.evaluationMode === EvaluationMode.StrictEager) {
       this.emitExpression(node.child1, environment);
     } else {
       this.emitThunk(node.child1, environment);
@@ -377,7 +371,7 @@ class GcCoreEmitter {
   }
 
   emitClosure(slot: number, captureLocals: readonly number[]): void {
-    this.#instructions.i32Const(FunctionalWasmGcValueKind.Closure);
+    this.#instructions.i32Const(WasmGcValueKind.Closure);
     this.#instructions.i32Const(slot);
     this.emitEmptyNumericFields();
     for (const captureLocal of captureLocals) {
@@ -389,7 +383,7 @@ class GcCoreEmitter {
   }
 
   emitThunk(expressionNode: number, captureLocals: readonly number[]): void {
-    this.#instructions.i32Const(FunctionalWasmGcValueKind.Thunk);
+    this.#instructions.i32Const(WasmGcValueKind.Thunk);
     this.#instructions.i32Const(this.thunkWorker(expressionNode, captureLocals.length));
     this.emitEmptyNumericFields();
     this.#instructions.refNullValue();
@@ -421,17 +415,17 @@ class GcCoreEmitter {
 
   emitLetRec(
     nodeIndex: number,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     environment: readonly number[],
   ): void {
     const value = this.node(node.child0);
-    if (value.tag !== FunctionalCoreTag.Lambda) {
+    if (value.tag !== CoreTag.Lambda) {
       throw new Error(
         `functional WasmGC backend let-rec at core node ${nodeIndex} binds tag ${value.tag}; expected a lambda`,
       );
     }
     const slot = this.lambdaWorker(node.child0, environment.length + 1);
-    this.#instructions.i32Const(FunctionalWasmGcValueKind.Closure);
+    this.#instructions.i32Const(WasmGcValueKind.Closure);
     this.#instructions.i32Const(slot);
     this.emitEmptyNumericFields();
     this.#instructions.refNullValue();
@@ -463,7 +457,7 @@ class GcCoreEmitter {
       return existing.slot;
     }
     const lambda = this.node(lambdaNode);
-    if (lambda.tag !== FunctionalCoreTag.Lambda) {
+    if (lambda.tag !== CoreTag.Lambda) {
       throw new Error(
         `functional WasmGC backend lambda worker ${lambdaNode} has core tag ${lambda.tag}`,
       );
@@ -497,7 +491,7 @@ class GcCoreEmitter {
         );
         return;
       }
-      this.#instructions.i32Const(FunctionalWasmGcValueKind.Constructor);
+      this.#instructions.i32Const(WasmGcValueKind.Constructor);
       this.#instructions.i32Const(constructorIndex);
       this.emitEmptyNumericFields();
       for (const field of fields) {
@@ -570,7 +564,7 @@ class GcCoreEmitter {
     const instructions = new GcInstructions(1);
     instructions.localGet(0);
     instructions.structGet(0);
-    instructions.i32Const(FunctionalWasmGcValueKind.Thunk);
+    instructions.i32Const(WasmGcValueKind.Thunk);
     instructions.emit(0x46);
     instructions.ifValue();
 
@@ -637,12 +631,12 @@ class GcCoreEmitter {
 
   emitBinary(
     nodeIndex: number,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     environment: readonly number[],
   ): void {
     if (
-      node.payload === FunctionalBinaryOperator.StructuralEqual ||
-      node.payload === FunctionalBinaryOperator.StructuralNotEqual
+      node.payload === BinaryOperator.StructuralEqual ||
+      node.payload === BinaryOperator.StructuralNotEqual
     ) {
       throw new Error(
         `functional WasmGC backend does not support structural equality at core node ${nodeIndex}`,
@@ -652,9 +646,9 @@ class GcCoreEmitter {
     const group = numericOperatorGroup(node.payload);
     if (
       opcode === undefined ||
-      node.payload === FunctionalBinaryOperator.Divide ||
-      node.payload === FunctionalBinaryOperator.DivideSignedInteger64 ||
-      node.payload === FunctionalBinaryOperator.RemainderSignedInteger64
+      node.payload === BinaryOperator.Divide ||
+      node.payload === BinaryOperator.DivideSignedInteger64 ||
+      node.payload === BinaryOperator.RemainderSignedInteger64
     ) {
       throw new Error(
         `functional WasmGC backend does not support binary operator ${node.payload} at core node ${nodeIndex}`,
@@ -665,15 +659,15 @@ class GcCoreEmitter {
       this.emitNumericField(node.child0, environment, group);
       this.emitNumericField(node.child1, environment, group);
       this.#instructions.emit(opcode);
-    }, comparison ? FunctionalWasmGcValueKind.Boolean : undefined);
+    }, comparison ? WasmGcValueKind.Boolean : undefined);
   }
 
   emitUnary(
     nodeIndex: number,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     environment: readonly number[],
   ): void {
-    if (node.payload === FunctionalUnaryOperator.Negate) {
+    if (node.payload === UnaryOperator.Negate) {
       this.emitNumericValue("integer", () => {
         this.#instructions.i32Const(0);
         this.emitNumericField(node.child0, environment, "integer");
@@ -681,15 +675,15 @@ class GcCoreEmitter {
       });
       return;
     }
-    const wideUnary = node.payload === FunctionalUnaryOperator.NegateSignedInteger64
+    const wideUnary = node.payload === UnaryOperator.NegateSignedInteger64
       ? { group: "signed-integer-64" as const, opcode: 0x7d, zero: "integer" as const }
-      : node.payload === FunctionalUnaryOperator.NegateFloat32
+      : node.payload === UnaryOperator.NegateFloat32
       ? { group: "float-32" as const, opcode: 0x8c }
-      : node.payload === FunctionalUnaryOperator.SquareRootFloat32
+      : node.payload === UnaryOperator.SquareRootFloat32
       ? { group: "float-32" as const, opcode: 0x91 }
-      : node.payload === FunctionalUnaryOperator.NegateFloat64
+      : node.payload === UnaryOperator.NegateFloat64
       ? { group: "float-64" as const, opcode: 0x9a }
-      : node.payload === FunctionalUnaryOperator.NegateWholeNumberF64
+      : node.payload === UnaryOperator.NegateWholeNumberF64
       ? { group: "whole-number-f64" as const, opcode: 0x9a }
       : undefined;
     if (wideUnary === undefined) {
@@ -706,7 +700,7 @@ class GcCoreEmitter {
 
   emitNumericConversion(
     nodeIndex: number,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     environment: readonly number[],
   ): void {
     const conversion = numericConversion(node.payload);
@@ -726,7 +720,7 @@ class GcCoreEmitter {
 
   emitCase(
     caseNodeIndex: number,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     environment: readonly number[],
   ): void {
     this.emitExpression(node.child0, environment);
@@ -736,7 +730,7 @@ class GcCoreEmitter {
     const visitedArms = new Set<number>();
     let armIndex = node.child1;
     let openArmCount = 0;
-    while (armIndex !== FUNCTIONAL_NO_INDEX) {
+    while (armIndex !== NO_INDEX) {
       if (visitedArms.has(armIndex)) {
         throw new Error(
           `functional WasmGC backend case at core node ${caseNodeIndex} has a cycle through arm ${armIndex}`,
@@ -744,7 +738,7 @@ class GcCoreEmitter {
       }
       visitedArms.add(armIndex);
       const arm = this.node(armIndex);
-      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+      if (arm.tag !== CoreTag.CaseArm) {
         throw new Error(
           `functional WasmGC backend case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
         );
@@ -762,7 +756,7 @@ class GcCoreEmitter {
       let armEnvironment = [...environment];
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex += 1) {
         const binding = this.node(bodyNode);
-        if (binding.tag !== FunctionalCoreTag.PatternBind) {
+        if (binding.tag !== CoreTag.PatternBind) {
           throw new Error(
             `functional WasmGC backend case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
           );
@@ -815,14 +809,14 @@ class GcCoreEmitter {
   ): void {
     const kind = kindOverride ??
       (group === "integer"
-        ? FunctionalWasmGcValueKind.Integer
+        ? WasmGcValueKind.Integer
         : group === "signed-integer-64"
-        ? FunctionalWasmGcValueKind.SignedInteger64
+        ? WasmGcValueKind.SignedInteger64
         : group === "float-32"
-        ? FunctionalWasmGcValueKind.Float32
+        ? WasmGcValueKind.Float32
         : group === "float-64"
-        ? FunctionalWasmGcValueKind.Float64
-        : FunctionalWasmGcValueKind.WholeNumberF64);
+        ? WasmGcValueKind.Float64
+        : WasmGcValueKind.WholeNumberF64);
     this.#instructions.i32Const(kind);
     if (group === "integer") {
       emitNumber();
@@ -870,7 +864,7 @@ class GcCoreEmitter {
 
   emitStoreNew(
     nodeIndex: number,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     environment: readonly number[],
   ): void {
     this.emitPayload(node.child0, environment);
@@ -880,7 +874,7 @@ class GcCoreEmitter {
     const initial = this.#instructions.addValueLocal();
     this.#instructions.localSet(initial);
     this.requireStoreLength(length, nodeIndex);
-    this.#instructions.i32Const(FunctionalWasmGcValueKind.Store);
+    this.#instructions.i32Const(WasmGcValueKind.Store);
     this.#instructions.i32Const(0);
     this.emitEmptyNumericFields();
     this.#instructions.localGet(initial);
@@ -890,7 +884,7 @@ class GcCoreEmitter {
     this.#instructions.structNew();
   }
 
-  emitStoreLength(node: FunctionalCoreNode, environment: readonly number[]): void {
+  emitStoreLength(node: CoreNode, environment: readonly number[]): void {
     this.emitExpression(node.child0, environment);
     const store = this.#instructions.addValueLocal();
     this.#instructions.localSet(store);
@@ -904,7 +898,7 @@ class GcCoreEmitter {
 
   emitStoreRead(
     nodeIndex: number,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     environment: readonly number[],
   ): void {
     this.emitExpression(node.child0, environment);
@@ -923,13 +917,13 @@ class GcCoreEmitter {
   }
 
   emitStoreUpdates(nodeIndex: number, environment: readonly number[]): void {
-    const updates: FunctionalStoreUpdate[] = [];
+    const updates: StoreUpdate[] = [];
     let sourceNodeIndex = nodeIndex;
     while (true) {
       const sourceNode = this.node(sourceNodeIndex);
       if (
-        sourceNode.tag !== FunctionalCoreTag.StoreWrite &&
-        sourceNode.tag !== FunctionalCoreTag.StoreGrow
+        sourceNode.tag !== CoreTag.StoreWrite &&
+        sourceNode.tag !== CoreTag.StoreGrow
       ) break;
       updates.push({ node: sourceNode, nodeIndex: sourceNodeIndex });
       sourceNodeIndex = sourceNode.child0;
@@ -965,7 +959,7 @@ class GcCoreEmitter {
       this.emitExpression(update.node.child2, environment);
       const value = this.#instructions.addValueLocal();
       this.#instructions.localSet(value);
-      if (update.node.tag === FunctionalCoreTag.StoreWrite) {
+      if (update.node.tag === CoreTag.StoreWrite) {
         this.#instructions.localGet(operand);
         this.#instructions.localGet(currentLength);
         this.#instructions.emit(0x4f);
@@ -1024,7 +1018,7 @@ class GcCoreEmitter {
 
   requireStoreLength(length: number, nodeIndex: number): void {
     this.#instructions.localGet(length);
-    this.#instructions.i32Const(FUNCTIONAL_MAXIMUM_STORE_LENGTH);
+    this.#instructions.i32Const(MAXIMUM_STORE_LENGTH);
     this.#instructions.emit(0x4b);
     this.emitStoreFaultWhenTrue(nodeIndex);
   }
@@ -1083,7 +1077,7 @@ class GcCoreEmitter {
   }
 
   emitStoreValue(fields: number): void {
-    this.#instructions.i32Const(FunctionalWasmGcValueKind.Store);
+    this.#instructions.i32Const(WasmGcValueKind.Store);
     this.#instructions.i32Const(0);
     this.emitEmptyNumericFields();
     this.#instructions.localGet(fields);
@@ -1101,7 +1095,7 @@ class GcCoreEmitter {
     return arity;
   }
 
-  node(nodeIndex: number): FunctionalCoreNode {
+  node(nodeIndex: number): CoreNode {
     const node = this.#nodes[nodeIndex];
     if (node === undefined) {
       throw new Error(
@@ -1363,7 +1357,7 @@ function encodeGcModule(
           0x7f,
           0x00,
           0x41,
-          ...encodeSigned(BigInt(FUNCTIONAL_WASM_GC_ABI_VERSION)),
+          ...encodeSigned(BigInt(WASM_GC_ABI_VERSION)),
           0x0b,
         ],
       ]),

@@ -1,15 +1,7 @@
-import {
-  GpuFunctionalCompiler,
-  GpuFunctionalEvaluator,
-  requestWebGpuDevice,
-} from "./functional.ts";
-import {
-  type GleamFunctionalSourceModule,
-  lowerGleamFunctionalSources,
-  renderGleamFunctionalTrace,
-} from "./gleam_functional.ts";
+import { GpuCompiler, GpuEvaluator, requestWebGpuDevice } from "./functional.ts";
+import { type GleamSourceModule, lowerGleamSources, renderGleamTrace } from "./gleam.ts";
 
-type GleamFunctionalCommand = "run" | "trace";
+type GleamCommand = "run" | "trace";
 type CliOutput = Pick<Console, "error" | "log">;
 
 export async function main(
@@ -32,7 +24,7 @@ export async function main(
   const sources = await Promise.all(
     sourceArguments.map((argument) => readModuleSource(argument, entryModule)),
   );
-  const frontend = lowerGleamFunctionalSources(sources, {
+  const frontend = lowerGleamSources(sources, {
     module: entryModule,
     exportName: "main",
   });
@@ -47,7 +39,7 @@ export async function main(
 
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuFunctionalCompiler.create(device);
+    const compiler = await GpuCompiler.create(device);
     const compilation = await compiler.compileModule(frontend.lowered.module);
     if (!compilation.ok) {
       for (const diagnostic of compilation.diagnostics) {
@@ -58,7 +50,7 @@ export async function main(
       return 1;
     }
     try {
-      const evaluator = await GpuFunctionalEvaluator.create(device);
+      const evaluator = await GpuEvaluator.create(device);
       const evaluation = await evaluator.evaluate(compilation.module, {
         heapSlots: gleamHeapSlots(compilation.module),
       });
@@ -86,7 +78,7 @@ export async function main(
       const source = sources.map((module) => `// ${module.name}\n${module.source.trimEnd()}`).join(
         "\n\n",
       );
-      const trace = renderGleamFunctionalTrace({
+      const trace = renderGleamTrace({
         title: `Gleam functional compilation trace: ${entryModule}`,
         source,
         lowered: frontend.lowered,
@@ -118,7 +110,7 @@ function gleamHeapSlots(
 async function readModuleSource(
   argument: string,
   entryModule: string,
-): Promise<GleamFunctionalSourceModule> {
+): Promise<GleamSourceModule> {
   const separator = argument.indexOf("=");
   const name = separator === -1 ? entryModule : argument.slice(0, separator);
   const path = separator === -1 ? argument : argument.slice(separator + 1);
@@ -150,13 +142,13 @@ async function writeTrace(path: string, trace: string): Promise<void> {
 }
 
 function printUsage(output: CliOutput): void {
-  output.error("usage: gleam_functional_cli.ts run <entry-module> <module=source.gleam>...");
+  output.error("usage: gleam_cli.ts run <entry-module> <module=source.gleam>...");
   output.error(
-    "       gleam_functional_cli.ts trace <entry-module> <trace.md> <module=source.gleam>...",
+    "       gleam_cli.ts trace <entry-module> <trace.md> <module=source.gleam>...",
   );
 }
 
-function isCommand(value: string | undefined): value is GleamFunctionalCommand {
+function isCommand(value: string | undefined): value is GleamCommand {
   return value === "run" || value === "trace";
 }
 

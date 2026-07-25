@@ -1,14 +1,14 @@
 import {
-  type EncodedFunctionalModule,
-  FunctionalBinaryOperator,
-  FunctionalEvaluationProfile,
-  FunctionalUnaryOperator,
+  BinaryOperator,
+  type EncodedModule,
+  EvaluationProfile,
+  UnaryOperator,
 } from "../../../src/functional/abi.ts";
 import {
-  buildFunctionalSurfaceModule,
-  type FunctionalSurfaceDefinition,
-  type FunctionalSurfaceExpression,
-  type FunctionalSurfaceTypeDeclaration,
+  buildSurfaceModule,
+  type SurfaceDefinition,
+  type SurfaceExpression,
+  type SurfaceTypeDeclaration,
 } from "../../../src/functional/surface_builder.ts";
 import {
   JAVASCRIPT_ARRAY_ELEMENT,
@@ -30,8 +30,8 @@ import { JavaScriptAotLoweringError } from "./diagnostic.ts";
 
 export interface LoweredJavaScriptAotModule {
   readonly sourceModule: JavaScriptAotModule;
-  readonly definitions: readonly FunctionalSurfaceDefinition[];
-  readonly module: EncodedFunctionalModule;
+  readonly definitions: readonly SurfaceDefinition[];
+  readonly module: EncodedModule;
 }
 
 export interface JavaScriptAotLoweringOptions {
@@ -59,7 +59,7 @@ interface JavaScriptAotObjectShape {
 
 interface LoweredJavaScriptAotFunction {
   readonly parameters: readonly string[];
-  readonly body: FunctionalSurfaceExpression;
+  readonly body: SurfaceExpression;
 }
 
 type JavaScriptPrimitiveConstant =
@@ -103,33 +103,33 @@ const JAVASCRIPT_AOT_MAXIMUM_TRY_CONTINUATION_DEPTH = 128;
 
 type JavaScriptAotEnvironment = ReadonlyMap<string, JavaScriptAotBinding>;
 type JavaScriptAotThrowContinuation = (
-  value: FunctionalSurfaceExpression,
+  value: SurfaceExpression,
   environment: JavaScriptAotEnvironment,
   constantValue: JavaScriptAotExpression | null,
-) => FunctionalSurfaceExpression;
+) => SurfaceExpression;
 type JavaScriptAotReturnContinuation = (
-  value: FunctionalSurfaceExpression,
+  value: SurfaceExpression,
   environment: JavaScriptAotEnvironment,
-) => FunctionalSurfaceExpression;
+) => SurfaceExpression;
 type JavaScriptAotControlContinuation = (
   environment: JavaScriptAotEnvironment,
-) => FunctionalSurfaceExpression;
+) => SurfaceExpression;
 type JavaScriptAotValueContinuation = (
-  value: FunctionalSurfaceExpression,
-) => FunctionalSurfaceExpression;
+  value: SurfaceExpression,
+) => SurfaceExpression;
 
-const binaryOperators: Readonly<Partial<Record<string, FunctionalBinaryOperator>>> = {
-  "+": FunctionalBinaryOperator.AddFloat64,
-  "-": FunctionalBinaryOperator.SubtractFloat64,
-  "*": FunctionalBinaryOperator.MultiplyFloat64,
-  "/": FunctionalBinaryOperator.DivideFloat64,
-  "%": FunctionalBinaryOperator.RemainderFloat64,
-  "<": FunctionalBinaryOperator.LessFloat64,
-  "<=": FunctionalBinaryOperator.LessEqualFloat64,
-  ">": FunctionalBinaryOperator.GreaterFloat64,
-  ">=": FunctionalBinaryOperator.GreaterEqualFloat64,
-  "===": FunctionalBinaryOperator.StructuralEqual,
-  "!==": FunctionalBinaryOperator.StructuralNotEqual,
+const binaryOperators: Readonly<Partial<Record<string, BinaryOperator>>> = {
+  "+": BinaryOperator.AddFloat64,
+  "-": BinaryOperator.SubtractFloat64,
+  "*": BinaryOperator.MultiplyFloat64,
+  "/": BinaryOperator.DivideFloat64,
+  "%": BinaryOperator.RemainderFloat64,
+  "<": BinaryOperator.LessFloat64,
+  "<=": BinaryOperator.LessEqualFloat64,
+  ">": BinaryOperator.GreaterFloat64,
+  ">=": BinaryOperator.GreaterEqualFloat64,
+  "===": BinaryOperator.StructuralEqual,
+  "!==": BinaryOperator.StructuralNotEqual,
 };
 
 export function lowerJavaScriptAotModule(
@@ -164,7 +164,7 @@ class JavaScriptAotLowering {
   lower(): LoweredJavaScriptAotModule {
     this.indexTopLevelBindings();
     const entry = this.requireEntry();
-    const definitions: FunctionalSurfaceDefinition[] = [];
+    const definitions: SurfaceDefinition[] = [];
     const initializedConstants = new Map(
       [...this.#topLevelBindings].filter(([, binding]) => binding.functionArity !== null),
     );
@@ -181,7 +181,7 @@ class JavaScriptAotLowering {
       ? javascriptArraySurface(this.sourceModule.span.endByte, this.#arrayDefinitions)
       : { definitions: [], typeDeclarations: [] };
     definitions.push(...arraySurface.definitions);
-    const typeDeclarations: FunctionalSurfaceTypeDeclaration[] = [
+    const typeDeclarations: SurfaceTypeDeclaration[] = [
       ...arraySurface.typeDeclarations,
     ];
     const syntheticSpan = {
@@ -230,12 +230,12 @@ class JavaScriptAotLowering {
     return {
       sourceModule: this.sourceModule,
       definitions,
-      module: buildFunctionalSurfaceModule(
+      module: buildSurfaceModule(
         definitions,
         typeDeclarations,
         entry.name,
         this.sourceModule.span.endByte,
-        { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+        { evaluationProfile: EvaluationProfile.StrictEager },
       ),
     };
   }
@@ -303,7 +303,7 @@ class JavaScriptAotLowering {
   private lowerDefinition(
     declaration: JavaScriptAotDeclaration,
     environment: JavaScriptAotEnvironment,
-  ): FunctionalSurfaceDefinition {
+  ): SurfaceDefinition {
     if (declaration.kind === "constant") {
       return {
         name: declaration.name,
@@ -400,14 +400,14 @@ class JavaScriptAotLowering {
       hoistedBindings.push(binding);
     }
     this.validateBlockBindings(statements, parameterNames);
-    const completeReturn = (value: FunctionalSurfaceExpression) =>
+    const completeReturn = (value: SurfaceExpression) =>
       returnContinuationName === null ? value : {
         kind: "apply" as const,
         callee: { kind: "name" as const, name: returnContinuationName, span },
         argument: value,
         span,
       };
-    const completeThrow = (value: FunctionalSurfaceExpression) =>
+    const completeThrow = (value: SurfaceExpression) =>
       throwContinuationName === null
         ? {
           kind: "let" as const,
@@ -458,12 +458,12 @@ class JavaScriptAotLowering {
   private lowerStatementScope(
     statements: readonly JavaScriptAotStatement[],
     environment: JavaScriptAotEnvironment,
-    onFallthrough: (environment: JavaScriptAotEnvironment) => FunctionalSurfaceExpression,
+    onFallthrough: (environment: JavaScriptAotEnvironment) => SurfaceExpression,
     onThrow: JavaScriptAotThrowContinuation,
     onReturn: JavaScriptAotReturnContinuation,
     onBreak: JavaScriptAotControlContinuation,
     onContinue: JavaScriptAotControlContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const declarations = statements.filter((statement) =>
       statement.kind === "function-declaration"
     );
@@ -532,13 +532,13 @@ class JavaScriptAotLowering {
   private lowerStatements(
     statements: readonly JavaScriptAotStatement[],
     environment: JavaScriptAotEnvironment,
-    onFallthrough: (environment: JavaScriptAotEnvironment) => FunctionalSurfaceExpression,
+    onFallthrough: (environment: JavaScriptAotEnvironment) => SurfaceExpression,
     onThrow: JavaScriptAotThrowContinuation,
     onReturn: JavaScriptAotReturnContinuation,
     onBreak: JavaScriptAotControlContinuation,
     onContinue: JavaScriptAotControlContinuation,
     statementIndex = 0,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const statement = statements[statementIndex];
     if (statement === undefined) return onFallthrough(environment);
     if (statement.kind === "function-declaration") {
@@ -630,7 +630,7 @@ class JavaScriptAotLowering {
       const assignmentIndexes = this.assignmentIndexes(statements);
       const loweredDeclarations: {
         readonly name: string;
-        readonly value: FunctionalSurfaceExpression;
+        readonly value: SurfaceExpression;
         readonly span: { readonly startByte: number; readonly endByte: number };
       }[] = [];
       let nextStatementIndex = statementIndex;
@@ -814,12 +814,12 @@ class JavaScriptAotLowering {
   private lowerScopedBlock(
     statements: readonly JavaScriptAotStatement[],
     environment: JavaScriptAotEnvironment,
-    onFallthrough: (environment: JavaScriptAotEnvironment) => FunctionalSurfaceExpression,
+    onFallthrough: (environment: JavaScriptAotEnvironment) => SurfaceExpression,
     onThrow: JavaScriptAotThrowContinuation,
     onReturn: JavaScriptAotReturnContinuation,
     onBreak: JavaScriptAotControlContinuation,
     onContinue: JavaScriptAotControlContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const localNames = new Set(
       statements.flatMap((statement) =>
         statement.kind === "constant" || statement.kind === "mutable" ||
@@ -853,15 +853,15 @@ class JavaScriptAotLowering {
   private lowerTry(
     statement: Extract<JavaScriptAotStatement, { readonly kind: "try" }>,
     environment: JavaScriptAotEnvironment,
-    onFallthrough: (environment: JavaScriptAotEnvironment) => FunctionalSurfaceExpression,
+    onFallthrough: (environment: JavaScriptAotEnvironment) => SurfaceExpression,
     onThrow: JavaScriptAotThrowContinuation,
     onReturn: JavaScriptAotReturnContinuation,
     onBreak: JavaScriptAotControlContinuation,
     onContinue: JavaScriptAotControlContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const runFinally = (
       currentEnvironment: JavaScriptAotEnvironment,
-      resume: (environment: JavaScriptAotEnvironment) => FunctionalSurfaceExpression,
+      resume: (environment: JavaScriptAotEnvironment) => SurfaceExpression,
     ) =>
       statement.finallyBody === null ? resume(currentEnvironment) : this.lowerScopedBlock(
         statement.finallyBody,
@@ -896,7 +896,7 @@ class JavaScriptAotLowering {
     const completeContinue: JavaScriptAotControlContinuation = (currentEnvironment) =>
       runFinally(currentEnvironment, onContinue);
     const catchException = (
-      value: FunctionalSurfaceExpression,
+      value: SurfaceExpression,
       thrownEnvironment: JavaScriptAotEnvironment,
       constantValue: JavaScriptAotExpression | null,
     ) => {
@@ -981,12 +981,12 @@ class JavaScriptAotLowering {
     statements: readonly JavaScriptAotStatement[],
     statementIndex: number,
     environment: JavaScriptAotEnvironment,
-    onFallthrough: (environment: JavaScriptAotEnvironment) => FunctionalSurfaceExpression,
+    onFallthrough: (environment: JavaScriptAotEnvironment) => SurfaceExpression,
     onThrow: JavaScriptAotThrowContinuation,
     onReturn: JavaScriptAotReturnContinuation,
     onBreak: JavaScriptAotControlContinuation,
     onContinue: JavaScriptAotControlContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const binding = environment.get(statement.name);
     if (binding === undefined) {
       throw new JavaScriptAotLoweringError(
@@ -1063,13 +1063,13 @@ class JavaScriptAotLowering {
         `JavaScript ${statement.operator} requires statically known primitive operands in this AOT profile.`,
       );
     }
-    const assignmentTarget: FunctionalSurfaceExpression = {
+    const assignmentTarget: SurfaceExpression = {
       kind: "name",
       name: binding.coreName,
       span: statement.span,
     };
     const assignedPrimitive = this.resolveCoerciblePrimitive(statement.value, environment);
-    const value: FunctionalSurfaceExpression = statement.operator === "="
+    const value: SurfaceExpression = statement.operator === "="
       ? assignedValue
       : compoundConstant !== null
       ? this.lowerExpression(
@@ -1138,12 +1138,12 @@ class JavaScriptAotLowering {
     statements: readonly JavaScriptAotStatement[],
     statementIndex: number,
     environment: JavaScriptAotEnvironment,
-    onFallthrough: (environment: JavaScriptAotEnvironment) => FunctionalSurfaceExpression,
+    onFallthrough: (environment: JavaScriptAotEnvironment) => SurfaceExpression,
     onThrow: JavaScriptAotThrowContinuation,
     onReturn: JavaScriptAotReturnContinuation,
     onBreak: JavaScriptAotControlContinuation,
     onContinue: JavaScriptAotControlContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (this.constantTruthiness(statement.condition, environment) === false) {
       return this.lowerStatements(
         statements,
@@ -1186,12 +1186,12 @@ class JavaScriptAotLowering {
       loopEnvironment,
     );
     const callLoop = (currentEnvironment: JavaScriptAotEnvironment) => {
-      let call: FunctionalSurfaceExpression = {
+      let call: SurfaceExpression = {
         kind: "name",
         name: loopName,
         span: statement.span,
       };
-      const arguments_: FunctionalSurfaceExpression[] = [
+      const arguments_: SurfaceExpression[] = [
         { kind: "boolean", value: true, span: statement.span },
         ...mutableNames.map((name) => ({
           kind: "name" as const,
@@ -1234,15 +1234,13 @@ class JavaScriptAotLowering {
       continueAfterLoop,
       continueLoop,
     );
-    const loopBody: FunctionalSurfaceExpression = invariantConditionTruthiness === true
-      ? iteration
-      : {
-        kind: "if",
-        condition: this.lowerCondition(statement.condition, loopEnvironment),
-        consequent: iteration,
-        alternate: continueAfterLoop(loopEnvironment),
-        span: statement.span,
-      };
+    const loopBody: SurfaceExpression = invariantConditionTruthiness === true ? iteration : {
+      kind: "if",
+      condition: this.lowerCondition(statement.condition, loopEnvironment),
+      consequent: iteration,
+      alternate: continueAfterLoop(loopEnvironment),
+      span: statement.span,
+    };
     return {
       kind: "let-rec-group",
       bindings: [{
@@ -1274,7 +1272,7 @@ class JavaScriptAotLowering {
   private lowerExpression(
     expression: JavaScriptAotExpression,
     environment: JavaScriptAotEnvironment,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     switch (expression.kind) {
       case "number":
         return { kind: "float-64", value: expression.value, span: expression.span };
@@ -1316,7 +1314,7 @@ class JavaScriptAotLowering {
       }
       case "array": {
         this.#usesArrays = true;
-        let array: FunctionalSurfaceExpression = {
+        let array: SurfaceExpression = {
           kind: "name",
           name: JAVASCRIPT_ARRAY_EMPTY,
           span: expression.span,
@@ -1413,7 +1411,7 @@ class JavaScriptAotLowering {
         }
         return {
           kind: "unary",
-          operator: FunctionalUnaryOperator.NegateFloat64,
+          operator: UnaryOperator.NegateFloat64,
           value: this.lowerExpression(expression.value, environment),
           span: expression.span,
         };
@@ -1466,7 +1464,7 @@ class JavaScriptAotLowering {
           this.options.exceptionConstructors?.has(expression.constructor) === true
         ) {
           this.#usedExceptionConstructors.add(expression.constructor);
-          let constructed: FunctionalSurfaceExpression = {
+          let constructed: SurfaceExpression = {
             kind: "name",
             name: javascriptExceptionConstructorName(expression.constructor),
             span: expression.span,
@@ -1583,7 +1581,7 @@ class JavaScriptAotLowering {
     environment: JavaScriptAotEnvironment,
     onValue: JavaScriptAotValueContinuation,
     onThrow: JavaScriptAotThrowContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (!this.expressionThrowsAcrossBoundary(expression, environment)) {
       return onValue(this.lowerExpression(expression, environment));
     }
@@ -1799,11 +1797,11 @@ class JavaScriptAotLowering {
     onValues: (
       expressions: readonly JavaScriptAotExpression[],
       environment: JavaScriptAotEnvironment,
-    ) => FunctionalSurfaceExpression,
+    ) => SurfaceExpression,
     onThrow: JavaScriptAotThrowContinuation,
     expressionIndex = 0,
     completedExpressions: readonly JavaScriptAotExpression[] = [],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const expression = expressions[expressionIndex];
     if (expression === undefined) return onValues(completedExpressions, environment);
     return this.lowerExpressionWithCompletion(
@@ -1921,7 +1919,7 @@ class JavaScriptAotLowering {
   private lowerCondition(
     expression: JavaScriptAotExpression,
     environment: JavaScriptAotEnvironment,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const truthiness = this.constantTruthiness(expression, environment);
     return truthiness === null ? this.lowerExpression(expression, environment) : {
       kind: "boolean",
@@ -2035,7 +2033,7 @@ class JavaScriptAotLowering {
   private lowerCall(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "call" }>,
     environment: JavaScriptAotEnvironment,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (expression.callee.kind === "name" && expression.callee.name === "isNaN") {
       if (expression.arguments.length !== 1) {
         throw new JavaScriptAotLoweringError(
@@ -2127,7 +2125,7 @@ class JavaScriptAotLowering {
   private lowerArrayMethodCall(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "call" }>,
     environment: JavaScriptAotEnvironment,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (expression.callee.kind !== "property") {
       throw new Error("JavaScript array method lowering requires a property callee.");
     }
@@ -2184,7 +2182,7 @@ class JavaScriptAotLowering {
   private lowerFunctionExpression(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "function" }>,
     environment: JavaScriptAotEnvironment,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (expression.name !== null) {
       const coreName = this.freshBindingName(expression.name);
       const functionEnvironment = new Map(environment);
@@ -2243,7 +2241,7 @@ class JavaScriptAotLowering {
 
   private lowerUndefined(
     span: { readonly startByte: number; readonly endByte: number },
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     this.#usesNullish = true;
     return { kind: "name", name: JAVASCRIPT_UNDEFINED, span };
   }
@@ -2251,7 +2249,7 @@ class JavaScriptAotLowering {
   private lowerBinary(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "binary" }>,
     environment: JavaScriptAotEnvironment,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (JAVASCRIPT_BITWISE_OPERATORS.has(expression.operator)) {
       const constant = this.resolvePrimitiveConstant(expression, environment);
       if (constant?.kind !== "number") {
@@ -2343,7 +2341,7 @@ class JavaScriptAotLowering {
       const left = this.lowerExpression(expression.left, environment);
       const right = this.lowerExpression(expression.right, environment);
       const leftName = this.freshBindingName("logicalLeft");
-      const leftReference: FunctionalSurfaceExpression = {
+      const leftReference: SurfaceExpression = {
         kind: "name",
         name: leftName,
         span: expression.left.span,
@@ -3008,18 +3006,18 @@ function objectFields(expression: JavaScriptAotExpression | null): readonly stri
 
 function assignmentBinaryOperator(
   operator: Extract<JavaScriptAotStatement, { readonly kind: "assignment" }>["operator"],
-): FunctionalBinaryOperator {
+): BinaryOperator {
   switch (operator) {
     case "+=":
-      return FunctionalBinaryOperator.AddFloat64;
+      return BinaryOperator.AddFloat64;
     case "-=":
-      return FunctionalBinaryOperator.SubtractFloat64;
+      return BinaryOperator.SubtractFloat64;
     case "*=":
-      return FunctionalBinaryOperator.MultiplyFloat64;
+      return BinaryOperator.MultiplyFloat64;
     case "/=":
-      return FunctionalBinaryOperator.DivideFloat64;
+      return BinaryOperator.DivideFloat64;
     case "%=":
-      return FunctionalBinaryOperator.RemainderFloat64;
+      return BinaryOperator.RemainderFloat64;
     case "=":
     case "<<=":
     case ">>=":
@@ -3034,10 +3032,10 @@ function assignmentBinaryOperator(
 }
 
 function applyExpressions(
-  callee: FunctionalSurfaceExpression,
-  arguments_: readonly FunctionalSurfaceExpression[],
+  callee: SurfaceExpression,
+  arguments_: readonly SurfaceExpression[],
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   let expression = callee;
   for (const argument of arguments_) {
     expression = { kind: "apply", callee: expression, argument, span };

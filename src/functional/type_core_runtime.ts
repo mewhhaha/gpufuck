@@ -1,5 +1,5 @@
-import type { FunctionalTypeSchema } from "./abi.ts";
-import type { FunctionalSurfaceTypeDeclaration } from "./surface_builder.ts";
+import type { TypeSchema } from "./abi.ts";
+import type { SurfaceTypeDeclaration } from "./surface_builder.ts";
 
 const TYPE_CORE_TYPE = "$TypeCoreType";
 const TYPE_CORE_LIST = "$TypeCoreList";
@@ -22,7 +22,7 @@ export const TypeCoreRuntimeConstructor = {
   ListCons: "$TypeCoreListCons",
 } as const;
 
-export function compileValueFunctionType(parameterCount: number): FunctionalTypeSchema {
+export function compileValueFunctionType(parameterCount: number): TypeSchema {
   let type = namedType(TYPE_CORE_VALUE);
   for (let parameterIndex = 0; parameterIndex < parameterCount; parameterIndex++) {
     type = { kind: "function", parameter: namedType(TYPE_CORE_VALUE), result: type };
@@ -30,11 +30,11 @@ export function compileValueFunctionType(parameterCount: number): FunctionalType
   return type;
 }
 
-export function namedType(name: string): FunctionalTypeSchema {
+export function namedType(name: string): TypeSchema {
   return { kind: "named", name, arguments: [] };
 }
 
-export function typeCoreRuntimeDeclarations(): readonly FunctionalSurfaceTypeDeclaration[] {
+export function typeCoreRuntimeDeclarations(): readonly SurfaceTypeDeclaration[] {
   return [
     {
       name: TYPE_CORE_VALUE,
@@ -83,8 +83,8 @@ export function typeCoreRuntimeDeclarations(): readonly FunctionalSurfaceTypeDec
 
 function constructor(
   name: string,
-  fields: readonly (readonly [string, FunctionalTypeSchema])[] = [],
-): FunctionalSurfaceTypeDeclaration["constructors"][number] {
+  fields: readonly (readonly [string, TypeSchema])[] = [],
+): SurfaceTypeDeclaration["constructors"][number] {
   return {
     name,
     fields: fields.map(([fieldName, type]) => ({ name: fieldName, type })),

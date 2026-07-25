@@ -1,6 +1,6 @@
-export const FUNCTIONAL_WASM_VALUE_ABI_VERSION = 2;
+export const WASM_VALUE_ABI_VERSION = 2;
 
-export interface FunctionalWasmValueAbiLayout {
+export interface WasmValueAbiLayout {
   readonly version: number;
   readonly valueByteLength: number;
   readonly objectAlignment: number;
@@ -35,9 +35,9 @@ export interface FunctionalWasmValueAbiLayout {
   }>;
 }
 
-export const FunctionalWasmValueAbi: FunctionalWasmValueAbiLayout = Object.freeze(
+export const WasmValueAbi: WasmValueAbiLayout = Object.freeze(
   {
-    version: FUNCTIONAL_WASM_VALUE_ABI_VERSION,
+    version: WASM_VALUE_ABI_VERSION,
     valueByteLength: 8,
     objectAlignment: 8,
     objectHeaderByteLength: 16,

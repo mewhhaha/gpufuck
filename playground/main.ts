@@ -1,16 +1,13 @@
 /// <reference lib="dom" />
 /// <reference lib="dom.iterable" />
 
-import type { FunctionalDiagnostic } from "../src/functional/abi.ts";
-import { GpuFunctionalCompiler } from "../src/functional/compiler.ts";
-import { runFunctionalWasmModule } from "../src/functional/wasm_execution.ts";
-import { describeFunctionalType } from "../src/functional/wasm_value_codec.ts";
-import type { LazuliDiagnostic } from "../src/semantic/abi.ts";
-import {
-  initializeLazuliParser,
-  parseLazuliSourceForCompilation,
-} from "../src/semantic/frontend.ts";
-import { lazuliSurfaceToFunctionalModule } from "../src/semantic/functional_adapter.ts";
+import type { Diagnostic } from "../src/functional/abi.ts";
+import { GpuCompiler } from "../src/functional/compiler.ts";
+import { runWasmModule } from "../src/functional/wasm_execution.ts";
+import { describeType } from "../src/functional/wasm_value_codec.ts";
+import type { SemanticDiagnostic } from "../src/semantic/abi.ts";
+import { initializeLazuliParser, parseLazuliSourceForCompilation } from "../src/lazuli/frontend.ts";
+import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
 
 interface Example {
   readonly name: string;
@@ -40,7 +37,7 @@ const resultPanel = element<HTMLDivElement>("result");
 const statusLine = element<HTMLParagraphElement>("status");
 const downloadLink = element<HTMLAnchorElement>("download");
 
-let runtime: { compiler: GpuFunctionalCompiler; adapter: string } | undefined;
+let runtime: { compiler: GpuCompiler; adapter: string } | undefined;
 let probed: { adapter: GPUAdapter; name: string } | { reason: string } | undefined;
 let artifact: Uint8Array<ArrayBuffer> | undefined;
 
@@ -68,7 +65,7 @@ function renderStages(timings: ReadonlyMap<Stage, number>, reached: Stage | unde
 
 function renderDiagnostics(
   heading: string,
-  diagnostics: readonly (LazuliDiagnostic | FunctionalDiagnostic)[],
+  diagnostics: readonly (SemanticDiagnostic | Diagnostic)[],
 ): void {
   resultPanel.replaceChildren();
   resultPanel.dataset.state = "error";
@@ -136,7 +133,7 @@ async function probeAdapter(): Promise<{ adapter: GPUAdapter; name: string } | {
   return probed;
 }
 
-async function ensureRuntime(): Promise<{ compiler: GpuFunctionalCompiler; adapter: string }> {
+async function ensureRuntime(): Promise<{ compiler: GpuCompiler; adapter: string }> {
   if (runtime !== undefined) return runtime;
   const capability = await probeAdapter();
   if ("reason" in capability) throw new Error(capability.reason);
@@ -149,7 +146,7 @@ async function ensureRuntime(): Promise<{ compiler: GpuFunctionalCompiler; adapt
       ),
     },
   });
-  runtime = { compiler: await GpuFunctionalCompiler.create(device), adapter: name };
+  runtime = { compiler: await GpuCompiler.create(device), adapter: name };
   return runtime;
 }
 
@@ -184,7 +181,7 @@ async function compileAndRun(): Promise<void> {
     reached = "infer";
     const inferStart = performance.now();
     const compilation = await compiler.compileModule(
-      lazuliSurfaceToFunctionalModule(parsed.frontend.surface, parsed.sourceByteLength),
+      lazuliSurfaceToModule(parsed.frontend.surface, parsed.sourceByteLength),
     );
     if (!compilation.ok) {
       renderStages(timings, reached);
@@ -198,7 +195,7 @@ async function compileAndRun(): Promise<void> {
       setStatus("Emitting WebAssembly…", "busy");
       reached = "emit";
       const emitStart = performance.now();
-      const execution = await runFunctionalWasmModule(compilation.module);
+      const execution = await runWasmModule(compilation.module);
       timings.set("emit", performance.now() - emitStart);
       reached = undefined;
 
@@ -207,7 +204,7 @@ async function compileAndRun(): Promise<void> {
       renderStages(timings, reached);
       renderValue(
         execution.value,
-        describeFunctionalType(compilation.module.entryType),
+        describeType(compilation.module.entryType),
         execution.bytes.byteLength,
         `${execution.stats.thunkEvaluations} thunk evaluations`,
       );

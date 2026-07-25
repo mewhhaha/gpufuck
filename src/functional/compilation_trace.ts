@@ -1,44 +1,44 @@
 import {
-  type EncodedFunctionalModule,
-  FUNCTIONAL_CONSTRUCTOR_WORD_LENGTH,
-  FUNCTIONAL_DEFINITION_WORD_LENGTH,
-  FUNCTIONAL_NO_INDEX,
-  FUNCTIONAL_NODE_WORD_LENGTH,
-  FUNCTIONAL_TYPE_WORD_LENGTH,
-  FunctionalAlgebraicTypeWord,
-  FunctionalBinaryOperator,
-  FunctionalConstructorWord,
-  FunctionalCoreTag,
-  FunctionalDefinitionWord,
-  FunctionalExpressionTag,
-  FunctionalNodeWord,
-  type FunctionalType,
-  type FunctionalTypeSchema,
-  FunctionalUnaryOperator,
+  AlgebraicTypeWord,
+  BinaryOperator,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  CoreTag,
+  DEFINITION_WORD_LENGTH,
+  DefinitionWord,
+  type EncodedModule,
+  ExpressionTag,
+  NO_INDEX,
+  NODE_WORD_LENGTH,
+  NodeWord,
+  type Type,
+  TYPE_WORD_LENGTH,
+  type TypeSchema,
+  UnaryOperator,
 } from "./abi.ts";
-import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler.ts";
-import type { FunctionalEvaluationResult } from "./evaluator.ts";
+import type { CoreNode, GpuModule } from "./compiler.ts";
+import type { EvaluationResult } from "./evaluator.ts";
 import type {
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceTypeDeclaration,
+  SurfaceDefinition,
+  SurfaceExpression,
+  SurfaceTypeDeclaration,
 } from "./surface_builder.ts";
 
-export interface FunctionalCompilationTraceSurface {
-  readonly definitions: readonly FunctionalSurfaceDefinition[];
-  readonly typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[];
-  readonly module: EncodedFunctionalModule;
+export interface CompilationTraceSurface {
+  readonly definitions: readonly SurfaceDefinition[];
+  readonly typeDeclarations: readonly SurfaceTypeDeclaration[];
+  readonly module: EncodedModule;
 }
 
-export interface FunctionalCompilationTraceInput {
+export interface CompilationTraceInput {
   readonly title: string;
   readonly sourceLabel: string;
   readonly introduction: string;
   readonly source: string;
-  readonly surface: FunctionalCompilationTraceSurface;
-  readonly compiledModule: GpuFunctionalModule;
-  readonly coreNodes: readonly FunctionalCoreNode[];
-  readonly evaluation: FunctionalEvaluationResult;
+  readonly surface: CompilationTraceSurface;
+  readonly compiledModule: GpuModule;
+  readonly coreNodes: readonly CoreNode[];
+  readonly evaluation: EvaluationResult;
 }
 
 /** `JSON.stringify` escapes control characters, so the marker has to survive as printable text. */
@@ -58,7 +58,7 @@ function formatOutcome(outcome: unknown): string {
   return marked.replaceAll(new RegExp(`"${BIGINT_MARKER}(-?\\d+)"`, "g"), "$1");
 }
 
-export function renderFunctionalCompilationTrace(input: FunctionalCompilationTraceInput): string {
+export function renderCompilationTrace(input: CompilationTraceInput): string {
   const normalized = formatNormalizedSurface(
     input.surface.definitions,
     input.surface.typeDeclarations,
@@ -100,8 +100,8 @@ ${outcome}
 }
 
 function formatNormalizedSurface(
-  definitions: readonly FunctionalSurfaceDefinition[],
-  typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[],
+  definitions: readonly SurfaceDefinition[],
+  typeDeclarations: readonly SurfaceTypeDeclaration[],
 ): string {
   const declarations = typeDeclarations.map(formatSurfaceTypeDeclaration);
   const functions = definitions.map((definition) =>
@@ -112,7 +112,7 @@ function formatNormalizedSurface(
   return [...declarations, ...functions].join("\n\n");
 }
 
-function formatSurfaceTypeDeclaration(declaration: FunctionalSurfaceTypeDeclaration): string {
+function formatSurfaceTypeDeclaration(declaration: SurfaceTypeDeclaration): string {
   const parameters = declaration.parameters.length === 0
     ? ""
     : `<${declaration.parameters.join(", ")}>`;
@@ -128,9 +128,9 @@ function formatSurfaceTypeDeclaration(declaration: FunctionalSurfaceTypeDeclarat
   return `type ${declaration.name}${parameters} =\n${constructors.join("\n")}`;
 }
 
-function formatExpression(expression: FunctionalSurfaceExpression, depth: number): string {
+function formatExpression(expression: SurfaceExpression, depth: number): string {
   const indent = "  ".repeat(depth);
-  const nested = (value: FunctionalSurfaceExpression): string => formatExpression(value, depth + 1);
+  const nested = (value: SurfaceExpression): string => formatExpression(value, depth + 1);
   switch (expression.kind) {
     case "integer":
       return `${indent}${expression.value}`;
@@ -219,32 +219,32 @@ function formatExpression(expression: FunctionalSurfaceExpression, depth: number
   }
 }
 
-function formatEncodedModule(module: EncodedFunctionalModule): string {
+function formatEncodedModule(module: EncodedModule): string {
   const lines = [
     `ABI v${module.abiVersion}; entry=${symbol(module, module.entrySymbol)}`,
     "",
     "definitions:",
   ];
   for (let index = 0; index < module.definitionCount; index++) {
-    const base = index * FUNCTIONAL_DEFINITION_WORD_LENGTH;
+    const base = index * DEFINITION_WORD_LENGTH;
     const name = requiredWord(
       module.definitionWords,
-      base + FunctionalDefinitionWord.Symbol,
+      base + DefinitionWord.Symbol,
       "definition symbol",
     );
     const root = requiredWord(
       module.definitionWords,
-      base + FunctionalDefinitionWord.RootNode,
+      base + DefinitionWord.RootNode,
       "definition root",
     );
     const start = requiredWord(
       module.definitionWords,
-      base + FunctionalDefinitionWord.StartByte,
+      base + DefinitionWord.StartByte,
       "definition start",
     );
     const end = requiredWord(
       module.definitionWords,
-      base + FunctionalDefinitionWord.EndByte,
+      base + DefinitionWord.EndByte,
       "definition end",
     );
     lines.push(
@@ -255,61 +255,61 @@ function formatEncodedModule(module: EncodedFunctionalModule): string {
   }
   lines.push("", "types:");
   for (let index = 0; index < module.typeCount; index++) {
-    const base = index * FUNCTIONAL_TYPE_WORD_LENGTH;
+    const base = index * TYPE_WORD_LENGTH;
     const name = requiredWord(
       module.typeWords,
-      base + FunctionalAlgebraicTypeWord.Symbol,
+      base + AlgebraicTypeWord.Symbol,
       "type symbol",
     );
     const first = requiredWord(
       module.typeWords,
-      base + FunctionalAlgebraicTypeWord.FirstConstructor,
+      base + AlgebraicTypeWord.FirstConstructor,
       "first constructor",
     );
     const count = requiredWord(
       module.typeWords,
-      base + FunctionalAlgebraicTypeWord.ConstructorCount,
+      base + AlgebraicTypeWord.ConstructorCount,
       "constructor count",
     );
     lines.push(`  t${index} ${symbol(module, name)} constructors=[c${first},c${first + count})`);
   }
   lines.push("", "constructors:");
   for (let index = 0; index < module.constructorCount; index++) {
-    const base = index * FUNCTIONAL_CONSTRUCTOR_WORD_LENGTH;
+    const base = index * CONSTRUCTOR_WORD_LENGTH;
     const name = requiredWord(
       module.constructorWords,
-      base + FunctionalConstructorWord.Symbol,
+      base + ConstructorWord.Symbol,
       "constructor symbol",
     );
     const type = requiredWord(
       module.constructorWords,
-      base + FunctionalConstructorWord.Type,
+      base + ConstructorWord.Type,
       "constructor type",
     );
     const arity = requiredWord(
       module.constructorWords,
-      base + FunctionalConstructorWord.Arity,
+      base + ConstructorWord.Arity,
       "constructor arity",
     );
     lines.push(`  c${index} ${symbol(module, name)} owner=t${type} arity=${arity}`);
   }
   lines.push("", "nodes:");
   for (let index = 0; index < module.nodeCount; index++) {
-    const base = index * FUNCTIONAL_NODE_WORD_LENGTH;
-    const tag = requiredWord(module.nodeWords, base + FunctionalNodeWord.Tag, "node tag");
+    const base = index * NODE_WORD_LENGTH;
+    const tag = requiredWord(module.nodeWords, base + NodeWord.Tag, "node tag");
     const payload = requiredWord(
       module.nodeWords,
-      base + FunctionalNodeWord.Payload,
+      base + NodeWord.Payload,
       "node payload",
     );
     const children = [
-      requiredWord(module.nodeWords, base + FunctionalNodeWord.Child0, "node child 0"),
-      requiredWord(module.nodeWords, base + FunctionalNodeWord.Child1, "node child 1"),
-      requiredWord(module.nodeWords, base + FunctionalNodeWord.Child2, "node child 2"),
+      requiredWord(module.nodeWords, base + NodeWord.Child0, "node child 0"),
+      requiredWord(module.nodeWords, base + NodeWord.Child1, "node child 1"),
+      requiredWord(module.nodeWords, base + NodeWord.Child2, "node child 2"),
     ];
-    const parent = requiredWord(module.nodeWords, base + FunctionalNodeWord.Parent, "node parent");
-    const start = requiredWord(module.nodeWords, base + FunctionalNodeWord.StartByte, "node start");
-    const end = requiredWord(module.nodeWords, base + FunctionalNodeWord.EndByte, "node end");
+    const parent = requiredWord(module.nodeWords, base + NodeWord.Parent, "node parent");
+    const start = requiredWord(module.nodeWords, base + NodeWord.StartByte, "node start");
+    const end = requiredWord(module.nodeWords, base + NodeWord.EndByte, "node end");
     lines.push(
       `  n${index} ${surfaceTagName(tag)} ${surfacePayload(module, tag, payload)} ` +
         `children=${formatEdges(children, "n")} parent=${
@@ -320,7 +320,7 @@ function formatEncodedModule(module: EncodedFunctionalModule): string {
   return lines.join("\n");
 }
 
-function formatDefinitionType(module: EncodedFunctionalModule, index: number): string {
+function formatDefinitionType(module: EncodedModule, index: number): string {
   const definitionType = module.definitionTypes[index];
   if (definitionType === undefined) {
     throw new Error(`Functional trace omitted definition type ${index}.`);
@@ -329,9 +329,9 @@ function formatDefinitionType(module: EncodedFunctionalModule, index: number): s
 }
 
 function formatCoreModule(
-  module: GpuFunctionalModule,
-  encoded: EncodedFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
+  module: GpuModule,
+  encoded: EncodedModule,
+  nodes: readonly CoreNode[],
 ): string {
   const lines = [
     `entry=d${module.entryDefinition}; type=${formatType(module.entryType)}; effects=${
@@ -350,23 +350,23 @@ function formatCoreModule(
   return lines.join("\n");
 }
 
-function surfacePayload(module: EncodedFunctionalModule, tag: number, payload: number): string {
+function surfacePayload(module: EncodedModule, tag: number, payload: number): string {
   switch (tag) {
-    case FunctionalExpressionTag.Integer:
+    case ExpressionTag.Integer:
       return `value=${payload | 0}`;
-    case FunctionalExpressionTag.Boolean:
+    case ExpressionTag.Boolean:
       return `value=${payload === 0 ? "false" : "true"}`;
-    case FunctionalExpressionTag.Name:
-    case FunctionalExpressionTag.Let:
-    case FunctionalExpressionTag.StrictLet:
-    case FunctionalExpressionTag.LetRec:
-    case FunctionalExpressionTag.Lambda:
-    case FunctionalExpressionTag.CaseArm:
-    case FunctionalExpressionTag.PatternBind:
+    case ExpressionTag.Name:
+    case ExpressionTag.Let:
+    case ExpressionTag.StrictLet:
+    case ExpressionTag.LetRec:
+    case ExpressionTag.Lambda:
+    case ExpressionTag.CaseArm:
+    case ExpressionTag.PatternBind:
       return `symbol=${symbol(module, payload)}`;
-    case FunctionalExpressionTag.Binary:
+    case ExpressionTag.Binary:
       return `operator=${binaryOperatorName(payload)}`;
-    case FunctionalExpressionTag.StrictApply:
+    case ExpressionTag.StrictApply:
       return "evaluation=strict";
     default:
       return "";
@@ -374,34 +374,34 @@ function surfacePayload(module: EncodedFunctionalModule, tag: number, payload: n
 }
 
 function corePayload(
-  module: GpuFunctionalModule,
-  encoded: EncodedFunctionalModule,
-  node: FunctionalCoreNode,
+  module: GpuModule,
+  encoded: EncodedModule,
+  node: CoreNode,
 ): string {
   switch (node.tag) {
-    case FunctionalCoreTag.Integer:
+    case CoreTag.Integer:
       return `value=${node.payload | 0}`;
-    case FunctionalCoreTag.Boolean:
+    case CoreTag.Boolean:
       return `value=${node.payload === 0 ? "false" : "true"}`;
-    case FunctionalCoreTag.Local:
+    case CoreTag.Local:
       return `depth=${node.payload}`;
-    case FunctionalCoreTag.Global:
+    case CoreTag.Global:
       return `definition=d${node.payload}`;
-    case FunctionalCoreTag.Constructor:
+    case CoreTag.Constructor:
       return `constructor=c${node.payload}:${module.constructorNames[node.payload] ?? "?"}`;
-    case FunctionalCoreTag.Lambda:
-    case FunctionalCoreTag.LetRec:
-    case FunctionalCoreTag.PatternBind:
+    case CoreTag.Lambda:
+    case CoreTag.LetRec:
+    case CoreTag.PatternBind:
       return `symbol=${symbol(encoded, node.payload)}`;
-    case FunctionalCoreTag.Let:
+    case CoreTag.Let:
       return `symbol=${symbol(encoded, node.payload)} evaluation=${
         evaluationName(node.evaluationMode)
       }`;
-    case FunctionalCoreTag.CaseArm:
+    case CoreTag.CaseArm:
       return `constructor=c${node.payload}:${module.constructorNames[node.payload] ?? "?"}`;
-    case FunctionalCoreTag.Binary:
+    case CoreTag.Binary:
       return `operator=${binaryOperatorName(node.payload)}`;
-    case FunctionalCoreTag.Apply:
+    case CoreTag.Apply:
       return `evaluation=${evaluationName(node.evaluationMode)}`;
     default:
       return node.payload === 0 ? "" : `payload=${node.payload}`;
@@ -413,34 +413,34 @@ function evaluationName(mode: number): string {
 }
 
 function surfaceTagName(tag: number): string {
-  for (const [name, value] of Object.entries(FunctionalExpressionTag)) {
+  for (const [name, value] of Object.entries(ExpressionTag)) {
     if (value === tag) return name;
   }
   return `Tag${tag}`;
 }
 
 function coreTagName(tag: number): string {
-  for (const [name, value] of Object.entries(FunctionalCoreTag)) {
+  for (const [name, value] of Object.entries(CoreTag)) {
     if (value === tag) return name;
   }
   return `Tag${tag}`;
 }
 
 function binaryOperatorName(operator: number): string {
-  for (const [name, value] of Object.entries(FunctionalBinaryOperator)) {
+  for (const [name, value] of Object.entries(BinaryOperator)) {
     if (value === operator) return name;
   }
   return `operator${operator}`;
 }
 
 function unaryOperatorName(operator: number): string {
-  for (const [name, value] of Object.entries(FunctionalUnaryOperator)) {
+  for (const [name, value] of Object.entries(UnaryOperator)) {
     if (value === operator) return name;
   }
   return `operator${operator}`;
 }
 
-function formatType(type: FunctionalTypeSchema | FunctionalType): string {
+function formatType(type: TypeSchema | Type): string {
   switch (type.kind) {
     case "integer":
       return "i32";
@@ -476,15 +476,15 @@ function formatType(type: FunctionalTypeSchema | FunctionalType): string {
 }
 
 function formatEdges(edges: readonly number[], prefix: string): string {
-  const present = edges.filter((edge) => edge !== FUNCTIONAL_NO_INDEX);
+  const present = edges.filter((edge) => edge !== NO_INDEX);
   return `[${present.map((edge) => `${prefix}${edge}`).join(",")}]`;
 }
 
 function formatEdge(edge: number, prefix: string): string {
-  return edge === FUNCTIONAL_NO_INDEX ? "-" : `${prefix}${edge}`;
+  return edge === NO_INDEX ? "-" : `${prefix}${edge}`;
 }
 
-function symbol(module: EncodedFunctionalModule, id: number): string {
+function symbol(module: EncodedModule, id: number): string {
   return module.symbolNames[id] ?? `<symbol ${id}>`;
 }
 

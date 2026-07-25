@@ -1,31 +1,31 @@
 import {
-  type EncodedFunctionalModule,
-  FUNCTIONAL_DEFINITION_WORD_LENGTH,
-  FUNCTIONAL_NO_INDEX,
-  FUNCTIONAL_NODE_BYTE_LENGTH,
-  FunctionalCoreTag,
-  FunctionalDefinitionWord,
-  FunctionalEvaluationMode,
-  type FunctionalType,
+  CoreTag,
+  DEFINITION_WORD_LENGTH,
+  DefinitionWord,
+  type EncodedModule,
+  EvaluationMode,
+  NO_INDEX,
+  NODE_BYTE_LENGTH,
+  type Type,
 } from "./abi.ts";
-import type { FunctionalCoreNode } from "./compiler_module.ts";
+import type { CoreNode } from "./compiler_module.ts";
 
-export interface FunctionalCompiledCoreArtifact {
-  readonly nodes: readonly FunctionalCoreNode[];
-  readonly entryType: FunctionalType;
+export interface CompiledCoreArtifact {
+  readonly nodes: readonly CoreNode[];
+  readonly entryType: Type;
 }
 
-export function encodeFunctionalCoreArtifact(
-  module: EncodedFunctionalModule,
-  artifact: FunctionalCompiledCoreArtifact,
+export function encodeCoreArtifact(
+  module: EncodedModule,
+  artifact: CompiledCoreArtifact,
 ): ArrayBuffer {
-  validateFunctionalCoreArtifact(module, artifact);
+  validateCoreArtifact(module, artifact);
   const bytes = new ArrayBuffer(
-    Math.max(FUNCTIONAL_NODE_BYTE_LENGTH, artifact.nodes.length * FUNCTIONAL_NODE_BYTE_LENGTH),
+    Math.max(NODE_BYTE_LENGTH, artifact.nodes.length * NODE_BYTE_LENGTH),
   );
   const view = new DataView(bytes);
   for (const [nodeIndex, node] of artifact.nodes.entries()) {
-    const offset = nodeIndex * FUNCTIONAL_NODE_BYTE_LENGTH;
+    const offset = nodeIndex * NODE_BYTE_LENGTH;
     view.setUint32(offset, node.tag, true);
     view.setUint32(offset + 4, node.payload, true);
     view.setUint32(offset + 8, node.child0, true);
@@ -38,9 +38,9 @@ export function encodeFunctionalCoreArtifact(
   return bytes;
 }
 
-export function validateFunctionalCoreArtifact(
-  module: EncodedFunctionalModule,
-  artifact: FunctionalCompiledCoreArtifact,
+export function validateCoreArtifact(
+  module: EncodedModule,
+  artifact: CompiledCoreArtifact,
 ): void {
   if (artifact.nodes.length !== module.nodeCount) {
     throw new Error(
@@ -52,8 +52,8 @@ export function validateFunctionalCoreArtifact(
       throw new Error(`functional compiled Core node ${nodeIndex} has unknown tag ${node.tag}`);
     }
     if (
-      node.evaluationMode !== FunctionalEvaluationMode.LazyCallByNeed &&
-      node.evaluationMode !== FunctionalEvaluationMode.StrictEager
+      node.evaluationMode !== EvaluationMode.LazyCallByNeed &&
+      node.evaluationMode !== EvaluationMode.StrictEager
     ) {
       throw new Error(
         `functional compiled Core node ${nodeIndex} has unknown evaluation mode ${node.evaluationMode}`,
@@ -68,18 +68,18 @@ export function validateFunctionalCoreArtifact(
       );
     }
     for (const [childName, child] of childReferences(node)) {
-      if (child === FUNCTIONAL_NO_INDEX || child < module.nodeCount) continue;
+      if (child === NO_INDEX || child < module.nodeCount) continue;
       throw new Error(
         `functional compiled Core node ${nodeIndex} ${childName} references node ${child} outside ${module.nodeCount} nodes`,
       );
     }
-    if (node.tag === FunctionalCoreTag.Global && node.payload >= module.definitionCount) {
+    if (node.tag === CoreTag.Global && node.payload >= module.definitionCount) {
       throw new Error(
         `functional compiled Core node ${nodeIndex} references definition ${node.payload} outside ${module.definitionCount} definitions`,
       );
     }
     if (
-      (node.tag === FunctionalCoreTag.Constructor || node.tag === FunctionalCoreTag.CaseArm) &&
+      (node.tag === CoreTag.Constructor || node.tag === CoreTag.CaseArm) &&
       node.payload >= module.constructorCount
     ) {
       throw new Error(
@@ -89,7 +89,7 @@ export function validateFunctionalCoreArtifact(
   }
   for (let definitionIndex = 0; definitionIndex < module.definitionCount; definitionIndex++) {
     const root = module.definitionWords[
-      definitionIndex * FUNCTIONAL_DEFINITION_WORD_LENGTH + FunctionalDefinitionWord.RootNode
+      definitionIndex * DEFINITION_WORD_LENGTH + DefinitionWord.RootNode
     ];
     if (root !== undefined && root < module.nodeCount) continue;
     throw new Error(
@@ -99,76 +99,76 @@ export function validateFunctionalCoreArtifact(
 }
 
 function childReferences(
-  node: FunctionalCoreNode,
+  node: CoreNode,
 ): readonly (readonly [string, number])[] {
   switch (node.tag) {
-    case FunctionalCoreTag.SignedInteger64:
-    case FunctionalCoreTag.Float64:
-    case FunctionalCoreTag.WholeNumberF64:
-    case FunctionalCoreTag.Integer:
-    case FunctionalCoreTag.Float32:
-    case FunctionalCoreTag.Boolean:
-    case FunctionalCoreTag.Text:
-    case FunctionalCoreTag.Bytes:
-    case FunctionalCoreTag.RuntimeFault:
-    case FunctionalCoreTag.Local:
-    case FunctionalCoreTag.Global:
-    case FunctionalCoreTag.Constructor:
+    case CoreTag.SignedInteger64:
+    case CoreTag.Float64:
+    case CoreTag.WholeNumberF64:
+    case CoreTag.Integer:
+    case CoreTag.Float32:
+    case CoreTag.Boolean:
+    case CoreTag.Text:
+    case CoreTag.Bytes:
+    case CoreTag.RuntimeFault:
+    case CoreTag.Local:
+    case CoreTag.Global:
+    case CoreTag.Constructor:
       return [];
-    case FunctionalCoreTag.Lambda:
-    case FunctionalCoreTag.Unary:
-    case FunctionalCoreTag.NumericConvert:
-    case FunctionalCoreTag.StoreLength:
-    case FunctionalCoreTag.PatternBind:
+    case CoreTag.Lambda:
+    case CoreTag.Unary:
+    case CoreTag.NumericConvert:
+    case CoreTag.StoreLength:
+    case CoreTag.PatternBind:
       return [["child0", node.child0]];
-    case FunctionalCoreTag.Apply:
-    case FunctionalCoreTag.Let:
-    case FunctionalCoreTag.LetRec:
-    case FunctionalCoreTag.Binary:
-    case FunctionalCoreTag.BufferAppend:
-    case FunctionalCoreTag.StoreNew:
-    case FunctionalCoreTag.StoreRead:
-    case FunctionalCoreTag.Case:
-    case FunctionalCoreTag.CaseArm:
+    case CoreTag.Apply:
+    case CoreTag.Let:
+    case CoreTag.LetRec:
+    case CoreTag.Binary:
+    case CoreTag.BufferAppend:
+    case CoreTag.StoreNew:
+    case CoreTag.StoreRead:
+    case CoreTag.Case:
+    case CoreTag.CaseArm:
       return [["child0", node.child0], ["child1", node.child1]];
-    case FunctionalCoreTag.If:
-    case FunctionalCoreTag.StoreWrite:
-    case FunctionalCoreTag.StoreGrow:
+    case CoreTag.If:
+    case CoreTag.StoreWrite:
+    case CoreTag.StoreGrow:
       return [["child0", node.child0], ["child1", node.child1], ["child2", node.child2]];
   }
 }
 
 function isCoreTag(tag: number): boolean {
   switch (tag) {
-    case FunctionalCoreTag.Integer:
-    case FunctionalCoreTag.SignedInteger64:
-    case FunctionalCoreTag.Float32:
-    case FunctionalCoreTag.Float64:
-    case FunctionalCoreTag.WholeNumberF64:
-    case FunctionalCoreTag.Boolean:
-    case FunctionalCoreTag.Text:
-    case FunctionalCoreTag.Bytes:
-    case FunctionalCoreTag.RuntimeFault:
-    case FunctionalCoreTag.Local:
-    case FunctionalCoreTag.Global:
-    case FunctionalCoreTag.Constructor:
-    case FunctionalCoreTag.Lambda:
-    case FunctionalCoreTag.Apply:
-    case FunctionalCoreTag.Let:
-    case FunctionalCoreTag.LetRec:
-    case FunctionalCoreTag.If:
-    case FunctionalCoreTag.Unary:
-    case FunctionalCoreTag.Binary:
-    case FunctionalCoreTag.BufferAppend:
-    case FunctionalCoreTag.StoreNew:
-    case FunctionalCoreTag.StoreLength:
-    case FunctionalCoreTag.StoreRead:
-    case FunctionalCoreTag.StoreWrite:
-    case FunctionalCoreTag.StoreGrow:
-    case FunctionalCoreTag.NumericConvert:
-    case FunctionalCoreTag.Case:
-    case FunctionalCoreTag.CaseArm:
-    case FunctionalCoreTag.PatternBind:
+    case CoreTag.Integer:
+    case CoreTag.SignedInteger64:
+    case CoreTag.Float32:
+    case CoreTag.Float64:
+    case CoreTag.WholeNumberF64:
+    case CoreTag.Boolean:
+    case CoreTag.Text:
+    case CoreTag.Bytes:
+    case CoreTag.RuntimeFault:
+    case CoreTag.Local:
+    case CoreTag.Global:
+    case CoreTag.Constructor:
+    case CoreTag.Lambda:
+    case CoreTag.Apply:
+    case CoreTag.Let:
+    case CoreTag.LetRec:
+    case CoreTag.If:
+    case CoreTag.Unary:
+    case CoreTag.Binary:
+    case CoreTag.BufferAppend:
+    case CoreTag.StoreNew:
+    case CoreTag.StoreLength:
+    case CoreTag.StoreRead:
+    case CoreTag.StoreWrite:
+    case CoreTag.StoreGrow:
+    case CoreTag.NumericConvert:
+    case CoreTag.Case:
+    case CoreTag.CaseArm:
+    case CoreTag.PatternBind:
       return true;
     default:
       return false;

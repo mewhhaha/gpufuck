@@ -1,53 +1,53 @@
-import { FUNCTIONAL_NO_INDEX, FunctionalCoreTag, FunctionalEvaluationMode } from "./abi.ts";
-import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
+import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
+import type { CoreNode, GpuModule } from "./compiler_module.ts";
 import {
-  FunctionalPersistentSharing,
-  FunctionalStorageCoreError,
-  type FunctionalStorageCoreLifetime,
-  type FunctionalStorageCoreOperation,
-  type FunctionalStorageCoreProgram,
-  verifyFunctionalStorageCore,
+  PersistentSharing,
+  StorageCoreError,
+  type StorageCoreLifetime,
+  type StorageCoreOperation,
+  type StorageCoreProgram,
+  verifyStorageCore,
 } from "./storage_core.ts";
 import {
-  type FunctionalBoundaryStorageDecision,
-  FunctionalStorageClass,
-  type FunctionalStorageDecision,
-  type FunctionalStoragePlan,
-  type FunctionalStoragePlanningOptions,
-  type FunctionalStorageReference,
+  type BoundaryStorageDecision,
+  StorageClass,
+  type StorageDecision,
+  type StoragePlan,
+  type StoragePlanningOptions,
+  type StorageReference,
 } from "./storage_contract.ts";
-import { analyzeFunctionalStorageReferences } from "./storage_reference_analysis.ts";
-import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
+import { analyzeStorageReferences } from "./storage_reference_analysis.ts";
+import { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 
 export {
-  type FunctionalBoundaryStorageDecision,
-  FunctionalStorageClass,
-  type FunctionalStorageDecision,
-  type FunctionalStoragePlan,
-  type FunctionalStoragePlanningOptions,
-  type FunctionalStoragePlanSummary,
-  type FunctionalStoredValueKind,
+  type BoundaryStorageDecision,
+  StorageClass,
+  type StorageDecision,
+  type StoragePlan,
+  type StoragePlanningOptions,
+  type StoragePlanSummary,
+  type StoredValueKind,
 } from "./storage_contract.ts";
 
-export async function planFunctionalModuleStorage(
-  module: GpuFunctionalModule,
-  options: FunctionalStoragePlanningOptions = {},
-): Promise<FunctionalStoragePlan> {
+export async function planModuleStorage(
+  module: GpuModule,
+  options: StoragePlanningOptions = {},
+): Promise<StoragePlan> {
   const nodes = await module.readCoreNodes();
-  return createFunctionalStoragePlan(
+  return createStoragePlan(
     module,
     nodes,
-    new FunctionalWasmCaptureAnalysis(nodes),
+    new WasmCaptureAnalysis(nodes),
     options,
   );
 }
 
-export function createFunctionalStoragePlan(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
-  captureAnalysis: FunctionalWasmCaptureAnalysis = new FunctionalWasmCaptureAnalysis(nodes),
-  options: FunctionalStoragePlanningOptions = {},
-): FunctionalStoragePlan {
+export function createStoragePlan(
+  module: GpuModule,
+  nodes: readonly CoreNode[],
+  captureAnalysis: WasmCaptureAnalysis = new WasmCaptureAnalysis(nodes),
+  options: StoragePlanningOptions = {},
+): StoragePlan {
   const definitionByRoot = new Map<number, number>();
   for (const [definition, root] of module.definitionRoots.entries()) {
     if (root >= nodes.length) {
@@ -61,14 +61,14 @@ export function createFunctionalStoragePlan(
   const directCallees = new Set<number>();
   const recursiveLambdas = new Set<number>();
   for (const [nodeIndex, node] of nodes.entries()) {
-    if (node.tag === FunctionalCoreTag.Apply) directCallees.add(node.child0);
-    if (node.tag === FunctionalCoreTag.LetRec) recursiveLambdas.add(node.child0);
+    if (node.tag === CoreTag.Apply) directCallees.add(node.child0);
+    if (node.tag === CoreTag.LetRec) recursiveLambdas.add(node.child0);
     requireCoreChildren(nodes.length, nodeIndex, node);
   }
 
-  const values: FunctionalStorageDecision[] = [];
-  const recorded = new Map<string, FunctionalStorageDecision>();
-  const record = (decision: FunctionalStorageDecision): void => {
+  const values: StorageDecision[] = [];
+  const recorded = new Map<string, StorageDecision>();
+  const record = (decision: StorageDecision): void => {
     const key = `${decision.valueKind}:${decision.coreNode}`;
     const existing = recorded.get(key);
     if (existing !== undefined) {
@@ -90,7 +90,7 @@ export function createFunctionalStoragePlan(
   };
 
   for (const [nodeIndex, node] of nodes.entries()) {
-    if (node.tag === FunctionalCoreTag.Lambda) {
+    if (node.tag === CoreTag.Lambda) {
       const capturedLocalCount = captureAnalysis.freeLocalDepths(node.child0)
         .filter((depth) => depth >= 1).length;
       const definition = definitionByRoot.get(nodeIndex);
@@ -98,7 +98,7 @@ export function createFunctionalStoragePlan(
         record({
           coreNode: nodeIndex,
           valueKind: "closure",
-          storage: FunctionalStorageClass.Static,
+          storage: StorageClass.Static,
           capturedLocalCount,
           reason: `definition d${definition} has module lifetime`,
         });
@@ -106,7 +106,7 @@ export function createFunctionalStoragePlan(
         record({
           coreNode: nodeIndex,
           valueKind: "closure",
-          storage: FunctionalStorageClass.InvocationArena,
+          storage: StorageClass.InvocationArena,
           capturedLocalCount,
           reason: "a local recursive closure may contain a self reference",
         });
@@ -114,8 +114,8 @@ export function createFunctionalStoragePlan(
         record({
           coreNode: nodeIndex,
           valueKind: "closure",
-          storage: FunctionalStorageClass.ScalarLocal,
-          escapeStorage: FunctionalStorageClass.InvocationArena,
+          storage: StorageClass.ScalarLocal,
+          escapeStorage: StorageClass.InvocationArena,
           capturedLocalCount,
           reason: directCallees.has(nodeIndex)
             ? "the lambda is directly applied and can remain virtual"
@@ -125,7 +125,7 @@ export function createFunctionalStoragePlan(
       continue;
     }
 
-    if (node.tag === FunctionalCoreTag.Constructor) {
+    if (node.tag === CoreTag.Constructor) {
       const arity = module.constructorArities[node.payload];
       if (arity === undefined) {
         throw new Error(
@@ -135,9 +135,7 @@ export function createFunctionalStoragePlan(
       record({
         coreNode: nodeIndex,
         valueKind: "constructor",
-        storage: arity === 0
-          ? FunctionalStorageClass.Static
-          : FunctionalStorageClass.InvocationArena,
+        storage: arity === 0 ? StorageClass.Static : StorageClass.InvocationArena,
         capturedLocalCount: 0,
         reason: arity === 0
           ? "a nullary constructor uses one module-lifetime value"
@@ -147,14 +145,14 @@ export function createFunctionalStoragePlan(
     }
 
     if (
-      node.tag === FunctionalCoreTag.Let &&
-      node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed &&
+      node.tag === CoreTag.Let &&
+      node.evaluationMode === EvaluationMode.LazyCallByNeed &&
       !expressionIsWeakHeadNormalForm(nodes, node.child0)
     ) {
       record({
         coreNode: node.child0,
         valueKind: "thunk",
-        storage: FunctionalStorageClass.InvocationArena,
+        storage: StorageClass.InvocationArena,
         capturedLocalCount: captureAnalysis.freeLocalDepths(node.child0).length,
         reason: `lazy let at core node ${nodeIndex} memoizes within one invocation`,
       });
@@ -162,14 +160,14 @@ export function createFunctionalStoragePlan(
     }
 
     if (
-      node.tag === FunctionalCoreTag.Apply &&
-      node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed &&
+      node.tag === CoreTag.Apply &&
+      node.evaluationMode === EvaluationMode.LazyCallByNeed &&
       !expressionIsWeakHeadNormalForm(nodes, node.child1)
     ) {
       record({
         coreNode: node.child1,
         valueKind: "thunk",
-        storage: FunctionalStorageClass.InvocationArena,
+        storage: StorageClass.InvocationArena,
         capturedLocalCount: captureAnalysis.freeLocalDepths(node.child1).length,
         reason:
           `lazy application at core node ${nodeIndex} memoizes its argument within one invocation`,
@@ -182,14 +180,14 @@ export function createFunctionalStoragePlan(
     record({
       coreNode: root,
       valueKind: "thunk",
-      storage: FunctionalStorageClass.Static,
+      storage: StorageClass.Static,
       capturedLocalCount: 0,
       reason: `definition d${definition} memoizes for the module instance lifetime`,
     });
   }
 
   const boundaries = boundaryStorageDecisions(module);
-  const references = analyzeFunctionalStorageReferences(
+  const references = analyzeStorageReferences(
     module,
     nodes,
     values,
@@ -209,10 +207,10 @@ export function createFunctionalStoragePlan(
       }`,
     );
   }
-  const verification = verifyFunctionalStorageCore(core);
+  const verification = verifyStorageCore(core);
   if (!verification.ok) {
     if (options.storageCore !== undefined) {
-      throw new FunctionalStorageCoreError(verification.diagnostic);
+      throw new StorageCoreError(verification.diagnostic);
     }
     throw new Error(
       `derived Functional Storage Core failed at operation ${verification.diagnostic.operation}: ${verification.diagnostic.message}`,
@@ -222,22 +220,21 @@ export function createFunctionalStoragePlan(
     requireCompleteStorageCore(derivedCore, options.storageCore);
   }
   const summary = Object.freeze({
-    staticValues: values.filter((value) => value.storage === FunctionalStorageClass.Static).length,
-    scalarLocalValues: values.filter((value) =>
-      value.storage === FunctionalStorageClass.ScalarLocal
-    ).length,
+    staticValues: values.filter((value) => value.storage === StorageClass.Static).length,
+    scalarLocalValues: values.filter((value) => value.storage === StorageClass.ScalarLocal).length,
     invocationArenaValues: values.filter((value) =>
-      value.storage === FunctionalStorageClass.InvocationArena ||
-      value.escapeStorage === FunctionalStorageClass.InvocationArena
+      value.storage === StorageClass.InvocationArena ||
+      value.escapeStorage === StorageClass.InvocationArena
     ).length,
     ownedBoundaries: boundaries.filter((boundary) =>
-      boundary.storage === FunctionalStorageClass.Owned
+      boundary.storage === StorageClass.Owned
     ).length,
-    hostManagedBoundaries:
-      boundaries.filter((boundary) => boundary.storage === FunctionalStorageClass.HostManaged)
-        .length,
+    hostManagedBoundaries: boundaries.filter((boundary) =>
+      boundary.storage === StorageClass.HostManaged
+    )
+      .length,
     automaticArenaReset: !values.some((value) =>
-      value.valueKind === "thunk" && value.storage === FunctionalStorageClass.Static
+      value.valueKind === "thunk" && value.storage === StorageClass.Static
     ),
   });
   return Object.freeze({
@@ -251,10 +248,10 @@ export function createFunctionalStoragePlan(
 }
 
 function requireCompleteStorageCore(
-  derived: FunctionalStorageCoreProgram,
-  supplied: FunctionalStorageCoreProgram,
+  derived: StorageCoreProgram,
+  supplied: StorageCoreProgram,
 ): void {
-  const suppliedDeclarations = new Map<string, FunctionalStorageCoreLifetime>();
+  const suppliedDeclarations = new Map<string, StorageCoreLifetime>();
   const suppliedReferences = new Set<string>();
   for (const operation of supplied.operations) {
     if (operation.kind === "declare") {
@@ -296,14 +293,14 @@ function requireCompleteStorageCore(
 }
 
 function storageCore(
-  values: readonly FunctionalStorageDecision[],
-  references: readonly FunctionalStorageReference[],
-  boundaries: readonly FunctionalBoundaryStorageDecision[],
-  persistentSharing: FunctionalPersistentSharing | undefined,
-): FunctionalStorageCoreProgram {
-  const operations: FunctionalStorageCoreOperation[] = [];
+  values: readonly StorageDecision[],
+  references: readonly StorageReference[],
+  boundaries: readonly BoundaryStorageDecision[],
+  persistentSharing: PersistentSharing | undefined,
+): StorageCoreProgram {
+  const operations: StorageCoreOperation[] = [];
   for (const value of values) {
-    if (value.storage !== FunctionalStorageClass.Static) continue;
+    if (value.storage !== StorageClass.Static) continue;
     operations.push({
       kind: "declare",
       value: `${value.valueKind}:${value.coreNode}`,
@@ -314,8 +311,8 @@ function storageCore(
   }
   for (const boundary of boundaries) {
     if (
-      boundary.storage !== FunctionalStorageClass.Owned &&
-      boundary.storage !== FunctionalStorageClass.HostManaged
+      boundary.storage !== StorageClass.Owned &&
+      boundary.storage !== StorageClass.HostManaged
     ) continue;
     operations.push({
       kind: "declare",
@@ -326,13 +323,13 @@ function storageCore(
   }
   operations.push({ kind: "enter-arena", arena: "invocation" });
   for (const value of values) {
-    if (value.storage === FunctionalStorageClass.Static) continue;
+    if (value.storage === StorageClass.Static) continue;
     operations.push({
       kind: "declare",
       value: `${value.valueKind}:${value.coreNode}`,
       lifetime: value.storage,
-      ...(value.storage === FunctionalStorageClass.ScalarLocal ||
-          value.storage === FunctionalStorageClass.InvocationArena
+      ...(value.storage === StorageClass.ScalarLocal ||
+          value.storage === StorageClass.InvocationArena
         ? { arena: "invocation" }
         : {}),
       coreNode: value.coreNode,
@@ -340,7 +337,7 @@ function storageCore(
     });
   }
   for (const boundary of boundaries) {
-    if (boundary.storage !== FunctionalStorageClass.InvocationArena) continue;
+    if (boundary.storage !== StorageClass.InvocationArena) continue;
     operations.push({
       kind: "declare",
       value: `boundary:${boundary.path}`,
@@ -360,15 +357,15 @@ function storageCore(
   }
   operations.push({ kind: "leave-arena", arena: "invocation" });
   return Object.freeze({
-    persistentSharing: persistentSharing ?? FunctionalPersistentSharing.Reject,
+    persistentSharing: persistentSharing ?? PersistentSharing.Reject,
     operations: Object.freeze(operations),
   });
 }
 
 function boundaryStorageDecisions(
-  module: GpuFunctionalModule,
-): readonly FunctionalBoundaryStorageDecision[] {
-  const boundaries: FunctionalBoundaryStorageDecision[] = [];
+  module: GpuModule,
+): readonly BoundaryStorageDecision[] {
+  const boundaries: BoundaryStorageDecision[] = [];
   for (const capability of module.hostCapabilities) {
     for (const field of capability.fields) {
       const path = `${capability.name}.${field.name}`;
@@ -377,7 +374,7 @@ function boundaryStorageDecisions(
         boundaries.push(Object.freeze({
           path,
           direction: "host-to-module",
-          storage: owned ? FunctionalStorageClass.Owned : FunctionalStorageClass.HostManaged,
+          storage: owned ? StorageClass.Owned : StorageClass.HostManaged,
           reason: owned
             ? "the module receives ownership of the encoded host value"
             : "the host promises an immutable shareable value",
@@ -389,9 +386,7 @@ function boundaryStorageDecisions(
       boundaries.push(Object.freeze({
         path: `${path}.parameter`,
         direction: "module-to-host",
-        storage: transferredParameter
-          ? FunctionalStorageClass.Owned
-          : FunctionalStorageClass.InvocationArena,
+        storage: transferredParameter ? StorageClass.Owned : StorageClass.InvocationArena,
         reason: transferredParameter
           ? "the host operation takes ownership of its argument"
           : "the host operation borrows its argument for the call",
@@ -400,9 +395,7 @@ function boundaryStorageDecisions(
       boundaries.push(Object.freeze({
         path: `${path}.result`,
         direction: "host-to-module",
-        storage: hostManagedResult
-          ? FunctionalStorageClass.HostManaged
-          : FunctionalStorageClass.Owned,
+        storage: hostManagedResult ? StorageClass.HostManaged : StorageClass.Owned,
         reason: hostManagedResult
           ? "the host retains an immutable shareable result"
           : "the module receives an owned operation result",
@@ -413,7 +406,7 @@ function boundaryStorageDecisions(
 }
 
 function expressionIsWeakHeadNormalForm(
-  nodes: readonly FunctionalCoreNode[],
+  nodes: readonly CoreNode[],
   nodeIndex: number,
 ): boolean {
   const node = nodes[nodeIndex];
@@ -422,23 +415,23 @@ function expressionIsWeakHeadNormalForm(
       `functional storage plan core node ${nodeIndex} exceeds ${nodes.length} resolved nodes`,
     );
   }
-  return node.tag === FunctionalCoreTag.Integer ||
-    node.tag === FunctionalCoreTag.SignedInteger64 ||
-    node.tag === FunctionalCoreTag.Float32 ||
-    node.tag === FunctionalCoreTag.Float64 ||
-    node.tag === FunctionalCoreTag.WholeNumberF64 ||
-    node.tag === FunctionalCoreTag.Boolean ||
-    node.tag === FunctionalCoreTag.Lambda ||
-    node.tag === FunctionalCoreTag.Constructor;
+  return node.tag === CoreTag.Integer ||
+    node.tag === CoreTag.SignedInteger64 ||
+    node.tag === CoreTag.Float32 ||
+    node.tag === CoreTag.Float64 ||
+    node.tag === CoreTag.WholeNumberF64 ||
+    node.tag === CoreTag.Boolean ||
+    node.tag === CoreTag.Lambda ||
+    node.tag === CoreTag.Constructor;
 }
 
 function requireCoreChildren(
   nodeCount: number,
   nodeIndex: number,
-  node: FunctionalCoreNode,
+  node: CoreNode,
 ): void {
   for (const [name, child] of coreChildren(node)) {
-    if (child === FUNCTIONAL_NO_INDEX) continue;
+    if (child === NO_INDEX) continue;
     if (child >= nodeCount) {
       throw new Error(
         `functional storage plan core node ${nodeIndex} ${name} ${child} exceeds ${nodeCount} resolved nodes`,
@@ -448,41 +441,41 @@ function requireCoreChildren(
 }
 
 function coreChildren(
-  node: FunctionalCoreNode,
+  node: CoreNode,
 ): readonly (readonly ["child0" | "child1" | "child2", number])[] {
   switch (node.tag) {
-    case FunctionalCoreTag.Integer:
-    case FunctionalCoreTag.SignedInteger64:
-    case FunctionalCoreTag.Float32:
-    case FunctionalCoreTag.Float64:
-    case FunctionalCoreTag.WholeNumberF64:
-    case FunctionalCoreTag.Boolean:
-    case FunctionalCoreTag.Text:
-    case FunctionalCoreTag.Bytes:
-    case FunctionalCoreTag.RuntimeFault:
-    case FunctionalCoreTag.Local:
-    case FunctionalCoreTag.Global:
-    case FunctionalCoreTag.Constructor:
+    case CoreTag.Integer:
+    case CoreTag.SignedInteger64:
+    case CoreTag.Float32:
+    case CoreTag.Float64:
+    case CoreTag.WholeNumberF64:
+    case CoreTag.Boolean:
+    case CoreTag.Text:
+    case CoreTag.Bytes:
+    case CoreTag.RuntimeFault:
+    case CoreTag.Local:
+    case CoreTag.Global:
+    case CoreTag.Constructor:
       return [];
-    case FunctionalCoreTag.Lambda:
-    case FunctionalCoreTag.Unary:
-    case FunctionalCoreTag.NumericConvert:
-    case FunctionalCoreTag.PatternBind:
-    case FunctionalCoreTag.StoreLength:
+    case CoreTag.Lambda:
+    case CoreTag.Unary:
+    case CoreTag.NumericConvert:
+    case CoreTag.PatternBind:
+    case CoreTag.StoreLength:
       return [["child0", node.child0]];
-    case FunctionalCoreTag.Apply:
-    case FunctionalCoreTag.Let:
-    case FunctionalCoreTag.LetRec:
-    case FunctionalCoreTag.Binary:
-    case FunctionalCoreTag.BufferAppend:
-    case FunctionalCoreTag.Case:
-    case FunctionalCoreTag.CaseArm:
-    case FunctionalCoreTag.StoreNew:
-    case FunctionalCoreTag.StoreRead:
+    case CoreTag.Apply:
+    case CoreTag.Let:
+    case CoreTag.LetRec:
+    case CoreTag.Binary:
+    case CoreTag.BufferAppend:
+    case CoreTag.Case:
+    case CoreTag.CaseArm:
+    case CoreTag.StoreNew:
+    case CoreTag.StoreRead:
       return [["child0", node.child0], ["child1", node.child1]];
-    case FunctionalCoreTag.If:
-    case FunctionalCoreTag.StoreWrite:
-    case FunctionalCoreTag.StoreGrow:
+    case CoreTag.If:
+    case CoreTag.StoreWrite:
+    case CoreTag.StoreGrow:
       return [["child0", node.child0], ["child1", node.child1], ["child2", node.child2]];
   }
 }

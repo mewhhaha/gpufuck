@@ -1,16 +1,16 @@
-import type { EncodedLazuliSurface } from "./abi.ts";
+import type { EncodedSemanticSurface } from "./abi.ts";
 import {
-  LAZULI_COMPILATION_STATE_BYTE_LENGTH,
-  LazuliCompilationStateWord,
-  LazuliCompilationStatus,
+  COMPILATION_STATE_BYTE_LENGTH,
+  CompilationStateWord,
+  CompilationStatus,
 } from "./compiler_shader.ts";
-import type { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
+import type { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
 import type {
-  GpuLazuliSemanticCompilationPass,
-  GpuLazuliSemanticStateSnapshot,
+  GpuSemanticCompilationPass,
+  GpuSemanticStateSnapshot,
 } from "./gpu_semantic_contract.ts";
 import type {
-  GpuLazuliTypeInferenceOptions,
+  GpuTypeInferenceOptions,
   InferenceStateSnapshot,
   WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
@@ -21,26 +21,26 @@ import {
   inferredTypeOutputByteLength,
 } from "./gpu_type_inference_workspace.ts";
 import {
-  LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
-  LAZULI_TYPE_INFERENCE_SHADER,
-  LazuliInferenceSchedulerWord,
-  LazuliInferenceStateWord,
+  INFERENCE_TYPE_RECORD_WORD_LENGTH,
+  InferenceSchedulerWord,
+  InferenceStateWord,
+  TYPE_INFERENCE_SHADER,
 } from "./type_inference_shader.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
-export const SEMANTIC_SNAPSHOT_BYTE_OFFSET = LazuliInferenceSchedulerWord.SemanticState *
+export const SEMANTIC_SNAPSHOT_BYTE_OFFSET = InferenceSchedulerWord.SemanticState *
   WORD_BYTES;
 
-/** Creates the shader module used with {@link runGpuLazuliTypeInference}. */
-export function createLazuliTypeInferenceShaderModule(device: GPUDevice): GPUShaderModule {
+/** Creates the shader module used with {@link runGpuSemanticTypeInference}. */
+export function createTypeInferenceShaderModule(device: GPUDevice): GPUShaderModule {
   return device.createShaderModule({
-    label: "Lazuli type inference",
-    code: LAZULI_TYPE_INFERENCE_SHADER,
+    label: "type inference",
+    code: TYPE_INFERENCE_SHADER,
   });
 }
 
 export async function createInferenceBindGroup(
-  options: GpuLazuliTypeInferenceOptions,
+  options: GpuTypeInferenceOptions,
   metadataBuffer: GPUBuffer,
   workspaceBuffer: GPUBuffer,
   outputBuffer: GPUBuffer,
@@ -53,7 +53,7 @@ export async function createInferenceBindGroup(
   let validation: Promise<GPUError | null>;
   try {
     bindGroup = options.device.createBindGroup({
-      label: "Lazuli type inference bindings",
+      label: "type inference bindings",
       layout: options.pipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: options.coreNodeBuffer } },
@@ -71,7 +71,7 @@ export async function createInferenceBindGroup(
     const validationError = await options.device.popErrorScope();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli type inference bindings for ${options.surface.nodeCount} nodes (${allocationEvidence}): ${validationError.message}`,
+        `WebGPU rejected type inference bindings for ${options.surface.nodeCount} nodes (${allocationEvidence}): ${validationError.message}`,
         { cause },
       );
     }
@@ -80,29 +80,29 @@ export async function createInferenceBindGroup(
   const validationError = await validation;
   if (validationError !== null) {
     throw new Error(
-      `WebGPU rejected Lazuli type inference bindings for ${options.surface.nodeCount} nodes (${allocationEvidence}): ${validationError.message}`,
+      `WebGPU rejected type inference bindings for ${options.surface.nodeCount} nodes (${allocationEvidence}): ${validationError.message}`,
     );
   }
   if (bindGroup === undefined) {
     throw new Error(
-      `WebGPU did not create Lazuli type inference bindings for ${options.surface.nodeCount} nodes (${allocationEvidence})`,
+      `WebGPU did not create type inference bindings for ${options.surface.nodeCount} nodes (${allocationEvidence})`,
     );
   }
   return bindGroup;
 }
 
 export async function runSemanticCompilationToCompletion(
-  options: GpuLazuliTypeInferenceOptions,
-  semanticPass: GpuLazuliSemanticCompilationPass,
-): Promise<GpuLazuliSemanticStateSnapshot> {
+  options: GpuTypeInferenceOptions,
+  semanticPass: GpuSemanticCompilationPass,
+): Promise<GpuSemanticStateSnapshot> {
   let readbackBuffer: GPUBuffer | undefined;
   let mapped = false;
   options.device.pushErrorScope("validation");
   let creationValidation: Promise<GPUError | null>;
   try {
     readbackBuffer = options.device.createBuffer({
-      label: "Lazuli semantic preflight fallback readback",
-      size: LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+      label: "semantic preflight fallback readback",
+      size: COMPILATION_STATE_BYTE_LENGTH,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     creationValidation = options.device.popErrorScope();
@@ -110,7 +110,7 @@ export async function runSemanticCompilationToCompletion(
     const validationError = await options.device.popErrorScope();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli semantic preflight fallback: ${validationError.message}`,
+        `WebGPU rejected semantic preflight fallback: ${validationError.message}`,
         { cause },
       );
     }
@@ -121,11 +121,11 @@ export async function runSemanticCompilationToCompletion(
     const creationError = await creationValidation;
     if (creationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli semantic preflight fallback: ${creationError.message}`,
+        `WebGPU rejected semantic preflight fallback: ${creationError.message}`,
       );
     }
     if (readbackBuffer === undefined) {
-      throw new Error("WebGPU did not create a Lazuli semantic preflight fallback readback");
+      throw new Error("WebGPU did not create a semantic preflight fallback readback");
     }
     let previousSteps = 0;
     while (true) {
@@ -134,7 +134,7 @@ export async function runSemanticCompilationToCompletion(
       let dispatchValidation: Promise<GPUError | null>;
       try {
         const commands = options.device.createCommandEncoder({
-          label: "Lazuli semantic preflight fallback commands",
+          label: "semantic preflight fallback commands",
         });
         encodeSemanticCompilation(commands, semanticPass, 1);
         commands.copyBufferToBuffer(
@@ -142,7 +142,7 @@ export async function runSemanticCompilationToCompletion(
           0,
           readbackBuffer,
           0,
-          LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+          COMPILATION_STATE_BYTE_LENGTH,
         );
         options.signal?.throwIfAborted();
         options.device.queue.submit([commands.finish()]);
@@ -151,7 +151,7 @@ export async function runSemanticCompilationToCompletion(
         const validationError = await options.device.popErrorScope();
         if (validationError !== null) {
           throw new Error(
-            `WebGPU rejected Lazuli semantic preflight fallback for ${options.surface.nodeCount} nodes: ${validationError.message}`,
+            `WebGPU rejected semantic preflight fallback for ${options.surface.nodeCount} nodes: ${validationError.message}`,
             { cause },
           );
         }
@@ -160,7 +160,7 @@ export async function runSemanticCompilationToCompletion(
       const dispatchError = await dispatchValidation;
       if (dispatchError !== null) {
         throw new Error(
-          `WebGPU rejected Lazuli semantic preflight fallback for ${options.surface.nodeCount} nodes: ${dispatchError.message}`,
+          `WebGPU rejected semantic preflight fallback for ${options.surface.nodeCount} nodes: ${dispatchError.message}`,
         );
       }
       options.signal?.throwIfAborted();
@@ -179,10 +179,10 @@ export async function runSemanticCompilationToCompletion(
         dispatchSteps > options.maximumStepsPerDispatch
       ) {
         throw new Error(
-          `GPU Lazuli semantic preflight fallback returned invalid progress: previousSteps=${previousSteps}, steps=${semanticState.totalSteps}, maximumStepsPerDispatch=${options.maximumStepsPerDispatch}`,
+          `GPU semantic preflight fallback returned invalid progress: previousSteps=${previousSteps}, steps=${semanticState.totalSteps}, maximumStepsPerDispatch=${options.maximumStepsPerDispatch}`,
         );
       }
-      if (semanticState.status !== LazuliCompilationStatus.Pending) return semanticState;
+      if (semanticState.status !== CompilationStatus.Pending) return semanticState;
       previousSteps = semanticState.totalSteps;
     }
   } finally {
@@ -203,8 +203,8 @@ export async function dispatchForReadback(
   coreNodeBuffer: GPUBuffer,
   coreReadbackByteOffset: number,
   coreReadbackByteLength: number,
-  surface: EncodedLazuliSurface,
-  semanticPass: GpuLazuliSemanticCompilationPass | undefined,
+  surface: EncodedSemanticSurface,
+  semanticPass: GpuSemanticCompilationPass | undefined,
   signal: AbortSignal | undefined,
   dispatchScheduler: GpuDispatchScheduler | undefined,
 ): Promise<void> {
@@ -225,7 +225,7 @@ export async function dispatchForReadback(
           coreReadbackByteLength,
           semanticPass,
         ),
-      validationContext: `WebGPU rejected Lazuli type inference for ${surface.nodeCount} nodes`,
+      validationContext: `WebGPU rejected type inference for ${surface.nodeCount} nodes`,
       ...(signal === undefined ? {} : { signal }),
     });
     return;
@@ -236,8 +236,8 @@ export async function dispatchForReadback(
   try {
     const commands = device.createCommandEncoder({
       label: semanticPass === undefined
-        ? "Lazuli type inference commands"
-        : "Lazuli semantic compilation and type inference commands",
+        ? "type inference commands"
+        : "semantic compilation and type inference commands",
     });
     encodeInferenceDispatch(
       commands,
@@ -260,7 +260,7 @@ export async function dispatchForReadback(
     const validationError = await device.popErrorScope();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli type inference for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected type inference for ${surface.nodeCount} nodes: ${validationError.message}`,
         { cause },
       );
     }
@@ -269,7 +269,7 @@ export async function dispatchForReadback(
   const validationError = await validation;
   if (validationError !== null) {
     throw new Error(
-      `WebGPU rejected Lazuli type inference for ${surface.nodeCount} nodes: ${validationError.message}`,
+      `WebGPU rejected type inference for ${surface.nodeCount} nodes: ${validationError.message}`,
     );
   }
 }
@@ -286,7 +286,7 @@ function encodeInferenceDispatch(
   coreNodeBuffer: GPUBuffer,
   coreReadbackByteOffset: number,
   coreReadbackByteLength: number,
-  semanticPass: GpuLazuliSemanticCompilationPass | undefined,
+  semanticPass: GpuSemanticCompilationPass | undefined,
 ): void {
   if (semanticPass !== undefined) {
     encodeSemanticCompilation(commands, semanticPass, 1);
@@ -295,10 +295,10 @@ function encodeInferenceDispatch(
       0,
       stateBuffer,
       SEMANTIC_SNAPSHOT_BYTE_OFFSET,
-      LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+      COMPILATION_STATE_BYTE_LENGTH,
     );
   }
-  const pass = commands.beginComputePass({ label: "Infer Lazuli types" });
+  const pass = commands.beginComputePass({ label: "Infer types" });
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
   pass.dispatchWorkgroups(1);
@@ -332,11 +332,11 @@ function encodeInferenceDispatch(
 
 function encodeSemanticCompilation(
   commands: GPUCommandEncoder,
-  semanticPass: GpuLazuliSemanticCompilationPass,
+  semanticPass: GpuSemanticCompilationPass,
   laneCount: number,
 ): void {
   const compilation = commands.beginComputePass({
-    label: "Compile Lazuli surface nodes",
+    label: "Compile surface nodes",
   });
   compilation.setPipeline(semanticPass.pipelines.compilation);
   compilation.setBindGroup(0, semanticPass.bindGroup);
@@ -345,7 +345,7 @@ function encodeSemanticCompilation(
   if (semanticPass.plannedLoweringWorkgroups === 0) return;
 
   const lowering = commands.beginComputePass({
-    label: "Lower planned Lazuli nodes",
+    label: "Lower planned nodes",
   });
   lowering.setPipeline(semanticPass.pipelines.plannedLowering);
   lowering.setBindGroup(0, semanticPass.bindGroup);
@@ -358,17 +358,17 @@ export async function copyOutputForReadback(
   outputBuffer: GPUBuffer,
   outputReadbackBuffer: GPUBuffer,
   outputCount: number,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): Promise<void> {
   const byteLength = inferredTypeOutputByteLength(outputCount);
   if (byteLength === 0) {
-    throw new Error("GPU Lazuli type inference completed without an output type");
+    throw new Error("GPU type inference completed without an output type");
   }
   device.pushErrorScope("validation");
   let validation: Promise<GPUError | null>;
   try {
     const commands = device.createCommandEncoder({
-      label: "Lazuli inferred type readback commands",
+      label: "inferred type readback commands",
     });
     commands.copyBufferToBuffer(outputBuffer, 0, outputReadbackBuffer, 0, byteLength);
     device.queue.submit([commands.finish()]);
@@ -377,7 +377,7 @@ export async function copyOutputForReadback(
     const validationError = await device.popErrorScope();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli inferred type readback for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected inferred type readback for ${surface.nodeCount} nodes: ${validationError.message}`,
         { cause },
       );
     }
@@ -386,7 +386,7 @@ export async function copyOutputForReadback(
   const validationError = await validation;
   if (validationError !== null) {
     throw new Error(
-      `WebGPU rejected Lazuli inferred type readback for ${surface.nodeCount} nodes: ${validationError.message}`,
+      `WebGPU rejected inferred type readback for ${surface.nodeCount} nodes: ${validationError.message}`,
     );
   }
 }
@@ -396,12 +396,12 @@ export async function readDiagnosticWorkspace(
   workspaceBuffer: GPUBuffer,
   state: InferenceStateSnapshot,
   layout: WorkspaceLayout,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): Promise<DataView> {
   const byteLength = checkedProduct(
     "type diagnostic workspace bytes",
     state.typeTop,
-    LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH * WORD_BYTES,
+    INFERENCE_TYPE_RECORD_WORD_LENGTH * WORD_BYTES,
   );
   if (byteLength === 0) return new DataView(new ArrayBuffer(0));
 
@@ -411,12 +411,12 @@ export async function readDiagnosticWorkspace(
   let validation: Promise<GPUError | null>;
   try {
     readbackBuffer = device.createBuffer({
-      label: "Lazuli type diagnostic workspace readback",
+      label: "type diagnostic workspace readback",
       size: byteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     const commands = device.createCommandEncoder({
-      label: "Lazuli type diagnostic workspace readback commands",
+      label: "type diagnostic workspace readback commands",
     });
     commands.copyBufferToBuffer(
       workspaceBuffer,
@@ -432,7 +432,7 @@ export async function readDiagnosticWorkspace(
     readbackBuffer?.destroy();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli type diagnostic readback for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected type diagnostic readback for ${surface.nodeCount} nodes: ${validationError.message}`,
         { cause },
       );
     }
@@ -442,11 +442,11 @@ export async function readDiagnosticWorkspace(
     const validationError = await validation;
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli type diagnostic readback for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected type diagnostic readback for ${surface.nodeCount} nodes: ${validationError.message}`,
       );
     }
     if (readbackBuffer === undefined) {
-      throw new Error("WebGPU did not create a Lazuli type diagnostic readback buffer");
+      throw new Error("WebGPU did not create a type diagnostic readback buffer");
     }
     await readbackBuffer.mapAsync(GPUMapMode.READ);
     mapped = true;
@@ -463,43 +463,43 @@ export function readInferenceState(
 ): InferenceStateSnapshot {
   const word = (offset: number) => view.getUint32(byteOffset + offset * WORD_BYTES, true);
   return {
-    status: word(LazuliInferenceStateWord.Status),
-    errorCode: word(LazuliInferenceStateWord.ErrorCode),
-    errorStartByte: word(LazuliInferenceStateWord.ErrorStartByte),
-    errorEndByte: word(LazuliInferenceStateWord.ErrorEndByte),
-    errorDetail: word(LazuliInferenceStateWord.ErrorDetail),
-    errorOperand0: word(LazuliInferenceStateWord.ErrorOperand0),
-    errorOperand1: word(LazuliInferenceStateWord.ErrorOperand1),
-    errorContext: word(LazuliInferenceStateWord.ErrorContext),
-    transitions: word(LazuliInferenceStateWord.Transitions),
-    phase: word(LazuliInferenceStateWord.Phase),
-    typeTop: word(LazuliInferenceStateWord.TypeTop),
-    environmentTop: word(LazuliInferenceStateWord.EnvironmentTop),
-    frameTop: word(LazuliInferenceStateWord.FrameTop),
-    refinementTop: word(LazuliInferenceStateWord.RefinementTop),
-    outputRoot: word(LazuliInferenceStateWord.OutputRoot),
-    outputCount: word(LazuliInferenceStateWord.OutputCount),
+    status: word(InferenceStateWord.Status),
+    errorCode: word(InferenceStateWord.ErrorCode),
+    errorStartByte: word(InferenceStateWord.ErrorStartByte),
+    errorEndByte: word(InferenceStateWord.ErrorEndByte),
+    errorDetail: word(InferenceStateWord.ErrorDetail),
+    errorOperand0: word(InferenceStateWord.ErrorOperand0),
+    errorOperand1: word(InferenceStateWord.ErrorOperand1),
+    errorContext: word(InferenceStateWord.ErrorContext),
+    transitions: word(InferenceStateWord.Transitions),
+    phase: word(InferenceStateWord.Phase),
+    typeTop: word(InferenceStateWord.TypeTop),
+    environmentTop: word(InferenceStateWord.EnvironmentTop),
+    frameTop: word(InferenceStateWord.FrameTop),
+    refinementTop: word(InferenceStateWord.RefinementTop),
+    outputRoot: word(InferenceStateWord.OutputRoot),
+    outputCount: word(InferenceStateWord.OutputCount),
   };
 }
 
 export function readSemanticState(
   view: DataView,
   byteOffset: number,
-): GpuLazuliSemanticStateSnapshot {
+): GpuSemanticStateSnapshot {
   const word = (offset: number) => view.getUint32(byteOffset + offset * WORD_BYTES, true);
   return {
-    nodeCount: word(LazuliCompilationStateWord.NodeCount),
-    definitionCount: word(LazuliCompilationStateWord.DefinitionCount),
-    typeCount: word(LazuliCompilationStateWord.TypeCount),
-    constructorCount: word(LazuliCompilationStateWord.ConstructorCount),
-    entrySymbol: word(LazuliCompilationStateWord.EntrySymbol),
-    status: word(LazuliCompilationStateWord.Status),
-    errorCode: word(LazuliCompilationStateWord.ErrorCode),
-    errorSource: word(LazuliCompilationStateWord.ErrorSource),
-    errorDetail: word(LazuliCompilationStateWord.ErrorDetail),
-    entryDefinition: word(LazuliCompilationStateWord.EntryDefinition),
-    totalSteps: word(LazuliCompilationStateWord.TotalSteps),
-    maximumSteps: word(LazuliCompilationStateWord.MaximumSteps),
-    maximumStepsPerDispatch: word(LazuliCompilationStateWord.MaximumStepsPerDispatch),
+    nodeCount: word(CompilationStateWord.NodeCount),
+    definitionCount: word(CompilationStateWord.DefinitionCount),
+    typeCount: word(CompilationStateWord.TypeCount),
+    constructorCount: word(CompilationStateWord.ConstructorCount),
+    entrySymbol: word(CompilationStateWord.EntrySymbol),
+    status: word(CompilationStateWord.Status),
+    errorCode: word(CompilationStateWord.ErrorCode),
+    errorSource: word(CompilationStateWord.ErrorSource),
+    errorDetail: word(CompilationStateWord.ErrorDetail),
+    entryDefinition: word(CompilationStateWord.EntryDefinition),
+    totalSteps: word(CompilationStateWord.TotalSteps),
+    maximumSteps: word(CompilationStateWord.MaximumSteps),
+    maximumStepsPerDispatch: word(CompilationStateWord.MaximumStepsPerDispatch),
   };
 }

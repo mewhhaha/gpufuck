@@ -1,5 +1,5 @@
-import { GpuFunctionalCompiler, type GpuFunctionalModule } from "./compiler.ts";
-import { GpuFunctionalEvaluator } from "./evaluator.ts";
+import { GpuCompiler, type GpuModule } from "./compiler.ts";
+import { GpuEvaluator } from "./evaluator.ts";
 import type {
   TypeCoreExecutionOptions,
   TypeCoreExecutionResult,
@@ -11,14 +11,14 @@ import { validateTypeCoreProgram } from "./type_core_validation.ts";
 
 export class GpuTypeCoreExecutor {
   private constructor(
-    private readonly compiler: GpuFunctionalCompiler,
-    private readonly evaluator: GpuFunctionalEvaluator,
+    private readonly compiler: GpuCompiler,
+    private readonly evaluator: GpuEvaluator,
   ) {}
 
   static async create(device: GPUDevice): Promise<GpuTypeCoreExecutor> {
     const [compiler, evaluator] = await Promise.all([
-      GpuFunctionalCompiler.create(device),
-      GpuFunctionalEvaluator.create(device),
+      GpuCompiler.create(device),
+      GpuEvaluator.create(device),
     ]);
     return new GpuTypeCoreExecutor(compiler, evaluator);
   }
@@ -130,7 +130,7 @@ export class GpuTypeCoreExecutor {
     const results: (TypeCoreExecutionResult | undefined)[] = new Array(programs.length);
     const successful: {
       readonly uniqueProgramIndex: number;
-      readonly module: GpuFunctionalModule;
+      readonly module: GpuModule;
     }[] = [];
     for (const [uniqueProgramIndex, compilation] of compilations.entries()) {
       if (compilation === undefined) {

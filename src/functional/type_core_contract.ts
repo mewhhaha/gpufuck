@@ -1,5 +1,5 @@
-import type { FunctionalDiagnostic } from "./abi.ts";
-import type { FunctionalEvaluationStats, FunctionalRuntimeFault } from "./evaluator.ts";
+import type { Diagnostic } from "./abi.ts";
+import type { EvaluationStats, RuntimeFault } from "./evaluator.ts";
 
 export const TypeCoreKind = {
   Type: "type",
@@ -163,16 +163,16 @@ export type TypeCoreExecutionResult =
   | {
     readonly ok: true;
     readonly value: TypeCoreValue;
-    readonly stats: FunctionalEvaluationStats;
+    readonly stats: EvaluationStats;
   }
   | {
     readonly ok: false;
     readonly stage: "compile";
-    readonly diagnostics: readonly [FunctionalDiagnostic, ...FunctionalDiagnostic[]];
+    readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
   }
   | {
     readonly ok: false;
     readonly stage: "execute";
-    readonly fault: FunctionalRuntimeFault;
-    readonly stats: FunctionalEvaluationStats;
+    readonly fault: RuntimeFault;
+    readonly stats: EvaluationStats;
   };

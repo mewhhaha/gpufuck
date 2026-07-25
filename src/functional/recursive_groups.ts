@@ -1,13 +1,13 @@
 import type {
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceRecursiveBinding,
+  SurfaceDefinition,
+  SurfaceExpression,
+  SurfaceRecursiveBinding,
 } from "./surface_contract.ts";
 
 const MAXIMUM_RECURSIVE_GROUP_CAPTURES = 512;
 
 interface RecursiveGroupElaboration {
-  readonly definitions: FunctionalSurfaceDefinition[];
+  readonly definitions: SurfaceDefinition[];
   readonly globalNames: Set<string>;
   nextGroupId: number;
 }
@@ -19,9 +19,9 @@ interface RecursiveGroupElaboration {
  * applications of its generated global to those captures. The ordinary GPU dependency analysis
  * then discovers and checks the generated SCC.
  */
-export function elaborateFunctionalRecursiveGroups(
-  definitions: readonly FunctionalSurfaceDefinition[],
-): readonly FunctionalSurfaceDefinition[] {
+export function elaborateRecursiveGroups(
+  definitions: readonly SurfaceDefinition[],
+): readonly SurfaceDefinition[] {
   const globalNames = new Set(definitions.map((definition) => definition.name));
   const elaboration: RecursiveGroupElaboration = {
     definitions: [],
@@ -43,7 +43,7 @@ export function elaborateFunctionalRecursiveGroups(
         (right.definition.span?.startByte ?? 0) || left.index - right.index
     )
     .map(({ definition }) => definition);
-  const merged: FunctionalSurfaceDefinition[] = [];
+  const merged: SurfaceDefinition[] = [];
   let generatedIndex = 0;
   for (const original of originals) {
     while (
@@ -59,14 +59,14 @@ export function elaborateFunctionalRecursiveGroups(
 }
 
 function elaborateExpression(
-  expression: FunctionalSurfaceExpression,
+  expression: SurfaceExpression,
   lexicalNames: ReadonlySet<string>,
   elaboration: RecursiveGroupElaboration,
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   const elaborate = (
-    nested: FunctionalSurfaceExpression,
+    nested: SurfaceExpression,
     scope: ReadonlySet<string> = lexicalNames,
-  ): FunctionalSurfaceExpression => elaborateExpression(nested, scope, elaboration);
+  ): SurfaceExpression => elaborateExpression(nested, scope, elaboration);
 
   switch (expression.kind) {
     case "integer":
@@ -182,11 +182,11 @@ function elaborateExpression(
 }
 
 function elaborateRecursiveGroup(
-  bindings: readonly FunctionalSurfaceRecursiveBinding[],
-  body: FunctionalSurfaceExpression,
+  bindings: readonly SurfaceRecursiveBinding[],
+  body: SurfaceExpression,
   lexicalNames: ReadonlySet<string>,
   elaboration: RecursiveGroupElaboration,
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   if (bindings.length === 0) {
     throw new Error("functional recursive group must contain at least one binding");
   }
@@ -225,7 +225,7 @@ function elaborateRecursiveGroup(
     );
   }
 
-  const replacements = new Map<string, FunctionalSurfaceExpression>();
+  const replacements = new Map<string, SurfaceExpression>();
   for (const binding of bindings) {
     const generatedName = requiredMapValue(generatedNames, binding.name);
     replacements.set(binding.name, applyNames(generatedName, captureNames));
@@ -254,14 +254,14 @@ function elaborateRecursiveGroup(
 }
 
 function rewriteNames(
-  expression: FunctionalSurfaceExpression,
-  replacements: ReadonlyMap<string, FunctionalSurfaceExpression>,
+  expression: SurfaceExpression,
+  replacements: ReadonlyMap<string, SurfaceExpression>,
   boundNames: ReadonlySet<string>,
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   const rewrite = (
-    nested: FunctionalSurfaceExpression,
+    nested: SurfaceExpression,
     scope: ReadonlySet<string> = boundNames,
-  ): FunctionalSurfaceExpression => rewriteNames(nested, replacements, scope);
+  ): SurfaceExpression => rewriteNames(nested, replacements, scope);
   switch (expression.kind) {
     case "integer":
     case "signed-integer-64":
@@ -397,11 +397,11 @@ function rewriteNames(
 }
 
 function freeNames(
-  expression: FunctionalSurfaceExpression,
+  expression: SurfaceExpression,
   boundNames: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const names = new Set<string>();
-  const visit = (nested: FunctionalSurfaceExpression, scope: ReadonlySet<string>): void => {
+  const visit = (nested: SurfaceExpression, scope: ReadonlySet<string>): void => {
     switch (nested.kind) {
       case "integer":
       case "signed-integer-64":
@@ -495,8 +495,8 @@ function freeNames(
   return names;
 }
 
-function applyNames(name: string, arguments_: readonly string[]): FunctionalSurfaceExpression {
-  let expression: FunctionalSurfaceExpression = { kind: "name", name };
+function applyNames(name: string, arguments_: readonly string[]): SurfaceExpression {
+  let expression: SurfaceExpression = { kind: "name", name };
   for (const argument of arguments_) {
     expression = { kind: "apply", callee: expression, argument: { kind: "name", name: argument } };
   }
@@ -516,7 +516,7 @@ function withNames(names: ReadonlySet<string>, additions: Iterable<string>): Set
 function withReplacementNames(
   names: ReadonlySet<string>,
   additions: Iterable<string>,
-  replacements: ReadonlyMap<string, FunctionalSurfaceExpression>,
+  replacements: ReadonlyMap<string, SurfaceExpression>,
 ): ReadonlySet<string> {
   let result: Set<string> | undefined;
   for (const name of additions) {

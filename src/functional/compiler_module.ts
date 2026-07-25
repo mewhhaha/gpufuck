@@ -1,35 +1,17 @@
-import type {
-  FunctionalCoreTag,
-  FunctionalDiagnostic,
-  FunctionalEvaluationMode,
-  FunctionalEvaluationProfile,
-  FunctionalSourceRange,
-  FunctionalType,
-  FunctionalTypeDeclaration,
-} from "./abi.ts";
-import type {
-  FunctionalHostCapabilityDeclaration,
-  FunctionalHostDefinitionBinding,
-} from "./host_contract.ts";
+import type { Diagnostic, EvaluationProfile, SourceRange, Type, TypeDeclaration } from "./abi.ts";
+import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
 
-export interface FunctionalWasmExport {
+export interface WasmExport {
   readonly name: string;
   readonly definitionIndex: number;
-  readonly type: FunctionalType;
+  readonly type: Type;
 }
 
-export interface FunctionalCoreNode {
-  readonly tag: FunctionalCoreTag;
-  readonly payload: number;
-  readonly child0: number;
-  readonly child1: number;
-  readonly child2: number;
-  readonly sourceByteOffset: number;
-  readonly sourceEndByte: number;
-  readonly evaluationMode: FunctionalEvaluationMode;
-}
+/** Declared once in the semantic layer; the two used to be field-identical twins. */
+export type { CoreNode } from "../semantic/compiler_module.ts";
+import type { CoreNode } from "../semantic/compiler_module.ts";
 
-export interface GpuFunctionalModule {
+export interface GpuModule {
   readonly nodeBuffer: GPUBuffer;
   readonly definitionBuffer: GPUBuffer;
   readonly constructorBuffer: GPUBuffer;
@@ -44,48 +26,48 @@ export interface GpuFunctionalModule {
   readonly symbolNames: readonly string[];
   readonly definitionRoots: readonly number[];
   readonly entryDefinition: number;
-  readonly entryType: FunctionalType;
+  readonly entryType: Type;
   readonly entryEffects: readonly string[];
-  readonly typeDeclarations: readonly FunctionalTypeDeclaration[];
-  readonly hostCapabilities: readonly FunctionalHostCapabilityDeclaration[];
-  readonly hostDefinitions: readonly FunctionalHostDefinitionBinding[];
-  readonly wasmExports: readonly FunctionalWasmExport[];
-  readonly sources: readonly FunctionalSourceRange[];
-  readonly evaluationProfile: FunctionalEvaluationProfile;
-  readCoreNodes(): Promise<readonly FunctionalCoreNode[]>;
+  readonly typeDeclarations: readonly TypeDeclaration[];
+  readonly hostCapabilities: readonly HostCapabilityDeclaration[];
+  readonly hostDefinitions: readonly HostDefinitionBinding[];
+  readonly wasmExports: readonly WasmExport[];
+  readonly sources: readonly SourceRange[];
+  readonly evaluationProfile: EvaluationProfile;
+  readCoreNodes(): Promise<readonly CoreNode[]>;
   destroy(): void;
 }
 
-const completeTypeDeclarations = new WeakMap<
-  GpuFunctionalModule,
-  readonly FunctionalTypeDeclaration[]
+const completedTypeDeclarationCache = new WeakMap<
+  GpuModule,
+  readonly TypeDeclaration[]
 >();
 
-export function registerCompleteFunctionalTypeDeclarations(
-  module: GpuFunctionalModule,
-  declarations: readonly FunctionalTypeDeclaration[],
+export function registerCompleteTypeDeclarations(
+  module: GpuModule,
+  declarations: readonly TypeDeclaration[],
 ): void {
-  if (completeTypeDeclarations.has(module)) {
+  if (completedTypeDeclarationCache.has(module)) {
     throw new Error("functional module complete type declarations were registered twice");
   }
-  completeTypeDeclarations.set(module, declarations);
+  completedTypeDeclarationCache.set(module, declarations);
 }
 
-export function completeFunctionalTypeDeclarations(
-  module: GpuFunctionalModule,
-): readonly FunctionalTypeDeclaration[] {
-  return completeTypeDeclarations.get(module) ?? module.typeDeclarations;
+export function completeTypeDeclarations(
+  module: GpuModule,
+): readonly TypeDeclaration[] {
+  return completedTypeDeclarationCache.get(module) ?? module.typeDeclarations;
 }
 
-export interface FunctionalCompilationOptions {
+export interface CompilationOptions {
   readonly maximumSteps?: number;
   readonly maximumStepsPerDispatch?: number;
   readonly signal?: AbortSignal;
 }
 
-export type FunctionalCompileResult =
-  | { readonly ok: true; readonly module: GpuFunctionalModule }
+export type CompileResult =
+  | { readonly ok: true; readonly module: GpuModule }
   | {
     readonly ok: false;
-    readonly diagnostics: readonly [FunctionalDiagnostic, ...FunctionalDiagnostic[]];
+    readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
   };

@@ -1,12 +1,12 @@
-import type { FunctionalTypeSchema } from "./schema_contract.ts";
+import type { TypeSchema } from "./schema_contract.ts";
 
-export const FUNCTIONAL_STORE_TYPE_NAME = "$FunctionalStore";
-export const FUNCTIONAL_MAXIMUM_STORE_LENGTH = 16_777_216;
+export const STORE_TYPE_NAME = "$FunctionalStore";
+export const MAXIMUM_STORE_LENGTH = 16_777_216;
 
-export function functionalStoreType(element: FunctionalTypeSchema): FunctionalTypeSchema {
+export function functionalStoreType(element: TypeSchema): TypeSchema {
   return {
     kind: "named",
-    name: FUNCTIONAL_STORE_TYPE_NAME,
+    name: STORE_TYPE_NAME,
     arguments: [element],
   };
 }

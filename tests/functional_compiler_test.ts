@@ -1,43 +1,43 @@
 import { deepStrictEqual, equal, match, ok, rejects, throws } from "node:assert/strict";
 
 import {
-  buildFunctionalSurfaceModule,
-  type EncodedFunctionalModule,
-  FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
-  FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH,
-  FUNCTIONAL_MODULE_ABI_VERSION,
-  FUNCTIONAL_NO_INDEX,
-  FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
-  FunctionalBinaryOperator,
-  FunctionalCoreTag,
-  FunctionalEvaluationProfile,
-  FunctionalExpressionTag,
-  FunctionalNodeWord,
-  type FunctionalSurfaceExpression,
-  FunctionalTypecheckingProfile,
-  type FunctionalTypeSchema,
-  FunctionalWasmIntrinsic,
-  GpuFunctionalCompiler,
-  GpuFunctionalEvaluator,
-  locateFunctionalDiagnostic,
+  BinaryOperator,
+  buildSurfaceModule,
+  CORE_V1_PRIMITIVE_CAPABILITIES,
+  CoreTag,
+  type EncodedModule,
+  EvaluationProfile,
+  ExpressionTag,
+  GpuCompiler,
+  GpuEvaluator,
+  locateDiagnostic,
+  MAXIMUM_SOURCE_BYTE_LENGTH,
+  MODULE_ABI_VERSION,
+  NO_INDEX,
+  NodeWord,
+  PAIR_CONSTRUCTOR_NAME,
   requestWebGpuDevice,
   surface,
+  type SurfaceExpression,
+  TypecheckingProfile,
+  type TypeSchema,
+  WasmIntrinsic,
 } from "../functional.ts";
-import { GpuLazuliCompiler, lazuliSurfaceToFunctionalModule, parseLazuliSource } from "../mod.ts";
+import { GpuLazuliCompiler, lazuliSurfaceToModule, parseLazuliSource } from "../mod.ts";
 
-interface FunctionalRuntime {
+interface Runtime {
   readonly device: GPUDevice;
-  readonly compiler: GpuFunctionalCompiler;
-  readonly evaluator: GpuFunctionalEvaluator;
+  readonly compiler: GpuCompiler;
+  readonly evaluator: GpuEvaluator;
 }
 
-let runtime: FunctionalRuntime | undefined;
+let runtime: Runtime | undefined;
 
 Deno.test.beforeAll(async () => {
   const device = await requestWebGpuDevice();
   const [compiler, evaluator] = await Promise.all([
-    GpuFunctionalCompiler.create(device),
-    GpuFunctionalEvaluator.create(device),
+    GpuCompiler.create(device),
+    GpuEvaluator.create(device),
   ]);
   runtime = { device, compiler, evaluator };
 });
@@ -48,17 +48,17 @@ Deno.test.afterAll(() => {
 });
 
 Deno.test("surface type schemas reject structural cycles before encoding", () => {
-  const typeArguments: FunctionalTypeSchema[] = [];
+  const typeArguments: TypeSchema[] = [];
   const cyclicType = {
     kind: "named",
     name: "Cycle",
     arguments: typeArguments,
-  } as FunctionalTypeSchema;
+  } as TypeSchema;
   typeArguments.push(cyclicType);
 
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{ name: "main", parameters: [], annotation: cyclicType, body: surface.integer(0) }],
         [],
         "main",
@@ -71,7 +71,7 @@ Deno.test("surface type schemas reject structural cycles before encoding", () =>
 Deno.test("surface module construction rejects malformed options at its boundary", () => {
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{ name: "main", parameters: [], annotation: null, body: surface.integer(0) }],
         [],
         "main",
@@ -83,14 +83,14 @@ Deno.test("surface module construction rejects malformed options at its boundary
 });
 
 Deno.test("surface type schemas bound expansion of structurally shared annotations", () => {
-  let sharedType: FunctionalTypeSchema = { kind: "integer" };
+  let sharedType: TypeSchema = { kind: "integer" };
   for (let depth = 0; depth < 13; depth += 1) {
     sharedType = { kind: "tuple", values: [sharedType, sharedType] };
   }
 
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{ name: "main", parameters: [], annotation: sharedType, body: surface.integer(0) }],
         [],
         "main",
@@ -106,12 +106,12 @@ Deno.test("surface expressions reject structural cycles before encoding", () => 
     name: "cycle",
     value: surface.integer(0),
     body: undefined,
-  } as unknown as { body: FunctionalSurfaceExpression } & FunctionalSurfaceExpression;
+  } as unknown as { body: SurfaceExpression } & SurfaceExpression;
   cyclicExpression.body = cyclicExpression;
 
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{ name: "main", parameters: [], annotation: null, body: cyclicExpression }],
         [],
         "main",
@@ -122,10 +122,10 @@ Deno.test("surface expressions reject structural cycles before encoding", () => 
 });
 
 Deno.test("surface expressions bound expansion of structurally shared trees", () => {
-  let sharedExpression: FunctionalSurfaceExpression = surface.integer(1);
+  let sharedExpression: SurfaceExpression = surface.integer(1);
   for (let depth = 0; depth < 16; depth += 1) {
     sharedExpression = surface.binary(
-      FunctionalBinaryOperator.Add,
+      BinaryOperator.Add,
       sharedExpression,
       sharedExpression,
     );
@@ -133,7 +133,7 @@ Deno.test("surface expressions bound expansion of structurally shared trees", ()
 
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{ name: "main", parameters: [], annotation: null, body: sharedExpression }],
         [],
         "main",
@@ -145,7 +145,7 @@ Deno.test("surface expressions bound expansion of structurally shared trees", ()
 
 Deno.test("surface encoding handles wide parameter lists without host recursion", () => {
   const parameterCount = 2_048;
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{
       name: "main",
       parameters: Array.from({ length: parameterCount }, (_, index) => `value${index}`),
@@ -162,7 +162,7 @@ Deno.test("surface encoding handles wide parameter lists without host recursion"
 
 Deno.test("surface encoding handles wide case lists without host recursion", () => {
   const armCount = 2_048;
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{
       name: "main",
       parameters: [],
@@ -191,7 +191,7 @@ Deno.test("surface validation bounds application chains created by recursive-gro
 
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{
           name: "main",
           parameters,
@@ -223,7 +223,7 @@ Deno.test("surface validation bounds application chains created by recursive-gro
 });
 
 Deno.test("surface validation rejects expression depth before host recursion overflows", () => {
-  let body: FunctionalSurfaceExpression = surface.integer(0);
+  let body: SurfaceExpression = surface.integer(0);
   for (let depth = 0; depth < 1_025; depth++) {
     body = {
       kind: "let",
@@ -235,7 +235,7 @@ Deno.test("surface validation rejects expression depth before host recursion ove
 
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{ name: "main", parameters: [], annotation: null, body }],
         [],
         "main",
@@ -245,28 +245,28 @@ Deno.test("surface validation rejects expression depth before host recursion ove
   );
 });
 
-function functionalRuntime(): FunctionalRuntime {
+function functionalRuntime(): Runtime {
   if (runtime === undefined) throw new Error("functional test runtime was not initialized");
   return runtime;
 }
 
-function integerModule(value: number, entryName = "entry"): EncodedFunctionalModule {
+function integerModule(value: number, entryName = "entry"): EncodedModule {
   return {
-    abiVersion: FUNCTIONAL_MODULE_ABI_VERSION,
+    abiVersion: MODULE_ABI_VERSION,
     sourceByteLength: 2,
-    evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
-    typecheckingProfile: FunctionalTypecheckingProfile.HindleyMilnerIndexed,
-    primitiveCapabilities: FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
+    evaluationProfile: EvaluationProfile.LazyCallByNeed,
+    typecheckingProfile: TypecheckingProfile.HindleyMilnerIndexed,
+    primitiveCapabilities: CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities: [],
     nodeWords: Uint32Array.of(
-      FunctionalExpressionTag.Integer,
+      ExpressionTag.Integer,
       0,
       2,
       value >>> 0,
-      FUNCTIONAL_NO_INDEX,
-      FUNCTIONAL_NO_INDEX,
-      FUNCTIONAL_NO_INDEX,
-      FUNCTIONAL_NO_INDEX,
+      NO_INDEX,
+      NO_INDEX,
+      NO_INDEX,
+      NO_INDEX,
     ),
     definitionWords: Uint32Array.of(0, 0, 0, 2),
     typeWords: new Uint32Array(),
@@ -292,7 +292,7 @@ Deno.test("compiles and evaluates a parser-independent functional module", async
     deepStrictEqual(compilation.module.entryType, { kind: "integer" });
     const nodes = await compilation.module.readCoreNodes();
     equal(nodes.length, 1);
-    equal(nodes[0]?.tag, FunctionalCoreTag.Integer);
+    equal(nodes[0]?.tag, CoreTag.Integer);
 
     const evaluation = await evaluator.evaluate(compilation.module);
     ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
@@ -321,7 +321,7 @@ Deno.test("accepts a 524288-step dispatch quantum and rejects larger quanta", as
 });
 
 Deno.test("rejects structural equality between different operand types", async () => {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{
       name: "main",
       parameters: [],
@@ -340,13 +340,13 @@ Deno.test("rejects structural equality between different operand types", async (
 
 Deno.test("GPU functional evaluation accepts i64 and f32 inputs", async () => {
   const modules = [
-    buildFunctionalSurfaceModule(
+    buildSurfaceModule(
       [{
         name: "main",
         parameters: ["input"],
         annotation: null,
         body: surface.binary(
-          FunctionalBinaryOperator.AddSignedInteger64,
+          BinaryOperator.AddSignedInteger64,
           surface.name("input"),
           surface.signedInteger64(9n),
         ),
@@ -355,13 +355,13 @@ Deno.test("GPU functional evaluation accepts i64 and f32 inputs", async () => {
       "main",
       10,
     ),
-    buildFunctionalSurfaceModule(
+    buildSurfaceModule(
       [{
         name: "main",
         parameters: ["input"],
         annotation: null,
         body: surface.binary(
-          FunctionalBinaryOperator.MultiplyFloat32,
+          BinaryOperator.MultiplyFloat32,
           surface.name("input"),
           surface.float32(4),
         ),
@@ -427,7 +427,7 @@ Deno.test("checks a parser-independent rank-3 function parameter on the GPU", as
       "function",
       surface.apply(
         surface.apply(
-          surface.name(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME),
+          surface.name(PAIR_CONSTRUCTOR_NAME),
           surface.apply(surface.name("function"), surface.integer(42)),
         ),
         surface.apply(surface.name("function"), surface.boolean(true)),
@@ -459,7 +459,7 @@ Deno.test("checks a parser-independent rank-3 function parameter on the GPU", as
       kind: "case",
       value: surface.apply(surface.name("with_identity"), surface.name("use")),
       arms: [{
-        constructor: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        constructor: PAIR_CONSTRUCTOR_NAME,
         binders: ["answer", "condition"],
         body: {
           kind: "if",
@@ -470,8 +470,8 @@ Deno.test("checks a parser-independent rank-3 function parameter on the GPU", as
       }],
     },
   } as const;
-  const module = buildFunctionalSurfaceModule([identity, use, withIdentity, main], [], "main", 0);
-  equal(module.typecheckingProfile, FunctionalTypecheckingProfile.PredicativeRankNIndexed);
+  const module = buildSurfaceModule([identity, use, withIdentity, main], [], "main", 0);
+  equal(module.typecheckingProfile, TypecheckingProfile.PredicativeRankNIndexed);
   const { compiler, evaluator } = functionalRuntime();
   const compilation = await compiler.compileModule(module);
 
@@ -559,7 +559,7 @@ Deno.test("packed functional compilation preserves lane order and scalar results
 Deno.test("rejects duplicate host capability fields at the surface boundary", () => {
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{ name: "main", parameters: [], annotation: null, body: surface.integer(42) }],
         [],
         "main",
@@ -581,7 +581,7 @@ Deno.test("rejects duplicate host capability fields at the surface boundary", ()
 Deno.test("rejects a WASM buffer intrinsic with an incompatible signature", () => {
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{ name: "main", parameters: [], annotation: null, body: surface.integer(42) }],
         [],
         "main",
@@ -595,7 +595,7 @@ Deno.test("rejects a WASM buffer intrinsic with an incompatible signature", () =
               purity: "pure",
               parameter: { kind: "integer" },
               result: { kind: "integer" },
-              wasmIntrinsic: FunctionalWasmIntrinsic.BufferByteLength,
+              wasmIntrinsic: WasmIntrinsic.BufferByteLength,
             }],
           }],
         },
@@ -609,7 +609,7 @@ Deno.test("rejects unsupported functional module envelopes before GPU work", asy
   const valid = integerModule(42);
 
   await rejects(
-    () => compiler.compileModule({ ...valid, abiVersion: FUNCTIONAL_MODULE_ABI_VERSION + 1 }),
+    () => compiler.compileModule({ ...valid, abiVersion: MODULE_ABI_VERSION + 1 }),
     /ABI version 6 is unsupported; expected 5/,
   );
   await rejects(
@@ -641,14 +641,14 @@ Deno.test("rejects malformed functional record tables with their exact shape", a
 });
 
 Deno.test("rejects malformed encoded bytes before GPU work", async () => {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{ name: "main", parameters: [], annotation: null, body: surface.bytes(Uint8Array.of(42)) }],
     [],
     "main",
     0,
   );
   const symbols = [...module.symbolNames];
-  const literalSymbol = module.nodeWords[FunctionalNodeWord.Payload]!;
+  const literalSymbol = module.nodeWords[NodeWord.Payload]!;
   symbols[literalSymbol] = "$bytes:zz";
 
   await rejects(
@@ -658,14 +658,14 @@ Deno.test("rejects malformed encoded bytes before GPU work", async () => {
 });
 
 Deno.test("rejects runtime faults outside the symbol table before GPU work", async () => {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{ name: "main", parameters: [], annotation: null, body: surface.runtimeFault("broken") }],
     [],
     "main",
     0,
   );
   const nodeWords = module.nodeWords.slice();
-  nodeWords[FunctionalNodeWord.Payload] = module.symbolNames.length;
+  nodeWords[NodeWord.Payload] = module.symbolNames.length;
 
   await rejects(
     () => functionalRuntime().compiler.compileModule({ ...module, nodeWords }),
@@ -677,7 +677,7 @@ Deno.test("bounds functional source spans before allocating GPU state", async ()
   const { compiler } = functionalRuntime();
   const compilation = await compiler.compileModule({
     ...integerModule(42),
-    sourceByteLength: FUNCTIONAL_MAXIMUM_SOURCE_BYTE_LENGTH + 1,
+    sourceByteLength: MAXIMUM_SOURCE_BYTE_LENGTH + 1,
   });
 
   equal(compilation.ok, false);
@@ -694,7 +694,7 @@ Deno.test("preserves Lazuli compatibility across the functional module boundary"
   if (!parsing.ok) return;
   const [functional, lazuli] = await Promise.all([
     compiler.compileModule(
-      lazuliSurfaceToFunctionalModule(
+      lazuliSurfaceToModule(
         parsing.surface,
         new TextEncoder().encode(source).byteLength,
       ),
@@ -732,7 +732,7 @@ Deno.test("reports functional diagnostic codes without frontend-specific prefixe
 });
 
 Deno.test("duplicate declarations report the original source span", async () => {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [
       {
         name: "answer",
@@ -765,7 +765,7 @@ Deno.test("duplicate declarations report the original source span", async () => 
 });
 
 Deno.test("linked diagnostics map primary and related spans back to frontend modules", () => {
-  const located = locateFunctionalDiagnostic(
+  const located = locateDiagnostic(
     [
       { module: "library.duck", startByte: 0, endByte: 10 },
       { module: "application.duck", startByte: 10, endByte: 30 },
@@ -803,7 +803,7 @@ Deno.test("keeps frontend collection names as ordinary constructors", async () =
   ok(parsing.ok);
   if (!parsing.ok) return;
   const compilation = await compiler.compileModule(
-    lazuliSurfaceToFunctionalModule(
+    lazuliSurfaceToModule(
       parsing.surface,
       new TextEncoder().encode(source).byteLength,
     ),
@@ -835,7 +835,7 @@ Deno.test("reports functional runtime faults without frontend-specific prefixes"
   ok(parsing.ok);
   if (!parsing.ok) return;
   const compilation = await compiler.compileModule(
-    lazuliSurfaceToFunctionalModule(
+    lazuliSurfaceToModule(
       parsing.surface,
       new TextEncoder().encode(source).byteLength,
     ),

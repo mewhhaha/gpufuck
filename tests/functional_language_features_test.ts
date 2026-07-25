@@ -1,25 +1,25 @@
 import { deepStrictEqual, equal, ok } from "node:assert/strict";
 
 import {
-  buildFunctionalSurfaceModule,
-  FunctionalBinaryOperator,
-  FunctionalEvaluationProfile,
-  type FunctionalSurfaceExpression,
+  BinaryOperator,
+  buildSurfaceModule,
+  EvaluationProfile,
   functionalThunkType,
-  GpuFunctionalCompiler,
-  GpuFunctionalEvaluator,
+  GpuCompiler,
+  GpuEvaluator,
   requestWebGpuDevice,
   surface,
+  type SurfaceExpression,
 } from "../functional.ts";
 
 let device: GPUDevice | undefined;
-let compiler: GpuFunctionalCompiler | undefined;
-let evaluator: GpuFunctionalEvaluator | undefined;
+let compiler: GpuCompiler | undefined;
+let evaluator: GpuEvaluator | undefined;
 
 Deno.test.beforeAll(async () => {
   device = await requestWebGpuDevice();
-  compiler = await GpuFunctionalCompiler.create(device);
-  evaluator = await GpuFunctionalEvaluator.create(device);
+  compiler = await GpuCompiler.create(device);
+  evaluator = await GpuEvaluator.create(device);
 });
 
 Deno.test.afterAll(() => {
@@ -30,13 +30,13 @@ Deno.test.afterAll(() => {
 });
 
 Deno.test("mutually recursive local functions retain lexical captures", async () => {
-  const decrement = (name: string): FunctionalSurfaceExpression =>
+  const decrement = (name: string): SurfaceExpression =>
     surface.binary(
-      FunctionalBinaryOperator.Subtract,
+      BinaryOperator.Subtract,
       surface.name(name),
       surface.integer(1),
     );
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{
       name: "main",
       parameters: [],
@@ -76,7 +76,7 @@ Deno.test("mutually recursive local functions retain lexical captures", async ()
     [],
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
 
   const compilation = await functionalCompiler().compileModule(module);
@@ -93,7 +93,7 @@ Deno.test("mutually recursive local functions retain lexical captures", async ()
 });
 
 Deno.test("nested recursive groups preserve source order through GPU compilation", async () => {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{
       name: "main",
       parameters: [],
@@ -124,7 +124,7 @@ Deno.test("nested recursive groups preserve source order through GPU compilation
     [],
     "main",
     30,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
 
   const compilation = await functionalCompiler().compileModule(module);
@@ -151,13 +151,13 @@ Deno.test("explicit thunk delays work and memoizes its first force", async () =>
 
 async function compileAndRunThunkModule(forceTwice: boolean) {
   const forced = surface.force(surface.name("shared"));
-  const result = forceTwice ? surface.binary(FunctionalBinaryOperator.Add, forced, forced) : forced;
-  const body: FunctionalSurfaceExpression = {
+  const result = forceTwice ? surface.binary(BinaryOperator.Add, forced, forced) : forced;
+  const body: SurfaceExpression = {
     kind: "let",
     name: "unused",
     value: surface.delay(
       surface.binary(
-        FunctionalBinaryOperator.Divide,
+        BinaryOperator.Divide,
         surface.integer(1),
         surface.integer(0),
       ),
@@ -167,7 +167,7 @@ async function compileAndRunThunkModule(forceTwice: boolean) {
       name: "shared",
       value: surface.delay(
         surface.binary(
-          FunctionalBinaryOperator.Add,
+          BinaryOperator.Add,
           surface.integer(20),
           surface.integer(1),
         ),
@@ -175,7 +175,7 @@ async function compileAndRunThunkModule(forceTwice: boolean) {
       body: result,
     },
   };
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{
       name: "declaredThunk",
       parameters: [],
@@ -185,7 +185,7 @@ async function compileAndRunThunkModule(forceTwice: boolean) {
     [],
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalCompiler().compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -198,12 +198,12 @@ async function compileAndRunThunkModule(forceTwice: boolean) {
     compilation.module.destroy();
   }
 }
-function functionalCompiler(): GpuFunctionalCompiler {
+function functionalCompiler(): GpuCompiler {
   if (compiler === undefined) throw new Error("functional compiler was not initialized");
   return compiler;
 }
 
-function functionalEvaluator(): GpuFunctionalEvaluator {
+function functionalEvaluator(): GpuEvaluator {
   if (evaluator === undefined) throw new Error("functional evaluator was not initialized");
   return evaluator;
 }

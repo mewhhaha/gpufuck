@@ -1,45 +1,33 @@
-import type {
-  LazuliSourceType,
-  LazuliSpan,
-  LazuliType,
-  LazuliTypeDeclaration,
-  LazuliTypeSchema,
-} from "../semantic/abi.ts";
+import type { Type, TypeSchema } from "../semantic/abi.ts";
 
-export const FunctionalEvaluationProfile = {
+export type { SourceType, Span, Type, TypeDeclaration, TypeSchema } from "../semantic/abi.ts";
+
+export const EvaluationProfile = {
   LazyCallByNeed: "lazy-call-by-need-v1",
   StrictEager: "strict-eager-v1",
 } as const;
 
-export type FunctionalEvaluationProfile =
-  (typeof FunctionalEvaluationProfile)[keyof typeof FunctionalEvaluationProfile];
+export type EvaluationProfile = (typeof EvaluationProfile)[keyof typeof EvaluationProfile];
 
-export const FunctionalTypecheckingProfile = {
+export const TypecheckingProfile = {
   HindleyMilnerIndexed: "hindley-milner-indexed-v1",
   PredicativeRankNIndexed: "predicative-rank-n-indexed-v1",
 } as const;
 
-export type FunctionalTypecheckingProfile =
-  (typeof FunctionalTypecheckingProfile)[keyof typeof FunctionalTypecheckingProfile];
-
-export type FunctionalSpan = LazuliSpan;
-export type FunctionalType = LazuliType;
-export type FunctionalTypeSchema = LazuliTypeSchema;
-export type FunctionalSourceType = LazuliSourceType;
-export type FunctionalTypeDeclaration = LazuliTypeDeclaration;
+export type TypecheckingProfile = (typeof TypecheckingProfile)[keyof typeof TypecheckingProfile];
 
 /**
  * Instantiates a closed schema into a concrete type. Schemas reaching a public boundary carry no
  * free parameters, so an unresolved parameter or a retained `forall` is a packing defect.
  */
-export function concreteFunctionalType(schema: FunctionalTypeSchema): FunctionalType {
+export function concreteType(schema: TypeSchema): Type {
   return instantiateSchema(schema, new Map());
 }
 
 export function instantiateSchema(
-  schema: FunctionalTypeSchema,
-  parameters: ReadonlyMap<string, FunctionalType>,
-): FunctionalType {
+  schema: TypeSchema,
+  parameters: ReadonlyMap<string, Type>,
+): Type {
   switch (schema.kind) {
     case "integer":
     case "signed-integer-64":

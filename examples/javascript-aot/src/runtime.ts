@@ -1,9 +1,9 @@
-import { FunctionalBinaryOperator } from "../../../src/functional/abi.ts";
+import { BinaryOperator } from "../../../src/functional/abi.ts";
 import type {
-  FunctionalSurfaceCaseArm,
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceTypeDeclaration,
+  SurfaceCaseArm,
+  SurfaceDefinition,
+  SurfaceExpression,
+  SurfaceTypeDeclaration,
 } from "../../../src/functional/surface_builder.ts";
 import {
   JAVASCRIPT_ACCESSOR_DESCRIPTOR,
@@ -110,13 +110,13 @@ const SET_BINDING_CELL = "$javascript#setBindingCell";
 const WITH_LEXICAL_ENVIRONMENT = "$javascript#withLexicalEnvironment";
 
 export interface JavaScriptRuntimeSurface {
-  readonly definitions: readonly FunctionalSurfaceDefinition[];
-  readonly typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[];
+  readonly definitions: readonly SurfaceDefinition[];
+  readonly typeDeclarations: readonly SurfaceTypeDeclaration[];
 }
 
 export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRuntimeSurface {
   const span = { startByte: sourceByteLength, endByte: sourceByteLength };
-  const definitions: readonly FunctionalSurfaceDefinition[] = [{
+  const definitions: readonly SurfaceDefinition[] = [{
     name: JAVASCRIPT_RUNTIME_EMPTY_HEAP,
     parameters: [],
     annotation: null,
@@ -273,7 +273,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         constructor: JAVASCRIPT_PROPERTY_KEY_STRING,
         binders: ["rightString"],
         body: binary(
-          FunctionalBinaryOperator.StructuralEqual,
+          BinaryOperator.StructuralEqual,
           reference("leftString", span),
           reference("rightString", span),
           span,
@@ -298,7 +298,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         constructor: JAVASCRIPT_PROPERTY_KEY_SYMBOL,
         binders: ["rightSymbol"],
         body: binary(
-          FunctionalBinaryOperator.Equal,
+          BinaryOperator.Equal,
           reference("leftSymbol", span),
           reference("rightSymbol", span),
           span,
@@ -332,13 +332,13 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       binders: ["numberValue"],
       body: conditional(
         binary(
-          FunctionalBinaryOperator.EqualFloat64,
+          BinaryOperator.EqualFloat64,
           reference("numberValue", span),
           reference("numberValue", span),
           span,
         ),
         binary(
-          FunctionalBinaryOperator.NotEqualFloat64,
+          BinaryOperator.NotEqualFloat64,
           reference("numberValue", span),
           { kind: "float-64", value: 0, span },
           span,
@@ -351,7 +351,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       constructor: JAVASCRIPT_VALUE_STRING,
       binders: ["stringValue"],
       body: binary(
-        FunctionalBinaryOperator.StructuralNotEqual,
+        BinaryOperator.StructuralNotEqual,
         reference("stringValue", span),
         { kind: "text", value: "", span },
         span,
@@ -403,7 +403,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       binders: ["numberString"],
       body: conditional(
         binary(
-          FunctionalBinaryOperator.StructuralEqual,
+          BinaryOperator.StructuralEqual,
           reference("numberString", span),
           text("", span),
           span,
@@ -648,7 +648,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         reference("right", span),
         JAVASCRIPT_VALUE_BOOLEAN,
         binary(
-          FunctionalBinaryOperator.StructuralEqual,
+          BinaryOperator.StructuralEqual,
           reference("leftBoolean", span),
           reference("matchingValue", span),
           span,
@@ -663,7 +663,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         reference("right", span),
         JAVASCRIPT_VALUE_NUMBER,
         binary(
-          FunctionalBinaryOperator.EqualFloat64,
+          BinaryOperator.EqualFloat64,
           reference("leftNumber", span),
           reference("matchingValue", span),
           span,
@@ -678,7 +678,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         reference("right", span),
         JAVASCRIPT_VALUE_STRING,
         binary(
-          FunctionalBinaryOperator.StructuralEqual,
+          BinaryOperator.StructuralEqual,
           reference("leftString", span),
           reference("matchingValue", span),
           span,
@@ -693,7 +693,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         reference("right", span),
         JAVASCRIPT_VALUE_SYMBOL,
         binary(
-          FunctionalBinaryOperator.Equal,
+          BinaryOperator.Equal,
           reference("leftSymbol", span),
           reference("matchingValue", span),
           span,
@@ -708,7 +708,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         reference("right", span),
         JAVASCRIPT_VALUE_OBJECT,
         binary(
-          FunctionalBinaryOperator.Equal,
+          BinaryOperator.Equal,
           reference("leftObject", span),
           reference("matchingValue", span),
           span,
@@ -918,7 +918,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
           binders: ["prototypeIdentity"],
           body: conditional(
             binary(
-              FunctionalBinaryOperator.Equal,
+              BinaryOperator.Equal,
               reference("prototypeIdentity", span),
               reference("expectedPrototypeIdentity", span),
               span,
@@ -1135,14 +1135,14 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     annotation: null,
     body: conditional(
       binary(
-        FunctionalBinaryOperator.Less,
+        BinaryOperator.Less,
         reference("identity", span),
         integer(0, span),
         span,
       ),
       boolean(false, span),
       binary(
-        FunctionalBinaryOperator.Less,
+        BinaryOperator.Less,
         reference("identity", span),
         storeLength(reference("objects", span), span),
         span,
@@ -1170,7 +1170,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       binders: ["nextIdentity", "objects"],
       body: conditional(
         binary(
-          FunctionalBinaryOperator.Equal,
+          BinaryOperator.Equal,
           reference("nextIdentity", span),
           integer(JAVASCRIPT_MAXIMUM_OBJECT_COUNT, span),
           span,
@@ -1232,7 +1232,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       binders: ["bindingName", "bindingIdentity", "outer"],
       body: conditional(
         binary(
-          FunctionalBinaryOperator.StructuralEqual,
+          BinaryOperator.StructuralEqual,
           reference("bindingName", span),
           reference("name", span),
           span,
@@ -1363,7 +1363,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         binders: ["nextIdentity", "cells"],
         body: conditional(
           binary(
-            FunctionalBinaryOperator.Less,
+            BinaryOperator.Less,
             reference("bindingIdentity", span),
             integer(0, span),
             span,
@@ -1371,7 +1371,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
           runtimeFault("JavaScript reference contains a negative binding identity", span),
           conditional(
             binary(
-              FunctionalBinaryOperator.Less,
+              BinaryOperator.Less,
               reference("bindingIdentity", span),
               storeLength(reference("cells", span), span),
               span,
@@ -1588,7 +1588,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
     annotation: null,
     body: conditional(
       binary(
-        FunctionalBinaryOperator.Less,
+        BinaryOperator.Less,
         reference("identity", span),
         storeLength(reference("cells", span), span),
         span,
@@ -1625,7 +1625,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
         binders: ["nextIdentity", "cells"],
         body: conditional(
           binary(
-            FunctionalBinaryOperator.Equal,
+            BinaryOperator.Equal,
             reference("nextIdentity", span),
             integer(JAVASCRIPT_MAXIMUM_BINDING_COUNT, span),
             span,
@@ -1643,7 +1643,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
             ], span),
             call(JAVASCRIPT_BINDING_STORE, [
               binary(
-                FunctionalBinaryOperator.Add,
+                BinaryOperator.Add,
                 reference("nextIdentity", span),
                 integer(1, span),
                 span,
@@ -1651,7 +1651,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
               storeGrow(
                 reference("cells", span),
                 binary(
-                  FunctionalBinaryOperator.Add,
+                  BinaryOperator.Add,
                   reference("nextIdentity", span),
                   integer(1, span),
                   span,
@@ -1700,7 +1700,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       binders: ["bindingName", "bindingIdentity", "outer"],
       body: conditional(
         binary(
-          FunctionalBinaryOperator.StructuralEqual,
+          BinaryOperator.StructuralEqual,
           reference("bindingName", span),
           reference("name", span),
           span,
@@ -1802,7 +1802,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
       binders: ["bindingName", "bindingIdentity", "outer"],
       body: conditional(
         binary(
-          FunctionalBinaryOperator.StructuralEqual,
+          BinaryOperator.StructuralEqual,
           reference("bindingName", span),
           reference("name", span),
           span,
@@ -1877,7 +1877,7 @@ export function javascriptRuntimeSurface(sourceByteLength: number): JavaScriptRu
 
 function lookupPrototypeProperty(
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return match(reference("prototype", span), [{
     constructor: JAVASCRIPT_VALUE_NULL,
     binders: [],
@@ -1897,7 +1897,7 @@ function lookupPrototypeProperty(
 
 function putReceiverDataProperty(
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   const invalidReceiver = reference(JAVASCRIPT_REFERENCE_UPDATE_INVALID_BASE, span);
   return match(reference("receiver", span), [{
     constructor: JAVASCRIPT_VALUE_OBJECT,
@@ -2023,9 +2023,9 @@ function putReceiverDataProperty(
 }
 
 function updatedReceiverState(
-  descriptor: FunctionalSurfaceExpression,
+  descriptor: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return call(JAVASCRIPT_REFERENCE_UPDATE_UPDATED, [call(JAVASCRIPT_STATE, [
     call(JAVASCRIPT_HEAP, [
       reference("nextIdentity", span),
@@ -2052,7 +2052,7 @@ function updatedReceiverState(
 
 function getPropertyReferenceValue(
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   const invalidBase = runtimeFault("JavaScript property reference base is not an object", span);
   return match(reference("base", span), [{
     constructor: JAVASCRIPT_VALUE_OBJECT,
@@ -2187,11 +2187,11 @@ function getPropertyReferenceValue(
 
 function allocateObjectResult(
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return call(JAVASCRIPT_HEAP_ALLOCATION, [
     call(JAVASCRIPT_HEAP, [
       binary(
-        FunctionalBinaryOperator.Add,
+        BinaryOperator.Add,
         reference("nextIdentity", span),
         integer(1, span),
         span,
@@ -2199,7 +2199,7 @@ function allocateObjectResult(
       storeGrow(
         reference("objects", span),
         binary(
-          FunctionalBinaryOperator.Add,
+          BinaryOperator.Add,
           reference("nextIdentity", span),
           integer(1, span),
           span,
@@ -2219,7 +2219,7 @@ function allocateObjectResult(
 
 function invalidPrototypeArms(
   span: { readonly startByte: number; readonly endByte: number },
-): readonly FunctionalSurfaceCaseArm[] {
+): readonly SurfaceCaseArm[] {
   const invalid = runtimeFault("JavaScript object prototype must be null or an object", span);
   return [
     { constructor: "$javascript#Undefined", binders: [], body: invalid, span },
@@ -2232,7 +2232,7 @@ function invalidPrototypeArms(
 
 function defaultObjectRecord(
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return call(JAVASCRIPT_OBJECT_RECORD, [
     reference(JAVASCRIPT_VALUE_NULL, span),
     boolean(true, span),
@@ -2242,11 +2242,11 @@ function defaultObjectRecord(
 }
 
 function compareMatchingValueKind(
-  right: FunctionalSurfaceExpression,
+  right: SurfaceExpression,
   matchingConstructor: string,
-  matchingComparison: FunctionalSurfaceExpression,
+  matchingComparison: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   const valueKinds = [
     { constructor: JAVASCRIPT_VALUE_UNDEFINED, carriesValue: false },
     { constructor: JAVASCRIPT_VALUE_NULL, carriesValue: false },
@@ -2270,9 +2270,9 @@ function compareMatchingValueKind(
 
 function numericAddition(
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return call(JAVASCRIPT_VALUE_NUMBER, [binary(
-    FunctionalBinaryOperator.AddFloat64,
+    BinaryOperator.AddFloat64,
     call(JAVASCRIPT_RUNTIME_TO_NUMBER, [reference("left", span)], span),
     call(JAVASCRIPT_RUNTIME_TO_NUMBER, [reference("right", span)], span),
     span,
@@ -2281,7 +2281,7 @@ function numericAddition(
 
 function invalidStringAdditionArms(
   span: { readonly startByte: number; readonly endByte: number },
-): readonly FunctionalSurfaceCaseArm[] {
+): readonly SurfaceCaseArm[] {
   const unsupported = runtimeFault(
     "JavaScript runtime string addition requires ToString for a non-string operand",
     span,
@@ -2320,22 +2320,22 @@ function invalidStringAdditionArms(
 }
 
 function sameNumberValue(
-  left: FunctionalSurfaceExpression,
-  right: FunctionalSurfaceExpression,
+  left: SurfaceExpression,
+  right: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return conditional(
-    binary(FunctionalBinaryOperator.EqualFloat64, left, right, span),
+    binary(BinaryOperator.EqualFloat64, left, right, span),
     binary(
-      FunctionalBinaryOperator.EqualFloat64,
+      BinaryOperator.EqualFloat64,
       binary(
-        FunctionalBinaryOperator.DivideFloat64,
+        BinaryOperator.DivideFloat64,
         { kind: "float-64", value: 1, span },
         left,
         span,
       ),
       binary(
-        FunctionalBinaryOperator.DivideFloat64,
+        BinaryOperator.DivideFloat64,
         { kind: "float-64", value: 1, span },
         right,
         span,
@@ -2343,8 +2343,8 @@ function sameNumberValue(
       span,
     ),
     conditional(
-      binary(FunctionalBinaryOperator.NotEqualFloat64, left, left, span),
-      binary(FunctionalBinaryOperator.NotEqualFloat64, right, right, span),
+      binary(BinaryOperator.NotEqualFloat64, left, left, span),
+      binary(BinaryOperator.NotEqualFloat64, right, right, span),
       boolean(false, span),
       span,
     ),
@@ -2355,36 +2355,36 @@ function sameNumberValue(
 function reference(
   name: string,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "name", name, span };
 }
 
 function integer(
   value: number,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "integer", value, span };
 }
 
 function boolean(
   value: boolean,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "boolean", value, span };
 }
 
 function text(
   value: string,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "text", value, span };
 }
 
 function call(
   calleeName: string,
-  arguments_: readonly FunctionalSurfaceExpression[],
+  arguments_: readonly SurfaceExpression[],
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   let expression = reference(calleeName, span);
   for (const argument of arguments_) {
     expression = { kind: "apply", callee: expression, argument, span };
@@ -2393,84 +2393,84 @@ function call(
 }
 
 function binary(
-  operator: FunctionalBinaryOperator,
-  left: FunctionalSurfaceExpression,
-  right: FunctionalSurfaceExpression,
+  operator: BinaryOperator,
+  left: SurfaceExpression,
+  right: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "binary", operator, left, right, span };
 }
 
 function storeNew(
-  length: FunctionalSurfaceExpression,
-  initial: FunctionalSurfaceExpression,
+  length: SurfaceExpression,
+  initial: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "store-new", length, initial, span };
 }
 
 function storeLength(
-  store: FunctionalSurfaceExpression,
+  store: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "store-length", store, span };
 }
 
 function storeRead(
-  store: FunctionalSurfaceExpression,
-  index: FunctionalSurfaceExpression,
+  store: SurfaceExpression,
+  index: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "store-read", store, index, span };
 }
 
 function storeWrite(
-  store: FunctionalSurfaceExpression,
-  index: FunctionalSurfaceExpression,
-  value: FunctionalSurfaceExpression,
+  store: SurfaceExpression,
+  index: SurfaceExpression,
+  value: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "store-write", store, index, value, span };
 }
 
 function storeGrow(
-  store: FunctionalSurfaceExpression,
-  length: FunctionalSurfaceExpression,
-  initial: FunctionalSurfaceExpression,
+  store: SurfaceExpression,
+  length: SurfaceExpression,
+  initial: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "store-grow", store, length, initial, span };
 }
 
 function conditional(
-  condition: FunctionalSurfaceExpression,
-  consequent: FunctionalSurfaceExpression,
-  alternate: FunctionalSurfaceExpression,
+  condition: SurfaceExpression,
+  consequent: SurfaceExpression,
+  alternate: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "if", condition, consequent, alternate, span };
 }
 
 function letExpression(
   name: string,
-  value: FunctionalSurfaceExpression,
-  body: FunctionalSurfaceExpression,
+  value: SurfaceExpression,
+  body: SurfaceExpression,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "let", name, value, body, span };
 }
 
 function match(
-  value: FunctionalSurfaceExpression,
-  arms: readonly FunctionalSurfaceCaseArm[],
+  value: SurfaceExpression,
+  arms: readonly SurfaceCaseArm[],
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "case", value, arms, span };
 }
 
 function runtimeFault(
   message: string,
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "runtime-fault", message, span };
 }

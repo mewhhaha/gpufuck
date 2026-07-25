@@ -1,14 +1,14 @@
-import { parseLazuliSource } from "../src/semantic/frontend.ts";
-import { GpuLazuliCompiler } from "../src/semantic/compiler.ts";
-import { lazuliSurfaceToFunctionalModule } from "../src/semantic/functional_adapter.ts";
+import { parseLazuliSource } from "../src/lazuli/frontend.ts";
+import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
+import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
-import { LAZULI_DEFINITION_WORD_LENGTH, LazuliDefinitionWord } from "../src/semantic/abi.ts";
-import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";
+import { DEFINITION_WORD_LENGTH, DefinitionWord } from "../src/semantic/abi.ts";
+import type { CoreNode } from "../src/semantic/compiler_module.ts";
 import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
-import { GpuLazuliSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
-import type { GpuLazuliCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
-import { LazuliCompilationStatus } from "../src/semantic/compiler_shader.ts";
-import { LazuliInferenceStatus } from "../src/semantic/type_inference_shader.ts";
+import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
+import type { GpuCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
+import { CompilationStatus } from "../src/semantic/compiler_shader.ts";
+import { InferenceStatus } from "../src/semantic/type_inference_shader.ts";
 
 const DEFAULT_SOURCE_PATH = "examples/lazuli/brainfuck_compiler.laz";
 const SAMPLE_COUNT = 5;
@@ -45,37 +45,37 @@ if (!parsed.ok) {
 }
 
 const adapterStart = performance.now();
-const functionalModule = lazuliSurfaceToFunctionalModule(parsed.surface, sourceBytes);
+const functionalModule = lazuliSurfaceToModule(parsed.surface, sourceBytes);
 const semanticSurface = semanticSurfaceFromModule(functionalModule);
 const functionalAdapterMilliseconds = performance.now() - adapterStart;
 
 const warmParseAndSurfacePackingMilliseconds: number[] = [];
-const warmFunctionalAdapterMilliseconds: number[] = [];
+const warmAdapterMilliseconds: number[] = [];
 for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
   const warmParseStart = performance.now();
   const warmParsed = parseLazuliSource(source);
   warmParseAndSurfacePackingMilliseconds.push(performance.now() - warmParseStart);
   if (!warmParsed.ok) throw new Error("profile source stopped parsing during warm samples");
   const warmAdapterStart = performance.now();
-  semanticSurfaceFromModule(lazuliSurfaceToFunctionalModule(warmParsed.surface, sourceBytes));
-  warmFunctionalAdapterMilliseconds.push(performance.now() - warmAdapterStart);
+  semanticSurfaceFromModule(lazuliSurfaceToModule(warmParsed.surface, sourceBytes));
+  warmAdapterMilliseconds.push(performance.now() - warmAdapterStart);
 }
 
 const deviceStart = performance.now();
 const adapter = await navigator.gpu.requestAdapter();
-if (adapter === null) throw new Error("Lazuli compiler profile could not find a WebGPU adapter");
+if (adapter === null) throw new Error("semantic compiler profile could not find a WebGPU adapter");
 const device = await adapter.requestDevice();
 const deviceInitializationMilliseconds = performance.now() - deviceStart;
 try {
   const compilerStart = performance.now();
-  const compiler = await GpuLazuliSemanticCompiler.create(device);
+  const compiler = await GpuSemanticCompiler.create(device);
   const compilerInitializationMilliseconds = performance.now() - compilerStart;
 
   const warmupSource = "fn main = 0;";
   const warmupParsed = parseLazuliSource(warmupSource);
-  if (!warmupParsed.ok) throw new Error("internal Lazuli profiling warmup did not parse");
+  if (!warmupParsed.ok) throw new Error("internal profiling warmup did not parse");
   const warmupSurface = semanticSurfaceFromModule(
-    lazuliSurfaceToFunctionalModule(
+    lazuliSurfaceToModule(
       warmupParsed.surface,
       new TextEncoder().encode(warmupSource).byteLength,
     ),
@@ -96,7 +96,7 @@ try {
     const samples: number[] = [];
     let representativeDispatches: readonly DispatchProfile[] = [];
     let representativeCoreReadbackMilliseconds = 0;
-    let representativeCoreNodes: readonly LazuliCoreNode[] = [];
+    let representativeCoreNodes: readonly CoreNode[] = [];
     for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
       const dispatches: DispatchProfile[] = [];
       let previousDispatch = performance.now();
@@ -107,7 +107,7 @@ try {
         { maximumSteps: MAXIMUM_STEPS, maximumStepsPerDispatch },
         undefined,
         {
-          observeDispatch: (observation: GpuLazuliCompilationDispatchObservation) => {
+          observeDispatch: (observation: GpuCompilationDispatchObservation) => {
             const now = performance.now();
             dispatches.push({
               elapsedMilliseconds: now - previousDispatch,
@@ -264,8 +264,8 @@ try {
       warmParseAndSurfacePackingMilliseconds,
       warmParseAndSurfacePackingMedianMilliseconds: median(warmParseAndSurfacePackingMilliseconds),
       functionalAdapterMilliseconds,
-      warmFunctionalAdapterMilliseconds,
-      warmFunctionalAdapterMedianMilliseconds: median(warmFunctionalAdapterMilliseconds),
+      warmAdapterMilliseconds,
+      warmAdapterMedianMilliseconds: median(warmAdapterMilliseconds),
       adapter: {
         vendor: adapter.info.vendor,
         architecture: adapter.info.architecture,
@@ -318,14 +318,16 @@ try {
 function median(samples: readonly number[]): number {
   const ordered = [...samples].sort((left, right) => left - right);
   const middle = ordered[Math.floor(ordered.length / 2)];
-  if (middle === undefined) throw new Error("Lazuli profile requires at least one sample");
+  if (middle === undefined) {
+    throw new Error("semantic compiler profile requires at least one sample");
+  }
   return middle;
 }
 
 function definitionRoots(surface: typeof semanticSurface): readonly number[] {
   return Array.from({ length: surface.definitionCount }, (_, definition) => {
     const root = surface.definitionWords[
-      definition * LAZULI_DEFINITION_WORD_LENGTH + LazuliDefinitionWord.RootNode
+      definition * DEFINITION_WORD_LENGTH + DefinitionWord.RootNode
     ];
     if (root === undefined) {
       throw new Error(`profile surface omits the root node for definition ${definition}`);
@@ -335,9 +337,9 @@ function definitionRoots(surface: typeof semanticSurface): readonly number[] {
 }
 
 function dispatchPhase(
-  observation: GpuLazuliCompilationDispatchObservation,
+  observation: GpuCompilationDispatchObservation,
 ): DispatchProfile["phase"] {
-  if (observation.semanticStatus === LazuliCompilationStatus.Pending) return "resolution";
-  if (observation.inferenceStatus === LazuliInferenceStatus.Complete) return "complete";
+  if (observation.semanticStatus === CompilationStatus.Pending) return "resolution";
+  if (observation.inferenceStatus === InferenceStatus.Complete) return "complete";
   return "inference";
 }

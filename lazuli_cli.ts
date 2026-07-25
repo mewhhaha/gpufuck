@@ -1,8 +1,8 @@
 import {
   GpuLazuliCompiler,
-  GpuLazuliEvaluator,
-  type GpuLazuliModule,
-  LAZULI_ABI_VERSION,
+  GpuSemanticEvaluator,
+  type GpuSemanticModule,
+  MODULE_ABI_VERSION,
   requestWebGpuDevice,
 } from "./mod.ts";
 
@@ -57,7 +57,7 @@ export async function main(
         const nodes = await compilation.module.readCoreNodes();
         output.log(JSON.stringify(
           {
-            abiVersion: LAZULI_ABI_VERSION,
+            abiVersion: MODULE_ABI_VERSION,
             nodeCount: compilation.module.nodeCount,
             definitionCount: compilation.module.definitionCount,
             typeCount: compilation.module.typeCount,
@@ -75,7 +75,7 @@ export async function main(
         return 0;
       }
 
-      const evaluator = await GpuLazuliEvaluator.create(device);
+      const evaluator = await GpuSemanticEvaluator.create(device);
       const evaluation = await evaluator.evaluate(compilation.module);
       if (!evaluation.ok) {
         const location = evaluation.fault.sourceByteOffset === null
@@ -121,7 +121,7 @@ async function runBatch(
   }
 
   const device = await requestWebGpuDevice();
-  const modules: GpuLazuliModule[] = [];
+  const modules: GpuSemanticModule[] = [];
   try {
     const compiler = await GpuLazuliCompiler.create(device);
     const compilations = await compiler.compileBatch(sources);
@@ -150,7 +150,7 @@ async function runBatch(
 
     if (hasCompilationFailure) return 1;
 
-    const evaluator = await GpuLazuliEvaluator.create(device);
+    const evaluator = await GpuSemanticEvaluator.create(device);
     const evaluations = await evaluator.evaluateBatch(modules);
     if (evaluations.length !== sourcePaths.length) {
       throw new Error(

@@ -1,26 +1,26 @@
 import {
-  type EncodedLazuliSurface,
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
-  LAZULI_MAXIMUM_PARSE_DEPTH,
-  LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH,
-  LAZULI_MAXIMUM_SURFACE_NODES,
-  LAZULI_NO_INDEX,
-  LAZULI_NODE_WORD_LENGTH,
-  LAZULI_TYPE_WORD_LENGTH,
-  LazuliBinaryOperator,
-  LazuliConstructorWord,
-  LazuliDefinitionWord,
-  type LazuliDiagnostic,
-  type LazuliFrontendResult,
-  type LazuliSourceType,
-  type LazuliSpan,
-  LazuliSurfaceTag,
-  LazuliSurfaceWord,
-  type LazuliTypeSchema,
-  LazuliTypeWord,
-  LazuliUnaryOperator,
-} from "./abi.ts";
+  AlgebraicTypeWord,
+  BinaryOperator,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  DefinitionWord,
+  type EncodedSemanticSurface,
+  ExpressionTag,
+  type FrontendResult,
+  MAXIMUM_CONSTRUCTOR_ARITY,
+  MAXIMUM_EXPRESSION_NODES,
+  MAXIMUM_PARSE_DEPTH,
+  MAXIMUM_SOURCE_BYTE_LENGTH,
+  NO_INDEX,
+  NODE_WORD_LENGTH,
+  NodeWord,
+  type SemanticDiagnostic,
+  type SourceType,
+  type Span,
+  TYPE_WORD_LENGTH,
+  type TypeSchema,
+  UnaryOperator,
+} from "../semantic/abi.ts";
 import { createParser, createParserAsync } from "@mewhhaha/baba/runtime/generated-wasm";
 
 type ParseResult = ReturnType<ReturnType<typeof createParser>["parse"]>;
@@ -31,7 +31,7 @@ const LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH = 256;
 
 export interface ParsedLazuliSource {
   readonly sourceByteLength: number;
-  readonly frontend: LazuliFrontendResult;
+  readonly frontend: FrontendResult;
 }
 
 interface SynchronousFileReader {
@@ -51,7 +51,7 @@ interface Identifier {
 interface Definition {
   readonly name: Identifier;
   readonly parameters: readonly Identifier[];
-  readonly annotation: SourceType | null;
+  readonly annotation: ParsedType | null;
   readonly body: Expression;
   readonly span: Utf16Span;
 }
@@ -88,7 +88,7 @@ type ConstParameter =
   };
 
 type ConstDescriptor =
-  | { readonly kind: "type"; readonly type: SourceType; readonly span: Utf16Span }
+  | { readonly kind: "type"; readonly type: ParsedType; readonly span: Utf16Span }
   | {
     readonly kind: "tuple";
     readonly values: readonly [ConstDescriptor, ConstDescriptor];
@@ -107,16 +107,16 @@ type ConstDescriptor =
 interface ConstructorDeclaration {
   readonly name: Identifier;
   readonly fields: readonly ConstructorField[];
-  readonly result: SourceType | null;
+  readonly result: ParsedType | null;
   readonly span: Utf16Span;
 }
 
 interface ConstructorField {
   readonly name: Identifier;
-  readonly type: SourceType;
+  readonly type: ParsedType;
 }
 
-type SourceType =
+type ParsedType =
   | { readonly kind: "integer"; readonly span: Utf16Span }
   | { readonly kind: "boolean"; readonly span: Utf16Span }
   | { readonly kind: "unit"; readonly span: Utf16Span }
@@ -127,19 +127,19 @@ type SourceType =
   }
   | {
     readonly kind: "tuple";
-    readonly values: readonly [SourceType, SourceType];
+    readonly values: readonly [ParsedType, ParsedType];
     readonly span: Utf16Span;
   }
   | {
     readonly kind: "named";
     readonly name: string;
-    readonly arguments: readonly SourceType[];
+    readonly arguments: readonly ParsedType[];
     readonly span: Utf16Span;
   }
   | {
     readonly kind: "function";
-    readonly parameter: SourceType;
-    readonly result: SourceType;
+    readonly parameter: ParsedType;
+    readonly result: ParsedType;
     readonly span: Utf16Span;
   };
 
@@ -225,7 +225,7 @@ type Expression =
 interface ExpressionSummary {
   readonly nodeCount: number;
   readonly maximumDepth: number;
-  readonly integerDiagnostics: readonly LazuliDiagnostic[];
+  readonly integerDiagnostics: readonly SemanticDiagnostic[];
 }
 
 const minimumI32 = -2_147_483_648n;
@@ -309,7 +309,7 @@ function getLazuliParser(): LazuliParser {
 }
 
 /** Parses Lazuli source into the stable surface-node ABI without resolving names. */
-export function parseLazuliSource(source: string): LazuliFrontendResult {
+export function parseLazuliSource(source: string): FrontendResult {
   return parseLazuliSourceForCompilation(source).frontend;
 }
 
@@ -324,10 +324,10 @@ export function parseLazuliSourceForCompilation(source: string): ParsedLazuliSou
 function parseLazuliSourceWithOffsets(
   source: string,
   byteOffsets: Utf8ByteOffsets,
-): LazuliFrontendResult {
-  if (byteOffsets.byteLength > LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH) {
+): FrontendResult {
+  if (byteOffsets.byteLength > MAXIMUM_SOURCE_BYTE_LENGTH) {
     return failure(limitDiagnostic(
-      `Source is ${byteOffsets.byteLength} bytes; the ABI limit is ${LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH}.`,
+      `Source is ${byteOffsets.byteLength} bytes; the ABI limit is ${MAXIMUM_SOURCE_BYTE_LENGTH}.`,
       { startByte: 0, endByte: byteOffsets.byteLength },
     ));
   }
@@ -353,9 +353,9 @@ function parseLazuliSourceWithOffsets(
           byteOffsets.span(traceLimit.span),
         ));
       }
-      const diagnostics = parsed.diagnostics.map((diagnostic): LazuliDiagnostic => ({
+      const diagnostics = parsed.diagnostics.map((diagnostic): SemanticDiagnostic => ({
         stage: "parse",
-        code: "L1001",
+        code: "F1001",
         message: `${diagnostic.code}: ${diagnostic.message}`,
         span: byteOffsets.span(diagnostic.span),
       }));
@@ -377,7 +377,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ReservedIdentifier) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: `Reserved word ${
             JSON.stringify(error.spelling)
           } cannot be used as an identifier.`,
@@ -387,7 +387,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ReservedBuiltinDeclaration) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -395,7 +395,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ApplicationSpacingError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -403,7 +403,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof TypeApplicationError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -411,7 +411,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof TypeApplicationSpacingError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -419,7 +419,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ConstSpecializationSpacingError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -443,7 +443,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ConstSpecializationError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -454,15 +454,15 @@ function parseLazuliSourceWithOffsets(
     if (summary.integerDiagnostics.length > 0) {
       return { ok: false, diagnostics: asNonemptyDiagnostics(summary.integerDiagnostics) };
     }
-    if (summary.nodeCount > LAZULI_MAXIMUM_SURFACE_NODES) {
+    if (summary.nodeCount > MAXIMUM_EXPRESSION_NODES) {
       return failure(limitDiagnostic(
-        `Surface has ${summary.nodeCount} nodes; the ABI limit is ${LAZULI_MAXIMUM_SURFACE_NODES}.`,
+        `Surface has ${summary.nodeCount} nodes; the ABI limit is ${MAXIMUM_EXPRESSION_NODES}.`,
         { startByte: 0, endByte: byteOffsets.byteLength },
       ));
     }
-    if (summary.maximumDepth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+    if (summary.maximumDepth > MAXIMUM_PARSE_DEPTH) {
       return failure(limitDiagnostic(
-        `Surface depth is ${summary.maximumDepth}; the ABI limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+        `Surface depth is ${summary.maximumDepth}; the ABI limit is ${MAXIMUM_PARSE_DEPTH}.`,
         { startByte: 0, endByte: byteOffsets.byteLength },
       ));
     }
@@ -474,7 +474,7 @@ function parseLazuliSourceWithOffsets(
   } catch (error) {
     if (isCallStackOverflow(error)) {
       return failure(limitDiagnostic(
-        `Source nesting exceeded the parser's stack-safe limit; the ABI depth limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+        `Source nesting exceeded the parser's stack-safe limit; the ABI depth limit is ${MAXIMUM_PARSE_DEPTH}.`,
         { startByte: 0, endByte: byteOffsets.byteLength },
       ));
     }
@@ -490,7 +490,7 @@ function parseLazuliSourceWithOffsets(
 
 class ParseDepthLimit extends Error {
   constructor(readonly span: Utf16Span, depth: number) {
-    super(`Surface depth is ${depth}; the ABI limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`);
+    super(`Surface depth is ${depth}; the ABI limit is ${MAXIMUM_PARSE_DEPTH}.`);
   }
 }
 
@@ -499,7 +499,7 @@ class ConstructorArityLimit extends Error {
     super(
       `Constructor ${
         JSON.stringify(name)
-      } has arity ${arity}; the ABI limit is ${LAZULI_MAXIMUM_CONSTRUCTOR_ARITY}.`,
+      } has arity ${arity}; the ABI limit is ${MAXIMUM_CONSTRUCTOR_ARITY}.`,
     );
   }
 }
@@ -550,13 +550,13 @@ function builtinDataDeclarations(
 ): readonly DataDeclaration[] {
   const span = { start: sourceEnd, end: sourceEnd };
   const parameter = (name: string): Identifier => ({ spelling: name, span });
-  const named = (name: string, arguments_: readonly SourceType[] = []): SourceType => ({
+  const named = (name: string, arguments_: readonly ParsedType[] = []): ParsedType => ({
     kind: "named",
     name,
     arguments: arguments_,
     span,
   });
-  const field = (name: string, type: SourceType): ConstructorField => ({
+  const field = (name: string, type: ParsedType): ConstructorField => ({
     name: parameter(name),
     type,
   });
@@ -621,7 +621,7 @@ function builtinDataDeclarations(
 }
 
 function ensureParseDepth(depth: number, span: Utf16Span): void {
-  if (depth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+  if (depth > MAXIMUM_PARSE_DEPTH) {
     throw new ParseDepthLimit(span, depth);
   }
 }
@@ -629,7 +629,7 @@ function ensureParseDepth(depth: number, span: Utf16Span): void {
 function parenthesisDepthDiagnostic(
   source: string,
   byteOffsets: Utf8ByteOffsets,
-): LazuliDiagnostic | null {
+): SemanticDiagnostic | null {
   let depth = 0;
   for (let index = 0; index < source.length; index++) {
     if (source[index] === "-" && source[index + 1] === "-") {
@@ -643,7 +643,7 @@ function parenthesisDepthDiagnostic(
       depth++;
       if (depth > LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH) {
         return limitDiagnostic(
-          `Parenthesis depth is ${depth}; the parser's stack-safe limit is ${LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH} and the ABI limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+          `Parenthesis depth is ${depth}; the parser's stack-safe limit is ${LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH} and the ABI limit is ${MAXIMUM_PARSE_DEPTH}.`,
           byteOffsets.span({ start: index, end: index + 1 }),
         );
       }
@@ -698,7 +698,7 @@ function parseConstructorDeclaration(
     ? parseConstructorFieldList(requiredRuleField(fields, "values"))
     : [];
   const result = optionalRuleField(node, "result");
-  if (constructorFields.length > LAZULI_MAXIMUM_CONSTRUCTOR_ARITY) {
+  if (constructorFields.length > MAXIMUM_CONSTRUCTOR_ARITY) {
     throw new ConstructorArityLimit(node.span, name.spelling, constructorFields.length);
   }
   return {
@@ -820,7 +820,7 @@ function parseConstructorField(node: AnyRuleCursor): ConstructorField {
   };
 }
 
-function parseSourceType(node: AnyRuleCursor): SourceType {
+function parseSourceType(node: AnyRuleCursor): ParsedType {
   if (node.name !== "source_type") {
     throw new Error(`Expected source type syntax node, got ${node.name}.`);
   }
@@ -835,7 +835,7 @@ function parseSourceType(node: AnyRuleCursor): SourceType {
   };
 }
 
-function parseTypeApplication(node: AnyRuleCursor): SourceType {
+function parseTypeApplication(node: AnyRuleCursor): ParsedType {
   if (node.name !== "type_application") {
     throw new Error(`Expected type application syntax node, got ${node.name}.`);
   }
@@ -857,7 +857,7 @@ function parseTypeApplication(node: AnyRuleCursor): SourceType {
   return { ...callee, arguments: arguments_, span: node.span };
 }
 
-function parseTypeAtom(node: AnyRuleCursor): SourceType {
+function parseTypeAtom(node: AnyRuleCursor): ParsedType {
   const atom = node.name === "type_atom" ? childRule(node) : node;
   switch (atom.name) {
     case "type_named": {
@@ -884,7 +884,7 @@ function parseTypeAtom(node: AnyRuleCursor): SourceType {
   }
 }
 
-function withTypeSpan(type: SourceType, span: Utf16Span): SourceType {
+function withTypeSpan(type: ParsedType, span: Utf16Span): ParsedType {
   return { ...type, span };
 }
 
@@ -977,7 +977,7 @@ function parseExpression(
       }
       return {
         kind: "unary",
-        operator: LazuliUnaryOperator.Negate,
+        operator: UnaryOperator.Negate,
         body,
         span: node.span,
       };
@@ -1261,9 +1261,9 @@ function foldBinary(
 function equalityOperator(ruleName: string): number {
   switch (ruleName) {
     case "eq":
-      return LazuliBinaryOperator.Equal;
+      return BinaryOperator.Equal;
     case "ne":
-      return LazuliBinaryOperator.NotEqual;
+      return BinaryOperator.NotEqual;
     default:
       throw new Error(`Unknown equality operator ${ruleName}.`);
   }
@@ -1272,13 +1272,13 @@ function equalityOperator(ruleName: string): number {
 function comparisonOperator(ruleName: string): number {
   switch (ruleName) {
     case "lt":
-      return LazuliBinaryOperator.Less;
+      return BinaryOperator.Less;
     case "le":
-      return LazuliBinaryOperator.LessEqual;
+      return BinaryOperator.LessEqual;
     case "gt":
-      return LazuliBinaryOperator.Greater;
+      return BinaryOperator.Greater;
     case "ge":
-      return LazuliBinaryOperator.GreaterEqual;
+      return BinaryOperator.GreaterEqual;
     default:
       throw new Error(`Unknown comparison operator ${ruleName}.`);
   }
@@ -1287,9 +1287,9 @@ function comparisonOperator(ruleName: string): number {
 function additiveOperator(ruleName: string): number {
   switch (ruleName) {
     case "plus":
-      return LazuliBinaryOperator.Add;
+      return BinaryOperator.Add;
     case "minus":
-      return LazuliBinaryOperator.Subtract;
+      return BinaryOperator.Subtract;
     default:
       throw new Error(`Unknown additive operator ${ruleName}.`);
   }
@@ -1298,9 +1298,9 @@ function additiveOperator(ruleName: string): number {
 function multiplicativeOperator(ruleName: string): number {
   switch (ruleName) {
     case "star":
-      return LazuliBinaryOperator.Multiply;
+      return BinaryOperator.Multiply;
     case "slash":
-      return LazuliBinaryOperator.Divide;
+      return BinaryOperator.Divide;
     default:
       throw new Error(`Unknown multiplicative operator ${ruleName}.`);
   }
@@ -1947,7 +1947,7 @@ function constDescriptorReferencesNames(
   return false;
 }
 
-function sourceTypeReferencesNames(type: SourceType, names: ReadonlySet<string>): boolean {
+function sourceTypeReferencesNames(type: ParsedType, names: ReadonlySet<string>): boolean {
   const pending = [type];
   while (pending.length !== 0) {
     const current = pending.pop();
@@ -2078,10 +2078,10 @@ function resolveConstDescriptor(
 }
 
 function resolveConstType(
-  type: SourceType,
+  type: ParsedType,
   forwardingDescriptors: ReadonlyMap<string, ConstDescriptor>,
   declaredTypes: ReadonlyMap<string, DataDeclaration>,
-): SourceType {
+): ParsedType {
   switch (type.kind) {
     case "integer":
     case "boolean":
@@ -2147,7 +2147,7 @@ function resolveConstType(
   }
 }
 
-function constDescriptorType(descriptor: ConstDescriptor): SourceType | null {
+function constDescriptorType(descriptor: ConstDescriptor): ParsedType | null {
   if (descriptor.kind === "type") return descriptor.type;
   if (descriptor.kind !== "tuple") return null;
   const first = constDescriptorType(descriptor.values[0]);
@@ -2162,7 +2162,7 @@ function summarizeDefinitions(
 ): ExpressionSummary {
   let nodeCount = 0;
   let maximumDepth = 0;
-  const integerDiagnostics: LazuliDiagnostic[] = [];
+  const integerDiagnostics: SemanticDiagnostic[] = [];
   const pending: Array<{ expression: Expression; depth: number }> = [];
 
   for (const definition of definitions) {
@@ -2183,7 +2183,7 @@ function summarizeDefinitions(
         if (value < minimumI32 || value > maximumI32) {
           integerDiagnostics.push({
             stage: "parse",
-            code: "L1002",
+            code: "F1002",
             message: `Integer ${expression.text} is outside the signed i32 range.`,
             span: byteOffsets.span(expression.span),
           });
@@ -2248,7 +2248,7 @@ function encodeSurface(
   dataDeclarations: readonly DataDeclaration[],
   symbols: SymbolInterner,
   byteOffsets: Utf8ByteOffsets,
-): EncodedLazuliSurface {
+): EncodedSemanticSurface {
   const encoder = new SurfaceEncoder(symbols, byteOffsets);
   const definitionWords: number[] = [];
   for (const definition of definitions) {
@@ -2263,13 +2263,13 @@ function encodeSurface(
         span: definition.span,
       };
     }
-    const rootNode = encoder.emitExpression(root, LAZULI_NO_INDEX);
+    const rootNode = encoder.emitExpression(root, NO_INDEX);
     const span = byteOffsets.span(definition.span);
     const encodedDefinition = new Array<number>(4);
-    encodedDefinition[LazuliDefinitionWord.Symbol] = symbols.id(definition.name.spelling);
-    encodedDefinition[LazuliDefinitionWord.RootNode] = rootNode;
-    encodedDefinition[LazuliDefinitionWord.StartByte] = span.startByte;
-    encodedDefinition[LazuliDefinitionWord.EndByte] = span.endByte;
+    encodedDefinition[DefinitionWord.Symbol] = symbols.id(definition.name.spelling);
+    encodedDefinition[DefinitionWord.RootNode] = rootNode;
+    encodedDefinition[DefinitionWord.StartByte] = span.startByte;
+    encodedDefinition[DefinitionWord.EndByte] = span.endByte;
     definitionWords.push(...encodedDefinition);
   }
   const typeWords: number[] = [];
@@ -2278,22 +2278,22 @@ function encodeSurface(
     const declaration = dataDeclarations[typeIndex];
     if (!declaration) throw new Error("Data declaration unexpectedly omitted a declaration.");
     const span = byteOffsets.span(declaration.span);
-    const firstConstructor = constructorWords.length / LAZULI_CONSTRUCTOR_WORD_LENGTH;
-    const encodedType = new Array<number>(LAZULI_TYPE_WORD_LENGTH);
-    encodedType[LazuliTypeWord.Symbol] = symbols.id(declaration.name.spelling);
-    encodedType[LazuliTypeWord.FirstConstructor] = firstConstructor;
-    encodedType[LazuliTypeWord.ConstructorCount] = declaration.constructors.length;
-    encodedType[LazuliTypeWord.StartByte] = span.startByte;
-    encodedType[LazuliTypeWord.EndByte] = span.endByte;
+    const firstConstructor = constructorWords.length / CONSTRUCTOR_WORD_LENGTH;
+    const encodedType = new Array<number>(TYPE_WORD_LENGTH);
+    encodedType[AlgebraicTypeWord.Symbol] = symbols.id(declaration.name.spelling);
+    encodedType[AlgebraicTypeWord.FirstConstructor] = firstConstructor;
+    encodedType[AlgebraicTypeWord.ConstructorCount] = declaration.constructors.length;
+    encodedType[AlgebraicTypeWord.StartByte] = span.startByte;
+    encodedType[AlgebraicTypeWord.EndByte] = span.endByte;
     typeWords.push(...encodedType);
     for (const constructor of declaration.constructors) {
       const constructorSpan = byteOffsets.span(constructor.span);
-      const encodedConstructor = new Array<number>(LAZULI_CONSTRUCTOR_WORD_LENGTH);
-      encodedConstructor[LazuliConstructorWord.Symbol] = symbols.id(constructor.name.spelling);
-      encodedConstructor[LazuliConstructorWord.Type] = typeIndex;
-      encodedConstructor[LazuliConstructorWord.Arity] = constructor.fields.length;
-      encodedConstructor[LazuliConstructorWord.StartByte] = constructorSpan.startByte;
-      encodedConstructor[LazuliConstructorWord.EndByte] = constructorSpan.endByte;
+      const encodedConstructor = new Array<number>(CONSTRUCTOR_WORD_LENGTH);
+      encodedConstructor[ConstructorWord.Symbol] = symbols.id(constructor.name.spelling);
+      encodedConstructor[ConstructorWord.Type] = typeIndex;
+      encodedConstructor[ConstructorWord.Arity] = constructor.fields.length;
+      encodedConstructor[ConstructorWord.StartByte] = constructorSpan.startByte;
+      encodedConstructor[ConstructorWord.EndByte] = constructorSpan.endByte;
       constructorWords.push(...encodedConstructor);
     }
   }
@@ -2305,8 +2305,8 @@ function encodeSurface(
     nodeCount: encoder.nodeCount,
     definitionCount: definitions.length,
     typeCount: dataDeclarations.length,
-    constructorCount: constructorWords.length / LAZULI_CONSTRUCTOR_WORD_LENGTH,
-    mainSymbol: symbols.id("main"),
+    constructorCount: constructorWords.length / CONSTRUCTOR_WORD_LENGTH,
+    entrySymbol: symbols.id("main"),
     symbolNames: symbols.names,
     definitionTypes: definitions.map((definition) => ({
       annotation: definition.annotation === null
@@ -2334,20 +2334,20 @@ function encodeSurface(
 }
 
 function encodeSourceType(
-  type: SourceType,
+  type: ParsedType,
   byteOffsets: Utf8ByteOffsets,
   parameters: ReadonlySet<string> = new Set(),
-): LazuliSourceType {
+): SourceType {
   return {
     ...encodeTypeSchema(type, parameters),
     ...byteOffsets.span(type.span),
-  } as LazuliSourceType;
+  } as SourceType;
 }
 
 function encodeTypeSchema(
-  type: SourceType,
+  type: ParsedType,
   parameters: ReadonlySet<string>,
-): LazuliTypeSchema {
+): TypeSchema {
   switch (type.kind) {
     case "integer":
       return { kind: "integer" };
@@ -2392,14 +2392,14 @@ class SurfaceEncoder {
   ) {}
 
   get nodeCount(): number {
-    return this.words.length / LAZULI_NODE_WORD_LENGTH;
+    return this.words.length / NODE_WORD_LENGTH;
   }
 
   emitExpression(expression: Expression, parent: number): number {
     switch (expression.kind) {
       case "integer":
         return this.emitNode(
-          LazuliSurfaceTag.Integer,
+          ExpressionTag.Integer,
           expression.span,
           Number(BigInt(expression.text)) >>> 0,
           [],
@@ -2407,7 +2407,7 @@ class SurfaceEncoder {
         );
       case "boolean":
         return this.emitNode(
-          LazuliSurfaceTag.Boolean,
+          ExpressionTag.Boolean,
           expression.span,
           expression.value ? 1 : 0,
           [],
@@ -2421,7 +2421,7 @@ class SurfaceEncoder {
         throw new Error("Record expression reached surface encoding.");
       case "let": {
         const node = this.reserveNode(
-          LazuliSurfaceTag.Let,
+          ExpressionTag.Let,
           expression.span,
           this.symbols.id(expression.name.spelling),
           parent,
@@ -2433,13 +2433,13 @@ class SurfaceEncoder {
       }
       case "let-rec": {
         const node = this.reserveNode(
-          LazuliSurfaceTag.LetRec,
+          ExpressionTag.LetRec,
           expression.span,
           this.symbols.id(expression.name.spelling),
           parent,
         );
         const lambda = this.reserveNode(
-          LazuliSurfaceTag.Lambda,
+          ExpressionTag.Lambda,
           { start: expression.name.span.start, end: expression.value.span.end },
           this.symbols.id(expression.parameter.spelling),
           node,
@@ -2451,7 +2451,7 @@ class SurfaceEncoder {
         return node;
       }
       case "if": {
-        const node = this.reserveNode(LazuliSurfaceTag.If, expression.span, 0, parent);
+        const node = this.reserveNode(ExpressionTag.If, expression.span, 0, parent);
         const condition = this.emitExpression(expression.condition, node);
         const consequent = this.emitExpression(expression.consequent, node);
         const alternate = this.emitExpression(expression.alternate, node);
@@ -2460,7 +2460,7 @@ class SurfaceEncoder {
       }
       case "lambda": {
         const node = this.reserveNode(
-          LazuliSurfaceTag.Lambda,
+          ExpressionTag.Lambda,
           expression.span,
           this.symbols.id(expression.parameter.spelling),
           parent,
@@ -2470,7 +2470,7 @@ class SurfaceEncoder {
         return node;
       }
       case "apply": {
-        const node = this.reserveNode(LazuliSurfaceTag.Apply, expression.span, 0, parent);
+        const node = this.reserveNode(ExpressionTag.Apply, expression.span, 0, parent);
         const callee = this.emitExpression(expression.callee, node);
         const argument = this.emitExpression(expression.argument, node);
         this.setChildren(node, [callee, argument]);
@@ -2478,7 +2478,7 @@ class SurfaceEncoder {
       }
       case "unary": {
         const node = this.reserveNode(
-          LazuliSurfaceTag.Unary,
+          ExpressionTag.Unary,
           expression.span,
           expression.operator,
           parent,
@@ -2488,7 +2488,7 @@ class SurfaceEncoder {
       }
       case "binary": {
         const node = this.reserveNode(
-          LazuliSurfaceTag.Binary,
+          ExpressionTag.Binary,
           expression.span,
           expression.operator,
           parent,
@@ -2499,7 +2499,7 @@ class SurfaceEncoder {
         return node;
       }
       case "case": {
-        const node = this.reserveNode(LazuliSurfaceTag.Case, expression.span, 0, parent);
+        const node = this.reserveNode(ExpressionTag.Case, expression.span, 0, parent);
         const scrutinee = this.emitExpression(expression.scrutinee, node);
         const firstArm = this.emitCaseArms(expression.arms, 0, node);
         this.setChildren(node, [scrutinee, firstArm]);
@@ -2510,9 +2510,9 @@ class SurfaceEncoder {
 
   private emitCaseArms(arms: readonly CaseArm[], index: number, parent: number): number {
     const arm = arms[index];
-    if (!arm) return LAZULI_NO_INDEX;
+    if (!arm) return NO_INDEX;
     const node = this.reserveNode(
-      LazuliSurfaceTag.CaseArm,
+      ExpressionTag.CaseArm,
       arm.span,
       this.symbols.id(arm.constructor.spelling),
       parent,
@@ -2529,29 +2529,29 @@ class SurfaceEncoder {
     parent: number,
   ): number {
     let bindingParent = parent;
-    let firstBinding = LAZULI_NO_INDEX;
+    let firstBinding = NO_INDEX;
     for (let index = binders.length - 1; index >= 0; index--) {
       const binder = binders[index];
       if (!binder) throw new Error("Pattern binders unexpectedly omitted a binder.");
       const binding = this.reserveNode(
-        LazuliSurfaceTag.PatternBind,
+        ExpressionTag.PatternBind,
         binder.span,
         this.symbols.id(binder.spelling),
         bindingParent,
       );
-      if (firstBinding === LAZULI_NO_INDEX) firstBinding = binding;
+      if (firstBinding === NO_INDEX) firstBinding = binding;
       else this.setChildren(bindingParent, [binding]);
       bindingParent = binding;
     }
     const bodyNode = this.emitExpression(body, bindingParent);
-    if (firstBinding === LAZULI_NO_INDEX) return bodyNode;
+    if (firstBinding === NO_INDEX) return bodyNode;
     this.setChildren(bindingParent, [bodyNode]);
     return firstBinding;
   }
 
   private emitName(identifier: Identifier, parent: number): number {
     return this.emitNode(
-      LazuliSurfaceTag.Name,
+      ExpressionTag.Name,
       identifier.span,
       this.symbols.id(identifier.spelling),
       [],
@@ -2579,9 +2579,9 @@ class SurfaceEncoder {
       byteSpan.startByte,
       byteSpan.endByte,
       payload,
-      LAZULI_NO_INDEX,
-      LAZULI_NO_INDEX,
-      LAZULI_NO_INDEX,
+      NO_INDEX,
+      NO_INDEX,
+      NO_INDEX,
       parent,
     );
     return node;
@@ -2591,9 +2591,9 @@ class SurfaceEncoder {
     if (children.length > 3) {
       throw new Error(`Surface node ${node} has ${children.length} children.`);
     }
-    const offset = node * LAZULI_NODE_WORD_LENGTH + LazuliSurfaceWord.Child0;
+    const offset = node * NODE_WORD_LENGTH + NodeWord.Child0;
     for (let index = 0; index < children.length; index++) {
-      this.words[offset + index] = children[index] ?? LAZULI_NO_INDEX;
+      this.words[offset + index] = children[index] ?? NO_INDEX;
     }
   }
 }
@@ -2657,7 +2657,7 @@ class Utf8ByteOffsets {
     return this.offsets[this.offsets.length - 1] ?? 0;
   }
 
-  span(span: Utf16Span): LazuliSpan {
+  span(span: Utf16Span): Span {
     return {
       startByte: this.at(span.start),
       endByte: this.at(span.end),
@@ -2787,18 +2787,18 @@ function tokenFieldArray(
   return tokens;
 }
 
-function failure(diagnostic: LazuliDiagnostic): LazuliFrontendResult {
+function failure(diagnostic: SemanticDiagnostic): FrontendResult {
   return { ok: false, diagnostics: [diagnostic] };
 }
 
 function asNonemptyDiagnostics(
-  diagnostics: readonly LazuliDiagnostic[],
-): readonly [LazuliDiagnostic, ...LazuliDiagnostic[]] {
+  diagnostics: readonly SemanticDiagnostic[],
+): readonly [SemanticDiagnostic, ...SemanticDiagnostic[]] {
   const first = diagnostics[0];
   if (!first) throw new Error("Expected at least one diagnostic.");
   return [first, ...diagnostics.slice(1)];
 }
 
-function limitDiagnostic(message: string, span: LazuliSpan): LazuliDiagnostic {
-  return { stage: "parse", code: "L1003", message, span };
+function limitDiagnostic(message: string, span: Span): SemanticDiagnostic {
+  return { stage: "parse", code: "F1003", message, span };
 }

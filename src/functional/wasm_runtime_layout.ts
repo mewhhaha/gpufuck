@@ -1,4 +1,4 @@
-export const FunctionalWasmRuntimeGlobal = Object.freeze(
+export const WasmRuntimeGlobal = Object.freeze(
   {
     HeapTop: 0,
     ThunkEvaluations: 1,
@@ -12,7 +12,7 @@ export const FunctionalWasmRuntimeGlobal = Object.freeze(
   } as const,
 );
 
-export interface FunctionalWasmCompactRuntimeGlobals {
+export interface WasmCompactRuntimeGlobals {
   readonly fault?: {
     readonly code: number;
     readonly node: number;
@@ -23,7 +23,7 @@ export interface FunctionalWasmCompactRuntimeGlobals {
   };
 }
 
-export const FUNCTIONAL_WASM_ALLOCATION_MAGIC = 0x4750_5541;
-export const FUNCTIONAL_WASM_FREE_BLOCK_MAGIC = 0x4750_5546;
-export const FUNCTIONAL_WASM_MINIMUM_ALLOCATION_BYTE_LENGTH = 16;
-export const FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH = 0xffff_0000;
+export const WASM_ALLOCATION_MAGIC = 0x4750_5541;
+export const WASM_FREE_BLOCK_MAGIC = 0x4750_5546;
+export const WASM_MINIMUM_ALLOCATION_BYTE_LENGTH = 16;
+export const WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH = 0xffff_0000;

@@ -1,47 +1,41 @@
-import type { GpuLazuliModule, LazuliCoreNode } from "../semantic/compiler_module.ts";
+import type { CoreNode, GpuSemanticModule } from "../semantic/compiler_module.ts";
 import {
-  GpuLazuliEvaluator,
-  type LazuliDeepEvaluationResult,
-  type LazuliEvaluationResult,
-  type LazuliRuntimeFault,
+  GpuSemanticEvaluator,
+  type SemanticDeepEvaluationResult,
+  type SemanticEvaluationResult,
+  type SemanticRuntimeFault,
 } from "../semantic/evaluator.ts";
-import type { GpuFunctionalModule } from "./compiler_module.ts";
-import {
-  FunctionalBinaryOperator,
-  FunctionalCoreTag,
-  FunctionalNumericConversion,
-  FunctionalUnaryOperator,
-} from "./abi.ts";
-import { type FunctionalWasmExecution, runBoundedFunctionalWasmModule } from "./wasm_execution.ts";
-import { FunctionalWasmRuntimeError } from "./wasm_host_boundary.ts";
-import type { FunctionalWasmValue } from "./wasm_value_codec.ts";
+import type { GpuModule } from "./compiler_module.ts";
+import { BinaryOperator, CoreTag, NumericConversion, UnaryOperator } from "./abi.ts";
+import { runBoundedWasmModule, type WasmExecution } from "./wasm_execution.ts";
+import { WasmRuntimeError } from "./wasm_host_boundary.ts";
+import type { WasmValue } from "./wasm_value_codec.ts";
 
-export interface FunctionalEvaluationOptions {
+export interface EvaluationOptions {
   readonly maximumSteps?: number;
   readonly maximumStepsPerDispatch?: number;
   readonly heapSlots?: number;
   readonly stackFrames?: number;
   readonly signal?: AbortSignal;
-  readonly input?: FunctionalInputValue;
+  readonly input?: InputValue;
   readonly resultForm?: "weak-head" | "deep";
   readonly maximumResultNodes?: number;
   readonly maximumResultBytes?: number;
 }
 
-export interface FunctionalDeepEvaluationOptions extends FunctionalEvaluationOptions {
+export interface DeepEvaluationOptions extends EvaluationOptions {
   readonly resultForm: "deep";
 }
 
-export interface FunctionalBatchEvaluationOptions
-  extends Omit<FunctionalEvaluationOptions, "input"> {
-  readonly inputs?: readonly (FunctionalInputValue | undefined)[];
+export interface BatchEvaluationOptions extends Omit<EvaluationOptions, "input"> {
+  readonly inputs?: readonly (InputValue | undefined)[];
 }
 
-export interface FunctionalDeepBatchEvaluationOptions extends FunctionalBatchEvaluationOptions {
+export interface DeepBatchEvaluationOptions extends BatchEvaluationOptions {
   readonly resultForm: "deep";
 }
 
-export type FunctionalInputValue =
+export type InputValue =
   | { readonly kind: "integer"; readonly value: number }
   | { readonly kind: "signed-integer-64"; readonly value: bigint }
   | { readonly kind: "float-32"; readonly value: number }
@@ -51,15 +45,15 @@ export type FunctionalInputValue =
   | { readonly kind: "unit" }
   | {
     readonly kind: "tuple";
-    readonly values: readonly [FunctionalInputValue, FunctionalInputValue];
+    readonly values: readonly [InputValue, InputValue];
   }
   | {
     readonly kind: "constructor";
     readonly name: string;
-    readonly fields: readonly FunctionalInputValue[];
+    readonly fields: readonly InputValue[];
   };
 
-export type FunctionalValue =
+export type Value =
   | { readonly kind: "integer"; readonly value: number }
   | { readonly kind: "signed-integer-64"; readonly value: bigint }
   | { readonly kind: "float-32"; readonly value: number }
@@ -70,7 +64,7 @@ export type FunctionalValue =
   | { readonly kind: "closure" }
   | { readonly kind: "constructor"; readonly name: string; readonly fieldCount: number };
 
-export type FunctionalDeepValue =
+export type DeepValue =
   | { readonly kind: "integer"; readonly value: number }
   | { readonly kind: "signed-integer-64"; readonly value: bigint }
   | { readonly kind: "float-32"; readonly value: number }
@@ -81,132 +75,132 @@ export type FunctionalDeepValue =
   | {
     readonly kind: "tuple";
     readonly fieldCount: 2;
-    readonly fields: readonly FunctionalDeepValue[];
+    readonly fields: readonly DeepValue[];
   }
   | {
     readonly kind: "constructor";
     readonly name: string;
     readonly fieldCount: number;
-    readonly fields: readonly FunctionalDeepValue[];
+    readonly fields: readonly DeepValue[];
   };
 
-export interface FunctionalEvaluationStats {
+export interface EvaluationStats {
   readonly steps: number;
   readonly allocations: number;
   readonly peakStack: number;
   readonly thunkEvaluations: number;
 }
 
-interface FunctionalFault<Kind extends string, Code extends string> {
+interface Fault<Kind extends string, Code extends string> {
   readonly kind: Kind;
   readonly code: Code;
   readonly message: string;
   readonly sourceByteOffset: number | null;
 }
 
-export type FunctionalRuntimeFault =
-  | FunctionalFault<"bad-module", "F3001">
-  | FunctionalFault<"out-of-fuel", "F3002">
-  | FunctionalFault<"out-of-heap", "F3003">
-  | FunctionalFault<"stack-overflow", "F3004">
-  | FunctionalFault<"blackhole", "F3005">
-  | FunctionalFault<"type-error", "F3006">
-  | FunctionalFault<"divide-by-zero", "F3007">
-  | FunctionalFault<"non-exhaustive-case", "F3008">
-  | (FunctionalFault<"bad-input", "F3009"> & { readonly fieldPath: readonly number[] })
-  | FunctionalFault<"result-too-large", "F3010">
-  | FunctionalFault<"cyclic-result", "F3011">
-  | FunctionalFault<"invalid-numeric-conversion", "F3012">;
+export type RuntimeFault =
+  | Fault<"bad-module", "F3001">
+  | Fault<"out-of-fuel", "F3002">
+  | Fault<"out-of-heap", "F3003">
+  | Fault<"stack-overflow", "F3004">
+  | Fault<"blackhole", "F3005">
+  | Fault<"type-error", "F3006">
+  | Fault<"divide-by-zero", "F3007">
+  | Fault<"non-exhaustive-case", "F3008">
+  | (Fault<"bad-input", "F3009"> & { readonly fieldPath: readonly number[] })
+  | Fault<"result-too-large", "F3010">
+  | Fault<"cyclic-result", "F3011">
+  | Fault<"invalid-numeric-conversion", "F3012">;
 
-export type FunctionalEvaluationResult =
+export type EvaluationResult =
   | {
     readonly ok: true;
-    readonly value: FunctionalValue;
-    readonly stats: FunctionalEvaluationStats;
+    readonly value: Value;
+    readonly stats: EvaluationStats;
   }
   | {
     readonly ok: false;
-    readonly fault: FunctionalRuntimeFault;
-    readonly stats: FunctionalEvaluationStats;
+    readonly fault: RuntimeFault;
+    readonly stats: EvaluationStats;
   };
 
-export type FunctionalDeepEvaluationResult =
+export type DeepEvaluationResult =
   | {
     readonly ok: true;
-    readonly value: FunctionalDeepValue;
-    readonly stats: FunctionalEvaluationStats;
+    readonly value: DeepValue;
+    readonly stats: EvaluationStats;
   }
   | {
     readonly ok: false;
-    readonly fault: FunctionalRuntimeFault;
-    readonly stats: FunctionalEvaluationStats;
+    readonly fault: RuntimeFault;
+    readonly stats: EvaluationStats;
   };
 
-type AnyFunctionalEvaluationResult =
-  | FunctionalEvaluationResult
-  | FunctionalDeepEvaluationResult;
+type AnyEvaluationResult =
+  | EvaluationResult
+  | DeepEvaluationResult;
 
 const numericRequirementsByModule = new WeakMap<
-  GpuFunctionalModule,
-  Promise<FunctionalNumericRequirements>
+  GpuModule,
+  Promise<NumericRequirements>
 >();
 
-export class GpuFunctionalEvaluator {
-  readonly #evaluator: GpuLazuliEvaluator;
+export class GpuEvaluator {
+  readonly #evaluator: GpuSemanticEvaluator;
 
-  private constructor(evaluator: GpuLazuliEvaluator) {
+  private constructor(evaluator: GpuSemanticEvaluator) {
     this.#evaluator = evaluator;
   }
 
-  static async create(device: GPUDevice): Promise<GpuFunctionalEvaluator> {
-    return new GpuFunctionalEvaluator(
-      await GpuLazuliEvaluator.createFunctionalBackend(device),
+  static async create(device: GPUDevice): Promise<GpuEvaluator> {
+    return new GpuEvaluator(
+      await GpuSemanticEvaluator.createBackend(device),
     );
   }
 
   async evaluate(
-    module: GpuFunctionalModule,
-    options: FunctionalDeepEvaluationOptions,
-  ): Promise<FunctionalDeepEvaluationResult>;
+    module: GpuModule,
+    options: DeepEvaluationOptions,
+  ): Promise<DeepEvaluationResult>;
   async evaluate(
-    module: GpuFunctionalModule,
-    options?: FunctionalEvaluationOptions,
-  ): Promise<FunctionalEvaluationResult>;
+    module: GpuModule,
+    options?: EvaluationOptions,
+  ): Promise<EvaluationResult>;
   async evaluate(
-    module: GpuFunctionalModule,
-    options: FunctionalEvaluationOptions = {},
-  ): Promise<AnyFunctionalEvaluationResult> {
+    module: GpuModule,
+    options: EvaluationOptions = {},
+  ): Promise<AnyEvaluationResult> {
     const numerics = await moduleNumericRequirements(module);
     if (numerics.boundedWasm) {
-      return await evaluateFunctionalModuleWithBoundedWasm(module, options);
+      return await evaluateModuleWithBoundedWasm(module, options);
     }
     const result = await this.#evaluator.evaluate(
-      lazuliRuntimeModule(module),
+      semanticRuntimeModule(module),
       {
         ...options,
         ...(numerics.signedInteger64 && options.resultForm !== "deep"
           ? { resultForm: "deep" as const }
           : {}),
-      } as Parameters<GpuLazuliEvaluator["evaluate"]>[1],
+      } as Parameters<GpuSemanticEvaluator["evaluate"]>[1],
     );
     const converted = functionalResult(result);
     return numerics.signedInteger64 && options.resultForm !== "deep" && converted.ok
-      ? { ...converted, value: shallowFunctionalValue(converted.value) }
+      ? { ...converted, value: shallowValue(converted.value) }
       : converted;
   }
 
   async evaluateBatch(
-    modules: readonly GpuFunctionalModule[],
-    options: FunctionalDeepBatchEvaluationOptions,
-  ): Promise<readonly FunctionalDeepEvaluationResult[]>;
+    modules: readonly GpuModule[],
+    options: DeepBatchEvaluationOptions,
+  ): Promise<readonly DeepEvaluationResult[]>;
   async evaluateBatch(
-    modules: readonly GpuFunctionalModule[],
-    options?: FunctionalBatchEvaluationOptions,
-  ): Promise<readonly FunctionalEvaluationResult[]>;
+    modules: readonly GpuModule[],
+    options?: BatchEvaluationOptions,
+  ): Promise<readonly EvaluationResult[]>;
   async evaluateBatch(
-    modules: readonly GpuFunctionalModule[],
-    options: FunctionalBatchEvaluationOptions = {},
-  ): Promise<readonly AnyFunctionalEvaluationResult[]> {
+    modules: readonly GpuModule[],
+    options: BatchEvaluationOptions = {},
+  ): Promise<readonly AnyEvaluationResult[]> {
     const numericRequirements = await Promise.all(modules.map(moduleNumericRequirements));
     if (
       numericRequirements.some((requirements) =>
@@ -218,25 +212,25 @@ export class GpuFunctionalEvaluator {
         this.evaluate(module, {
           ...options,
           ...(options.inputs?.[index] === undefined ? {} : { input: options.inputs[index] }),
-        } as FunctionalEvaluationOptions)
+        } as EvaluationOptions)
       ));
     }
     const results = await this.#evaluator.evaluateBatch(
-      modules.map(lazuliRuntimeModule),
-      options as Parameters<GpuLazuliEvaluator["evaluateBatch"]>[1],
+      modules.map(semanticRuntimeModule),
+      options as Parameters<GpuSemanticEvaluator["evaluateBatch"]>[1],
     );
     return results.map(functionalResult);
   }
 }
 
-interface FunctionalNumericRequirements {
+interface NumericRequirements {
   readonly signedInteger64: boolean;
   readonly boundedWasm: boolean;
 }
 
 async function moduleNumericRequirements(
-  module: GpuFunctionalModule,
-): Promise<FunctionalNumericRequirements> {
+  module: GpuModule,
+): Promise<NumericRequirements> {
   const cached = numericRequirementsByModule.get(module);
   if (cached !== undefined) return await cached;
   const inspection = inspectModuleNumericRequirements(module);
@@ -252,78 +246,78 @@ async function moduleNumericRequirements(
 }
 
 async function inspectModuleNumericRequirements(
-  module: GpuFunctionalModule,
-): Promise<FunctionalNumericRequirements> {
+  module: GpuModule,
+): Promise<NumericRequirements> {
   const nodes = await module.readCoreNodes();
   let signedInteger64 = false;
   let boundedWasm = false;
   for (const node of nodes) {
-    if (node.tag === FunctionalCoreTag.SignedInteger64) signedInteger64 = true;
+    if (node.tag === CoreTag.SignedInteger64) signedInteger64 = true;
     if (
-      node.tag === FunctionalCoreTag.Float64 ||
-      node.tag === FunctionalCoreTag.WholeNumberF64
+      node.tag === CoreTag.Float64 ||
+      node.tag === CoreTag.WholeNumberF64
     ) boundedWasm = true;
     if (
-      node.tag === FunctionalCoreTag.Text || node.tag === FunctionalCoreTag.Bytes ||
-      node.tag === FunctionalCoreTag.RuntimeFault || node.tag === FunctionalCoreTag.BufferAppend ||
-      node.tag === FunctionalCoreTag.StoreNew || node.tag === FunctionalCoreTag.StoreLength ||
-      node.tag === FunctionalCoreTag.StoreRead || node.tag === FunctionalCoreTag.StoreWrite ||
-      node.tag === FunctionalCoreTag.StoreGrow
+      node.tag === CoreTag.Text || node.tag === CoreTag.Bytes ||
+      node.tag === CoreTag.RuntimeFault || node.tag === CoreTag.BufferAppend ||
+      node.tag === CoreTag.StoreNew || node.tag === CoreTag.StoreLength ||
+      node.tag === CoreTag.StoreRead || node.tag === CoreTag.StoreWrite ||
+      node.tag === CoreTag.StoreGrow
     ) {
       boundedWasm = true;
     }
-    if (node.tag === FunctionalCoreTag.Unary) {
-      if (node.payload === FunctionalUnaryOperator.NegateSignedInteger64) signedInteger64 = true;
+    if (node.tag === CoreTag.Unary) {
+      if (node.payload === UnaryOperator.NegateSignedInteger64) signedInteger64 = true;
       if (
-        node.payload === FunctionalUnaryOperator.NegateFloat64 ||
-        node.payload === FunctionalUnaryOperator.NegateWholeNumberF64 ||
-        node.payload === FunctionalUnaryOperator.SquareRootFloat32
+        node.payload === UnaryOperator.NegateFloat64 ||
+        node.payload === UnaryOperator.NegateWholeNumberF64 ||
+        node.payload === UnaryOperator.SquareRootFloat32
       ) boundedWasm = true;
     }
-    if (node.tag === FunctionalCoreTag.Binary) {
+    if (node.tag === CoreTag.Binary) {
       if (
-        node.payload === FunctionalBinaryOperator.StructuralEqual ||
-        node.payload === FunctionalBinaryOperator.StructuralNotEqual
+        node.payload === BinaryOperator.StructuralEqual ||
+        node.payload === BinaryOperator.StructuralNotEqual
       ) boundedWasm = true;
       if (
-        (node.payload >= FunctionalBinaryOperator.EqualSignedInteger64 &&
-          node.payload <= FunctionalBinaryOperator.DivideSignedInteger64) ||
-        node.payload >= FunctionalBinaryOperator.RemainderSignedInteger64
+        (node.payload >= BinaryOperator.EqualSignedInteger64 &&
+          node.payload <= BinaryOperator.DivideSignedInteger64) ||
+        node.payload >= BinaryOperator.RemainderSignedInteger64
       ) signedInteger64 = true;
       if (
-        node.payload >= FunctionalBinaryOperator.EqualFloat64 &&
-          node.payload <= FunctionalBinaryOperator.DivideFloat64 ||
-        node.payload === FunctionalBinaryOperator.RemainderFloat64
+        node.payload >= BinaryOperator.EqualFloat64 &&
+          node.payload <= BinaryOperator.DivideFloat64 ||
+        node.payload === BinaryOperator.RemainderFloat64
       ) boundedWasm = true;
       if (
-        node.payload >= FunctionalBinaryOperator.EqualWholeNumberF64 &&
-        node.payload <= FunctionalBinaryOperator.RemainderWholeNumberF64
+        node.payload >= BinaryOperator.EqualWholeNumberF64 &&
+        node.payload <= BinaryOperator.RemainderWholeNumberF64
       ) boundedWasm = true;
-      if (node.payload === FunctionalBinaryOperator.DivideFloat32) boundedWasm = true;
+      if (node.payload === BinaryOperator.DivideFloat32) boundedWasm = true;
     }
-    if (node.tag === FunctionalCoreTag.NumericConvert) {
+    if (node.tag === CoreTag.NumericConvert) {
       if (
-        node.payload === FunctionalNumericConversion.SignedInteger32ToSignedInteger64 ||
-        node.payload === FunctionalNumericConversion.SignedInteger64ToSignedInteger32 ||
-        node.payload === FunctionalNumericConversion.SignedInteger64ToFloat32 ||
-        node.payload === FunctionalNumericConversion.Float32ToSignedInteger64
+        node.payload === NumericConversion.SignedInteger32ToSignedInteger64 ||
+        node.payload === NumericConversion.SignedInteger64ToSignedInteger32 ||
+        node.payload === NumericConversion.SignedInteger64ToFloat32 ||
+        node.payload === NumericConversion.Float32ToSignedInteger64
       ) signedInteger64 = true;
       if (
-        node.payload === FunctionalNumericConversion.SignedInteger32ToFloat64 ||
-        node.payload === FunctionalNumericConversion.SignedInteger64ToFloat64 ||
-        node.payload === FunctionalNumericConversion.Float32ToFloat64 ||
-        node.payload === FunctionalNumericConversion.Float64ToSignedInteger32 ||
-        node.payload === FunctionalNumericConversion.Float64ToSignedInteger64 ||
-        node.payload === FunctionalNumericConversion.Float64ToFloat32
+        node.payload === NumericConversion.SignedInteger32ToFloat64 ||
+        node.payload === NumericConversion.SignedInteger64ToFloat64 ||
+        node.payload === NumericConversion.Float32ToFloat64 ||
+        node.payload === NumericConversion.Float64ToSignedInteger32 ||
+        node.payload === NumericConversion.Float64ToSignedInteger64 ||
+        node.payload === NumericConversion.Float64ToFloat32
       ) boundedWasm = true;
     }
   }
   return { signedInteger64, boundedWasm };
 }
 
-function shallowFunctionalValue(
-  value: FunctionalValue | FunctionalDeepValue,
-): FunctionalValue {
+function shallowValue(
+  value: Value | DeepValue,
+): Value {
   switch (value.kind) {
     case "integer":
     case "signed-integer-64":
@@ -340,18 +334,18 @@ function shallowFunctionalValue(
   }
 }
 
-export function evaluateFunctionalModuleWithBoundedWasm(
-  module: GpuFunctionalModule,
-  options: FunctionalDeepEvaluationOptions,
-): Promise<FunctionalDeepEvaluationResult>;
-export function evaluateFunctionalModuleWithBoundedWasm(
-  module: GpuFunctionalModule,
-  options: FunctionalEvaluationOptions,
-): Promise<FunctionalEvaluationResult>;
-export async function evaluateFunctionalModuleWithBoundedWasm(
-  module: GpuFunctionalModule,
-  options: FunctionalEvaluationOptions,
-): Promise<AnyFunctionalEvaluationResult> {
+export function evaluateModuleWithBoundedWasm(
+  module: GpuModule,
+  options: DeepEvaluationOptions,
+): Promise<DeepEvaluationResult>;
+export function evaluateModuleWithBoundedWasm(
+  module: GpuModule,
+  options: EvaluationOptions,
+): Promise<EvaluationResult>;
+export async function evaluateModuleWithBoundedWasm(
+  module: GpuModule,
+  options: EvaluationOptions,
+): Promise<AnyEvaluationResult> {
   options.signal?.throwIfAborted();
   if (
     options.maximumStepsPerDispatch !== undefined || options.heapSlots !== undefined ||
@@ -369,7 +363,7 @@ export async function evaluateFunctionalModuleWithBoundedWasm(
   const maximumSteps = options.maximumSteps ?? 1_000_000;
   let execution;
   try {
-    execution = await runBoundedFunctionalWasmModule(module, maximumSteps, {
+    execution = await runBoundedWasmModule(module, maximumSteps, {
       ...(options.input === undefined ? {} : { argument: wasmInputValue(options.input) }),
       ...(options.maximumResultNodes === undefined
         ? {}
@@ -379,7 +373,7 @@ export async function evaluateFunctionalModuleWithBoundedWasm(
         : { maximumResultBytes: options.maximumResultBytes }),
     });
   } catch (cause) {
-    if (!(cause instanceof FunctionalWasmRuntimeError)) throw cause;
+    if (!(cause instanceof WasmRuntimeError)) throw cause;
     const fault = functionalFaultFromBoundedWasm(cause, maximumSteps);
     if (fault === undefined) throw cause;
     return {
@@ -406,7 +400,7 @@ export async function evaluateFunctionalModuleWithBoundedWasm(
   };
 }
 
-function wasmInputValue(value: FunctionalInputValue): FunctionalWasmValue {
+function wasmInputValue(value: InputValue): WasmValue {
   switch (value.kind) {
     case "whole-number-f64":
       return { kind: "integer", value: value.value };
@@ -427,9 +421,9 @@ function wasmInputValue(value: FunctionalInputValue): FunctionalWasmValue {
 }
 
 function functionalFaultFromBoundedWasm(
-  error: FunctionalWasmRuntimeError,
+  error: WasmRuntimeError,
   maximumSteps: number,
-): FunctionalRuntimeFault | undefined {
+): RuntimeFault | undefined {
   const sourceByteOffset = error.span?.startByte ?? null;
   if (error.code === "F3002") {
     return {
@@ -466,10 +460,10 @@ function functionalFaultFromBoundedWasm(
 }
 
 function functionalValueFromWasm(
-  execution: FunctionalWasmExecution,
+  execution: WasmExecution,
   deep: boolean,
-): FunctionalValue | FunctionalDeepValue {
-  const convert = (value: FunctionalWasmValue): FunctionalValue | FunctionalDeepValue => {
+): Value | DeepValue {
+  const convert = (value: WasmValue): Value | DeepValue => {
     switch (value.kind) {
       case "integer":
       case "signed-integer-64":
@@ -483,7 +477,7 @@ function functionalValueFromWasm(
         return {
           kind: "tuple",
           fieldCount: 2,
-          fields: value.values.map((field) => convert(field) as FunctionalDeepValue),
+          fields: value.values.map((field) => convert(field) as DeepValue),
         };
       case "constructor":
         if (!deep) {
@@ -493,7 +487,7 @@ function functionalValueFromWasm(
           kind: "constructor",
           name: value.name,
           fieldCount: value.fields.length,
-          fields: value.fields.map((field) => convert(field) as FunctionalDeepValue),
+          fields: value.fields.map((field) => convert(field) as DeepValue),
         };
       case "text":
       case "bytes":
@@ -507,7 +501,7 @@ function functionalValueFromWasm(
   return convert(execution.value);
 }
 
-function lazuliRuntimeModule(module: GpuFunctionalModule): GpuLazuliModule {
+function semanticRuntimeModule(module: GpuModule): GpuSemanticModule {
   return {
     nodeBuffer: module.nodeBuffer,
     definitionBuffer: module.definitionBuffer,
@@ -521,15 +515,15 @@ function lazuliRuntimeModule(module: GpuFunctionalModule): GpuLazuliModule {
     entryDefinition: module.entryDefinition,
     mainType: module.entryType,
     typeDeclarations: module.typeDeclarations,
-    readCoreNodes: async () => await module.readCoreNodes() as readonly LazuliCoreNode[],
+    readCoreNodes: async () => await module.readCoreNodes() as readonly CoreNode[],
     destroy: () => module.destroy(),
   };
 }
 
 function functionalResult(
-  result: LazuliEvaluationResult | LazuliDeepEvaluationResult,
-): AnyFunctionalEvaluationResult {
-  if (result.ok) return result as AnyFunctionalEvaluationResult;
+  result: SemanticEvaluationResult | SemanticDeepEvaluationResult,
+): AnyEvaluationResult {
+  if (result.ok) return result as AnyEvaluationResult;
   return {
     ok: false,
     fault: functionalFault(result.fault),
@@ -537,10 +531,7 @@ function functionalResult(
   };
 }
 
-function functionalFault(fault: LazuliRuntimeFault): FunctionalRuntimeFault {
-  return {
-    ...fault,
-    code: `F${fault.code.slice(1)}`,
-    message: fault.message.replaceAll("Lazuli", "functional"),
-  } as FunctionalRuntimeFault;
+/** The two fault types differ only in what a caller is allowed to see, not in their codes. */
+function functionalFault(fault: SemanticRuntimeFault): RuntimeFault {
+  return fault as RuntimeFault;
 }

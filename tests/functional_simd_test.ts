@@ -1,28 +1,28 @@
 import { deepStrictEqual, equal, ok, rejects, throws } from "node:assert/strict";
 
 import {
-  buildFunctionalSurfaceModule,
-  compileFunctionalModuleToWasm,
-  FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
-  FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
-  FunctionalBinaryOperator,
-  FunctionalEvaluationProfile,
+  BinaryOperator,
+  buildSurfaceModule,
+  compileModuleToWasm,
+  EvaluationProfile,
+  F32x4Definition,
+  FIXED_VECTOR_DEFINITIONS,
+  FIXED_VECTOR_TYPE_DECLARATIONS,
   functionalF32x4,
-  FunctionalF32x4Definition,
-  type FunctionalWasmCompilationOptions,
-  GpuFunctionalCompiler,
-  linkFunctionalModules,
+  GpuCompiler,
+  linkModules,
   requestWebGpuDevice,
-  runFunctionalWasmModule,
+  runWasmModule,
   surface,
+  type WasmCompilationOptions,
 } from "../functional.ts";
 
 let device: GPUDevice | undefined;
-let compiler: GpuFunctionalCompiler | undefined;
+let compiler: GpuCompiler | undefined;
 
 Deno.test.beforeAll(async () => {
   device = await requestWebGpuDevice();
-  compiler = await GpuFunctionalCompiler.create(device);
+  compiler = await GpuCompiler.create(device);
 });
 
 Deno.test.afterAll(() => {
@@ -31,7 +31,7 @@ Deno.test.afterAll(() => {
   compiler = undefined;
 });
 
-function functionalWasmCompiler(): GpuFunctionalCompiler {
+function functionalWasmCompiler(): GpuCompiler {
   if (compiler === undefined) throw new Error("functional SIMD test compiler is not initialized");
   return compiler;
 }
@@ -49,8 +49,8 @@ Deno.test("fixed F32x4 builders reject lanes outside the four-lane shape", () =>
 });
 
 Deno.test("canonical fixed-vector definitions are deeply immutable", () => {
-  const definition = FUNCTIONAL_FIXED_VECTOR_DEFINITIONS.find((candidate) =>
-    candidate.name === FunctionalF32x4Definition.Add
+  const definition = FIXED_VECTOR_DEFINITIONS.find((candidate) =>
+    candidate.name === F32x4Definition.Add
   );
   if (definition === undefined) throw new Error("canonical F32x4 addition definition is missing");
   throws(
@@ -78,10 +78,10 @@ Deno.test("linked fixed-vector definitions retain native SIMD lowering", async (
     surface.float32(3),
     surface.float32(4),
   ]);
-  const linked = linkFunctionalModules([{
+  const linked = linkModules([{
     name: "vectors",
     definitions: [
-      ...FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+      ...FIXED_VECTOR_DEFINITIONS,
       {
         name: "identityMask",
         parameters: ["mask"],
@@ -129,7 +129,7 @@ Deno.test("linked fixed-vector definitions retain native SIMD lowering", async (
         ),
       },
     ],
-    typeDeclarations: FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+    typeDeclarations: FIXED_VECTOR_TYPE_DECLARATIONS,
     imports: [],
     exports: [{
       name: "main",
@@ -137,14 +137,14 @@ Deno.test("linked fixed-vector definitions retain native SIMD lowering", async (
       type: { kind: "float-32" },
     }],
     sourceByteLength: 0,
-    options: { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    options: { evaluationProfile: EvaluationProfile.StrictEager },
   }], { module: "vectors", exportName: "main" });
 
   const compilation = await functionalWasmCompiler().compileModule(linked.module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("linked functional fixed-vector module did not compile");
   try {
-    const simdBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    const simdBytes = await compileModuleToWasm(compilation.module, {
       simd: "wasm-simd",
     });
     ok(simdBytes.includes(0xfd), "linked fixed-vector output omitted native SIMD instructions");
@@ -173,7 +173,7 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
     surface.lambda(
       "value",
       surface.binary(
-        FunctionalBinaryOperator.MultiplyFloat32,
+        BinaryOperator.MultiplyFloat32,
         surface.name("value"),
         surface.float32(2),
       ),
@@ -186,7 +186,7 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
       surface.lambda(
         "right",
         surface.binary(
-          FunctionalBinaryOperator.AddFloat32,
+          BinaryOperator.AddFloat32,
           surface.name("left"),
           surface.name("right"),
         ),
@@ -195,9 +195,9 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
     mapped,
     functionalF32x4.replaceLane(vector, 2, surface.float32(20)),
   );
-  const encoded = buildFunctionalSurfaceModule(
+  const encoded = buildSurfaceModule(
     [
-      ...FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+      ...FIXED_VECTOR_DEFINITIONS,
       {
         name: "main",
         parameters: [],
@@ -208,7 +208,7 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
             surface.lambda(
               "lane",
               surface.binary(
-                FunctionalBinaryOperator.AddFloat32,
+                BinaryOperator.AddFloat32,
                 surface.name("accumulator"),
                 surface.name("lane"),
               ),
@@ -219,24 +219,24 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
         ),
       },
     ],
-    FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+    FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
 
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("functional fixed-vector module did not compile");
   try {
-    const portableExecution = await runFunctionalWasmModule(compilation.module);
+    const portableExecution = await runWasmModule(compilation.module);
     deepStrictEqual(portableExecution.value, { kind: "float-32", value: 101 });
-    const explicitlyPortableBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    const explicitlyPortableBytes = await compileModuleToWasm(compilation.module, {
       simd: "portable-scalar",
     });
     deepStrictEqual(explicitlyPortableBytes, portableExecution.bytes);
 
-    const simdBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    const simdBytes = await compileModuleToWasm(compilation.module, {
       simd: "wasm-simd",
     });
     equal(WebAssembly.validate(simdBytes), true);
@@ -251,15 +251,15 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
     ok(typeof main === "function");
     equal(main(), 101);
     simdBytes[0] = 0xff;
-    const secondSimdBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    const secondSimdBytes = await compileModuleToWasm(compilation.module, {
       simd: "wasm-simd",
     });
     equal(WebAssembly.validate(secondSimdBytes), true);
     await rejects(
       () =>
-        compileFunctionalModuleToWasm(compilation.module, {
+        compileModuleToWasm(compilation.module, {
           simd: "unknown",
-        } as unknown as FunctionalWasmCompilationOptions),
+        } as unknown as WasmCompilationOptions),
       /SIMD mode must be portable-scalar or wasm-simd; received "unknown"/,
     );
   } finally {
@@ -294,30 +294,30 @@ Deno.test("native F32x4 lane operations, comparisons, and reductions preserve Fl
     functionalF32x4.splat(surface.float32(10)),
   );
   const repaired = functionalF32x4.replaceLane(selected, 2, surface.float32(3));
-  const encoded = buildFunctionalSurfaceModule(
+  const encoded = buildSurfaceModule(
     [
-      ...FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+      ...FIXED_VECTOR_DEFINITIONS,
       {
         name: "main",
         parameters: [],
         annotation: { kind: "float-32" },
         body: surface.binary(
-          FunctionalBinaryOperator.AddFloat32,
+          BinaryOperator.AddFloat32,
           functionalF32x4.reduceAdd(repaired),
           functionalF32x4.extractLane(repaired, 1),
         ),
       },
     ],
-    FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+    FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("functional fixed-vector module did not compile");
   try {
-    const simdBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    const simdBytes = await compileModuleToWasm(compilation.module, {
       simd: "wasm-simd",
     });
     equal(WebAssembly.validate(simdBytes), true);
@@ -331,9 +331,9 @@ Deno.test("native F32x4 lane operations, comparisons, and reductions preserve Fl
 });
 
 Deno.test("strict F32x4 functions use an allocation-free internal vector worker", async () => {
-  const encoded = buildFunctionalSurfaceModule(
+  const encoded = buildSurfaceModule(
     [
-      ...FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+      ...FIXED_VECTOR_DEFINITIONS,
       {
         name: "doubleVector",
         parameters: ["vector"],
@@ -364,16 +364,16 @@ Deno.test("strict F32x4 functions use an allocation-free internal vector worker"
         ),
       },
     ],
-    FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+    FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("functional F32x4 worker module did not compile");
   try {
-    const simdBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    const simdBytes = await compileModuleToWasm(compilation.module, {
       simd: "wasm-simd",
     });
     const wasmModule = new WebAssembly.Module(simdBytes);
@@ -395,9 +395,9 @@ Deno.test("native vectors preserve values across ordinary boxed function boundar
     surface.float32(3),
     surface.float32(4),
   ]);
-  const encoded = buildFunctionalSurfaceModule(
+  const encoded = buildSurfaceModule(
     [
-      ...FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+      ...FIXED_VECTOR_DEFINITIONS,
       {
         name: "identityMask",
         parameters: ["mask"],
@@ -438,16 +438,16 @@ Deno.test("native vectors preserve values across ordinary boxed function boundar
         ),
       },
     ],
-    FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+    FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("functional boxed-vector module did not compile");
   try {
-    const simdBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    const simdBytes = await compileModuleToWasm(compilation.module, {
       simd: "wasm-simd",
     });
     equal(WebAssembly.validate(simdBytes), true);
@@ -461,9 +461,9 @@ Deno.test("native vectors preserve values across ordinary boxed function boundar
 });
 
 Deno.test("requested SIMD preserves lazy lane evaluation through scalar fallback", async () => {
-  const encoded = buildFunctionalSurfaceModule(
+  const encoded = buildSurfaceModule(
     [
-      ...FUNCTIONAL_FIXED_VECTOR_DEFINITIONS,
+      ...FIXED_VECTOR_DEFINITIONS,
       {
         name: "main",
         parameters: [],
@@ -479,16 +479,16 @@ Deno.test("requested SIMD preserves lazy lane evaluation through scalar fallback
         ),
       },
     ],
-    FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS,
+    FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed },
+    { evaluationProfile: EvaluationProfile.LazyCallByNeed },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("lazy functional fixed-vector module did not compile");
   try {
-    const simdBytes = await compileFunctionalModuleToWasm(compilation.module, {
+    const simdBytes = await compileModuleToWasm(compilation.module, {
       simd: "wasm-simd",
     });
     equal(WebAssembly.validate(simdBytes), true);

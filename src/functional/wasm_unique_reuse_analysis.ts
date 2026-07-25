@@ -1,5 +1,5 @@
-import { FUNCTIONAL_NO_INDEX, FunctionalCoreTag } from "./abi.ts";
-import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
+import { CoreTag, NO_INDEX } from "./abi.ts";
+import type { CoreNode, GpuModule } from "./compiler_module.ts";
 
 const MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH = 256;
 
@@ -15,12 +15,12 @@ const EMPTY_CONSUMPTION: LocalConsumption = Object.freeze({
   caseNodes: new Set<number>(),
 });
 
-export class FunctionalWasmUniqueReuseAnalysis {
-  readonly #module: GpuFunctionalModule;
-  readonly #nodes: readonly FunctionalCoreNode[];
+export class WasmUniqueReuseAnalysis {
+  readonly #module: GpuModule;
+  readonly #nodes: readonly CoreNode[];
   readonly #resultFieldCounts: (number | null | undefined)[];
 
-  constructor(module: GpuFunctionalModule, nodes: readonly FunctionalCoreNode[]) {
+  constructor(module: GpuModule, nodes: readonly CoreNode[]) {
     this.#module = module;
     this.#nodes = nodes;
     this.#resultFieldCounts = Array.from({ length: nodes.length }, () => undefined);
@@ -45,14 +45,14 @@ export class FunctionalWasmUniqueReuseAnalysis {
     let fieldCount: number | undefined;
     if (constructor !== undefined) {
       fieldCount = constructor.fieldCount;
-    } else if (node.tag === FunctionalCoreTag.If) {
+    } else if (node.tag === CoreTag.If) {
       fieldCount = matchingFieldCount(
         this.uniqueConstructorFieldCount(node.child1, analysisDepth + 1),
         this.uniqueConstructorFieldCount(node.child2, analysisDepth + 1),
       );
-    } else if (node.tag === FunctionalCoreTag.Let) {
+    } else if (node.tag === CoreTag.Let) {
       fieldCount = this.uniqueConstructorFieldCount(node.child1, analysisDepth + 1);
-    } else if (node.tag === FunctionalCoreTag.Case) {
+    } else if (node.tag === CoreTag.Case) {
       fieldCount = this.#caseArmFieldCount(node.child1, analysisDepth + 1);
     }
     this.#resultFieldCounts[nodeIndex] = fieldCount ?? null;
@@ -64,16 +64,16 @@ export class FunctionalWasmUniqueReuseAnalysis {
     let armIndex = firstArm;
     let fieldCount: number | undefined;
     let sawArm = false;
-    while (armIndex !== FUNCTIONAL_NO_INDEX) {
+    while (armIndex !== NO_INDEX) {
       const arm = this.#node(armIndex);
-      if (arm.tag !== FunctionalCoreTag.CaseArm) return undefined;
+      if (arm.tag !== CoreTag.CaseArm) return undefined;
       sawArm = true;
       let bodyNode = arm.child0;
       const arity = this.#module.constructorArities[arm.payload];
       if (arity === undefined) return undefined;
       for (let binder = 0; binder < arity; binder += 1) {
         const binding = this.#node(bodyNode);
-        if (binding.tag !== FunctionalCoreTag.PatternBind) return undefined;
+        if (binding.tag !== CoreTag.PatternBind) return undefined;
         bodyNode = binding.child0;
       }
       const armFieldCount = this.uniqueConstructorFieldCount(bodyNode, analysisDepth + 1);
@@ -93,13 +93,13 @@ export class FunctionalWasmUniqueReuseAnalysis {
     let fieldCount = 0;
     let baseNode = nodeIndex;
     let base = this.#node(baseNode);
-    while (base.tag === FunctionalCoreTag.Apply) {
+    while (base.tag === CoreTag.Apply) {
       fieldCount += 1;
       if (fieldCount > MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH) return undefined;
       baseNode = base.child0;
       base = this.#node(baseNode);
     }
-    if (base.tag !== FunctionalCoreTag.Constructor) return undefined;
+    if (base.tag !== CoreTag.Constructor) return undefined;
     const arity = this.#module.constructorArities[base.payload];
     if (arity === undefined || arity === 0 || fieldCount !== arity) return undefined;
     return { fieldCount };
@@ -115,40 +115,40 @@ export class FunctionalWasmUniqueReuseAnalysis {
       return { valid: false, maximumPerPath: 0, caseNodes: new Set() };
     }
     const node = this.#node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Local) {
+    if (node.tag === CoreTag.Local) {
       return node.payload === localDepth
         ? { valid: false, maximumPerPath: 0, caseNodes: new Set() }
         : EMPTY_CONSUMPTION;
     }
     switch (node.tag) {
-      case FunctionalCoreTag.Integer:
-      case FunctionalCoreTag.SignedInteger64:
-      case FunctionalCoreTag.Float32:
-      case FunctionalCoreTag.Float64:
-      case FunctionalCoreTag.WholeNumberF64:
-      case FunctionalCoreTag.Boolean:
-      case FunctionalCoreTag.Text:
-      case FunctionalCoreTag.Bytes:
-      case FunctionalCoreTag.RuntimeFault:
-      case FunctionalCoreTag.Global:
-      case FunctionalCoreTag.Constructor:
+      case CoreTag.Integer:
+      case CoreTag.SignedInteger64:
+      case CoreTag.Float32:
+      case CoreTag.Float64:
+      case CoreTag.WholeNumberF64:
+      case CoreTag.Boolean:
+      case CoreTag.Text:
+      case CoreTag.Bytes:
+      case CoreTag.RuntimeFault:
+      case CoreTag.Global:
+      case CoreTag.Constructor:
         return EMPTY_CONSUMPTION;
-      case FunctionalCoreTag.Unary:
-      case FunctionalCoreTag.NumericConvert:
-      case FunctionalCoreTag.StoreLength:
+      case CoreTag.Unary:
+      case CoreTag.NumericConvert:
+      case CoreTag.StoreLength:
         return this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1);
-      case FunctionalCoreTag.Apply:
-      case FunctionalCoreTag.Binary:
-      case FunctionalCoreTag.BufferAppend:
-      case FunctionalCoreTag.StoreNew:
-      case FunctionalCoreTag.StoreRead:
+      case CoreTag.Apply:
+      case CoreTag.Binary:
+      case CoreTag.BufferAppend:
+      case CoreTag.StoreNew:
+      case CoreTag.StoreRead:
         return sequentialConsumption(
           this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1),
           this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
         );
-      case FunctionalCoreTag.If:
-      case FunctionalCoreTag.StoreWrite:
-      case FunctionalCoreTag.StoreGrow:
+      case CoreTag.If:
+      case CoreTag.StoreWrite:
+      case CoreTag.StoreGrow:
         return sequentialConsumption(
           this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1),
           alternativeConsumption(
@@ -156,7 +156,7 @@ export class FunctionalWasmUniqueReuseAnalysis {
             this.#localConsumption(node.child2, localDepth, insideLambda, analysisDepth + 1),
           ),
         );
-      case FunctionalCoreTag.Lambda: {
+      case CoreTag.Lambda: {
         const body = this.#localConsumption(
           node.child0,
           localDepth + 1,
@@ -167,14 +167,14 @@ export class FunctionalWasmUniqueReuseAnalysis {
           ? body
           : { valid: false, maximumPerPath: 0, caseNodes: new Set() };
       }
-      case FunctionalCoreTag.PatternBind:
+      case CoreTag.PatternBind:
         return this.#localConsumption(
           node.child0,
           localDepth + 1,
           insideLambda,
           analysisDepth + 1,
         );
-      case FunctionalCoreTag.Let:
+      case CoreTag.Let:
         return sequentialConsumption(
           this.#localConsumption(node.child0, localDepth, insideLambda, analysisDepth + 1),
           this.#localConsumption(
@@ -184,7 +184,7 @@ export class FunctionalWasmUniqueReuseAnalysis {
             analysisDepth + 1,
           ),
         );
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.LetRec:
         return sequentialConsumption(
           this.#localConsumption(node.child0, localDepth + 1, true, analysisDepth + 1),
           this.#localConsumption(
@@ -194,9 +194,9 @@ export class FunctionalWasmUniqueReuseAnalysis {
             analysisDepth + 1,
           ),
         );
-      case FunctionalCoreTag.Case: {
+      case CoreTag.Case: {
         const scrutinee = this.#node(node.child0);
-        const selected = scrutinee.tag === FunctionalCoreTag.Local &&
+        const selected = scrutinee.tag === CoreTag.Local &&
             scrutinee.payload === localDepth && !insideLambda
           ? {
             valid: true,
@@ -214,14 +214,14 @@ export class FunctionalWasmUniqueReuseAnalysis {
           this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
         );
       }
-      case FunctionalCoreTag.CaseArm: {
+      case CoreTag.CaseArm: {
         const current = this.#localConsumption(
           node.child0,
           localDepth,
           insideLambda,
           analysisDepth + 1,
         );
-        if (node.child1 === FUNCTIONAL_NO_INDEX) return current;
+        if (node.child1 === NO_INDEX) return current;
         return alternativeConsumption(
           current,
           this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
@@ -230,7 +230,7 @@ export class FunctionalWasmUniqueReuseAnalysis {
     }
   }
 
-  #node(nodeIndex: number): FunctionalCoreNode {
+  #node(nodeIndex: number): CoreNode {
     const node = this.#nodes[nodeIndex];
     if (node !== undefined) return node;
     throw new Error(

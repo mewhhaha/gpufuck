@@ -3,13 +3,13 @@
  *
  * Reports marginal cost per module rather than totals, because totals hide the crossover: both
  * paths pay the same CPU parse, so a total-wall-time ratio flatters the GPU. The CPU baseline is
- * `inferLazuliTypes`, the host Hindley-Milner implementation the GPU shader is differentially
+ * `inferTypes`, the host Hindley-Milner implementation the GPU shader is differentially
  * tested against, so the two columns do the same work.
  */
-import { GpuLazuliCompiler } from "../src/semantic/compiler.ts";
-import { parseLazuliSource } from "../src/semantic/frontend.ts";
-import { createLazuliSymbolLookup } from "../src/semantic/symbol_lookup.ts";
-import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
+import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
+import { parseLazuliSource } from "../src/lazuli/frontend.ts";
+import { createSymbolLookup } from "../src/semantic/symbol_lookup.ts";
+import { inferTypes } from "../src/semantic/type_inference.ts";
 import { requestWebGpuDevice } from "../src/webgpu.ts";
 
 const SIZES = [1, 16, 64, 256, 1024] as const;
@@ -64,14 +64,14 @@ for (const size of SIZES) {
   const cpu = await median(REPETITIONS, () => {
     for (const source of sources) {
       const parsed = parseLazuliSource(source);
-      if (parsed.ok) inferLazuliTypes(parsed.surface);
+      if (parsed.ok) inferTypes(parsed.surface);
     }
   });
   const inference = await median(REPETITIONS, () => {
-    for (const surface of surfaces) inferLazuliTypes(surface);
+    for (const surface of surfaces) inferTypes(surface);
   });
   const lookup = await median(REPETITIONS, () => {
-    for (const surface of surfaces) createLazuliSymbolLookup(surface);
+    for (const surface of surfaces) createSymbolLookup(surface);
   });
   const gpu = await median(REPETITIONS, async () => {
     const results = await compiler.compileBatch(sources);

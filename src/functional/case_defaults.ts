@@ -1,8 +1,8 @@
 import type {
-  FunctionalSurfaceCaseArm,
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceTypeDeclaration,
+  SurfaceCaseArm,
+  SurfaceDefinition,
+  SurfaceExpression,
+  SurfaceTypeDeclaration,
 } from "./surface_contract.ts";
 
 /**
@@ -12,15 +12,15 @@ import type {
  * constructor the arms omit and bind the fallback once so it is not duplicated per arm. That is the
  * same expansion for every frontend, so it belongs here.
  */
-export function elaborateFunctionalCaseDefaults(
-  definitions: readonly FunctionalSurfaceDefinition[],
-  typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[],
-): readonly FunctionalSurfaceDefinition[] {
+export function elaborateCaseDefaults(
+  definitions: readonly SurfaceDefinition[],
+  typeDeclarations: readonly SurfaceTypeDeclaration[],
+): readonly SurfaceDefinition[] {
   const owners = constructorOwners(typeDeclarations);
   let counter = 0;
   const nextName = (role: string): string => `$caseDefault${role}${counter++}`;
 
-  const expand = (expression: FunctionalSurfaceExpression): FunctionalSurfaceExpression => {
+  const expand = (expression: SurfaceExpression): SurfaceExpression => {
     switch (expression.kind) {
       case "case": {
         const value = expand(expression.value);
@@ -37,12 +37,12 @@ export function elaborateFunctionalCaseDefaults(
         const scrutinee = nextName("Value");
         const fallback = nextName("Arm");
         const binder = otherwise.binder ?? nextName("Ignored");
-        const call: FunctionalSurfaceExpression = {
+        const call: SurfaceExpression = {
           kind: "apply",
           callee: { kind: "name", name: fallback },
           argument: { kind: "name", name: scrutinee },
         };
-        const expanded: FunctionalSurfaceCaseArm[] = [
+        const expanded: SurfaceCaseArm[] = [
           ...arms,
           ...missing.map((constructor) => ({
             constructor: constructor.name,
@@ -141,7 +141,7 @@ interface ConstructorShape {
 }
 
 function constructorOwners(
-  typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[],
+  typeDeclarations: readonly SurfaceTypeDeclaration[],
 ): ReadonlyMap<string, readonly ConstructorShape[]> {
   const owners = new Map<string, readonly ConstructorShape[]>();
   for (const declaration of typeDeclarations) {
@@ -155,7 +155,7 @@ function constructorOwners(
 }
 
 function missingConstructors(
-  arms: readonly FunctionalSurfaceCaseArm[],
+  arms: readonly SurfaceCaseArm[],
   owners: ReadonlyMap<string, readonly ConstructorShape[]>,
 ): readonly ConstructorShape[] {
   const named = arms.find((arm) => owners.has(arm.constructor));

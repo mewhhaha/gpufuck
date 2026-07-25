@@ -101,7 +101,7 @@ Deno.test("returns a nonzero exit code for a faulted Lazuli batch lane", async (
         path: sourcePaths[1],
         successful: false,
         value: undefined,
-        faultCode: "L3007",
+        faultCode: "F3007",
       },
     ],
   );

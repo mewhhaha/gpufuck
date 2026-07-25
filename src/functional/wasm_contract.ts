@@ -1,35 +1,35 @@
-import type { FunctionalType } from "./schema_contract.ts";
-import type { FunctionalStorageCoreProgram } from "./storage_core.ts";
+import type { Type } from "./schema_contract.ts";
+import type { StorageCoreProgram } from "./storage_core.ts";
 
-export type { FunctionalWasmExportDeclaration } from "./module_contract.ts";
+export type { WasmExportDeclaration } from "./module_contract.ts";
 
-export interface FunctionalWasmOwnedTypeExport {
+export interface WasmOwnedTypeExport {
   readonly name: string;
   readonly storageValue: string;
-  readonly type: FunctionalType;
+  readonly type: Type;
 }
 
-export type FunctionalWasmBackend = "linear-memory" | "wasm-gc";
-export type FunctionalWasmSimdMode = "portable-scalar" | "wasm-simd";
+export type WasmBackend = "linear-memory" | "wasm-gc";
+export type WasmSimdMode = "portable-scalar" | "wasm-simd";
 
-export interface FunctionalWasmCompilationOptions {
-  readonly backend?: FunctionalWasmBackend;
-  readonly simd?: FunctionalWasmSimdMode;
-  readonly storageCore?: FunctionalStorageCoreProgram;
-  readonly ownedTypeExports?: readonly FunctionalWasmOwnedTypeExport[];
+export interface WasmCompilationOptions {
+  readonly backend?: WasmBackend;
+  readonly simd?: WasmSimdMode;
+  readonly storageCore?: StorageCoreProgram;
+  readonly ownedTypeExports?: readonly WasmOwnedTypeExport[];
 }
 
-export interface FunctionalComponentBoundaryOptions {
+export interface ComponentBoundaryOptions {
   readonly packageName?: string;
   readonly worldName?: string;
 }
 
-export interface FunctionalComponentBoundaryArtifact {
+export interface ComponentBoundaryArtifact {
   readonly coreWasm: Uint8Array<ArrayBuffer>;
   readonly wit: string;
 }
 
-export type FunctionalWasmRuntimeDiagnosticCode =
+export type WasmRuntimeDiagnosticCode =
   | "F3002"
   | "F3003"
   | "F3005"
@@ -43,7 +43,7 @@ export type FunctionalWasmRuntimeDiagnosticCode =
   | "F3103"
   | "F3104";
 
-export type FunctionalWasmRuntimeFaultKind =
+export type WasmRuntimeFaultKind =
   | "out-of-fuel"
   | "out-of-memory"
   | "blackhole"
@@ -58,9 +58,9 @@ export type FunctionalWasmRuntimeFaultKind =
   | "trap"
   | "suspension-limit";
 
-export interface FunctionalWasmRuntimeErrorDetails {
-  readonly code: FunctionalWasmRuntimeDiagnosticCode;
-  readonly kind: FunctionalWasmRuntimeFaultKind;
+export interface WasmRuntimeErrorDetails {
+  readonly code: WasmRuntimeDiagnosticCode;
+  readonly kind: WasmRuntimeFaultKind;
   readonly entryDefinition: number;
   readonly entryName: string;
   readonly coreNode?: number;
@@ -74,28 +74,28 @@ export interface FunctionalWasmRuntimeErrorDetails {
   readonly message: string;
 }
 
-export type FunctionalWasmBoundaryDiagnosticCode = "F4101" | "F4102";
+export type WasmBoundaryDiagnosticCode = "F4101" | "F4102";
 
-export type FunctionalWasmBoundaryFaultKind = "invalid-argument" | "invalid-init";
+export type WasmBoundaryFaultKind = "invalid-argument" | "invalid-init";
 
-export interface FunctionalWasmBoundaryErrorDetails {
-  readonly code: FunctionalWasmBoundaryDiagnosticCode;
-  readonly kind: FunctionalWasmBoundaryFaultKind;
+export interface WasmBoundaryErrorDetails {
+  readonly code: WasmBoundaryDiagnosticCode;
+  readonly kind: WasmBoundaryFaultKind;
   readonly message: string;
   readonly path?: string;
 }
 
-export type FunctionalWasmHostOperation = (
-  argument: FunctionalWasmHostValue,
-) => FunctionalWasmHostValue;
+export type WasmHostOperation = (
+  argument: WasmHostValue,
+) => WasmHostValue;
 
-export type FunctionalRuntimeTypeDescriptor = FunctionalType;
+export type RuntimeTypeDescriptor = Type;
 
-export type FunctionalWasmAsyncHostOperation = (
-  argument: FunctionalWasmHostValue,
-) => FunctionalWasmHostValue | PromiseLike<FunctionalWasmHostValue>;
+export type WasmAsyncHostOperation = (
+  argument: WasmHostValue,
+) => WasmHostValue | PromiseLike<WasmHostValue>;
 
-export type FunctionalWasmHostValue =
+export type WasmHostValue =
   | { readonly kind: "integer"; readonly value: number }
   | { readonly kind: "signed-integer-64"; readonly value: bigint }
   | { readonly kind: "float-32"; readonly value: number }
@@ -104,32 +104,32 @@ export type FunctionalWasmHostValue =
   | { readonly kind: "unit" }
   | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "bytes"; readonly value: Uint8Array }
-  | { readonly kind: "array"; readonly values: readonly FunctionalWasmHostValue[] }
-  | { readonly kind: "slice"; readonly values: readonly FunctionalWasmHostValue[] }
+  | { readonly kind: "array"; readonly values: readonly WasmHostValue[] }
+  | { readonly kind: "slice"; readonly values: readonly WasmHostValue[] }
   | { readonly kind: "resource"; readonly id: number }
   | {
     readonly kind: "erased";
-    readonly type: FunctionalRuntimeTypeDescriptor;
-    readonly value: FunctionalWasmHostValue;
+    readonly type: RuntimeTypeDescriptor;
+    readonly value: WasmHostValue;
   }
   | {
     readonly kind: "tuple";
-    readonly values: readonly [FunctionalWasmHostValue, FunctionalWasmHostValue];
+    readonly values: readonly [WasmHostValue, WasmHostValue];
   }
   | {
     readonly kind: "constructor";
     readonly name: string;
-    readonly fields: readonly FunctionalWasmHostValue[];
+    readonly fields: readonly WasmHostValue[];
   };
 
-export type FunctionalWasmInitBinding = FunctionalWasmHostValue | FunctionalWasmHostOperation;
+export type WasmInitBinding = WasmHostValue | WasmHostOperation;
 
-export interface FunctionalWasmInit {
-  readonly [capability: string]: Readonly<Record<string, FunctionalWasmInitBinding>>;
+export interface WasmInit {
+  readonly [capability: string]: Readonly<Record<string, WasmInitBinding>>;
 }
 
-export interface FunctionalWasmAsyncInit {
+export interface WasmAsyncInit {
   readonly [capability: string]: Readonly<
-    Record<string, FunctionalWasmHostValue | FunctionalWasmAsyncHostOperation>
+    Record<string, WasmHostValue | WasmAsyncHostOperation>
   >;
 }

@@ -1,18 +1,18 @@
-import { LAZULI_MAXIMUM_CONSTRUCTOR_ARITY, LazuliBinaryOperator, LazuliCoreTag } from "./abi.ts";
+import { BinaryOperator, CoreTag, MAXIMUM_CONSTRUCTOR_ARITY } from "./abi.ts";
 import {
-  LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC,
-  LAZULI_INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC,
+  INDEXED_LOCAL_RESOLUTION_MAGIC,
+  INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC,
 } from "./symbol_lookup.ts";
 
-export const LAZULI_COMPILATION_STATE_WORD_LENGTH = 24;
-export const LAZULI_COMPILATION_STATE_BYTE_LENGTH = LAZULI_COMPILATION_STATE_WORD_LENGTH *
+export const COMPILATION_STATE_WORD_LENGTH = 24;
+export const COMPILATION_STATE_BYTE_LENGTH = COMPILATION_STATE_WORD_LENGTH *
   Uint32Array.BYTES_PER_ELEMENT;
-export const LAZULI_COMPILATION_INTERNAL_STATE_WORD_LENGTH = 32;
-export const LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH =
-  LAZULI_COMPILATION_INTERNAL_STATE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
-export const LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE = 64;
+export const COMPILATION_INTERNAL_STATE_WORD_LENGTH = 32;
+export const COMPILATION_INTERNAL_STATE_BYTE_LENGTH = COMPILATION_INTERNAL_STATE_WORD_LENGTH *
+  Uint32Array.BYTES_PER_ELEMENT;
+export const PLANNED_LOWERING_WORKGROUP_SIZE = 64;
 
-export const LazuliCompilationStateWord = {
+export const CompilationStateWord = {
   NodeCount: 0,
   DefinitionCount: 1,
   TypeCount: 2,
@@ -39,7 +39,7 @@ export const LazuliCompilationStateWord = {
   CorePayload: 23,
 } as const;
 
-export const LazuliCompilationInternalStateWord = {
+export const CompilationInternalStateWord = {
   SurfaceNodeBase: 24,
   DefinitionBase: 25,
   AlgebraicTypeBase: 26,
@@ -50,7 +50,7 @@ export const LazuliCompilationInternalStateWord = {
   SymbolLookupBase: 31,
 } as const;
 
-export const LazuliCompilationStatus = {
+export const CompilationStatus = {
   Pending: 0,
   Ok: 1,
   Diagnostic: 2,
@@ -58,7 +58,7 @@ export const LazuliCompilationStatus = {
   StepLimit: 4,
 } as const;
 
-export const LAZULI_COMPILER_SHADER = /* wgsl */ `
+export const COMPILER_SHADER = /* wgsl */ `
 struct SurfaceNode {
   tag: u32,
   start_byte: u32,
@@ -170,11 +170,11 @@ var<storage, read_write> symbol_lookups: array<SymbolLookup>;
 var<private> state: CompilationState;
 
 const NO_INDEX: u32 = 0xffffffffu;
-const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${LAZULI_MAXIMUM_CONSTRUCTOR_ARITY}u;
-const INDEXED_LOCAL_RESOLUTION_MAGIC: u32 = ${LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC}u;
-const INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC: u32 = ${LAZULI_INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC}u;
+const MAXIMUM_CONSTRUCTOR_ARITY: u32 = ${MAXIMUM_CONSTRUCTOR_ARITY}u;
+const INDEXED_LOCAL_RESOLUTION_MAGIC: u32 = ${INDEXED_LOCAL_RESOLUTION_MAGIC}u;
+const INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC: u32 = ${INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC}u;
 const PLANNED_LOWERING_READY: u32 = 0x4c5a5052u;
-const PLANNED_LOWERING_MINIMUM_NODES: u32 = ${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE}u;
+const PLANNED_LOWERING_MINIMUM_NODES: u32 = ${PLANNED_LOWERING_WORKGROUP_SIZE}u;
 
 const STATUS_PENDING: u32 = 0u;
 const STATUS_OK: u32 = 1u;
@@ -222,11 +222,11 @@ const SURFACE_BYTES: u32 = 24u;
 const SURFACE_RUNTIME_FAULT: u32 = 25u;
 const SURFACE_WHOLE_NUMBER_F64: u32 = 26u;
 const SURFACE_BUFFER_APPEND: u32 = 27u;
-const SURFACE_STORE_NEW: u32 = ${LazuliCoreTag.StoreNew}u;
-const SURFACE_STORE_LENGTH: u32 = ${LazuliCoreTag.StoreLength}u;
-const SURFACE_STORE_READ: u32 = ${LazuliCoreTag.StoreRead}u;
-const SURFACE_STORE_WRITE: u32 = ${LazuliCoreTag.StoreWrite}u;
-const SURFACE_STORE_GROW: u32 = ${LazuliCoreTag.StoreGrow}u;
+const SURFACE_STORE_NEW: u32 = ${CoreTag.StoreNew}u;
+const SURFACE_STORE_LENGTH: u32 = ${CoreTag.StoreLength}u;
+const SURFACE_STORE_READ: u32 = ${CoreTag.StoreRead}u;
+const SURFACE_STORE_WRITE: u32 = ${CoreTag.StoreWrite}u;
+const SURFACE_STORE_GROW: u32 = ${CoreTag.StoreGrow}u;
 
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
@@ -410,10 +410,10 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_BINARY: {
-      let whole_number = node.payload >= ${LazuliBinaryOperator.EqualWholeNumberF64}u &&
-        node.payload <= ${LazuliBinaryOperator.RemainderWholeNumberF64}u;
+      let whole_number = node.payload >= ${BinaryOperator.EqualWholeNumberF64}u &&
+        node.payload <= ${BinaryOperator.RemainderWholeNumberF64}u;
       return node.payload >= 1u &&
-        node.payload <= ${LazuliBinaryOperator.RemainderFloat64}u &&
+        node.payload <= ${BinaryOperator.RemainderFloat64}u &&
         required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) &&
         select(node.child2 == NO_INDEX, node.child2 < state.type_count, whole_number);
@@ -983,7 +983,7 @@ fn prepare_inference_state() {
 }
 
 @compute @workgroup_size(1)
-fn compile_lazuli(@builtin(global_invocation_id) invocation: vec3<u32>) {
+fn compile_module(@builtin(global_invocation_id) invocation: vec3<u32>) {
   let lane_index = invocation.x;
   if lane_index >= arrayLength(&compilation_states) {
     return;
@@ -1017,15 +1017,15 @@ fn lane_of_node(global_node: u32) -> u32 {
   return low;
 }
 
-@compute @workgroup_size(${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE})
-fn lower_planned_lazuli(
+@compute @workgroup_size(${PLANNED_LOWERING_WORKGROUP_SIZE})
+fn lower_planned_module(
   @builtin(workgroup_id) workgroup: vec3<u32>,
   @builtin(local_invocation_index) local_invocation: u32,
 ) {
   if arrayLength(&compilation_states) == 0u {
     return;
   }
-  let global_node = workgroup.x * ${LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE}u + local_invocation;
+  let global_node = workgroup.x * ${PLANNED_LOWERING_WORKGROUP_SIZE}u + local_invocation;
   state = compilation_states[lane_of_node(global_node)];
   if state.resolution_symbol != PLANNED_LOWERING_READY ||
     !indexed_local_resolutions_are_available() ||

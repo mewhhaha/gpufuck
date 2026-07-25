@@ -1,11 +1,11 @@
 import { deepStrictEqual, equal, match, notStrictEqual, ok, rejects } from "node:assert/strict";
 
 import { GpuLazuliCompiler, requestWebGpuDevice } from "../mod.ts";
-import { LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH } from "../src/semantic/abi.ts";
+import { MAXIMUM_SOURCE_BYTE_LENGTH } from "../src/semantic/abi.ts";
 import {
   GpuDispatchScheduler,
   MAXIMUM_GPU_DISPATCH_BATCH_SIZE,
-} from "../src/functional/gpu_dispatch_scheduler.ts";
+} from "../src/semantic/gpu_dispatch_scheduler.ts";
 
 interface FakeCommandEncoder extends GPUCommandEncoder {
   readonly lanes: number[];
@@ -149,7 +149,7 @@ Deno.test("same GPU compiler batches concurrent results and remains reusable aft
     Object.defineProperty(device, "createBuffer", {
       configurable: true,
       value: (descriptor: GPUBufferDescriptor) => {
-        if (descriptor.label === "Lazuli surface nodes") surfaceNodeAllocations++;
+        if (descriptor.label === "surface nodes") surfaceNodeAllocations++;
         return createBuffer(descriptor);
       },
     });
@@ -211,7 +211,7 @@ Deno.test("same GPU compiler batches concurrent results and remains reusable aft
     }
 
     const weightedProgram = "let main = 0;";
-    const weightedSourceByteLength = LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH / 4;
+    const weightedSourceByteLength = MAXIMUM_SOURCE_BYTE_LENGTH / 4;
     const weightedSource = weightedProgram +
       " ".repeat(weightedSourceByteLength - weightedProgram.length);
     const weightedAllocationStart = surfaceNodeAllocations;
@@ -236,9 +236,9 @@ Deno.test("same GPU compiler batches concurrent results and remains reusable aft
     ]);
     ok(mixed[0]?.ok);
     equal(mixed[1]?.ok, false);
-    if (mixed[1]?.ok === false) equal(mixed[1].diagnostics[0].code, "L2001");
+    if (mixed[1]?.ok === false) equal(mixed[1].diagnostics[0].code, "F2001");
     equal(mixed[2]?.ok, false);
-    if (mixed[2]?.ok === false) equal(mixed[2].diagnostics[0].code, "L2102");
+    if (mixed[2]?.ok === false) equal(mixed[2].diagnostics[0].code, "F2102");
     for (const result of mixed) if (result.ok) result.module.destroy();
 
     const controller = new AbortController();

@@ -1,24 +1,23 @@
-import type { FunctionalDiagnostic, FunctionalSourceRange, FunctionalSpan } from "./abi.ts";
+import type { Diagnostic, SourceRange, Span } from "./abi.ts";
 
-export interface FunctionalSourceSpan {
+export interface SourceSpan {
   readonly module: string;
-  readonly span: FunctionalSpan;
+  readonly span: Span;
 }
 
-export interface FunctionalLocatedDiagnostic
-  extends Omit<FunctionalDiagnostic, "span" | "related"> {
-  readonly location: FunctionalSourceSpan;
+export interface LocatedDiagnostic extends Omit<Diagnostic, "span" | "related"> {
+  readonly location: SourceSpan;
   readonly related?: readonly {
     readonly message: string;
-    readonly location: FunctionalSourceSpan;
+    readonly location: SourceSpan;
   }[];
 }
 
-export function locateFunctionalSpan(
-  sources: readonly FunctionalSourceRange[],
-  span: FunctionalSpan,
-): FunctionalSourceSpan | undefined {
-  let boundaryMatch: FunctionalSourceRange | undefined;
+export function locateSpan(
+  sources: readonly SourceRange[],
+  span: Span,
+): SourceSpan | undefined {
+  let boundaryMatch: SourceRange | undefined;
   for (const source of sources) {
     if (span.startByte < source.startByte || span.endByte > source.endByte) continue;
     if (span.startByte < source.endByte || source.startByte === source.endByte) {
@@ -42,14 +41,14 @@ export function locateFunctionalSpan(
   };
 }
 
-export function locateFunctionalDiagnostic(
-  sources: readonly FunctionalSourceRange[],
-  diagnostic: FunctionalDiagnostic,
-): FunctionalLocatedDiagnostic | undefined {
-  const location = locateFunctionalSpan(sources, diagnostic.span);
+export function locateDiagnostic(
+  sources: readonly SourceRange[],
+  diagnostic: Diagnostic,
+): LocatedDiagnostic | undefined {
+  const location = locateSpan(sources, diagnostic.span);
   if (location === undefined) return undefined;
   const related = diagnostic.related?.flatMap((entry) => {
-    const relatedLocation = locateFunctionalSpan(sources, entry.span);
+    const relatedLocation = locateSpan(sources, entry.span);
     return relatedLocation === undefined
       ? []
       : [{ message: entry.message, location: relatedLocation }];

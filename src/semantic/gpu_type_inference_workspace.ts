@@ -1,36 +1,32 @@
-import {
-  type EncodedLazuliSurface,
-  LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
-  LAZULI_NO_INDEX,
-} from "./abi.ts";
-import { LazuliCompilationStateWord, LazuliCompilationStatus } from "./compiler_shader.ts";
+import { type EncodedSemanticSurface, MAXIMUM_CONSTRUCTOR_ARITY, NO_INDEX } from "./abi.ts";
+import { CompilationStateWord, CompilationStatus } from "./compiler_shader.ts";
 import type {
-  GpuLazuliTypeInferenceOptions,
-  GpuLazuliTypeInferenceWorkspaceCapacities,
+  GpuTypeInferenceOptions,
+  GpuTypeInferenceWorkspaceCapacities,
   InferenceStateSnapshot,
   WorkspaceCapacities,
   WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import {
-  LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
-  LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
-  LAZULI_INFERENCE_FRAME_WORD_LENGTH,
-  LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
-  LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
-  LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
-  LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
-  LazuliInferenceDiagnosticCode,
-  LazuliInferenceSchedulerWord,
-  LazuliInferenceStateWord,
-  LazuliInferenceStatus,
-  type prepareLazuliInferenceShaderMetadata,
+  INFERENCE_DEFINITION_SCRATCH_VECTORS,
+  INFERENCE_ENVIRONMENT_WORD_LENGTH,
+  INFERENCE_FRAME_WORD_LENGTH,
+  INFERENCE_INTERNAL_STATE_WORD_LENGTH,
+  INFERENCE_OUTPUT_WORD_LENGTH,
+  INFERENCE_REFINEMENT_WORD_LENGTH,
+  INFERENCE_TYPE_RECORD_WORD_LENGTH,
+  InferenceDiagnosticCode,
+  InferenceSchedulerWord,
+  InferenceStateWord,
+  InferenceStatus,
+  type prepareInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 export const INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY = 64;
 const INITIAL_TYPE_RECORDS_PER_INPUT = 4;
 const INITIAL_MINIMUM_FRAME_CAPACITY = 64;
-export const INFERENCE_INTERNAL_STATE_BYTE_LENGTH = LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH *
+export const INFERENCE_INTERNAL_STATE_BYTE_LENGTH = INFERENCE_INTERNAL_STATE_WORD_LENGTH *
   WORD_BYTES;
 // Staged output copies need a substantial dispatch quantum to amortize their bandwidth cost.
 const COMBINED_READBACK_MINIMUM_DISPATCH_TRANSITIONS = 256;
@@ -62,11 +58,11 @@ export function validateFuel(
 }
 
 export function workspaceLayout(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   schemaNodeCount: number,
   typeParameterCount: number,
   limits: GPUSupportedLimits,
-  overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
+  overrides: GpuTypeInferenceWorkspaceCapacities | undefined,
 ): WorkspaceLayout {
   const inferenceInputs = checkedSum(
     "inference input count",
@@ -104,7 +100,7 @@ export function workspaceLayout(
     "schema scratch capacity",
     checkedProduct("schema parameter mapping", Math.max(schemaNodeCount, typeParameterCount), 2),
     checkedProduct("schema traversal", schemaNodeCount, 3),
-    LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
+    MAXIMUM_CONSTRUCTOR_ARITY,
     32,
   );
   const inferredTypeTraversalCapacity = checkedSum(
@@ -121,14 +117,14 @@ export function workspaceLayout(
       ),
       3,
     ),
-    LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
+    MAXIMUM_CONSTRUCTOR_ARITY,
   );
   const defaultScratchCapacity = checkedSum(
     "scratch arena capacity",
     checkedProduct(
       "definition scratch",
       surface.definitionCount,
-      LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
+      INFERENCE_DEFINITION_SCRATCH_VECTORS,
     ),
     Math.max(schemaScratchCapacity, inferredTypeTraversalCapacity),
   );
@@ -144,7 +140,7 @@ export function workspaceLayout(
     checkedProduct(
       "minimum scratch arena capacity",
       surface.definitionCount,
-      LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
+      INFERENCE_DEFINITION_SCRATCH_VECTORS,
     ),
     overrides,
   );
@@ -154,11 +150,11 @@ export function workspaceLayout(
 function optionsWorkspaceCapacities(
   defaults: WorkspaceCapacities,
   minimumScratchCapacity: number,
-  overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
+  overrides: GpuTypeInferenceWorkspaceCapacities | undefined,
 ): WorkspaceCapacities {
   const capacity = (name: string, value: number | undefined, fallback: number): number => {
     const selected = value ?? fallback;
-    if (!Number.isSafeInteger(selected) || selected < 0 || selected > LAZULI_NO_INDEX) {
+    if (!Number.isSafeInteger(selected) || selected < 0 || selected > NO_INDEX) {
       throw new RangeError(`${name} must be an unsigned 32-bit integer; received ${selected}`);
     }
     return selected;
@@ -195,7 +191,7 @@ function createWorkspaceLayout(
   const environmentBase = checkedProduct(
     "type arena words",
     capacities.type,
-    LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
+    INFERENCE_TYPE_RECORD_WORD_LENGTH,
   );
   const frameBase = checkedSum(
     "environment arena base",
@@ -203,7 +199,7 @@ function createWorkspaceLayout(
     checkedProduct(
       "environment arena words",
       capacities.environment,
-      LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
+      INFERENCE_ENVIRONMENT_WORD_LENGTH,
     ),
   );
   const refinementBase = checkedSum(
@@ -212,7 +208,7 @@ function createWorkspaceLayout(
     checkedProduct(
       "frame arena words",
       capacities.frame,
-      LAZULI_INFERENCE_FRAME_WORD_LENGTH,
+      INFERENCE_FRAME_WORD_LENGTH,
     ),
   );
   const scratchBase = checkedSum(
@@ -221,7 +217,7 @@ function createWorkspaceLayout(
     checkedProduct(
       "refinement arena words",
       capacities.refinement,
-      LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
+      INFERENCE_REFINEMENT_WORD_LENGTH,
     ),
   );
   const workspaceWordLength = checkedSum(
@@ -235,7 +231,7 @@ function createWorkspaceLayout(
     checkedProduct(
       "output words",
       capacities.output,
-      LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
+      INFERENCE_OUTPUT_WORD_LENGTH,
     ),
     limits,
   );
@@ -257,76 +253,76 @@ function createWorkspaceLayout(
 
 export function createInitialState(
   options: Pick<
-    GpuLazuliTypeInferenceOptions,
+    GpuTypeInferenceOptions,
     "surface" | "maximumSteps" | "maximumStepsPerDispatch" | "initialSteps"
   >,
-  metadata: ReturnType<typeof prepareLazuliInferenceShaderMetadata>,
+  metadata: ReturnType<typeof prepareInferenceShaderMetadata>,
   layout: WorkspaceLayout,
   syntheticSemanticSuccess: boolean,
 ): ArrayBuffer {
   const state = new ArrayBuffer(INFERENCE_INTERNAL_STATE_BYTE_LENGTH);
   const words = new DataView(state);
   const set = (word: number, value: number) => words.setUint32(word * WORD_BYTES, value, true);
-  set(LazuliInferenceStateWord.NodeCount, options.surface.nodeCount);
-  set(LazuliInferenceStateWord.DefinitionCount, options.surface.definitionCount);
-  set(LazuliInferenceStateWord.TypeCount, options.surface.typeCount);
-  set(LazuliInferenceStateWord.ConstructorCount, options.surface.constructorCount);
-  set(LazuliInferenceStateWord.SchemaNodeCount, metadata.schemaNodeCount);
-  set(LazuliInferenceStateWord.MainSymbol, options.surface.mainSymbol);
+  set(InferenceStateWord.NodeCount, options.surface.nodeCount);
+  set(InferenceStateWord.DefinitionCount, options.surface.definitionCount);
+  set(InferenceStateWord.TypeCount, options.surface.typeCount);
+  set(InferenceStateWord.ConstructorCount, options.surface.constructorCount);
+  set(InferenceStateWord.SchemaNodeCount, metadata.schemaNodeCount);
+  set(InferenceStateWord.MainSymbol, options.surface.entrySymbol);
   set(
-    LazuliInferenceStateWord.MaximumTransitionsPerDispatch,
+    InferenceStateWord.MaximumTransitionsPerDispatch,
     Math.min(options.maximumStepsPerDispatch, options.maximumSteps - (options.initialSteps ?? 0)),
   );
-  set(LazuliInferenceStateWord.TypeBase, layout.typeBase);
-  set(LazuliInferenceStateWord.TypeCapacity, layout.typeCapacity);
-  set(LazuliInferenceStateWord.EnvironmentBase, layout.environmentBase);
-  set(LazuliInferenceStateWord.EnvironmentCapacity, layout.environmentCapacity);
-  set(LazuliInferenceStateWord.FrameBase, layout.frameBase);
-  set(LazuliInferenceStateWord.FrameCapacity, layout.frameCapacity);
-  set(LazuliInferenceStateWord.RefinementBase, layout.refinementBase);
-  set(LazuliInferenceStateWord.RefinementCapacity, layout.refinementCapacity);
-  set(LazuliInferenceStateWord.ScratchBase, layout.scratchBase);
-  set(LazuliInferenceStateWord.ScratchCapacity, layout.scratchCapacity);
-  set(LazuliInferenceStateWord.OutputCapacity, layout.outputCapacity);
-  set(LazuliInferenceStateWord.DefinitionAnnotationBase, metadata.definitionAnnotationBase);
-  set(LazuliInferenceStateWord.SchemaBase, metadata.schemaBase);
-  set(LazuliInferenceStateWord.TypeParameterBase, metadata.typeParameterBase);
-  set(LazuliInferenceStateWord.TypeParameterCount, metadata.typeParameterCount);
+  set(InferenceStateWord.TypeBase, layout.typeBase);
+  set(InferenceStateWord.TypeCapacity, layout.typeCapacity);
+  set(InferenceStateWord.EnvironmentBase, layout.environmentBase);
+  set(InferenceStateWord.EnvironmentCapacity, layout.environmentCapacity);
+  set(InferenceStateWord.FrameBase, layout.frameBase);
+  set(InferenceStateWord.FrameCapacity, layout.frameCapacity);
+  set(InferenceStateWord.RefinementBase, layout.refinementBase);
+  set(InferenceStateWord.RefinementCapacity, layout.refinementCapacity);
+  set(InferenceStateWord.ScratchBase, layout.scratchBase);
+  set(InferenceStateWord.ScratchCapacity, layout.scratchCapacity);
+  set(InferenceStateWord.OutputCapacity, layout.outputCapacity);
+  set(InferenceStateWord.DefinitionAnnotationBase, metadata.definitionAnnotationBase);
+  set(InferenceStateWord.SchemaBase, metadata.schemaBase);
+  set(InferenceStateWord.TypeParameterBase, metadata.typeParameterBase);
+  set(InferenceStateWord.TypeParameterCount, metadata.typeParameterCount);
   set(
-    LazuliInferenceStateWord.TypeParameterOffsetsBase,
+    InferenceStateWord.TypeParameterOffsetsBase,
     metadata.typeParameterOffsetsBase,
   );
-  set(LazuliInferenceStateWord.ConstructorFieldBase, metadata.constructorFieldBase);
-  set(LazuliInferenceStateWord.ConstructorFieldCount, metadata.constructorFieldCount);
+  set(InferenceStateWord.ConstructorFieldBase, metadata.constructorFieldBase);
+  set(InferenceStateWord.ConstructorFieldCount, metadata.constructorFieldCount);
   set(
-    LazuliInferenceStateWord.ConstructorFieldOffsetsBase,
+    InferenceStateWord.ConstructorFieldOffsetsBase,
     metadata.constructorFieldOffsetsBase,
   );
-  set(LazuliInferenceStateWord.ConstructorResultBase, metadata.constructorResultBase);
-  set(LazuliInferenceStateWord.IndexedMetadataFooterBase, metadata.indexedMetadataFooterBase);
-  set(LazuliInferenceStateWord.UntouchableTypeCutoff, LAZULI_NO_INDEX);
-  set(LazuliInferenceStateWord.IndexedEliminationAllowed, 1);
-  set(LazuliInferenceStateWord.IndexedEliminationRestrictionSymbol, LAZULI_NO_INDEX);
+  set(InferenceStateWord.ConstructorResultBase, metadata.constructorResultBase);
+  set(InferenceStateWord.IndexedMetadataFooterBase, metadata.indexedMetadataFooterBase);
+  set(InferenceStateWord.UntouchableTypeCutoff, NO_INDEX);
+  set(InferenceStateWord.IndexedEliminationAllowed, 1);
+  set(InferenceStateWord.IndexedEliminationRestrictionSymbol, NO_INDEX);
   const initialSteps = syntheticSemanticSuccess ? options.initialSteps ?? 0 : 0;
-  set(LazuliInferenceSchedulerWord.PreviousSemanticSteps, initialSteps);
+  set(InferenceSchedulerWord.PreviousSemanticSteps, initialSteps);
   const setSemantic = (word: number, value: number) =>
-    set(LazuliInferenceSchedulerWord.SemanticState + word, value);
-  setSemantic(LazuliCompilationStateWord.NodeCount, options.surface.nodeCount);
-  setSemantic(LazuliCompilationStateWord.DefinitionCount, options.surface.definitionCount);
-  setSemantic(LazuliCompilationStateWord.TypeCount, options.surface.typeCount);
-  setSemantic(LazuliCompilationStateWord.ConstructorCount, options.surface.constructorCount);
-  setSemantic(LazuliCompilationStateWord.EntrySymbol, options.surface.mainSymbol);
+    set(InferenceSchedulerWord.SemanticState + word, value);
+  setSemantic(CompilationStateWord.NodeCount, options.surface.nodeCount);
+  setSemantic(CompilationStateWord.DefinitionCount, options.surface.definitionCount);
+  setSemantic(CompilationStateWord.TypeCount, options.surface.typeCount);
+  setSemantic(CompilationStateWord.ConstructorCount, options.surface.constructorCount);
+  setSemantic(CompilationStateWord.EntrySymbol, options.surface.entrySymbol);
   setSemantic(
-    LazuliCompilationStateWord.Status,
-    syntheticSemanticSuccess ? LazuliCompilationStatus.Ok : LazuliCompilationStatus.Pending,
+    CompilationStateWord.Status,
+    syntheticSemanticSuccess ? CompilationStatus.Ok : CompilationStatus.Pending,
   );
-  setSemantic(LazuliCompilationStateWord.ErrorSource, LAZULI_NO_INDEX);
-  setSemantic(LazuliCompilationStateWord.ErrorDetail, LAZULI_NO_INDEX);
-  setSemantic(LazuliCompilationStateWord.EntryDefinition, LAZULI_NO_INDEX);
-  setSemantic(LazuliCompilationStateWord.TotalSteps, initialSteps);
-  setSemantic(LazuliCompilationStateWord.MaximumSteps, options.maximumSteps);
+  setSemantic(CompilationStateWord.ErrorSource, NO_INDEX);
+  setSemantic(CompilationStateWord.ErrorDetail, NO_INDEX);
+  setSemantic(CompilationStateWord.EntryDefinition, NO_INDEX);
+  setSemantic(CompilationStateWord.TotalSteps, initialSteps);
+  setSemantic(CompilationStateWord.MaximumSteps, options.maximumSteps);
   setSemantic(
-    LazuliCompilationStateWord.MaximumStepsPerDispatch,
+    CompilationStateWord.MaximumStepsPerDispatch,
     options.maximumStepsPerDispatch,
   );
   return state;
@@ -341,7 +337,7 @@ export function dispatchOutputReadbackCapacity(
     INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY,
   );
   return outputByteLength <= limits.maxBufferSize - INFERENCE_INTERNAL_STATE_BYTE_LENGTH &&
-      outputByteLength <= LAZULI_NO_INDEX - INFERENCE_INTERNAL_STATE_BYTE_LENGTH
+      outputByteLength <= NO_INDEX - INFERENCE_INTERNAL_STATE_BYTE_LENGTH
     ? INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY
     : 0;
 }
@@ -362,12 +358,12 @@ export function inferredTypeOutputByteLength(outputCount: number): number {
   return checkedProduct(
     "inferred type output bytes",
     outputCount,
-    LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
+    INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
   );
 }
 
 export async function createInferenceBuffers(
-  options: GpuLazuliTypeInferenceOptions,
+  options: GpuTypeInferenceOptions,
   metadataWords: Uint32Array,
   layout: WorkspaceLayout,
   initialState: ArrayBuffer,
@@ -387,22 +383,22 @@ export async function createInferenceBuffers(
   let validation: Promise<GPUError | null>;
   try {
     metadataBuffer = options.device.createBuffer({
-      label: "Lazuli type inference schema metadata",
+      label: "type inference schema metadata",
       size: metadataByteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
     });
     workspaceBuffer = options.device.createBuffer({
-      label: "Lazuli type inference workspace",
+      label: "type inference workspace",
       size: workspaceByteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
     outputBuffer = options.device.createBuffer({
-      label: "Lazuli inferred type output",
+      label: "inferred type output",
       size: outputByteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
     stateBuffer = options.device.createBuffer({
-      label: "Lazuli type inference state",
+      label: "type inference state",
       size: INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
@@ -421,7 +417,7 @@ export async function createInferenceBuffers(
     stateBuffer?.destroy();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli type inference buffers (${allocationEvidence}): ${validationError.message}`,
+        `WebGPU rejected type inference buffers (${allocationEvidence}): ${validationError.message}`,
         { cause },
       );
     }
@@ -441,7 +437,7 @@ export async function createInferenceBuffers(
     outputBuffer.destroy();
     stateBuffer.destroy();
     throw new Error(
-      `WebGPU rejected Lazuli type inference buffers (${allocationEvidence}): ${validationError.message}`,
+      `WebGPU rejected type inference buffers (${allocationEvidence}): ${validationError.message}`,
     );
   }
   if (outOfMemoryError !== null) {
@@ -463,7 +459,7 @@ export async function createInferenceBuffers(
     workspaceBuffer?.destroy();
     outputBuffer?.destroy();
     stateBuffer?.destroy();
-    throw new Error("WebGPU did not create Lazuli type inference buffers");
+    throw new Error("WebGPU did not create type inference buffers");
   }
 
   options.device.pushErrorScope("validation");
@@ -489,7 +485,7 @@ export async function createInferenceBuffers(
     stateBuffer.destroy();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli type inference buffer initialization (${allocationEvidence}): ${validationError.message}`,
+        `WebGPU rejected type inference buffer initialization (${allocationEvidence}): ${validationError.message}`,
         { cause },
       );
     }
@@ -502,7 +498,7 @@ export async function createInferenceBuffers(
     outputBuffer.destroy();
     stateBuffer.destroy();
     throw new Error(
-      `WebGPU rejected Lazuli type inference buffer initialization (${allocationEvidence}): ${initializationError.message}`,
+      `WebGPU rejected type inference buffer initialization (${allocationEvidence}): ${initializationError.message}`,
     );
   }
   return {
@@ -536,10 +532,10 @@ export async function createInferenceReadbackBuffer(
     coreNodeByteLength,
   );
   const errorSubject = coreNodeByteLength > 0
-    ? "Lazuli compilation readback"
+    ? "compilation readback"
     : includesOutput
-    ? "Lazuli inferred type readback"
-    : "Lazuli type inference buffers";
+    ? "inferred type readback"
+    : "type inference buffers";
   device.pushErrorScope("validation");
   device.pushErrorScope("out-of-memory");
   let buffer: GPUBuffer | undefined;
@@ -548,10 +544,10 @@ export async function createInferenceReadbackBuffer(
   try {
     buffer = device.createBuffer({
       label: coreNodeByteLength > 0
-        ? "Lazuli compilation state, output, and core readback"
+        ? "compilation state, output, and core readback"
         : includesOutput
-        ? "Lazuli type inference state and output readback"
-        : "Lazuli type inference state readback",
+        ? "type inference state and output readback"
+        : "type inference state readback",
       size,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
@@ -590,10 +586,10 @@ export async function createInferenceReadbackBuffer(
   if (buffer === undefined) {
     throw new Error(
       coreNodeByteLength > 0
-        ? "WebGPU did not create a Lazuli compilation readback"
+        ? "WebGPU did not create a compilation readback"
         : includesOutput
-        ? "WebGPU did not create Lazuli inferred type readback"
-        : "WebGPU did not create Lazuli type inference buffers",
+        ? "WebGPU did not create inferred type readback"
+        : "WebGPU did not create type inference buffers",
     );
   }
   return { ok: true, buffer };
@@ -615,7 +611,7 @@ export async function createOutputReadbackBuffer(
   let validation: Promise<GPUError | null>;
   try {
     buffer = device.createBuffer({
-      label: "Lazuli inferred type readback",
+      label: "inferred type readback",
       size,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
@@ -623,7 +619,7 @@ export async function createOutputReadbackBuffer(
   } catch (cause) {
     const validationError = await device.popErrorScope();
     if (validationError !== null) {
-      throw new Error(`WebGPU rejected Lazuli inferred type readback: ${validationError.message}`, {
+      throw new Error(`WebGPU rejected inferred type readback: ${validationError.message}`, {
         cause,
       });
     }
@@ -632,10 +628,10 @@ export async function createOutputReadbackBuffer(
   const validationError = await validation;
   if (validationError !== null) {
     buffer?.destroy();
-    throw new Error(`WebGPU rejected Lazuli inferred type readback: ${validationError.message}`);
+    throw new Error(`WebGPU rejected inferred type readback: ${validationError.message}`);
   }
   if (buffer === undefined) {
-    throw new Error("WebGPU did not create Lazuli inferred type readback");
+    throw new Error("WebGPU did not create inferred type readback");
   }
   return buffer;
 }
@@ -652,7 +648,7 @@ export async function createInferenceOutputBuffer(
   let validation: Promise<GPUError | null>;
   try {
     buffer = device.createBuffer({
-      label: "Expanded Lazuli inferred type output",
+      label: "Expanded inferred type output",
       size,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
@@ -670,7 +666,7 @@ export async function createInferenceOutputBuffer(
       return { ok: false, byteLength: size, reason: outOfMemoryError.message };
     }
     if (validationError !== null) {
-      throw new Error(`WebGPU rejected expanded Lazuli type output: ${validationError.message}`, {
+      throw new Error(`WebGPU rejected expanded type output: ${validationError.message}`, {
         cause,
       });
     }
@@ -683,9 +679,9 @@ export async function createInferenceOutputBuffer(
   }
   if (validationError !== null) {
     buffer?.destroy();
-    throw new Error(`WebGPU rejected expanded Lazuli type output: ${validationError.message}`);
+    throw new Error(`WebGPU rejected expanded type output: ${validationError.message}`);
   }
-  if (buffer === undefined) throw new Error("WebGPU did not create expanded Lazuli type output");
+  if (buffer === undefined) throw new Error("WebGPU did not create expanded type output");
   return { ok: true, buffer };
 }
 
@@ -699,7 +695,7 @@ export async function createExpandedWorkspace(
   layout: WorkspaceLayout,
   expandedLayout: WorkspaceLayout,
   state: InferenceStateSnapshot,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): Promise<BufferAllocation> {
   const byteLength = storageBytes(expandedLayout.workspaceWordLength);
   device.pushErrorScope("validation");
@@ -709,7 +705,7 @@ export async function createExpandedWorkspace(
   let validation: Promise<GPUError | null>;
   try {
     expandedBuffer = device.createBuffer({
-      label: "Expanded Lazuli type inference workspace",
+      label: "Expanded type inference workspace",
       size: byteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
@@ -728,7 +724,7 @@ export async function createExpandedWorkspace(
     }
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected expanded Lazuli type inference workspace: ${validationError.message}`,
+        `WebGPU rejected expanded type inference workspace: ${validationError.message}`,
         { cause },
       );
     }
@@ -742,18 +738,18 @@ export async function createExpandedWorkspace(
   if (validationError !== null) {
     expandedBuffer?.destroy();
     throw new Error(
-      `WebGPU rejected expanded Lazuli type inference workspace: ${validationError.message}`,
+      `WebGPU rejected expanded type inference workspace: ${validationError.message}`,
     );
   }
   if (expandedBuffer === undefined) {
-    throw new Error("WebGPU did not create expanded Lazuli type inference workspace");
+    throw new Error("WebGPU did not create expanded type inference workspace");
   }
 
   device.pushErrorScope("validation");
   let copyValidation: Promise<GPUError | null>;
   try {
     const commands = device.createCommandEncoder({
-      label: "Expand Lazuli type inference workspace",
+      label: "Expand type inference workspace",
     });
     copyWorkspaceRegion(
       commands,
@@ -762,7 +758,7 @@ export async function createExpandedWorkspace(
       expandedBuffer,
       expandedLayout.typeBase,
       state.typeTop,
-      LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
+      INFERENCE_TYPE_RECORD_WORD_LENGTH,
     );
     copyWorkspaceRegion(
       commands,
@@ -771,7 +767,7 @@ export async function createExpandedWorkspace(
       expandedBuffer,
       expandedLayout.environmentBase,
       state.environmentTop,
-      LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
+      INFERENCE_ENVIRONMENT_WORD_LENGTH,
     );
     copyWorkspaceRegion(
       commands,
@@ -780,7 +776,7 @@ export async function createExpandedWorkspace(
       expandedBuffer,
       expandedLayout.frameBase,
       state.frameTop,
-      LAZULI_INFERENCE_FRAME_WORD_LENGTH,
+      INFERENCE_FRAME_WORD_LENGTH,
     );
     copyWorkspaceRegion(
       commands,
@@ -789,7 +785,7 @@ export async function createExpandedWorkspace(
       expandedBuffer,
       expandedLayout.refinementBase,
       state.refinementTop,
-      LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
+      INFERENCE_REFINEMENT_WORD_LENGTH,
     );
     copyWorkspaceRegion(
       commands,
@@ -807,7 +803,7 @@ export async function createExpandedWorkspace(
     expandedBuffer.destroy();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli workspace growth for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected workspace growth for ${surface.nodeCount} nodes: ${validationError.message}`,
         { cause },
       );
     }
@@ -817,7 +813,7 @@ export async function createExpandedWorkspace(
     const validationError = await copyValidation;
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli workspace growth for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected workspace growth for ${surface.nodeCount} nodes: ${validationError.message}`,
       );
     }
     await device.queue.onSubmittedWorkDone();
@@ -857,11 +853,15 @@ export async function copyOutputForGrowth(
   source: GPUBuffer,
   destination: GPUBuffer,
   outputCount: number,
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
 ): Promise<void> {
   const byteLength = checkedProduct(
     "live output growth bytes",
-    checkedProduct("live output growth words", outputCount, LAZULI_INFERENCE_OUTPUT_WORD_LENGTH),
+    checkedProduct(
+      "live output growth words",
+      outputCount,
+      INFERENCE_OUTPUT_WORD_LENGTH,
+    ),
     WORD_BYTES,
   );
   if (byteLength === 0) return;
@@ -869,7 +869,7 @@ export async function copyOutputForGrowth(
   device.pushErrorScope("validation");
   let validation: Promise<GPUError | null>;
   try {
-    const commands = device.createCommandEncoder({ label: "Expand Lazuli inferred type output" });
+    const commands = device.createCommandEncoder({ label: "Expand inferred type output" });
     commands.copyBufferToBuffer(source, 0, destination, 0, byteLength);
     device.queue.submit([commands.finish()]);
     validation = device.popErrorScope();
@@ -877,7 +877,7 @@ export async function copyOutputForGrowth(
     const validationError = await device.popErrorScope();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli output growth for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected output growth for ${surface.nodeCount} nodes: ${validationError.message}`,
         { cause },
       );
     }
@@ -886,7 +886,7 @@ export async function copyOutputForGrowth(
   const validationError = await validation;
   if (validationError !== null) {
     throw new Error(
-      `WebGPU rejected Lazuli output growth for ${surface.nodeCount} nodes: ${validationError.message}`,
+      `WebGPU rejected output growth for ${surface.nodeCount} nodes: ${validationError.message}`,
     );
   }
   await device.queue.onSubmittedWorkDone();
@@ -899,15 +899,15 @@ export function resumeOutputAfterGrowth(
 ): void {
   for (
     const [word, value] of [
-      [LazuliInferenceStateWord.OutputCapacity, outputCapacity],
-      [LazuliInferenceStateWord.Status, LazuliInferenceStatus.Pending],
-      [LazuliInferenceStateWord.ErrorCode, LazuliInferenceDiagnosticCode.None],
-      [LazuliInferenceStateWord.ErrorStartByte, 0],
-      [LazuliInferenceStateWord.ErrorEndByte, 0],
-      [LazuliInferenceStateWord.ErrorDetail, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorOperand0, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorOperand1, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorContext, 0],
+      [InferenceStateWord.OutputCapacity, outputCapacity],
+      [InferenceStateWord.Status, InferenceStatus.Pending],
+      [InferenceStateWord.ErrorCode, InferenceDiagnosticCode.None],
+      [InferenceStateWord.ErrorStartByte, 0],
+      [InferenceStateWord.ErrorEndByte, 0],
+      [InferenceStateWord.ErrorDetail, NO_INDEX],
+      [InferenceStateWord.ErrorOperand0, NO_INDEX],
+      [InferenceStateWord.ErrorOperand1, NO_INDEX],
+      [InferenceStateWord.ErrorContext, 0],
     ] as const
   ) {
     writeStateWord(device, stateBuffer, word, value);
@@ -915,24 +915,24 @@ export function resumeOutputAfterGrowth(
 }
 
 export function isWorkspaceArenaExhaustion(errorCode: number): boolean {
-  return errorCode === LazuliInferenceDiagnosticCode.TypeArenaExhausted ||
-    errorCode === LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted ||
-    errorCode === LazuliInferenceDiagnosticCode.FrameArenaExhausted ||
-    errorCode === LazuliInferenceDiagnosticCode.RefinementArenaExhausted ||
-    errorCode === LazuliInferenceDiagnosticCode.ScratchArenaExhausted;
+  return errorCode === InferenceDiagnosticCode.TypeArenaExhausted ||
+    errorCode === InferenceDiagnosticCode.EnvironmentArenaExhausted ||
+    errorCode === InferenceDiagnosticCode.FrameArenaExhausted ||
+    errorCode === InferenceDiagnosticCode.RefinementArenaExhausted ||
+    errorCode === InferenceDiagnosticCode.ScratchArenaExhausted;
 }
 
 export function workspaceArenaCapacity(layout: WorkspaceLayout, errorCode: number): number {
   switch (errorCode) {
-    case LazuliInferenceDiagnosticCode.TypeArenaExhausted:
+    case InferenceDiagnosticCode.TypeArenaExhausted:
       return layout.typeCapacity;
-    case LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted:
+    case InferenceDiagnosticCode.EnvironmentArenaExhausted:
       return layout.environmentCapacity;
-    case LazuliInferenceDiagnosticCode.FrameArenaExhausted:
+    case InferenceDiagnosticCode.FrameArenaExhausted:
       return layout.frameCapacity;
-    case LazuliInferenceDiagnosticCode.RefinementArenaExhausted:
+    case InferenceDiagnosticCode.RefinementArenaExhausted:
       return layout.refinementCapacity;
-    case LazuliInferenceDiagnosticCode.ScratchArenaExhausted:
+    case InferenceDiagnosticCode.ScratchArenaExhausted:
       return layout.scratchCapacity;
     default:
       throw new Error(`cannot read capacity for non-workspace arena error ${errorCode}`);
@@ -951,19 +951,19 @@ export function growWorkspaceLayout(
     checkedProduct(`${inferenceArenaName(errorCode)} arena growth`, currentCapacity, 2),
   );
   return createWorkspaceLayout({
-    type: errorCode === LazuliInferenceDiagnosticCode.TypeArenaExhausted
+    type: errorCode === InferenceDiagnosticCode.TypeArenaExhausted
       ? doubledCapacity
       : layout.typeCapacity,
-    environment: errorCode === LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted
+    environment: errorCode === InferenceDiagnosticCode.EnvironmentArenaExhausted
       ? doubledCapacity
       : layout.environmentCapacity,
-    frame: errorCode === LazuliInferenceDiagnosticCode.FrameArenaExhausted
+    frame: errorCode === InferenceDiagnosticCode.FrameArenaExhausted
       ? doubledCapacity
       : layout.frameCapacity,
-    refinement: errorCode === LazuliInferenceDiagnosticCode.RefinementArenaExhausted
+    refinement: errorCode === InferenceDiagnosticCode.RefinementArenaExhausted
       ? doubledCapacity
       : layout.refinementCapacity,
-    scratch: errorCode === LazuliInferenceDiagnosticCode.ScratchArenaExhausted
+    scratch: errorCode === InferenceDiagnosticCode.ScratchArenaExhausted
       ? doubledCapacity
       : layout.scratchCapacity,
     output: outputCapacity,
@@ -977,24 +977,24 @@ export function resumeWorkspaceAfterGrowth(
 ): void {
   for (
     const [word, value] of [
-      [LazuliInferenceStateWord.TypeBase, layout.typeBase],
-      [LazuliInferenceStateWord.TypeCapacity, layout.typeCapacity],
-      [LazuliInferenceStateWord.EnvironmentBase, layout.environmentBase],
-      [LazuliInferenceStateWord.EnvironmentCapacity, layout.environmentCapacity],
-      [LazuliInferenceStateWord.FrameBase, layout.frameBase],
-      [LazuliInferenceStateWord.FrameCapacity, layout.frameCapacity],
-      [LazuliInferenceStateWord.RefinementBase, layout.refinementBase],
-      [LazuliInferenceStateWord.RefinementCapacity, layout.refinementCapacity],
-      [LazuliInferenceStateWord.ScratchBase, layout.scratchBase],
-      [LazuliInferenceStateWord.ScratchCapacity, layout.scratchCapacity],
-      [LazuliInferenceStateWord.Status, LazuliInferenceStatus.Pending],
-      [LazuliInferenceStateWord.ErrorCode, LazuliInferenceDiagnosticCode.None],
-      [LazuliInferenceStateWord.ErrorStartByte, 0],
-      [LazuliInferenceStateWord.ErrorEndByte, 0],
-      [LazuliInferenceStateWord.ErrorDetail, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorOperand0, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorOperand1, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorContext, 0],
+      [InferenceStateWord.TypeBase, layout.typeBase],
+      [InferenceStateWord.TypeCapacity, layout.typeCapacity],
+      [InferenceStateWord.EnvironmentBase, layout.environmentBase],
+      [InferenceStateWord.EnvironmentCapacity, layout.environmentCapacity],
+      [InferenceStateWord.FrameBase, layout.frameBase],
+      [InferenceStateWord.FrameCapacity, layout.frameCapacity],
+      [InferenceStateWord.RefinementBase, layout.refinementBase],
+      [InferenceStateWord.RefinementCapacity, layout.refinementCapacity],
+      [InferenceStateWord.ScratchBase, layout.scratchBase],
+      [InferenceStateWord.ScratchCapacity, layout.scratchCapacity],
+      [InferenceStateWord.Status, InferenceStatus.Pending],
+      [InferenceStateWord.ErrorCode, InferenceDiagnosticCode.None],
+      [InferenceStateWord.ErrorStartByte, 0],
+      [InferenceStateWord.ErrorEndByte, 0],
+      [InferenceStateWord.ErrorDetail, NO_INDEX],
+      [InferenceStateWord.ErrorOperand0, NO_INDEX],
+      [InferenceStateWord.ErrorOperand1, NO_INDEX],
+      [InferenceStateWord.ErrorContext, 0],
     ] as const
   ) {
     writeStateWord(device, stateBuffer, word, value);
@@ -1007,13 +1007,13 @@ export function discardGrowthTransition(
   state: InferenceStateSnapshot,
 ): number {
   if (state.transitions === 0) {
-    throw new Error("GPU Lazuli type inference exhausted an arena before its first transition");
+    throw new Error("GPU type inference exhausted an arena before its first transition");
   }
   const resumedTransitions = state.transitions - 1;
   writeStateWord(
     device,
     stateBuffer,
-    LazuliInferenceStateWord.Transitions,
+    InferenceStateWord.Transitions,
     resumedTransitions,
   );
   return resumedTransitions;
@@ -1032,17 +1032,17 @@ export function writeStateWord(
 
 export function inferenceArenaName(errorCode: number): string {
   switch (errorCode) {
-    case LazuliInferenceDiagnosticCode.TypeArenaExhausted:
+    case InferenceDiagnosticCode.TypeArenaExhausted:
       return "type";
-    case LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted:
+    case InferenceDiagnosticCode.EnvironmentArenaExhausted:
       return "environment";
-    case LazuliInferenceDiagnosticCode.FrameArenaExhausted:
+    case InferenceDiagnosticCode.FrameArenaExhausted:
       return "frame";
-    case LazuliInferenceDiagnosticCode.RefinementArenaExhausted:
+    case InferenceDiagnosticCode.RefinementArenaExhausted:
       return "refinement";
-    case LazuliInferenceDiagnosticCode.ScratchArenaExhausted:
+    case InferenceDiagnosticCode.ScratchArenaExhausted:
       return "scratch";
-    case LazuliInferenceDiagnosticCode.OutputArenaExhausted:
+    case InferenceDiagnosticCode.OutputArenaExhausted:
       return "output";
     default:
       return `unknown (${errorCode})`;
@@ -1051,7 +1051,7 @@ export function inferenceArenaName(errorCode: number): string {
 
 function checkedSum(name: string, ...values: readonly number[]): number {
   const result = values.reduce((sum, value) => sum + value, 0);
-  if (!Number.isSafeInteger(result) || result < 0 || result > LAZULI_NO_INDEX) {
+  if (!Number.isSafeInteger(result) || result < 0 || result > NO_INDEX) {
     throw new RangeError(`${name} cannot be represented as a u32: ${result}`);
   }
   return result;
@@ -1059,7 +1059,7 @@ function checkedSum(name: string, ...values: readonly number[]): number {
 
 export function checkedProduct(name: string, left: number, right: number): number {
   const result = left * right;
-  if (!Number.isSafeInteger(result) || result < 0 || result > LAZULI_NO_INDEX) {
+  if (!Number.isSafeInteger(result) || result < 0 || result > NO_INDEX) {
     throw new RangeError(`${name} cannot be represented as a u32: ${left} * ${right}`);
   }
   return result;

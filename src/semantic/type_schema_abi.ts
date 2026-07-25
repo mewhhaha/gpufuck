@@ -1,28 +1,28 @@
 import {
-  type EncodedLazuliSurface,
-  LAZULI_ABI_VERSION,
-  LAZULI_CONSTRUCTOR_WORD_LENGTH,
-  LAZULI_DEFINITION_WORD_LENGTH,
-  LAZULI_MAXIMUM_PARSE_DEPTH,
-  LAZULI_NO_INDEX,
-  LAZULI_TYPE_WORD_LENGTH,
-  LazuliConstructorWord,
-  type LazuliType,
-  type LazuliTypeSchema,
-  LazuliTypeWord,
+  AlgebraicTypeWord,
+  CONSTRUCTOR_WORD_LENGTH,
+  ConstructorWord,
+  DEFINITION_WORD_LENGTH,
+  type EncodedSemanticSurface,
+  MAXIMUM_PARSE_DEPTH,
+  MODULE_ABI_VERSION,
+  NO_INDEX,
+  type Type,
+  TYPE_WORD_LENGTH,
+  type TypeSchema,
 } from "./abi.ts";
 
-/** The schema buffer accompanies version 5 of the Lazuli surface ABI. */
-export const LAZULI_TYPE_SCHEMA_ABI_VERSION = LAZULI_ABI_VERSION;
-export const LAZULI_TYPE_SCHEMA_WORD_LENGTH = 6;
-export const LAZULI_TYPE_SCHEMA_BYTE_LENGTH = LAZULI_TYPE_SCHEMA_WORD_LENGTH *
+/** The schema buffer accompanies version 5 of the surface ABI. */
+export const TYPE_SCHEMA_ABI_VERSION = MODULE_ABI_VERSION;
+export const TYPE_SCHEMA_WORD_LENGTH = 6;
+export const TYPE_SCHEMA_BYTE_LENGTH = TYPE_SCHEMA_WORD_LENGTH *
   Uint32Array.BYTES_PER_ELEMENT;
-export const LAZULI_TYPE_SCHEMA_METADATA_ARRAY_COUNT = 7;
-export const LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH = 2 +
-  LAZULI_TYPE_SCHEMA_METADATA_ARRAY_COUNT * 2;
+export const TYPE_SCHEMA_METADATA_ARRAY_COUNT = 7;
+export const TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH = 2 +
+  TYPE_SCHEMA_METADATA_ARRAY_COUNT * 2;
 
 /** Word positions for one compact, linked-preorder type-schema record. */
-export const LazuliTypeSchemaWord = {
+export const TypeSchemaWord = {
   Tag: 0,
   Symbol: 1,
   FirstChild: 2,
@@ -32,7 +32,7 @@ export const LazuliTypeSchemaWord = {
 } as const;
 
 /** Header positions for the single schema metadata storage-buffer binding. */
-export const LazuliTypeSchemaMetadataWord = {
+export const TypeSchemaMetadataWord = {
   AbiVersion: 0,
   HeaderWordLength: 1,
   SchemaWordsOffset: 2,
@@ -53,9 +53,9 @@ export const LazuliTypeSchemaMetadataWord = {
 
 /**
  * Tags stored in `schemaWords`. `Symbol` holds a named-type surface symbol or a schema
- * parameter ID; a missing child or sibling is represented by `LAZULI_NO_INDEX`.
+ * parameter ID; a missing child or sibling is represented by `NO_INDEX`.
  */
-export const LazuliTypeSchemaTag = {
+export const TypeSchemaTag = {
   Integer: 1,
   Boolean: 2,
   Unit: 3,
@@ -69,17 +69,17 @@ export const LazuliTypeSchemaTag = {
   Float64: 11,
 } as const;
 
-export type LazuliTypeSchemaTag = (typeof LazuliTypeSchemaTag)[keyof typeof LazuliTypeSchemaTag];
+export type TypeSchemaTag = (typeof TypeSchemaTag)[keyof typeof TypeSchemaTag];
 
-/** Numeric buffers ready to upload alongside an ABI-v5 Lazuli surface. */
-export interface FlattenedLazuliTypeSchemas {
+/** Numeric buffers ready to upload alongside an ABI-v5 surface. */
+export interface FlattenedTypeSchemas {
   /** One GPU-uploadable buffer: a fixed header followed by the seven logical arrays below. */
   readonly metadataWords: Uint32Array;
   /** Surface symbol names followed by synthetic identifiers used only by schema records. */
   readonly identifierNames: readonly string[];
-  /** Linked-preorder records, each `LAZULI_TYPE_SCHEMA_WORD_LENGTH` words long. */
+  /** Linked-preorder records, each `TYPE_SCHEMA_WORD_LENGTH` words long. */
   readonly schemaWords: Uint32Array;
-  /** One schema root per encoded definition, or `LAZULI_NO_INDEX` when unannotated. */
+  /** One schema root per encoded definition, or `NO_INDEX` when unannotated. */
   readonly definitionAnnotationRoots: Uint32Array;
   /** Prefix offsets into `typeParameterSymbols`, one entry for every encoded type plus one. */
   readonly typeParameterOffsets: Uint32Array;
@@ -93,8 +93,8 @@ export interface FlattenedLazuliTypeSchemas {
   readonly constructorResultRoots: Uint32Array;
 }
 
-/** A portable representation of one inferred, concrete Lazuli type. */
-export interface SerializedLazuliType {
+/** A portable representation of one inferred, concrete type. */
+export interface SerializedType {
   readonly schemaWords: Uint32Array;
   readonly root: number;
 }
@@ -104,9 +104,9 @@ export interface SerializedLazuliType {
  * symbol IDs as `surface.nodeWords`; parameter IDs are synthetic when a frontend-built-in
  * declaration did not intern its parameter spelling.
  */
-export function flattenLazuliTypeSchemas(
-  surface: EncodedLazuliSurface,
-): FlattenedLazuliTypeSchemas {
+export function flattenTypeSchemas(
+  surface: EncodedSemanticSurface,
+): FlattenedTypeSchemas {
   const counts = validateSurfaceShape(surface);
   const identifiers = new TypeSchemaIdentifiers(
     surface.symbolNames,
@@ -115,7 +115,7 @@ export function flattenLazuliTypeSchemas(
   const schemaEncoder = new TypeSchemaEncoder(identifiers);
 
   const definitionAnnotationRoots = new Uint32Array(counts.definitionCount);
-  definitionAnnotationRoots.fill(LAZULI_NO_INDEX);
+  definitionAnnotationRoots.fill(NO_INDEX);
 
   const typeParameterOffsets: number[] = [0];
   const typeParameterSymbols: number[] = [];
@@ -127,7 +127,7 @@ export function flattenLazuliTypeSchemas(
   for (let typeIndex = 0; typeIndex < counts.typeCount; typeIndex++) {
     const declaration = surface.typeDeclarations[typeIndex];
     if (declaration === undefined) {
-      throw new Error(`Lazuli type metadata omitted type ${typeIndex}.`);
+      throw new Error(`type metadata omitted type ${typeIndex}.`);
     }
     validateTypeDeclaration(
       surface,
@@ -147,7 +147,7 @@ export function flattenLazuliTypeSchemas(
         const field = constructor.fields[fieldIndex];
         if (field === undefined) {
           throw new Error(
-            `Lazuli type ${JSON.stringify(declaration.name)} constructor ${
+            `type ${JSON.stringify(declaration.name)} constructor ${
               JSON.stringify(constructor.name)
             } omitted field ${fieldIndex}.`,
           );
@@ -180,14 +180,14 @@ export function flattenLazuliTypeSchemas(
 
   if (constructorIndex !== counts.constructorCount) {
     throw new Error(
-      `Lazuli type metadata described ${constructorIndex} constructors; the surface encodes ${counts.constructorCount}.`,
+      `type metadata described ${constructorIndex} constructors; the surface encodes ${counts.constructorCount}.`,
     );
   }
 
   for (let definitionIndex = 0; definitionIndex < counts.definitionCount; definitionIndex++) {
     const definitionType = surface.definitionTypes[definitionIndex];
     if (definitionType === undefined) {
-      throw new Error(`Lazuli type metadata omitted definition ${definitionIndex}.`);
+      throw new Error(`type metadata omitted definition ${definitionIndex}.`);
     }
     if (definitionType.annotation !== null) {
       validateHigherRankDefinitionSchema(
@@ -213,11 +213,11 @@ export function flattenLazuliTypeSchemas(
   ], identifiers.names);
 }
 
-function validateHigherRankDefinitionSchema(schema: LazuliTypeSchema, context: string): void {
+function validateHigherRankDefinitionSchema(schema: TypeSchema, context: string): void {
   const forallNames = new Set<string>();
   const freeParameters = new Set<string>();
   const visit = (
-    current: LazuliTypeSchema,
+    current: TypeSchema,
     forallAllowed: boolean,
     bound: ReadonlySet<string>,
   ): void => {
@@ -282,7 +282,7 @@ function validateHigherRankDefinitionSchema(schema: LazuliTypeSchema, context: s
   }
 }
 
-function containsForall(schema: LazuliTypeSchema): boolean {
+function containsForall(schema: TypeSchema): boolean {
   switch (schema.kind) {
     case "forall":
       return true;
@@ -304,10 +304,10 @@ function containsForall(schema: LazuliTypeSchema): boolean {
 }
 
 /** Serializes a concrete inferred type using the same records as `schemaWords`. */
-export function serializeLazuliType(
-  type: LazuliType,
+export function serializeType(
+  type: Type,
   symbolNames: readonly string[],
-): SerializedLazuliType {
+): SerializedType {
   const identifiers = new TypeSchemaIdentifiers(symbolNames);
   const encoder = new TypeSchemaEncoder(identifiers);
   const root = encoder.encode(type, "inferred type");
@@ -315,7 +315,7 @@ export function serializeLazuliType(
     throw new Error(
       `inferred type references named type ${
         JSON.stringify(identifiers.names[symbolNames.length])
-      }, which is absent from the Lazuli symbol table`,
+      }, which is absent from the symbol table`,
     );
   }
   return Object.freeze({ schemaWords: Uint32Array.from(encoder.words), root });
@@ -323,216 +323,224 @@ export function serializeLazuliType(
 
 /**
  * Decodes one concrete inferred type from a schema buffer. Parameter-tagged records are
- * rejected because an inferred `LazuliType` cannot contain a type parameter.
+ * rejected because an inferred `Type` cannot contain a type parameter.
  */
-export function decodeLazuliType(
+export function decodeType(
   schemaWords: Uint32Array,
   root: number,
   symbolNames: readonly string[],
-): LazuliType {
-  return decodeLazuliTypeRecords(schemaWords, root, symbolNames, false) as LazuliType;
+): Type {
+  return decodeTypeRecords(schemaWords, root, symbolNames, false) as Type;
 }
 
 /** Decodes one possibly-parameterized schema from the canonical linked-preorder records. */
-export function decodeLazuliTypeSchema(
+export function decodeTypeSchema(
   schemaWords: Uint32Array,
   root: number,
   identifierNames: readonly string[],
-): LazuliTypeSchema {
-  return decodeLazuliTypeRecords(schemaWords, root, identifierNames, true);
+): TypeSchema {
+  return decodeTypeRecords(schemaWords, root, identifierNames, true);
 }
 
-function decodeLazuliTypeRecords(
+function decodeTypeRecords(
   schemaWords: Uint32Array,
   root: number,
   identifierNames: readonly string[],
   allowParameters: boolean,
-): LazuliTypeSchema {
-  if (schemaWords.length % LAZULI_TYPE_SCHEMA_WORD_LENGTH !== 0) {
+): TypeSchema {
+  if (schemaWords.length % TYPE_SCHEMA_WORD_LENGTH !== 0) {
     throw new Error(
-      `Lazuli type schema has ${schemaWords.length} words, not a multiple of ${LAZULI_TYPE_SCHEMA_WORD_LENGTH}.`,
+      `type schema has ${schemaWords.length} words, not a multiple of ${TYPE_SCHEMA_WORD_LENGTH}.`,
     );
   }
-  if (root === LAZULI_NO_INDEX) {
-    throw new Error("Lazuli type schema root must not be LAZULI_NO_INDEX.");
+  if (root === NO_INDEX) {
+    throw new Error("type schema root must not be NO_INDEX.");
   }
 
-  const recordCount = schemaWords.length / LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+  const recordCount = schemaWords.length / TYPE_SCHEMA_WORD_LENGTH;
   const used = new Set<number>();
   const active = new Set<number>();
-  const decode = (index: number, depth: number): LazuliTypeSchema => {
-    if (depth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+  const decode = (index: number, depth: number): TypeSchema => {
+    if (depth > MAXIMUM_PARSE_DEPTH) {
       throw new Error(
-        `Lazuli type schema exceeds the ABI nesting limit of ${LAZULI_MAXIMUM_PARSE_DEPTH} at record ${index}.`,
+        `type schema exceeds the ABI nesting limit of ${MAXIMUM_PARSE_DEPTH} at record ${index}.`,
       );
     }
     if (!Number.isInteger(index) || index < 0 || index >= recordCount) {
       throw new Error(
-        `Lazuli type schema references record ${index}; it has ${recordCount} records.`,
+        `type schema references record ${index}; it has ${recordCount} records.`,
       );
     }
     if (active.has(index)) {
-      throw new Error(`Lazuli type schema contains a cycle through record ${index}.`);
+      throw new Error(`type schema contains a cycle through record ${index}.`);
     }
     if (used.has(index)) {
-      throw new Error(`Lazuli type schema record ${index} is referenced more than once.`);
+      throw new Error(`type schema record ${index} is referenced more than once.`);
     }
     used.add(index);
     active.add(index);
 
     try {
-      const offset = index * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-      const tag = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.Tag, index);
-      const symbol = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.Symbol, index);
-      const firstChild = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.FirstChild, index);
-      const startByte = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.StartByte, index);
-      const endByte = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.EndByte, index);
+      const offset = index * TYPE_SCHEMA_WORD_LENGTH;
+      const tag = requiredWord(schemaWords, offset + TypeSchemaWord.Tag, index);
+      const symbol = requiredWord(schemaWords, offset + TypeSchemaWord.Symbol, index);
+      const firstChild = requiredWord(
+        schemaWords,
+        offset + TypeSchemaWord.FirstChild,
+        index,
+      );
+      const startByte = requiredWord(
+        schemaWords,
+        offset + TypeSchemaWord.StartByte,
+        index,
+      );
+      const endByte = requiredWord(schemaWords, offset + TypeSchemaWord.EndByte, index);
       const isSyntheticResultRoot = depth === 0 &&
-        startByte === LAZULI_NO_INDEX && endByte === LAZULI_NO_INDEX;
+        startByte === NO_INDEX && endByte === NO_INDEX;
       if (startByte > endByte && !isSyntheticResultRoot) {
         throw new Error(
-          `Lazuli type schema record ${index} starts at byte ${startByte} after it ends at byte ${endByte}.`,
+          `type schema record ${index} starts at byte ${startByte} after it ends at byte ${endByte}.`,
         );
       }
-      const children = (expectedCount: number | null): LazuliTypeSchema[] => {
-        const values: LazuliTypeSchema[] = [];
+      const children = (expectedCount: number | null): TypeSchema[] => {
+        const values: TypeSchema[] = [];
         const siblings = new Set<number>();
         let child = firstChild;
-        while (child !== LAZULI_NO_INDEX) {
+        while (child !== NO_INDEX) {
           if (siblings.has(child)) {
             throw new Error(
-              `Lazuli type schema contains a sibling cycle through record ${child}.`,
+              `type schema contains a sibling cycle through record ${child}.`,
             );
           }
           siblings.add(child);
           if (expectedCount !== null && values.length === expectedCount) {
             throw new Error(
-              `Lazuli type schema record ${index} has more than ${expectedCount} children.`,
+              `type schema record ${index} has more than ${expectedCount} children.`,
             );
           }
           if (child <= index && !active.has(child) && !used.has(child)) {
             throw new Error(
-              `Lazuli type schema record ${index} has non-forward child ${child}.`,
+              `type schema record ${index} has non-forward child ${child}.`,
             );
           }
           values.push(decode(child, depth + 1));
-          const childOffset = child * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+          const childOffset = child * TYPE_SCHEMA_WORD_LENGTH;
           const sibling = requiredWord(
             schemaWords,
-            childOffset + LazuliTypeSchemaWord.NextSibling,
+            childOffset + TypeSchemaWord.NextSibling,
             child,
           );
-          if (sibling !== LAZULI_NO_INDEX && sibling <= child) {
+          if (sibling !== NO_INDEX && sibling <= child) {
             if (active.has(sibling) || siblings.has(sibling)) {
               throw new Error(
-                `Lazuli type schema contains a sibling cycle through record ${sibling}.`,
+                `type schema contains a sibling cycle through record ${sibling}.`,
               );
             }
             if (used.has(sibling)) {
               throw new Error(
-                `Lazuli type schema record ${sibling} is referenced more than once.`,
+                `type schema record ${sibling} is referenced more than once.`,
               );
             }
             throw new Error(
-              `Lazuli type schema record ${child} has non-forward next sibling ${sibling}.`,
+              `type schema record ${child} has non-forward next sibling ${sibling}.`,
             );
           }
           child = sibling;
         }
         if (expectedCount !== null && values.length !== expectedCount) {
           throw new Error(
-            `Lazuli type schema record ${index} has ${values.length} children; expected ${expectedCount}.`,
+            `type schema record ${index} has ${values.length} children; expected ${expectedCount}.`,
           );
         }
         return values;
       };
       const noChildren = (): void => {
-        if (firstChild !== LAZULI_NO_INDEX) {
-          throw new Error(`Lazuli type schema record ${index} must not have children.`);
+        if (firstChild !== NO_INDEX) {
+          throw new Error(`type schema record ${index} must not have children.`);
         }
       };
       const noSymbol = (): void => {
-        if (symbol !== LAZULI_NO_INDEX) {
+        if (symbol !== NO_INDEX) {
           throw new Error(
-            `Lazuli type schema record ${index} must use LAZULI_NO_INDEX as its symbol.`,
+            `type schema record ${index} must use NO_INDEX as its symbol.`,
           );
         }
       };
 
       switch (tag) {
-        case LazuliTypeSchemaTag.Integer:
+        case TypeSchemaTag.Integer:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "integer" });
-        case LazuliTypeSchemaTag.SignedInteger64:
+        case TypeSchemaTag.SignedInteger64:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "signed-integer-64" });
-        case LazuliTypeSchemaTag.Float32:
+        case TypeSchemaTag.Float32:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "float-32" });
-        case LazuliTypeSchemaTag.Float64:
+        case TypeSchemaTag.Float64:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "float-64" });
-        case LazuliTypeSchemaTag.Boolean:
+        case TypeSchemaTag.Boolean:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "boolean" });
-        case LazuliTypeSchemaTag.Unit:
+        case TypeSchemaTag.Unit:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "unit" });
-        case LazuliTypeSchemaTag.Parameter: {
+        case TypeSchemaTag.Parameter: {
           const name = symbolName(identifierNames, symbol, index);
           noChildren();
           if (!allowParameters) {
-            throw new Error(`Lazuli inferred type record ${index} must not be a parameter.`);
+            throw new Error(`inferred type record ${index} must not be a parameter.`);
           }
           return Object.freeze({ kind: "parameter", name });
         }
-        case LazuliTypeSchemaTag.Tuple: {
+        case TypeSchemaTag.Tuple: {
           noSymbol();
           const values = children(2);
           const left = values[0];
           const right = values[1];
           if (left === undefined || right === undefined) {
-            throw new Error(`Lazuli tuple schema record ${index} omitted a child.`);
+            throw new Error(`tuple schema record ${index} omitted a child.`);
           }
           return Object.freeze({
             kind: "tuple",
             values: Object.freeze([left, right]) as readonly [
-              LazuliTypeSchema,
-              LazuliTypeSchema,
+              TypeSchema,
+              TypeSchema,
             ],
           });
         }
-        case LazuliTypeSchemaTag.Named:
+        case TypeSchemaTag.Named:
           return Object.freeze({
             kind: "named",
             name: symbolName(identifierNames, symbol, index),
             arguments: Object.freeze(children(null)),
           });
-        case LazuliTypeSchemaTag.Function: {
+        case TypeSchemaTag.Function: {
           noSymbol();
           const values = children(2);
           const parameter = values[0];
           const result = values[1];
           if (parameter === undefined || result === undefined) {
-            throw new Error(`Lazuli function schema record ${index} omitted a child.`);
+            throw new Error(`function schema record ${index} omitted a child.`);
           }
           return Object.freeze({ kind: "function", parameter, result });
         }
-        case LazuliTypeSchemaTag.Forall: {
+        case TypeSchemaTag.Forall: {
           const parameter = symbolName(identifierNames, symbol, index);
           const values = children(1);
           const body = values[0];
           if (body === undefined) {
-            throw new Error(`Lazuli forall schema record ${index} omitted its body.`);
+            throw new Error(`forall schema record ${index} omitted its body.`);
           }
           if (!allowParameters) {
-            throw new Error(`Lazuli inferred type record ${index} must not be a forall.`);
+            throw new Error(`inferred type record ${index} must not be a forall.`);
           }
           if (body.kind === "forall") {
             return Object.freeze({
@@ -548,7 +556,7 @@ function decodeLazuliTypeRecords(
           });
         }
         default:
-          throw new Error(`Lazuli type schema record ${index} has unsupported tag ${tag}.`);
+          throw new Error(`type schema record ${index} has unsupported tag ${tag}.`);
       }
     } finally {
       active.delete(index);
@@ -556,14 +564,14 @@ function decodeLazuliTypeRecords(
   };
 
   const decoded = decode(root, 0);
-  const rootOffset = root * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+  const rootOffset = root * TYPE_SCHEMA_WORD_LENGTH;
   const rootSibling = requiredWord(
     schemaWords,
-    rootOffset + LazuliTypeSchemaWord.NextSibling,
+    rootOffset + TypeSchemaWord.NextSibling,
     root,
   );
-  if (rootSibling !== LAZULI_NO_INDEX) {
-    throw new Error(`Lazuli type schema root ${root} must not have a next sibling.`);
+  if (rootSibling !== NO_INDEX) {
+    throw new Error(`type schema root ${root} must not have a next sibling.`);
   }
   return decoded;
 }
@@ -577,7 +585,7 @@ class TypeSchemaEncoder {
   }
 
   encode(
-    type: LazuliTypeSchema | LazuliType,
+    type: TypeSchema | Type,
     context: string,
     options: {
       readonly implicitNamedParameters: boolean;
@@ -588,7 +596,7 @@ class TypeSchemaEncoder {
   }
 
   private encodeAtDepth(
-    type: LazuliTypeSchema | LazuliType,
+    type: TypeSchema | Type,
     context: string,
     depth: number,
     inheritedSpan: { readonly startByte: number; readonly endByte: number },
@@ -597,44 +605,48 @@ class TypeSchemaEncoder {
       readonly syntheticResultRoot: boolean;
     },
   ): number {
-    if (depth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+    if (depth > MAXIMUM_PARSE_DEPTH) {
       throw new Error(
-        `${context} exceeds the ABI nesting limit of ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+        `${context} exceeds the ABI nesting limit of ${MAXIMUM_PARSE_DEPTH}.`,
       );
     }
     if (type === null || typeof type !== "object" || !("kind" in type)) {
-      throw new Error(`${context} is not a Lazuli type schema.`);
+      throw new Error(`${context} is not a type schema.`);
     }
-    const index = this.words.length / LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-    if (index >= LAZULI_NO_INDEX) {
-      throw new Error(`${context} exceeds the maximum schema-record index ${LAZULI_NO_INDEX - 1}.`);
+    const index = this.words.length / TYPE_SCHEMA_WORD_LENGTH;
+    if (index >= NO_INDEX) {
+      throw new Error(`${context} exceeds the maximum schema-record index ${NO_INDEX - 1}.`);
     }
     const declaredSpan = typeSchemaSpan(type, context, inheritedSpan);
     const span = options.syntheticResultRoot && depth === 0
-      ? { startByte: LAZULI_NO_INDEX, endByte: LAZULI_NO_INDEX }
+      ? { startByte: NO_INDEX, endByte: NO_INDEX }
       : declaredSpan;
 
-    const write = (tag: LazuliTypeSchemaTag, symbol = LAZULI_NO_INDEX): number => {
+    const write = (tag: TypeSchemaTag, symbol = NO_INDEX): number => {
       this.words.push(
         tag,
         symbol,
-        LAZULI_NO_INDEX,
-        LAZULI_NO_INDEX,
+        NO_INDEX,
+        NO_INDEX,
         span.startByte,
         span.endByte,
       );
       return index;
     };
-    const attachChildren = (children: readonly (LazuliTypeSchema | LazuliType)[]): void => {
-      let previous = LAZULI_NO_INDEX;
+    const attachChildren = (children: readonly (TypeSchema | Type)[]): void => {
+      let previous = NO_INDEX;
       for (const child of children) {
         const childIndex = this.encodeAtDepth(child, context, depth + 1, declaredSpan, options);
-        if (previous === LAZULI_NO_INDEX) {
-          this.words[index * LAZULI_TYPE_SCHEMA_WORD_LENGTH + LazuliTypeSchemaWord.FirstChild] =
-            childIndex;
+        if (previous === NO_INDEX) {
+          this
+            .words[
+              index * TYPE_SCHEMA_WORD_LENGTH + TypeSchemaWord.FirstChild
+            ] = childIndex;
         } else {
-          this.words[previous * LAZULI_TYPE_SCHEMA_WORD_LENGTH + LazuliTypeSchemaWord.NextSibling] =
-            childIndex;
+          this
+            .words[
+              previous * TYPE_SCHEMA_WORD_LENGTH + TypeSchemaWord.NextSibling
+            ] = childIndex;
         }
         previous = childIndex;
       }
@@ -642,28 +654,28 @@ class TypeSchemaEncoder {
 
     switch (type.kind) {
       case "integer":
-        return write(LazuliTypeSchemaTag.Integer);
+        return write(TypeSchemaTag.Integer);
       case "signed-integer-64":
-        return write(LazuliTypeSchemaTag.SignedInteger64);
+        return write(TypeSchemaTag.SignedInteger64);
       case "float-32":
-        return write(LazuliTypeSchemaTag.Float32);
+        return write(TypeSchemaTag.Float32);
       case "float-64":
-        return write(LazuliTypeSchemaTag.Float64);
+        return write(TypeSchemaTag.Float64);
       case "boolean":
-        return write(LazuliTypeSchemaTag.Boolean);
+        return write(TypeSchemaTag.Boolean);
       case "unit":
-        return write(LazuliTypeSchemaTag.Unit);
+        return write(TypeSchemaTag.Unit);
       case "parameter":
         requireTypeName(type.name, `${context} parameter`);
         return write(
-          LazuliTypeSchemaTag.Parameter,
+          TypeSchemaTag.Parameter,
           this.#identifiers.parameterId(type.name, `${context} parameter`),
         );
       case "tuple":
         if (!Array.isArray(type.values) || type.values.length !== 2) {
           throw new Error(`${context} tuple must have exactly two type values.`);
         }
-        write(LazuliTypeSchemaTag.Tuple);
+        write(TypeSchemaTag.Tuple);
         attachChildren(type.values);
         return index;
       case "named":
@@ -678,12 +690,12 @@ class TypeSchemaEncoder {
           !this.#identifiers.hasNamedType(type.name)
         ) {
           return write(
-            LazuliTypeSchemaTag.Parameter,
+            TypeSchemaTag.Parameter,
             this.#identifiers.parameterId(type.name, `${context} implicit parameter`),
           );
         }
         write(
-          LazuliTypeSchemaTag.Named,
+          TypeSchemaTag.Named,
           this.#identifiers.namedTypeSymbol(
             type.name,
             `${context} named type`,
@@ -695,7 +707,7 @@ class TypeSchemaEncoder {
         if (type.parameter === undefined || type.result === undefined) {
           throw new Error(`${context} function must have parameter and result types.`);
         }
-        write(LazuliTypeSchemaTag.Function);
+        write(TypeSchemaTag.Function);
         attachChildren([type.parameter, type.result]);
         return index;
       case "forall": {
@@ -708,22 +720,22 @@ class TypeSchemaEncoder {
         }
         requireTypeName(parameter, `${context} forall parameter`);
         write(
-          LazuliTypeSchemaTag.Forall,
+          TypeSchemaTag.Forall,
           this.#identifiers.parameterId(parameter, `${context} forall parameter`),
         );
-        const body: LazuliTypeSchema = remaining.length === 0
+        const body: TypeSchema = remaining.length === 0
           ? type.body
           : { kind: "forall", parameters: remaining, body: type.body };
         attachChildren([body]);
         return index;
       }
       default:
-        throw new Error(`${context} has an unsupported Lazuli type kind.`);
+        throw new Error(`${context} has an unsupported type kind.`);
     }
   }
 }
 
-function validateSurfaceShape(surface: EncodedLazuliSurface): {
+function validateSurfaceShape(surface: EncodedSemanticSurface): {
   readonly definitionCount: number;
   readonly typeCount: number;
   readonly constructorCount: number;
@@ -731,68 +743,72 @@ function validateSurfaceShape(surface: EncodedLazuliSurface): {
   const definitionCount = abiCount(surface.definitionCount, "definitionCount");
   const typeCount = abiCount(surface.typeCount, "typeCount");
   const constructorCount = abiCount(surface.constructorCount, "constructorCount");
-  if (surface.definitionWords.length !== definitionCount * LAZULI_DEFINITION_WORD_LENGTH) {
+  if (surface.definitionWords.length !== definitionCount * DEFINITION_WORD_LENGTH) {
     throw new Error(
-      `Lazuli surface has ${surface.definitionWords.length} definition words for ${definitionCount} definitions.`,
+      `surface has ${surface.definitionWords.length} definition words for ${definitionCount} definitions.`,
     );
   }
-  if (surface.typeWords.length !== typeCount * LAZULI_TYPE_WORD_LENGTH) {
+  if (surface.typeWords.length !== typeCount * TYPE_WORD_LENGTH) {
     throw new Error(
-      `Lazuli surface has ${surface.typeWords.length} type words for ${typeCount} types.`,
+      `surface has ${surface.typeWords.length} type words for ${typeCount} types.`,
     );
   }
-  if (surface.constructorWords.length !== constructorCount * LAZULI_CONSTRUCTOR_WORD_LENGTH) {
+  if (surface.constructorWords.length !== constructorCount * CONSTRUCTOR_WORD_LENGTH) {
     throw new Error(
-      `Lazuli surface has ${surface.constructorWords.length} constructor words for ${constructorCount} constructors.`,
+      `surface has ${surface.constructorWords.length} constructor words for ${constructorCount} constructors.`,
     );
   }
   if (surface.definitionTypes.length !== definitionCount) {
     throw new Error(
-      `Lazuli surface has ${surface.definitionTypes.length} definition type entries for ${definitionCount} definitions.`,
+      `surface has ${surface.definitionTypes.length} definition type entries for ${definitionCount} definitions.`,
     );
   }
   if (surface.typeDeclarations.length !== typeCount) {
     throw new Error(
-      `Lazuli surface has ${surface.typeDeclarations.length} typed declarations for ${typeCount} types.`,
+      `surface has ${surface.typeDeclarations.length} typed declarations for ${typeCount} types.`,
     );
   }
   return { definitionCount, typeCount, constructorCount };
 }
 
 function validateTypeDeclaration(
-  surface: EncodedLazuliSurface,
+  surface: EncodedSemanticSurface,
   counts: { readonly constructorCount: number },
   typeIndex: number,
   expectedFirstConstructor: number,
   declarationName: string,
   constructors: readonly { readonly name: string; readonly fields: readonly unknown[] }[],
 ): void {
-  const typeOffset = typeIndex * LAZULI_TYPE_WORD_LENGTH;
+  const typeOffset = typeIndex * TYPE_WORD_LENGTH;
   const encodedName = symbolName(
     surface.symbolNames,
-    requiredSurfaceWord(surface.typeWords, typeOffset + LazuliTypeWord.Symbol, `type ${typeIndex}`),
+    requiredSurfaceWord(
+      surface.typeWords,
+      typeOffset + AlgebraicTypeWord.Symbol,
+      `type ${typeIndex}`,
+    ),
     typeIndex,
   );
   if (declarationName !== encodedName) {
     throw new Error(
-      `Lazuli type metadata ${JSON.stringify(declarationName)} does not match encoded type ${
+      `type metadata ${JSON.stringify(declarationName)} does not match encoded type ${
         JSON.stringify(encodedName)
       } at index ${typeIndex}.`,
     );
   }
   const firstConstructor = requiredSurfaceWord(
     surface.typeWords,
-    typeOffset + LazuliTypeWord.FirstConstructor,
+    typeOffset + AlgebraicTypeWord.FirstConstructor,
     `type ${typeIndex}`,
   );
   const constructorCount = requiredSurfaceWord(
     surface.typeWords,
-    typeOffset + LazuliTypeWord.ConstructorCount,
+    typeOffset + AlgebraicTypeWord.ConstructorCount,
     `type ${typeIndex}`,
   );
   if (firstConstructor !== expectedFirstConstructor) {
     throw new Error(
-      `Lazuli type ${typeIndex} starts at constructor ${firstConstructor}; ABI-v5 types must start at ${expectedFirstConstructor}.`,
+      `type ${typeIndex} starts at constructor ${firstConstructor}; ABI-v5 types must start at ${expectedFirstConstructor}.`,
     );
   }
   if (
@@ -800,14 +816,14 @@ function validateTypeDeclaration(
     constructorCount > counts.constructorCount - firstConstructor
   ) {
     throw new Error(
-      `Lazuli type ${typeIndex} references constructors ${firstConstructor} through ${
+      `type ${typeIndex} references constructors ${firstConstructor} through ${
         firstConstructor + constructorCount
       }, outside the ${counts.constructorCount} encoded constructors.`,
     );
   }
   if (constructors.length !== constructorCount) {
     throw new Error(
-      `Lazuli type ${
+      `type ${
         JSON.stringify(declarationName)
       } has ${constructors.length} typed constructors but ${constructorCount} encoded constructors.`,
     );
@@ -816,31 +832,31 @@ function validateTypeDeclaration(
     const constructorIndex = firstConstructor + offset;
     const constructor = constructors[offset];
     if (constructor === undefined) {
-      throw new Error(`Lazuli type ${typeIndex} omitted constructor metadata ${constructorIndex}.`);
+      throw new Error(`type ${typeIndex} omitted constructor metadata ${constructorIndex}.`);
     }
-    const constructorOffset = constructorIndex * LAZULI_CONSTRUCTOR_WORD_LENGTH;
+    const constructorOffset = constructorIndex * CONSTRUCTOR_WORD_LENGTH;
     const encodedType = requiredSurfaceWord(
       surface.constructorWords,
-      constructorOffset + LazuliConstructorWord.Type,
+      constructorOffset + ConstructorWord.Type,
       `constructor ${constructorIndex}`,
     );
     const encodedName = symbolName(
       surface.symbolNames,
       requiredSurfaceWord(
         surface.constructorWords,
-        constructorOffset + LazuliConstructorWord.Symbol,
+        constructorOffset + ConstructorWord.Symbol,
         `constructor ${constructorIndex}`,
       ),
       constructorIndex,
     );
     const encodedArity = requiredSurfaceWord(
       surface.constructorWords,
-      constructorOffset + LazuliConstructorWord.Arity,
+      constructorOffset + ConstructorWord.Arity,
       `constructor ${constructorIndex}`,
     );
     if (encodedType !== typeIndex || encodedName !== constructor.name) {
       throw new Error(
-        `Lazuli constructor metadata ${
+        `constructor metadata ${
           JSON.stringify(constructor.name)
         } does not match encoded constructor ${
           JSON.stringify(encodedName)
@@ -849,7 +865,7 @@ function validateTypeDeclaration(
     }
     if (constructor.fields.length !== encodedArity) {
       throw new Error(
-        `Lazuli constructor ${
+        `constructor ${
           JSON.stringify(constructor.name)
         } has ${constructor.fields.length} typed fields but ${encodedArity} encoded fields.`,
       );
@@ -868,21 +884,19 @@ class TypeSchemaIdentifiers {
   constructor(symbolNames: readonly string[], namedTypes: readonly string[] = []) {
     this.#namedTypes = new Set(namedTypes);
     this.names = [...symbolNames];
-    if (symbolNames.length >= LAZULI_NO_INDEX) {
+    if (symbolNames.length >= NO_INDEX) {
       throw new Error(
-        `Lazuli symbol table has ${symbolNames.length} entries; the ABI maximum is ${
-          LAZULI_NO_INDEX - 1
-        }.`,
+        `symbol table has ${symbolNames.length} entries; the ABI maximum is ${NO_INDEX - 1}.`,
       );
     }
     for (let symbol = 0; symbol < symbolNames.length; symbol++) {
       const name = symbolNames[symbol];
       if (name === undefined || typeof name !== "string") {
-        throw new Error(`Lazuli symbol table omits name ${symbol}.`);
+        throw new Error(`symbol table omits name ${symbol}.`);
       }
       if (this.#surfaceSymbols.has(name)) {
         throw new Error(
-          `Lazuli symbol table repeats name ${JSON.stringify(name)} at index ${symbol}.`,
+          `symbol table repeats name ${JSON.stringify(name)} at index ${symbol}.`,
         );
       }
       this.#surfaceSymbols.set(name, symbol);
@@ -916,8 +930,8 @@ class TypeSchemaIdentifiers {
   }
 
   private allocateSyntheticId(context: string): number {
-    if (this.#nextParameterId >= LAZULI_NO_INDEX) {
-      throw new Error(`${context} exceeds the maximum schema identifier ${LAZULI_NO_INDEX - 1}.`);
+    if (this.#nextParameterId >= NO_INDEX) {
+      throw new Error(`${context} exceeds the maximum schema identifier ${NO_INDEX - 1}.`);
     }
     return this.#nextParameterId++;
   }
@@ -930,11 +944,11 @@ function requireTypeName(name: string, context: string): void {
 }
 
 function typeSchemaSpan(
-  type: LazuliTypeSchema | LazuliType,
+  type: TypeSchema | Type,
   context: string,
   inherited: { readonly startByte: number; readonly endByte: number },
 ): { readonly startByte: number; readonly endByte: number } {
-  const source = type as LazuliTypeSchema & {
+  const source = type as TypeSchema & {
     readonly startByte?: unknown;
     readonly endByte?: unknown;
   };
@@ -958,10 +972,10 @@ function schemaByteOffset(value: unknown, context: string): number {
 }
 
 function synthesizedConstructorResult(
-  declaration: EncodedLazuliSurface["typeDeclarations"][number],
+  declaration: EncodedSemanticSurface["typeDeclarations"][number],
   constructorName: string,
-): LazuliTypeSchema {
-  const parameters = declaration.parameters.map((name): LazuliTypeSchema => ({
+): TypeSchema {
+  const parameters = declaration.parameters.map((name): TypeSchema => ({
     kind: "parameter",
     name,
   }));
@@ -988,20 +1002,19 @@ function packSchemaMetadata(
     Uint32Array,
   ],
   identifierNames: readonly string[],
-): FlattenedLazuliTypeSchemas {
-  let totalWords = LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
+): FlattenedTypeSchemas {
+  let totalWords = TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
   for (const array of arrays) {
-    if (array.length > LAZULI_NO_INDEX - totalWords) {
-      throw new Error("Lazuli type schema metadata exceeds the maximum ABI buffer length.");
+    if (array.length > NO_INDEX - totalWords) {
+      throw new Error("type schema metadata exceeds the maximum ABI buffer length.");
     }
     totalWords += array.length;
   }
 
   const metadataWords = new Uint32Array(totalWords);
-  metadataWords[LazuliTypeSchemaMetadataWord.AbiVersion] = LAZULI_TYPE_SCHEMA_ABI_VERSION;
-  metadataWords[LazuliTypeSchemaMetadataWord.HeaderWordLength] =
-    LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
-  let offset = LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
+  metadataWords[TypeSchemaMetadataWord.AbiVersion] = TYPE_SCHEMA_ABI_VERSION;
+  metadataWords[TypeSchemaMetadataWord.HeaderWordLength] = TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
+  let offset = TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
   const views = arrays.map((array, arrayIndex) => {
     const headerOffset = 2 + arrayIndex * 2;
     metadataWords[headerOffset] = offset;
@@ -1026,7 +1039,7 @@ function packSchemaMetadata(
     constructorFieldOffsets === undefined || constructorFieldRoots === undefined ||
     constructorResultRoots === undefined
   ) {
-    throw new Error("Lazuli type schema metadata packing omitted a logical array.");
+    throw new Error("type schema metadata packing omitted a logical array.");
   }
   return Object.freeze({
     metadataWords,
@@ -1042,22 +1055,22 @@ function packSchemaMetadata(
 }
 
 function symbolName(symbolNames: readonly string[], symbol: number, recordIndex: number): string {
-  if (symbol === LAZULI_NO_INDEX) {
-    throw new Error(`Lazuli type schema record ${recordIndex} omits its required symbol.`);
+  if (symbol === NO_INDEX) {
+    throw new Error(`type schema record ${recordIndex} omits its required symbol.`);
   }
   const name = symbolNames[symbol];
   if (name === undefined) {
     throw new Error(
-      `Lazuli type schema record ${recordIndex} references missing symbol ${symbol}.`,
+      `type schema record ${recordIndex} references missing symbol ${symbol}.`,
     );
   }
   return name;
 }
 
 function abiCount(value: number, name: string): number {
-  if (!Number.isInteger(value) || value < 0 || value >= LAZULI_NO_INDEX) {
+  if (!Number.isInteger(value) || value < 0 || value >= NO_INDEX) {
     throw new Error(
-      `${name} must be an integer from 0 through ${LAZULI_NO_INDEX - 1}; received ${value}.`,
+      `${name} must be an integer from 0 through ${NO_INDEX - 1}; received ${value}.`,
     );
   }
   return value;
@@ -1065,12 +1078,12 @@ function abiCount(value: number, name: string): number {
 
 function requiredSurfaceWord(words: Uint32Array, offset: number, context: string): number {
   const word = words[offset];
-  if (word === undefined) throw new Error(`Lazuli ${context} omits ABI word ${offset}.`);
+  if (word === undefined) throw new Error(`${context} omits ABI word ${offset}.`);
   return word;
 }
 
 function requiredWord(words: Uint32Array, offset: number, recordIndex: number): number {
   const word = words[offset];
-  if (word === undefined) throw new Error(`Lazuli type schema record ${recordIndex} is truncated.`);
+  if (word === undefined) throw new Error(`type schema record ${recordIndex} is truncated.`);
   return word;
 }

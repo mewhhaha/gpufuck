@@ -1,8 +1,8 @@
-import { FunctionalBinaryOperator } from "../../../src/functional/abi.ts";
+import { BinaryOperator } from "../../../src/functional/abi.ts";
 import type {
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceTypeDeclaration,
+  SurfaceDefinition,
+  SurfaceExpression,
+  SurfaceTypeDeclaration,
 } from "../../../src/functional/surface_builder.ts";
 
 export const JAVASCRIPT_ARRAY_TYPE = "$javascript#Array";
@@ -14,8 +14,8 @@ export const JAVASCRIPT_ARRAY_MAP = "$javascript#arrayMap";
 export const JAVASCRIPT_ARRAY_REDUCE = "$javascript#arrayReduce";
 
 export interface JavaScriptArraySurface {
-  readonly definitions: readonly FunctionalSurfaceDefinition[];
-  readonly typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[];
+  readonly definitions: readonly SurfaceDefinition[];
+  readonly typeDeclarations: readonly SurfaceTypeDeclaration[];
 }
 
 export function javascriptArraySurface(
@@ -41,7 +41,7 @@ export function javascriptArraySurface(
           binders: ["head", "tail"],
           body: {
             kind: "binary",
-            operator: FunctionalBinaryOperator.AddFloat64,
+            operator: BinaryOperator.AddFloat64,
             left: { kind: "float-64", value: 1, span },
             right: apply(
               { kind: "name", name: JAVASCRIPT_ARRAY_LENGTH, span },
@@ -63,7 +63,7 @@ export function javascriptArraySurface(
         kind: "if",
         condition: {
           kind: "binary",
-          operator: FunctionalBinaryOperator.LessFloat64,
+          operator: BinaryOperator.LessFloat64,
           left: { kind: "name", name: "index", span },
           right: { kind: "float-64", value: 0, span },
           span,
@@ -92,7 +92,7 @@ export function javascriptArraySurface(
               kind: "if",
               condition: {
                 kind: "binary",
-                operator: FunctionalBinaryOperator.EqualFloat64,
+                operator: BinaryOperator.EqualFloat64,
                 left: { kind: "name", name: "index", span },
                 right: { kind: "float-64", value: 0, span },
                 span,
@@ -104,7 +104,7 @@ export function javascriptArraySurface(
                   { kind: "name", name: "tail", span },
                   {
                     kind: "binary",
-                    operator: FunctionalBinaryOperator.SubtractFloat64,
+                    operator: BinaryOperator.SubtractFloat64,
                     left: { kind: "name", name: "index", span },
                     right: { kind: "float-64", value: 1, span },
                     span,
@@ -233,10 +233,10 @@ export function javascriptArraySurface(
 }
 
 function apply(
-  callee: FunctionalSurfaceExpression,
-  arguments_: readonly FunctionalSurfaceExpression[],
+  callee: SurfaceExpression,
+  arguments_: readonly SurfaceExpression[],
   span: { readonly startByte: number; readonly endByte: number },
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   let expression = callee;
   for (const argument of arguments_) {
     expression = { kind: "apply", callee: expression, argument, span };

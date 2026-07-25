@@ -1,26 +1,23 @@
 import {
-  type EncodedFunctionalModule,
-  FunctionalEvaluationProfile,
-  type FunctionalSourceRange,
-  type FunctionalSpan,
-  type FunctionalTypeSchema,
+  type EncodedModule,
+  EvaluationProfile,
+  type SourceRange,
+  type Span,
+  type TypeSchema,
 } from "./abi.ts";
-import type {
-  FunctionalHostCapabilityDeclaration,
-  FunctionalSurfaceModuleOptions,
-} from "./host_contract.ts";
-import { FUNCTIONAL_INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
-import { analyzeFunctionalSurfaceReachability } from "./surface_reachability.ts";
+import type { HostCapabilityDeclaration, SurfaceModuleOptions } from "./host_contract.ts";
+import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
+import { analyzeSurfaceReachability } from "./surface_reachability.ts";
 import {
-  buildFunctionalSurfaceModule,
-  type FunctionalSurfaceCaseArm,
-  type FunctionalSurfaceCaseDefault,
-  type FunctionalSurfaceDefinition,
-  type FunctionalSurfaceExpression,
-  type FunctionalSurfaceTypeDeclaration,
+  buildSurfaceModule,
+  type SurfaceCaseArm,
+  type SurfaceCaseDefault,
+  type SurfaceDefinition,
+  type SurfaceExpression,
+  type SurfaceTypeDeclaration,
 } from "./surface_builder.ts";
 
-export type FunctionalLinkDiagnosticCode =
+export type LinkDiagnosticCode =
   | "F4001"
   | "F4002"
   | "F4003"
@@ -29,7 +26,7 @@ export type FunctionalLinkDiagnosticCode =
   | "F4006"
   | "F4007";
 
-export type FunctionalLinkFaultKind =
+export type LinkFaultKind =
   | "invalid-artifact"
   | "duplicate-module"
   | "missing-import"
@@ -38,23 +35,23 @@ export type FunctionalLinkFaultKind =
   | "missing-entry"
   | "duplicate-export";
 
-export interface FunctionalLinkErrorDetails {
-  readonly code: FunctionalLinkDiagnosticCode;
-  readonly kind: FunctionalLinkFaultKind;
+export interface LinkErrorDetails {
+  readonly code: LinkDiagnosticCode;
+  readonly kind: LinkFaultKind;
   readonly message: string;
   readonly module?: string;
   readonly reference?: string;
 }
 
-export class FunctionalLinkError extends Error {
-  readonly code: FunctionalLinkDiagnosticCode;
-  readonly kind: FunctionalLinkFaultKind;
+export class LinkError extends Error {
+  readonly code: LinkDiagnosticCode;
+  readonly kind: LinkFaultKind;
   readonly module: string | undefined;
   readonly reference: string | undefined;
 
-  constructor(details: FunctionalLinkErrorDetails, cause?: unknown) {
+  constructor(details: LinkErrorDetails, cause?: unknown) {
     super(`${details.code}: ${details.message}`, { cause });
-    this.name = "FunctionalLinkError";
+    this.name = "LinkError";
     this.code = details.code;
     this.kind = details.kind;
     this.module = details.module;
@@ -62,70 +59,70 @@ export class FunctionalLinkError extends Error {
   }
 }
 
-export interface FunctionalModuleImport {
+export interface ModuleImport {
   readonly name: string;
   readonly fromModule: string;
   readonly exportName: string;
-  readonly type?: FunctionalTypeSchema;
+  readonly type?: TypeSchema;
 }
 
-export interface FunctionalModuleExport {
+export interface ModuleExport {
   readonly name: string;
   readonly definition: string;
-  readonly type?: FunctionalTypeSchema;
+  readonly type?: TypeSchema;
 }
 
-export interface FunctionalModuleTypeImport {
+export interface ModuleTypeImport {
   readonly name: string;
   readonly fromModule: string;
   readonly exportName: string;
 }
 
-export interface FunctionalModuleConstructorImport {
+export interface ModuleConstructorImport {
   readonly name: string;
   readonly fromModule: string;
   readonly exportName: string;
 }
 
-export interface FunctionalModuleTypeExport {
+export interface ModuleTypeExport {
   readonly name: string;
   readonly declaration: string;
 }
 
-export interface FunctionalModuleConstructorExport {
+export interface ModuleConstructorExport {
   readonly name: string;
   readonly constructor: string;
 }
 
-export interface FunctionalModuleArtifact {
+export interface ModuleArtifact {
   readonly name: string;
-  readonly definitions: readonly FunctionalSurfaceDefinition[];
-  readonly typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[];
-  readonly imports: readonly FunctionalModuleImport[];
-  readonly exports: readonly FunctionalModuleExport[];
-  readonly typeImports?: readonly FunctionalModuleTypeImport[];
-  readonly constructorImports?: readonly FunctionalModuleConstructorImport[];
-  readonly typeExports?: readonly FunctionalModuleTypeExport[];
-  readonly constructorExports?: readonly FunctionalModuleConstructorExport[];
+  readonly definitions: readonly SurfaceDefinition[];
+  readonly typeDeclarations: readonly SurfaceTypeDeclaration[];
+  readonly imports: readonly ModuleImport[];
+  readonly exports: readonly ModuleExport[];
+  readonly typeImports?: readonly ModuleTypeImport[];
+  readonly constructorImports?: readonly ModuleConstructorImport[];
+  readonly typeExports?: readonly ModuleTypeExport[];
+  readonly constructorExports?: readonly ModuleConstructorExport[];
   readonly sourceByteLength: number;
-  readonly options: FunctionalSurfaceModuleOptions;
+  readonly options: SurfaceModuleOptions;
 }
 
-const snapshottedFunctionalModules = new WeakSet<FunctionalModuleArtifact>();
+const snapshottedModules = new WeakSet<ModuleArtifact>();
 
-export type FunctionalLinkedSource = FunctionalSourceRange;
+export type LinkedSource = SourceRange;
 
-export interface LinkedFunctionalModule {
-  readonly module: EncodedFunctionalModule;
-  readonly sources: readonly FunctionalLinkedSource[];
+export interface LinkedModule {
+  readonly module: EncodedModule;
+  readonly sources: readonly LinkedSource[];
 }
 
-export function createFunctionalModuleArtifact(
-  artifact: FunctionalModuleArtifact,
-): FunctionalModuleArtifact {
+export function createModuleArtifact(
+  artifact: ModuleArtifact,
+): ModuleArtifact {
   requireModuleName(artifact.name, "module name");
   if (!Number.isSafeInteger(artifact.sourceByteLength) || artifact.sourceByteLength < 0) {
-    throw invalidFunctionalArtifact(
+    throw invalidArtifact(
       artifact.name,
       `functional module ${
         JSON.stringify(artifact.name)
@@ -138,7 +135,7 @@ export function createFunctionalModuleArtifact(
     requireModuleName(imported.fromModule, `import ${JSON.stringify(imported.name)} source module`);
     requireModuleName(imported.exportName, `import ${JSON.stringify(imported.name)} export name`);
     if (importNames.has(imported.name)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         artifact.name,
         `functional module ${JSON.stringify(artifact.name)} repeats import ${
           JSON.stringify(imported.name)
@@ -163,7 +160,7 @@ export function createFunctionalModuleArtifact(
   const definitionNames = new Set(artifact.definitions.map((definition) => definition.name));
   for (const imported of artifact.imports) {
     if (definitionNames.has(imported.name)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         artifact.name,
         `functional module ${JSON.stringify(artifact.name)} import ${
           JSON.stringify(imported.name)
@@ -175,7 +172,7 @@ export function createFunctionalModuleArtifact(
   for (const exported of artifact.exports) {
     requireModuleName(exported.name, `module ${JSON.stringify(artifact.name)} export name`);
     if (!definitionNames.has(exported.definition)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         artifact.name,
         `functional module ${JSON.stringify(artifact.name)} export ${
           JSON.stringify(exported.name)
@@ -183,7 +180,7 @@ export function createFunctionalModuleArtifact(
       );
     }
     if (exportNames.has(exported.name)) {
-      throw new FunctionalLinkError({
+      throw new LinkError({
         code: "F4007",
         kind: "duplicate-export",
         module: artifact.name,
@@ -209,11 +206,11 @@ export function createFunctionalModuleArtifact(
     constructorNames,
     (exported) => exported.constructor,
   );
-  let snapshot: FunctionalModuleArtifact;
+  let snapshot: ModuleArtifact;
   try {
     snapshot = structuredClone(artifact);
   } catch (cause) {
-    throw new FunctionalLinkError({
+    throw new LinkError({
       code: "F4001",
       kind: "invalid-artifact",
       module: artifact.name,
@@ -235,28 +232,28 @@ export function createFunctionalModuleArtifact(
     }
     if (!ArrayBuffer.isView(current)) Object.freeze(current);
   }
-  snapshottedFunctionalModules.add(snapshot);
+  snapshottedModules.add(snapshot);
   return snapshot;
 }
 
-export function linkFunctionalModules(
-  artifacts: readonly FunctionalModuleArtifact[],
+export function linkModules(
+  artifacts: readonly ModuleArtifact[],
   entry: { readonly module: string; readonly exportName: string },
-): LinkedFunctionalModule {
+): LinkedModule {
   if (artifacts.length === 0) {
-    throw new FunctionalLinkError({
+    throw new LinkError({
       code: "F4001",
       kind: "invalid-artifact",
       message: "functional module linker requires at least one module",
     });
   }
-  const modules = new Map<string, FunctionalModuleArtifact>();
+  const modules = new Map<string, ModuleArtifact>();
   for (const candidate of artifacts) {
-    const artifact = snapshottedFunctionalModules.has(candidate)
+    const artifact = snapshottedModules.has(candidate)
       ? candidate
-      : createFunctionalModuleArtifact(candidate);
+      : createModuleArtifact(candidate);
     if (modules.has(artifact.name)) {
-      throw new FunctionalLinkError({
+      throw new LinkError({
         code: "F4002",
         kind: "duplicate-module",
         module: artifact.name,
@@ -288,10 +285,10 @@ export function linkFunctionalModules(
       );
     }
   }
-  const linkedDefinitions: FunctionalSurfaceDefinition[] = [];
-  const linkedTypes: FunctionalSurfaceTypeDeclaration[] = [];
-  const sources: FunctionalLinkedSource[] = [];
-  const capabilities: FunctionalHostCapabilityDeclaration[] = [];
+  const linkedDefinitions: SurfaceDefinition[] = [];
+  const linkedTypes: SurfaceTypeDeclaration[] = [];
+  const sources: LinkedSource[] = [];
+  const capabilities: HostCapabilityDeclaration[] = [];
   const linkedWasmExports: { readonly name: string; readonly definition: string }[] = [];
   const linkedHostDefinitions: {
     readonly definition: string;
@@ -300,12 +297,12 @@ export function linkFunctionalModules(
   }[] = [];
   const linkedWasmExportNames = new Set<string>();
   let sourceBase = 0;
-  let evaluationProfile: FunctionalEvaluationProfile | undefined;
+  let evaluationProfile: EvaluationProfile | undefined;
 
   for (const artifact of modules.values()) {
-    const profile = artifact.options.evaluationProfile ?? FunctionalEvaluationProfile.StrictEager;
+    const profile = artifact.options.evaluationProfile ?? EvaluationProfile.StrictEager;
     if (evaluationProfile !== undefined && evaluationProfile !== profile) {
-      throw new FunctionalLinkError({
+      throw new LinkError({
         code: "F4004",
         kind: "incompatible-profile",
         module: artifact.name,
@@ -328,7 +325,7 @@ export function linkFunctionalModules(
     for (const binding of artifact.options.hostDefinitions ?? []) {
       const definition = definitionNames.get(binding.definition);
       if (definition === undefined) {
-        throw invalidFunctionalArtifact(
+        throw invalidArtifact(
           artifact.name,
           `functional module ${
             JSON.stringify(artifact.name)
@@ -340,7 +337,7 @@ export function linkFunctionalModules(
     for (const exported of artifact.options.wasmExports ?? []) {
       const definition = definitionNames.get(exported.definition);
       if (definition === undefined) {
-        throw invalidFunctionalArtifact(
+        throw invalidArtifact(
           artifact.name,
           `functional module ${JSON.stringify(artifact.name)} WASM export ${
             JSON.stringify(exported.name)
@@ -348,7 +345,7 @@ export function linkFunctionalModules(
         );
       }
       if (linkedWasmExportNames.has(exported.name)) {
-        throw new FunctionalLinkError({
+        throw new LinkError({
           code: "F4007",
           kind: "duplicate-export",
           module: artifact.name,
@@ -401,7 +398,7 @@ export function linkFunctionalModules(
     for (const imported of artifact.imports) {
       const target = exportedDefinitions.get(exportKey(imported.fromModule, imported.exportName));
       if (target === undefined) {
-        throw new FunctionalLinkError({
+        throw new LinkError({
           code: "F4003",
           kind: "missing-import",
           module: artifact.name,
@@ -470,7 +467,7 @@ export function linkFunctionalModules(
       });
     }
     for (const capability of artifact.options.hostCapabilities ?? []) {
-      const linkedCapability: FunctionalHostCapabilityDeclaration = {
+      const linkedCapability: HostCapabilityDeclaration = {
         name: capability.name,
         fields: capability.fields.map((field) =>
           field.kind === "value"
@@ -516,7 +513,7 @@ export function linkFunctionalModules(
           continue;
         }
         if (JSON.stringify(previous) === JSON.stringify(field)) continue;
-        throw new FunctionalLinkError({
+        throw new LinkError({
           code: "F4005",
           kind: "incompatible-capability",
           module: artifact.name,
@@ -532,7 +529,7 @@ export function linkFunctionalModules(
   }
   const entryDefinition = exportedDefinitions.get(exportKey(entry.module, entry.exportName));
   if (entryDefinition === undefined) {
-    throw new FunctionalLinkError({
+    throw new LinkError({
       code: "F4006",
       kind: "missing-entry",
       module: entry.module,
@@ -542,7 +539,7 @@ export function linkFunctionalModules(
       }`,
     });
   }
-  const reachability = analyzeFunctionalSurfaceReachability(linkedDefinitions, [
+  const reachability = analyzeSurfaceReachability(linkedDefinitions, [
     entryDefinition,
     ...linkedWasmExports.map((exported) => exported.definition),
   ]);
@@ -558,7 +555,7 @@ export function linkFunctionalModules(
     fields.add(binding.field);
     reachableHostFields.set(binding.capability, fields);
   }
-  const reachableCapabilities = reachability.referencedSymbols.has(FUNCTIONAL_INIT_CONSTRUCTOR_NAME)
+  const reachableCapabilities = reachability.referencedSymbols.has(INIT_CONSTRUCTOR_NAME)
     ? capabilities
     : capabilities.flatMap((capability) => {
       const fields = reachableHostFields.get(capability.name);
@@ -568,7 +565,7 @@ export function linkFunctionalModules(
         fields: capability.fields.filter((field) => fields.has(field.name)),
       }];
     });
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     reachableDefinitions,
     linkedTypes,
     entryDefinition,
@@ -576,7 +573,7 @@ export function linkFunctionalModules(
     {
       hostCapabilities: reachableCapabilities,
       hostDefinitions: reachableHostDefinitions,
-      evaluationProfile: evaluationProfile ?? FunctionalEvaluationProfile.StrictEager,
+      evaluationProfile: evaluationProfile ?? EvaluationProfile.StrictEager,
       wasmExports: linkedWasmExports,
     },
   );
@@ -587,14 +584,14 @@ export function linkFunctionalModules(
 }
 
 function rewriteExpression(
-  expression: FunctionalSurfaceExpression,
+  expression: SurfaceExpression,
   boundNames: Map<string, number>,
   definitions: ReadonlyMap<string, string>,
   imports: ReadonlyMap<string, string>,
   constructors: ReadonlyMap<string, string>,
   sourceBase: number,
-): FunctionalSurfaceExpression {
-  const rewrite = (value: FunctionalSurfaceExpression) =>
+): SurfaceExpression {
+  const rewrite = (value: SurfaceExpression) =>
     rewriteExpression(value, boundNames, definitions, imports, constructors, sourceBase);
   const span = offsetSpan(expression.span, sourceBase);
   switch (expression.kind) {
@@ -752,13 +749,13 @@ function rewriteExpression(
 }
 
 function rewriteCaseDefault(
-  otherwise: FunctionalSurfaceCaseDefault,
+  otherwise: SurfaceCaseDefault,
   boundNames: Map<string, number>,
   definitions: ReadonlyMap<string, string>,
   imports: ReadonlyMap<string, string>,
   constructors: ReadonlyMap<string, string>,
   sourceBase: number,
-): FunctionalSurfaceCaseDefault {
+): SurfaceCaseDefault {
   const binders = otherwise.binder === undefined ? [] : [otherwise.binder];
   addBoundNames(boundNames, binders);
   const body = rewriteExpression(
@@ -774,13 +771,13 @@ function rewriteCaseDefault(
 }
 
 function rewriteCaseArm(
-  arm: FunctionalSurfaceCaseArm,
+  arm: SurfaceCaseArm,
   boundNames: Map<string, number>,
   definitions: ReadonlyMap<string, string>,
   imports: ReadonlyMap<string, string>,
   constructors: ReadonlyMap<string, string>,
   sourceBase: number,
-): FunctionalSurfaceCaseArm {
+): SurfaceCaseArm {
   addBoundNames(boundNames, arm.binders);
   const body = rewriteExpression(
     arm.body,
@@ -813,9 +810,9 @@ function removeBoundNames(boundNames: Map<string, number>, names: readonly strin
 }
 
 function rewriteSchema(
-  schema: FunctionalTypeSchema | null,
+  schema: TypeSchema | null,
   types: ReadonlyMap<string, string>,
-): FunctionalTypeSchema | null {
+): TypeSchema | null {
   if (schema === null) return null;
   switch (schema.kind) {
     case "integer":
@@ -848,7 +845,7 @@ function rewriteSchema(
   }
 }
 
-function offsetSpan(span: FunctionalSpan | undefined, offset: number): FunctionalSpan {
+function offsetSpan(span: Span | undefined, offset: number): Span {
   return {
     startByte: offset + (span?.startByte ?? 0),
     endByte: offset + (span?.endByte ?? 0),
@@ -879,7 +876,7 @@ function validateNominalImports(
     requireModuleName(imported.fromModule, `${kind} import source module`);
     requireModuleName(imported.exportName, `${kind} import export name`);
     if (localNames.has(imported.name) || names.has(imported.name)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         module,
         `functional module ${JSON.stringify(module)} repeats ${kind} name ${
           JSON.stringify(imported.name)
@@ -902,7 +899,7 @@ function validateNominalExports<Export extends { readonly name: string }>(
     requireModuleName(exported.name, `module ${JSON.stringify(module)} ${kind} export name`);
     const declaration = declarationName(exported);
     if (!localNames.has(declaration)) {
-      throw invalidFunctionalArtifact(
+      throw invalidArtifact(
         module,
         `functional module ${JSON.stringify(module)} ${kind} export ${
           JSON.stringify(exported.name)
@@ -910,7 +907,7 @@ function validateNominalExports<Export extends { readonly name: string }>(
       );
     }
     if (names.has(exported.name)) {
-      throw new FunctionalLinkError({
+      throw new LinkError({
         code: "F4007",
         kind: "duplicate-export",
         module,
@@ -928,9 +925,9 @@ function missingNominalImport(
   module: string,
   kind: "type" | "constructor",
   imported: { readonly fromModule: string; readonly exportName: string },
-): FunctionalLinkError {
+): LinkError {
   const reference = `${imported.fromModule}.${imported.exportName}`;
-  return new FunctionalLinkError({
+  return new LinkError({
     code: "F4003",
     kind: "missing-import",
     module,
@@ -943,7 +940,7 @@ function missingNominalImport(
 
 function requireModuleName(name: string, location: string): void {
   if (typeof name !== "string" || name.length === 0) {
-    throw new FunctionalLinkError({
+    throw new LinkError({
       code: "F4001",
       kind: "invalid-artifact",
       message: `functional ${location} must be nonempty; received ${JSON.stringify(name)}`,
@@ -951,8 +948,8 @@ function requireModuleName(name: string, location: string): void {
   }
 }
 
-function invalidFunctionalArtifact(module: string, message: string): FunctionalLinkError {
-  return new FunctionalLinkError({
+function invalidArtifact(module: string, message: string): LinkError {
+  return new LinkError({
     code: "F4001",
     kind: "invalid-artifact",
     module,

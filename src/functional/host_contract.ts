@@ -1,17 +1,17 @@
-import type { FunctionalWasmExportDeclaration } from "./module_contract.ts";
-import type { FunctionalEvaluationProfile, FunctionalTypeSchema } from "./schema_contract.ts";
+import type { WasmExportDeclaration } from "./module_contract.ts";
+import type { EvaluationProfile, TypeSchema } from "./schema_contract.ts";
 
-export type FunctionalHostType = FunctionalTypeSchema;
+export type HostType = TypeSchema;
 
-export const FUNCTIONAL_INIT_TYPE_NAME = "$FunctionalInitType";
-export const FUNCTIONAL_INIT_CONSTRUCTOR_NAME = "$FunctionalInit";
-export const FUNCTIONAL_TEXT_TYPE_NAME = "$FunctionalText";
-export const FUNCTIONAL_BYTES_TYPE_NAME = "$FunctionalBytes";
-export const FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME = "$FunctionalWholeNumberF64";
-export const FUNCTIONAL_ARRAY_TYPE_NAME = "$FunctionalArray";
-export const FUNCTIONAL_SLICE_TYPE_NAME = "$FunctionalSlice";
-export const FUNCTIONAL_RESOURCE_TYPE_PREFIX = "$FunctionalResource:";
-export const FUNCTIONAL_ERASED_TYPE_NAME = "$FunctionalErased";
+export const INIT_TYPE_NAME = "$FunctionalInitType";
+export const INIT_CONSTRUCTOR_NAME = "$FunctionalInit";
+export const TEXT_TYPE_NAME = "$FunctionalText";
+export const BYTES_TYPE_NAME = "$FunctionalBytes";
+export const WHOLE_NUMBER_F64_TYPE_NAME = "$FunctionalWholeNumberF64";
+export const ARRAY_TYPE_NAME = "$FunctionalArray";
+export const SLICE_TYPE_NAME = "$FunctionalSlice";
+export const RESOURCE_TYPE_PREFIX = "$FunctionalResource:";
+export const ERASED_TYPE_NAME = "$FunctionalErased";
 
 const MAXIMUM_HOST_TYPE_DEPTH = 64;
 const MAXIMUM_HOST_TYPE_NODES = 4_096;
@@ -21,58 +21,58 @@ interface HostTypeTraversal {
   remainingNodes: number;
 }
 
-export const FunctionalHostTypes: Readonly<{
-  readonly text: FunctionalTypeSchema;
-  readonly bytes: FunctionalTypeSchema;
-  readonly wholeNumberF64: FunctionalTypeSchema;
-  readonly array: (element: FunctionalTypeSchema) => FunctionalTypeSchema;
-  readonly slice: (element: FunctionalTypeSchema) => FunctionalTypeSchema;
-  readonly resource: (name: string) => FunctionalTypeSchema;
-  readonly erased: FunctionalTypeSchema;
-  readonly bitBuffer: FunctionalTypeSchema;
+export const HostTypes: Readonly<{
+  readonly text: TypeSchema;
+  readonly bytes: TypeSchema;
+  readonly wholeNumberF64: TypeSchema;
+  readonly array: (element: TypeSchema) => TypeSchema;
+  readonly slice: (element: TypeSchema) => TypeSchema;
+  readonly resource: (name: string) => TypeSchema;
+  readonly erased: TypeSchema;
+  readonly bitBuffer: TypeSchema;
 }> = Object.freeze({
-  text: Object.freeze({ kind: "named", name: FUNCTIONAL_TEXT_TYPE_NAME, arguments: [] }),
-  bytes: Object.freeze({ kind: "named", name: FUNCTIONAL_BYTES_TYPE_NAME, arguments: [] }),
+  text: Object.freeze({ kind: "named", name: TEXT_TYPE_NAME, arguments: [] }),
+  bytes: Object.freeze({ kind: "named", name: BYTES_TYPE_NAME, arguments: [] }),
   wholeNumberF64: Object.freeze({
     kind: "named",
-    name: FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
+    name: WHOLE_NUMBER_F64_TYPE_NAME,
     arguments: [],
   }),
-  array(element: FunctionalTypeSchema): FunctionalTypeSchema {
+  array(element: TypeSchema): TypeSchema {
     return Object.freeze({
       kind: "named",
-      name: FUNCTIONAL_ARRAY_TYPE_NAME,
+      name: ARRAY_TYPE_NAME,
       arguments: Object.freeze([element]),
     });
   },
-  slice(element: FunctionalTypeSchema): FunctionalTypeSchema {
+  slice(element: TypeSchema): TypeSchema {
     return Object.freeze({
       kind: "named",
-      name: FUNCTIONAL_SLICE_TYPE_NAME,
+      name: SLICE_TYPE_NAME,
       arguments: Object.freeze([element]),
     });
   },
-  resource(name: string): FunctionalTypeSchema {
+  resource(name: string): TypeSchema {
     requireName(name, "resource type name");
     return Object.freeze({
       kind: "named",
-      name: FUNCTIONAL_RESOURCE_TYPE_PREFIX + encodeURIComponent(name),
+      name: RESOURCE_TYPE_PREFIX + encodeURIComponent(name),
       arguments: Object.freeze([]),
     });
   },
-  erased: Object.freeze({ kind: "named", name: FUNCTIONAL_ERASED_TYPE_NAME, arguments: [] }),
+  erased: Object.freeze({ kind: "named", name: ERASED_TYPE_NAME, arguments: [] }),
   bitBuffer: Object.freeze({
     kind: "tuple",
     values: Object.freeze(
       [
-        Object.freeze({ kind: "named", name: FUNCTIONAL_BYTES_TYPE_NAME, arguments: [] }),
+        Object.freeze({ kind: "named", name: BYTES_TYPE_NAME, arguments: [] }),
         Object.freeze({ kind: "integer" }),
       ] as const,
     ),
   }),
 });
 
-export type FunctionalHostScalarType =
+export type HostScalarType =
   | { readonly kind: "integer" }
   | { readonly kind: "signed-integer-64" }
   | { readonly kind: "float-32" }
@@ -80,17 +80,16 @@ export type FunctionalHostScalarType =
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" };
 
-export const FunctionalHostOwnership = {
+export const HostOwnership = {
   BoundedBorrow: "bounded-borrow",
   FrozenShareable: "frozen-shareable",
   OwnershipTransfer: "ownership-transfer",
   Unique: "unique",
 } as const;
 
-export type FunctionalHostOwnership =
-  (typeof FunctionalHostOwnership)[keyof typeof FunctionalHostOwnership];
+export type HostOwnership = (typeof HostOwnership)[keyof typeof HostOwnership];
 
-export const FunctionalWasmIntrinsic = {
+export const WasmIntrinsic = {
   BufferByteLength: "buffer-byte-length",
   BufferByteGet: "buffer-byte-get",
   BufferByteSlice: "buffer-byte-slice",
@@ -100,67 +99,66 @@ export const FunctionalWasmIntrinsic = {
   BufferConvert: "buffer-convert",
 } as const;
 
-export type FunctionalWasmIntrinsic =
-  (typeof FunctionalWasmIntrinsic)[keyof typeof FunctionalWasmIntrinsic];
+export type WasmIntrinsic = (typeof WasmIntrinsic)[keyof typeof WasmIntrinsic];
 
-export interface FunctionalHostValueDeclaration {
+export interface HostValueDeclaration {
   readonly kind: "value";
   readonly name: string;
-  readonly type: FunctionalHostType;
-  readonly representation?: FunctionalHostType;
+  readonly type: HostType;
+  readonly representation?: HostType;
   readonly ownership?: "frozen-shareable" | "ownership-transfer";
-  readonly wasmLiteral?: FunctionalWasmLiteral;
+  readonly wasmLiteral?: WasmLiteral;
 }
 
-export type FunctionalWasmLiteral =
+export type WasmLiteral =
   | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "bytes"; readonly value: readonly number[] };
 
-export interface FunctionalHostOperationDeclaration {
+export interface HostOperationDeclaration {
   readonly kind: "operation";
   readonly name: string;
   readonly purity: "pure" | "effectful";
   readonly execution?: "synchronous" | "suspending";
-  readonly parameter: FunctionalHostType;
-  readonly result: FunctionalHostType;
+  readonly parameter: HostType;
+  readonly result: HostType;
   readonly typeParameters?: readonly string[];
-  readonly parameterRepresentation?: FunctionalHostType;
-  readonly resultRepresentation?: FunctionalHostType;
+  readonly parameterRepresentation?: HostType;
+  readonly resultRepresentation?: HostType;
   readonly parameterOwnership?: "bounded-borrow" | "ownership-transfer";
   readonly resultOwnership?: "frozen-shareable" | "ownership-transfer" | "unique";
-  readonly wasmIntrinsic?: FunctionalWasmIntrinsic;
+  readonly wasmIntrinsic?: WasmIntrinsic;
 }
 
-export type FunctionalHostFieldDeclaration =
-  | FunctionalHostValueDeclaration
-  | FunctionalHostOperationDeclaration;
+export type HostFieldDeclaration =
+  | HostValueDeclaration
+  | HostOperationDeclaration;
 
-export interface FunctionalHostCapabilityDeclaration {
+export interface HostCapabilityDeclaration {
   readonly name: string;
-  readonly fields: readonly FunctionalHostFieldDeclaration[];
+  readonly fields: readonly HostFieldDeclaration[];
 }
 
-export interface FunctionalHostDefinitionBinding {
+export interface HostDefinitionBinding {
   readonly definition: string;
   readonly capability: string;
   readonly field: string;
 }
 
-export interface FunctionalSurfaceModuleOptions {
-  readonly hostCapabilities?: readonly FunctionalHostCapabilityDeclaration[];
-  readonly hostDefinitions?: readonly FunctionalHostDefinitionBinding[];
-  readonly evaluationProfile?: FunctionalEvaluationProfile;
-  readonly wasmExports?: readonly FunctionalWasmExportDeclaration[];
+export interface SurfaceModuleOptions {
+  readonly hostCapabilities?: readonly HostCapabilityDeclaration[];
+  readonly hostDefinitions?: readonly HostDefinitionBinding[];
+  readonly evaluationProfile?: EvaluationProfile;
+  readonly wasmExports?: readonly WasmExportDeclaration[];
 }
 
-export function normalizeFunctionalHostCapabilities(
-  declarations: readonly FunctionalHostCapabilityDeclaration[] | undefined,
-): readonly FunctionalHostCapabilityDeclaration[] {
+export function normalizeHostCapabilities(
+  declarations: readonly HostCapabilityDeclaration[] | undefined,
+): readonly HostCapabilityDeclaration[] {
   if (declarations === undefined) return Object.freeze([]);
   if (!Array.isArray(declarations)) {
     throw new TypeError("functional host capabilities must be an array");
   }
-  const capabilities: readonly FunctionalHostCapabilityDeclaration[] = declarations;
+  const capabilities: readonly HostCapabilityDeclaration[] = declarations;
   const capabilityNames = new Set<string>();
   return Object.freeze(capabilities.map((declaration, capabilityIndex) => {
     if (declaration === null || typeof declaration !== "object") {
@@ -182,7 +180,7 @@ export function normalizeFunctionalHostCapabilities(
         `functional host capability ${JSON.stringify(declaration.name)} fields must be an array`,
       );
     }
-    const declaredFields: readonly FunctionalHostFieldDeclaration[] = declaration.fields;
+    const declaredFields: readonly HostFieldDeclaration[] = declaration.fields;
     const fieldNames = new Set<string>();
     const fields = declaredFields.map((field, fieldIndex) => {
       if (field === null || typeof field !== "object") {
@@ -235,7 +233,7 @@ export function normalizeFunctionalHostCapabilities(
             } has unsupported ownership ${JSON.stringify(field.ownership)}`,
           );
         }
-        let wasmLiteral: FunctionalWasmLiteral | undefined;
+        let wasmLiteral: WasmLiteral | undefined;
         if (field.wasmLiteral !== undefined) {
           wasmLiteral = normalizeWasmLiteral(
             field.wasmLiteral,
@@ -286,7 +284,7 @@ export function normalizeFunctionalHostCapabilities(
         );
       }
       if (field.wasmIntrinsic !== undefined) {
-        if (!Object.values(FunctionalWasmIntrinsic).includes(field.wasmIntrinsic)) {
+        if (!Object.values(WasmIntrinsic).includes(field.wasmIntrinsic)) {
           throw new Error(
             `functional host operation ${
               JSON.stringify(`${declaration.name}.${field.name}`)
@@ -327,7 +325,7 @@ export function normalizeFunctionalHostCapabilities(
           } has unsupported result ownership ${JSON.stringify(field.resultOwnership)}`,
         );
       }
-      if (field.wasmIntrinsic !== FunctionalWasmIntrinsic.BufferGenerate) {
+      if (field.wasmIntrinsic !== WasmIntrinsic.BufferGenerate) {
         requireHostType(
           field.parameter,
           `operation ${JSON.stringify(`${declaration.name}.${field.name}`)} parameter`,
@@ -392,15 +390,15 @@ export function normalizeFunctionalHostCapabilities(
 }
 
 function normalizeWasmLiteral(
-  literal: FunctionalWasmLiteral,
-  type: FunctionalHostType,
+  literal: WasmLiteral,
+  type: HostType,
   capability: string,
   field: string,
-): FunctionalWasmLiteral {
+): WasmLiteral {
   const location = JSON.stringify(`${capability}.${field}`);
   if (literal.kind === "text") {
     if (
-      type.kind !== "named" || type.name !== FUNCTIONAL_TEXT_TYPE_NAME ||
+      type.kind !== "named" || type.name !== TEXT_TYPE_NAME ||
       typeof literal.value !== "string"
     ) {
       throw new Error(`functional WASM literal ${location} must match Text`);
@@ -410,7 +408,7 @@ function normalizeWasmLiteral(
   if (literal.kind !== "bytes" || !Array.isArray(literal.value)) {
     throw new Error(`functional WASM literal ${location} is unsupported`);
   }
-  if (type.kind !== "named" || type.name !== FUNCTIONAL_BYTES_TYPE_NAME) {
+  if (type.kind !== "named" || type.name !== BYTES_TYPE_NAME) {
     throw new Error(`functional WASM literal ${location} must match Bytes`);
   }
   for (const [index, byte] of literal.value.entries()) {
@@ -424,30 +422,30 @@ function normalizeWasmLiteral(
 }
 
 function requireWasmIntrinsicSignature(
-  field: FunctionalHostOperationDeclaration,
+  field: HostOperationDeclaration,
   capability: string,
 ): void {
   const intrinsic = field.wasmIntrinsic;
   if (intrinsic === undefined) return;
   const location = JSON.stringify(`${capability}.${field.name}`);
-  if (intrinsic === FunctionalWasmIntrinsic.BufferByteLength) {
+  if (intrinsic === WasmIntrinsic.BufferByteLength) {
     requireBufferType(field.parameter, `${location} parameter`);
     requireTypeKind(field.result, "integer", `${location} result`);
     return;
   }
-  if (intrinsic === FunctionalWasmIntrinsic.BufferByteGet) {
+  if (intrinsic === WasmIntrinsic.BufferByteGet) {
     const [buffer, index] = requireTupleType(field.parameter, `${location} parameter`);
     requireBufferType(buffer, `${location} buffer`);
     requireTypeKind(index, "integer", `${location} index`);
     requireTypeKind(field.result, "integer", `${location} result`);
     return;
   }
-  if (intrinsic === FunctionalWasmIntrinsic.BufferConvert) {
+  if (intrinsic === WasmIntrinsic.BufferConvert) {
     requireBufferType(field.parameter, `${location} parameter`);
     requireBufferType(field.result, `${location} result`);
     return;
   }
-  if (intrinsic === FunctionalWasmIntrinsic.BufferByteSlice) {
+  if (intrinsic === WasmIntrinsic.BufferByteSlice) {
     const [buffer, bounds] = requireTupleType(field.parameter, `${location} parameter`);
     const [start, end] = requireTupleType(bounds, `${location} bounds`);
     requireBufferType(buffer, `${location} buffer`);
@@ -456,7 +454,7 @@ function requireWasmIntrinsicSignature(
     requireSameBufferType(buffer, field.result, location);
     return;
   }
-  if (intrinsic === FunctionalWasmIntrinsic.BufferGenerate) {
+  if (intrinsic === WasmIntrinsic.BufferGenerate) {
     const [length, generate] = requireTupleType(field.parameter, `${location} parameter`);
     requireTypeKind(length, "integer", `${location} length`);
     if (generate.kind !== "function") {
@@ -470,7 +468,7 @@ function requireWasmIntrinsicSignature(
   const [left, right] = requireTupleType(field.parameter, `${location} parameter`);
   requireBufferType(left, `${location} left`);
   requireSameBufferType(left, right, location);
-  if (intrinsic === FunctionalWasmIntrinsic.BufferAppend) {
+  if (intrinsic === WasmIntrinsic.BufferAppend) {
     requireSameBufferType(left, field.result, location);
     return;
   }
@@ -478,27 +476,27 @@ function requireWasmIntrinsicSignature(
 }
 
 function requireTupleType(
-  type: FunctionalHostType,
+  type: HostType,
   location: string,
-): readonly [FunctionalHostType, FunctionalHostType] {
+): readonly [HostType, HostType] {
   if (type.kind !== "tuple") {
     throw new Error(`functional WASM intrinsic ${location} must be a tuple`);
   }
   return type.values;
 }
 
-function requireBufferType(type: FunctionalHostType, location: string): void {
+function requireBufferType(type: HostType, location: string): void {
   if (
     type.kind === "named" &&
-    (type.name === FUNCTIONAL_TEXT_TYPE_NAME || type.name === FUNCTIONAL_BYTES_TYPE_NAME) &&
+    (type.name === TEXT_TYPE_NAME || type.name === BYTES_TYPE_NAME) &&
     type.arguments.length === 0
   ) return;
   throw new Error(`functional WASM intrinsic ${location} must be Text or Bytes`);
 }
 
 function requireSameBufferType(
-  expected: FunctionalHostType,
-  actual: FunctionalHostType,
+  expected: HostType,
+  actual: HostType,
   location: string,
 ): void {
   requireBufferType(actual, `${location} buffer`);
@@ -511,7 +509,7 @@ function requireSameBufferType(
 }
 
 function requireTypeKind(
-  type: FunctionalHostType,
+  type: HostType,
   kind: "integer" | "boolean",
   location: string,
 ): void {
@@ -521,8 +519,8 @@ function requireTypeKind(
 }
 
 export function functionalHostFieldType(
-  field: FunctionalHostFieldDeclaration,
-): FunctionalTypeSchema {
+  field: HostFieldDeclaration,
+): TypeSchema {
   if (field.kind === "value") return field.type;
   return {
     kind: "function",
@@ -532,8 +530,8 @@ export function functionalHostFieldType(
 }
 
 export function functionalHostFieldRepresentationType(
-  field: FunctionalHostFieldDeclaration,
-): FunctionalTypeSchema {
+  field: HostFieldDeclaration,
+): TypeSchema {
   if (field.kind === "value") return field.representation ?? field.type;
   return {
     kind: "function",
@@ -551,7 +549,7 @@ function requireName(name: string, location: string): void {
 }
 
 function requireHostType(
-  type: FunctionalHostType,
+  type: HostType,
   location: string,
   typeParameters: ReadonlySet<string>,
   depth = 0,
@@ -657,18 +655,18 @@ function normalizeTypeParameters(
 }
 
 function requireCompatibleRepresentation(
-  semantic: FunctionalHostType,
-  representation: FunctionalHostType,
+  semantic: HostType,
+  representation: HostType,
   location: string,
 ): void {
   if (sameHostType(semantic, representation)) return;
   if (
-    representation.kind === "named" && representation.name === FUNCTIONAL_ERASED_TYPE_NAME &&
+    representation.kind === "named" && representation.name === ERASED_TYPE_NAME &&
     representation.arguments.length === 0
   ) return;
   if (
     semantic.kind === "named" && representation.kind === "named" &&
-    representation.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX) &&
+    representation.name.startsWith(RESOURCE_TYPE_PREFIX) &&
     representation.arguments.length === 0
   ) return;
   throw new Error(
@@ -678,7 +676,7 @@ function requireCompatibleRepresentation(
   );
 }
 
-function sameHostType(left: FunctionalHostType, right: FunctionalHostType): boolean {
+function sameHostType(left: HostType, right: HostType): boolean {
   if (left.kind !== right.kind) return false;
   switch (left.kind) {
     case "integer":

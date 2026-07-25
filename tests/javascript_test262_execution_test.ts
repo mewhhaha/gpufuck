@@ -1,6 +1,6 @@
 import { deepStrictEqual, equal, match, throws } from "node:assert/strict";
 
-import type { GpuFunctionalCompiler } from "../functional.ts";
+import type { GpuCompiler } from "../functional.ts";
 import {
   compileTest262Case,
   type Test262ExecutionCase,
@@ -99,7 +99,7 @@ Deno.test("reports compiler fuel exhaustion as a resource limit", async () => {
         }],
       });
     },
-  } as unknown as GpuFunctionalCompiler;
+  } as unknown as GpuCompiler;
 
   const result = await compileTest262Case(compiler, {
     executionCase: {

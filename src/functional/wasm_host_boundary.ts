@@ -1,19 +1,19 @@
 import {
-  FUNCTIONAL_ERASED_TYPE_NAME,
-  FUNCTIONAL_INIT_TYPE_NAME,
-  type FunctionalHostScalarType,
-  type FunctionalHostType,
+  ERASED_TYPE_NAME,
+  type HostScalarType,
+  type HostType,
+  INIT_TYPE_NAME,
 } from "./host_contract.ts";
-import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
-import type { FunctionalType } from "./abi.ts";
+import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { Type } from "./abi.ts";
 import type {
-  FunctionalWasmBoundaryErrorDetails,
-  FunctionalWasmHostValue,
-  FunctionalWasmInit,
-  FunctionalWasmInitBinding,
-  FunctionalWasmRuntimeErrorDetails,
+  WasmBoundaryErrorDetails,
+  WasmHostValue,
+  WasmInit,
+  WasmInitBinding,
+  WasmRuntimeErrorDetails,
 } from "./wasm_contract.ts";
-import { locateFunctionalSpan } from "./diagnostics.ts";
+import { locateSpan } from "./diagnostics.ts";
 import { functionalRuntimeTypeDescriptorKey } from "./host_specialization.ts";
 import { WasmValueType } from "./wasm_binary.ts";
 import {
@@ -25,55 +25,55 @@ import {
   WASM_FAULT_OUT_OF_FUEL,
   WASM_FAULT_OUT_OF_MEMORY,
 } from "./wasm_runtime_binary.ts";
-import { concreteFunctionalType } from "./schema_contract.ts";
+import { concreteType } from "./schema_contract.ts";
 import {
-  decodeFunctionalWasmBoxedValue,
-  decodeFunctionalWasmValue,
-  describeFunctionalType,
-  encodeFunctionalWasmValue,
-  requireFirstOrderFunctionalWasmType,
+  decodeWasmBoxedValue,
+  decodeWasmValue,
+  describeType,
+  encodeWasmValue,
+  requireFirstOrderWasmType,
 } from "./wasm_value_codec.ts";
 
 const HOST_IMPORT_MODULE_PREFIX = "functional_init:";
 
-export interface FunctionalWasmEntry {
+export interface WasmEntry {
   readonly takesInit: boolean;
-  readonly parameter?: FunctionalType;
-  readonly result: FunctionalType;
+  readonly parameter?: Type;
+  readonly result: Type;
 }
 
-export class FunctionalWasmBoundaryError extends TypeError {
-  readonly code: FunctionalWasmBoundaryErrorDetails["code"];
-  readonly kind: FunctionalWasmBoundaryErrorDetails["kind"];
+export class WasmBoundaryError extends TypeError {
+  readonly code: WasmBoundaryErrorDetails["code"];
+  readonly kind: WasmBoundaryErrorDetails["kind"];
   readonly path: string | undefined;
 
-  constructor(details: FunctionalWasmBoundaryErrorDetails, cause?: unknown) {
+  constructor(details: WasmBoundaryErrorDetails, cause?: unknown) {
     super(`${details.code}: ${details.message}`, { cause });
-    this.name = "FunctionalWasmBoundaryError";
+    this.name = "WasmBoundaryError";
     this.code = details.code;
     this.kind = details.kind;
     this.path = details.path;
   }
 }
 
-export class FunctionalWasmRuntimeError extends Error {
-  readonly code: FunctionalWasmRuntimeErrorDetails["code"];
-  readonly kind: FunctionalWasmRuntimeErrorDetails["kind"];
+export class WasmRuntimeError extends Error {
+  readonly code: WasmRuntimeErrorDetails["code"];
+  readonly kind: WasmRuntimeErrorDetails["kind"];
   readonly entryDefinition: number;
   readonly entryName: string;
   readonly coreNode: number | undefined;
-  readonly span: FunctionalWasmRuntimeErrorDetails["span"] | undefined;
-  readonly location: FunctionalWasmRuntimeErrorDetails["location"] | undefined;
+  readonly span: WasmRuntimeErrorDetails["span"] | undefined;
+  readonly location: WasmRuntimeErrorDetails["location"] | undefined;
   readonly capability: string | undefined;
   readonly operation: string | undefined;
 
   constructor(entryDefinition: number, cause: unknown);
-  constructor(details: FunctionalWasmRuntimeErrorDetails, cause?: unknown);
+  constructor(details: WasmRuntimeErrorDetails, cause?: unknown);
   constructor(
-    detailsOrEntryDefinition: FunctionalWasmRuntimeErrorDetails | number,
+    detailsOrEntryDefinition: WasmRuntimeErrorDetails | number,
     cause?: unknown,
   ) {
-    const details: FunctionalWasmRuntimeErrorDetails = typeof detailsOrEntryDefinition === "number"
+    const details: WasmRuntimeErrorDetails = typeof detailsOrEntryDefinition === "number"
       ? {
         code: "F3005",
         kind: "blackhole",
@@ -84,7 +84,7 @@ export class FunctionalWasmRuntimeError extends Error {
       }
       : detailsOrEntryDefinition;
     super(`${details.code}: ${details.message}`, { cause });
-    this.name = "FunctionalWasmRuntimeError";
+    this.name = "WasmRuntimeError";
     this.code = details.code;
     this.kind = details.kind;
     this.entryDefinition = details.entryDefinition;
@@ -97,13 +97,13 @@ export class FunctionalWasmRuntimeError extends Error {
   }
 }
 
-export class FunctionalWasmSuspension extends Error {
+export class WasmSuspension extends Error {
   constructor(readonly pending: Promise<void>) {
     super("functional WASM host operation suspended");
   }
 }
 
-export function wasmValueType(type: FunctionalHostType): number {
+export function wasmValueType(type: HostType): number {
   switch (type.kind) {
     case "integer":
     case "boolean":
@@ -127,7 +127,7 @@ export function wasmValueType(type: FunctionalHostType): number {
   }
 }
 
-export function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasmEntry {
+export function functionalWasmEntry(module: GpuModule): WasmEntry {
   const requiresInit = module.hostCapabilities.some((capability) =>
     capability.fields.some((field) =>
       !module.hostDefinitions.some((binding) =>
@@ -138,10 +138,10 @@ export function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasm
   if (module.entryType.kind !== "function") {
     if (requiresInit) {
       throw new TypeError(
-        `functional WASM entry d${module.entryDefinition} declares ${module.hostCapabilities.length} host capabilities but does not accept ${FUNCTIONAL_INIT_TYPE_NAME}`,
+        `functional WASM entry d${module.entryDefinition} declares ${module.hostCapabilities.length} host capabilities but does not accept ${INIT_TYPE_NAME}`,
       );
     }
-    requireFirstOrderFunctionalWasmType(
+    requireFirstOrderWasmType(
       module,
       module.entryType,
       "entry result",
@@ -150,7 +150,7 @@ export function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasm
   }
   const parameter = module.entryType.parameter;
   const takesInit = parameter.kind === "named" &&
-    parameter.name === FUNCTIONAL_INIT_TYPE_NAME &&
+    parameter.name === INIT_TYPE_NAME &&
     parameter.arguments.length === 0;
   if (module.entryType.result.kind === "function") {
     throw unsupportedWasmEntryType(module, module.entryType);
@@ -158,10 +158,10 @@ export function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasm
   if (takesInit) {
     if (module.hostCapabilities.length === 0) {
       throw new TypeError(
-        `functional WASM entry d${module.entryDefinition} accepts ${FUNCTIONAL_INIT_TYPE_NAME} but declares no host capabilities`,
+        `functional WASM entry d${module.entryDefinition} accepts ${INIT_TYPE_NAME} but declares no host capabilities`,
       );
     }
-    requireFirstOrderFunctionalWasmType(
+    requireFirstOrderWasmType(
       module,
       module.entryType.result,
       "entry result",
@@ -171,12 +171,12 @@ export function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasm
   if (requiresInit) {
     throw new TypeError(
       `functional WASM entry d${module.entryDefinition} declares host capabilities but accepts ${
-        describeFunctionalType(parameter)
-      } instead of ${FUNCTIONAL_INIT_TYPE_NAME}`,
+        describeType(parameter)
+      } instead of ${INIT_TYPE_NAME}`,
     );
   }
-  requireFirstOrderFunctionalWasmType(module, parameter, "entry argument");
-  requireFirstOrderFunctionalWasmType(
+  requireFirstOrderWasmType(module, parameter, "entry argument");
+  requireFirstOrderWasmType(
     module,
     module.entryType.result,
     "entry result",
@@ -184,17 +184,17 @@ export function functionalWasmEntry(module: GpuFunctionalModule): FunctionalWasm
   return { takesInit: false, parameter, result: module.entryType.result };
 }
 
-export function functionalEntryName(module: GpuFunctionalModule): string {
+export function functionalEntryName(module: GpuModule): string {
   return module.definitionNames[module.entryDefinition] ??
     `d${module.entryDefinition}`;
 }
 
 function functionalWasmRuntimeErrorDetails(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
+  module: GpuModule,
+  nodes: readonly CoreNode[],
   faultCode: number,
   coreNode: number,
-): FunctionalWasmRuntimeErrorDetails {
+): WasmRuntimeErrorDetails {
   const entryName = functionalEntryName(module);
   const node = coreNode >= 0 ? nodes[coreNode] : undefined;
   const nodeContext = node === undefined ? {} : {
@@ -202,7 +202,7 @@ function functionalWasmRuntimeErrorDetails(
     span: { startByte: node.sourceByteOffset, endByte: node.sourceEndByte },
   };
   const span = nodeContext.span;
-  const location = span === undefined ? undefined : locateFunctionalSpan(module.sources, span);
+  const location = span === undefined ? undefined : locateSpan(module.sources, span);
   const context = {
     entryDefinition: module.entryDefinition,
     entryName,
@@ -284,13 +284,13 @@ function functionalWasmRuntimeErrorDetails(
   };
 }
 
-export function throwFunctionalWasmTrap(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
+export function throwWasmTrap(
+  module: GpuModule,
+  nodes: readonly CoreNode[],
   instance: WebAssembly.Instance,
   cause: unknown,
 ): never {
-  if (cause instanceof FunctionalWasmRuntimeError) throw cause;
+  if (cause instanceof WasmRuntimeError) throw cause;
   const runtimeFault = instance.exports.runtimeFault;
   const runtimeFaultNode = instance.exports.runtimeFaultNode;
   if (
@@ -298,7 +298,7 @@ export function throwFunctionalWasmTrap(
     Number(runtimeFault.value) !== 0 &&
     runtimeFaultNode instanceof WebAssembly.Global
   ) {
-    throw new FunctionalWasmRuntimeError(
+    throw new WasmRuntimeError(
       functionalWasmRuntimeErrorDetails(
         module,
         nodes,
@@ -309,7 +309,7 @@ export function throwFunctionalWasmTrap(
     );
   }
   if (cause instanceof WebAssembly.RuntimeError) {
-    throw new FunctionalWasmRuntimeError({
+    throw new WasmRuntimeError({
       code: "F3103",
       kind: "trap",
       entryDefinition: module.entryDefinition,
@@ -323,20 +323,20 @@ export function throwFunctionalWasmTrap(
 }
 
 function unsupportedWasmEntryType(
-  module: GpuFunctionalModule,
-  type: FunctionalType,
+  module: GpuModule,
+  type: Type,
 ): TypeError {
   return new TypeError(
     `functional WASM entry d${module.entryDefinition} has unsupported type ${
-      describeFunctionalType(type)
+      describeType(type)
     }; ` +
-      `expected a first-order result or ${FUNCTIONAL_INIT_TYPE_NAME} -> first-order result`,
+      `expected a first-order result or ${INIT_TYPE_NAME} -> first-order result`,
   );
 }
 
 export function functionalHostScalarType(
-  type: FunctionalType,
-): FunctionalHostScalarType | undefined {
+  type: Type,
+): HostScalarType | undefined {
   if (
     type.kind === "integer" || type.kind === "signed-integer-64" ||
     type.kind === "float-32" || type.kind === "float-64" ||
@@ -346,8 +346,8 @@ export function functionalHostScalarType(
 }
 
 export function functionalWasmImports(
-  module: GpuFunctionalModule,
-  init: FunctionalWasmInit | undefined,
+  module: GpuModule,
+  init: WasmInit | undefined,
 ): {
   readonly imports: Record<string, Record<string, CallableFunction>>;
   bindInstance(instance: WebAssembly.Instance): void;
@@ -382,7 +382,7 @@ export function functionalWasmImports(
   })).filter((capability) => capability.fields.length > 0);
   if (externalCapabilities.length === 0) return bridge({});
   if (init === undefined || init === null || typeof init !== "object") {
-    throw invalidFunctionalWasmInit(
+    throw invalidWasmInit(
       "init",
       `functional WASM module requires init capabilities ${
         JSON.stringify(externalCapabilities.map((capability) => capability.name))
@@ -396,7 +396,7 @@ export function functionalWasmImports(
   for (const capability of externalCapabilities) {
     const fields = Object.hasOwn(init, capability.name) ? init[capability.name] : undefined;
     if (fields === undefined || fields === null || typeof fields !== "object") {
-      throw invalidFunctionalWasmInit(
+      throw invalidWasmInit(
         capability.name,
         `functional WASM init omitted capability ${JSON.stringify(capability.name)}; received ${
           describeHostBinding(fields)
@@ -415,7 +415,7 @@ export function functionalWasmImports(
       const key = hostFieldKey(capability.name, declaration.name);
       if (declaration.kind === "value") {
         if (typeof binding === "function" || binding === undefined) {
-          throw invalidFunctionalWasmInit(
+          throw invalidWasmInit(
             key,
             `functional WASM init value ${
               JSON.stringify(key)
@@ -433,8 +433,8 @@ export function functionalWasmImports(
               key,
             );
           } catch (cause) {
-            if (cause instanceof FunctionalWasmBoundaryError) throw cause;
-            throw invalidFunctionalWasmInit(
+            if (cause instanceof WasmBoundaryError) throw cause;
+            throw invalidWasmInit(
               key,
               cause instanceof Error
                 ? cause.message
@@ -446,7 +446,7 @@ export function functionalWasmImports(
         continue;
       }
       if (typeof binding !== "function") {
-        throw invalidFunctionalWasmInit(
+        throw invalidWasmInit(
           key,
           `functional WASM init operation ${JSON.stringify(key)} expected a function; received ${
             describeHostBinding(binding)
@@ -474,8 +474,8 @@ export function functionalWasmImports(
             key,
           );
         } catch (cause) {
-          if (cause instanceof FunctionalWasmSuspension) throw cause;
-          if (cause instanceof FunctionalWasmRuntimeError) throw cause;
+          if (cause instanceof WasmSuspension) throw cause;
+          if (cause instanceof WasmRuntimeError) throw cause;
           throw functionalHostOperationError(
             module,
             capability.name,
@@ -491,24 +491,24 @@ export function functionalWasmImports(
 
 function decodeHostValue(
   instance: WebAssembly.Instance,
-  module: GpuFunctionalModule,
-  semanticType: FunctionalHostType,
-  representation: FunctionalHostType,
+  module: GpuModule,
+  semanticType: HostType,
+  representation: HostType,
   value: number | bigint,
-): FunctionalWasmHostValue {
+): WasmHostValue {
   if (isErasedRepresentation(representation)) {
-    const type = concreteFunctionalType(semanticType);
+    const type = concreteType(semanticType);
     return {
       kind: "erased",
       type,
-      value: decodeFunctionalWasmBoxedValue(instance, module, type, value, 2_047),
+      value: decodeWasmBoxedValue(instance, module, type, value, 2_047),
     };
   }
   return representation.kind === "tuple" || representation.kind === "named"
-    ? decodeFunctionalWasmValue(
+    ? decodeWasmValue(
       instance,
       module,
-      concreteFunctionalType(representation),
+      concreteType(representation),
       value,
       2_047,
     )
@@ -517,10 +517,10 @@ function decodeHostValue(
 
 function encodeHostValue(
   instance: WebAssembly.Instance,
-  module: GpuFunctionalModule,
-  semanticType: FunctionalHostType,
-  representation: FunctionalHostType,
-  value: FunctionalWasmHostValue,
+  module: GpuModule,
+  semanticType: HostType,
+  representation: HostType,
+  value: WasmHostValue,
   key: string,
 ): number | bigint {
   if (isErasedRepresentation(representation)) {
@@ -531,39 +531,39 @@ function encodeHostValue(
         } expected erased; received ${value.kind}`,
       );
     }
-    const expected = concreteFunctionalType(semanticType);
+    const expected = concreteType(semanticType);
     if (
       functionalRuntimeTypeDescriptorKey(value.type) !==
         functionalRuntimeTypeDescriptorKey(expected)
     ) {
       throw new TypeError(
         `functional WASM erased host value ${JSON.stringify(key)} has descriptor ${
-          describeFunctionalType(value.type)
-        }; expected ${describeFunctionalType(expected)}`,
+          describeType(value.type)
+        }; expected ${describeType(expected)}`,
       );
     }
-    return encodeFunctionalWasmValue(instance, module, expected, value.value);
+    return encodeWasmValue(instance, module, expected, value.value);
   }
   if (representation.kind === "tuple" || representation.kind === "named") {
-    return encodeFunctionalWasmValue(
+    return encodeWasmValue(
       instance,
       module,
-      concreteFunctionalType(representation),
+      concreteType(representation),
       value,
     );
   }
   return hostValueAsNumber(value, representation, key);
 }
 
-function isErasedRepresentation(type: FunctionalHostType): boolean {
-  return type.kind === "named" && type.name === FUNCTIONAL_ERASED_TYPE_NAME &&
+function isErasedRepresentation(type: HostType): boolean {
+  return type.kind === "named" && type.name === ERASED_TYPE_NAME &&
     type.arguments.length === 0;
 }
 
 function hostValueFromNative(
   value: number | bigint,
-  type: FunctionalHostType,
-): FunctionalWasmHostValue {
+  type: HostType,
+): WasmHostValue {
   if (type.kind === "tuple" || type.kind === "named") {
     throw new TypeError(
       "functional WASM aggregate host values require an instantiated module",
@@ -588,8 +588,8 @@ function hostValueFromNative(
 }
 
 function hostValueAsNumber(
-  value: FunctionalWasmInitBinding,
-  expectedType: FunctionalHostType,
+  value: WasmInitBinding,
+  expectedType: HostType,
   field: string,
 ): number | bigint {
   if (expectedType.kind === "tuple" || expectedType.kind === "named") {
@@ -677,12 +677,12 @@ function describeHostBinding(binding: unknown): string {
   return kind === undefined ? "object without a kind" : `object with kind ${JSON.stringify(kind)}`;
 }
 
-export function invalidFunctionalWasmInit(
+export function invalidWasmInit(
   path: string,
   message: string,
   cause?: unknown,
-): FunctionalWasmBoundaryError {
-  return new FunctionalWasmBoundaryError({
+): WasmBoundaryError {
+  return new WasmBoundaryError({
     code: "F4102",
     kind: "invalid-init",
     path,
@@ -691,14 +691,14 @@ export function invalidFunctionalWasmInit(
 }
 
 export function functionalHostOperationError(
-  module: GpuFunctionalModule,
+  module: GpuModule,
   capability: string,
   operation: string,
   cause: unknown,
-): FunctionalWasmRuntimeError {
+): WasmRuntimeError {
   const key = hostFieldKey(capability, operation);
   const reason = cause instanceof Error ? cause.message : String(cause);
-  return new FunctionalWasmRuntimeError({
+  return new WasmRuntimeError({
     code: "F3101",
     kind: "host-operation",
     entryDefinition: module.entryDefinition,

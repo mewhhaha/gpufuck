@@ -1,7 +1,7 @@
 import { deepStrictEqual, equal, match, rejects } from "node:assert/strict";
 
-import { FunctionalCoreTag, FunctionalEvaluationMode, requestWebGpuDevice } from "../functional.ts";
-import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";
+import { CoreTag, EvaluationMode, requestWebGpuDevice } from "../functional.ts";
+import type { CoreNode } from "../src/semantic/compiler_module.ts";
 import {
   GpuSemanticDefinitionWavefrontPlan,
   GpuSemanticDefinitionWavefrontScheduler,
@@ -179,28 +179,28 @@ function deterministicDependencyGraphs(count: number): SemanticDefinitionDepende
   });
 }
 
-function globalNode(definition: number): LazuliCoreNode {
+function globalNode(definition: number): CoreNode {
   return {
-    tag: FunctionalCoreTag.Global,
+    tag: CoreTag.Global,
     payload: definition,
     child0: 0xffff_ffff,
     child1: 0xffff_ffff,
     child2: 0xffff_ffff,
     sourceByteOffset: 0,
     sourceEndByte: 0,
-    evaluationMode: FunctionalEvaluationMode.StrictEager,
+    evaluationMode: EvaluationMode.StrictEager,
   };
 }
 
-function integerNode(): LazuliCoreNode {
+function integerNode(): CoreNode {
   return {
-    tag: FunctionalCoreTag.Integer,
+    tag: CoreTag.Integer,
     payload: 42,
     child0: 0xffff_ffff,
     child1: 0xffff_ffff,
     child2: 0xffff_ffff,
     sourceByteOffset: 0,
     sourceEndByte: 0,
-    evaluationMode: FunctionalEvaluationMode.StrictEager,
+    evaluationMode: EvaluationMode.StrictEager,
   };
 }

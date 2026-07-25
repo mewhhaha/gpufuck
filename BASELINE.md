@@ -41,8 +41,8 @@ proper A/B.
 
 **The GPU loses at every batch size, and the gap converges rather than crossing.** Its marginal cost
 per module exceeds the CPU's total cost per module, so no batch size wins. The CPU baseline is
-`inferLazuliTypes` in `src/semantic/type_inference.ts` — the host Hindley-Milner implementation that
-the GPU shader is differentially tested against in `tests/lazuli_gpu_diagnostic_parity_test.ts`, so
+`inferTypes` in `src/semantic/type_inference.ts` — the host Hindley-Milner implementation that the
+GPU shader is differentially tested against in `tests/semantic_gpu_diagnostic_parity_test.ts`, so
 both columns do the same work.
 
 **Two independent causes, with different fixes.**
@@ -52,7 +52,7 @@ both columns do the same work.
    it is a runtime property, not a compiler one. Unmeasured in Chrome.
 2. _Slope (~9.7x)._ The semantic, inference, and evaluator kernels are all
    `@compute @workgroup_size(1)`, one lane per module, running a serial `loop { if phase == … }`
-   state machine over a 74-field `var<private>` struct. The one exception, `lower_planned_lazuli` at
+   state machine over a 74-field `var<private>` struct. The one exception, `lower_planned_module` at
    `workgroup_size(64)`, only copies a lowering plan the host already computed — about 2,300 of the
    ~28,800 GPU transitions per module. This survives any runtime fix.
 
@@ -68,7 +68,7 @@ tree-sitter does 10–30 MB/s. A 10x parser improvement would outweigh the entir
 The retarget is judged on the **GPU inference share**, not total wall time:
 
 - Below **10.2 µs/module** it beats the single-threaded CPU it replaces.
-- The honest bar is a multi-threaded host: `inferLazuliTypes` across 8 workers is ~1.3 µs/module.
+- The honest bar is a multi-threaded host: `inferTypes` across 8 workers is ~1.3 µs/module.
 - If node-parallel validation and constraint generation cannot bring 99.7 µs under ~30 µs, the
   remaining phases — unification and generalization — will not close the gap either, since they are
   strictly harder to parallelize. Retreat to module-level throughput at that point.

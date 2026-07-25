@@ -1,4 +1,4 @@
-import { MAXIMUM_GPU_DISPATCH_BATCH_SIZE } from "./gpu_dispatch_scheduler.ts";
+import { MAXIMUM_GPU_DISPATCH_BATCH_SIZE } from "../semantic/gpu_dispatch_scheduler.ts";
 
 interface PendingCompilation {
   readonly compile: () => Promise<unknown>;
