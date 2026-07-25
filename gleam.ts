@@ -24,4 +24,9 @@ export {
   lowerGleamSources,
 } from "./src/gleam/frontend.ts";
 export type { GleamExportSignature, LoweredGleamModule } from "./src/gleam/lowering.ts";
+export {
+  ParallelGleamFrontend,
+  type ParallelGleamResult,
+  type ParallelGleamUnit,
+} from "./src/gleam/parallel_frontend.ts";
 export { type GleamTraceInput, renderGleamTrace } from "./src/gleam/trace.ts";

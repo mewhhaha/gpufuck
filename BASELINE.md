@@ -208,6 +208,52 @@ Two measurement traps this benchmark hit, recorded so the next person does not:
 - `compileModuleToWasm` memoizes per module, so a median over repeats times a cache hit and reports
   0.8 ms for a 25 ms operation. Each sample needs a freshly compiled module.
 
+## 2026-07-25 — throughput, where the GPU wins
+
+Everything above measures latency: one large program, compiled once. That is the case gpufuck loses
+badly. This measures the opposite, and the conclusion reverses.
+
+`gleam build` has no cross-package batching, so its per-package cost is a floor. Measured cold five
+times on a minimal package containing the identical program: **11 ms**. Reproduce the gpufuck side
+with `deno task bench:gleam-batch`.
+
+| Batch | Serial frontend | Parallel frontend |    GPU | Wasm emit | Per module |  vs Gleam |
+| ----: | --------------: | ----------------: | -----: | --------: | ---------: | --------: |
+|     1 |           25 ms |              2 ms |  13 ms |      0 ms |  15,562 µs |      0.7x |
+|    32 |           27 ms |              7 ms |  17 ms |      2 ms |     806 µs |     13.6x |
+|   512 |          323 ms |             76 ms |  60 ms |    237 ms |     729 µs |     15.1x |
+| 1,024 |          649 ms |            156 ms | 104 ms |    453 ms |     697 µs | **15.8x** |
+
+Wasm emission is included because Gleam writes JavaScript to disk. The one-time WebGPU setup is
+excluded; at batch 1,024 it amortizes to under a microsecond per module.
+
+**Latency and throughput point opposite ways, and both are real.** One large module: 33x slower than
+Gleam. A thousand independent modules: 15.8x faster. Which number matters depends entirely on
+whether the workload is "build this project" or "compile these thousand programs" — a playground, a
+package registry, a CI corpus, a Test262-style sweep.
+
+### What the batch profile says to do next
+
+At batch 1,024 the cost is **22% frontend, 15% GPU, 63% Wasm emission**. The GPU is the cheapest
+phase in the pipeline. Two things follow.
+
+`ParallelGleamFrontend` (`src/gleam/parallel_frontend.ts`) took the frontend from 649 ms to 156 ms,
+a **4.2x** speedup on 16 cores. Parsing and lowering are pure functions of a source string, so they
+parallelise across compilation units with nothing shared. The gap from the theoretical 15x is worker
+message copying and per-worker JIT warmup, not contention.
+
+Wasm emission is now the dominant cost at 442 µs/module, and it is worth knowing what it is _not_:
+Core readback from the GPU is 1 µs, the three runtime body builders are 22 µs, and the
+content-addressed fingerprint (`JSON.stringify` plus SHA-256 over every Core node) is 34 µs. The
+remaining ~540 µs is instruction emission, and it is mostly **fixed per module** — `40 + 2` lowers
+to 8 Core nodes and still emits a 1,244-byte code section, because every module carries its own
+allocator, free list, and thunk-forcing runtime. The code section is 91-98% of every artifact.
+
+That points at two different fixes with different shapes. Emitting bodies on the GPU is the
+data-parallel one: the Core is already in GPU buffers, emission is a local per-node mapping, and
+LEB128's data-dependent offsets are a size pass plus a prefix sum plus a write pass. Not re-emitting
+an identical runtime per module is the cheaper one. The batch case wants the second first.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
