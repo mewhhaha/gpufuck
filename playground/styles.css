@@ -1,0 +1,283 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;
+  --panel: #ffffff;
+  --ink: #16161a;
+  --muted: #61616b;
+  --line: #e2e2df;
+  --accent: #1b6bd6;
+  --ok: #0f7b4f;
+  --error: #b4271f;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101013;
+    --panel: #17171b;
+    --ink: #ececf1;
+    --muted: #9a9aa6;
+    --line: #2a2a31;
+    --accent: #7aa9f7;
+    --ok: #55c98d;
+    --error: #f0837c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem 1.5rem 3rem;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  max-width: 78rem;
+  margin-inline: auto;
+}
+
+header {
+  margin-bottom: 1.75rem;
+}
+
+h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  letter-spacing: -0.015em;
+}
+
+header p {
+  margin: 0;
+  max-width: 46rem;
+  color: var(--muted);
+}
+
+main {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+@media (max-width: 60rem) {
+  main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.pane {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem;
+  min-width: 0;
+}
+
+.pane-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+h2 {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.examples button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.examples button:hover {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+
+.examples button[aria-current="true"] {
+  color: var(--panel);
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+textarea {
+  width: 100%;
+  min-height: 22rem;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.85rem;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.6 var(--mono);
+  tab-size: 2;
+}
+
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+#run {
+  border: 0;
+  border-radius: 7px;
+  padding: 0.5rem 1.15rem;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#run:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.actions a {
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.stages {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.3rem 1rem;
+  margin: 0 0 0.9rem;
+  font-size: 0.875rem;
+}
+
+.stages dt {
+  color: var(--muted);
+}
+
+.stages dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.stages dd[data-state="skipped"] {
+  color: var(--line);
+}
+
+.stages dd[data-state="failed"] {
+  color: var(--error);
+}
+
+.status {
+  margin: 0 0 0.9rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.status[data-tone="busy"] {
+  color: var(--accent);
+}
+
+.status[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.status[data-tone="error"] {
+  color: var(--error);
+}
+
+.result:empty {
+  display: none;
+}
+
+.result {
+  border-top: 1px solid var(--line);
+  padding-top: 0.9rem;
+}
+
+.result pre {
+  margin: 0.5rem 0;
+  padding: 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+  font: 13px/1.5 var(--mono);
+}
+
+.result ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.result li {
+  margin-bottom: 0.4rem;
+  font-size: 0.875rem;
+}
+
+.result code {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--error);
+}
+
+.result .span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.result .meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+footer p {
+  margin: 0 0 0.4rem;
+  max-width: 52rem;
+}
+
+footer code {
+  font-family: var(--mono);
+}
+
+footer a {
+  color: var(--accent);
+}

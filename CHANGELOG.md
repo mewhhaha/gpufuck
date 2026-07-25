@@ -8,8 +8,8 @@ All notable changes to gpufuck are documented here. The project follows
 This release narrows the project toward one purpose: being a fast compiler on the GPU. Roughly
 45,000 net lines of non-documentation code were removed, taking `src/` from 78,209 to 61,195 lines.
 It is a large, deliberate reduction in capability, and **the compiler is not yet fast** — nothing in
-this release improved compile throughput. See [BASELINE.md](BASELINE.md) for the measurements and the
-criteria that would call the approach dead.
+this release improved compile throughput. See [BASELINE.md](BASELINE.md) for the measurements and
+the criteria that would call the approach dead.
 
 The WebAssembly backend was removed during this cycle and restored before release. It stays because
 Ducklang compiles through it and has no other code generator; it imports `functional.ts` by relative
