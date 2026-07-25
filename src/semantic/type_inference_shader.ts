@@ -151,7 +151,7 @@ export const InferenceStatus = {
   Exhausted: 5,
 } as const;
 
-/** Numeric counterparts of L2010/L2101-L2104 plus bounded-arena failures. */
+/** Numeric counterparts of F2010/F2101-F2104 plus bounded-arena failures. */
 export const InferenceDiagnosticCode = {
   None: 0,
   NonExhaustiveCase: 2010,
@@ -169,7 +169,7 @@ export const InferenceDiagnosticCode = {
 } as const;
 
 /**
- * Stable `ErrorContext` values for L2101. `ErrorDetail` and the two error
+ * Stable `ErrorContext` values for F2101. `ErrorDetail` and the two error
  * operands use the category-specific meanings documented on
  * `InferenceStateWord`.
  */
@@ -207,8 +207,8 @@ export const InferenceMetadataFailure = {
  *
  * Diagnostic payloads are durable workspace references/scalars:
  *
- * - L2010: `ErrorDetail` is the missing constructor symbol.
- * - L2101: `ErrorContext` is `InferenceMetadataFailure`; `ErrorDetail`
+ * - F2010: `ErrorDetail` is the missing constructor symbol.
+ * - F2101: `ErrorContext` is `InferenceMetadataFailure`; `ErrorDetail`
  *   identifies the primary symbol/index, while `ErrorOperand0/1` carry any
  *   expected/received evidence required by that category. Name/type failures
  *   put the offending symbol in `ErrorDetail`; case-field, type-argument, and
@@ -220,9 +220,9 @@ export const InferenceMetadataFailure = {
  *   scrutinee uses its inferred type root as operand 0. Constructor-result
  *   failures use the constructor index as detail and the result root as
  *   operand 0; hidden field parameters additionally put their symbol there.
- * - L2102: `ErrorOperand0/1` are the expected/received internal type roots.
- * - L2103: `ErrorOperand0/1` are the variable/candidate internal type roots.
- * - L2104: `ErrorDetail` is the main symbol and `ErrorOperand0` is its inferred
+ * - F2102: `ErrorOperand0/1` are the expected/received internal type roots.
+ * - F2103: `ErrorOperand0/1` are the variable/candidate internal type roots.
+ * - F2104: `ErrorDetail` is the main symbol and `ErrorOperand0` is its inferred
  *   type root, or `NO_INDEX` when main has no definition.
  */
 export const INFERENCE_STATE_WORD_LENGTH = 73;

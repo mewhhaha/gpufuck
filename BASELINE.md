@@ -1,7 +1,13 @@
 # Baseline
 
-Reproduce with `deno task bench:throughput`. Every performance claim in this repo is judged against
-this file.
+**This file is the measurement record: what was measured, how, and what turned out to be false.** It
+is deliberately append-only in spirit — superseded numbers stay, with the correction next to them,
+because several of them were wrong the first time and knowing that is the point.
+
+For what to _do_ about these numbers, ranked, see [TASKS.md](TASKS.md). This file does not plan.
+
+Every performance claim in the repository is judged against this file. Reproduce the oldest section
+with `deno task bench:throughput`; later sections name their own task.
 
 Marginal cost per module is the number that matters. Totals hide the crossover, because both the CPU
 and GPU paths pay the same host parse — a total-wall-time ratio flatters the GPU.
@@ -232,7 +238,7 @@ Gleam. A thousand independent modules: 15.8x faster. Which number matters depend
 whether the workload is "build this project" or "compile these thousand programs" — a playground, a
 package registry, a CI corpus, a Test262-style sweep.
 
-### What the batch profile says to do next
+### What the batch profile shows
 
 At batch 1,024 the cost is **22% frontend, 15% GPU, 63% Wasm emission**. The GPU is the cheapest
 phase in the pipeline. Two things follow.

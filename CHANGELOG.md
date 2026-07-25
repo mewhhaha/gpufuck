@@ -16,6 +16,12 @@ restored. The release workflow, the version, the `publish` include/exclude, and
 CLIs, `language/`, and `examples/` stay out of the tarball, which `deno publish --dry-run` enforces
 by typechecking the published graph.
 
+The documentation was rebaselined with this release. README is now written for a consumer — install,
+a quickstart that runs as written, an honest "is it fast" section with both numbers, and how to
+build a frontend — rather than as a project status page. [TASKS.md](TASKS.md) is new and holds
+ranked future work with the measurement behind each item. BASELINE.md states plainly that it is the
+measurement record and does not plan.
+
 This release narrows the project toward one purpose: being a fast compiler on the GPU. Roughly
 45,000 net lines of non-documentation code were removed, taking `src/` from 78,209 to 61,195 lines.
 It is a large, deliberate reduction in capability, and **the compiler is not yet fast** — nothing in

@@ -90,14 +90,17 @@ therefore enumerated a type's constructors itself. Sugar that only one frontend 
 that frontend. Deleted Effect Core is the counterexample: a subsystem shaped around one idea of
 effects that no frontend adopted.
 
-Builder coverage is a separate question from sugar. The `let`, `let-rec`, `if`, and `case` helpers
-elaborate nothing — they emit the Core shape directly, and only the `otherwise` arm a `case` may
-carry goes through `case_defaults.ts` — but until they existed a lowering that needed one of those
-shapes fell back to a hand-written node literal and had to remember the span on it, which defeats
-`at`. `let-rec-group` is the one node kind that still has no helper. Relatedly, `at` stamps the
-whole interior spine of a fold rather than its outermost node: a curried lambda or an application
-spine is one source construct, and dropping a span per parameter is not a more honest location than
-reusing the construct's.
+Builder coverage is a separate question from sugar. The `let`, `if`, and `case` helpers elaborate
+nothing — they emit the Core shape directly, and only the `otherwise` arm a `case` may carry goes
+through `case_defaults.ts` — but until they existed a lowering that needed one of those shapes fell
+back to a hand-written node literal and had to remember the span on it, which defeats `at`.
+`let-rec`, `let-rec-group`, and the buffer appends are the node kinds still without a helper, and
+the Gleam lowering hand-writes a `text-append` literal for `<>` because of it. Relatedly, `at`
+stamps every node a helper synthesises, including the interior spine of a fold, not just its
+outermost node: a curried lambda or an application spine is one source construct, and dropping a
+span per parameter is not a more honest location than reusing the construct's. Case arms and the
+`otherwise` default keep any span they already carry, so `at` fills blanks rather than overwriting a
+more precise location.
 
 **Type schemas** are structural trees over primitives, parameters, tuples, named applications,
 functions, and explicit `forall`, encoded in one canonical linked preorder. Each six-word record
@@ -158,8 +161,11 @@ Two kernels exist: `compile_module` is the persistent per-lane state machine at
 `@compute @workgroup_size(1)`, and `lower_planned_module` is the one data-parallel production kernel
 — at `@compute @workgroup_size(64)` it copies the plan for every `(program, node)` pair in a single
 dispatch, gated on the remaining plan fitting the current fuel and quantum. Programs under 64
-remaining nodes use the serial path, and packed batches use it for at most four lanes because wider
-batches already expose lane parallelism.
+remaining nodes use the serial path. Batches of any width use the parallel one: lanes are packed
+into the surface buffer in ascending base order, so a node's global index finds its lane by bounded
+binary search. The earlier two-dimensional grid over (widest lane, lane count) scaled with the
+widest lane instead, which is why lowering used to fall back to the serial path once a batch held
+more than a few lanes.
 
 **Inference** consumes resolved nodes and canonical schema metadata. The baseline discipline is
 Hindley–Milner. Indexed constructors add equality refinements scoped to a case arm. Predicative
@@ -208,7 +214,7 @@ summary below exists so this document is not read in isolation. Marginal cost pe
 | Host symbol lookup and lowering plan | CPU     |     3.6 µs |
 | Hindley–Milner inference             | GPU     |    99.7 µs |
 
-Three conclusions, none of them flattering.
+Three conclusions from that table, none of them flattering.
 
 The GPU is **9.7× slower** than the CPU at the one phase it exclusively owns, and loses at every
 batch size measured — marginal GPU cost per module exceeds total CPU cost per module, so the curves
@@ -225,32 +231,49 @@ inference would only take that path from 39.3 to 29.1 µs/module — a **1.35×*
 is worth doing because the GPU phase is currently a regression, not because the ceiling above it is
 high. A faster parser would outweigh the entire retarget.
 
+Throughput inverts the verdict, and both directions are real. `deno task bench:gleam-batch` runs a
+thousand independent Gleam modules end to end — parse, lower, GPU compile, emit Wasm — at 697
+µs/module against the 11 ms per-package floor of `gleam build`, which has no cross-package batching:
+**15.8×** faster. The same pipeline on one large module is **33×** slower than Gleam. At batch 1024
+the split is 22% frontend, 15% GPU, 63% Wasm emission, so on that workload the GPU is the cheapest
+phase and codegen is the one to attack. Which number governs depends entirely on whether the task is
+"build this project" or "compile these thousand programs".
+
 ## 7. External consumers
 
 **Ducklang is why the WebAssembly backend exists.** Ducklang is a separate language project — a
-functional language compiling to WebAssembly, kept in a checkout beside this one — whose own README
-states its pipeline as:
+functional language compiling to WebAssembly, kept in its own checkout (`../binned`) — whose own
+README states its pipeline as:
 
 ```text
 Source -> Frontend -> semantic Core -> gpufuck Functional Core -> Wasm
 ```
 
-It owns parsing, its own semantic Core, and the lowering into Functional Surface;
-`experiments/gpufuck/core_lowering.ts` is its entire backend adapter. It has no other code
-generator, so deleting gpufuck's Wasm emission leaves Ducklang with no target at all.
+It owns parsing, its own semantic Core, and the lowering into Functional Surface; `src/backend/` —
+`core_lowering.ts` and a thin `compiler.ts` driver over it — is its entire backend adapter. It has
+no other code generator, so deleting gpufuck's Wasm emission leaves Ducklang with no target at all.
 
 What it imports from `functional.ts`: `GpuCompiler` and `requestWebGpuDevice`, `linkModules` and the
 `surface` builders, `compileModuleToWasm`, `runWasmModule` and `runWasmModuleAsync` with their
 `init` and host-value types, `planModuleStorage`, and `GpuComptimeExecutor`. Storage planning,
 comptime, and the host boundary are load-bearing for it, not vestigial.
 
-The coupling is a **relative import**, `../../../gpufuck/functional.ts`. It could not be a version
-range even in principle: gpufuck is no longer published, so there is nothing to pin to and no
-release step between the two projects. A change here reaches Ducklang on its next compile, and a
-removed export breaks it immediately.
-[`tests/functional_wasm_smoke_test.ts`](tests/functional_wasm_smoke_test.ts) is the in-repo guard —
-nothing else in the suite emits WebAssembly, so without it the code generator can be deleted or
-broken and the suite stays green.
+The coupling is **mid-migration, and both halves are live**. gpufuck is on JSR as
+`@mewhhaha/gpufuck`, currently 0.4.0, and Ducklang has an import-map entry
+`"gpufuck": "jsr:@mewhhaha/gpufuck@^0.4.0"`. Its five compiler-side modules resolve through that
+entry; the twenty-two files under `case-studies/` still import `functional.ts` by relative path, so
+the two checkouts do still have to sit beside each other.
+
+That means two failure modes at once, and they are not equivalent. A removed export shows up against
+the pinned files as a resolution failure at the published boundary, which is the behaviour a version
+range is for. Against the relative files it shows up as a broken compile with no deprecation window,
+which is stricter but silent until someone builds. Until the migration finishes, `just typecheck` in
+the Ducklang checkout remains the real gate on a gpufuck API change — it is the only thing that
+exercises both paths. Three tests reach the code generator and are the in-repo guard:
+[`functional_wasm_smoke_test.ts`](tests/functional_wasm_smoke_test.ts) emits and runs a binary,
+[`functional_simd_test.ts`](tests/functional_simd_test.ts) asserts on emitted `v128` instructions,
+and [`gleam_test.ts`](tests/gleam_test.ts) runs one through `runWasmModule`. Without them the
+generator can be deleted or broken and the rest of the suite stays green.
 
 ## 8. Runtimes
 
@@ -320,11 +343,16 @@ to parallelize. BASELINE.md records that criterion so it cannot be quietly relax
 
 ## 10. Diagnostics and resource ownership
 
-`F1xxx` covers structural, resolution, and work-limit diagnostics and `F2xxx` covers type,
-annotation, coverage, and inference diagnostics; both arrive in the compile result. `F3001`–`F3012`
-are evaluation faults, and `F4001`–`F4007` are `LinkError`. WebGPU and device errors reject or throw
-with a `cause`, and a compiler bug or corrupt trusted state throws. Spans are UTF-8 byte offsets
-because packed source evidence must be independent of JavaScript UTF-16 indexing; `locateSpan()` and
+Diagnostic codes are one `F####` namespace banded by stage, so a code identifies its origin without
+a second scheme to reconcile. `F1001`–`F1003` are structural, resolution, and work-limit failures
+and `F2001`–`F2104` are type, annotation, coverage, and inference failures; both arrive in the
+compile result. `F3001`–`F3012` are GPU evaluation faults, and `F3013` and `F3101`–`F3104` are the
+faults only the bounded-Wasm runtime can raise — host-operation, async-replay divergence, trap, and
+suspension-limit have no GPU counterpart. `F4001`–`F4007` are `LinkError`; `F4101`–`F4102` reject a
+malformed host argument or `init` at the Wasm boundary. `F5001`–`F5002` are comptime faults and
+`F6001`–`F6006` are Storage Core faults. WebGPU and device errors reject or throw with a `cause`,
+and a compiler bug or corrupt trusted state throws. Spans are UTF-8 byte offsets because packed
+source evidence must be independent of JavaScript UTF-16 indexing; `locateSpan()` and
 `locateDiagnostic()` map neutral evidence back to a module, and the frontend maps that offset to
 lines, columns, and its own wording. Cancellation is not a diagnostic — it rejects with the caller's
 abort reason.
@@ -349,12 +377,16 @@ records, bit arrays, external annotations, and pipeline desugaring. Its `Int` lo
 integers rather than the f64-backed JavaScript model: a semantics choice, made because the corpus is
 integer arithmetic and `i64` keeps it on the GPU evaluator. Division and remainder keep Gleam's
 rules — the frontend guards a zero divisor and yields `0`, so `42 / 0 == 0`, and `i64` division
-truncates toward zero, so `-7 / 2 == -3`. **JavaScript AOT** is the largest frontend and the reason
-`Store` and continuation sharing exist in Core: it lifts statement tails and repeated call,
-construction, accessor, and coercion resumptions into explicit functions so continuation-passing
-lowering does not expand the input tree, and its call frames carry the callable object as well as
-its target, captured realm and environment, receiver, and arguments, preserving `arguments.callee`
-identity without a global lookup.
+truncates toward zero, so `-7 / 2 == -3`. Because parsing and lowering are pure functions of a
+source string with nothing shared between units, `ParallelGleamFrontend` in
+[`parallel_frontend.ts`](src/gleam/parallel_frontend.ts) fans them across a worker pool — 4.2× on 16
+cores at batch 1024 — and falls back to the caller's thread below 16 units, where worker startup and
+message copying cost more than the parallelism returns. **JavaScript AOT** is the largest frontend
+and the reason `Store` and continuation sharing exist in Core: it lifts statement tails and repeated
+call, construction, accessor, and coercion resumptions into explicit functions so
+continuation-passing lowering does not expand the input tree, and its call frames carry the callable
+object as well as its target, captured realm and environment, receiver, and arguments, preserving
+`arguments.callee` identity without a global lookup.
 
 New semantic features must be exposed through `src/functional/` contracts and must not depend on any
 frontend's keywords or parser structures.
@@ -366,7 +398,9 @@ Decisions that are easy to reverse accidentally in a local patch.
 **Frontend syntax stays host-side.** Source grammars, filesystem lookup, recovery, macros, and
 diagnostics are language-specific and branch-heavy; moving them to WGSL would couple every syntax
 change to shader pipelines. The cost is now visible: parsing is the majority of the CPU path, which
-bounds what the rest of the retarget can achieve.
+bounds what the rest of the retarget can achieve. It is not a fixed cost, though — host-side parsing
+parallelises across compilation units (section 11), which a design that serialises the frontend
+through a device queue cannot do.
 
 **Inference stays GPU-side.** This is the workload the project exists to test, and two authorities
 would make traces, diagnostics, and measurements depend on a hidden CPU compiler. The TypeScript
@@ -399,19 +433,20 @@ its own option surface and step cap (section 8). Revisit the split when the WGSL
 baseline exposes the required scalar operations.
 
 **The WebAssembly backend is a supported target, not an artifact of history.** It has an external
-consumer that imports it by relative path with no version pin (section 7). Removing an export, or
-the backend itself, breaks that consumer at its next compile with no deprecation window.
+consumer resolving it half through a JSR pin and half by relative path (section 7). Removing an
+export is therefore both a breaking change to a published package and a compile break in a checkout
+that never sees a release note.
 
 ## 13. Limits and safety properties
 
-1 MiB of source evidence, 65,536 surface nodes, semantic depth 512, constructor arity 256, stores of
-16,777,216 elements, and device-derived buffer maxima. Runtime APIs add explicit fuel, heap, stack,
-dispatch, output-node, output-byte, and output-depth limits. These prevent integer overflow in
-byte-size calculations, keep every GPU index inside the packed representation, bound host validation
-and decoding, bound denial-of-service exposure for untrusted programs, make cancellation intervals
-configurable, and turn device limitations into reproducible evidence. Proof witnesses and capability
-dictionaries are ordinary values; recursive proof programs can diverge, and typechecking does not
-imply totality.
+1 MiB of source evidence, 65,536 surface nodes, nesting depth 512 for both surface and schema trees,
+constructor arity 256, stores of 16,777,216 elements, and device-derived buffer maxima. Runtime APIs
+add explicit fuel, heap, stack, dispatch, output-node, output-byte, and output-depth limits. These
+prevent integer overflow in byte-size calculations, keep every GPU index inside the packed
+representation, bound host validation and decoding, bound denial-of-service exposure for untrusted
+programs, make cancellation intervals configurable, and turn device limitations into reproducible
+evidence. Proof witnesses and capability dictionaries are ordinary values; recursive proof programs
+can diverge, and typechecking does not imply totality.
 
 ## 14. Internal source map
 
@@ -428,12 +463,16 @@ imply totality.
 | Wasm backend           | `wasm_artifacts.ts`, `wasm_codegen.ts`, `wasm_gc_codegen.ts`, `wasm_binary.ts`                                 |
 | Wasm runtime and hosts | `wasm_execution.ts`, `wasm_host_emitter.ts`, `wasm_value_codec.ts`, `wasm_arena.ts`                            |
 | Storage and comptime   | `storage_plan.ts`, `storage_core.ts`, `comptime.ts`                                                            |
-| Diagnostics and device | `src/functional/diagnostics.ts`, `compilation_diagnostics.ts`, `src/webgpu.ts`                                 |
+| Diagnostics and device | `src/functional/diagnostics.ts`, `src/semantic/compilation_diagnostics.ts`, `src/webgpu.ts`                    |
 
-Of Type Core only `type_core.ts` and `type_core_contract.ts` survive, alongside
-`capability_resolver.ts`. The resolver is the type-resolution primitive — bounded search over
-frontend-defined predicates returning a replayable evidence tree, which is what a frontend with
-traits or `derive` needs. Nothing calls it today; the frontends that did were removed.
+Type Core survives the cull as a live subsystem, but adds no execution path: `type_core.ts` and
+`type_core_contract.ts` are its exported surface, `type_core_lowering.ts`, `type_core_runtime.ts`,
+`type_core_validation.ts`, and `type_core_value_decoder.ts` are internal, and
+`GpuTypeCoreExecutor.execute` validates and lowers a program and then runs it through the same
+`GpuCompiler` and `GpuEvaluator` as any other module. `capability_resolver.ts` beside it is the
+type-resolution primitive — bounded search over frontend-defined predicates returning a replayable
+evidence tree, which is what a frontend with traits or `derive` needs. Nothing calls it today; the
+frontends that did were removed.
 
 Effect Core was deleted rather than kept dormant. It lowered a handler to a closed `A -> B` with no
 `resume` parameter, so it could not abort, resume later, or resume twice — which is what exceptions,

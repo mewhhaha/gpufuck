@@ -4,9 +4,9 @@ This experiment parses a closed ES module with Baba, lowers JavaScript control f
 language-neutral Functional Surface, and resolves and typechecks it on WebGPU. It is compile-only:
 the CLI reports compilation success and the inferred entry type, and nothing here runs the compiled
 program. Its purpose is to feed the compiler a wide batch of independent modules, which is what the
-roughly 50,000 standalone Test262 files provide. All JavaScript-specific code lives in this example:
-`src/` contains the frontend, `language/` contains the Baba grammar and generated parser, and
-`check_test262.ts` owns the pinned corpus harness. The repository's `src/` directory remains
+standalone files under Test262's `test/language` provide. All JavaScript-specific code lives in this
+example: `src/` contains the frontend, `language/` contains the Baba grammar and generated parser,
+and `check_test262.ts` owns the pinned corpus harness. The repository's `src/` directory remains
 language-neutral. Run the example with:
 
 ```sh

@@ -371,7 +371,7 @@ function metadataFailureMessage(
       } with ${formatWorkspaceType(state.errorOperand1, workspace, surface, identifierNames)}`;
     default:
       throw new Error(
-        `GPU type inference returned unknown L2101 context ${state.errorContext}`,
+        `GPU type inference returned unknown F2101 context ${state.errorContext}`,
       );
   }
 }

@@ -48,7 +48,7 @@ const REPETITIONS = 9;
 
 const checkout = Deno.args[0];
 if (checkout === undefined) {
-  console.error("usage: gleam_stdlib_compile_bench.ts <stdlib-checkout> <entry.gleam>");
+  console.error("usage: gleam_stdlib_compile_bench.ts <stdlib-checkout> <all-exports-entry.gleam>");
   Deno.exit(2);
 }
 
