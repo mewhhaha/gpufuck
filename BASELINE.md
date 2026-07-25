@@ -249,6 +249,39 @@ remaining ~540 µs is instruction emission, and it is mostly **fixed per module*
 to 8 Core nodes and still emits a 1,244-byte code section, because every module carries its own
 allocator, free list, and thunk-forcing runtime. The code section is 91-98% of every artifact.
 
+### The compact-scalar path is attempted and discarded on every module
+
+Profiling the emit path rather than reasoning about it found a specific defect.
+`compileWasmArtifact` tries a compact-scalar encoding first, and discovers whether it was allowed
+only _after_ compiling:
+
+```
+requiresRuntime = requestedAllocator || requestedThunkForce
+                || bodies.some(usesMemory || usesIndirectCalls)
+```
+
+The gate that guards the attempt (`compactScalarEligible` in `wasm_backend_plan.ts`) checks the
+evaluation profile, effects, host capabilities, and Store tags. It is true for **100% of Gleam
+modules** and the attempt then succeeds for **0%** — measured across 14 program shapes including
+`pub fn main() -> Int { 42 }`. Every module therefore builds a compiler, compiles its entry and
+exports, throws the result away, builds a second compiler, and compiles again.
+
+Forcing the gate off measured the cost: **371 -> 275 µs/module, 26% of codegen**, taking batch 1,024
+from 15.8x to 20.3x against Gleam with byte-identical output (checksummed over 128 artifacts).
+
+The fix is not a Core-tag predicate, which is what I tried first. Instrumenting the bail shows
+`usesMemory` is true for every Gleam program — including `main() -> Bool { 1 < 2 }`, where
+`requestedAllocator` is false — so the discriminator is set during emission and is not derivable
+from the Core tags. A conservative tag list guessed at it and broke `functional_simd_test.ts`: the
+compact path is live for F32x4 programs, which use `surface.apply` and still qualify because the
+callee is a direct call. That attempt is reverted.
+
+Two approaches remain, neither yet done. Bail early: track `usesMemory` incrementally so the attempt
+abandons at the first memory-using instruction instead of after emitting everything. Or find what in
+the Gleam lowering forces linear memory for a program that allocates nothing — the entry is wrapped
+as `Apply(Global, Constructor)`, which is the obvious suspect and would be worth fixing on its own
+merits.
+
 That points at two different fixes with different shapes. Emitting bodies on the GPU is the
 data-parallel one: the Core is already in GPU buffers, emission is a local per-node mapping, and
 LEB128's data-dependent offsets are a size pass plus a prefix sum plus a write pass. Not re-emitting
