@@ -1,23 +1,15 @@
-import {
-  FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
-  FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
-  type FunctionalSpan,
-  type FunctionalTypeSchema,
-} from "./abi.ts";
-import type { FunctionalConstant } from "./comptime_contract.ts";
-import type { FunctionalDeepValue } from "./evaluator.ts";
+import { PAIR_CONSTRUCTOR_NAME, type Span, type TypeSchema, UNIT_CONSTRUCTOR_NAME } from "./abi.ts";
+import type { Constant } from "./comptime_contract.ts";
+import type { DeepValue } from "./evaluator.ts";
 import { matchesFunctionalQualifiedName } from "./module_contract.ts";
 import type { TypeCoreType, TypeCoreValue } from "./type_core_contract.ts";
-import type {
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceTypeDeclaration,
-} from "./surface_builder.ts";
+import type { SurfaceExpression, SurfaceTypeDeclaration } from "./surface_builder.ts";
 
-export const FUNCTIONAL_CONSTANT_ABI_VERSION = 1;
-export const FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPE_NAME = "$ComptimeDescriptor";
-export const FUNCTIONAL_COMPTIME_TYPE_TREE_NAME = "$ComptimeTypeTree";
-export const FUNCTIONAL_COMPTIME_BYTE_LIST_NAME = "$ComptimeByteList";
-export const FUNCTIONAL_COMPTIME_DESCRIPTOR_LIST_NAME = "$ComptimeDescriptorList";
+export const CONSTANT_ABI_VERSION = 1;
+export const COMPTIME_DESCRIPTOR_TYPE_NAME = "$ComptimeDescriptor";
+export const COMPTIME_TYPE_TREE_NAME = "$ComptimeTypeTree";
+export const COMPTIME_BYTE_LIST_NAME = "$ComptimeByteList";
+export const COMPTIME_DESCRIPTOR_LIST_NAME = "$ComptimeDescriptorList";
 
 const DESCRIPTOR_INTEGER = "$ComptimeDescriptorInteger";
 const DESCRIPTOR_BOOLEAN = "$ComptimeDescriptorBoolean";
@@ -35,158 +27,157 @@ const DESCRIPTOR_NIL = "$ComptimeDescriptorNil";
 const DESCRIPTOR_CONS = "$ComptimeDescriptorCons";
 const MAXIMUM_FUNCTIONAL_CONSTANT_DEPTH = 512;
 
-export const FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPES: readonly FunctionalSurfaceTypeDeclaration[] =
-  Object.freeze([
-    {
-      name: FUNCTIONAL_COMPTIME_BYTE_LIST_NAME,
-      parameters: [],
-      constructors: [
-        { name: BYTE_NIL, fields: [] },
-        {
-          name: BYTE_CONS,
-          fields: [
-            { name: "byte", type: { kind: "integer" } },
-            {
-              name: "rest",
-              type: {
-                kind: "named",
-                name: FUNCTIONAL_COMPTIME_BYTE_LIST_NAME,
-                arguments: [],
-              },
+export const COMPTIME_DESCRIPTOR_TYPES: readonly SurfaceTypeDeclaration[] = Object.freeze([
+  {
+    name: COMPTIME_BYTE_LIST_NAME,
+    parameters: [],
+    constructors: [
+      { name: BYTE_NIL, fields: [] },
+      {
+        name: BYTE_CONS,
+        fields: [
+          { name: "byte", type: { kind: "integer" } },
+          {
+            name: "rest",
+            type: {
+              kind: "named",
+              name: COMPTIME_BYTE_LIST_NAME,
+              arguments: [],
             },
-          ],
-        },
-      ],
-    },
-    {
-      name: FUNCTIONAL_COMPTIME_DESCRIPTOR_LIST_NAME,
-      parameters: [],
-      constructors: [
-        { name: DESCRIPTOR_NIL, fields: [] },
-        {
-          name: DESCRIPTOR_CONS,
-          fields: [
-            {
-              name: "value",
-              type: {
-                kind: "named",
-                name: FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPE_NAME,
-                arguments: [],
-              },
-            },
-            {
-              name: "rest",
-              type: {
-                kind: "named",
-                name: FUNCTIONAL_COMPTIME_DESCRIPTOR_LIST_NAME,
-                arguments: [],
-              },
-            },
-          ],
-        },
-      ],
-    },
-    {
-      name: FUNCTIONAL_COMPTIME_TYPE_TREE_NAME,
-      parameters: [],
-      constructors: [
-        { name: TYPE_INTEGER, fields: [] },
-        { name: TYPE_BOOLEAN, fields: [] },
-        { name: TYPE_UNIT, fields: [] },
-        {
-          name: TYPE_NAMED,
-          fields: [
-            {
-              name: "name",
-              type: {
-                kind: "named",
-                name: FUNCTIONAL_COMPTIME_BYTE_LIST_NAME,
-                arguments: [],
-              },
-            },
-            {
-              name: "arguments",
-              type: {
-                kind: "named",
-                name: FUNCTIONAL_COMPTIME_DESCRIPTOR_LIST_NAME,
-                arguments: [],
-              },
-            },
-          ],
-        },
-        {
-          name: TYPE_TUPLE,
-          fields: [
-            {
-              name: "first",
-              type: { kind: "named", name: FUNCTIONAL_COMPTIME_TYPE_TREE_NAME, arguments: [] },
-            },
-            {
-              name: "second",
-              type: { kind: "named", name: FUNCTIONAL_COMPTIME_TYPE_TREE_NAME, arguments: [] },
-            },
-          ],
-        },
-        {
-          name: TYPE_FUNCTION,
-          fields: [
-            {
-              name: "parameter",
-              type: { kind: "named", name: FUNCTIONAL_COMPTIME_TYPE_TREE_NAME, arguments: [] },
-            },
-            {
-              name: "result",
-              type: { kind: "named", name: FUNCTIONAL_COMPTIME_TYPE_TREE_NAME, arguments: [] },
-            },
-          ],
-        },
-      ],
-    },
-    {
-      name: FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPE_NAME,
-      parameters: [],
-      constructors: [
-        {
-          name: DESCRIPTOR_INTEGER,
-          fields: [{ name: "value", type: { kind: "integer" } }],
-        },
-        {
-          name: DESCRIPTOR_BOOLEAN,
-          fields: [{ name: "value", type: { kind: "boolean" } }],
-        },
-        {
-          name: DESCRIPTOR_SYMBOL,
-          fields: [{
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: COMPTIME_DESCRIPTOR_LIST_NAME,
+    parameters: [],
+    constructors: [
+      { name: DESCRIPTOR_NIL, fields: [] },
+      {
+        name: DESCRIPTOR_CONS,
+        fields: [
+          {
             name: "value",
-            type: { kind: "named", name: FUNCTIONAL_COMPTIME_BYTE_LIST_NAME, arguments: [] },
-          }],
-        },
-        {
-          name: DESCRIPTOR_TYPE,
-          fields: [{
-            name: "value",
-            type: { kind: "named", name: FUNCTIONAL_COMPTIME_TYPE_TREE_NAME, arguments: [] },
-          }],
-        },
-      ],
-    },
-  ]);
+            type: {
+              kind: "named",
+              name: COMPTIME_DESCRIPTOR_TYPE_NAME,
+              arguments: [],
+            },
+          },
+          {
+            name: "rest",
+            type: {
+              kind: "named",
+              name: COMPTIME_DESCRIPTOR_LIST_NAME,
+              arguments: [],
+            },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: COMPTIME_TYPE_TREE_NAME,
+    parameters: [],
+    constructors: [
+      { name: TYPE_INTEGER, fields: [] },
+      { name: TYPE_BOOLEAN, fields: [] },
+      { name: TYPE_UNIT, fields: [] },
+      {
+        name: TYPE_NAMED,
+        fields: [
+          {
+            name: "name",
+            type: {
+              kind: "named",
+              name: COMPTIME_BYTE_LIST_NAME,
+              arguments: [],
+            },
+          },
+          {
+            name: "arguments",
+            type: {
+              kind: "named",
+              name: COMPTIME_DESCRIPTOR_LIST_NAME,
+              arguments: [],
+            },
+          },
+        ],
+      },
+      {
+        name: TYPE_TUPLE,
+        fields: [
+          {
+            name: "first",
+            type: { kind: "named", name: COMPTIME_TYPE_TREE_NAME, arguments: [] },
+          },
+          {
+            name: "second",
+            type: { kind: "named", name: COMPTIME_TYPE_TREE_NAME, arguments: [] },
+          },
+        ],
+      },
+      {
+        name: TYPE_FUNCTION,
+        fields: [
+          {
+            name: "parameter",
+            type: { kind: "named", name: COMPTIME_TYPE_TREE_NAME, arguments: [] },
+          },
+          {
+            name: "result",
+            type: { kind: "named", name: COMPTIME_TYPE_TREE_NAME, arguments: [] },
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: COMPTIME_DESCRIPTOR_TYPE_NAME,
+    parameters: [],
+    constructors: [
+      {
+        name: DESCRIPTOR_INTEGER,
+        fields: [{ name: "value", type: { kind: "integer" } }],
+      },
+      {
+        name: DESCRIPTOR_BOOLEAN,
+        fields: [{ name: "value", type: { kind: "boolean" } }],
+      },
+      {
+        name: DESCRIPTOR_SYMBOL,
+        fields: [{
+          name: "value",
+          type: { kind: "named", name: COMPTIME_BYTE_LIST_NAME, arguments: [] },
+        }],
+      },
+      {
+        name: DESCRIPTOR_TYPE,
+        fields: [{
+          name: "value",
+          type: { kind: "named", name: COMPTIME_TYPE_TREE_NAME, arguments: [] },
+        }],
+      },
+    ],
+  },
+]);
 
-export const FUNCTIONAL_COMPTIME_DESCRIPTOR_SCHEMA: FunctionalTypeSchema = Object.freeze({
+export const COMPTIME_DESCRIPTOR_SCHEMA: TypeSchema = Object.freeze({
   kind: "named",
-  name: FUNCTIONAL_COMPTIME_DESCRIPTOR_TYPE_NAME,
+  name: COMPTIME_DESCRIPTOR_TYPE_NAME,
   arguments: Object.freeze([]),
 });
 
-export interface FunctionalConstantMeasurements {
+export interface ConstantMeasurements {
   readonly nodes: number;
   readonly bytes: number;
   readonly depth: number;
 }
 
 export function functionalConstantFromDeepValue(
-  value: FunctionalDeepValue,
-): FunctionalConstant | undefined {
+  value: DeepValue,
+): Constant | undefined {
   switch (value.kind) {
     case "integer":
     case "signed-integer-64":
@@ -210,7 +201,7 @@ export function functionalConstantFromDeepValue(
       return Object.freeze({
         kind: "tuple",
         values: Object.freeze([first, second]),
-      }) as FunctionalConstant;
+      }) as Constant;
     }
     case "constructor": {
       const fields = value.fields.map(functionalConstantFromDeepValue);
@@ -218,23 +209,23 @@ export function functionalConstantFromDeepValue(
       return Object.freeze({
         kind: "constructor",
         name: value.name,
-        fields: Object.freeze(fields as FunctionalConstant[]),
+        fields: Object.freeze(fields as Constant[]),
       });
     }
   }
 }
 
 export function functionalConstantExpression(
-  constant: FunctionalConstant,
-  span?: FunctionalSpan,
-): FunctionalSurfaceExpression {
+  constant: Constant,
+  span?: Span,
+): SurfaceExpression {
   validateFunctionalConstant(constant);
   return functionalConstantExpressionUnchecked(constant, span);
 }
 
-export function validateFunctionalConstant(constant: FunctionalConstant): void {
-  const ancestors = new Set<FunctionalConstant>();
-  const visit = (value: FunctionalConstant, depth: number): void => {
+export function validateFunctionalConstant(constant: Constant): void {
+  const ancestors = new Set<Constant>();
+  const visit = (value: Constant, depth: number): void => {
     if (depth > MAXIMUM_FUNCTIONAL_CONSTANT_DEPTH) {
       throw new RangeError(
         `functional constant depth ${depth} exceeds ${MAXIMUM_FUNCTIONAL_CONSTANT_DEPTH}`,
@@ -320,9 +311,9 @@ export function validateFunctionalConstant(constant: FunctionalConstant): void {
 }
 
 function functionalConstantExpressionUnchecked(
-  constant: FunctionalConstant,
-  span?: FunctionalSpan,
-): FunctionalSurfaceExpression {
+  constant: Constant,
+  span?: Span,
+): SurfaceExpression {
   switch (constant.kind) {
     case "integer":
     case "signed-integer-64":
@@ -334,12 +325,12 @@ function functionalConstantExpressionUnchecked(
     case "unit":
       return {
         kind: "name",
-        name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+        name: UNIT_CONSTRUCTOR_NAME,
         ...(span === undefined ? {} : { span }),
       };
     case "tuple":
       return applyConstantConstructor(
-        FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
+        PAIR_CONSTRUCTOR_NAME,
         constant.values,
         span,
       );
@@ -349,12 +340,12 @@ function functionalConstantExpressionUnchecked(
 }
 
 export function measureFunctionalConstant(
-  constant: FunctionalConstant,
-): FunctionalConstantMeasurements {
+  constant: Constant,
+): ConstantMeasurements {
   validateFunctionalConstant(constant);
   let nodes = 0;
   let depth = 0;
-  const visit = (value: FunctionalConstant, currentDepth: number): void => {
+  const visit = (value: Constant, currentDepth: number): void => {
     nodes++;
     depth = Math.max(depth, currentDepth);
     if (value.kind === "tuple") {
@@ -368,37 +359,37 @@ export function measureFunctionalConstant(
   return { nodes, bytes: encodedFunctionalConstantBytes(constant).byteLength, depth };
 }
 
-export function encodeFunctionalConstant(constant: FunctionalConstant): Uint8Array {
+export function encodeConstant(constant: Constant): Uint8Array {
   validateFunctionalConstant(constant);
   return encodedFunctionalConstantBytes(constant);
 }
 
-function encodedFunctionalConstantBytes(constant: FunctionalConstant): Uint8Array {
+function encodedFunctionalConstantBytes(constant: Constant): Uint8Array {
   const envelope = {
-    abiVersion: FUNCTIONAL_CONSTANT_ABI_VERSION,
+    abiVersion: CONSTANT_ABI_VERSION,
     value: encodedConstant(constant),
   };
   return new TextEncoder().encode(JSON.stringify(envelope));
 }
 
-export function decodeFunctionalConstant(bytes: Uint8Array): FunctionalConstant {
+export function decodeConstant(bytes: Uint8Array): Constant {
   let envelope: unknown;
   try {
     envelope = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch (cause) {
     throw new Error("functional constant is not valid UTF-8 JSON", { cause });
   }
-  if (!isRecord(envelope) || envelope.abiVersion !== FUNCTIONAL_CONSTANT_ABI_VERSION) {
+  if (!isRecord(envelope) || envelope.abiVersion !== CONSTANT_ABI_VERSION) {
     throw new Error(
       `functional constant has ABI ${
         isRecord(envelope) ? String(envelope.abiVersion) : "non-object"
-      }; expected ${FUNCTIONAL_CONSTANT_ABI_VERSION}`,
+      }; expected ${CONSTANT_ABI_VERSION}`,
     );
   }
   return decodedConstant(envelope.value, 0);
 }
 
-export function functionalConstantFromTypeCoreValue(value: TypeCoreValue): FunctionalConstant {
+export function functionalConstantFromTypeCoreValue(value: TypeCoreValue): Constant {
   switch (value.kind) {
     case "integer":
       return constructor(DESCRIPTOR_INTEGER, [{ kind: "integer", value: value.value }]);
@@ -411,15 +402,15 @@ export function functionalConstantFromTypeCoreValue(value: TypeCoreValue): Funct
   }
 }
 
-export function functionalConstantFromComptimeString(value: string): FunctionalConstant {
+export function functionalConstantFromComptimeString(value: string): Constant {
   return byteList(new TextEncoder().encode(value));
 }
 
-export function functionalConstantFromComptimeBytes(value: Uint8Array): FunctionalConstant {
+export function functionalConstantFromComptimeBytes(value: Uint8Array): Constant {
   return byteList(value);
 }
 
-export function functionalComptimeStringFromConstant(constant: FunctionalConstant): string {
+export function functionalComptimeStringFromConstant(constant: Constant): string {
   const bytes = functionalComptimeBytesFromConstant(constant);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -428,7 +419,7 @@ export function functionalComptimeStringFromConstant(constant: FunctionalConstan
   }
 }
 
-export function functionalComptimeBytesFromConstant(constant: FunctionalConstant): Uint8Array {
+export function functionalComptimeBytesFromConstant(constant: Constant): Uint8Array {
   validateFunctionalConstant(constant);
   const bytes: number[] = [];
   let current = constant;
@@ -466,7 +457,7 @@ export function functionalComptimeBytesFromConstant(constant: FunctionalConstant
   return Uint8Array.from(bytes);
 }
 
-function typeTree(type: TypeCoreType): FunctionalConstant {
+function typeTree(type: TypeCoreType): Constant {
   switch (type.kind) {
     case "integer":
       return constructor(TYPE_INTEGER);
@@ -486,7 +477,7 @@ function typeTree(type: TypeCoreType): FunctionalConstant {
   }
 }
 
-function byteList(bytes: Uint8Array): FunctionalConstant {
+function byteList(bytes: Uint8Array): Constant {
   let result = constructor(BYTE_NIL);
   for (let index = bytes.length - 1; index >= 0; index--) {
     result = constructor(BYTE_CONS, [{ kind: "integer", value: bytes[index]! }, result]);
@@ -494,7 +485,7 @@ function byteList(bytes: Uint8Array): FunctionalConstant {
   return result;
 }
 
-function descriptorList(values: readonly FunctionalConstant[]): FunctionalConstant {
+function descriptorList(values: readonly Constant[]): Constant {
   let result = constructor(DESCRIPTOR_NIL);
   for (let index = values.length - 1; index >= 0; index--) {
     result = constructor(DESCRIPTOR_CONS, [values[index]!, result]);
@@ -504,17 +495,17 @@ function descriptorList(values: readonly FunctionalConstant[]): FunctionalConsta
 
 function constructor(
   name: string,
-  fields: readonly FunctionalConstant[] = [],
-): FunctionalConstant {
+  fields: readonly Constant[] = [],
+): Constant {
   return Object.freeze({ kind: "constructor", name, fields: Object.freeze([...fields]) });
 }
 
 function applyConstantConstructor(
   name: string,
-  fields: readonly FunctionalConstant[],
-  span: FunctionalSpan | undefined,
-): FunctionalSurfaceExpression {
-  let expression: FunctionalSurfaceExpression = {
+  fields: readonly Constant[],
+  span: Span | undefined,
+): SurfaceExpression {
+  let expression: SurfaceExpression = {
     kind: "name",
     name,
     ...(span === undefined ? {} : { span }),
@@ -530,7 +521,7 @@ function applyConstantConstructor(
   return expression;
 }
 
-function encodedConstant(constant: FunctionalConstant): unknown {
+function encodedConstant(constant: Constant): unknown {
   switch (constant.kind) {
     case "integer":
     case "boolean":
@@ -554,7 +545,7 @@ function encodedConstant(constant: FunctionalConstant): unknown {
   }
 }
 
-function decodedConstant(candidate: unknown, depth: number): FunctionalConstant {
+function decodedConstant(candidate: unknown, depth: number): Constant {
   if (
     depth > MAXIMUM_FUNCTIONAL_CONSTANT_DEPTH || !isRecord(candidate) ||
     typeof candidate.kind !== "string"
@@ -611,7 +602,7 @@ function decodedConstant(candidate: unknown, depth: number): FunctionalConstant 
           decodedConstant(candidate.values[0], depth + 1),
           decodedConstant(candidate.values[1], depth + 1),
         ]),
-      }) as FunctionalConstant;
+      }) as Constant;
     case "constructor":
       if (
         typeof candidate.name !== "string" || candidate.name.length === 0 ||

@@ -112,10 +112,10 @@ configuration; it is a local developer action and must never run in automated te
 ## Adding or changing a frontend
 
 A frontend stays outside the semantic engine: parse into a source-specific AST with UTF-8 byte
-spans, enforce the rules Functional Core does not represent, lower to `FunctionalSurfaceDefinition`
-and `FunctionalSurfaceTypeDeclaration` values, select strict or lazy evaluation deliberately,
-translate neutral diagnostics back to source terminology, and add an accepted program, a rejected
-program, and an end-to-end evaluation test.
+spans, enforce the rules Functional Core does not represent, lower to `SurfaceDefinition` and
+`SurfaceTypeDeclaration` values, select strict or lazy evaluation deliberately, translate neutral
+diagnostics back to source terminology, and add an accepted program, a rejected program, and an
+end-to-end evaluation test.
 
 Keep parsing and desugaring out of `src/functional/` — that directory is target-neutral and cannot
 acquire rules named after a source language. Reusable elaboration belongs beside the target

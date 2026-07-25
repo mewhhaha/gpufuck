@@ -1,6 +1,6 @@
-import type { FunctionalType, FunctionalTypeSchema } from "./abi.ts";
-import type { FunctionalHostOperationDeclaration, FunctionalHostType } from "./host_contract.ts";
-import type { FunctionalRuntimeTypeDescriptor } from "./wasm_contract.ts";
+import type { Type, TypeSchema } from "./abi.ts";
+import type { HostOperationDeclaration, HostType } from "./host_contract.ts";
+import type { RuntimeTypeDescriptor } from "./wasm_contract.ts";
 
 const MAXIMUM_RUNTIME_TYPE_DEPTH = 64;
 const MAXIMUM_RUNTIME_TYPE_NODES = 4_096;
@@ -11,9 +11,9 @@ interface RuntimeTypeTraversal {
 }
 
 export function specializeFunctionalHostOperation(
-  operation: FunctionalHostOperationDeclaration,
-  substitutions: Readonly<Record<string, FunctionalHostType>>,
-): FunctionalHostOperationDeclaration {
+  operation: HostOperationDeclaration,
+  substitutions: Readonly<Record<string, HostType>>,
+): HostOperationDeclaration {
   if (operation === null || typeof operation !== "object") {
     throw new TypeError(
       `functional host specialization operation must be an object; received ${
@@ -101,28 +101,28 @@ export function specializeFunctionalHostOperation(
 }
 
 export function functionalRuntimeTypeDescriptor(
-  schema: FunctionalTypeSchema,
-  substitutions: Readonly<Record<string, FunctionalHostType>> = {},
-): FunctionalRuntimeTypeDescriptor {
+  schema: TypeSchema,
+  substitutions: Readonly<Record<string, HostType>> = {},
+): RuntimeTypeDescriptor {
   const type = substituteType(schema, substitutions);
   requireRuntimeType(type, "$", 0, runtimeTypeTraversal());
-  return type as FunctionalType;
+  return type as Type;
 }
 
 export function functionalRuntimeTypeDescriptorKey(
-  descriptor: FunctionalRuntimeTypeDescriptor,
+  descriptor: RuntimeTypeDescriptor,
 ): string {
   requireRuntimeType(descriptor, "$", 0, runtimeTypeTraversal());
   return JSON.stringify(runtimeTypeKeyValue(descriptor));
 }
 
 function substituteType(
-  schema: FunctionalTypeSchema,
-  substitutions: Readonly<Record<string, FunctionalHostType>>,
+  schema: TypeSchema,
+  substitutions: Readonly<Record<string, HostType>>,
   path = "$",
   depth = 0,
   traversal: RuntimeTypeTraversal = runtimeTypeTraversal(),
-): FunctionalHostType {
+): HostType {
   if (depth > MAXIMUM_RUNTIME_TYPE_DEPTH) {
     throw new RangeError(
       `functional type schema exceeds depth ${MAXIMUM_RUNTIME_TYPE_DEPTH} at ${path}`,
@@ -223,7 +223,7 @@ function substituteType(
 }
 
 function requireRuntimeType(
-  type: FunctionalTypeSchema,
+  type: TypeSchema,
   path: string,
   depth: number,
   traversal: RuntimeTypeTraversal,
@@ -307,7 +307,7 @@ function consumeRuntimeTypeNode(
   traversal.remainingNodes -= 1;
 }
 
-function runtimeTypeKeyValue(type: FunctionalRuntimeTypeDescriptor): unknown {
+function runtimeTypeKeyValue(type: RuntimeTypeDescriptor): unknown {
   switch (type.kind) {
     case "integer":
     case "signed-integer-64":

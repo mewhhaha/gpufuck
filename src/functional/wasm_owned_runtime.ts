@@ -1,18 +1,18 @@
-import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
+import { WasmValueAbi } from "./wasm_abi.ts";
 import { functionBody } from "./wasm_runtime_binary.ts";
 import { type WasmFunctionBody, WasmInstructions, WasmValueType } from "./wasm_binary.ts";
-import { FunctionalWasmRuntimeGlobal } from "./wasm_runtime_layout.ts";
+import { WasmRuntimeGlobal } from "./wasm_runtime_layout.ts";
 
-const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
-const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
-const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
-const BYTES_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.bytes;
-const ARRAY_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.array;
-const SLICE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.slice;
-const RESOURCE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.resource;
-const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
-const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
-const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
+const CONSTRUCTOR_OBJECT_KIND = WasmValueAbi.objectKinds.constructor;
+const NUMERIC_OBJECT_KIND = WasmValueAbi.objectKinds.numeric;
+const TEXT_OBJECT_KIND = WasmValueAbi.objectKinds.text;
+const BYTES_OBJECT_KIND = WasmValueAbi.objectKinds.bytes;
+const ARRAY_OBJECT_KIND = WasmValueAbi.objectKinds.array;
+const SLICE_OBJECT_KIND = WasmValueAbi.objectKinds.slice;
+const RESOURCE_OBJECT_KIND = WasmValueAbi.objectKinds.resource;
+const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
+const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
+const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 const MAXIMUM_BYTE_VALUE_COUNT = 0xffff_ffff - OBJECT_HEADER_BYTE_LENGTH;
 const MAXIMUM_GRAPH_VALUE_COUNT = Math.floor(
   (0xffff_ffff - OBJECT_HEADER_BYTE_LENGTH) / VALUE_BYTE_LENGTH,
@@ -80,13 +80,13 @@ export function releaseOwnedValueFunction(
   const references = instructions.addLocal(WasmValueType.I32);
   const byteLength = instructions.addLocal(WasmValueType.I32);
   const immediateTag = instructions.addLocal(WasmValueType.I64);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.ArenaDepth);
+  instructions.globalGet(WasmRuntimeGlobal.ArenaDepth);
   instructions.emit(0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(0);
   instructions.localSet(currentValue);
   instructions.emit(0x02, 0x40, 0x03, 0x40);
   instructions.localGet(currentValue);
-  instructions.i64Const(BigInt(FunctionalWasmValueAbi.immediateTags.bitMask));
+  instructions.i64Const(BigInt(WasmValueAbi.immediateTags.bitMask));
   instructions.emit(0x83);
   instructions.localTee(immediateTag);
   instructions.emit(0x50, 0x45, 0x04, 0x40);
@@ -226,15 +226,15 @@ function emitPointerGuard(
 ): void {
   const immediateTag = instructions.addLocal(WasmValueType.I64);
   instructions.localGet(0);
-  instructions.i64Const(BigInt(FunctionalWasmValueAbi.immediateTags.bitMask));
+  instructions.i64Const(BigInt(WasmValueAbi.immediateTags.bitMask));
   instructions.emit(0x83);
   instructions.localTee(immediateTag);
   instructions.emit(0x50, 0x45, 0x04, 0x40);
   instructions.localGet(immediateTag);
-  instructions.i64Const(BigInt(FunctionalWasmValueAbi.immediateTags.integer));
+  instructions.i64Const(BigInt(WasmValueAbi.immediateTags.integer));
   instructions.emit(0x51);
   instructions.localGet(immediateTag);
-  instructions.i64Const(BigInt(FunctionalWasmValueAbi.immediateTags.boolean));
+  instructions.i64Const(BigInt(WasmValueAbi.immediateTags.boolean));
   instructions.emit(0x51, 0x72, 0x45, 0x04, 0x40, 0x00, 0x0b, 0x0f, 0x0b);
   instructions.localGet(0);
   instructions.emit(0xa7);
@@ -262,10 +262,10 @@ function emitImmediateTagGuard(
   immediateTag: number,
 ): void {
   instructions.localGet(immediateTag);
-  instructions.i64Const(BigInt(FunctionalWasmValueAbi.immediateTags.integer));
+  instructions.i64Const(BigInt(WasmValueAbi.immediateTags.integer));
   instructions.emit(0x51);
   instructions.localGet(immediateTag);
-  instructions.i64Const(BigInt(FunctionalWasmValueAbi.immediateTags.boolean));
+  instructions.i64Const(BigInt(WasmValueAbi.immediateTags.boolean));
   instructions.emit(0x51, 0x72, 0x45, 0x04, 0x40, 0x00, 0x0b);
 }
 
@@ -287,7 +287,7 @@ function emitDynamicPointerGuard(
 ): void {
   const objectEnd = instructions.addLocal(WasmValueType.I32);
   instructions.localGet(pointer);
-  instructions.i32Const(FunctionalWasmValueAbi.objectAlignment - 1);
+  instructions.i32Const(WasmValueAbi.objectAlignment - 1);
   instructions.emit(0x71, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(pointer);
   instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
@@ -296,7 +296,7 @@ function emitDynamicPointerGuard(
   instructions.localGet(pointer);
   instructions.emit(0x49, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(objectEnd);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapTop);
+  instructions.globalGet(WasmRuntimeGlobal.HeapTop);
   instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
 }
 
@@ -396,6 +396,6 @@ function emitObjectBoundsGuard(
   instructions.localGet(pointer);
   instructions.emit(0x49, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(objectEnd);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapTop);
+  instructions.globalGet(WasmRuntimeGlobal.HeapTop);
   instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
 }

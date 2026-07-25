@@ -4,12 +4,12 @@ import type {
   LazuliDiagnosticCode,
 } from "../semantic/abi.ts";
 import {
+  CORE_V1_PRIMITIVE_CAPABILITIES,
+  type Diagnostic,
   type EncodedFunctionalModule,
-  FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
-  FUNCTIONAL_MODULE_ABI_VERSION,
-  type FunctionalDiagnostic,
-  FunctionalEvaluationProfile,
-  FunctionalTypecheckingProfile,
+  EvaluationProfile,
+  MODULE_ABI_VERSION,
+  TypecheckingProfile,
 } from "../functional/abi.ts";
 
 export function lazuliSurfaceToFunctionalModule(
@@ -17,11 +17,11 @@ export function lazuliSurfaceToFunctionalModule(
   sourceByteLength: number,
 ): EncodedFunctionalModule {
   return {
-    abiVersion: FUNCTIONAL_MODULE_ABI_VERSION,
+    abiVersion: MODULE_ABI_VERSION,
     sourceByteLength,
-    evaluationProfile: FunctionalEvaluationProfile.LazyCallByNeed,
-    typecheckingProfile: FunctionalTypecheckingProfile.HindleyMilnerIndexed,
-    primitiveCapabilities: FUNCTIONAL_CORE_V1_PRIMITIVE_CAPABILITIES,
+    evaluationProfile: EvaluationProfile.LazyCallByNeed,
+    typecheckingProfile: TypecheckingProfile.HindleyMilnerIndexed,
+    primitiveCapabilities: CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities: [],
     nodeWords: surface.nodeWords,
     definitionWords: surface.definitionWords,
@@ -39,7 +39,7 @@ export function lazuliSurfaceToFunctionalModule(
 }
 
 export function lazuliDiagnosticFromFunctional(
-  diagnostic: FunctionalDiagnostic,
+  diagnostic: Diagnostic,
 ): LazuliDiagnostic {
   return {
     stage: "compile",

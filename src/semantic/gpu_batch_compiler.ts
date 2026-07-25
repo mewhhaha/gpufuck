@@ -7,13 +7,13 @@ import {
   LAZULI_TYPE_BYTE_LENGTH,
 } from "./abi.ts";
 import {
-  FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
-  FUNCTIONAL_PLANNED_LOWERING_WORKGROUP_SIZE,
-  FunctionalCompilationInternalStateWord,
-  FunctionalCompilationStateWord,
-  FunctionalCompilationStatus,
+  COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
+  CompilationInternalStateWord,
+  CompilationStateWord,
+  CompilationStatus,
+  PLANNED_LOWERING_WORKGROUP_SIZE,
 } from "./compiler_shader.ts";
-import { FunctionalSemanticCompilerErrorCode } from "./compilation_diagnostics.ts";
+import { SemanticCompilerErrorCode } from "./compilation_diagnostics.ts";
 import type { LazuliCompileResult } from "./compiler_module.ts";
 import {
   batchSemanticFailure,
@@ -21,7 +21,7 @@ import {
   PackedModuleAllocationError,
   type TerminalInference,
 } from "./gpu_batch_results.ts";
-import type { GpuFunctionalSemanticPipelines } from "./gpu_semantic_contract.ts";
+import type { GpuSemanticPipelines } from "./gpu_semantic_contract.ts";
 import { readInferenceState, readSemanticState } from "./gpu_type_inference_gpu_io.ts";
 import { fuelExhausted } from "./gpu_type_inference_results.ts";
 import {
@@ -34,39 +34,39 @@ import {
   workspaceLayout,
 } from "./gpu_type_inference_workspace.ts";
 import type {
-  GpuFunctionalTypeInferenceWorkspaceCapacities,
+  GpuTypeInferenceWorkspaceCapacities,
   WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import {
-  FUNCTIONAL_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
-  FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
-  FunctionalInferenceSchedulerWord,
-  type FunctionalInferenceShaderMetadata,
-  FunctionalInferenceStateWord,
-  FunctionalInferenceStatus,
+  INFERENCE_INTERNAL_STATE_WORD_LENGTH,
+  INFERENCE_OUTPUT_WORD_LENGTH,
+  InferenceSchedulerWord,
+  type InferenceShaderMetadata,
+  InferenceStateWord,
+  InferenceStatus,
   prepareLazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
-import { createLazuliSymbolLookup, FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH } from "./symbol_lookup.ts";
+import { createLazuliSymbolLookup, SYMBOL_LOOKUP_WORD_LENGTH } from "./symbol_lookup.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 const FAST_COMPLETION_MINIMUM_DISPATCH_QUANTUM = 4_096;
 
-export interface FunctionalBatchCompilationInput {
+export interface BatchCompilationInput {
   readonly surface: EncodedLazuliSurface;
   readonly sourceByteLength: number;
   readonly maximumSteps: number;
   readonly maximumStepsPerDispatch: number;
-  readonly initialWorkspaceCapacities?: GpuFunctionalTypeInferenceWorkspaceCapacities;
+  readonly initialWorkspaceCapacities?: GpuTypeInferenceWorkspaceCapacities;
 }
 
-export interface FunctionalBatchCompilationInstrumentation {
+export interface BatchCompilationInstrumentation {
   readonly observeDispatch: (laneCount: number) => void;
 }
 
-export interface BatchLane extends FunctionalBatchCompilationInput {
+export interface BatchLane extends BatchCompilationInput {
   readonly resultIndex: number;
-  readonly metadata: FunctionalInferenceShaderMetadata;
+  readonly metadata: InferenceShaderMetadata;
   readonly localWorkspace: WorkspaceLayout;
   readonly nodeBase: number;
   readonly definitionBase: number;
@@ -83,12 +83,12 @@ export interface BatchLane extends FunctionalBatchCompilationInput {
 
 export async function compileLazuliBatch(
   device: GPUDevice,
-  semanticPipelines: GpuFunctionalSemanticPipelines,
+  semanticPipelines: GpuSemanticPipelines,
   inferencePipeline: GPUComputePipeline,
-  inputs: readonly FunctionalBatchCompilationInput[],
+  inputs: readonly BatchCompilationInput[],
   signal: AbortSignal | undefined,
-  compileScalar: (input: FunctionalBatchCompilationInput) => Promise<LazuliCompileResult>,
-  instrumentation?: FunctionalBatchCompilationInstrumentation,
+  compileScalar: (input: BatchCompilationInput) => Promise<LazuliCompileResult>,
+  instrumentation?: BatchCompilationInstrumentation,
 ): Promise<readonly LazuliCompileResult[]> {
   return await compileLazuliBatchWithin(
     device,
@@ -104,12 +104,12 @@ export async function compileLazuliBatch(
 
 async function compileLazuliBatchWithin(
   device: GPUDevice,
-  semanticPipelines: GpuFunctionalSemanticPipelines,
+  semanticPipelines: GpuSemanticPipelines,
   inferencePipeline: GPUComputePipeline,
-  inputs: readonly FunctionalBatchCompilationInput[],
+  inputs: readonly BatchCompilationInput[],
   signal: AbortSignal | undefined,
-  compileScalar: (input: FunctionalBatchCompilationInput) => Promise<LazuliCompileResult>,
-  instrumentation: FunctionalBatchCompilationInstrumentation | undefined,
+  compileScalar: (input: BatchCompilationInput) => Promise<LazuliCompileResult>,
+  instrumentation: BatchCompilationInstrumentation | undefined,
   parallelSplitAvailable: boolean,
 ): Promise<readonly LazuliCompileResult[]> {
   signal?.throwIfAborted();
@@ -189,17 +189,17 @@ async function compileLazuliBatchWithin(
 
 async function compileSplitBatch(
   device: GPUDevice,
-  semanticPipelines: GpuFunctionalSemanticPipelines,
+  semanticPipelines: GpuSemanticPipelines,
   inferencePipeline: GPUComputePipeline,
-  inputs: readonly FunctionalBatchCompilationInput[],
+  inputs: readonly BatchCompilationInput[],
   signal: AbortSignal | undefined,
-  compileScalar: (input: FunctionalBatchCompilationInput) => Promise<LazuliCompileResult>,
-  instrumentation: FunctionalBatchCompilationInstrumentation | undefined,
+  compileScalar: (input: BatchCompilationInput) => Promise<LazuliCompileResult>,
+  instrumentation: BatchCompilationInstrumentation | undefined,
   parallelSplitAvailable: boolean,
 ): Promise<readonly LazuliCompileResult[]> {
   if (inputs.length <= 2) return await compileScalars(inputs, compileScalar);
   const middle = Math.floor(inputs.length / 2);
-  const compileHalf = (half: readonly FunctionalBatchCompilationInput[]) =>
+  const compileHalf = (half: readonly BatchCompilationInput[]) =>
     compileLazuliBatchWithin(
       device,
       semanticPipelines,
@@ -239,11 +239,11 @@ async function compileSplitBatch(
 
 async function runPackedCompilation(
   device: GPUDevice,
-  semanticPipelines: GpuFunctionalSemanticPipelines,
+  semanticPipelines: GpuSemanticPipelines,
   inferencePipeline: GPUComputePipeline,
   lanes: readonly BatchLane[],
   signal: AbortSignal | undefined,
-  instrumentation: FunctionalBatchCompilationInstrumentation | undefined,
+  instrumentation: BatchCompilationInstrumentation | undefined,
 ): Promise<readonly (LazuliCompileResult | undefined)[]> {
   const totals = batchTotals(lanes);
   const fastCompletion = lanes.every((lane) =>
@@ -254,11 +254,11 @@ async function runPackedCompilation(
   const typeWords = new Uint32Array(totals.types * 5);
   const constructorWords = new Uint32Array(totals.constructors * 5);
   const symbolLookupWords = new Uint32Array(
-    totals.symbolLookupRecords * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH,
+    totals.symbolLookupRecords * SYMBOL_LOOKUP_WORD_LENGTH,
   );
   const metadataWords = new Uint32Array(totals.metadataWords);
   const semanticStates = new Uint8Array(
-    lanes.length * FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
+    lanes.length * COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
   );
   const inferenceStates = new Uint8Array(lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH);
 
@@ -269,7 +269,7 @@ async function runPackedCompilation(
     constructorWords.set(lane.surface.constructorWords, lane.constructorBase * 5);
     symbolLookupWords.set(
       lane.symbolLookupWords,
-      lane.symbolLookupBase * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH,
+      lane.symbolLookupBase * SYMBOL_LOOKUP_WORD_LENGTH,
     );
     const relocatedMetadata = lane.metadata.words.slice();
     for (let footerWord = 1; footerWord < 8; footerWord++) {
@@ -397,7 +397,7 @@ async function runPackedCompilation(
         const inferenceState = readInferenceState(stateView, inferenceOffset);
         const semanticState = readSemanticState(
           stateView,
-          inferenceOffset + FunctionalInferenceSchedulerWord.SemanticState * WORD_BYTES,
+          inferenceOffset + InferenceSchedulerWord.SemanticState * WORD_BYTES,
         );
         const semanticProgress = semanticState.totalSteps - previousSemanticSteps[laneIndex]!;
         const inferenceProgress = inferenceState.transitions -
@@ -406,7 +406,7 @@ async function runPackedCompilation(
         if (
           semanticProgress < 0 || inferenceProgress < 0 || progress < 1 ||
           progress > lane.maximumStepsPerDispatch ||
-          (semanticState.status !== FunctionalCompilationStatus.Ok && inferenceProgress !== 0)
+          (semanticState.status !== CompilationStatus.Ok && inferenceProgress !== 0)
         ) {
           throw new Error(
             `GPU Lazuli packed lane ${lane.resultIndex} returned invalid progress: semantic=${semanticState.totalSteps}, previousSemantic=${
@@ -419,8 +419,8 @@ async function runPackedCompilation(
         previousSemanticSteps[laneIndex] = semanticState.totalSteps;
         previousInferenceTransitions[laneIndex] = inferenceState.transitions;
 
-        if (semanticState.status === FunctionalCompilationStatus.Pending) continue;
-        if (semanticState.status !== FunctionalCompilationStatus.Ok) {
+        if (semanticState.status === CompilationStatus.Pending) continue;
+        if (semanticState.status !== CompilationStatus.Ok) {
           results[lane.resultIndex] = batchSemanticFailure(lane, semanticState);
           terminalLaneCount++;
           continue;
@@ -428,8 +428,8 @@ async function runPackedCompilation(
 
         const totalSteps = semanticState.totalSteps + inferenceState.transitions;
         if (
-          inferenceState.status === FunctionalInferenceStatus.Uninitialized ||
-          inferenceState.status === FunctionalInferenceStatus.Pending
+          inferenceState.status === InferenceStatus.Uninitialized ||
+          inferenceState.status === InferenceStatus.Pending
         ) {
           if (totalSteps < lane.maximumSteps) continue;
           const exhausted = fuelExhausted(
@@ -450,13 +450,13 @@ async function runPackedCompilation(
           continue;
         }
         if (
-          inferenceState.status === FunctionalInferenceStatus.Complete ||
-          inferenceState.status === FunctionalInferenceStatus.Diagnostic
+          inferenceState.status === InferenceStatus.Complete ||
+          inferenceState.status === InferenceStatus.Diagnostic
         ) {
           terminalInference[laneIndex] = { state: inferenceState, semanticState };
           if (
             fastCompletion &&
-            inferenceState.status === FunctionalInferenceStatus.Complete &&
+            inferenceState.status === InferenceStatus.Complete &&
             inferenceState.outputCount <= lane.fastOutputCapacity
           ) {
             const outputByteLength = inferredTypeOutputByteLength(inferenceState.outputCount);
@@ -468,7 +468,7 @@ async function runPackedCompilation(
           }
           if (
             fastCompletion &&
-            inferenceState.status === FunctionalInferenceStatus.Complete
+            inferenceState.status === InferenceStatus.Complete
           ) {
             const coreByteOffset = fastCoreByteOffset(lanes, lane);
             terminalCoreNodes[laneIndex] = stateBytes.slice(
@@ -479,11 +479,11 @@ async function runPackedCompilation(
           terminalLaneCount++;
           continue;
         }
-        if (inferenceState.status === FunctionalInferenceStatus.Exhausted) {
+        if (inferenceState.status === InferenceStatus.Exhausted) {
           terminalLaneCount++;
           continue;
         }
-        if (inferenceState.status === FunctionalInferenceStatus.InvalidInput) {
+        if (inferenceState.status === InferenceStatus.InvalidInput) {
           throw new Error(
             `GPU Lazuli packed lane ${lane.resultIndex} rejected the supplied ABI: code=${inferenceState.errorCode}, detail=${inferenceState.errorDetail}`,
           );
@@ -526,7 +526,7 @@ async function runPackedCompilation(
 }
 
 function prepareBatchLanes(
-  inputs: readonly FunctionalBatchCompilationInput[],
+  inputs: readonly BatchCompilationInput[],
   limits: GPUSupportedLimits,
 ): readonly BatchLane[] {
   let nodes = 0;
@@ -586,7 +586,7 @@ function prepareBatchLanes(
     symbolLookupRecords = checkedSum(
       "packed symbol lookup records",
       symbolLookupRecords,
-      symbolLookupWords.length / FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH,
+      symbolLookupWords.length / SYMBOL_LOOKUP_WORD_LENGTH,
     );
     metadataWords = checkedSum("packed metadata words", metadataWords, metadata.words.length);
     workspaceWords = checkedSum(
@@ -614,7 +614,7 @@ function prepareBatchLanes(
   assertBatchStorage(
     "symbol lookups",
     symbolLookupRecords,
-    FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH,
+    SYMBOL_LOOKUP_WORD_LENGTH,
     limits,
   );
   assertStorageSize("packed inference metadata", metadataWords, limits);
@@ -622,19 +622,19 @@ function prepareBatchLanes(
   assertBatchStorage(
     "inference output",
     outputRecords,
-    FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
+    INFERENCE_OUTPUT_WORD_LENGTH,
     limits,
   );
   assertBatchStorage(
     "semantic states",
     lanes.length,
-    FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH / WORD_BYTES,
+    COMPILATION_INTERNAL_STATE_BYTE_LENGTH / WORD_BYTES,
     limits,
   );
   assertBatchStorage(
     "inference states",
     lanes.length,
-    FUNCTIONAL_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
+    INFERENCE_INTERNAL_STATE_WORD_LENGTH,
     limits,
   );
   assertStorageSize(
@@ -644,12 +644,12 @@ function prepareBatchLanes(
       checkedProduct(
         "packed inference state readback words",
         lanes.length,
-        FUNCTIONAL_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
+        INFERENCE_INTERNAL_STATE_WORD_LENGTH,
       ),
       checkedProduct(
         "packed fast output readback words",
         fastOutputRecords,
-        FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
+        INFERENCE_OUTPUT_WORD_LENGTH,
       ),
     ),
     limits,
@@ -658,28 +658,28 @@ function prepareBatchLanes(
 }
 
 function createSemanticState(lane: BatchLane): Uint8Array {
-  const bytes = new Uint8Array(FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH);
+  const bytes = new Uint8Array(COMPILATION_INTERNAL_STATE_BYTE_LENGTH);
   const view = new DataView(bytes.buffer);
   const set = (word: number, value: number) => view.setUint32(word * WORD_BYTES, value, true);
-  set(FunctionalCompilationStateWord.NodeCount, lane.surface.nodeCount);
-  set(FunctionalCompilationStateWord.DefinitionCount, lane.surface.definitionCount);
-  set(FunctionalCompilationStateWord.TypeCount, lane.surface.typeCount);
-  set(FunctionalCompilationStateWord.ConstructorCount, lane.surface.constructorCount);
-  set(FunctionalCompilationStateWord.EntrySymbol, lane.surface.entrySymbol);
-  set(FunctionalCompilationStateWord.ErrorCode, FunctionalSemanticCompilerErrorCode.None);
-  set(FunctionalCompilationStateWord.ErrorSource, LAZULI_NO_INDEX);
-  set(FunctionalCompilationStateWord.ErrorDetail, LAZULI_NO_INDEX);
-  set(FunctionalCompilationStateWord.EntryDefinition, LAZULI_NO_INDEX);
-  set(FunctionalCompilationStateWord.MaximumSteps, lane.maximumSteps);
-  set(FunctionalCompilationStateWord.MaximumStepsPerDispatch, lane.maximumStepsPerDispatch);
-  set(FunctionalCompilationInternalStateWord.SurfaceNodeBase, lane.nodeBase);
-  set(FunctionalCompilationInternalStateWord.DefinitionBase, lane.definitionBase);
-  set(FunctionalCompilationInternalStateWord.AlgebraicTypeBase, lane.typeBase);
-  set(FunctionalCompilationInternalStateWord.ConstructorBase, lane.constructorBase);
-  set(FunctionalCompilationInternalStateWord.CoreNodeBase, lane.nodeBase);
-  set(FunctionalCompilationInternalStateWord.InferenceOutputBase, lane.outputBase);
-  set(FunctionalCompilationInternalStateWord.SymbolCount, lane.surface.symbolNames.length);
-  set(FunctionalCompilationInternalStateWord.SymbolLookupBase, lane.symbolLookupBase);
+  set(CompilationStateWord.NodeCount, lane.surface.nodeCount);
+  set(CompilationStateWord.DefinitionCount, lane.surface.definitionCount);
+  set(CompilationStateWord.TypeCount, lane.surface.typeCount);
+  set(CompilationStateWord.ConstructorCount, lane.surface.constructorCount);
+  set(CompilationStateWord.EntrySymbol, lane.surface.entrySymbol);
+  set(CompilationStateWord.ErrorCode, SemanticCompilerErrorCode.None);
+  set(CompilationStateWord.ErrorSource, LAZULI_NO_INDEX);
+  set(CompilationStateWord.ErrorDetail, LAZULI_NO_INDEX);
+  set(CompilationStateWord.EntryDefinition, LAZULI_NO_INDEX);
+  set(CompilationStateWord.MaximumSteps, lane.maximumSteps);
+  set(CompilationStateWord.MaximumStepsPerDispatch, lane.maximumStepsPerDispatch);
+  set(CompilationInternalStateWord.SurfaceNodeBase, lane.nodeBase);
+  set(CompilationInternalStateWord.DefinitionBase, lane.definitionBase);
+  set(CompilationInternalStateWord.AlgebraicTypeBase, lane.typeBase);
+  set(CompilationInternalStateWord.ConstructorBase, lane.constructorBase);
+  set(CompilationInternalStateWord.CoreNodeBase, lane.nodeBase);
+  set(CompilationInternalStateWord.InferenceOutputBase, lane.outputBase);
+  set(CompilationInternalStateWord.SymbolCount, lane.surface.symbolNames.length);
+  set(CompilationInternalStateWord.SymbolLookupBase, lane.symbolLookupBase);
   return bytes;
 }
 
@@ -699,23 +699,23 @@ function createBatchInferenceState(lane: BatchLane): Uint8Array {
   const relocate = (word: number, base: number) =>
     view.setUint32(word * WORD_BYTES, lane.metadataBase + base, true);
   relocate(
-    FunctionalInferenceStateWord.DefinitionAnnotationBase,
+    InferenceStateWord.DefinitionAnnotationBase,
     lane.metadata.definitionAnnotationBase,
   );
-  relocate(FunctionalInferenceStateWord.SchemaBase, lane.metadata.schemaBase);
-  relocate(FunctionalInferenceStateWord.TypeParameterBase, lane.metadata.typeParameterBase);
+  relocate(InferenceStateWord.SchemaBase, lane.metadata.schemaBase);
+  relocate(InferenceStateWord.TypeParameterBase, lane.metadata.typeParameterBase);
   relocate(
-    FunctionalInferenceStateWord.TypeParameterOffsetsBase,
+    InferenceStateWord.TypeParameterOffsetsBase,
     lane.metadata.typeParameterOffsetsBase,
   );
-  relocate(FunctionalInferenceStateWord.ConstructorFieldBase, lane.metadata.constructorFieldBase);
+  relocate(InferenceStateWord.ConstructorFieldBase, lane.metadata.constructorFieldBase);
   relocate(
-    FunctionalInferenceStateWord.ConstructorFieldOffsetsBase,
+    InferenceStateWord.ConstructorFieldOffsetsBase,
     lane.metadata.constructorFieldOffsetsBase,
   );
-  relocate(FunctionalInferenceStateWord.ConstructorResultBase, lane.metadata.constructorResultBase);
+  relocate(InferenceStateWord.ConstructorResultBase, lane.metadata.constructorResultBase);
   relocate(
-    FunctionalInferenceStateWord.IndexedMetadataFooterBase,
+    InferenceStateWord.IndexedMetadataFooterBase,
     lane.metadata.indexedMetadataFooterBase,
   );
   return state;
@@ -752,7 +752,7 @@ function batchTotals(lanes: readonly BatchLane[]): BatchTotals {
     types: last.typeBase + last.surface.typeCount,
     constructors: last.constructorBase + last.surface.constructorCount,
     symbolLookupRecords: last.symbolLookupBase +
-      last.symbolLookupWords.length / FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH,
+      last.symbolLookupWords.length / SYMBOL_LOOKUP_WORD_LENGTH,
     metadataWords: last.metadataBase + last.metadata.words.length,
     workspaceWords: last.workspaceBase + last.localWorkspace.workspaceWordLength,
     outputRecords: last.outputBase + last.localWorkspace.outputCapacity,
@@ -829,14 +829,14 @@ async function allocateBatchBuffers(
       ),
       semanticStates: create(
         "Lazuli packed semantic states",
-        lanes.length * FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
+        lanes.length * COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
         GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       symbolLookups: create(
         "Lazuli packed symbol lookups",
         Math.max(
-          FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
-          totals.symbolLookupRecords * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
+          SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
+          totals.symbolLookupRecords * SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
         ),
         GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
       ),
@@ -852,7 +852,7 @@ async function allocateBatchBuffers(
       ),
       output: create(
         "Lazuli packed inferred types",
-        totals.outputRecords * FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
+        totals.outputRecords * INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
         GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       inferenceStates: create(
@@ -863,7 +863,7 @@ async function allocateBatchBuffers(
       stateReadback: create(
         "Lazuli packed state readback",
         lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
-          totals.fastOutputRecords * FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES +
+          totals.fastOutputRecords * INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES +
           totals.nodes * LAZULI_NODE_BYTE_LENGTH,
         GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
       ),
@@ -893,7 +893,7 @@ async function allocateBatchBuffers(
 
 async function dispatchBatch(
   device: GPUDevice,
-  semanticPipelines: GpuFunctionalSemanticPipelines,
+  semanticPipelines: GpuSemanticPipelines,
   semanticBindings: GPUBindGroup,
   inferencePipeline: GPUComputePipeline,
   inferenceBindings: GPUBindGroup,
@@ -923,7 +923,7 @@ async function dispatchBatch(
       0,
     );
     const loweringWorkgroups = Math.ceil(
-      packedNodeCount / FUNCTIONAL_PLANNED_LOWERING_WORKGROUP_SIZE,
+      packedNodeCount / PLANNED_LOWERING_WORKGROUP_SIZE,
     );
     if (loweringWorkgroups > 0) {
       const loweringPass = commands.beginComputePass({
@@ -940,7 +940,7 @@ async function dispatchBatch(
         semanticStateByteOffset(laneIndex),
         inferenceStateBuffer,
         inferenceStateByteOffset(laneIndex) +
-          FunctionalInferenceSchedulerWord.SemanticState * WORD_BYTES,
+          InferenceSchedulerWord.SemanticState * WORD_BYTES,
         24 * WORD_BYTES,
       );
     }
@@ -965,7 +965,7 @@ async function dispatchBatch(
         const lastLane = lanes.at(-1);
         if (lastLane === undefined) throw new Error("packed dispatch omitted all lanes");
         const fastOutputByteLength = (lastLane.fastOutputBase + lastLane.fastOutputCapacity) *
-          FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
+          INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
         if (fastOutputByteLength > 0) {
           commands.copyBufferToBuffer(
             outputBuffer,
@@ -978,11 +978,11 @@ async function dispatchBatch(
       }
       for (const lane of lanes) {
         const fastOutputByteLength = lane.fastOutputCapacity *
-          FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
+          INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
         if (!contiguousFastOutput && fastOutputByteLength > 0) {
           commands.copyBufferToBuffer(
             outputBuffer,
-            lane.outputBase * FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
+            lane.outputBase * INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
             stateReadbackBuffer,
             fastOutputByteOffset(laneCount, lane),
             fastOutputByteLength,
@@ -1045,8 +1045,8 @@ function batchInferenceOptions(
 }
 
 async function compileScalars(
-  inputs: readonly FunctionalBatchCompilationInput[],
-  compileScalar: (input: FunctionalBatchCompilationInput) => Promise<LazuliCompileResult>,
+  inputs: readonly BatchCompilationInput[],
+  compileScalar: (input: BatchCompilationInput) => Promise<LazuliCompileResult>,
 ): Promise<readonly LazuliCompileResult[]> {
   const outcomes = await Promise.allSettled(inputs.map(compileScalar));
   const results: LazuliCompileResult[] = [];
@@ -1098,7 +1098,7 @@ function checkedSum(name: string, left: number, right: number): number {
 }
 
 function semanticStateByteOffset(laneIndex: number): number {
-  return laneIndex * FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH;
+  return laneIndex * COMPILATION_INTERNAL_STATE_BYTE_LENGTH;
 }
 
 function inferenceStateByteOffset(laneIndex: number): number {
@@ -1107,7 +1107,7 @@ function inferenceStateByteOffset(laneIndex: number): number {
 
 function fastOutputByteOffset(laneCount: number, lane: BatchLane): number {
   return laneCount * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
-    lane.fastOutputBase * FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
+    lane.fastOutputBase * INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
 }
 
 function fastCoreByteOffset(lanes: readonly BatchLane[], lane: BatchLane): number {
@@ -1119,7 +1119,7 @@ function fastCoreBaseByteOffset(lanes: readonly BatchLane[]): number {
   if (lastLane === undefined) throw new Error("packed core readback omitted all lanes");
   const fastOutputRecords = lastLane.fastOutputBase + lastLane.fastOutputCapacity;
   return lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
-    fastOutputRecords * FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
+    fastOutputRecords * INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES;
 }
 
 class PackedAllocationError extends Error {

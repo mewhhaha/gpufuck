@@ -1,51 +1,51 @@
 import {
   completeFunctionalTypeDeclarations,
-  type FunctionalCoreNode,
-  type GpuFunctionalModule,
+  type CoreNode,
+  type GpuModule,
 } from "./compiler_module.ts";
-import { compileFunctionalWasmArtifact, type FunctionalWasmArtifact } from "./wasm_codegen.ts";
+import { compileWasmArtifact, type WasmArtifact } from "./wasm_codegen.ts";
 import { validateFunctionalWasmSimdMode } from "./wasm_backend_plan.ts";
-import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
-import { compileFunctionalWasmGc } from "./wasm_gc_codegen.ts";
+import type { WasmCompilationOptions } from "./wasm_contract.ts";
+import { compileWasmGc } from "./wasm_gc_codegen.ts";
 
 const MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS = 64;
 
 const wasmArtifactsByModule = new WeakMap<
-  GpuFunctionalModule,
-  Promise<FunctionalWasmArtifact>
+  GpuModule,
+  Promise<WasmArtifact>
 >();
 const simdWasmArtifactsByModule = new WeakMap<
-  GpuFunctionalModule,
-  Promise<FunctionalWasmArtifact>
+  GpuModule,
+  Promise<WasmArtifact>
 >();
 const executableWasmByModule = new WeakMap<
-  GpuFunctionalModule,
+  GpuModule,
   Promise<WebAssembly.Module>
 >();
 const wasmGcArtifactsByModule = new WeakMap<
-  GpuFunctionalModule,
+  GpuModule,
   Promise<{
     readonly bytes: Uint8Array<ArrayBuffer>;
-    readonly nodes: readonly FunctionalCoreNode[];
+    readonly nodes: readonly CoreNode[];
   }>
 >();
 const instrumentedWasmByModule = new WeakMap<
-  GpuFunctionalModule,
-  Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }>
+  GpuModule,
+  Promise<WasmArtifact & { readonly executable: WebAssembly.Module }>
 >();
-const resolvedCoreFingerprintByModule = new WeakMap<GpuFunctionalModule, Promise<string>>();
+const resolvedCoreFingerprintByModule = new WeakMap<GpuModule, Promise<string>>();
 const instrumentedWasmByResolvedCore = new Map<
   string,
-  Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }>
+  Promise<WasmArtifact & { readonly executable: WebAssembly.Module }>
 >();
 const wasmArtifactsByResolvedCore = new Map<
   string,
-  Promise<FunctionalWasmArtifact>
+  Promise<WasmArtifact>
 >();
 
-export async function compileFunctionalModuleToWasm(
-  module: GpuFunctionalModule,
-  options: FunctionalWasmCompilationOptions = {},
+export async function compileModuleToWasm(
+  module: GpuModule,
+  options: WasmCompilationOptions = {},
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("functional WASM compilation options must be an object");
@@ -76,7 +76,7 @@ export async function compileFunctionalModuleToWasm(
     return (await cachedFunctionalSimdWasmArtifact(module)).bytes.slice();
   }
   if (customStorage) {
-    return compileFunctionalWasmArtifact(
+    return compileWasmArtifact(
       module,
       await module.readCoreNodes(),
       false,
@@ -87,38 +87,38 @@ export async function compileFunctionalModuleToWasm(
 }
 
 async function cachedFunctionalSimdWasmArtifact(
-  module: GpuFunctionalModule,
-): Promise<FunctionalWasmArtifact> {
+  module: GpuModule,
+): Promise<WasmArtifact> {
   return await cachedModuleValue(
     simdWasmArtifactsByModule,
     module,
     () =>
       module.readCoreNodes().then((nodes) =>
-        compileFunctionalWasmArtifact(module, nodes, false, { simd: "wasm-simd" })
+        compileWasmArtifact(module, nodes, false, { simd: "wasm-simd" })
       ),
   );
 }
 
 export async function cachedFunctionalWasmGcArtifact(
-  module: GpuFunctionalModule,
+  module: GpuModule,
 ): Promise<{
   readonly bytes: Uint8Array<ArrayBuffer>;
-  readonly nodes: readonly FunctionalCoreNode[];
+  readonly nodes: readonly CoreNode[];
 }> {
   return await cachedModuleValue(
     wasmGcArtifactsByModule,
     module,
     () =>
       module.readCoreNodes().then((nodes) => ({
-        bytes: compileFunctionalWasmGc(module, nodes),
+        bytes: compileWasmGc(module, nodes),
         nodes,
       })),
   );
 }
 
 export async function cachedFunctionalWasmArtifact(
-  module: GpuFunctionalModule,
-): Promise<FunctionalWasmArtifact> {
+  module: GpuModule,
+): Promise<WasmArtifact> {
   return await cachedModuleValue(
     wasmArtifactsByModule,
     module,
@@ -127,9 +127,9 @@ export async function cachedFunctionalWasmArtifact(
 }
 
 async function sharedFunctionalWasmArtifact(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
-): Promise<FunctionalWasmArtifact> {
+  module: GpuModule,
+  nodes: readonly CoreNode[],
+): Promise<WasmArtifact> {
   const fingerprint = await resolvedCoreFingerprint(module, nodes);
   const cached = wasmArtifactsByResolvedCore.get(fingerprint);
   if (cached !== undefined) {
@@ -137,7 +137,7 @@ async function sharedFunctionalWasmArtifact(
     wasmArtifactsByResolvedCore.set(fingerprint, cached);
     return await cached;
   }
-  const compilation = Promise.resolve().then(() => compileFunctionalWasmArtifact(module, nodes));
+  const compilation = Promise.resolve().then(() => compileWasmArtifact(module, nodes));
   wasmArtifactsByResolvedCore.set(fingerprint, compilation);
   evictOldestResolvedCoreArtifacts(wasmArtifactsByResolvedCore);
   try {
@@ -151,7 +151,7 @@ async function sharedFunctionalWasmArtifact(
 }
 
 export async function cachedExecutableWasm(
-  module: GpuFunctionalModule,
+  module: GpuModule,
 ): Promise<WebAssembly.Module> {
   return await cachedModuleValue(
     executableWasmByModule,
@@ -164,9 +164,9 @@ export async function cachedExecutableWasm(
 }
 
 export async function fuelInstrumentedWasm(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
-): Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }> {
+  module: GpuModule,
+  nodes: readonly CoreNode[],
+): Promise<WasmArtifact & { readonly executable: WebAssembly.Module }> {
   return await cachedModuleValue(
     instrumentedWasmByModule,
     module,
@@ -175,9 +175,9 @@ export async function fuelInstrumentedWasm(
 }
 
 async function sharedFuelInstrumentedWasm(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
-): Promise<FunctionalWasmArtifact & { readonly executable: WebAssembly.Module }> {
+  module: GpuModule,
+  nodes: readonly CoreNode[],
+): Promise<WasmArtifact & { readonly executable: WebAssembly.Module }> {
   const fingerprint = await resolvedCoreFingerprint(module, nodes);
   const cached = instrumentedWasmByResolvedCore.get(fingerprint);
   if (cached !== undefined) {
@@ -186,7 +186,7 @@ async function sharedFuelInstrumentedWasm(
     return await cached;
   }
   const compilation = Promise.resolve().then(() => {
-    const artifact = compileFunctionalWasmArtifact(module, nodes, true);
+    const artifact = compileWasmArtifact(module, nodes, true);
     return { ...artifact, executable: new WebAssembly.Module(artifact.bytes) };
   });
   instrumentedWasmByResolvedCore.set(fingerprint, compilation);
@@ -212,8 +212,8 @@ function evictOldestResolvedCoreArtifacts<Value>(
 }
 
 async function resolvedCoreFingerprint(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
+  module: GpuModule,
+  nodes: readonly CoreNode[],
 ): Promise<string> {
   return await cachedModuleValue(
     resolvedCoreFingerprintByModule,
@@ -240,7 +240,7 @@ async function resolvedCoreFingerprint(
 }
 
 export async function functionalResolvedCoreFingerprint(
-  module: GpuFunctionalModule,
+  module: GpuModule,
 ): Promise<string> {
   return await resolvedCoreFingerprint(module, await module.readCoreNodes());
 }
@@ -252,8 +252,8 @@ async function sha256(value: string): Promise<string> {
 }
 
 async function cachedModuleValue<Value>(
-  cache: WeakMap<GpuFunctionalModule, Promise<Value>>,
-  module: GpuFunctionalModule,
+  cache: WeakMap<GpuModule, Promise<Value>>,
+  module: GpuModule,
   create: () => Promise<Value>,
 ): Promise<Value> {
   const cached = cache.get(module);

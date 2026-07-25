@@ -1,6 +1,6 @@
 import {
-  buildFunctionalSurfaceModule,
-  GpuFunctionalCompiler,
+  buildSurfaceModule,
+  GpuCompiler,
   requestWebGpuDevice,
   surface,
 } from "../../../functional.ts";
@@ -17,8 +17,8 @@ import {
 
 const device = await requestWebGpuDevice();
 try {
-  const compiler = await GpuFunctionalCompiler.create(device);
-  const warmupModule = buildFunctionalSurfaceModule(
+  const compiler = await GpuCompiler.create(device);
+  const warmupModule = buildSurfaceModule(
     [{
       name: "__test262_worker_warmup",
       parameters: [],

@@ -1,8 +1,4 @@
-import {
-  GpuFunctionalCompiler,
-  GpuFunctionalEvaluator,
-  requestWebGpuDevice,
-} from "./functional.ts";
+import { GpuCompiler, GpuEvaluator, requestWebGpuDevice } from "./functional.ts";
 import {
   type GleamFunctionalSourceModule,
   lowerGleamFunctionalSources,
@@ -47,7 +43,7 @@ export async function main(
 
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuFunctionalCompiler.create(device);
+    const compiler = await GpuCompiler.create(device);
     const compilation = await compiler.compileModule(frontend.lowered.module);
     if (!compilation.ok) {
       for (const diagnostic of compilation.diagnostics) {
@@ -58,7 +54,7 @@ export async function main(
       return 1;
     }
     try {
-      const evaluator = await GpuFunctionalEvaluator.create(device);
+      const evaluator = await GpuEvaluator.create(device);
       const evaluation = await evaluator.evaluate(compilation.module, {
         heapSlots: gleamHeapSlots(compilation.module),
       });

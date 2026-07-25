@@ -1,11 +1,11 @@
 import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
 
 import {
-  type FunctionalEvaluationOptions,
-  GpuFunctionalCompiler,
-  GpuFunctionalEvaluator,
+  type EvaluationOptions,
+  GpuCompiler,
+  GpuEvaluator,
   requestWebGpuDevice,
-  runFunctionalWasmModule,
+  runWasmModule,
 } from "../functional.ts";
 import {
   type GleamFunctionalSourceModule,
@@ -17,8 +17,8 @@ import {
 
 interface GleamFunctionalRuntime {
   readonly device: GPUDevice;
-  readonly compiler: GpuFunctionalCompiler;
-  readonly evaluator: GpuFunctionalEvaluator;
+  readonly compiler: GpuCompiler;
+  readonly evaluator: GpuEvaluator;
 }
 
 let runtime: GleamFunctionalRuntime | undefined;
@@ -32,8 +32,8 @@ const KERNEL_HEAP_SLOTS = 1024;
 Deno.test.beforeAll(async () => {
   const device = await requestWebGpuDevice();
   const [compiler, evaluator] = await Promise.all([
-    GpuFunctionalCompiler.create(device),
-    GpuFunctionalEvaluator.create(device),
+    GpuCompiler.create(device),
+    GpuEvaluator.create(device),
   ]);
   runtime = { device, compiler, evaluator };
 });
@@ -709,7 +709,7 @@ Deno.test("reports Gleam panic messages as located runtime faults", async () => 
   if (!compilation.ok) return;
   try {
     await rejects(
-      () => runFunctionalWasmModule(compilation.module),
+      () => runWasmModule(compilation.module),
       (error) => {
         ok(error instanceof Error);
         match(error.message, /F3013/);
@@ -735,7 +735,7 @@ Deno.test("evaluates a dynamic Gleam panic message before the outer panic", asyn
   if (!compilation.ok) return;
   try {
     await rejects(
-      () => runFunctionalWasmModule(compilation.module),
+      () => runWasmModule(compilation.module),
       /inner panic/,
     );
   } finally {
@@ -818,7 +818,7 @@ pub fn main() -> Int {
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) return;
   try {
-    const execution = await runFunctionalWasmModule(compilation.module, {
+    const execution = await runWasmModule(compilation.module, {
       init: {
         "GleamExternal:./math.mjs": {
           "add@external/add.add": (argument) => {
@@ -1043,7 +1043,7 @@ async function evaluateSingleExample(
 
 async function evaluate(
   lowered: LoweredGleamFunctionalProgram,
-  options: FunctionalEvaluationOptions = {},
+  options: EvaluationOptions = {},
 ): Promise<{ readonly kind: string; readonly value: unknown }> {
   const { compiler, evaluator } = gleamRuntime();
   const compilation = await compiler.compileModule(lowered.module);
@@ -1073,7 +1073,7 @@ async function evaluateWasm(
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) throw new Error("Gleam example did not compile.");
   try {
-    return (await runFunctionalWasmModule(compilation.module)).value;
+    return (await runWasmModule(compilation.module)).value;
   } finally {
     compilation.module.destroy();
   }

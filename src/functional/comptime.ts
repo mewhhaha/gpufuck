@@ -1,45 +1,38 @@
 import {
-  FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
-  FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
-  FunctionalEvaluationProfile,
-  type FunctionalTypeSchema,
+  EvaluationProfile,
+  PAIR_CONSTRUCTOR_NAME,
+  type TypeSchema,
+  UNIT_CONSTRUCTOR_NAME,
 } from "./abi.ts";
 import {
-  encodeFunctionalConstant,
+  encodeConstant,
   functionalConstantFromDeepValue,
   measureFunctionalConstant,
   validateFunctionalConstant,
 } from "./comptime_constant.ts";
 import type {
   CompiledFunctionalComptimeFunction,
-  FunctionalComptimeDiagnostic,
-  FunctionalComptimeExecutionOptions,
-  FunctionalComptimeExecutionResult,
-  FunctionalComptimeExportSelection,
-  FunctionalComptimeExportValue,
-  FunctionalComptimeFunctionCompilationOptions,
-  FunctionalComptimeFunctionCompilationResult,
-  FunctionalComptimeInvocationOptions,
-  FunctionalComptimeInvocationResult,
-  FunctionalComptimeModuleArtifact,
-  FunctionalComptimeStats,
-  FunctionalConstant,
+  ComptimeDiagnostic,
+  ComptimeExecutionOptions,
+  ComptimeExecutionResult,
+  ComptimeExportSelection,
+  ComptimeExportValue,
+  ComptimeFunctionCompilationOptions,
+  ComptimeFunctionCompilationResult,
+  ComptimeInvocationOptions,
+  ComptimeInvocationResult,
+  ComptimeModuleArtifact,
+  ComptimeStats,
+  Constant,
 } from "./comptime_contract.ts";
-import { GpuFunctionalCompiler, type GpuFunctionalModule } from "./compiler.ts";
+import { GpuCompiler, type GpuModule } from "./compiler.ts";
 import {
+  type DeepValue,
   evaluateFunctionalModuleWithBoundedWasm,
-  type FunctionalDeepValue,
-  GpuFunctionalEvaluator,
+  GpuEvaluator,
 } from "./evaluator.ts";
-import {
-  createFunctionalModuleArtifact,
-  type FunctionalModuleArtifact,
-  linkFunctionalModules,
-} from "./module_linker.ts";
-import type {
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceTypeDeclaration,
-} from "./surface_builder.ts";
+import { createModuleArtifact, linkModules, type ModuleArtifact } from "./module_linker.ts";
+import type { SurfaceExpression, SurfaceTypeDeclaration } from "./surface_builder.ts";
 import { functionalResolvedCoreFingerprint } from "./wasm_artifacts.ts";
 
 const DEFAULT_MAXIMUM_COMPTIME_STEPS = 1_000_000;
@@ -51,12 +44,12 @@ const MAXIMUM_MEMOIZED_COMPTIME_INVOCATIONS = 4_096;
 type MemoizedComptimeInvocation =
   | {
     readonly ok: true;
-    readonly value: FunctionalConstant;
-    readonly evaluation: FunctionalComptimeStats["evaluation"];
+    readonly value: Constant;
+    readonly evaluation: ComptimeStats["evaluation"];
   }
   | {
     readonly ok: false;
-    readonly fault: Extract<FunctionalComptimeInvocationResult, { readonly ok: false }>;
+    readonly fault: Extract<ComptimeInvocationResult, { readonly ok: false }>;
   };
 
 const memoizedComptimeInvocations = new Map<string, Promise<MemoizedComptimeInvocation>>();
@@ -65,7 +58,7 @@ type ComptimeOutput = {
   readonly module: string;
   readonly exportName: string;
   readonly definition: string;
-  readonly type: FunctionalTypeSchema;
+  readonly type: TypeSchema;
   readonly span: { readonly startByte: number; readonly endByte: number } | undefined;
 };
 
@@ -73,69 +66,69 @@ type PreparedComptimeProgram =
   | { readonly kind: "empty"; readonly outputs: readonly [] }
   | {
     readonly kind: "compiled";
-    readonly module: ReturnType<typeof linkFunctionalModules>["module"];
+    readonly module: ReturnType<typeof linkModules>["module"];
     readonly outputs: readonly ComptimeOutput[];
   };
 
 type CompiledComptimeProgram = Extract<PreparedComptimeProgram, { readonly kind: "compiled" }>;
 
-export class GpuFunctionalComptimeExecutor {
-  readonly #compiler: GpuFunctionalCompiler;
-  readonly #evaluator: GpuFunctionalEvaluator;
+export class GpuComptimeExecutor {
+  readonly #compiler: GpuCompiler;
+  readonly #evaluator: GpuEvaluator;
 
   private constructor(
-    compiler: GpuFunctionalCompiler,
-    evaluator: GpuFunctionalEvaluator,
+    compiler: GpuCompiler,
+    evaluator: GpuEvaluator,
   ) {
     this.#compiler = compiler;
     this.#evaluator = evaluator;
   }
 
-  static async create(device: GPUDevice): Promise<GpuFunctionalComptimeExecutor> {
+  static async create(device: GPUDevice): Promise<GpuComptimeExecutor> {
     const [compiler, evaluator] = await Promise.all([
-      GpuFunctionalCompiler.create(device),
-      GpuFunctionalEvaluator.create(device),
+      GpuCompiler.create(device),
+      GpuEvaluator.create(device),
     ]);
-    return new GpuFunctionalComptimeExecutor(compiler, evaluator);
+    return new GpuComptimeExecutor(compiler, evaluator);
   }
 
   async execute(
-    artifacts: readonly FunctionalComptimeModuleArtifact[],
-    options: FunctionalComptimeExecutionOptions = {},
-  ): Promise<FunctionalComptimeExecutionResult> {
+    artifacts: readonly ComptimeModuleArtifact[],
+    options: ComptimeExecutionOptions = {},
+  ): Promise<ComptimeExecutionResult> {
     return (await this.#executeRequests([{ artifacts }], options))[0]!;
   }
 
   async executeBatch(
-    programs: readonly (readonly FunctionalComptimeModuleArtifact[])[],
-    options: FunctionalComptimeExecutionOptions = {},
-  ): Promise<readonly FunctionalComptimeExecutionResult[]> {
+    programs: readonly (readonly ComptimeModuleArtifact[])[],
+    options: ComptimeExecutionOptions = {},
+  ): Promise<readonly ComptimeExecutionResult[]> {
     return await this.#executeRequests(programs.map((artifacts) => ({ artifacts })), options);
   }
 
   async executeExports(
-    artifacts: readonly FunctionalComptimeModuleArtifact[],
-    exports: readonly FunctionalComptimeExportSelection[],
-    options: FunctionalComptimeExecutionOptions = {},
-  ): Promise<FunctionalComptimeExecutionResult> {
+    artifacts: readonly ComptimeModuleArtifact[],
+    exports: readonly ComptimeExportSelection[],
+    options: ComptimeExecutionOptions = {},
+  ): Promise<ComptimeExecutionResult> {
     return (await this.#executeRequests([{ artifacts, exports }], options))[0]!;
   }
 
   async executeExportsBatch(
     requests: readonly {
-      readonly artifacts: readonly FunctionalComptimeModuleArtifact[];
-      readonly exports: readonly FunctionalComptimeExportSelection[];
+      readonly artifacts: readonly ComptimeModuleArtifact[];
+      readonly exports: readonly ComptimeExportSelection[];
     }[],
-    options: FunctionalComptimeExecutionOptions = {},
-  ): Promise<readonly FunctionalComptimeExecutionResult[]> {
+    options: ComptimeExecutionOptions = {},
+  ): Promise<readonly ComptimeExecutionResult[]> {
     return await this.#executeRequests(requests, options);
   }
 
   async compileFunction(
-    artifacts: readonly FunctionalComptimeModuleArtifact[],
-    selection: FunctionalComptimeExportSelection,
-    options: FunctionalComptimeFunctionCompilationOptions = {},
-  ): Promise<FunctionalComptimeFunctionCompilationResult> {
+    artifacts: readonly ComptimeModuleArtifact[],
+    selection: ComptimeExportSelection,
+    options: ComptimeFunctionCompilationOptions = {},
+  ): Promise<ComptimeFunctionCompilationResult> {
     options.signal?.throwIfAborted();
     const modules = artifacts.map(comptimeArtifact);
     const selectedModule = artifacts.find((module) => module.name === selection.module);
@@ -149,7 +142,7 @@ export class GpuFunctionalComptimeExecutor {
         }`,
       );
     }
-    const linked = linkFunctionalModules(modules, selection);
+    const linked = linkModules(modules, selection);
     const compilation = await this.#compiler.compileModule(linked.module, {
       ...(options.maximumCompilationSteps === undefined
         ? {}
@@ -195,14 +188,14 @@ export class GpuFunctionalComptimeExecutor {
 
   async #executeRequests(
     requests: readonly {
-      readonly artifacts: readonly FunctionalComptimeModuleArtifact[];
-      readonly exports?: readonly FunctionalComptimeExportSelection[];
+      readonly artifacts: readonly ComptimeModuleArtifact[];
+      readonly exports?: readonly ComptimeExportSelection[];
     }[],
-    options: FunctionalComptimeExecutionOptions,
-  ): Promise<readonly FunctionalComptimeExecutionResult[]> {
+    options: ComptimeExecutionOptions,
+  ): Promise<readonly ComptimeExecutionResult[]> {
     options.signal?.throwIfAborted();
     const limits = comptimeLimits(options);
-    const results: (FunctionalComptimeExecutionResult | undefined)[] = new Array(requests.length);
+    const results: (ComptimeExecutionResult | undefined)[] = new Array(requests.length);
     const prepared: { readonly resultIndex: number; readonly program: CompiledComptimeProgram }[] =
       [];
     for (const [resultIndex, request] of requests.entries()) {
@@ -238,7 +231,7 @@ export class GpuFunctionalComptimeExecutor {
       readonly preparedIndex: number;
       readonly resultIndex: number;
       readonly program: CompiledComptimeProgram;
-      readonly module: GpuFunctionalModule;
+      readonly module: GpuModule;
     }[] = [];
     try {
       for (const [preparedIndex, compilation] of compilations.entries()) {
@@ -324,12 +317,12 @@ export class GpuFunctionalComptimeExecutor {
 class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFunction {
   readonly parameterType;
   readonly resultType;
-  readonly #module: GpuFunctionalModule;
+  readonly #module: GpuModule;
   readonly #fingerprint: string;
   readonly #output: ComptimeOutput;
   #destroyed = false;
 
-  constructor(module: GpuFunctionalModule, fingerprint: string, output: ComptimeOutput) {
+  constructor(module: GpuModule, fingerprint: string, output: ComptimeOutput) {
     if (module.entryType.kind !== "function") {
       throw new Error(`reusable functional comptime entry has type ${module.entryType.kind}`);
     }
@@ -341,9 +334,9 @@ class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFu
   }
 
   async invoke(
-    argument: FunctionalConstant,
-    options: FunctionalComptimeInvocationOptions = {},
-  ): Promise<FunctionalComptimeInvocationResult> {
+    argument: Constant,
+    options: ComptimeInvocationOptions = {},
+  ): Promise<ComptimeInvocationResult> {
     if (this.#destroyed) {
       throw new Error(
         `cannot invoke destroyed functional comptime function ${
@@ -366,7 +359,7 @@ class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFu
     const limits = comptimeLimits(options);
     const key = `${this.#fingerprint}:${maximumSteps}:${limits.maximumOutputNodes}:` +
       `${limits.maximumOutputBytes}:` +
-      new TextDecoder().decode(encodeFunctionalConstant(argument));
+      new TextDecoder().decode(encodeConstant(argument));
     let invocation = memoizedComptimeInvocations.get(key);
     const memoized = invocation !== undefined;
     if (invocation === undefined) {
@@ -426,7 +419,7 @@ class ReusableFunctionalComptimeFunction implements CompiledFunctionalComptimeFu
   }
 
   async #evaluate(
-    argument: FunctionalConstant,
+    argument: Constant,
     maximumSteps: number,
     maximumResultNodes: number,
     maximumResultBytes: number,
@@ -473,7 +466,7 @@ function evictOldestComptimeInvocations(): void {
   }
 }
 
-function gpuEvaluationRequested(options: FunctionalComptimeExecutionOptions): boolean {
+function gpuEvaluationRequested(options: ComptimeExecutionOptions): boolean {
   return options.maximumStepsPerDispatch !== undefined || options.heapSlots !== undefined ||
     options.stackFrames !== undefined;
 }
@@ -485,9 +478,9 @@ function programProducesFirstOrderValues(program: CompiledComptimeProgram): bool
 }
 
 function schemaContainsFunction(
-  schema: FunctionalTypeSchema,
-  declarations: readonly FunctionalSurfaceTypeDeclaration[],
-  parameters: ReadonlyMap<string, FunctionalTypeSchema> = new Map(),
+  schema: TypeSchema,
+  declarations: readonly SurfaceTypeDeclaration[],
+  parameters: ReadonlyMap<string, TypeSchema> = new Map(),
   visiting = new Set<string>(),
 ): boolean {
   switch (schema.kind) {
@@ -538,8 +531,8 @@ function schemaContainsFunction(
 }
 
 function prepareComptimeProgram(
-  artifacts: readonly FunctionalComptimeModuleArtifact[],
-  selections?: readonly FunctionalComptimeExportSelection[],
+  artifacts: readonly ComptimeModuleArtifact[],
+  selections?: readonly ComptimeExportSelection[],
 ): PreparedComptimeProgram {
   const functionalArtifacts = artifacts.map(comptimeArtifact);
   const modules = new Map(functionalArtifacts.map((artifact) => [artifact.name, artifact]));
@@ -574,7 +567,7 @@ function prepareComptimeProgram(
     exportName: output.exportName,
     type: output.type,
   }));
-  const collector: FunctionalModuleArtifact = {
+  const collector: ModuleArtifact = {
     name: collectorName,
     definitions: [{
       name: "main",
@@ -591,21 +584,21 @@ function prepareComptimeProgram(
     }],
     sourceByteLength: 0,
     options: {
-      evaluationProfile: FunctionalEvaluationProfile.StrictEager,
+      evaluationProfile: EvaluationProfile.StrictEager,
     },
   };
-  const linked = linkFunctionalModules(
+  const linked = linkModules(
     [...functionalArtifacts, collector],
     { module: collectorName, exportName: "main" },
   );
   return { kind: "compiled", module: linked.module, outputs: Object.freeze(outputs) };
 }
 
-function comptimeArtifact(artifact: FunctionalComptimeModuleArtifact): FunctionalModuleArtifact {
+function comptimeArtifact(artifact: ComptimeModuleArtifact): ModuleArtifact {
   if (artifact.name.length === 0) {
     throw new TypeError("functional comptime module name must be nonempty");
   }
-  return createFunctionalModuleArtifact({
+  return createModuleArtifact({
     name: artifact.name,
     definitions: artifact.definitions,
     typeDeclarations: artifact.typeDeclarations,
@@ -613,22 +606,22 @@ function comptimeArtifact(artifact: FunctionalComptimeModuleArtifact): Functiona
     exports: artifact.exports,
     sourceByteLength: artifact.sourceByteLength,
     options: {
-      evaluationProfile: artifact.evaluationProfile ?? FunctionalEvaluationProfile.StrictEager,
+      evaluationProfile: artifact.evaluationProfile ?? EvaluationProfile.StrictEager,
     },
   });
 }
 
-function collectedExpression(names: readonly string[]): FunctionalSurfaceExpression {
-  let expression: FunctionalSurfaceExpression = {
+function collectedExpression(names: readonly string[]): SurfaceExpression {
+  let expression: SurfaceExpression = {
     kind: "name",
-    name: FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+    name: UNIT_CONSTRUCTOR_NAME,
   };
   for (let index = names.length - 1; index >= 0; index--) {
     expression = {
       kind: "apply",
       callee: {
         kind: "apply",
-        callee: { kind: "name", name: FUNCTIONAL_PAIR_CONSTRUCTOR_NAME },
+        callee: { kind: "name", name: PAIR_CONSTRUCTOR_NAME },
         argument: { kind: "name", name: names[index]! },
       },
       argument: expression,
@@ -637,8 +630,8 @@ function collectedExpression(names: readonly string[]): FunctionalSurfaceExpress
   return expression;
 }
 
-function collectedType(types: readonly FunctionalTypeSchema[]): FunctionalTypeSchema {
-  let result: FunctionalTypeSchema = { kind: "unit" };
+function collectedType(types: readonly TypeSchema[]): TypeSchema {
+  let result: TypeSchema = { kind: "unit" };
   for (let index = types.length - 1; index >= 0; index--) {
     result = { kind: "tuple", values: [types[index]!, result] };
   }
@@ -647,10 +640,10 @@ function collectedType(types: readonly FunctionalTypeSchema[]): FunctionalTypeSc
 
 function comptimeSuccess(
   program: CompiledComptimeProgram,
-  value: FunctionalDeepValue,
-  evaluation: FunctionalComptimeStats["evaluation"],
+  value: DeepValue,
+  evaluation: ComptimeStats["evaluation"],
   limits: ReturnType<typeof comptimeLimits>,
-): FunctionalComptimeExecutionResult {
+): ComptimeExecutionResult {
   const values = unpackCollectedValues(value, program.outputs.length);
   if (values === undefined) {
     return {
@@ -665,7 +658,7 @@ function comptimeSuccess(
       stats: evaluation,
     };
   }
-  const exports: FunctionalComptimeExportValue[] = [];
+  const exports: ComptimeExportValue[] = [];
   let outputNodes = 0;
   let outputBytes = 0;
   let outputDepth = 0;
@@ -709,10 +702,10 @@ function comptimeSuccess(
 }
 
 function unpackCollectedValues(
-  value: FunctionalDeepValue,
+  value: DeepValue,
   count: number,
-): readonly FunctionalDeepValue[] | undefined {
-  const values: FunctionalDeepValue[] = [];
+): readonly DeepValue[] | undefined {
+  const values: DeepValue[] = [];
   let current = value;
   for (let index = 0; index < count; index++) {
     if (current.kind !== "tuple" || current.fields.length !== 2) return undefined;
@@ -724,7 +717,7 @@ function unpackCollectedValues(
 
 function nonConstantOutput(
   output: ComptimeOutput,
-): FunctionalComptimeDiagnostic {
+): ComptimeDiagnostic {
   return {
     stage: "comptime",
     code: "F5001",
@@ -744,7 +737,7 @@ function exceededOutputLimit(
   bytes: number,
   depth: number,
   limits: ReturnType<typeof comptimeLimits>,
-): FunctionalComptimeDiagnostic | undefined {
+): ComptimeDiagnostic | undefined {
   const evidence = nodes > limits.maximumOutputNodes
     ? { label: "nodes", limit: limits.maximumOutputNodes, observed: nodes }
     : bytes > limits.maximumOutputBytes
@@ -769,10 +762,10 @@ function exceededOutputLimit(
 }
 
 function qualifySchema(
-  schema: FunctionalTypeSchema,
-  artifact: FunctionalModuleArtifact,
-  modules: ReadonlyMap<string, FunctionalModuleArtifact>,
-): FunctionalTypeSchema {
+  schema: TypeSchema,
+  artifact: ModuleArtifact,
+  modules: ReadonlyMap<string, ModuleArtifact>,
+): TypeSchema {
   const names = new Map(
     artifact.typeDeclarations.map((
       declaration,
@@ -787,7 +780,7 @@ function qualifySchema(
       }
     }
   }
-  const rewrite = (value: FunctionalTypeSchema): FunctionalTypeSchema => {
+  const rewrite = (value: TypeSchema): TypeSchema => {
     switch (value.kind) {
       case "integer":
       case "signed-integer-64":
@@ -818,7 +811,7 @@ function qualifySchema(
   return rewrite(schema);
 }
 
-function comptimeLimits(options: FunctionalComptimeExecutionOptions): {
+function comptimeLimits(options: ComptimeExecutionOptions): {
   readonly maximumOutputNodes: number;
   readonly maximumOutputBytes: number;
   readonly maximumOutputDepth: number;
@@ -850,13 +843,13 @@ function positiveLimit(name: string, value: number | undefined, fallback: number
   );
 }
 
-function uniqueCollectorName(modules: ReadonlyMap<string, FunctionalModuleArtifact>): string {
+function uniqueCollectorName(modules: ReadonlyMap<string, ModuleArtifact>): string {
   let name = "$gpufuck-comptime-output";
   while (modules.has(name)) name += "$";
   return name;
 }
 
-function emptyComptimeStats(): FunctionalComptimeStats {
+function emptyComptimeStats(): ComptimeStats {
   return Object.freeze({
     compilationCount: 0,
     evaluation: Object.freeze({ steps: 0, allocations: 0, peakStack: 0, thunkEvaluations: 0 }),
@@ -867,8 +860,8 @@ function emptyComptimeStats(): FunctionalComptimeStats {
 }
 
 function completedResults(
-  results: readonly (FunctionalComptimeExecutionResult | undefined)[],
-): readonly FunctionalComptimeExecutionResult[] {
+  results: readonly (ComptimeExecutionResult | undefined)[],
+): readonly ComptimeExecutionResult[] {
   return results.map((result, index) => {
     if (result === undefined) throw new Error(`functional comptime batch omitted result ${index}`);
     return result;

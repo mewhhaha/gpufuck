@@ -9,12 +9,12 @@ import {
   LazuliSurfaceTag,
   LazuliSurfaceWord,
 } from "../src/semantic/abi.ts";
-import { FunctionalSemanticCompilerErrorCode } from "../src/semantic/compilation_diagnostics.ts";
+import { SemanticCompilerErrorCode } from "../src/semantic/compilation_diagnostics.ts";
 import {
   createLazuliSymbolLookup,
-  FUNCTIONAL_INDEXED_LOCAL_RESOLUTION_MAGIC,
-  FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH,
-  FunctionalSymbolLookupWord,
+  INDEXED_LOCAL_RESOLUTION_MAGIC,
+  SYMBOL_LOOKUP_WORD_LENGTH,
+  SymbolLookupWord,
 } from "../src/semantic/symbol_lookup.ts";
 
 Deno.test("indexed lowering plans resolve local, global, and constructor names", () => {
@@ -33,7 +33,7 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
       lowering: {
         coreTag: LazuliCoreTag.Local,
         corePayload: 0,
-        errorCode: FunctionalSemanticCompilerErrorCode.None,
+        errorCode: SemanticCompilerErrorCode.None,
         errorDetail: LAZULI_NO_INDEX,
       },
     },
@@ -42,7 +42,7 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
       lowering: {
         coreTag: LazuliCoreTag.Global,
         corePayload: 0,
-        errorCode: FunctionalSemanticCompilerErrorCode.None,
+        errorCode: SemanticCompilerErrorCode.None,
         errorDetail: LAZULI_NO_INDEX,
       },
     },
@@ -51,7 +51,7 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
       lowering: {
         coreTag: LazuliCoreTag.Constructor,
         corePayload: 1,
-        errorCode: FunctionalSemanticCompilerErrorCode.None,
+        errorCode: SemanticCompilerErrorCode.None,
         errorDetail: LAZULI_NO_INDEX,
       },
     },
@@ -67,7 +67,7 @@ Deno.test("indexed lowering plans retain the first deterministic semantic diagno
   deepStrictEqual(loweringRecord(unknownLookup, unknownSurface, unknownNode.index), {
     coreTag: LazuliSurfaceTag.Name,
     corePayload: unknownNode.payload,
-    errorCode: FunctionalSemanticCompilerErrorCode.UnknownName,
+    errorCode: SemanticCompilerErrorCode.UnknownName,
     errorDetail: unknownNode.payload,
   });
 
@@ -81,7 +81,7 @@ Deno.test("indexed lowering plans retain the first deterministic semantic diagno
   equal(loweringHeader(duplicateLookup, duplicateSurface).errorNode, repeatedArm.index);
   equal(
     loweringRecord(duplicateLookup, duplicateSurface, repeatedArm.index).errorCode,
-    FunctionalSemanticCompilerErrorCode.DuplicateCaseArm,
+    SemanticCompilerErrorCode.DuplicateCaseArm,
   );
 });
 
@@ -123,13 +123,13 @@ function loweringHeader(
   lookup: Uint32Array,
   surface: EncodedLazuliSurface,
 ): { readonly errorNode: number } {
-  const offset = surface.symbolNames.length * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH;
+  const offset = surface.symbolNames.length * SYMBOL_LOOKUP_WORD_LENGTH;
   equal(
-    lookup[offset + FunctionalSymbolLookupWord.Definition],
-    FUNCTIONAL_INDEXED_LOCAL_RESOLUTION_MAGIC,
+    lookup[offset + SymbolLookupWord.Definition],
+    INDEXED_LOCAL_RESOLUTION_MAGIC,
   );
   return {
-    errorNode: lookup[offset + FunctionalSymbolLookupWord.CaseNode]!,
+    errorNode: lookup[offset + SymbolLookupWord.CaseNode]!,
   };
 }
 
@@ -139,11 +139,11 @@ function loweringRecord(
   node: number,
 ): LoweringRecord {
   const offset = (surface.symbolNames.length + 1 + node) *
-    FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH;
+    SYMBOL_LOOKUP_WORD_LENGTH;
   return {
-    coreTag: lookup[offset + FunctionalSymbolLookupWord.Definition]!,
-    corePayload: lookup[offset + FunctionalSymbolLookupWord.Type]!,
-    errorCode: lookup[offset + FunctionalSymbolLookupWord.Constructor]!,
-    errorDetail: lookup[offset + FunctionalSymbolLookupWord.CaseNode]!,
+    coreTag: lookup[offset + SymbolLookupWord.Definition]!,
+    corePayload: lookup[offset + SymbolLookupWord.Type]!,
+    errorCode: lookup[offset + SymbolLookupWord.Constructor]!,
+    errorDetail: lookup[offset + SymbolLookupWord.CaseNode]!,
   };
 }

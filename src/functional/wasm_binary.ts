@@ -1,7 +1,4 @@
-import {
-  type FunctionalWasmCompactRuntimeGlobals,
-  FunctionalWasmRuntimeGlobal,
-} from "./wasm_runtime_layout.ts";
+import { type WasmCompactRuntimeGlobals, WasmRuntimeGlobal } from "./wasm_runtime_layout.ts";
 
 export const WasmValueType = {
   I32: 0x7f,
@@ -11,7 +8,7 @@ export const WasmValueType = {
   V128: 0x7b,
 } as const;
 
-export const FunctionalWasmFunctionType = Object.freeze(
+export const WasmFunctionTypeIndex = Object.freeze(
   {
     Allocator: 0,
     NullaryValue: 1,
@@ -40,7 +37,7 @@ export interface WasmFunctionType {
   readonly results: readonly number[];
 }
 
-export const FUNCTIONAL_WASM_BASE_FUNCTION_TYPES: readonly WasmFunctionType[] = Object.freeze([
+export const WASM_BASE_FUNCTION_TYPES: readonly WasmFunctionType[] = Object.freeze([
   { parameters: [WasmValueType.I32], results: [WasmValueType.I32] },
   { parameters: [], results: [WasmValueType.I64] },
   { parameters: [WasmValueType.I32, WasmValueType.I64], results: [WasmValueType.I64] },
@@ -48,7 +45,7 @@ export const FUNCTIONAL_WASM_BASE_FUNCTION_TYPES: readonly WasmFunctionType[] = 
   { parameters: [WasmValueType.I32], results: [WasmValueType.I64] },
 ]);
 
-export const FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT = FUNCTIONAL_WASM_BASE_FUNCTION_TYPES.length;
+export const WASM_BASE_FUNCTION_TYPE_COUNT = WASM_BASE_FUNCTION_TYPES.length;
 
 export class WasmInstructions {
   readonly bytes: number[] = [];
@@ -319,16 +316,16 @@ export function encodeWasmModule(
           ...encodeUnsigned(exported.functionIndex),
         ]),
         [...name("memory"), 0x02, 0x00],
-        globalExport("thunkEvaluations", FunctionalWasmRuntimeGlobal.ThunkEvaluations),
-        globalExport("runtimeFault", FunctionalWasmRuntimeGlobal.RuntimeFault),
-        globalExport("runtimeFaultNode", FunctionalWasmRuntimeGlobal.RuntimeFaultNode),
-        globalExport("heapTop", FunctionalWasmRuntimeGlobal.HeapTop),
-        globalExport("freeListHead", FunctionalWasmRuntimeGlobal.FreeListHead),
-        globalExport("arenaDepth", FunctionalWasmRuntimeGlobal.ArenaDepth),
+        globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
+        globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
+        globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
+        globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
+        globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
+        globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
         ...(instrumentedFuel
           ? [
-            globalExport("comptimeFuel", FunctionalWasmRuntimeGlobal.ComptimeFuel),
-            globalExport("comptimeSteps", FunctionalWasmRuntimeGlobal.ComptimeSteps),
+            globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
+            globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
           ]
           : []),
       ]),
@@ -368,7 +365,7 @@ export function encodeCompactScalarWasmModule(
   entryFunctionIndex: number,
   additionalFunctionTypes: readonly WasmFunctionType[],
   options: {
-    readonly runtimeGlobals: FunctionalWasmCompactRuntimeGlobals;
+    readonly runtimeGlobals: WasmCompactRuntimeGlobals;
   },
   functionExports: readonly {
     readonly name: string;
@@ -478,7 +475,7 @@ export function encodeCompactScalarWasmModule(
 }
 
 function wasmFunctionTypes(additionalFunctionTypes: readonly WasmFunctionType[]): number[][] {
-  return [...FUNCTIONAL_WASM_BASE_FUNCTION_TYPES, ...additionalFunctionTypes].map((type) =>
+  return [...WASM_BASE_FUNCTION_TYPES, ...additionalFunctionTypes].map((type) =>
     functionType(type.parameters, type.results)
   );
 }

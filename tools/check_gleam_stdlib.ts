@@ -1,4 +1,4 @@
-import { GpuFunctionalCompiler, requestWebGpuDevice } from "../functional.ts";
+import { GpuCompiler, requestWebGpuDevice } from "../functional.ts";
 import {
   type GleamFunctionalSourceModule,
   lowerGleamFunctionalSources,
@@ -99,7 +99,7 @@ try {
 
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuFunctionalCompiler.create(device);
+    const compiler = await GpuCompiler.create(device);
     const testCompilation = await compileStdlibTests(compiler, stdlibSources, testSources);
     const compilationStart = performance.now();
     const compilation = await compiler.compileModule(frontend.lowered.module, {
@@ -137,7 +137,7 @@ try {
 }
 
 async function compileStdlibTests(
-  compiler: GpuFunctionalCompiler,
+  compiler: GpuCompiler,
   stdlibSources: readonly GleamFunctionalSourceModule[],
   testSources: readonly GleamFunctionalSourceModule[],
 ): Promise<{

@@ -7,13 +7,13 @@ import {
   LazuliCoreTag,
 } from "./abi.ts";
 import type {
-  FunctionalConstructorDeclaration,
+  ConstructorDeclaration,
   LazuliType,
   LazuliTypeDeclaration,
   LazuliTypeSchema,
 } from "./abi.ts";
 import type { GpuLazuliModule } from "./compiler_module.ts";
-import { FUNCTIONAL_EVALUATOR_SHADER } from "./evaluator_shader.ts";
+import { EVALUATOR_SHADER } from "./evaluator_shader.ts";
 
 const HEAP_SLOT_BYTE_LENGTH = 32;
 const STACK_FRAME_BYTE_LENGTH = 32;
@@ -379,7 +379,7 @@ interface InputModuleIndex {
     string,
     {
       readonly owner: LazuliTypeDeclaration;
-      readonly declaration: FunctionalConstructorDeclaration;
+      readonly declaration: ConstructorDeclaration;
     }
   >;
   readonly constructorIndexes: ReadonlyMap<string, number>;
@@ -491,7 +491,7 @@ function createInputModuleIndex(module: GpuLazuliModule): InputModuleIndex {
     string,
     {
       readonly owner: LazuliTypeDeclaration;
-      readonly declaration: FunctionalConstructorDeclaration;
+      readonly declaration: ConstructorDeclaration;
     }
   >();
   for (const declaration of module.typeDeclarations) {
@@ -1777,14 +1777,14 @@ export class GpuLazuliEvaluator {
   }
 
   static async create(device: GPUDevice): Promise<GpuLazuliEvaluator> {
-    return await GpuLazuliEvaluator.createBackend(device, true);
+    return await GpuLazuliEvaluator.createWithCollectionSyntax(device, true);
   }
 
-  static async createFunctionalBackend(device: GPUDevice): Promise<GpuLazuliEvaluator> {
-    return await GpuLazuliEvaluator.createBackend(device, false);
+  static async createBackend(device: GPUDevice): Promise<GpuLazuliEvaluator> {
+    return await GpuLazuliEvaluator.createWithCollectionSyntax(device, false);
   }
 
-  private static async createBackend(
+  private static async createWithCollectionSyntax(
     device: GPUDevice,
     enableCollectionSyntax: boolean,
   ): Promise<GpuLazuliEvaluator> {
@@ -1812,7 +1812,7 @@ export class GpuLazuliEvaluator {
 
     const shaderModule = device.createShaderModule({
       label: "Lazuli lazy evaluator",
-      code: FUNCTIONAL_EVALUATOR_SHADER,
+      code: EVALUATOR_SHADER,
     });
     const shaderCompilation = await shaderModule.getCompilationInfo();
     const shaderErrors = shaderCompilation.messages.filter((message) => message.type === "error");

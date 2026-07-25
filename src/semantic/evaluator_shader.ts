@@ -11,7 +11,7 @@ import {
   LazuliUnaryOperator,
 } from "./abi.ts";
 
-export const FUNCTIONAL_EVALUATOR_SHADER = /* wgsl */ `
+export const EVALUATOR_SHADER = /* wgsl */ `
 struct CoreNode {
   tag: u32,
   payload: u32,

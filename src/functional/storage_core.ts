@@ -1,69 +1,68 @@
-export const FunctionalPersistentSharing = {
+export const PersistentSharing = {
   Reject: "reject",
   HostManaged: "host-managed",
   ExplicitReferenceCounting: "explicit-reference-counting",
 } as const;
 
-export type FunctionalPersistentSharing =
-  (typeof FunctionalPersistentSharing)[keyof typeof FunctionalPersistentSharing];
+export type PersistentSharing = (typeof PersistentSharing)[keyof typeof PersistentSharing];
 
-export type FunctionalStorageCoreLifetime =
+export type StorageCoreLifetime =
   | "static"
   | "scalar-local"
   | "invocation-arena"
   | "owned"
   | "host-managed";
 
-interface FunctionalStorageCoreEvidence {
+interface StorageCoreEvidence {
   readonly coreNode?: number;
   readonly reason?: string;
 }
 
-export type FunctionalStorageCoreOperation =
-  | (FunctionalStorageCoreEvidence & {
+export type StorageCoreOperation =
+  | (StorageCoreEvidence & {
     readonly kind: "enter-arena";
     readonly arena: string;
   })
-  | (FunctionalStorageCoreEvidence & {
+  | (StorageCoreEvidence & {
     readonly kind: "leave-arena";
     readonly arena: string;
   })
-  | (FunctionalStorageCoreEvidence & {
+  | (StorageCoreEvidence & {
     readonly kind: "declare";
     readonly value: string;
-    readonly lifetime: FunctionalStorageCoreLifetime;
+    readonly lifetime: StorageCoreLifetime;
     readonly arena?: string;
   })
-  | (FunctionalStorageCoreEvidence & {
+  | (StorageCoreEvidence & {
     readonly kind: "reference";
     readonly owner: string;
     readonly target: string;
   })
-  | (FunctionalStorageCoreEvidence & {
+  | (StorageCoreEvidence & {
     readonly kind: "promote";
     readonly source: string;
     readonly target: string;
     readonly targetLifetime: "parent-arena" | "owned";
   })
-  | (FunctionalStorageCoreEvidence & {
+  | (StorageCoreEvidence & {
     readonly kind: "retain";
     readonly value: string;
   })
-  | (FunctionalStorageCoreEvidence & {
+  | (StorageCoreEvidence & {
     readonly kind: "release";
     readonly value: string;
   })
-  | (FunctionalStorageCoreEvidence & {
+  | (StorageCoreEvidence & {
     readonly kind: "use";
     readonly value: string;
   });
 
-export interface FunctionalStorageCoreProgram {
-  readonly persistentSharing: FunctionalPersistentSharing;
-  readonly operations: readonly FunctionalStorageCoreOperation[];
+export interface StorageCoreProgram {
+  readonly persistentSharing: PersistentSharing;
+  readonly operations: readonly StorageCoreOperation[];
 }
 
-export type FunctionalStorageDiagnosticCode =
+export type StorageDiagnosticCode =
   | "F6001"
   | "F6002"
   | "F6003"
@@ -71,7 +70,7 @@ export type FunctionalStorageDiagnosticCode =
   | "F6005"
   | "F6006";
 
-export type FunctionalStorageFaultKind =
+export type StorageFaultKind =
   | "malformed-storage-core"
   | "lifetime-escape"
   | "expired-value"
@@ -79,29 +78,29 @@ export type FunctionalStorageFaultKind =
   | "persistent-sharing"
   | "arena-order";
 
-export interface FunctionalStorageDiagnostic {
-  readonly code: FunctionalStorageDiagnosticCode;
-  readonly kind: FunctionalStorageFaultKind;
+export interface StorageDiagnostic {
+  readonly code: StorageDiagnosticCode;
+  readonly kind: StorageFaultKind;
   readonly operation: number;
   readonly coreNode?: number;
   readonly message: string;
 }
 
-export type FunctionalStorageVerification =
+export type StorageVerification =
   | {
     readonly ok: true;
     readonly arenaCount: number;
     readonly valueCount: number;
     readonly promotionCount: number;
   }
-  | { readonly ok: false; readonly diagnostic: FunctionalStorageDiagnostic };
+  | { readonly ok: false; readonly diagnostic: StorageDiagnostic };
 
 interface ArenaState {
   readonly parent: string | undefined;
 }
 
 interface ValueState {
-  readonly lifetime: FunctionalStorageCoreLifetime;
+  readonly lifetime: StorageCoreLifetime;
   readonly arena: string | undefined;
   readonly ownedTargets: Set<string>;
   readonly persistentOwners: Set<string>;
@@ -109,15 +108,15 @@ interface ValueState {
   active: boolean;
 }
 
-export class FunctionalStorageCoreError extends Error {
-  readonly code: FunctionalStorageDiagnosticCode;
-  readonly kind: FunctionalStorageFaultKind;
+export class StorageCoreError extends Error {
+  readonly code: StorageDiagnosticCode;
+  readonly kind: StorageFaultKind;
   readonly operation: number;
   readonly coreNode: number | undefined;
 
-  constructor(readonly diagnostic: FunctionalStorageDiagnostic) {
+  constructor(readonly diagnostic: StorageDiagnostic) {
     super(`${diagnostic.code}: ${diagnostic.message}`);
-    this.name = "FunctionalStorageCoreError";
+    this.name = "StorageCoreError";
     this.code = diagnostic.code;
     this.kind = diagnostic.kind;
     this.operation = diagnostic.operation;
@@ -126,15 +125,15 @@ export class FunctionalStorageCoreError extends Error {
 }
 
 export function requireVerifiedFunctionalStorageCore(
-  program: FunctionalStorageCoreProgram,
+  program: StorageCoreProgram,
 ): void {
-  const verification = verifyFunctionalStorageCore(program);
-  if (!verification.ok) throw new FunctionalStorageCoreError(verification.diagnostic);
+  const verification = verifyStorageCore(program);
+  if (!verification.ok) throw new StorageCoreError(verification.diagnostic);
 }
 
-export function verifyFunctionalStorageCore(
-  program: FunctionalStorageCoreProgram,
-): FunctionalStorageVerification {
+export function verifyStorageCore(
+  program: StorageCoreProgram,
+): StorageVerification {
   if (program === null || typeof program !== "object") {
     return failure(
       "F6001",
@@ -144,7 +143,7 @@ export function verifyFunctionalStorageCore(
       "Functional Storage Core program must be an object",
     );
   }
-  if (!Object.values(FunctionalPersistentSharing).includes(program.persistentSharing)) {
+  if (!Object.values(PersistentSharing).includes(program.persistentSharing)) {
     return failure(
       "F6001",
       "malformed-storage-core",
@@ -173,11 +172,10 @@ export function verifyFunctionalStorageCore(
     const malformed = requireOperationShape(operation, operationIndex);
     if (malformed !== undefined) return malformed;
     const fail = (
-      code: FunctionalStorageDiagnosticCode,
-      kind: FunctionalStorageFaultKind,
+      code: StorageDiagnosticCode,
+      kind: StorageFaultKind,
       message: string,
-    ): FunctionalStorageVerification =>
-      failure(code, kind, operationIndex, operation.coreNode, message);
+    ): StorageVerification => failure(code, kind, operationIndex, operation.coreNode, message);
 
     if (operation.kind === "enter-arena") {
       if (arenas.has(operation.arena)) {
@@ -442,7 +440,7 @@ export function verifyFunctionalStorageCore(
       owner.ownedTargets.add(operation.target);
       value.persistentOwners.add(operation.owner);
       if (value.persistentOwners.size > 1) {
-        if (program.persistentSharing === FunctionalPersistentSharing.Reject) {
+        if (program.persistentSharing === PersistentSharing.Reject) {
           return fail(
             "F6005",
             "persistent-sharing",
@@ -452,7 +450,7 @@ export function verifyFunctionalStorageCore(
           );
         }
         if (
-          program.persistentSharing === FunctionalPersistentSharing.ExplicitReferenceCounting &&
+          program.persistentSharing === PersistentSharing.ExplicitReferenceCounting &&
           value.references < value.persistentOwners.size
         ) {
           return fail(
@@ -463,7 +461,7 @@ export function verifyFunctionalStorageCore(
             } has ${value.persistentOwners.size} owners but reference count ${value.references}`,
           );
         }
-        if (program.persistentSharing === FunctionalPersistentSharing.HostManaged) {
+        if (program.persistentSharing === PersistentSharing.HostManaged) {
           return fail(
             "F6005",
             "persistent-sharing",
@@ -548,9 +546,9 @@ function arenaIsAncestor(
 }
 
 function requireOperationShape(
-  operation: FunctionalStorageCoreOperation,
+  operation: StorageCoreOperation,
   operationIndex: number,
-): FunctionalStorageVerification | undefined {
+): StorageVerification | undefined {
   if (operation === null || typeof operation !== "object" || typeof operation.kind !== "string") {
     return failure(
       "F6001",
@@ -650,12 +648,12 @@ function requireOperationShape(
 }
 
 function failure(
-  code: FunctionalStorageDiagnosticCode,
-  kind: FunctionalStorageFaultKind,
+  code: StorageDiagnosticCode,
+  kind: StorageFaultKind,
   operation: number,
   coreNode: number | undefined,
   message: string,
-): FunctionalStorageVerification {
+): StorageVerification {
   return {
     ok: false,
     diagnostic: {

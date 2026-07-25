@@ -1,4 +1,4 @@
-import type { FunctionalDeepValue } from "./evaluator.ts";
+import type { DeepValue } from "./evaluator.ts";
 import { TypeCoreRuntimeConstructor } from "./type_core_runtime.ts";
 import type { TypeCoreKind, TypeCoreType, TypeCoreValue } from "./type_core_contract.ts";
 
@@ -6,7 +6,7 @@ type DecodeCategory = "value" | "type" | "list";
 
 interface DecodeFrame {
   readonly category: DecodeCategory;
-  readonly node: FunctionalDeepValue;
+  readonly node: DeepValue;
   readonly expanded: boolean;
 }
 
@@ -18,7 +18,7 @@ interface DecodedListCell {
 type DecodedList = DecodedListCell | null;
 
 export function decodeTypeCoreValue(
-  root: FunctionalDeepValue,
+  root: DeepValue,
   symbolValues: readonly string[],
   expectedKind: TypeCoreKind,
 ): TypeCoreValue {
@@ -211,10 +211,10 @@ function decodeList(
   }
 }
 
-type FunctionalConstructor = Extract<FunctionalDeepValue, { readonly kind: "constructor" }>;
+type FunctionalConstructor = Extract<DeepValue, { readonly kind: "constructor" }>;
 
 function requireConstructor(
-  value: FunctionalDeepValue,
+  value: DeepValue,
   category: DecodeCategory,
 ): FunctionalConstructor {
   if (value.kind !== "constructor") {
@@ -249,7 +249,7 @@ function requireArity(
 function requiredField(
   constructor: FunctionalConstructor,
   index: number,
-): FunctionalDeepValue {
+): DeepValue {
   const field = constructor.fields[index];
   if (field === undefined) {
     throw new Error(
@@ -295,7 +295,7 @@ function requireSymbol(symbolValues: readonly string[], symbolIndex: number): st
 
 function requiredDecoded<Value>(
   decoded: WeakMap<object, Value>,
-  node: FunctionalDeepValue,
+  node: DeepValue,
   location: string,
 ): Value {
   const value = decoded.get(node);

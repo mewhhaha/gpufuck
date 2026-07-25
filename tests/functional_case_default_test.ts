@@ -6,23 +6,23 @@
 import { equal, ok, throws } from "node:assert/strict";
 
 import {
-  buildFunctionalSurfaceModule,
-  FunctionalEvaluationProfile,
-  GpuFunctionalCompiler,
-  GpuFunctionalEvaluator,
-  linkFunctionalModules,
+  buildSurfaceModule,
+  EvaluationProfile,
+  GpuCompiler,
+  GpuEvaluator,
+  linkModules,
   requestWebGpuDevice,
   surface,
 } from "../functional.ts";
 
 let device: GPUDevice | undefined;
-let compiler: GpuFunctionalCompiler | undefined;
-let evaluator: GpuFunctionalEvaluator | undefined;
+let compiler: GpuCompiler | undefined;
+let evaluator: GpuEvaluator | undefined;
 
 Deno.test.beforeAll(async () => {
   device = await requestWebGpuDevice();
-  compiler = await GpuFunctionalCompiler.create(device);
-  evaluator = await GpuFunctionalEvaluator.create(device);
+  compiler = await GpuCompiler.create(device);
+  evaluator = await GpuEvaluator.create(device);
 });
 
 Deno.test.afterAll(() => {
@@ -43,7 +43,7 @@ const COLOUR = {
 };
 
 async function runColour(subject: string, binder?: string) {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{
       name: "main",
       parameters: [],
@@ -63,7 +63,7 @@ async function runColour(subject: string, binder?: string) {
     [COLOUR],
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await compiler!.compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
@@ -96,7 +96,7 @@ Deno.test("the default covers a constructor with fields", async () => {
 Deno.test("a case default needs an arm naming a declared constructor", () => {
   throws(
     () =>
-      buildFunctionalSurfaceModule(
+      buildSurfaceModule(
         [{
           name: "main",
           parameters: [],
@@ -111,7 +111,7 @@ Deno.test("a case default needs an arm naming a declared constructor", () => {
         [COLOUR],
         "main",
         0,
-        { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+        { evaluationProfile: EvaluationProfile.StrictEager },
       ),
     /needs at least one arm naming a declared constructor/,
   );
@@ -123,7 +123,7 @@ Deno.test("a default body's names survive linking and reachability", async () =>
   // this test with `unknown name "colours::$import$borrowedFallback"`. The linker's matching rewrite
   // of the default body is exercised too, though an unqualified alias happens to resolve anyway, so
   // this test does not isolate it.
-  const linked = linkFunctionalModules([
+  const linked = linkModules([
     {
       name: "support",
       definitions: [{
@@ -136,7 +136,7 @@ Deno.test("a default body's names survive linking and reachability", async () =>
       imports: [],
       exports: [{ name: "fallbackValue", definition: "fallbackValue", type: { kind: "integer" } }],
       sourceByteLength: 0,
-      options: { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+      options: { evaluationProfile: EvaluationProfile.StrictEager },
     },
     {
       name: "colours",
@@ -160,7 +160,7 @@ Deno.test("a default body's names survive linking and reachability", async () =>
       }],
       exports: [{ name: "main", definition: "main", type: { kind: "integer" } }],
       sourceByteLength: 0,
-      options: { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+      options: { evaluationProfile: EvaluationProfile.StrictEager },
     },
   ], { module: "colours", exportName: "main" });
 

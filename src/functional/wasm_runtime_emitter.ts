@@ -1,21 +1,18 @@
-import { FunctionalBinaryOperator, FunctionalCoreTag } from "./abi.ts";
-import type { FunctionalCoreNode } from "./compiler_module.ts";
+import { BinaryOperator, CoreTag } from "./abi.ts";
+import type { CoreNode } from "./compiler_module.ts";
 import type { WasmInstructions } from "./wasm_binary.ts";
 import { numericConversion } from "./wasm_numeric.ts";
 import { WASM_FAULT_OUT_OF_FUEL } from "./wasm_runtime_binary.ts";
-import {
-  type FunctionalWasmCompactRuntimeGlobals,
-  FunctionalWasmRuntimeGlobal,
-} from "./wasm_runtime_layout.ts";
+import { type WasmCompactRuntimeGlobals, WasmRuntimeGlobal } from "./wasm_runtime_layout.ts";
 
-export class FunctionalWasmRuntimeEmitter {
-  readonly compactGlobals: FunctionalWasmCompactRuntimeGlobals;
+export class WasmRuntimeEmitter {
+  readonly compactGlobals: WasmCompactRuntimeGlobals;
 
   readonly #compactScalar: boolean;
   readonly #instrumentedFuel: boolean;
 
   constructor(
-    nodes: readonly FunctionalCoreNode[],
+    nodes: readonly CoreNode[],
     options: {
       readonly compactScalar: boolean;
       readonly instrumentedFuel: boolean;
@@ -33,10 +30,10 @@ export class FunctionalWasmRuntimeEmitter {
     const fuel = this.compactGlobals.fuel;
     const remainingFuelGlobal = this.#compactScalar
       ? requiredCompactGlobal(fuel?.remaining, "remaining fuel")
-      : FunctionalWasmRuntimeGlobal.ComptimeFuel;
+      : WasmRuntimeGlobal.ComptimeFuel;
     const stepsGlobal = this.#compactScalar
       ? requiredCompactGlobal(fuel?.steps, "semantic steps")
-      : FunctionalWasmRuntimeGlobal.ComptimeSteps;
+      : WasmRuntimeGlobal.ComptimeSteps;
     instructions.globalGet(remainingFuelGlobal);
     instructions.emit(0x45, 0x04, 0x40);
     this.emitFault(instructions, WASM_FAULT_OUT_OF_FUEL, nodeIndex);
@@ -60,10 +57,10 @@ export class FunctionalWasmRuntimeEmitter {
     const fuel = this.compactGlobals.fuel;
     const remainingFuelGlobal = this.#compactScalar
       ? requiredCompactGlobal(fuel?.remaining, "remaining fuel")
-      : FunctionalWasmRuntimeGlobal.ComptimeFuel;
+      : WasmRuntimeGlobal.ComptimeFuel;
     const stepsGlobal = this.#compactScalar
       ? requiredCompactGlobal(fuel?.steps, "semantic steps")
-      : FunctionalWasmRuntimeGlobal.ComptimeSteps;
+      : WasmRuntimeGlobal.ComptimeSteps;
     instructions.globalGet(remainingFuelGlobal);
     instructions.localGet(amount);
     instructions.emit(0x49, 0x04, 0x40);
@@ -87,10 +84,10 @@ export class FunctionalWasmRuntimeEmitter {
     const compactFault = this.compactGlobals.fault;
     const faultGlobal = this.#compactScalar
       ? requiredCompactGlobal(compactFault?.code, "runtime fault")
-      : FunctionalWasmRuntimeGlobal.RuntimeFault;
+      : WasmRuntimeGlobal.RuntimeFault;
     const faultNodeGlobal = this.#compactScalar
       ? requiredCompactGlobal(compactFault?.node, "runtime fault node")
-      : FunctionalWasmRuntimeGlobal.RuntimeFaultNode;
+      : WasmRuntimeGlobal.RuntimeFaultNode;
     instructions.i32Const(fault);
     instructions.globalSet(faultGlobal);
     instructions.i32Const(nodeIndex);
@@ -100,24 +97,24 @@ export class FunctionalWasmRuntimeEmitter {
 }
 
 function compactRuntimeGlobals(
-  nodes: readonly FunctionalCoreNode[],
+  nodes: readonly CoreNode[],
   instrumentedFuel: boolean,
-): FunctionalWasmCompactRuntimeGlobals {
+): WasmCompactRuntimeGlobals {
   let nextIndex = 0;
   const mayFault = instrumentedFuel || nodes.some((node) => {
-    if (node.tag === FunctionalCoreTag.RuntimeFault) return true;
-    if (node.tag === FunctionalCoreTag.BufferAppend) return true;
+    if (node.tag === CoreTag.RuntimeFault) return true;
+    if (node.tag === CoreTag.BufferAppend) return true;
     if (
-      node.tag === FunctionalCoreTag.StoreNew || node.tag === FunctionalCoreTag.StoreRead ||
-      node.tag === FunctionalCoreTag.StoreWrite || node.tag === FunctionalCoreTag.StoreGrow
+      node.tag === CoreTag.StoreNew || node.tag === CoreTag.StoreRead ||
+      node.tag === CoreTag.StoreWrite || node.tag === CoreTag.StoreGrow
     ) return true;
-    if (node.tag === FunctionalCoreTag.Binary) {
-      return node.payload === FunctionalBinaryOperator.Divide ||
-        node.payload === FunctionalBinaryOperator.DivideSignedInteger64 ||
-        node.payload === FunctionalBinaryOperator.Remainder ||
-        node.payload === FunctionalBinaryOperator.RemainderSignedInteger64;
+    if (node.tag === CoreTag.Binary) {
+      return node.payload === BinaryOperator.Divide ||
+        node.payload === BinaryOperator.DivideSignedInteger64 ||
+        node.payload === BinaryOperator.Remainder ||
+        node.payload === BinaryOperator.RemainderSignedInteger64;
     }
-    if (node.tag !== FunctionalCoreTag.NumericConvert) return false;
+    if (node.tag !== CoreTag.NumericConvert) return false;
     const conversion = numericConversion(node.payload);
     return (conversion.source === "float-32" || conversion.source === "float-64") &&
       (conversion.result === "integer" || conversion.result === "signed-integer-64");

@@ -1,58 +1,54 @@
 import {
-  FUNCTIONAL_NO_INDEX,
-  FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
-  FunctionalBinaryOperator,
-  FunctionalCoreTag,
-  FunctionalEvaluationMode,
-  FunctionalEvaluationProfile,
-  type FunctionalType,
-  FunctionalUnaryOperator,
+  BinaryOperator,
+  CoreTag,
+  EvaluationMode,
+  EvaluationProfile,
+  NO_INDEX,
+  type Type,
+  UnaryOperator,
+  UNIT_CONSTRUCTOR_NAME,
 } from "./abi.ts";
-import type {
-  FunctionalCoreNode,
-  FunctionalWasmExport,
-  GpuFunctionalModule,
-} from "./compiler_module.ts";
+import type { CoreNode, GpuModule, WasmExport } from "./compiler_module.ts";
 import {
-  FUNCTIONAL_BYTES_TYPE_NAME,
-  FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
-  FUNCTIONAL_INIT_TYPE_NAME,
-  FUNCTIONAL_TEXT_TYPE_NAME,
-  type FunctionalHostFieldDeclaration,
-  type FunctionalHostType,
-  FunctionalWasmIntrinsic,
+  BYTES_TYPE_NAME,
+  type HostFieldDeclaration,
+  type HostType,
+  INIT_CONSTRUCTOR_NAME,
+  INIT_TYPE_NAME,
+  TEXT_TYPE_NAME,
+  WasmIntrinsic,
 } from "./host_contract.ts";
 import {
   encodeCompactScalarWasmModule,
   encodeWasmModule,
-  FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT,
-  FUNCTIONAL_WASM_BASE_FUNCTION_TYPES,
-  FunctionalWasmFunctionType,
+  WASM_BASE_FUNCTION_TYPE_COUNT,
+  WASM_BASE_FUNCTION_TYPES,
   type WasmFunctionBody,
   type WasmFunctionImport,
   type WasmFunctionType,
+  WasmFunctionTypeIndex,
   WasmInstructions,
   WasmValueType,
 } from "./wasm_binary.ts";
-import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
+import { WasmValueAbi } from "./wasm_abi.ts";
 import { concreteFunctionalType } from "./schema_contract.ts";
 import { requireFirstOrderFunctionalWasmType } from "./wasm_value_codec.ts";
-import type { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
-import { type FunctionalLambdaSet, FunctionalLambdaSetAnalysis } from "./wasm_lambda_sets.ts";
+import type { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
+import { type LambdaSet, LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 import type {
-  FunctionalCallArgument,
-  FunctionalFunctionShape,
-  FunctionalNumericFold,
-  FunctionalWasmFunctionAnalysis,
+  CallArgument,
+  FunctionShape,
+  NumericFold,
+  WasmFunctionAnalysis,
 } from "./wasm_function_analysis.ts";
 import {
   functionalHostScalarType,
-  type FunctionalWasmEntry,
   hostFieldKey,
   hostImportModule,
+  type WasmEntry,
   wasmValueType,
 } from "./wasm_host_boundary.ts";
-import { FunctionalWasmHostEmitter } from "./wasm_host_emitter.ts";
+import { WasmHostEmitter } from "./wasm_host_emitter.ts";
 import {
   allocateFunction,
   forceThunkFunction,
@@ -65,7 +61,7 @@ import {
   WASM_FAULT_INVALID_NUMERIC_CONVERSION,
   WASM_FAULT_OUT_OF_BOUNDS,
 } from "./wasm_runtime_binary.ts";
-import { FunctionalWasmRuntimeEmitter } from "./wasm_runtime_emitter.ts";
+import { WasmRuntimeEmitter } from "./wasm_runtime_emitter.ts";
 import { structuralEqualityFunction } from "./wasm_structural_equality.ts";
 import {
   float32FromBits,
@@ -82,44 +78,38 @@ import {
   releaseOwnedValueFunction,
   retainOwnedValueFunction,
 } from "./wasm_owned_runtime.ts";
-import { FUNCTIONAL_MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
-import { FunctionalStorageClass, type FunctionalStorageDecision } from "./storage_contract.ts";
-import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
-import type {
-  FunctionalConstantResolver,
-  FunctionalWasmConstantAnalysis,
-} from "./wasm_constant_analysis.ts";
+import { MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
+import { StorageClass, type StorageDecision } from "./storage_contract.ts";
+import type { WasmCompilationOptions } from "./wasm_contract.ts";
+import type { ConstantResolver, WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import {
   canonicalFunctionalFixedVectorName,
   correspondingFunctionalFixedVectorName,
-  FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
-  FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
-  FunctionalF32x4Definition,
+  F32X4_CONSTRUCTOR_NAME,
+  F32x4Definition,
+  MASK32X4_CONSTRUCTOR_NAME,
 } from "./fixed_vector_contract.ts";
-import {
-  createFunctionalWasmBackendPlan,
-  type FunctionalWasmBackendPlan,
-} from "./wasm_backend_plan.ts";
+import { createWasmBackendPlan, type WasmBackendPlan } from "./wasm_backend_plan.ts";
 import {
   f32x4ExtractedLane,
   f32x4ReplacementLane,
-  FunctionalWasmSimdOpcode,
   simdF32x4BinaryOpcode,
   simdF32x4ComparisonOpcode,
   simdFloat32Operator,
+  WasmSimdOpcode,
 } from "./wasm_simd.ts";
-import type { FunctionalWasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
+import type { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
 
-const CLOSURE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.closure;
-const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
-const THUNK_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.thunk;
-const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
-const STORE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.store;
-const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
-const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
+const CLOSURE_OBJECT_KIND = WasmValueAbi.objectKinds.closure;
+const CONSTRUCTOR_OBJECT_KIND = WasmValueAbi.objectKinds.constructor;
+const THUNK_OBJECT_KIND = WasmValueAbi.objectKinds.thunk;
+const NUMERIC_OBJECT_KIND = WasmValueAbi.objectKinds.numeric;
+const STORE_OBJECT_KIND = WasmValueAbi.objectKinds.store;
+const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
+const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
 const THUNK_HEADER_BYTE_LENGTH = 24;
-const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
+const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
 
@@ -136,20 +126,20 @@ type ValueSource =
 interface VirtualLambda {
   readonly kind: "virtual-lambda";
   readonly node: number;
-  readonly environment: FunctionalEnvironment;
+  readonly environment: Environment;
 }
 
 interface VirtualConstructor {
   readonly kind: "virtual-constructor";
   readonly constructorIndex: number;
-  readonly arguments: readonly FunctionalCallArgument[];
-  readonly environment: FunctionalEnvironment;
+  readonly arguments: readonly CallArgument[];
+  readonly environment: Environment;
 }
 
 interface StaticRecursiveFunction {
   readonly kind: "static-recursive-function";
   readonly node: number;
-  readonly environment: FunctionalEnvironment;
+  readonly environment: Environment;
   readonly inlineAtSoleCall: boolean;
 }
 
@@ -165,12 +155,12 @@ interface ConstructorReuseTarget {
   readonly fieldCount: number;
 }
 
-interface FunctionalStoreUpdate {
-  readonly node: FunctionalCoreNode;
+interface StoreUpdate {
+  readonly node: CoreNode;
   readonly nodeIndex: number;
 }
 
-type FunctionalBinding =
+type Binding =
   | ValueSource
   | { readonly kind: "v128-f32x4"; readonly index: number }
   | VirtualLambda
@@ -179,11 +169,11 @@ type FunctionalBinding =
   | UniqueConstructorSource;
 
 // A missing source preserves de Bruijn depth for a binding that this closure does not capture.
-type FunctionalEnvironment = readonly (FunctionalBinding | undefined)[];
+type Environment = readonly (Binding | undefined)[];
 
 interface HostField {
   readonly capability: string;
-  readonly declaration: FunctionalHostFieldDeclaration;
+  readonly declaration: HostFieldDeclaration;
   readonly importIndex: number | undefined;
   readonly closureSlot?: number;
 }
@@ -191,21 +181,21 @@ interface HostField {
 interface ConstructorApplication {
   readonly constructorNode: number;
   readonly constructorIndex: number;
-  readonly arguments: readonly FunctionalCallArgument[];
+  readonly arguments: readonly CallArgument[];
 }
 
 interface UncurriedApplication {
   readonly baseNode: number;
-  readonly arguments: readonly FunctionalCallArgument[];
-  readonly functionShape: FunctionalFunctionShape;
-  readonly staticEnvironment?: FunctionalEnvironment;
+  readonly arguments: readonly CallArgument[];
+  readonly functionShape: FunctionShape;
+  readonly staticEnvironment?: Environment;
   readonly inlineAtSoleCall: boolean;
   readonly inlineVirtualBase: boolean;
 }
 
 interface NamedApplication {
   readonly definition: string;
-  readonly arguments: readonly FunctionalCallArgument[];
+  readonly arguments: readonly CallArgument[];
 }
 
 interface CompiledSimdVector {
@@ -219,7 +209,7 @@ function compiledSimdVector(
 ): CompiledSimdVector {
   const constructorName = correspondingFunctionalFixedVectorName(
     definition,
-    kind === "f32x4" ? FUNCTIONAL_F32X4_CONSTRUCTOR_NAME : FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
+    kind === "f32x4" ? F32X4_CONSTRUCTOR_NAME : MASK32X4_CONSTRUCTOR_NAME,
   );
   if (constructorName === undefined) {
     throw new Error(
@@ -236,21 +226,21 @@ interface UncurriedWorker {
   readonly hasEnvironmentParameter: boolean;
 }
 
-export interface FunctionalWasmArtifact {
+export interface WasmArtifact {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly specializedCallSites: number;
   readonly automaticArenaReset: boolean;
 }
 
-export function compileFunctionalWasmArtifact(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
+export function compileWasmArtifact(
+  module: GpuModule,
+  nodes: readonly CoreNode[],
   instrumentedFuel = false,
-  options: FunctionalWasmCompilationOptions = {},
-): FunctionalWasmArtifact {
-  const plan = createFunctionalWasmBackendPlan(module, nodes, instrumentedFuel, options);
+  options: WasmCompilationOptions = {},
+): WasmArtifact {
+  const plan = createWasmBackendPlan(module, nodes, instrumentedFuel, options);
   if (plan.compactScalarEligible) {
-    const compactCompiler = new FunctionalWasmCompiler(
+    const compactCompiler = new WasmCompiler(
       plan,
       true,
     );
@@ -258,21 +248,21 @@ export function compileFunctionalWasmArtifact(
     if (compactBytes !== undefined) return compactCompiler.artifact(compactBytes);
   }
 
-  const compiler = new FunctionalWasmCompiler(
+  const compiler = new WasmCompiler(
     plan,
     false,
   );
   return compiler.artifact(compiler.compile());
 }
 
-class FunctionalWasmCompiler {
-  readonly #module: GpuFunctionalModule;
-  readonly #nodes: readonly FunctionalCoreNode[];
-  readonly #captureAnalysis: FunctionalWasmCaptureAnalysis;
-  readonly #constantAnalysis: FunctionalWasmConstantAnalysis;
-  readonly #functionAnalysis: FunctionalWasmFunctionAnalysis;
-  readonly #uniqueReuseAnalysis: FunctionalWasmUniqueReuseAnalysis;
-  readonly #storageDecisions: ReadonlyMap<string, FunctionalStorageDecision>;
+class WasmCompiler {
+  readonly #module: GpuModule;
+  readonly #nodes: readonly CoreNode[];
+  readonly #captureAnalysis: WasmCaptureAnalysis;
+  readonly #constantAnalysis: WasmConstantAnalysis;
+  readonly #functionAnalysis: WasmFunctionAnalysis;
+  readonly #uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
+  readonly #storageDecisions: ReadonlyMap<string, StorageDecision>;
   readonly #indirectFunctions: (WasmFunctionBody | undefined)[] = [];
   readonly #lambdaSlots: (number | undefined)[];
   readonly #recursiveLambdaOwners = new Map<number, number>();
@@ -285,7 +275,7 @@ class FunctionalWasmCompiler {
   readonly #constructorClosureSlots: (number | undefined)[][];
   readonly #nullaryConstructorOffsets: readonly (number | undefined)[];
   readonly #globalThunkSlots: (number | undefined)[];
-  readonly #entry: FunctionalWasmEntry;
+  readonly #entry: WasmEntry;
   readonly #hostFields: readonly HostField[];
   readonly #hostDefinitionFields: ReadonlyMap<number, HostField>;
   readonly #functionImports: readonly WasmFunctionImport[];
@@ -295,12 +285,12 @@ class FunctionalWasmCompiler {
   readonly #hasLazyEvaluationBoundary: boolean;
   readonly #instrumentedFuel: boolean;
   readonly #simdEnabled: boolean;
-  readonly #runtimeEmitter: FunctionalWasmRuntimeEmitter;
+  readonly #runtimeEmitter: WasmRuntimeEmitter;
   readonly #automaticArenaReset: boolean;
-  readonly #compilationOptions: FunctionalWasmCompilationOptions;
+  readonly #compilationOptions: WasmCompilationOptions;
   readonly #ownedRuntimeEnabled: boolean;
-  readonly #hostEmitter: FunctionalWasmHostEmitter;
-  #lambdaSetAnalysis: FunctionalLambdaSetAnalysis | undefined;
+  readonly #hostEmitter: WasmHostEmitter;
+  #lambdaSetAnalysis: LambdaSetAnalysis | undefined;
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
   #specializedCallSiteCount = 0;
@@ -311,27 +301,27 @@ class FunctionalWasmCompiler {
   #structuralEqualitySlot: number | undefined;
 
   constructor(
-    plan: FunctionalWasmBackendPlan,
+    plan: WasmBackendPlan,
     compactScalar: boolean,
   ) {
     const { module, nodes } = plan;
     this.#module = module;
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
-    for (const [index, type] of FUNCTIONAL_WASM_BASE_FUNCTION_TYPES.entries()) {
+    for (const [index, type] of WASM_BASE_FUNCTION_TYPES.entries()) {
       this.#additionalFunctionTypeIndices.set(
         `${type.parameters.join(",")}->${type.results.join(",")}`,
         index,
       );
     }
     this.#instrumentedFuel = plan.instrumentedFuel;
-    this.#runtimeEmitter = new FunctionalWasmRuntimeEmitter(nodes, {
+    this.#runtimeEmitter = new WasmRuntimeEmitter(nodes, {
       compactScalar,
       instrumentedFuel: plan.instrumentedFuel,
     });
     this.#compilationOptions = plan.options;
     this.#ownedRuntimeEnabled = (plan.options.ownedTypeExports?.length ?? 0) > 0;
-    this.#hostEmitter = new FunctionalWasmHostEmitter({
+    this.#hostEmitter = new WasmHostEmitter({
       ownedRuntimeEnabled: this.#ownedRuntimeEnabled,
       allocateFunctionIndex: () => this.allocateFunctionIndex(),
       emitDecodeInteger: (instructions) => this.emitDecodeInteger(instructions),
@@ -345,12 +335,12 @@ class FunctionalWasmCompiler {
     });
     this.#automaticArenaReset = plan.storage.summary.automaticArenaReset;
     this.#hasLazyEvaluationBoundary = nodes.some((node) =>
-      (node.tag === FunctionalCoreTag.Apply ||
-        node.tag === FunctionalCoreTag.Let) &&
-      node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
+      (node.tag === CoreTag.Apply ||
+        node.tag === CoreTag.Let) &&
+      node.evaluationMode === EvaluationMode.LazyCallByNeed
     );
     this.#simdEnabled = !plan.instrumentedFuel && plan.options.simd === "wasm-simd" &&
-      module.evaluationProfile === FunctionalEvaluationProfile.StrictEager &&
+      module.evaluationProfile === EvaluationProfile.StrictEager &&
       !this.#hasLazyEvaluationBoundary;
     this.#captureAnalysis = plan.captureAnalysis;
     this.#constantAnalysis = plan.constantAnalysis;
@@ -364,7 +354,7 @@ class FunctionalWasmCompiler {
     this.#uniqueReuseAnalysis = plan.uniqueReuseAnalysis;
     this.#lambdaSlots = Array.from({ length: nodes.length }, () => undefined);
     for (const [nodeIndex, node] of nodes.entries()) {
-      if (node.tag === FunctionalCoreTag.LetRec) {
+      if (node.tag === CoreTag.LetRec) {
         this.#recursiveLambdaOwners.set(node.child0, nodeIndex);
       }
     }
@@ -382,7 +372,7 @@ class FunctionalWasmCompiler {
         } else {
           if (
             declaration.wasmIntrinsic !==
-              FunctionalWasmIntrinsic.BufferGenerate
+              WasmIntrinsic.BufferGenerate
           ) {
             requireFirstOrderFunctionalWasmType(
               module,
@@ -457,7 +447,7 @@ class FunctionalWasmCompiler {
     const referencedNullaryConstructors = new Set<number>();
     for (const node of nodes) {
       if (
-        node.tag === FunctionalCoreTag.Constructor &&
+        node.tag === CoreTag.Constructor &&
         module.constructorArities[node.payload] === 0
       ) {
         referencedNullaryConstructors.add(node.payload);
@@ -471,7 +461,7 @@ class FunctionalWasmCompiler {
       )
     ) {
       const unitConstructor = module.constructorNames.indexOf(
-        FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+        UNIT_CONSTRUCTOR_NAME,
       );
       if (unitConstructor >= 0) {
         referencedNullaryConstructors.add(unitConstructor);
@@ -491,7 +481,7 @@ class FunctionalWasmCompiler {
     this.#globalThunkSlots = module.definitionRoots.map(() => undefined);
   }
 
-  artifact(bytes: Uint8Array<ArrayBuffer>): FunctionalWasmArtifact {
+  artifact(bytes: Uint8Array<ArrayBuffer>): WasmArtifact {
     return {
       bytes,
       specializedCallSites: this.#specializedCallSiteCount,
@@ -748,11 +738,11 @@ class FunctionalWasmCompiler {
     );
   }
 
-  wasmExportSignature(exported: FunctionalWasmExport): {
-    readonly parameters: readonly FunctionalType[];
-    readonly result: FunctionalType;
+  wasmExportSignature(exported: WasmExport): {
+    readonly parameters: readonly Type[];
+    readonly result: Type;
   } {
-    const parameters: FunctionalType[] = [];
+    const parameters: Type[] = [];
     let result = exported.type;
     while (result.kind === "function") {
       parameters.push(result.parameter);
@@ -774,12 +764,12 @@ class FunctionalWasmCompiler {
   }
 
   compileDirectIntegerWasmExport(
-    exported: FunctionalWasmExport,
-    parameters: readonly FunctionalType[],
-    result: FunctionalType,
+    exported: WasmExport,
+    parameters: readonly Type[],
+    result: Type,
   ): WasmFunctionBody | undefined {
     if (
-      this.#module.evaluationProfile !== FunctionalEvaluationProfile.StrictEager ||
+      this.#module.evaluationProfile !== EvaluationProfile.StrictEager ||
       this.#module.entryEffects.length !== 0 ||
       this.#hostFields.length !== 0 ||
       this.#hasLazyEvaluationBoundary ||
@@ -853,9 +843,9 @@ class FunctionalWasmCompiler {
   }
 
   compileGeneralWasmExport(
-    exported: FunctionalWasmExport,
-    parameters: readonly FunctionalType[],
-    result: FunctionalType,
+    exported: WasmExport,
+    parameters: readonly Type[],
+    result: Type,
     initializeFunctionIndex: number,
   ): WasmFunctionBody {
     const instructions = new WasmInstructions(parameters.length);
@@ -870,7 +860,7 @@ class FunctionalWasmCompiler {
       instructions.localGet(index);
       instructions.localGet(closure);
       instructions.i32Load(4);
-      instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
+      instructions.callIndirect(WasmFunctionTypeIndex.ClosureCall);
     }
     this.emitPublicResult(instructions, result);
     const scalarResult = functionalHostScalarType(result);
@@ -887,7 +877,7 @@ class FunctionalWasmCompiler {
 
   emitPublicResult(
     instructions: WasmInstructions,
-    result: FunctionalType,
+    result: Type,
   ): void {
     if (result.kind === "unit") {
       instructions.emit(0x1a);
@@ -921,7 +911,7 @@ class FunctionalWasmCompiler {
           field.declaration.result,
         );
         this.#indirectFunctions[field.closureSlot] = functionBody(
-          FunctionalWasmFunctionType.ClosureCall,
+          WasmFunctionTypeIndex.ClosureCall,
           instructions,
           `WASM intrinsic ${field.declaration.wasmIntrinsic}`,
         );
@@ -944,7 +934,7 @@ class FunctionalWasmCompiler {
         field.declaration.resultRepresentation ?? field.declaration.result,
       );
       this.#indirectFunctions[field.closureSlot] = functionBody(
-        FunctionalWasmFunctionType.ClosureCall,
+        WasmFunctionTypeIndex.ClosureCall,
         instructions,
         `host operation ${hostFieldKey(field.capability, field.declaration.name)}`,
       );
@@ -961,7 +951,7 @@ class FunctionalWasmCompiler {
       instructions.localGet(0);
       instructions.localGet(closure);
       instructions.i32Load(4);
-      instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
+      instructions.callIndirect(WasmFunctionTypeIndex.ClosureCall);
       return;
     }
     if (!this.#entry.takesInit) return;
@@ -972,16 +962,16 @@ class FunctionalWasmCompiler {
     this.emitHostInit(instructions);
     instructions.localGet(closure);
     instructions.i32Load(4);
-    instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
+    instructions.callIndirect(WasmFunctionTypeIndex.ClosureCall);
   }
 
   emitHostInit(instructions: WasmInstructions): void {
     const constructorIndex = this.#module.constructorNames.indexOf(
-      FUNCTIONAL_INIT_CONSTRUCTOR_NAME,
+      INIT_CONSTRUCTOR_NAME,
     );
     if (constructorIndex < 0) {
       throw new Error(
-        `functional WASM entry d${this.#module.entryDefinition} accepts ${FUNCTIONAL_INIT_TYPE_NAME} but the module omits constructor ${FUNCTIONAL_INIT_CONSTRUCTOR_NAME}`,
+        `functional WASM entry d${this.#module.entryDefinition} accepts ${INIT_TYPE_NAME} but the module omits constructor ${INIT_CONSTRUCTOR_NAME}`,
       );
     }
     const fields: ValueSource[] = [];
@@ -1034,7 +1024,7 @@ class FunctionalWasmCompiler {
         [],
       );
       this.#indirectFunctions[slot] = functionBody(
-        FunctionalWasmFunctionType.ThunkForce,
+        WasmFunctionTypeIndex.ThunkForce,
         instructions,
         `global thunk d${definitionIndex}`,
       );
@@ -1101,12 +1091,12 @@ class FunctionalWasmCompiler {
   compileExpression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
-    if (this.#simdEnabled && node.tag === FunctionalCoreTag.Apply) {
+    if (this.#simdEnabled && node.tag === CoreTag.Apply) {
       const vectorKind = this.compileSimdVectorApplication(
         instructions,
         nodeIndex,
@@ -1122,10 +1112,10 @@ class FunctionalWasmCompiler {
       }
     }
     switch (node.tag) {
-      case FunctionalCoreTag.Integer:
+      case CoreTag.Integer:
         instructions.i64Const((BigInt(node.payload | 0) << 3n) | 1n);
         return;
-      case FunctionalCoreTag.SignedInteger64:
+      case CoreTag.SignedInteger64:
         this.compileSignedInteger64Expression(
           instructions,
           nodeIndex,
@@ -1133,28 +1123,28 @@ class FunctionalWasmCompiler {
         );
         this.emitBoxSignedInteger64(instructions);
         return;
-      case FunctionalCoreTag.Float32:
+      case CoreTag.Float32:
         this.compileFloat32Expression(instructions, nodeIndex, environment);
         this.emitBoxFloat32(instructions);
         return;
-      case FunctionalCoreTag.Float64:
+      case CoreTag.Float64:
         this.compileFloat64Expression(instructions, nodeIndex, environment);
         this.emitBoxFloat64(instructions);
         return;
-      case FunctionalCoreTag.WholeNumberF64:
+      case CoreTag.WholeNumberF64:
         this.compileWholeNumberF64Expression(instructions, nodeIndex, environment);
         this.emitBoxFloat64(instructions);
         return;
-      case FunctionalCoreTag.BufferAppend: {
+      case CoreTag.BufferAppend: {
         const typeName = this.#module.typeNames[node.child2];
-        if (typeName !== FUNCTIONAL_TEXT_TYPE_NAME && typeName !== FUNCTIONAL_BYTES_TYPE_NAME) {
+        if (typeName !== TEXT_TYPE_NAME && typeName !== BYTES_TYPE_NAME) {
           throw new Error(
             `functional WASM buffer append at core node ${nodeIndex} references non-buffer type ${
               JSON.stringify(typeName)
             } at index ${node.child2}`,
           );
         }
-        const type: FunctionalHostType = {
+        const type: HostType = {
           kind: "named",
           name: typeName,
           arguments: [],
@@ -1164,21 +1154,21 @@ class FunctionalWasmCompiler {
         this.#hostEmitter.emitBufferAppendValues(instructions, type, nodeIndex);
         return;
       }
-      case FunctionalCoreTag.StoreNew:
+      case CoreTag.StoreNew:
         this.compileStoreNew(instructions, node, nodeIndex, environment);
         return;
-      case FunctionalCoreTag.StoreLength:
+      case CoreTag.StoreLength:
         this.compileStoreLength(instructions, node, environment);
         return;
-      case FunctionalCoreTag.StoreRead:
+      case CoreTag.StoreRead:
         this.compileStoreRead(instructions, node, nodeIndex, environment);
         return;
-      case FunctionalCoreTag.StoreWrite:
-      case FunctionalCoreTag.StoreGrow:
+      case CoreTag.StoreWrite:
+      case CoreTag.StoreGrow:
         this.compileStoreUpdates(instructions, nodeIndex, environment);
         return;
-      case FunctionalCoreTag.Text:
-      case FunctionalCoreTag.Bytes: {
+      case CoreTag.Text:
+      case CoreTag.Bytes: {
         const symbol = this.#module.symbolNames[node.payload];
         if (symbol === undefined) {
           throw new Error(
@@ -1187,20 +1177,20 @@ class FunctionalWasmCompiler {
         }
         this.#hostEmitter.emitLiteral(
           instructions,
-          node.tag === FunctionalCoreTag.Text
+          node.tag === CoreTag.Text
             ? { kind: "text", value: symbol }
             : { kind: "bytes", value: functionalBytesFromLiteralSymbol(symbol) },
           nodeIndex,
         );
         return;
       }
-      case FunctionalCoreTag.RuntimeFault:
+      case CoreTag.RuntimeFault:
         this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_EXPLICIT, nodeIndex);
         return;
-      case FunctionalCoreTag.Boolean:
+      case CoreTag.Boolean:
         instructions.i64Const((BigInt(node.payload) << 3n) | 2n);
         return;
-      case FunctionalCoreTag.Local:
+      case CoreTag.Local:
         {
           const source = this.localSource(environment, node.payload, nodeIndex);
           this.emitBinding(instructions, source);
@@ -1209,7 +1199,7 @@ class FunctionalWasmCompiler {
           }
         }
         return;
-      case FunctionalCoreTag.Global:
+      case CoreTag.Global:
         if (node.payload >= this.#module.definitionCount) {
           throw new Error(
             `functional WASM global d${node.payload} at core node ${nodeIndex} exceeds ${this.#module.definitionCount} definitions`,
@@ -1217,13 +1207,13 @@ class FunctionalWasmCompiler {
         }
         this.emitGlobalReference(instructions, node.payload);
         return;
-      case FunctionalCoreTag.Constructor:
+      case CoreTag.Constructor:
         this.compileConstructorReference(instructions, node.payload, nodeIndex);
         return;
-      case FunctionalCoreTag.Lambda:
+      case CoreTag.Lambda:
         this.compileLambda(instructions, nodeIndex, environment);
         return;
-      case FunctionalCoreTag.Apply:
+      case CoreTag.Apply:
         this.compileApply(
           instructions,
           node,
@@ -1232,22 +1222,22 @@ class FunctionalWasmCompiler {
           constructorReuse,
         );
         return;
-      case FunctionalCoreTag.Let:
+      case CoreTag.Let:
         this.compileLet(instructions, node, environment, constructorReuse);
         return;
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.LetRec:
         this.compileLetRec(instructions, node, environment, nodeIndex);
         return;
-      case FunctionalCoreTag.If:
+      case CoreTag.If:
         this.compileIf(instructions, node, environment, constructorReuse);
         return;
-      case FunctionalCoreTag.Unary:
+      case CoreTag.Unary:
         this.compileUnary(instructions, node, environment, nodeIndex);
         return;
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         this.compileBinary(instructions, node, environment, nodeIndex);
         return;
-      case FunctionalCoreTag.NumericConvert:
+      case CoreTag.NumericConvert:
         this.compileNumericConversionExpression(
           instructions,
           node,
@@ -1255,7 +1245,7 @@ class FunctionalWasmCompiler {
           environment,
         );
         return;
-      case FunctionalCoreTag.Case:
+      case CoreTag.Case:
         this.compileCase(
           instructions,
           node,
@@ -1264,8 +1254,8 @@ class FunctionalWasmCompiler {
           constructorReuse,
         );
         return;
-      case FunctionalCoreTag.CaseArm:
-      case FunctionalCoreTag.PatternBind:
+      case CoreTag.CaseArm:
+      case CoreTag.PatternBind:
         throw new Error(
           `functional WASM core node ${nodeIndex} has structural tag ${node.tag} in expression position`,
         );
@@ -1333,7 +1323,7 @@ class FunctionalWasmCompiler {
       );
     }
     this.#indirectFunctions[slot] = functionBody(
-      FunctionalWasmFunctionType.ClosureCall,
+      WasmFunctionTypeIndex.ClosureCall,
       instructions,
       `constructor ${constructorIndex} stage ${stage}`,
     );
@@ -1343,11 +1333,11 @@ class FunctionalWasmCompiler {
   compileLambda(
     instructions: WasmInstructions,
     lambdaNode: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.storageDecision(lambdaNode, "closure");
     const lambda = this.node(lambdaNode);
-    if (lambda.tag !== FunctionalCoreTag.Lambda) {
+    if (lambda.tag !== CoreTag.Lambda) {
       throw new Error(
         `functional WASM lambda compilation received core tag ${lambda.tag} at node ${lambdaNode}`,
       );
@@ -1364,8 +1354,8 @@ class FunctionalWasmCompiler {
 
   compileApply(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
     nodeIndex: number,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
@@ -1387,7 +1377,7 @@ class FunctionalWasmCompiler {
       this.storageDecision(
         constructorApplication.constructorNode,
         "constructor",
-        [FunctionalStorageClass.InvocationArena],
+        [StorageClass.InvocationArena],
       );
       const fields: ValueSource[] = [];
       for (const argument of constructorApplication.arguments) {
@@ -1443,7 +1433,7 @@ class FunctionalWasmCompiler {
     }
 
     const callee = this.node(node.child0);
-    if (callee.tag === FunctionalCoreTag.Lambda) {
+    if (callee.tag === CoreTag.Lambda) {
       this.compileApplicationArgument(
         instructions,
         { node: node.child1, evaluationMode: node.evaluationMode },
@@ -1496,17 +1486,17 @@ class FunctionalWasmCompiler {
     );
     instructions.localGet(closure);
     instructions.i32Load(4);
-    instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
+    instructions.callIndirect(WasmFunctionTypeIndex.ClosureCall);
   }
 
   uncurriedApplication(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): UncurriedApplication | undefined {
-    const reverseArguments: FunctionalCallArgument[] = [];
+    const reverseArguments: CallArgument[] = [];
     let baseNode = nodeIndex;
     let node = this.node(baseNode);
-    while (node.tag === FunctionalCoreTag.Apply) {
+    while (node.tag === CoreTag.Apply) {
       reverseArguments.push({
         node: node.child1,
         evaluationMode: node.evaluationMode,
@@ -1516,7 +1506,7 @@ class FunctionalWasmCompiler {
     }
     if (reverseArguments.length === 0) return undefined;
     const virtualBase = this.virtualLambda(baseNode, environment);
-    const localVirtualBase = virtualBase !== undefined && node.tag !== FunctionalCoreTag.Global;
+    const localVirtualBase = virtualBase !== undefined && node.tag !== CoreTag.Global;
     const inlineVirtualBase = localVirtualBase && reverseArguments.length > 1;
     if (localVirtualBase && !inlineVirtualBase) return undefined;
     if (
@@ -1543,10 +1533,8 @@ class FunctionalWasmCompiler {
     ) {
       return undefined;
     }
-    const recursiveFunction = node.tag === FunctionalCoreTag.Local
-      ? environment[node.payload]
-      : undefined;
-    let staticEnvironment: FunctionalEnvironment | undefined;
+    const recursiveFunction = node.tag === CoreTag.Local ? environment[node.payload] : undefined;
+    let staticEnvironment: Environment | undefined;
     if (recursiveFunction?.kind === "static-recursive-function") {
       staticEnvironment = recursiveFunction.environment;
     } else if (inlineVirtualBase) {
@@ -1566,7 +1554,7 @@ class FunctionalWasmCompiler {
   compileUncurriedApplication(
     instructions: WasmInstructions,
     application: UncurriedApplication,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     if (
       this.compileFusedUncurriedApplication(
@@ -1595,8 +1583,8 @@ class FunctionalWasmCompiler {
     instructions.call(this.indirectFunctionOffset() + worker.slot);
   }
 
-  lambdaSet(nodeIndex: number): FunctionalLambdaSet {
-    this.#lambdaSetAnalysis ??= new FunctionalLambdaSetAnalysis(
+  lambdaSet(nodeIndex: number): LambdaSet {
+    this.#lambdaSetAnalysis ??= new LambdaSetAnalysis(
       this.#module,
       this.#nodes,
     );
@@ -1606,7 +1594,7 @@ class FunctionalWasmCompiler {
   compileNativeIntegerUncurriedApplication(
     instructions: WasmInstructions,
     application: UncurriedApplication,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     if (
       this.compileFusedUncurriedApplication(
@@ -1638,7 +1626,7 @@ class FunctionalWasmCompiler {
   compileFusedUncurriedApplication(
     instructions: WasmInstructions,
     application: UncurriedApplication,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     resultKind: "value" | "integer",
   ): boolean {
     if (
@@ -1646,7 +1634,7 @@ class FunctionalWasmCompiler {
       this.#remainingSpecializedInlineSites > 0 &&
       !this.#activeSpecializedLambdas.has(application.functionShape.outerLambdaNode)
     ) {
-      const parameterBindings: FunctionalBinding[] = [];
+      const parameterBindings: Binding[] = [];
       for (const [parameter, argument] of application.arguments.entries()) {
         const virtualLambda = this.virtualLambda(argument.node, environment);
         if (virtualLambda !== undefined) {
@@ -1761,17 +1749,17 @@ class FunctionalWasmCompiler {
   emitUncurriedEnvironmentArgument(
     instructions: WasmInstructions,
     application: UncurriedApplication,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     const base = this.node(application.baseNode);
-    const localBase = base.tag === FunctionalCoreTag.Local
+    const localBase = base.tag === CoreTag.Local
       ? this.localSource(environment, base.payload, application.baseNode)
       : undefined;
     if (localBase?.kind === "i32-pointer") {
       instructions.localGet(localBase.index);
     } else if (localBase?.kind === "static-recursive-function") {
       const lambda = this.node(localBase.node);
-      if (lambda.tag !== FunctionalCoreTag.Lambda) {
+      if (lambda.tag !== CoreTag.Lambda) {
         throw new Error(
           `functional WASM recursive environment ${localBase.node} has core tag ${lambda.tag}`,
         );
@@ -1808,7 +1796,7 @@ class FunctionalWasmCompiler {
       instructions.localGet(pointer);
     } else if (
       this.scalarSpecializationEnabled() &&
-      base.tag === FunctionalCoreTag.Global &&
+      base.tag === CoreTag.Global &&
       this.#module.definitionRoots[base.payload] ===
         application.functionShape.outerLambdaNode
     ) {
@@ -1822,7 +1810,7 @@ class FunctionalWasmCompiler {
   compileUncurriedArguments(
     instructions: WasmInstructions,
     application: UncurriedApplication,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): readonly number[] {
     const argumentLocals: number[] = [];
     for (const [parameter, argument] of application.arguments.entries()) {
@@ -1850,8 +1838,8 @@ class FunctionalWasmCompiler {
   }
 
   uncurriedWorker(
-    functionShape: FunctionalFunctionShape,
-    staticEnvironment: FunctionalEnvironment | undefined,
+    functionShape: FunctionShape,
+    staticEnvironment: Environment | undefined,
     resultKind: "value" | "integer",
   ): UncurriedWorker {
     let environmentKey = "runtime";
@@ -1890,7 +1878,7 @@ class FunctionalWasmCompiler {
       ),
     ];
     const instructions = new WasmInstructions(parameterTypes.length);
-    const parameterBindings: FunctionalBinding[] = [];
+    const parameterBindings: Binding[] = [];
     const parameterOffset = hasEnvironmentParameter ? 1 : 0;
     for (
       let parameter = 0;
@@ -1952,11 +1940,11 @@ class FunctionalWasmCompiler {
   }
 
   uncurriedWorkerHasEnvironmentParameter(
-    functionShape: FunctionalFunctionShape,
-    staticEnvironment: FunctionalEnvironment | undefined,
+    functionShape: FunctionShape,
+    staticEnvironment: Environment | undefined,
   ): boolean {
     const outerLambda = this.node(functionShape.outerLambdaNode);
-    if (outerLambda.tag !== FunctionalCoreTag.Lambda) {
+    if (outerLambda.tag !== CoreTag.Lambda) {
       throw new Error(
         `functional WASM uncurried worker origin ${functionShape.outerLambdaNode} has core tag ${outerLambda.tag}`,
       );
@@ -1973,19 +1961,19 @@ class FunctionalWasmCompiler {
   }
 
   uncurriedBodyEnvironment(
-    functionShape: FunctionalFunctionShape,
-    parameterBindings: readonly FunctionalBinding[],
-    staticEnvironment: FunctionalEnvironment | undefined,
+    functionShape: FunctionShape,
+    parameterBindings: readonly Binding[],
+    staticEnvironment: Environment | undefined,
     environmentParameter: number | undefined,
     staticCaptureMode: "caller" | "worker",
-  ): FunctionalEnvironment {
+  ): Environment {
     const outerLambda = this.node(functionShape.outerLambdaNode);
-    if (outerLambda.tag !== FunctionalCoreTag.Lambda) {
+    if (outerLambda.tag !== CoreTag.Lambda) {
       throw new Error(
         `functional WASM uncurried worker origin ${functionShape.outerLambdaNode} has core tag ${outerLambda.tag}`,
       );
     }
-    const bodyEnvironment: (FunctionalBinding | undefined)[] = [];
+    const bodyEnvironment: (Binding | undefined)[] = [];
     for (const [parameter, binding] of parameterBindings.entries()) {
       bodyEnvironment[functionShape.parameterCount - parameter - 1] = binding;
     }
@@ -2031,8 +2019,8 @@ class FunctionalWasmCompiler {
   }
 
   staticCaptureForWorker(
-    binding: FunctionalBinding | undefined,
-  ): FunctionalBinding | undefined {
+    binding: Binding | undefined,
+  ): Binding | undefined {
     if (binding?.kind === "i32-integer-constant") return binding;
     if (binding?.kind === "i32-boolean-constant") return binding;
     if (binding?.kind === "static-recursive-function") return binding;
@@ -2047,8 +2035,8 @@ class FunctionalWasmCompiler {
 
   compileNumericFoldLoop(
     instructions: WasmInstructions,
-    environment: FunctionalEnvironment,
-    fold: FunctionalNumericFold,
+    environment: Environment,
+    fold: NumericFold,
     resultKind: "value" | "integer" = "value",
   ): void {
     const parameterSource = environment[0];
@@ -2059,7 +2047,7 @@ class FunctionalWasmCompiler {
     }
     const accumulator = instructions.addLocal(WasmValueType.I32);
     instructions.i32Const(
-      fold.operator === FunctionalBinaryOperator.Add ? 0 : 1,
+      fold.operator === BinaryOperator.Add ? 0 : 1,
     );
     instructions.localSet(accumulator);
 
@@ -2099,8 +2087,8 @@ class FunctionalWasmCompiler {
 
   compileNumericFoldBranch(
     instructions: WasmInstructions,
-    environment: FunctionalEnvironment,
-    fold: FunctionalNumericFold,
+    environment: Environment,
+    fold: NumericFold,
     parameter: number,
     accumulator: number,
     recursive: boolean,
@@ -2110,7 +2098,7 @@ class FunctionalWasmCompiler {
       instructions.localGet(accumulator);
       this.compileIntegerExpression(instructions, fold.baseNode, environment);
       instructions.emit(
-        fold.operator === FunctionalBinaryOperator.Add ? 0x6a : 0x6c,
+        fold.operator === BinaryOperator.Add ? 0x6a : 0x6c,
       );
       if (resultKind === "value") this.emitEncodeInteger(instructions);
       instructions.branch(2);
@@ -2134,7 +2122,7 @@ class FunctionalWasmCompiler {
     instructions.localGet(accumulator);
     instructions.localGet(contribution);
     instructions.emit(
-      fold.operator === FunctionalBinaryOperator.Add ? 0x6a : 0x6c,
+      fold.operator === BinaryOperator.Add ? 0x6a : 0x6c,
     );
     instructions.localSet(accumulator);
     instructions.localGet(nextParameter);
@@ -2143,11 +2131,11 @@ class FunctionalWasmCompiler {
   }
 
   isUnboxedNumericParameter(
-    functionShape: FunctionalFunctionShape,
+    functionShape: FunctionShape,
     parameter: number,
   ): boolean {
     const profileMakesParameterStrict = this.#module.evaluationProfile ===
-        FunctionalEvaluationProfile.StrictEager &&
+        EvaluationProfile.StrictEager &&
       !this.#hasLazyEvaluationBoundary;
     return this.#module.entryEffects.length === 0 &&
       (profileMakesParameterStrict ||
@@ -2160,11 +2148,11 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     callee: VirtualLambda,
     argumentNode: number,
-    argumentEvaluation: FunctionalCoreNode["evaluationMode"],
-    environment: FunctionalEnvironment,
+    argumentEvaluation: CoreNode["evaluationMode"],
+    environment: Environment,
   ): void {
     const lambda = this.node(callee.node);
-    if (lambda.tag !== FunctionalCoreTag.Lambda) {
+    if (lambda.tag !== CoreTag.Lambda) {
       throw new Error(
         `functional WASM virtual callee ${callee.node} has core tag ${lambda.tag}`,
       );
@@ -2180,7 +2168,7 @@ class FunctionalWasmCompiler {
       functionShape?.parameterCount === 1 &&
       this.isUnboxedNumericParameter(functionShape, 0);
 
-    let argument: FunctionalBinding;
+    let argument: Binding;
     if (virtualArgument !== undefined) {
       argument = virtualArgument;
     } else if (unboxedNumericArgument) {
@@ -2197,7 +2185,7 @@ class FunctionalWasmCompiler {
         argument = { kind: "i32-integer", index: argumentLocal };
       }
     } else {
-      const argumentIsEager = argumentEvaluation === FunctionalEvaluationMode.StrictEager ||
+      const argumentIsEager = argumentEvaluation === EvaluationMode.StrictEager ||
         this.immediatelyForcesLocal(lambda.child0, 0);
       this.compileApplicationArgument(
         instructions,
@@ -2249,29 +2237,29 @@ class FunctionalWasmCompiler {
 
   virtualLambda(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     remainingDepth = 64,
   ): VirtualLambda | undefined {
     if (remainingDepth === 0) return undefined;
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Lambda) {
+    if (node.tag === CoreTag.Lambda) {
       if (this.#recursiveLambdaOwners.has(nodeIndex)) return undefined;
       return { kind: "virtual-lambda", node: nodeIndex, environment };
     }
-    if (node.tag === FunctionalCoreTag.Local) {
+    if (node.tag === CoreTag.Local) {
       const binding = environment[node.payload];
       return binding?.kind === "virtual-lambda" ? binding : undefined;
     }
-    if (node.tag === FunctionalCoreTag.Global) {
+    if (node.tag === CoreTag.Global) {
       if (node.payload >= this.#module.definitionCount) return undefined;
       const root = this.#module.definitionRoots[node.payload];
       if (
-        root === undefined || this.node(root).tag !== FunctionalCoreTag.Lambda
+        root === undefined || this.node(root).tag !== CoreTag.Lambda
       ) return undefined;
       return { kind: "virtual-lambda", node: root, environment: [] };
     }
     if (!this.#compactScalar || this.#instrumentedFuel) return undefined;
-    if (node.tag === FunctionalCoreTag.Let) {
+    if (node.tag === CoreTag.Let) {
       const binding = this.staticBinding(
         node.child0,
         environment,
@@ -2283,7 +2271,7 @@ class FunctionalWasmCompiler {
         remainingDepth - 1,
       );
     }
-    if (node.tag === FunctionalCoreTag.Apply) {
+    if (node.tag === CoreTag.Apply) {
       const callee = this.virtualLambda(
         node.child0,
         environment,
@@ -2291,7 +2279,7 @@ class FunctionalWasmCompiler {
       );
       if (callee === undefined) return undefined;
       const lambda = this.node(callee.node);
-      if (lambda.tag !== FunctionalCoreTag.Lambda) return undefined;
+      if (lambda.tag !== CoreTag.Lambda) return undefined;
       const argument = this.staticBinding(
         node.child1,
         environment,
@@ -2303,7 +2291,7 @@ class FunctionalWasmCompiler {
         remainingDepth - 1,
       );
     }
-    if (node.tag === FunctionalCoreTag.If) {
+    if (node.tag === CoreTag.If) {
       const condition = this.constantBooleanExpression(node.child0, environment);
       if (condition === undefined) return undefined;
       return this.virtualLambda(
@@ -2317,8 +2305,8 @@ class FunctionalWasmCompiler {
 
   compileLet(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
     const virtualValue = this.virtualLambda(node.child0, environment);
@@ -2339,7 +2327,7 @@ class FunctionalWasmCompiler {
       ], constructorReuse);
       return;
     }
-    const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+    const eager = node.evaluationMode === EvaluationMode.StrictEager ||
       this.expressionIsWhnf(node.child0) ||
       this.immediatelyForcesLocal(node.child1, 0);
     const constantValue = !this.#instrumentedFuel && eager
@@ -2362,14 +2350,14 @@ class FunctionalWasmCompiler {
     const value = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(value);
     const fieldCount = eager &&
-        this.#module.evaluationProfile === FunctionalEvaluationProfile.StrictEager &&
+        this.#module.evaluationProfile === EvaluationProfile.StrictEager &&
         !this.#hasLazyEvaluationBoundary && !this.#ownedRuntimeEnabled
       ? this.#uniqueReuseAnalysis.uniqueConstructorFieldCount(node.child0)
       : undefined;
     const reusableCases = fieldCount === undefined
       ? undefined
       : this.#uniqueReuseAnalysis.reusableCases(node.child1, 0);
-    const binding: FunctionalBinding = fieldCount !== undefined && reusableCases !== undefined
+    const binding: Binding = fieldCount !== undefined && reusableCases !== undefined
       ? {
         kind: "unique-constructor",
         index: value,
@@ -2390,13 +2378,13 @@ class FunctionalWasmCompiler {
 
   compileLetRec(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
     nodeIndex: number,
     resultKind: "value" | "integer" = "value",
   ): void {
     const lambda = this.node(node.child0);
-    if (lambda.tag !== FunctionalCoreTag.Lambda) {
+    if (lambda.tag !== CoreTag.Lambda) {
       throw new Error(
         `functional WASM let-rec at core node ${nodeIndex} binds tag ${lambda.tag}; expected a lambda`,
       );
@@ -2437,7 +2425,7 @@ class FunctionalWasmCompiler {
           (source.kind === "i32-integer" || source.kind === "i32-boolean"))
       )
     ) {
-      const bodyEnvironment: FunctionalEnvironment = [{
+      const bodyEnvironment: Environment = [{
         kind: "static-recursive-function",
         node: node.child0,
         environment,
@@ -2470,7 +2458,7 @@ class FunctionalWasmCompiler {
         firstOuterCaptureByteOffset + index * VALUE_BYTE_LENGTH,
       );
     }
-    const bodyEnvironment: FunctionalEnvironment = [
+    const bodyEnvironment: Environment = [
       { kind: "i32-pointer", index: pointer },
       ...environment,
     ];
@@ -2483,8 +2471,8 @@ class FunctionalWasmCompiler {
 
   compileIf(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
     const selectedBranch = this.constantIfBranch(node, environment);
@@ -2501,8 +2489,8 @@ class FunctionalWasmCompiler {
   }
 
   constantIfBranch(
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
   ): number | undefined {
     if (this.#instrumentedFuel) return undefined;
     const condition = this.constantBooleanExpression(node.child0, environment);
@@ -2511,18 +2499,18 @@ class FunctionalWasmCompiler {
 
   compileUnary(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
     nodeIndex: number,
   ): void {
-    if (node.payload === FunctionalUnaryOperator.Negate) {
+    if (node.payload === UnaryOperator.Negate) {
       this.compileIntegerExpression(instructions, node.child0, environment);
       instructions.i32Const(-1);
       instructions.emit(0x6c);
       this.emitEncodeInteger(instructions);
       return;
     }
-    if (node.payload === FunctionalUnaryOperator.NegateSignedInteger64) {
+    if (node.payload === UnaryOperator.NegateSignedInteger64) {
       instructions.i64Const(0n);
       this.compileSignedInteger64Expression(
         instructions,
@@ -2533,25 +2521,25 @@ class FunctionalWasmCompiler {
       this.emitBoxSignedInteger64(instructions);
       return;
     }
-    if (node.payload === FunctionalUnaryOperator.NegateFloat32) {
+    if (node.payload === UnaryOperator.NegateFloat32) {
       this.compileFloat32Expression(instructions, node.child0, environment);
       instructions.emit(0x8c);
       this.emitBoxFloat32(instructions);
       return;
     }
-    if (node.payload === FunctionalUnaryOperator.NegateFloat64) {
+    if (node.payload === UnaryOperator.NegateFloat64) {
       this.compileFloat64Expression(instructions, node.child0, environment);
       instructions.emit(0x9a);
       this.emitBoxFloat64(instructions);
       return;
     }
-    if (node.payload === FunctionalUnaryOperator.NegateWholeNumberF64) {
+    if (node.payload === UnaryOperator.NegateWholeNumberF64) {
       this.compileWholeNumberF64Expression(instructions, node.child0, environment);
       instructions.emit(0x9a);
       this.emitBoxFloat64(instructions);
       return;
     }
-    if (node.payload === FunctionalUnaryOperator.SquareRootFloat32) {
+    if (node.payload === UnaryOperator.SquareRootFloat32) {
       this.compileFloat32Expression(instructions, node.child0, environment);
       instructions.emit(0x91);
       this.emitBoxFloat32(instructions);
@@ -2564,9 +2552,9 @@ class FunctionalWasmCompiler {
 
   compileStoreNew(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.compileIntegerExpression(instructions, node.child0, environment);
     const length = instructions.addLocal(WasmValueType.I32);
@@ -2587,8 +2575,8 @@ class FunctionalWasmCompiler {
 
   compileStoreLength(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
   ): void {
     const pointer = this.compileStorePointer(instructions, node.child0, environment);
     instructions.localGet(pointer);
@@ -2598,9 +2586,9 @@ class FunctionalWasmCompiler {
 
   compileStoreRead(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     const pointer = this.compileStorePointer(instructions, node.child0, environment);
     this.compileIntegerExpression(instructions, node.child1, environment);
@@ -2614,15 +2602,15 @@ class FunctionalWasmCompiler {
   compileStoreUpdates(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
-    const updates: FunctionalStoreUpdate[] = [];
+    const updates: StoreUpdate[] = [];
     let sourceNodeIndex = nodeIndex;
     while (true) {
       const sourceNode = this.node(sourceNodeIndex);
       if (
-        sourceNode.tag !== FunctionalCoreTag.StoreWrite &&
-        sourceNode.tag !== FunctionalCoreTag.StoreGrow
+        sourceNode.tag !== CoreTag.StoreWrite &&
+        sourceNode.tag !== CoreTag.StoreGrow
       ) break;
       updates.push({ node: sourceNode, nodeIndex: sourceNodeIndex });
       sourceNodeIndex = sourceNode.child0;
@@ -2657,7 +2645,7 @@ class FunctionalWasmCompiler {
       this.compileExpression(instructions, update.node.child2, environment);
       const value = instructions.addLocal(WasmValueType.I64);
       instructions.localSet(value);
-      if (update.node.tag === FunctionalCoreTag.StoreWrite) {
+      if (update.node.tag === CoreTag.StoreWrite) {
         instructions.localGet(operand);
         instructions.localGet(currentLength);
         instructions.emit(0x4f, 0x04, 0x40);
@@ -2717,7 +2705,7 @@ class FunctionalWasmCompiler {
   compileStorePointer(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): number {
     this.compileExpression(instructions, nodeIndex, environment);
     instructions.emit(0xa7);
@@ -2732,7 +2720,7 @@ class FunctionalWasmCompiler {
     nodeIndex: number,
   ): void {
     instructions.localGet(length);
-    instructions.i32Const(FUNCTIONAL_MAXIMUM_STORE_LENGTH);
+    instructions.i32Const(MAXIMUM_STORE_LENGTH);
     instructions.emit(0x4b, 0x04, 0x40);
     this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, nodeIndex);
     instructions.emit(0x0b);
@@ -2834,7 +2822,7 @@ class FunctionalWasmCompiler {
   compileIntegerExpression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     if (!this.#instrumentedFuel) {
@@ -2842,8 +2830,8 @@ class FunctionalWasmCompiler {
       let bodyNode = nodeIndex;
       let body = this.node(bodyNode);
       while (
-        body.tag === FunctionalCoreTag.Let &&
-        body.evaluationMode === FunctionalEvaluationMode.StrictEager
+        body.tag === CoreTag.Let &&
+        body.evaluationMode === EvaluationMode.StrictEager
       ) {
         const value = this.constantIntegerExpression(
           body.child0,
@@ -2874,10 +2862,10 @@ class FunctionalWasmCompiler {
     }
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Integer:
+      case CoreTag.Integer:
         instructions.i32Const(node.payload | 0);
         return;
-      case FunctionalCoreTag.Local: {
+      case CoreTag.Local: {
         const source = this.localSource(environment, node.payload, nodeIndex);
         if (source.kind === "i32-integer") {
           instructions.localGet(source.index);
@@ -2890,8 +2878,8 @@ class FunctionalWasmCompiler {
         this.emitDecodeInteger(instructions);
         return;
       }
-      case FunctionalCoreTag.Unary:
-        if (node.payload !== FunctionalUnaryOperator.Negate) {
+      case CoreTag.Unary:
+        if (node.payload !== UnaryOperator.Negate) {
           throw new Error(
             `functional WASM unary operator ${node.payload} at core node ${nodeIndex} is unsupported`,
           );
@@ -2900,18 +2888,18 @@ class FunctionalWasmCompiler {
         instructions.i32Const(-1);
         instructions.emit(0x6c);
         return;
-      case FunctionalCoreTag.Binary: {
+      case CoreTag.Binary: {
         if (
-          node.payload !== FunctionalBinaryOperator.Add &&
-          node.payload !== FunctionalBinaryOperator.Subtract &&
-          node.payload !== FunctionalBinaryOperator.Multiply &&
-          node.payload !== FunctionalBinaryOperator.Divide &&
-          node.payload !== FunctionalBinaryOperator.Remainder &&
-          node.payload !== FunctionalBinaryOperator.BitwiseAnd &&
-          node.payload !== FunctionalBinaryOperator.BitwiseOr &&
-          node.payload !== FunctionalBinaryOperator.BitwiseXor &&
-          node.payload !== FunctionalBinaryOperator.ShiftLeft &&
-          node.payload !== FunctionalBinaryOperator.ShiftRightUnsigned
+          node.payload !== BinaryOperator.Add &&
+          node.payload !== BinaryOperator.Subtract &&
+          node.payload !== BinaryOperator.Multiply &&
+          node.payload !== BinaryOperator.Divide &&
+          node.payload !== BinaryOperator.Remainder &&
+          node.payload !== BinaryOperator.BitwiseAnd &&
+          node.payload !== BinaryOperator.BitwiseOr &&
+          node.payload !== BinaryOperator.BitwiseXor &&
+          node.payload !== BinaryOperator.ShiftLeft &&
+          node.payload !== BinaryOperator.ShiftRightUnsigned
         ) {
           this.compileExpression(instructions, nodeIndex, environment);
           this.emitDecodeInteger(instructions);
@@ -2919,39 +2907,39 @@ class FunctionalWasmCompiler {
         }
         this.compileIntegerExpression(instructions, node.child0, environment);
         if (
-          node.payload === FunctionalBinaryOperator.Divide ||
-          node.payload === FunctionalBinaryOperator.Remainder
+          node.payload === BinaryOperator.Divide ||
+          node.payload === BinaryOperator.Remainder
         ) {
           instructions.emit(0xac);
         }
         this.compileIntegerExpression(instructions, node.child1, environment);
         if (
-          node.payload === FunctionalBinaryOperator.Divide ||
-          node.payload === FunctionalBinaryOperator.Remainder
+          node.payload === BinaryOperator.Divide ||
+          node.payload === BinaryOperator.Remainder
         ) {
           const divisor = instructions.addLocal(WasmValueType.I32);
           instructions.localSet(divisor);
           this.emitDivisionByZeroGuard(instructions, nodeIndex, divisor, "i32");
           instructions.localGet(divisor);
         }
-        if (node.payload === FunctionalBinaryOperator.Add) {
+        if (node.payload === BinaryOperator.Add) {
           instructions.emit(0x6a);
-        } else if (node.payload === FunctionalBinaryOperator.Subtract) {
+        } else if (node.payload === BinaryOperator.Subtract) {
           instructions.emit(0x6b);
-        } else if (node.payload === FunctionalBinaryOperator.Multiply) {
+        } else if (node.payload === BinaryOperator.Multiply) {
           instructions.emit(0x6c);
-        } else if (node.payload === FunctionalBinaryOperator.Remainder) {
+        } else if (node.payload === BinaryOperator.Remainder) {
           instructions.emit(0xac, 0x81, 0xa7);
-        } else if (node.payload === FunctionalBinaryOperator.BitwiseAnd) {
+        } else if (node.payload === BinaryOperator.BitwiseAnd) {
           instructions.emit(0x71);
-        } else if (node.payload === FunctionalBinaryOperator.BitwiseOr) {
+        } else if (node.payload === BinaryOperator.BitwiseOr) {
           instructions.emit(0x72);
-        } else if (node.payload === FunctionalBinaryOperator.BitwiseXor) {
+        } else if (node.payload === BinaryOperator.BitwiseXor) {
           instructions.emit(0x73);
-        } else if (node.payload === FunctionalBinaryOperator.ShiftLeft) {
+        } else if (node.payload === BinaryOperator.ShiftLeft) {
           instructions.emit(0x74);
         } else if (
-          node.payload === FunctionalBinaryOperator.ShiftRightUnsigned
+          node.payload === BinaryOperator.ShiftRightUnsigned
         ) {
           instructions.emit(0x76);
         } else {
@@ -2959,7 +2947,7 @@ class FunctionalWasmCompiler {
         }
         return;
       }
-      case FunctionalCoreTag.NumericConvert:
+      case CoreTag.NumericConvert:
         this.compileNumericConversion(
           instructions,
           node,
@@ -2968,7 +2956,7 @@ class FunctionalWasmCompiler {
           "integer",
         );
         return;
-      case FunctionalCoreTag.If: {
+      case CoreTag.If: {
         const selectedBranch = this.constantIfBranch(node, environment);
         if (selectedBranch !== undefined) {
           this.compileIntegerExpression(instructions, selectedBranch, environment);
@@ -2982,7 +2970,7 @@ class FunctionalWasmCompiler {
         instructions.emit(0x0b);
         return;
       }
-      case FunctionalCoreTag.Apply: {
+      case CoreTag.Apply: {
         const application = this.uncurriedApplication(nodeIndex, environment);
         if (application !== undefined && this.canUseNativeIntegerWorker(application)) {
           this.compileNativeIntegerUncurriedApplication(
@@ -2996,10 +2984,10 @@ class FunctionalWasmCompiler {
         this.emitDecodeInteger(instructions);
         return;
       }
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.LetRec:
         this.compileLetRec(instructions, node, environment, nodeIndex, "integer");
         return;
-      case FunctionalCoreTag.Let: {
+      case CoreTag.Let: {
         const virtualValue = this.virtualLambda(node.child0, environment);
         if (virtualValue !== undefined) {
           this.compileIntegerExpression(
@@ -3020,7 +3008,7 @@ class FunctionalWasmCompiler {
           );
           return;
         }
-        const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+        const eager = node.evaluationMode === EvaluationMode.StrictEager ||
           this.expressionIsWhnf(node.child0) ||
           this.immediatelyForcesLocal(node.child1, 0);
         const constantValue = eager
@@ -3072,7 +3060,7 @@ class FunctionalWasmCompiler {
         );
         return;
       }
-      case FunctionalCoreTag.Case: {
+      case CoreTag.Case: {
         const constructor = this.scalarSpecializationEnabled()
           ? this.virtualConstructor(node.child0, environment)
           : undefined;
@@ -3100,7 +3088,7 @@ class FunctionalWasmCompiler {
   compileBooleanExpression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const constant = this.constantBooleanExpression(nodeIndex, environment);
@@ -3110,10 +3098,10 @@ class FunctionalWasmCompiler {
     }
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Boolean:
+      case CoreTag.Boolean:
         instructions.i32Const(node.payload === 0 ? 0 : 1);
         return;
-      case FunctionalCoreTag.Local: {
+      case CoreTag.Local: {
         const source = this.localSource(environment, node.payload, nodeIndex);
         if (source.kind === "i32-boolean") {
           instructions.localGet(source.index);
@@ -3126,28 +3114,28 @@ class FunctionalWasmCompiler {
         this.emitDecodeBoolean(instructions);
         return;
       }
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         if (
           !this.#instrumentedFuel &&
-          (node.payload === FunctionalBinaryOperator.Equal ||
-            node.payload === FunctionalBinaryOperator.NotEqual)
+          (node.payload === BinaryOperator.Equal ||
+            node.payload === BinaryOperator.NotEqual)
         ) {
           const left = this.node(node.child0);
           const right = this.node(node.child1);
-          let integerBoolean: FunctionalCoreNode | undefined;
-          if (left.tag === FunctionalCoreTag.Integer && left.payload === 0) {
+          let integerBoolean: CoreNode | undefined;
+          if (left.tag === CoreTag.Integer && left.payload === 0) {
             integerBoolean = right;
           } else if (
-            right.tag === FunctionalCoreTag.Integer && right.payload === 0
+            right.tag === CoreTag.Integer && right.payload === 0
           ) {
             integerBoolean = left;
           }
-          if (integerBoolean?.tag === FunctionalCoreTag.If) {
+          if (integerBoolean?.tag === CoreTag.If) {
             const thenBranch = this.node(integerBoolean.child1);
             const elseBranch = this.node(integerBoolean.child2);
             if (
-              thenBranch.tag === FunctionalCoreTag.Integer &&
-              elseBranch.tag === FunctionalCoreTag.Integer &&
+              thenBranch.tag === CoreTag.Integer &&
+              elseBranch.tag === CoreTag.Integer &&
               (thenBranch.payload === 0 || thenBranch.payload === 1) &&
               thenBranch.payload + elseBranch.payload === 1
             ) {
@@ -3156,7 +3144,7 @@ class FunctionalWasmCompiler {
                 integerBoolean.child0,
                 environment,
               );
-              const trueWhenCondition = node.payload === FunctionalBinaryOperator.NotEqual
+              const trueWhenCondition = node.payload === BinaryOperator.NotEqual
                 ? thenBranch.payload === 1
                 : thenBranch.payload === 0;
               if (!trueWhenCondition) instructions.emit(0x45);
@@ -3165,8 +3153,8 @@ class FunctionalWasmCompiler {
           }
         }
         if (
-          node.payload === FunctionalBinaryOperator.StructuralEqual ||
-          node.payload === FunctionalBinaryOperator.StructuralNotEqual
+          node.payload === BinaryOperator.StructuralEqual ||
+          node.payload === BinaryOperator.StructuralNotEqual
         ) {
           this.compileStructuralEquality(instructions, node, environment);
           return;
@@ -3179,7 +3167,7 @@ class FunctionalWasmCompiler {
           nodeIndex,
         );
         return;
-      case FunctionalCoreTag.If: {
+      case CoreTag.If: {
         const selectedBranch = this.constantIfBranch(node, environment);
         if (selectedBranch !== undefined) {
           this.compileBooleanExpression(instructions, selectedBranch, environment);
@@ -3193,8 +3181,8 @@ class FunctionalWasmCompiler {
         instructions.emit(0x0b);
         return;
       }
-      case FunctionalCoreTag.Let: {
-        const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+      case CoreTag.Let: {
+        const eager = node.evaluationMode === EvaluationMode.StrictEager ||
           this.expressionIsWhnf(node.child0) ||
           this.immediatelyForcesLocal(node.child1, 0);
         const constantValue = eager
@@ -3247,16 +3235,16 @@ class FunctionalWasmCompiler {
   compileSignedInteger64Expression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.SignedInteger64:
+      case CoreTag.SignedInteger64:
         instructions.i64Const(wideLiteralBits(node));
         return;
-      case FunctionalCoreTag.Unary:
-        if (node.payload !== FunctionalUnaryOperator.NegateSignedInteger64) {
+      case CoreTag.Unary:
+        if (node.payload !== UnaryOperator.NegateSignedInteger64) {
           break;
         }
         instructions.i64Const(0n);
@@ -3267,7 +3255,7 @@ class FunctionalWasmCompiler {
         );
         instructions.emit(0x7d);
         return;
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         if (numericOperatorGroup(node.payload) !== "signed-integer-64") break;
         this.compileSignedInteger64Expression(
           instructions,
@@ -3281,7 +3269,7 @@ class FunctionalWasmCompiler {
         );
         this.emitNumericBinary(instructions, node.payload, nodeIndex);
         return;
-      case FunctionalCoreTag.NumericConvert:
+      case CoreTag.NumericConvert:
         this.compileNumericConversion(
           instructions,
           node,
@@ -3290,7 +3278,7 @@ class FunctionalWasmCompiler {
           "signed-integer-64",
         );
         return;
-      case FunctionalCoreTag.If: {
+      case CoreTag.If: {
         const selectedBranch = this.constantIfBranch(node, environment);
         if (selectedBranch !== undefined) {
           this.compileSignedInteger64Expression(instructions, selectedBranch, environment);
@@ -3320,37 +3308,37 @@ class FunctionalWasmCompiler {
   compileFloat32Expression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     if (
-      this.#simdEnabled && node.tag === FunctionalCoreTag.Apply &&
+      this.#simdEnabled && node.tag === CoreTag.Apply &&
       this.compileSimdFloat32Application(instructions, nodeIndex, environment)
     ) return;
     switch (node.tag) {
-      case FunctionalCoreTag.Float32:
+      case CoreTag.Float32:
         instructions.f32Const(float32FromBits(node.payload));
         return;
-      case FunctionalCoreTag.Unary:
+      case CoreTag.Unary:
         if (
-          node.payload !== FunctionalUnaryOperator.NegateFloat32 &&
-          node.payload !== FunctionalUnaryOperator.SquareRootFloat32
+          node.payload !== UnaryOperator.NegateFloat32 &&
+          node.payload !== UnaryOperator.SquareRootFloat32
         ) break;
         this.compileFloat32Expression(instructions, node.child0, environment);
-        if (node.payload === FunctionalUnaryOperator.NegateFloat32) {
+        if (node.payload === UnaryOperator.NegateFloat32) {
           instructions.emit(0x8c);
         } else {
           instructions.emit(0x91);
         }
         return;
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         if (numericOperatorGroup(node.payload) !== "float-32") break;
         this.compileFloat32Expression(instructions, node.child0, environment);
         this.compileFloat32Expression(instructions, node.child1, environment);
         this.emitNumericBinary(instructions, node.payload, nodeIndex);
         return;
-      case FunctionalCoreTag.NumericConvert:
+      case CoreTag.NumericConvert:
         this.compileNumericConversion(
           instructions,
           node,
@@ -3359,7 +3347,7 @@ class FunctionalWasmCompiler {
           "float-32",
         );
         return;
-      case FunctionalCoreTag.If: {
+      case CoreTag.If: {
         const selectedBranch = this.constantIfBranch(node, environment);
         if (selectedBranch !== undefined) {
           this.compileFloat32Expression(instructions, selectedBranch, environment);
@@ -3381,15 +3369,15 @@ class FunctionalWasmCompiler {
   compileSimdVectorApplication(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): CompiledSimdVector | undefined {
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return undefined;
     const { definition, arguments: arguments_ } = application;
     const canonicalDefinition = canonicalFunctionalFixedVectorName(definition);
-    if (canonicalDefinition === FunctionalF32x4Definition.Splat && arguments_.length === 1) {
+    if (canonicalDefinition === F32x4Definition.Splat && arguments_.length === 1) {
       this.compileFloat32Expression(instructions, arguments_[0]!.node, environment);
-      instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
+      instructions.simd(WasmSimdOpcode.F32x4Splat);
       return compiledSimdVector(definition, "f32x4");
     }
     const binaryOpcode = simdF32x4BinaryOpcode(definition);
@@ -3406,26 +3394,26 @@ class FunctionalWasmCompiler {
       instructions.simd(comparisonOpcode);
       return compiledSimdVector(definition, "mask32x4");
     }
-    if (canonicalDefinition === FunctionalF32x4Definition.Select && arguments_.length === 3) {
+    if (canonicalDefinition === F32x4Definition.Select && arguments_.length === 3) {
       this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
       this.compileF32x4Expression(instructions, arguments_[2]!.node, environment);
       this.compileMask32x4Expression(instructions, arguments_[0]!.node, environment);
-      instructions.simd(FunctionalWasmSimdOpcode.V128BitSelect);
+      instructions.simd(WasmSimdOpcode.V128BitSelect);
       return compiledSimdVector(definition, "f32x4");
     }
     const replacementLane = f32x4ReplacementLane(definition);
     if (replacementLane !== undefined && arguments_.length === 2) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       this.compileFloat32Expression(instructions, arguments_[1]!.node, environment);
-      instructions.simd(FunctionalWasmSimdOpcode.F32x4ReplaceLane, replacementLane);
+      instructions.simd(WasmSimdOpcode.F32x4ReplaceLane, replacementLane);
       return compiledSimdVector(definition, "f32x4");
     }
-    if (canonicalDefinition === FunctionalF32x4Definition.Map && arguments_.length === 2) {
+    if (canonicalDefinition === F32x4Definition.Map && arguments_.length === 2) {
       return this.compileSimdMap(instructions, arguments_, environment)
         ? compiledSimdVector(definition, "f32x4")
         : undefined;
     }
-    if (canonicalDefinition === FunctionalF32x4Definition.Zip && arguments_.length === 3) {
+    if (canonicalDefinition === F32x4Definition.Zip && arguments_.length === 3) {
       return this.compileSimdZip(instructions, arguments_, environment)
         ? compiledSimdVector(definition, "f32x4")
         : undefined;
@@ -3436,7 +3424,7 @@ class FunctionalWasmCompiler {
   compileSimdFloat32Application(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): boolean {
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return false;
@@ -3445,10 +3433,10 @@ class FunctionalWasmCompiler {
     const extractedLane = f32x4ExtractedLane(definition);
     if (extractedLane !== undefined && arguments_.length === 1) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
-      instructions.simd(FunctionalWasmSimdOpcode.F32x4ExtractLane, extractedLane);
+      instructions.simd(WasmSimdOpcode.F32x4ExtractLane, extractedLane);
       return true;
     }
-    if (canonicalDefinition === FunctionalF32x4Definition.ReduceAdd && arguments_.length === 1) {
+    if (canonicalDefinition === F32x4Definition.ReduceAdd && arguments_.length === 1) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       const vector = instructions.addLocal(WasmValueType.V128);
       instructions.localSet(vector);
@@ -3460,7 +3448,7 @@ class FunctionalWasmCompiler {
       instructions.emit(0x92, 0x92);
       return true;
     }
-    if (canonicalDefinition === FunctionalF32x4Definition.Fold && arguments_.length === 3) {
+    if (canonicalDefinition === F32x4Definition.Fold && arguments_.length === 3) {
       const combine = this.float32CombineOperator(arguments_[0]!.node, environment);
       if (combine === undefined) return false;
       const combineOpcode = numericBinaryOpcode(combine);
@@ -3481,17 +3469,17 @@ class FunctionalWasmCompiler {
   compileF32x4Expression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Local) {
+    if (node.tag === CoreTag.Local) {
       const binding = environment[node.payload];
       if (binding?.kind === "v128-f32x4") {
         instructions.localGet(binding.index);
         return;
       }
     }
-    if (node.tag === FunctionalCoreTag.Apply) {
+    if (node.tag === CoreTag.Apply) {
       const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
       if (kind?.kind === "f32x4") return;
     }
@@ -3500,13 +3488,13 @@ class FunctionalWasmCompiler {
       constructor !== undefined && constructor.arguments.length === 4 &&
       canonicalFunctionalFixedVectorName(
           this.#module.constructorNames[constructor.constructorIndex]!,
-        ) === FUNCTIONAL_F32X4_CONSTRUCTOR_NAME
+        ) === F32X4_CONSTRUCTOR_NAME
     ) {
       this.compileFloat32Expression(instructions, constructor.arguments[0]!.node, environment);
-      instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
+      instructions.simd(WasmSimdOpcode.F32x4Splat);
       for (let lane = 1; lane < 4; lane += 1) {
         this.compileFloat32Expression(instructions, constructor.arguments[lane]!.node, environment);
-        instructions.simd(FunctionalWasmSimdOpcode.F32x4ReplaceLane, lane);
+        instructions.simd(WasmSimdOpcode.F32x4ReplaceLane, lane);
       }
       return;
     }
@@ -3518,7 +3506,7 @@ class FunctionalWasmCompiler {
   compileF32x4WorkerApplication(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): boolean {
     const application = this.uncurriedApplication(nodeIndex, environment);
     if (
@@ -3570,10 +3558,10 @@ class FunctionalWasmCompiler {
 
   isKnownF32x4Expression(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): boolean {
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Local) {
+    if (node.tag === CoreTag.Local) {
       return environment[node.payload]?.kind === "v128-f32x4";
     }
     const constructor = this.constructorApplication(nodeIndex);
@@ -3581,19 +3569,19 @@ class FunctionalWasmCompiler {
       constructor !== undefined && constructor.arguments.length === 4 &&
       canonicalFunctionalFixedVectorName(
           this.#module.constructorNames[constructor.constructorIndex]!,
-        ) === FUNCTIONAL_F32X4_CONSTRUCTOR_NAME
+        ) === F32X4_CONSTRUCTOR_NAME
     ) return true;
     const application = this.namedApplication(nodeIndex);
     if (application === undefined) return false;
     const { definition, arguments: arguments_ } = application;
     const canonicalDefinition = canonicalFunctionalFixedVectorName(definition);
-    if (canonicalDefinition === FunctionalF32x4Definition.Splat) return arguments_.length === 1;
+    if (canonicalDefinition === F32x4Definition.Splat) return arguments_.length === 1;
     if (simdF32x4BinaryOpcode(definition) !== undefined) {
       return arguments_.length === 2 &&
         this.isKnownF32x4Expression(arguments_[0]!.node, environment) &&
         this.isKnownF32x4Expression(arguments_[1]!.node, environment);
     }
-    if (canonicalDefinition === FunctionalF32x4Definition.Select) {
+    if (canonicalDefinition === F32x4Definition.Select) {
       return arguments_.length === 3 &&
         this.isKnownMask32x4Expression(arguments_[0]!.node, environment) &&
         this.isKnownF32x4Expression(arguments_[1]!.node, environment) &&
@@ -3605,7 +3593,7 @@ class FunctionalWasmCompiler {
 
   isKnownMask32x4Expression(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): boolean {
     const application = this.namedApplication(nodeIndex);
     if (
@@ -3619,10 +3607,10 @@ class FunctionalWasmCompiler {
   compileMask32x4Expression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Apply) {
+    if (node.tag === CoreTag.Apply) {
       const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
       if (kind?.kind === "mask32x4") return;
     }
@@ -3632,14 +3620,14 @@ class FunctionalWasmCompiler {
 
   compileSimdMap(
     instructions: WasmInstructions,
-    arguments_: readonly FunctionalCallArgument[],
-    environment: FunctionalEnvironment,
+    arguments_: readonly CallArgument[],
+    environment: Environment,
   ): boolean {
     const transform = this.virtualLambda(arguments_[0]!.node, environment);
     if (transform === undefined) return false;
     const lambda = this.node(transform.node);
     if (
-      lambda.tag !== FunctionalCoreTag.Lambda ||
+      lambda.tag !== CoreTag.Lambda ||
       !this.canVectorizeFloat32Expression(lambda.child0, 1)
     ) return false;
     this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
@@ -3651,16 +3639,16 @@ class FunctionalWasmCompiler {
 
   compileSimdZip(
     instructions: WasmInstructions,
-    arguments_: readonly FunctionalCallArgument[],
-    environment: FunctionalEnvironment,
+    arguments_: readonly CallArgument[],
+    environment: Environment,
   ): boolean {
     const combine = this.virtualLambda(arguments_[0]!.node, environment);
     if (combine === undefined) return false;
     const outerLambda = this.node(combine.node);
-    if (outerLambda.tag !== FunctionalCoreTag.Lambda) return false;
+    if (outerLambda.tag !== CoreTag.Lambda) return false;
     const innerLambda = this.node(outerLambda.child0);
     if (
-      innerLambda.tag !== FunctionalCoreTag.Lambda ||
+      innerLambda.tag !== CoreTag.Lambda ||
       !this.canVectorizeFloat32Expression(innerLambda.child0, 2)
     ) return false;
     this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
@@ -3679,14 +3667,14 @@ class FunctionalWasmCompiler {
 
   canVectorizeFloat32Expression(nodeIndex: number, parameterCount: number): boolean {
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Float32) return true;
-    if (node.tag === FunctionalCoreTag.Local) return node.payload < parameterCount;
-    if (node.tag === FunctionalCoreTag.Unary) {
-      return (node.payload === FunctionalUnaryOperator.NegateFloat32 ||
-        node.payload === FunctionalUnaryOperator.SquareRootFloat32) &&
+    if (node.tag === CoreTag.Float32) return true;
+    if (node.tag === CoreTag.Local) return node.payload < parameterCount;
+    if (node.tag === CoreTag.Unary) {
+      return (node.payload === UnaryOperator.NegateFloat32 ||
+        node.payload === UnaryOperator.SquareRootFloat32) &&
         this.canVectorizeFloat32Expression(node.child0, parameterCount);
     }
-    return node.tag === FunctionalCoreTag.Binary &&
+    return node.tag === CoreTag.Binary &&
       numericOperatorGroup(node.payload) === "float-32" &&
       !isComparisonOperator(node.payload) &&
       this.canVectorizeFloat32Expression(node.child0, parameterCount) &&
@@ -3699,12 +3687,12 @@ class FunctionalWasmCompiler {
     parameters: readonly number[],
   ): void {
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Float32) {
+    if (node.tag === CoreTag.Float32) {
       instructions.f32Const(float32FromBits(node.payload));
-      instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
+      instructions.simd(WasmSimdOpcode.F32x4Splat);
       return;
     }
-    if (node.tag === FunctionalCoreTag.Local) {
+    if (node.tag === CoreTag.Local) {
       const parameter = parameters[node.payload];
       if (parameter === undefined) {
         throw new Error(
@@ -3714,16 +3702,16 @@ class FunctionalWasmCompiler {
       instructions.localGet(parameter);
       return;
     }
-    if (node.tag === FunctionalCoreTag.Unary) {
+    if (node.tag === CoreTag.Unary) {
       this.compileVectorizedFloat32Expression(instructions, node.child0, parameters);
       instructions.simd(
-        node.payload === FunctionalUnaryOperator.NegateFloat32
-          ? FunctionalWasmSimdOpcode.F32x4Negate
-          : FunctionalWasmSimdOpcode.F32x4SquareRoot,
+        node.payload === UnaryOperator.NegateFloat32
+          ? WasmSimdOpcode.F32x4Negate
+          : WasmSimdOpcode.F32x4SquareRoot,
       );
       return;
     }
-    if (node.tag === FunctionalCoreTag.Binary) {
+    if (node.tag === CoreTag.Binary) {
       this.compileVectorizedFloat32Expression(instructions, node.child0, parameters);
       this.compileVectorizedFloat32Expression(instructions, node.child1, parameters);
       const opcode = simdFloat32Operator(node.payload);
@@ -3742,38 +3730,38 @@ class FunctionalWasmCompiler {
 
   float32CombineOperator(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): number | undefined {
     const combine = this.virtualLambda(nodeIndex, environment);
     if (combine === undefined) return undefined;
     const outerLambda = this.node(combine.node);
-    if (outerLambda.tag !== FunctionalCoreTag.Lambda) return undefined;
+    if (outerLambda.tag !== CoreTag.Lambda) return undefined;
     const innerLambda = this.node(outerLambda.child0);
-    if (innerLambda.tag !== FunctionalCoreTag.Lambda) return undefined;
+    if (innerLambda.tag !== CoreTag.Lambda) return undefined;
     const body = this.node(innerLambda.child0);
     if (
-      body.tag !== FunctionalCoreTag.Binary ||
+      body.tag !== CoreTag.Binary ||
       numericOperatorGroup(body.payload) !== "float-32" ||
       isComparisonOperator(body.payload)
     ) return undefined;
     const left = this.node(body.child0);
     const right = this.node(body.child1);
-    return left.tag === FunctionalCoreTag.Local && left.payload === 1 &&
-        right.tag === FunctionalCoreTag.Local && right.payload === 0
+    return left.tag === CoreTag.Local && left.payload === 1 &&
+        right.tag === CoreTag.Local && right.payload === 0
       ? body.payload
       : undefined;
   }
 
   namedApplication(nodeIndex: number): NamedApplication | undefined {
-    const reverseArguments: FunctionalCallArgument[] = [];
+    const reverseArguments: CallArgument[] = [];
     let baseNode = nodeIndex;
     let node = this.node(baseNode);
-    while (node.tag === FunctionalCoreTag.Apply) {
+    while (node.tag === CoreTag.Apply) {
       reverseArguments.push({ node: node.child1, evaluationMode: node.evaluationMode });
       baseNode = node.child0;
       node = this.node(baseNode);
     }
-    if (node.tag !== FunctionalCoreTag.Global) return undefined;
+    if (node.tag !== CoreTag.Global) return undefined;
     const definition = this.#module.definitionNames[node.payload];
     if (definition === undefined) return undefined;
     return { definition, arguments: Object.freeze(reverseArguments.reverse()) };
@@ -3785,32 +3773,32 @@ class FunctionalWasmCompiler {
     lane: number,
   ): void {
     instructions.localGet(vector);
-    instructions.simd(FunctionalWasmSimdOpcode.F32x4ExtractLane, lane);
+    instructions.simd(WasmSimdOpcode.F32x4ExtractLane, lane);
   }
 
   compileFloat64Expression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Float64:
+      case CoreTag.Float64:
         instructions.f64Const(float64FromBits(wideLiteralBits(node)));
         return;
-      case FunctionalCoreTag.Unary:
-        if (node.payload !== FunctionalUnaryOperator.NegateFloat64) break;
+      case CoreTag.Unary:
+        if (node.payload !== UnaryOperator.NegateFloat64) break;
         this.compileFloat64Expression(instructions, node.child0, environment);
         instructions.emit(0x9a);
         return;
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         if (numericOperatorGroup(node.payload) !== "float-64") break;
         this.compileFloat64Expression(instructions, node.child0, environment);
         this.compileFloat64Expression(instructions, node.child1, environment);
         this.emitNumericBinary(instructions, node.payload, nodeIndex);
         return;
-      case FunctionalCoreTag.NumericConvert:
+      case CoreTag.NumericConvert:
         this.compileNumericConversion(
           instructions,
           node,
@@ -3819,7 +3807,7 @@ class FunctionalWasmCompiler {
           "float-64",
         );
         return;
-      case FunctionalCoreTag.If: {
+      case CoreTag.If: {
         const selectedBranch = this.constantIfBranch(node, environment);
         if (selectedBranch !== undefined) {
           this.compileFloat64Expression(instructions, selectedBranch, environment);
@@ -3840,8 +3828,8 @@ class FunctionalWasmCompiler {
 
   compileComparisonOperands(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
     nodeIndex: number,
   ): void {
     const group = numericOperatorGroup(node.payload);
@@ -3875,26 +3863,26 @@ class FunctionalWasmCompiler {
   compileWholeNumberF64Expression(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.WholeNumberF64:
+      case CoreTag.WholeNumberF64:
         instructions.f64Const(float64FromBits(wideLiteralBits(node)));
         return;
-      case FunctionalCoreTag.Unary:
-        if (node.payload !== FunctionalUnaryOperator.NegateWholeNumberF64) break;
+      case CoreTag.Unary:
+        if (node.payload !== UnaryOperator.NegateWholeNumberF64) break;
         this.compileWholeNumberF64Expression(instructions, node.child0, environment);
         instructions.emit(0x9a);
         return;
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         if (numericOperatorGroup(node.payload) !== "whole-number-f64") break;
         this.compileWholeNumberF64Expression(instructions, node.child0, environment);
         this.compileWholeNumberF64Expression(instructions, node.child1, environment);
         this.emitNumericBinary(instructions, node.payload, nodeIndex);
         return;
-      case FunctionalCoreTag.If: {
+      case CoreTag.If: {
         const selectedBranch = this.constantIfBranch(node, environment);
         if (selectedBranch !== undefined) {
           this.compileWholeNumberF64Expression(instructions, selectedBranch, environment);
@@ -3915,9 +3903,9 @@ class FunctionalWasmCompiler {
 
   compileNumericConversion(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     expectedResult: NumericPrimitiveKind,
   ): void {
     const conversion = numericConversion(node.payload);
@@ -3986,9 +3974,9 @@ class FunctionalWasmCompiler {
 
   compileNumericConversionExpression(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     const result = numericConversion(node.payload).result;
     if (result === "integer") {
@@ -4015,7 +4003,7 @@ class FunctionalWasmCompiler {
     operator: number,
     nodeIndex: number,
   ): void {
-    if (operator === FunctionalBinaryOperator.RemainderFloat64) {
+    if (operator === BinaryOperator.RemainderFloat64) {
       const divisor = instructions.addLocal(WasmValueType.F64);
       instructions.localSet(divisor);
       const dividend = instructions.addLocal(WasmValueType.F64);
@@ -4064,8 +4052,8 @@ class FunctionalWasmCompiler {
       return;
     }
     if (
-      operator === FunctionalBinaryOperator.DivideWholeNumberF64 ||
-      operator === FunctionalBinaryOperator.RemainderWholeNumberF64
+      operator === BinaryOperator.DivideWholeNumberF64 ||
+      operator === BinaryOperator.RemainderWholeNumberF64
     ) {
       const divisor = instructions.addLocal(WasmValueType.F64);
       instructions.localSet(divisor);
@@ -4079,7 +4067,7 @@ class FunctionalWasmCompiler {
       instructions.localGet(dividend);
       instructions.localGet(divisor);
       instructions.emit(0xa3, 0x9d);
-      if (operator === FunctionalBinaryOperator.RemainderWholeNumberF64) {
+      if (operator === BinaryOperator.RemainderWholeNumberF64) {
         instructions.localGet(divisor);
         instructions.emit(0xa2);
         const multiple = instructions.addLocal(WasmValueType.F64);
@@ -4098,8 +4086,8 @@ class FunctionalWasmCompiler {
       );
     }
     if (
-      operator === FunctionalBinaryOperator.DivideSignedInteger64 ||
-      operator === FunctionalBinaryOperator.RemainderSignedInteger64
+      operator === BinaryOperator.DivideSignedInteger64 ||
+      operator === BinaryOperator.RemainderSignedInteger64
     ) {
       const divisor = instructions.addLocal(WasmValueType.I64);
       instructions.localSet(divisor);
@@ -4113,7 +4101,7 @@ class FunctionalWasmCompiler {
       instructions.i64Const(-1n);
       instructions.emit(0x51, 0x71, 0x04, WasmValueType.I64);
       instructions.i64Const(
-        operator === FunctionalBinaryOperator.DivideSignedInteger64 ? -0x8000000000000000n : 0n,
+        operator === BinaryOperator.DivideSignedInteger64 ? -0x8000000000000000n : 0n,
       );
       instructions.emit(0x05);
       instructions.localGet(dividend);
@@ -4142,13 +4130,13 @@ class FunctionalWasmCompiler {
 
   compileBinary(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
     nodeIndex: number,
   ): void {
     if (
-      node.payload === FunctionalBinaryOperator.StructuralEqual ||
-      node.payload === FunctionalBinaryOperator.StructuralNotEqual
+      node.payload === BinaryOperator.StructuralEqual ||
+      node.payload === BinaryOperator.StructuralNotEqual
     ) {
       this.compileStructuralEquality(instructions, node, environment);
       this.emitEncodeBoolean(instructions);
@@ -4180,12 +4168,12 @@ class FunctionalWasmCompiler {
     }
     if (isComparisonOperator(node.payload)) {
       switch (node.payload) {
-        case FunctionalBinaryOperator.Equal:
-        case FunctionalBinaryOperator.NotEqual:
-        case FunctionalBinaryOperator.Less:
-        case FunctionalBinaryOperator.LessEqual:
-        case FunctionalBinaryOperator.Greater:
-        case FunctionalBinaryOperator.GreaterEqual:
+        case BinaryOperator.Equal:
+        case BinaryOperator.NotEqual:
+        case BinaryOperator.Less:
+        case BinaryOperator.LessEqual:
+        case BinaryOperator.Greater:
+        case BinaryOperator.GreaterEqual:
           this.compileIntegerExpression(instructions, node.child0, environment);
           this.compileIntegerExpression(instructions, node.child1, environment);
           this.emitComparison(instructions, node.payload, nodeIndex);
@@ -4203,13 +4191,13 @@ class FunctionalWasmCompiler {
 
   compileStructuralEquality(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
   ): void {
     this.compileExpression(instructions, node.child0, environment);
     this.compileExpression(instructions, node.child1, environment);
     instructions.call(this.structuralEqualityFunctionIndex());
-    if (node.payload === FunctionalBinaryOperator.StructuralNotEqual) instructions.emit(0x45);
+    if (node.payload === BinaryOperator.StructuralNotEqual) instructions.emit(0x45);
   }
 
   structuralEqualityFunctionIndex(): number {
@@ -4234,8 +4222,8 @@ class FunctionalWasmCompiler {
 
   compileCase(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
-    environment: FunctionalEnvironment,
+    node: CoreNode,
+    environment: Environment,
     nodeIndex: number,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
@@ -4255,7 +4243,7 @@ class FunctionalWasmCompiler {
       return;
     }
     const scrutineeNode = this.node(node.child0);
-    const scrutinee = scrutineeNode.tag === FunctionalCoreTag.Local
+    const scrutinee = scrutineeNode.tag === CoreTag.Local
       ? this.localSource(environment, scrutineeNode.payload, node.child0)
       : undefined;
     const constructor = instructions.addLocal(WasmValueType.I32);
@@ -4291,7 +4279,7 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     firstArmIndex: number,
     constructor: VirtualConstructor,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     caseNodeIndex: number,
     resultKind: "value" | "integer" = "value",
     constructorReuse?: ConstructorReuseTarget,
@@ -4312,9 +4300,9 @@ class FunctionalWasmCompiler {
       )
     );
     let armIndex = firstArmIndex;
-    while (armIndex !== FUNCTIONAL_NO_INDEX) {
+    while (armIndex !== NO_INDEX) {
       const arm = this.node(armIndex);
-      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+      if (arm.tag !== CoreTag.CaseArm) {
         throw new Error(
           `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
         );
@@ -4324,7 +4312,7 @@ class FunctionalWasmCompiler {
         let armEnvironment = [...environment];
         for (let bindingIndex = 0; bindingIndex < arity; bindingIndex += 1) {
           const binding = this.node(bodyNode);
-          if (binding.tag !== FunctionalCoreTag.PatternBind) {
+          if (binding.tag !== CoreTag.PatternBind) {
             throw new Error(
               `functional WASM case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
             );
@@ -4361,9 +4349,9 @@ class FunctionalWasmCompiler {
 
   compileExpressionBinding(
     instructions: WasmInstructions,
-    expression: FunctionalCallArgument,
-    environment: FunctionalEnvironment,
-  ): FunctionalBinding {
+    expression: CallArgument,
+    environment: Environment,
+  ): Binding {
     const virtualLambda = this.virtualLambda(expression.node, environment);
     if (virtualLambda !== undefined) return virtualLambda;
     const virtualConstructor = this.virtualConstructor(
@@ -4394,15 +4382,15 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     armIndex: number,
     constructor: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     caseNodeIndex: number,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
     let currentArmIndex = armIndex;
     let openArmCount = 0;
-    while (currentArmIndex !== FUNCTIONAL_NO_INDEX) {
+    while (currentArmIndex !== NO_INDEX) {
       const arm = this.node(currentArmIndex);
-      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+      if (arm.tag !== CoreTag.CaseArm) {
         throw new Error(
           `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${currentArmIndex}; expected a case arm`,
         );
@@ -4421,7 +4409,7 @@ class FunctionalWasmCompiler {
       let armEnvironment = [...environment];
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
         const binding = this.node(bodyNode);
-        if (binding.tag !== FunctionalCoreTag.PatternBind) {
+        if (binding.tag !== CoreTag.PatternBind) {
           throw new Error(
             `functional WASM case arm ${currentArmIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
           );
@@ -4456,7 +4444,7 @@ class FunctionalWasmCompiler {
   compileThunk(
     instructions: WasmInstructions,
     expressionNode: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     this.storageDecision(expressionNode, "thunk");
     const slot = this.reserveIndirectFunction();
@@ -4483,21 +4471,21 @@ class FunctionalWasmCompiler {
   compileLazyValue(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): void {
     if (this.expressionIsWhnf(nodeIndex)) {
       this.compileExpression(instructions, nodeIndex, environment);
       return;
     }
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Local) {
+    if (node.tag === CoreTag.Local) {
       this.emitBinding(
         instructions,
         this.localSource(environment, node.payload, nodeIndex),
       );
       return;
     }
-    if (node.tag === FunctionalCoreTag.Global) {
+    if (node.tag === CoreTag.Global) {
       if (node.payload >= this.#module.definitionCount) {
         throw new Error(
           `functional WASM global d${node.payload} at core node ${nodeIndex} exceeds ${this.#module.definitionCount} definitions`,
@@ -4512,12 +4500,12 @@ class FunctionalWasmCompiler {
 
   compileApplicationArgument(
     instructions: WasmInstructions,
-    argument: FunctionalCallArgument,
-    environment: FunctionalEnvironment,
+    argument: CallArgument,
+    environment: Environment,
     demandedImmediately: boolean,
   ): void {
     if (
-      argument.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+      argument.evaluationMode === EvaluationMode.StrictEager ||
       demandedImmediately
     ) {
       this.compileExpression(instructions, argument.node, environment);
@@ -4527,10 +4515,10 @@ class FunctionalWasmCompiler {
   }
 
   localSource(
-    environment: FunctionalEnvironment,
+    environment: Environment,
     depth: number,
     nodeIndex: number,
-  ): FunctionalBinding {
+  ): Binding {
     const source = environment[depth];
     if (source !== undefined) return source;
     throw new Error(
@@ -4543,14 +4531,14 @@ class FunctionalWasmCompiler {
   prunedCaptures(
     bodyNode: number,
     binderDepth: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     firstCaptureByteOffset: number,
   ): {
-    readonly captureSources: readonly FunctionalBinding[];
-    readonly bodyEnvironment: FunctionalEnvironment;
+    readonly captureSources: readonly Binding[];
+    readonly bodyEnvironment: Environment;
   } {
-    const captureSources: FunctionalBinding[] = [];
-    const bodyEnvironment: (FunctionalBinding | undefined)[] = Array.from(
+    const captureSources: Binding[] = [];
+    const bodyEnvironment: (Binding | undefined)[] = Array.from(
       { length: environment.length },
       () => undefined,
     );
@@ -4581,10 +4569,10 @@ class FunctionalWasmCompiler {
   constructorApplication(
     nodeIndex: number,
   ): ConstructorApplication | undefined {
-    const reverseArguments: FunctionalCallArgument[] = [];
+    const reverseArguments: CallArgument[] = [];
     let calleeIndex = nodeIndex;
     let callee = this.node(calleeIndex);
-    while (callee.tag === FunctionalCoreTag.Apply) {
+    while (callee.tag === CoreTag.Apply) {
       reverseArguments.push({
         node: callee.child1,
         evaluationMode: callee.evaluationMode,
@@ -4592,7 +4580,7 @@ class FunctionalWasmCompiler {
       calleeIndex = callee.child0;
       callee = this.node(calleeIndex);
     }
-    if (callee.tag !== FunctionalCoreTag.Constructor) return undefined;
+    if (callee.tag !== CoreTag.Constructor) return undefined;
     const arity = this.#module.constructorArities[callee.payload];
     if (
       arity === undefined || reverseArguments.length === 0 ||
@@ -4609,12 +4597,12 @@ class FunctionalWasmCompiler {
 
   virtualConstructor(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     remainingDepth = 64,
   ): VirtualConstructor | undefined {
     if (remainingDepth === 0) return undefined;
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Local) {
+    if (node.tag === CoreTag.Local) {
       const binding = environment[node.payload];
       return binding?.kind === "virtual-constructor" ? binding : undefined;
     }
@@ -4640,7 +4628,7 @@ class FunctionalWasmCompiler {
         environment,
       };
     }
-    if (node.tag === FunctionalCoreTag.Let) {
+    if (node.tag === CoreTag.Let) {
       const binding = this.staticBinding(
         node.child0,
         environment,
@@ -4652,11 +4640,11 @@ class FunctionalWasmCompiler {
         remainingDepth - 1,
       );
     }
-    if (node.tag === FunctionalCoreTag.Apply) {
+    if (node.tag === CoreTag.Apply) {
       const callee = this.virtualLambda(node.child0, environment);
       if (callee === undefined) return undefined;
       const lambda = this.node(callee.node);
-      if (lambda.tag !== FunctionalCoreTag.Lambda) return undefined;
+      if (lambda.tag !== CoreTag.Lambda) return undefined;
       const argument = this.staticBinding(
         node.child1,
         environment,
@@ -4668,7 +4656,7 @@ class FunctionalWasmCompiler {
         remainingDepth - 1,
       );
     }
-    if (node.tag === FunctionalCoreTag.If) {
+    if (node.tag === CoreTag.If) {
       const condition = this.constantBooleanExpression(node.child0, environment);
       if (condition === undefined) return undefined;
       return this.virtualConstructor(
@@ -4682,9 +4670,9 @@ class FunctionalWasmCompiler {
 
   staticBinding(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     remainingDepth: number,
-  ): FunctionalBinding | undefined {
+  ): Binding | undefined {
     const lambda = this.virtualLambda(nodeIndex, environment, remainingDepth);
     if (lambda !== undefined) return lambda;
     const constructor = this.virtualConstructor(
@@ -4703,7 +4691,7 @@ class FunctionalWasmCompiler {
 
   scalarConstantBinding(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
   ): ValueSource | undefined {
     const constant = this.#constantAnalysis.scalar(
       nodeIndex,
@@ -4721,7 +4709,7 @@ class FunctionalWasmCompiler {
   emitThunkObject(
     instructions: WasmInstructions,
     slot: number,
-    captures: readonly FunctionalBinding[],
+    captures: readonly Binding[],
   ): void {
     instructions.i32Const(
       THUNK_HEADER_BYTE_LENGTH + captures.length * VALUE_BYTE_LENGTH,
@@ -4788,14 +4776,14 @@ class FunctionalWasmCompiler {
 
   expressionIsWhnf(nodeIndex: number): boolean {
     switch (this.node(nodeIndex).tag) {
-      case FunctionalCoreTag.Integer:
-      case FunctionalCoreTag.SignedInteger64:
-      case FunctionalCoreTag.Float32:
-      case FunctionalCoreTag.Float64:
-      case FunctionalCoreTag.WholeNumberF64:
-      case FunctionalCoreTag.Boolean:
-      case FunctionalCoreTag.Lambda:
-      case FunctionalCoreTag.Constructor:
+      case CoreTag.Integer:
+      case CoreTag.SignedInteger64:
+      case CoreTag.Float32:
+      case CoreTag.Float64:
+      case CoreTag.WholeNumberF64:
+      case CoreTag.Boolean:
+      case CoreTag.Lambda:
+      case CoreTag.Constructor:
         return true;
       default:
         return false;
@@ -4805,20 +4793,20 @@ class FunctionalWasmCompiler {
   canCompileIntegerExpression(nodeIndex: number): boolean {
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Integer:
+      case CoreTag.Integer:
         return true;
-      case FunctionalCoreTag.Unary:
-        return node.payload === FunctionalUnaryOperator.Negate &&
+      case CoreTag.Unary:
+        return node.payload === UnaryOperator.Negate &&
           this.canCompileIntegerExpression(node.child0);
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         return !isComparisonOperator(node.payload) &&
           this.canCompileIntegerExpression(node.child0) &&
           this.canCompileIntegerExpression(node.child1);
-      case FunctionalCoreTag.If:
+      case CoreTag.If:
         return this.canCompileIntegerExpression(node.child1) &&
           this.canCompileIntegerExpression(node.child2);
-      case FunctionalCoreTag.Let:
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.Let:
+      case CoreTag.LetRec:
         return this.canCompileIntegerExpression(node.child1);
       default:
         return false;
@@ -4828,17 +4816,17 @@ class FunctionalWasmCompiler {
   canCompileBooleanExpression(nodeIndex: number): boolean {
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Boolean:
+      case CoreTag.Boolean:
         return true;
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         return isComparisonOperator(node.payload) &&
           this.canCompileIntegerExpression(node.child0) &&
           this.canCompileIntegerExpression(node.child1);
-      case FunctionalCoreTag.If:
+      case CoreTag.If:
         return this.canCompileBooleanExpression(node.child1) &&
           this.canCompileBooleanExpression(node.child2);
-      case FunctionalCoreTag.Let:
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.Let:
+      case CoreTag.LetRec:
         return this.canCompileBooleanExpression(node.child1);
       default:
         return false;
@@ -4847,7 +4835,7 @@ class FunctionalWasmCompiler {
 
   constantIntegerExpression(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     constantLocals: readonly number[] = [],
   ): number | undefined {
     const constantResolver = this.constantResolver(environment, constantLocals);
@@ -4858,7 +4846,7 @@ class FunctionalWasmCompiler {
 
   constantBooleanExpression(
     nodeIndex: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     constantLocals: readonly number[] = [],
   ): boolean | undefined {
     const constantResolver = this.constantResolver(environment, constantLocals);
@@ -4868,9 +4856,9 @@ class FunctionalWasmCompiler {
   }
 
   constantResolver(
-    environment: FunctionalEnvironment,
+    environment: Environment,
     constantLocals: readonly number[] = [],
-  ): FunctionalConstantResolver {
+  ): ConstantResolver {
     return (localDepth) => {
       if (localDepth < constantLocals.length) {
         return {
@@ -4891,14 +4879,14 @@ class FunctionalWasmCompiler {
 
   calleeImmediatelyForcesArgument(nodeIndex: number): boolean {
     const node = this.node(nodeIndex);
-    return node.tag === FunctionalCoreTag.Lambda &&
+    return node.tag === CoreTag.Lambda &&
       this.immediatelyForcesLocal(node.child0, 0);
   }
 
   lambdaSetImmediatelyForcesArgument(lambdaNodes: readonly number[]): boolean {
     return lambdaNodes.every((lambdaNode) => {
       const lambda = this.node(lambdaNode);
-      return lambda.tag === FunctionalCoreTag.Lambda &&
+      return lambda.tag === CoreTag.Lambda &&
         this.immediatelyForcesLocal(lambda.child0, 0);
     });
   }
@@ -4906,18 +4894,18 @@ class FunctionalWasmCompiler {
   immediatelyForcesLocal(nodeIndex: number, localDepth: number): boolean {
     const node = this.node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Local:
+      case CoreTag.Local:
         return node.payload === localDepth;
-      case FunctionalCoreTag.Unary:
-      case FunctionalCoreTag.NumericConvert:
-      case FunctionalCoreTag.Case:
-      case FunctionalCoreTag.If:
+      case CoreTag.Unary:
+      case CoreTag.NumericConvert:
+      case CoreTag.Case:
+      case CoreTag.If:
         return this.immediatelyForcesLocal(node.child0, localDepth);
-      case FunctionalCoreTag.Binary:
-      case FunctionalCoreTag.Apply:
+      case CoreTag.Binary:
+      case CoreTag.Apply:
         return this.immediatelyForcesLocal(node.child0, localDepth);
-      case FunctionalCoreTag.Let:
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.Let:
+      case CoreTag.LetRec:
         return this.immediatelyForcesLocal(node.child1, localDepth + 1);
       default:
         return false;
@@ -4927,7 +4915,7 @@ class FunctionalWasmCompiler {
   emitClosure(
     instructions: WasmInstructions,
     slot: number,
-    captures: readonly FunctionalBinding[],
+    captures: readonly Binding[],
   ): void {
     const pointer = this.allocateObject(
       instructions,
@@ -4949,7 +4937,7 @@ class FunctionalWasmCompiler {
   emitConstructor(
     instructions: WasmInstructions,
     constructorIndex: number,
-    fields: readonly FunctionalBinding[],
+    fields: readonly Binding[],
     reuse?: ConstructorReuseTarget,
   ): void {
     const reusesAllocation = reuse?.fieldCount === fields.length;
@@ -5011,7 +4999,7 @@ class FunctionalWasmCompiler {
     return pointer;
   }
 
-  emitBinding(instructions: WasmInstructions, source: FunctionalBinding): void {
+  emitBinding(instructions: WasmInstructions, source: Binding): void {
     switch (source.kind) {
       case "i64-local":
       case "i64-value":
@@ -5046,7 +5034,7 @@ class FunctionalWasmCompiler {
         );
       case "virtual-lambda": {
         const lambda = this.node(source.node);
-        if (lambda.tag !== FunctionalCoreTag.Lambda) {
+        if (lambda.tag !== CoreTag.Lambda) {
           throw new Error(
             `functional WASM virtual lambda ${source.node} has core tag ${lambda.tag}`,
           );
@@ -5065,7 +5053,7 @@ class FunctionalWasmCompiler {
         return;
       }
       case "virtual-constructor": {
-        const fields: FunctionalBinding[] = [];
+        const fields: Binding[] = [];
         for (const argument of source.arguments) {
           fields.push(this.compileExpressionBinding(
             instructions,
@@ -5082,7 +5070,7 @@ class FunctionalWasmCompiler {
       }
       case "static-recursive-function": {
         const lambda = this.node(source.node);
-        if (lambda.tag !== FunctionalCoreTag.Lambda) {
+        if (lambda.tag !== CoreTag.Lambda) {
           throw new Error(
             `functional WASM recursive closure ${source.node} has core tag ${lambda.tag}`,
           );
@@ -5139,22 +5127,22 @@ class FunctionalWasmCompiler {
     nodeIndex: number,
   ): void {
     switch (operator) {
-      case FunctionalBinaryOperator.Equal:
+      case BinaryOperator.Equal:
         instructions.emit(0x46);
         return;
-      case FunctionalBinaryOperator.NotEqual:
+      case BinaryOperator.NotEqual:
         instructions.emit(0x47);
         return;
-      case FunctionalBinaryOperator.Less:
+      case BinaryOperator.Less:
         instructions.emit(0x48);
         return;
-      case FunctionalBinaryOperator.LessEqual:
+      case BinaryOperator.LessEqual:
         instructions.emit(0x4c);
         return;
-      case FunctionalBinaryOperator.Greater:
+      case BinaryOperator.Greater:
         instructions.emit(0x4a);
         return;
-      case FunctionalBinaryOperator.GreaterEqual:
+      case BinaryOperator.GreaterEqual:
         instructions.emit(0x4e);
         return;
       default:
@@ -5166,7 +5154,7 @@ class FunctionalWasmCompiler {
 
   emitHostArgument(
     instructions: WasmInstructions,
-    type: FunctionalHostType,
+    type: HostType,
   ): void {
     if (type.kind === "tuple" || type.kind === "named") return;
     if (type.kind === "unit") {
@@ -5191,7 +5179,7 @@ class FunctionalWasmCompiler {
 
   emitHostResult(
     instructions: WasmInstructions,
-    type: FunctionalHostType,
+    type: HostType,
   ): void {
     if (type.kind === "tuple" || type.kind === "named") return;
     if (type.kind === "integer") {
@@ -5216,7 +5204,7 @@ class FunctionalWasmCompiler {
     }
     instructions.emit(0x1a);
     const constructorIndex = this.#module.constructorNames.indexOf(
-      FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
+      UNIT_CONSTRUCTOR_NAME,
     );
     if (constructorIndex < 0) {
       throw new Error(
@@ -5255,7 +5243,7 @@ class FunctionalWasmCompiler {
     const pointer = this.allocateObject(
       instructions,
       NUMERIC_OBJECT_KIND,
-      FunctionalWasmValueAbi.numericKinds.signedInteger64,
+      WasmValueAbi.numericKinds.signedInteger64,
       1,
     );
     instructions.localGet(pointer);
@@ -5271,7 +5259,7 @@ class FunctionalWasmCompiler {
     const pointer = this.allocateObject(
       instructions,
       NUMERIC_OBJECT_KIND,
-      FunctionalWasmValueAbi.numericKinds.float32,
+      WasmValueAbi.numericKinds.float32,
       1,
     );
     instructions.localGet(pointer);
@@ -5305,7 +5293,7 @@ class FunctionalWasmCompiler {
     const fields: ValueSource[] = [];
     for (let lane = 0; lane < 4; lane += 1) {
       instructions.localGet(vector);
-      instructions.simd(FunctionalWasmSimdOpcode.I32x4ExtractLane, lane);
+      instructions.simd(WasmSimdOpcode.I32x4ExtractLane, lane);
       instructions.emit(0x45, 0x45);
       this.emitEncodeBoolean(instructions);
       const field = instructions.addLocal(WasmValueType.I64);
@@ -5325,7 +5313,7 @@ class FunctionalWasmCompiler {
     const pointer = this.allocateObject(
       instructions,
       NUMERIC_OBJECT_KIND,
-      FunctionalWasmValueAbi.numericKinds.float64,
+      WasmValueAbi.numericKinds.float64,
       1,
     );
     instructions.localGet(pointer);
@@ -5353,8 +5341,8 @@ class FunctionalWasmCompiler {
       instructions.localGet(pointer);
       instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH + lane * VALUE_BYTE_LENGTH);
       this.emitUnboxFloat32(instructions);
-      if (lane === 0) instructions.simd(FunctionalWasmSimdOpcode.F32x4Splat);
-      else instructions.simd(FunctionalWasmSimdOpcode.F32x4ReplaceLane, lane);
+      if (lane === 0) instructions.simd(WasmSimdOpcode.F32x4Splat);
+      else instructions.simd(WasmSimdOpcode.F32x4ReplaceLane, lane);
     }
   }
 
@@ -5368,8 +5356,8 @@ class FunctionalWasmCompiler {
       this.emitDecodeBoolean(instructions);
       instructions.i32Const(-1);
       instructions.emit(0x6c);
-      if (lane === 0) instructions.simd(FunctionalWasmSimdOpcode.I32x4Splat);
-      else instructions.simd(FunctionalWasmSimdOpcode.I32x4ReplaceLane, lane);
+      if (lane === 0) instructions.simd(WasmSimdOpcode.I32x4Splat);
+      else instructions.simd(WasmSimdOpcode.I32x4ReplaceLane, lane);
     }
   }
 
@@ -5434,7 +5422,7 @@ class FunctionalWasmCompiler {
     const existing = this.#lambdaSlots[lambdaNode];
     if (existing !== undefined) return existing;
     const lambda = this.node(lambdaNode);
-    if (lambda.tag !== FunctionalCoreTag.Lambda) {
+    if (lambda.tag !== CoreTag.Lambda) {
       throw new Error(
         `functional WASM lambda-set origin ${lambdaNode} has core tag ${lambda.tag}; expected a lambda`,
       );
@@ -5444,7 +5432,7 @@ class FunctionalWasmCompiler {
     this.#lambdaSlots[lambdaNode] = slot;
     const recursiveOwner = this.#recursiveLambdaOwners.get(lambdaNode);
     const bodyInstructions = new WasmInstructions(2);
-    let bodyEnvironment: FunctionalEnvironment;
+    let bodyEnvironment: Environment;
     if (recursiveOwner === undefined) {
       bodyEnvironment = [
         { kind: "i64-local", index: 1 },
@@ -5536,8 +5524,8 @@ class FunctionalWasmCompiler {
   compileTailLoop(
     instructions: WasmInstructions,
     bodyNode: number,
-    environment: FunctionalEnvironment,
-    loop: FunctionalFunctionShape,
+    environment: Environment,
+    loop: FunctionShape,
     resultKind: "value" | "integer" = "value",
   ): void {
     const parameterLocals: (number | undefined)[] = [];
@@ -5601,8 +5589,8 @@ class FunctionalWasmCompiler {
   compileTailPosition(
     instructions: WasmInstructions,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
-    loop: FunctionalFunctionShape,
+    environment: Environment,
+    loop: FunctionShape,
     parameterLocals: readonly (number | undefined)[],
     binderDepth: number,
     loopBranchDepth: number,
@@ -5628,7 +5616,7 @@ class FunctionalWasmCompiler {
           );
         } else if (
           argumentExpression.evaluationMode ===
-            FunctionalEvaluationMode.StrictEager
+            EvaluationMode.StrictEager
         ) {
           this.compileExpression(
             instructions,
@@ -5662,7 +5650,7 @@ class FunctionalWasmCompiler {
     }
 
     const node = this.node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.If) {
+    if (node.tag === CoreTag.If) {
       const selectedBranch = this.constantIfBranch(node, environment);
       if (selectedBranch !== undefined) {
         this.compileTailPosition(
@@ -5706,7 +5694,7 @@ class FunctionalWasmCompiler {
       instructions.emit(0x0b);
       return;
     }
-    if (node.tag === FunctionalCoreTag.Let) {
+    if (node.tag === CoreTag.Let) {
       const virtualValue = this.virtualLambda(node.child0, environment) ??
         (this.scalarSpecializationEnabled()
           ? this.virtualConstructor(node.child0, environment)
@@ -5725,7 +5713,7 @@ class FunctionalWasmCompiler {
         );
         return;
       }
-      const eager = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
+      const eager = node.evaluationMode === EvaluationMode.StrictEager ||
         this.expressionIsWhnf(node.child0) || this.immediatelyForcesLocal(node.child1, 0);
       const constantValue = !this.#instrumentedFuel && eager
         ? this.scalarConstantBinding(node.child0, environment)
@@ -5761,7 +5749,7 @@ class FunctionalWasmCompiler {
       );
       return;
     }
-    if (node.tag === FunctionalCoreTag.Case) {
+    if (node.tag === CoreTag.Case) {
       this.compileTailCase(
         instructions,
         node,
@@ -5787,10 +5775,10 @@ class FunctionalWasmCompiler {
 
   compileTailCase(
     instructions: WasmInstructions,
-    node: FunctionalCoreNode,
+    node: CoreNode,
     nodeIndex: number,
-    environment: FunctionalEnvironment,
-    loop: FunctionalFunctionShape,
+    environment: Environment,
+    loop: FunctionShape,
     parameterLocals: readonly (number | undefined)[],
     binderDepth: number,
     loopBranchDepth: number,
@@ -5839,9 +5827,9 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     firstArmIndex: number,
     constructor: VirtualConstructor,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     caseNodeIndex: number,
-    loop: FunctionalFunctionShape,
+    loop: FunctionShape,
     parameterLocals: readonly (number | undefined)[],
     binderDepth: number,
     loopBranchDepth: number,
@@ -5860,9 +5848,9 @@ class FunctionalWasmCompiler {
       this.compileExpressionBinding(instructions, argument, constructor.environment)
     );
     let armIndex = firstArmIndex;
-    while (armIndex !== FUNCTIONAL_NO_INDEX) {
+    while (armIndex !== NO_INDEX) {
       const arm = this.node(armIndex);
-      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+      if (arm.tag !== CoreTag.CaseArm) {
         throw new Error(
           `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
         );
@@ -5872,7 +5860,7 @@ class FunctionalWasmCompiler {
         let armEnvironment = [...environment];
         for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
           const binding = this.node(bodyNode);
-          if (binding.tag !== FunctionalCoreTag.PatternBind) {
+          if (binding.tag !== CoreTag.PatternBind) {
             throw new Error(
               `functional WASM case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
             );
@@ -5904,9 +5892,9 @@ class FunctionalWasmCompiler {
     instructions: WasmInstructions,
     armIndex: number,
     constructor: number,
-    environment: FunctionalEnvironment,
+    environment: Environment,
     caseNodeIndex: number,
-    loop: FunctionalFunctionShape,
+    loop: FunctionShape,
     parameterLocals: readonly (number | undefined)[],
     binderDepth: number,
     loopBranchDepth: number,
@@ -5915,9 +5903,9 @@ class FunctionalWasmCompiler {
   ): void {
     let currentArmIndex = armIndex;
     let openArmCount = 0;
-    while (currentArmIndex !== FUNCTIONAL_NO_INDEX) {
+    while (currentArmIndex !== NO_INDEX) {
       const arm = this.node(currentArmIndex);
-      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+      if (arm.tag !== CoreTag.CaseArm) {
         throw new Error(
           `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${currentArmIndex}; expected a case arm`,
         );
@@ -5936,7 +5924,7 @@ class FunctionalWasmCompiler {
       let armEnvironment = [...environment];
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
         const binding = this.node(bodyNode);
-        if (binding.tag !== FunctionalCoreTag.PatternBind) {
+        if (binding.tag !== CoreTag.PatternBind) {
           throw new Error(
             `functional WASM case arm ${currentArmIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
           );
@@ -5973,7 +5961,7 @@ class FunctionalWasmCompiler {
     bodyNode: number,
     binderDepth: number,
     firstCaptureByteOffset: number,
-  ): FunctionalEnvironment {
+  ): Environment {
     const freeDepths = this.#captureAnalysis.freeLocalDepths(bodyNode).filter((
       depth,
     ) => depth >= binderDepth);
@@ -6005,7 +5993,7 @@ class FunctionalWasmCompiler {
     const key = `${parameters.join(",")}->${results.join(",")}`;
     const existing = this.#additionalFunctionTypeIndices.get(key);
     if (existing !== undefined) return existing;
-    const index = FUNCTIONAL_WASM_BASE_FUNCTION_TYPE_COUNT +
+    const index = WASM_BASE_FUNCTION_TYPE_COUNT +
       this.#additionalFunctionTypes.length;
     this.#additionalFunctionTypes.push({
       parameters: [...parameters],
@@ -6032,8 +6020,8 @@ class FunctionalWasmCompiler {
   storageDecision(
     coreNode: number,
     valueKind: "closure" | "constructor" | "thunk",
-    allowedStorage?: readonly FunctionalStorageClass[],
-  ): FunctionalStorageDecision {
+    allowedStorage?: readonly StorageClass[],
+  ): StorageDecision {
     const decision = this.#storageDecisions.get(`${valueKind}:${coreNode}`);
     if (decision === undefined) {
       throw new Error(
@@ -6050,7 +6038,7 @@ class FunctionalWasmCompiler {
     return decision;
   }
 
-  node(index: number): FunctionalCoreNode {
+  node(index: number): CoreNode {
     const node = this.#nodes[index];
     if (node === undefined) {
       throw new Error(

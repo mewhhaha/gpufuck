@@ -1,11 +1,11 @@
 import { LAZULI_NO_INDEX, LAZULI_NODE_BYTE_LENGTH } from "./abi.ts";
-import { FunctionalCompilationStatus } from "./compiler_shader.ts";
+import { CompilationStatus } from "./compiler_shader.ts";
 import type { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
-import type { GpuFunctionalSemanticCompilationPass } from "./gpu_semantic_contract.ts";
+import type { GpuSemanticCompilationPass } from "./gpu_semantic_contract.ts";
 import type {
-  GpuFunctionalCompilationInferenceRun,
-  GpuFunctionalTypeInferenceOptions,
-  GpuFunctionalTypeInferenceRun,
+  GpuCompilationInferenceRun,
+  GpuTypeInferenceOptions,
+  GpuTypeInferenceRun,
   InferenceStateSnapshot,
   WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
@@ -55,10 +55,10 @@ import {
   workspaceLayout,
 } from "./gpu_type_inference_workspace.ts";
 import {
-  FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
-  FunctionalInferenceDiagnosticCode,
-  FunctionalInferenceMetadataFailure,
-  FunctionalInferenceStatus,
+  INFERENCE_OUTPUT_WORD_LENGTH,
+  InferenceDiagnosticCode,
+  InferenceMetadataFailure,
+  InferenceStatus,
   prepareLazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
@@ -72,8 +72,8 @@ import { flattenLazuliTypeSchemas } from "./type_schema_abi.ts";
  * aborted runs.
  */
 export async function runGpuLazuliTypeInference(
-  options: GpuFunctionalTypeInferenceOptions,
-): Promise<GpuFunctionalTypeInferenceRun> {
+  options: GpuTypeInferenceOptions,
+): Promise<GpuTypeInferenceRun> {
   const run = await runGpuLazuliTypeInferenceMachine(options);
   if (run.inference === undefined) {
     throw new Error(
@@ -84,18 +84,18 @@ export async function runGpuLazuliTypeInference(
 }
 
 export async function runGpuLazuliCompilationInference(
-  options: GpuFunctionalTypeInferenceOptions,
-  semanticPass: GpuFunctionalSemanticCompilationPass,
+  options: GpuTypeInferenceOptions,
+  semanticPass: GpuSemanticCompilationPass,
   dispatchScheduler?: GpuDispatchScheduler,
-): Promise<GpuFunctionalCompilationInferenceRun> {
+): Promise<GpuCompilationInferenceRun> {
   return await runGpuLazuliTypeInferenceMachine(options, semanticPass, dispatchScheduler);
 }
 
 async function runGpuLazuliTypeInferenceMachine(
-  options: GpuFunctionalTypeInferenceOptions,
-  semanticPass?: GpuFunctionalSemanticCompilationPass,
+  options: GpuTypeInferenceOptions,
+  semanticPass?: GpuSemanticCompilationPass,
   dispatchScheduler?: GpuDispatchScheduler,
-): Promise<GpuFunctionalCompilationInferenceRun> {
+): Promise<GpuCompilationInferenceRun> {
   const initialSteps = semanticPass === undefined ? options.initialSteps ?? 0 : 0;
   validateFuel(options.maximumSteps, options.maximumStepsPerDispatch, initialSteps);
   options.signal?.throwIfAborted();
@@ -270,9 +270,9 @@ async function runGpuLazuliTypeInferenceMachine(
           dispatchTransitions,
         );
         semanticPassCompleted = activeSemanticPass !== undefined &&
-          semanticState.status !== FunctionalCompilationStatus.Pending;
+          semanticState.status !== CompilationStatus.Pending;
         if (
-          semanticPassCompleted && semanticState.status === FunctionalCompilationStatus.Ok &&
+          semanticPassCompleted && semanticState.status === CompilationStatus.Ok &&
           coreReadbackByteLength > 0
         ) {
           coreNodeBytes = mappedRange.slice(
@@ -282,8 +282,8 @@ async function runGpuLazuliTypeInferenceMachine(
         }
         if (
           state.outputCount <= outputReadbackCapacity &&
-          semanticState.status === FunctionalCompilationStatus.Ok &&
-          state.status === FunctionalInferenceStatus.Complete
+          semanticState.status === CompilationStatus.Ok &&
+          state.status === InferenceStatus.Complete
         ) {
           completedOutput = mappedRange.slice(
             INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
@@ -304,11 +304,11 @@ async function runGpuLazuliTypeInferenceMachine(
         inferenceTransitions: state.transitions,
         requiredCapacity: state.errorDetail,
       });
-      if (semanticState.status === FunctionalCompilationStatus.Pending) {
+      if (semanticState.status === CompilationStatus.Pending) {
         previousSemanticSteps = semanticState.totalSteps;
         continue;
       }
-      if (semanticState.status !== FunctionalCompilationStatus.Ok) {
+      if (semanticState.status !== CompilationStatus.Ok) {
         return { semanticState };
       }
       options.observeDispatch?.({
@@ -326,8 +326,8 @@ async function runGpuLazuliTypeInferenceMachine(
       options.signal?.throwIfAborted();
       const totalSteps = semanticState.totalSteps + state.transitions;
       if (
-        state.status === FunctionalInferenceStatus.Uninitialized ||
-        state.status === FunctionalInferenceStatus.Pending
+        state.status === InferenceStatus.Uninitialized ||
+        state.status === InferenceStatus.Pending
       ) {
         if (totalSteps >= options.maximumSteps) {
           return {
@@ -340,7 +340,7 @@ async function runGpuLazuliTypeInferenceMachine(
         continue;
       }
 
-      if (state.status === FunctionalInferenceStatus.Complete) {
+      if (state.status === InferenceStatus.Complete) {
         const outputByteLength = inferredTypeOutputByteLength(state.outputCount);
         if (outputByteLength === 0) {
           throw new Error("GPU Lazuli type inference completed without an output type");
@@ -381,15 +381,15 @@ async function runGpuLazuliTypeInferenceMachine(
         };
       }
 
-      if (state.status === FunctionalInferenceStatus.Diagnostic) {
-        const workspace = state.errorCode === FunctionalInferenceDiagnosticCode.TypeMismatch ||
-            state.errorCode === FunctionalInferenceDiagnosticCode.InfiniteType ||
-            (state.errorCode === FunctionalInferenceDiagnosticCode.InvalidTypeMetadata &&
+      if (state.status === InferenceStatus.Diagnostic) {
+        const workspace = state.errorCode === InferenceDiagnosticCode.TypeMismatch ||
+            state.errorCode === InferenceDiagnosticCode.InfiniteType ||
+            (state.errorCode === InferenceDiagnosticCode.InvalidTypeMetadata &&
               (state.errorContext ===
-                  FunctionalInferenceMetadataFailure.InvalidEmptyCaseScrutinee ||
+                  InferenceMetadataFailure.InvalidEmptyCaseScrutinee ||
                 state.errorContext >=
-                  FunctionalInferenceMetadataFailure.IndexedExpectedTypeUnresolved)) ||
-            (state.errorCode === FunctionalInferenceDiagnosticCode.NonConcreteMain &&
+                  InferenceMetadataFailure.IndexedExpectedTypeUnresolved)) ||
+            (state.errorCode === InferenceDiagnosticCode.NonConcreteMain &&
               state.errorOperand0 !== LAZULI_NO_INDEX)
           ? await readDiagnosticWorkspace(
             options.device,
@@ -408,8 +408,8 @@ async function runGpuLazuliTypeInferenceMachine(
         return { semanticState, inference };
       }
 
-      if (state.status === FunctionalInferenceStatus.Exhausted) {
-        if (state.errorCode === FunctionalInferenceDiagnosticCode.OutputArenaExhausted) {
+      if (state.status === InferenceStatus.Exhausted) {
+        if (state.errorCode === InferenceDiagnosticCode.OutputArenaExhausted) {
           const nextOutputCapacity = Math.max(outputCapacity * 2, state.errorDetail * 2);
           try {
             assertStorageSize(
@@ -417,7 +417,7 @@ async function runGpuLazuliTypeInferenceMachine(
               checkedProduct(
                 "output words",
                 nextOutputCapacity,
-                FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
+                INFERENCE_OUTPUT_WORD_LENGTH,
               ),
               options.device.limits,
             );
@@ -565,7 +565,7 @@ async function runGpuLazuliTypeInferenceMachine(
           ),
         };
       }
-      if (state.status === FunctionalInferenceStatus.InvalidInput) {
+      if (state.status === InferenceStatus.InvalidInput) {
         throw new Error(
           `GPU Lazuli type inference rejected the supplied ABI: code=${state.errorCode}, detail=${state.errorDetail}`,
         );
@@ -585,11 +585,11 @@ async function runGpuLazuliTypeInferenceMachine(
 }
 
 async function finishAfterInferenceSetupFailure(
-  options: GpuFunctionalTypeInferenceOptions,
-  semanticPass: GpuFunctionalSemanticCompilationPass | undefined,
+  options: GpuTypeInferenceOptions,
+  semanticPass: GpuSemanticCompilationPass | undefined,
   initialSteps: number,
-  inference: GpuFunctionalTypeInferenceRun,
-): Promise<GpuFunctionalCompilationInferenceRun> {
+  inference: GpuTypeInferenceRun,
+): Promise<GpuCompilationInferenceRun> {
   if (semanticPass === undefined) {
     return {
       semanticState: syntheticSemanticState(options, initialSteps),
@@ -597,7 +597,7 @@ async function finishAfterInferenceSetupFailure(
     };
   }
   const semanticState = await runSemanticCompilationToCompletion(options, semanticPass);
-  if (semanticState.status !== FunctionalCompilationStatus.Ok) return { semanticState };
+  if (semanticState.status !== CompilationStatus.Ok) return { semanticState };
   return {
     semanticState,
     inference: Object.freeze({

@@ -1,19 +1,19 @@
-import { renderFunctionalCompilationTrace } from "../functional/compilation_trace.ts";
-import type { FunctionalCoreNode, GpuFunctionalModule } from "../functional/compiler.ts";
-import type { FunctionalEvaluationResult } from "../functional/evaluator.ts";
+import { renderCompilationTrace } from "../functional/compilation_trace.ts";
+import type { CoreNode, GpuModule } from "../functional/compiler.ts";
+import type { EvaluationResult } from "../functional/evaluator.ts";
 import type { LoweredGleamFunctionalProgram } from "./frontend.ts";
 
 export interface GleamFunctionalTraceInput {
   readonly title: string;
   readonly source: string;
   readonly lowered: LoweredGleamFunctionalProgram;
-  readonly compiledModule: GpuFunctionalModule;
-  readonly coreNodes: readonly FunctionalCoreNode[];
-  readonly evaluation: FunctionalEvaluationResult;
+  readonly compiledModule: GpuModule;
+  readonly coreNodes: readonly CoreNode[];
+  readonly evaluation: EvaluationResult;
 }
 
 export function renderGleamFunctionalTrace(input: GleamFunctionalTraceInput): string {
-  return renderFunctionalCompilationTrace({
+  return renderCompilationTrace({
     title: input.title,
     sourceLabel: "Gleam source modules",
     introduction:

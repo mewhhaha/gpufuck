@@ -1,18 +1,9 @@
-import type {
-  FunctionalDiagnostic,
-  FunctionalEvaluationProfile,
-  FunctionalSpan,
-  FunctionalType,
-  FunctionalTypeSchema,
-} from "./abi.ts";
-import type { FunctionalEvaluationStats, FunctionalRuntimeFault } from "./evaluator.ts";
-import type { FunctionalModuleArtifact, FunctionalModuleImport } from "./module_linker.ts";
-import type {
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceTypeDeclaration,
-} from "./surface_builder.ts";
+import type { Diagnostic, EvaluationProfile, Span, Type, TypeSchema } from "./abi.ts";
+import type { EvaluationStats, RuntimeFault } from "./evaluator.ts";
+import type { ModuleArtifact, ModuleImport } from "./module_linker.ts";
+import type { SurfaceDefinition, SurfaceTypeDeclaration } from "./surface_builder.ts";
 
-export type FunctionalConstant =
+export type Constant =
   | { readonly kind: "integer"; readonly value: number }
   | { readonly kind: "signed-integer-64"; readonly value: bigint }
   | { readonly kind: "float-32"; readonly value: number }
@@ -22,31 +13,31 @@ export type FunctionalConstant =
   | { readonly kind: "unit" }
   | {
     readonly kind: "tuple";
-    readonly values: readonly [FunctionalConstant, FunctionalConstant];
+    readonly values: readonly [Constant, Constant];
   }
   | {
     readonly kind: "constructor";
     readonly name: string;
-    readonly fields: readonly FunctionalConstant[];
+    readonly fields: readonly Constant[];
   };
 
-export interface FunctionalComptimeModuleArtifact {
+export interface ComptimeModuleArtifact {
   readonly name: string;
-  readonly definitions: readonly FunctionalSurfaceDefinition[];
-  readonly typeDeclarations: readonly FunctionalSurfaceTypeDeclaration[];
-  readonly imports: readonly FunctionalModuleImport[];
-  readonly exports: readonly FunctionalComptimeModuleExport[];
+  readonly definitions: readonly SurfaceDefinition[];
+  readonly typeDeclarations: readonly SurfaceTypeDeclaration[];
+  readonly imports: readonly ModuleImport[];
+  readonly exports: readonly ComptimeModuleExport[];
   readonly sourceByteLength: number;
-  readonly evaluationProfile?: FunctionalEvaluationProfile;
+  readonly evaluationProfile?: EvaluationProfile;
 }
 
-export interface FunctionalComptimeModuleExport {
+export interface ComptimeModuleExport {
   readonly name: string;
   readonly definition: string;
-  readonly type: FunctionalTypeSchema;
+  readonly type: TypeSchema;
 }
 
-export interface FunctionalComptimeExecutionOptions {
+export interface ComptimeExecutionOptions {
   readonly maximumCompilationSteps?: number;
   readonly maximumExecutionSteps?: number;
   readonly maximumStepsPerDispatch?: number;
@@ -58,13 +49,13 @@ export interface FunctionalComptimeExecutionOptions {
   readonly signal?: AbortSignal;
 }
 
-export interface FunctionalComptimeFunctionCompilationOptions {
+export interface ComptimeFunctionCompilationOptions {
   readonly maximumCompilationSteps?: number;
   readonly maximumStepsPerDispatch?: number;
   readonly signal?: AbortSignal;
 }
 
-export interface FunctionalComptimeInvocationOptions {
+export interface ComptimeInvocationOptions {
   readonly maximumExecutionSteps?: number;
   readonly maximumOutputNodes?: number;
   readonly maximumOutputBytes?: number;
@@ -72,49 +63,49 @@ export interface FunctionalComptimeInvocationOptions {
   readonly signal?: AbortSignal;
 }
 
-export interface FunctionalComptimeExportSelection {
+export interface ComptimeExportSelection {
   readonly module: string;
   readonly exportName: string;
 }
 
-export interface FunctionalComptimeExportValue {
+export interface ComptimeExportValue {
   readonly module: string;
   readonly exportName: string;
   readonly definition: string;
-  readonly type: FunctionalTypeSchema;
-  readonly value: FunctionalConstant;
+  readonly type: TypeSchema;
+  readonly value: Constant;
 }
 
-export type FunctionalComptimeDiagnosticCode =
+export type ComptimeDiagnosticCode =
   | "F5001"
   | "F5002";
 
-export type FunctionalComptimeFaultKind =
+export type ComptimeFaultKind =
   | "non-constant-output"
   | "output-limit";
 
-export interface FunctionalComptimeDiagnostic {
+export interface ComptimeDiagnostic {
   readonly stage: "comptime";
-  readonly code: FunctionalComptimeDiagnosticCode;
-  readonly kind: FunctionalComptimeFaultKind;
+  readonly code: ComptimeDiagnosticCode;
+  readonly kind: ComptimeFaultKind;
   readonly message: string;
   readonly module?: string;
   readonly exportName?: string;
-  readonly span?: FunctionalSpan;
+  readonly span?: Span;
   readonly limit?: number;
   readonly observed?: number;
 }
 
-export interface FunctionalComptimeStats {
+export interface ComptimeStats {
   readonly compilationCount: number;
-  readonly evaluation: FunctionalEvaluationStats;
+  readonly evaluation: EvaluationStats;
   readonly outputNodes: number;
   readonly outputBytes: number;
   readonly outputDepth: number;
 }
 
-export interface FunctionalComptimeInvocationStats {
-  readonly evaluation: FunctionalEvaluationStats;
+export interface ComptimeInvocationStats {
+  readonly evaluation: EvaluationStats;
   readonly outputNodes: number;
   readonly outputBytes: number;
   readonly outputDepth: number;
@@ -122,74 +113,74 @@ export interface FunctionalComptimeInvocationStats {
 }
 
 export interface CompiledFunctionalComptimeFunction {
-  readonly parameterType: FunctionalType;
-  readonly resultType: FunctionalType;
+  readonly parameterType: Type;
+  readonly resultType: Type;
   invoke(
-    argument: FunctionalConstant,
-    options?: FunctionalComptimeInvocationOptions,
-  ): Promise<FunctionalComptimeInvocationResult>;
+    argument: Constant,
+    options?: ComptimeInvocationOptions,
+  ): Promise<ComptimeInvocationResult>;
   destroy(): void;
 }
 
-export type FunctionalComptimeFunctionCompilationResult =
+export type ComptimeFunctionCompilationResult =
   | {
     readonly ok: true;
     readonly compiledFunction: CompiledFunctionalComptimeFunction;
   }
   | {
     readonly ok: false;
-    readonly diagnostics: readonly [FunctionalDiagnostic, ...FunctionalDiagnostic[]];
+    readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
   };
 
-export type FunctionalComptimeInvocationResult =
+export type ComptimeInvocationResult =
   | {
     readonly ok: true;
-    readonly value: FunctionalConstant;
-    readonly stats: FunctionalComptimeInvocationStats;
+    readonly value: Constant;
+    readonly stats: ComptimeInvocationStats;
   }
   | {
     readonly ok: false;
     readonly stage: "execute";
-    readonly fault: FunctionalRuntimeFault;
-    readonly stats: FunctionalEvaluationStats;
+    readonly fault: RuntimeFault;
+    readonly stats: EvaluationStats;
   }
   | {
     readonly ok: false;
     readonly stage: "comptime";
-    readonly diagnostic: FunctionalComptimeDiagnostic;
-    readonly stats?: FunctionalEvaluationStats;
+    readonly diagnostic: ComptimeDiagnostic;
+    readonly stats?: EvaluationStats;
   };
 
-export type FunctionalComptimeExecutionResult =
+export type ComptimeExecutionResult =
   | {
     readonly ok: true;
-    readonly exports: readonly FunctionalComptimeExportValue[];
-    readonly stats: FunctionalComptimeStats;
+    readonly exports: readonly ComptimeExportValue[];
+    readonly stats: ComptimeStats;
   }
   | {
     readonly ok: false;
     readonly stage: "compile";
-    readonly diagnostics: readonly [FunctionalDiagnostic, ...FunctionalDiagnostic[]];
+    readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
   }
   | {
     readonly ok: false;
     readonly stage: "execute";
-    readonly fault: FunctionalRuntimeFault;
-    readonly stats: FunctionalEvaluationStats;
+    readonly fault: RuntimeFault;
+    readonly stats: EvaluationStats;
   }
   | {
     readonly ok: false;
     readonly stage: "comptime";
-    readonly diagnostic: FunctionalComptimeDiagnostic;
-    readonly stats?: FunctionalEvaluationStats;
+    readonly diagnostic: ComptimeDiagnostic;
+    readonly stats?: EvaluationStats;
   };
 
-export interface FunctionalPartialEvaluationResult {
-  readonly artifact: FunctionalModuleArtifact;
+export interface PartialEvaluationResult {
+  readonly artifact: ModuleArtifact;
   readonly attemptedDefinitions: readonly string[];
   readonly foldedDefinitions: readonly string[];
   readonly skipped?:
-    | { readonly stage: "compile"; readonly diagnostics: readonly FunctionalDiagnostic[] }
-    | { readonly stage: "execute"; readonly fault: FunctionalRuntimeFault }
-    | { readonly stage: "comptime"; readonly diagnostic: FunctionalComptimeDiagnostic };
+    | { readonly stage: "compile"; readonly diagnostics: readonly Diagnostic[] }
+    | { readonly stage: "execute"; readonly fault: RuntimeFault }
+    | { readonly stage: "comptime"; readonly diagnostic: ComptimeDiagnostic };
 }

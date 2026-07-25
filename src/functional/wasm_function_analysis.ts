@@ -1,22 +1,19 @@
 import {
-  FUNCTIONAL_NO_INDEX,
-  FunctionalBinaryOperator,
-  FunctionalCoreTag,
-  FunctionalEvaluationMode,
-  type FunctionalEvaluationMode as FunctionalEvaluationModeValue,
-  FunctionalUnaryOperator,
+  BinaryOperator,
+  CoreTag,
+  EvaluationMode,
+  type EvaluationMode as EvaluationModeValue,
+  NO_INDEX,
+  UnaryOperator,
 } from "./abi.ts";
-import type { FunctionalCoreNode } from "./compiler_module.ts";
-import type {
-  FunctionalScalarConstant,
-  FunctionalWasmConstantAnalysis,
-} from "./wasm_constant_analysis.ts";
+import type { CoreNode } from "./compiler_module.ts";
+import type { ScalarConstant, WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 
-type FunctionalNumericFoldOperator =
-  | typeof FunctionalBinaryOperator.Add
-  | typeof FunctionalBinaryOperator.Multiply;
+type NumericFoldOperator =
+  | typeof BinaryOperator.Add
+  | typeof BinaryOperator.Multiply;
 
-export interface FunctionalFunctionShape {
+export interface FunctionShape {
   readonly outerLambdaNode: number;
   readonly innerLambdaNode: number;
   readonly bodyNode: number;
@@ -27,47 +24,47 @@ export interface FunctionalFunctionShape {
   readonly recursiveDefinition: number | undefined;
 }
 
-export interface FunctionalCallArgument {
+export interface CallArgument {
   readonly node: number;
-  readonly evaluationMode: FunctionalEvaluationModeValue;
+  readonly evaluationMode: EvaluationModeValue;
 }
 
-export interface FunctionalNumericFold {
-  readonly functionShape: FunctionalFunctionShape;
-  readonly operator: FunctionalNumericFoldOperator;
+export interface NumericFold {
+  readonly functionShape: FunctionShape;
+  readonly operator: NumericFoldOperator;
   readonly conditionNode: number;
   readonly baseNode: number;
   readonly contributionNode: number;
-  readonly recursiveArgument: FunctionalCallArgument;
+  readonly recursiveArgument: CallArgument;
   readonly recurseWhenTrue: boolean;
 }
 
-export class FunctionalWasmFunctionAnalysis {
-  readonly #nodes: readonly FunctionalCoreNode[];
+export class WasmFunctionAnalysis {
+  readonly #nodes: readonly CoreNode[];
   readonly #definitionRoots: readonly number[];
-  readonly #constantAnalysis: FunctionalWasmConstantAnalysis;
-  readonly #functions = new Map<number, FunctionalFunctionShape>();
-  readonly #loops = new Map<number, FunctionalFunctionShape>();
-  readonly #numericFolds = new Map<number, FunctionalNumericFold>();
+  readonly #constantAnalysis: WasmConstantAnalysis;
+  readonly #functions = new Map<number, FunctionShape>();
+  readonly #loops = new Map<number, FunctionShape>();
+  readonly #numericFolds = new Map<number, NumericFold>();
   readonly #recursiveFunctions = new Map<
     number,
     { readonly local: boolean; readonly definition: number | undefined }
   >();
 
   constructor(
-    nodes: readonly FunctionalCoreNode[],
+    nodes: readonly CoreNode[],
     definitionRoots: readonly number[],
-    constantAnalysis: FunctionalWasmConstantAnalysis,
+    constantAnalysis: WasmConstantAnalysis,
   ) {
     this.#nodes = nodes;
     this.#definitionRoots = definitionRoots;
     this.#constantAnalysis = constantAnalysis;
     for (const node of nodes) {
-      if (node.tag !== FunctionalCoreTag.LetRec) continue;
+      if (node.tag !== CoreTag.LetRec) continue;
       this.#recursiveFunctions.set(node.child0, { local: true, definition: undefined });
     }
     for (const [definition, rootNode] of definitionRoots.entries()) {
-      if (this.#node(rootNode).tag !== FunctionalCoreTag.Lambda) continue;
+      if (this.#node(rootNode).tag !== CoreTag.Lambda) continue;
       this.#recursiveFunctions.set(rootNode, { local: false, definition });
     }
     for (const outerLambdaNode of this.#recursiveFunctions.keys()) {
@@ -75,15 +72,15 @@ export class FunctionalWasmFunctionAnalysis {
     }
   }
 
-  function(outerLambdaNode: number): FunctionalFunctionShape | undefined {
+  function(outerLambdaNode: number): FunctionShape | undefined {
     return this.#functions.get(outerLambdaNode) ?? this.#registerFunction(outerLambdaNode);
   }
 
-  loop(lambdaNode: number): FunctionalFunctionShape | undefined {
+  loop(lambdaNode: number): FunctionShape | undefined {
     return this.#loops.get(lambdaNode);
   }
 
-  numericFold(lambdaNode: number): FunctionalNumericFold | undefined {
+  numericFold(lambdaNode: number): NumericFold | undefined {
     return this.#numericFolds.get(lambdaNode);
   }
 
@@ -106,7 +103,7 @@ export class FunctionalWasmFunctionAnalysis {
       definitions.add(definition);
       const pendingNodes: {
         readonly nodeIndex: number;
-        readonly environment: readonly (FunctionalScalarConstant | undefined)[];
+        readonly environment: readonly (ScalarConstant | undefined)[];
       }[] = [{ nodeIndex: rootNode, environment: [] }];
       while (pendingNodes.length > 0) {
         const pending = pendingNodes.pop();
@@ -114,11 +111,11 @@ export class FunctionalWasmFunctionAnalysis {
         const { nodeIndex, environment } = pending;
         visitedNodes.add(nodeIndex);
         const node = this.#node(nodeIndex);
-        if (node.tag === FunctionalCoreTag.Global) {
+        if (node.tag === CoreTag.Global) {
           pendingDefinitions.push(node.payload);
           continue;
         }
-        if (node.tag === FunctionalCoreTag.If) {
+        if (node.tag === CoreTag.If) {
           pendingNodes.push({ nodeIndex: node.child0, environment });
           const condition = options.constantBranches === "prune"
             ? this.#constantAnalysis.boolean(node.child0, environment)
@@ -134,12 +131,12 @@ export class FunctionalWasmFunctionAnalysis {
           }
           continue;
         }
-        if (node.tag === FunctionalCoreTag.Let) {
+        if (node.tag === CoreTag.Let) {
           pendingNodes.push({ nodeIndex: node.child0, environment });
           const valueNode = this.#node(node.child0);
-          const value = node.evaluationMode === FunctionalEvaluationMode.StrictEager ||
-              valueNode.tag === FunctionalCoreTag.Integer ||
-              valueNode.tag === FunctionalCoreTag.Boolean
+          const value = node.evaluationMode === EvaluationMode.StrictEager ||
+              valueNode.tag === CoreTag.Integer ||
+              valueNode.tag === CoreTag.Boolean
             ? this.#constantAnalysis.scalar(node.child0, environment)
             : undefined;
           pendingNodes.push({
@@ -148,13 +145,13 @@ export class FunctionalWasmFunctionAnalysis {
           });
           continue;
         }
-        if (node.tag === FunctionalCoreTag.LetRec) {
+        if (node.tag === CoreTag.LetRec) {
           const recursiveEnvironment = [undefined, ...environment];
           pendingNodes.push({ nodeIndex: node.child0, environment: recursiveEnvironment });
           pendingNodes.push({ nodeIndex: node.child1, environment: recursiveEnvironment });
           continue;
         }
-        if (node.tag === FunctionalCoreTag.Lambda || node.tag === FunctionalCoreTag.PatternBind) {
+        if (node.tag === CoreTag.Lambda || node.tag === CoreTag.PatternBind) {
           pendingNodes.push({
             nodeIndex: node.child0,
             environment: [undefined, ...environment],
@@ -162,7 +159,7 @@ export class FunctionalWasmFunctionAnalysis {
           continue;
         }
         for (const child of coreNodeChildren(node)) {
-          if (child !== FUNCTIONAL_NO_INDEX) pendingNodes.push({ nodeIndex: child, environment });
+          if (child !== NO_INDEX) pendingNodes.push({ nodeIndex: child, environment });
         }
       }
     }
@@ -171,13 +168,13 @@ export class FunctionalWasmFunctionAnalysis {
 
   tailArguments(
     nodeIndex: number,
-    loop: FunctionalFunctionShape,
+    loop: FunctionShape,
     binderDepth: number,
-  ): readonly FunctionalCallArgument[] | undefined {
-    const reverseArguments: FunctionalCallArgument[] = [];
+  ): readonly CallArgument[] | undefined {
+    const reverseArguments: CallArgument[] = [];
     let calleeIndex = nodeIndex;
     let callee = this.#node(calleeIndex);
-    while (callee.tag === FunctionalCoreTag.Apply) {
+    while (callee.tag === CoreTag.Apply) {
       reverseArguments.push({
         node: callee.child1,
         evaluationMode: callee.evaluationMode,
@@ -185,10 +182,10 @@ export class FunctionalWasmFunctionAnalysis {
       calleeIndex = callee.child0;
       callee = this.#node(calleeIndex);
     }
-    const localSelf = loop.recursiveLocal && callee.tag === FunctionalCoreTag.Local &&
+    const localSelf = loop.recursiveLocal && callee.tag === CoreTag.Local &&
       callee.payload === binderDepth + loop.parameterCount;
     const globalSelf = loop.recursiveDefinition !== undefined &&
-      callee.tag === FunctionalCoreTag.Global && callee.payload === loop.recursiveDefinition;
+      callee.tag === CoreTag.Global && callee.payload === loop.recursiveDefinition;
     if ((!localSelf && !globalSelf) || reverseArguments.length !== loop.parameterCount) {
       return undefined;
     }
@@ -198,68 +195,68 @@ export class FunctionalWasmFunctionAnalysis {
   canEvaluateEagerly(nodeIndex: number): boolean {
     const node = this.#node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Integer:
-      case FunctionalCoreTag.SignedInteger64:
-      case FunctionalCoreTag.Float32:
-      case FunctionalCoreTag.Float64:
-      case FunctionalCoreTag.WholeNumberF64:
-      case FunctionalCoreTag.Boolean:
-      case FunctionalCoreTag.Text:
-      case FunctionalCoreTag.Bytes:
-      case FunctionalCoreTag.Local:
-      case FunctionalCoreTag.Global:
-      case FunctionalCoreTag.Lambda:
-      case FunctionalCoreTag.Constructor:
+      case CoreTag.Integer:
+      case CoreTag.SignedInteger64:
+      case CoreTag.Float32:
+      case CoreTag.Float64:
+      case CoreTag.WholeNumberF64:
+      case CoreTag.Boolean:
+      case CoreTag.Text:
+      case CoreTag.Bytes:
+      case CoreTag.Local:
+      case CoreTag.Global:
+      case CoreTag.Lambda:
+      case CoreTag.Constructor:
         return true;
-      case FunctionalCoreTag.Unary:
-      case FunctionalCoreTag.NumericConvert:
-      case FunctionalCoreTag.StoreLength:
+      case CoreTag.Unary:
+      case CoreTag.NumericConvert:
+      case CoreTag.StoreLength:
         return this.canEvaluateEagerly(node.child0);
-      case FunctionalCoreTag.Binary:
-      case FunctionalCoreTag.BufferAppend:
-        return node.payload !== FunctionalBinaryOperator.Divide &&
+      case CoreTag.Binary:
+      case CoreTag.BufferAppend:
+        return node.payload !== BinaryOperator.Divide &&
           this.canEvaluateEagerly(node.child0) && this.canEvaluateEagerly(node.child1);
-      case FunctionalCoreTag.If:
+      case CoreTag.If:
         return this.canEvaluateEagerly(node.child0) &&
           this.canEvaluateEagerly(node.child1) && this.canEvaluateEagerly(node.child2);
-      case FunctionalCoreTag.Let:
+      case CoreTag.Let:
         return this.canEvaluateEagerly(node.child0) && this.canEvaluateEagerly(node.child1);
       default:
         return false;
     }
   }
 
-  hasOnlySaturatedSelfReferences(functionShape: FunctionalFunctionShape): boolean {
+  hasOnlySaturatedSelfReferences(functionShape: FunctionShape): boolean {
     return functionShape.parameterCount >= 1 &&
       !this.#containsSelfReference(functionShape.bodyNode, functionShape, 0, "unsaturated");
   }
 
-  hasOnlyTailSelfReferences(functionShape: FunctionalFunctionShape): boolean {
+  hasOnlyTailSelfReferences(functionShape: FunctionShape): boolean {
     return functionShape.parameterCount >= 1 &&
       !this.#containsNonTailSelfReference(functionShape.bodyNode, functionShape, 0);
   }
 
   #containsNonTailSelfReference(
     nodeIndex: number,
-    functionShape: FunctionalFunctionShape,
+    functionShape: FunctionShape,
     binderDepth: number,
   ): boolean {
     if (this.tailArguments(nodeIndex, functionShape, binderDepth) !== undefined) {
       return false;
     }
     const node = this.#node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.PatternBind) {
+    if (node.tag === CoreTag.PatternBind) {
       return this.#containsNonTailSelfReference(
         node.child0,
         functionShape,
         binderDepth + 1,
       );
     }
-    if (node.tag === FunctionalCoreTag.Let || node.tag === FunctionalCoreTag.LetRec) {
+    if (node.tag === CoreTag.Let || node.tag === CoreTag.LetRec) {
       return this.#containsSelfReference(
         node.child0,
         functionShape,
-        binderDepth + (node.tag === FunctionalCoreTag.LetRec ? 1 : 0),
+        binderDepth + (node.tag === CoreTag.LetRec ? 1 : 0),
         "any",
       ) || this.#containsNonTailSelfReference(
         node.child1,
@@ -267,7 +264,7 @@ export class FunctionalWasmFunctionAnalysis {
         binderDepth + 1,
       );
     }
-    if (node.tag === FunctionalCoreTag.Case) {
+    if (node.tag === CoreTag.Case) {
       return this.#containsSelfReference(
         node.child0,
         functionShape,
@@ -279,18 +276,18 @@ export class FunctionalWasmFunctionAnalysis {
         binderDepth,
       );
     }
-    if (node.tag === FunctionalCoreTag.CaseArm) {
+    if (node.tag === CoreTag.CaseArm) {
       return this.#containsNonTailSelfReference(
         node.child0,
         functionShape,
         binderDepth,
-      ) || node.child1 !== FUNCTIONAL_NO_INDEX && this.#containsNonTailSelfReference(
+      ) || node.child1 !== NO_INDEX && this.#containsNonTailSelfReference(
             node.child1,
             functionShape,
             binderDepth,
           );
     }
-    if (node.tag !== FunctionalCoreTag.If) {
+    if (node.tag !== CoreTag.If) {
       return this.#containsSelfReference(
         nodeIndex,
         functionShape,
@@ -314,11 +311,11 @@ export class FunctionalWasmFunctionAnalysis {
     );
   }
 
-  #registerFunction(outerLambdaNode: number): FunctionalFunctionShape | undefined {
+  #registerFunction(outerLambdaNode: number): FunctionShape | undefined {
     const lambdaNodes: number[] = [];
     let bodyNode = outerLambdaNode;
     let body = this.#node(bodyNode);
-    while (body.tag === FunctionalCoreTag.Lambda) {
+    while (body.tag === CoreTag.Lambda) {
       lambdaNodes.push(bodyNode);
       bodyNode = body.child0;
       body = this.#node(bodyNode);
@@ -327,7 +324,7 @@ export class FunctionalWasmFunctionAnalysis {
     if (innermostLambda === undefined) return undefined;
 
     const parameterCount = lambdaNodes.length;
-    const provisionalLoop: FunctionalFunctionShape = {
+    const provisionalLoop: FunctionShape = {
       outerLambdaNode,
       innerLambdaNode: innermostLambda,
       bodyNode,
@@ -348,7 +345,7 @@ export class FunctionalWasmFunctionAnalysis {
     const strictParameters = tailRecursive
       ? this.#strictParameters(bodyNode, recursiveLoop)
       : this.#directStrictParameters(bodyNode, recursiveLoop);
-    const functionShape: FunctionalFunctionShape = {
+    const functionShape: FunctionShape = {
       ...recursiveLoop,
       strictParameters: Object.freeze(strictParameters),
       numericParameters: Object.freeze(this.#numericParameters(bodyNode, parameterCount)),
@@ -363,10 +360,10 @@ export class FunctionalWasmFunctionAnalysis {
     return functionShape;
   }
 
-  #numericFold(functionShape: FunctionalFunctionShape): FunctionalNumericFold | undefined {
+  #numericFold(functionShape: FunctionShape): NumericFold | undefined {
     if (functionShape.parameterCount !== 1) return undefined;
     const body = this.#node(functionShape.bodyNode);
-    if (body.tag !== FunctionalCoreTag.If) return undefined;
+    if (body.tag !== CoreTag.If) return undefined;
     if (this.#containsSelfReference(body.child0, functionShape, 0, "any")) return undefined;
 
     const consequent = this.#numericFoldStep(body.child1, functionShape);
@@ -389,19 +386,19 @@ export class FunctionalWasmFunctionAnalysis {
 
   #numericFoldStep(
     nodeIndex: number,
-    functionShape: FunctionalFunctionShape,
+    functionShape: FunctionShape,
   ):
     | {
-      readonly operator: FunctionalNumericFoldOperator;
+      readonly operator: NumericFoldOperator;
       readonly contributionNode: number;
-      readonly recursiveArgument: FunctionalCallArgument;
+      readonly recursiveArgument: CallArgument;
     }
     | undefined {
     const node = this.#node(nodeIndex);
     if (
-      node.tag !== FunctionalCoreTag.Binary ||
-      (node.payload !== FunctionalBinaryOperator.Add &&
-        node.payload !== FunctionalBinaryOperator.Multiply)
+      node.tag !== CoreTag.Binary ||
+      (node.payload !== BinaryOperator.Add &&
+        node.payload !== BinaryOperator.Multiply)
     ) return undefined;
 
     const rightRecursiveArguments = this.tailArguments(node.child1, functionShape, 0);
@@ -422,7 +419,7 @@ export class FunctionalWasmFunctionAnalysis {
 
   #containsSelfReference(
     nodeIndex: number,
-    functionShape: FunctionalFunctionShape,
+    functionShape: FunctionShape,
     binderDepth: number,
     scope: "any" | "unsaturated",
   ): boolean {
@@ -430,40 +427,40 @@ export class FunctionalWasmFunctionAnalysis {
       return scope === "any";
     }
     const node = this.#node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.Local) {
+    if (node.tag === CoreTag.Local) {
       return functionShape.recursiveLocal &&
         node.payload === binderDepth + functionShape.parameterCount;
     }
-    if (node.tag === FunctionalCoreTag.Global) {
+    if (node.tag === CoreTag.Global) {
       return functionShape.recursiveDefinition !== undefined &&
         node.payload === functionShape.recursiveDefinition;
     }
     switch (node.tag) {
-      case FunctionalCoreTag.Integer:
-      case FunctionalCoreTag.SignedInteger64:
-      case FunctionalCoreTag.Float32:
-      case FunctionalCoreTag.Float64:
-      case FunctionalCoreTag.WholeNumberF64:
-      case FunctionalCoreTag.Boolean:
-      case FunctionalCoreTag.Text:
-      case FunctionalCoreTag.Bytes:
-      case FunctionalCoreTag.RuntimeFault:
-      case FunctionalCoreTag.Constructor:
+      case CoreTag.Integer:
+      case CoreTag.SignedInteger64:
+      case CoreTag.Float32:
+      case CoreTag.Float64:
+      case CoreTag.WholeNumberF64:
+      case CoreTag.Boolean:
+      case CoreTag.Text:
+      case CoreTag.Bytes:
+      case CoreTag.RuntimeFault:
+      case CoreTag.Constructor:
         return false;
-      case FunctionalCoreTag.Unary:
-      case FunctionalCoreTag.NumericConvert:
-      case FunctionalCoreTag.StoreLength:
+      case CoreTag.Unary:
+      case CoreTag.NumericConvert:
+      case CoreTag.StoreLength:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth,
           scope,
         );
-      case FunctionalCoreTag.Binary:
-      case FunctionalCoreTag.BufferAppend:
-      case FunctionalCoreTag.Apply:
-      case FunctionalCoreTag.StoreNew:
-      case FunctionalCoreTag.StoreRead:
+      case CoreTag.Binary:
+      case CoreTag.BufferAppend:
+      case CoreTag.Apply:
+      case CoreTag.StoreNew:
+      case CoreTag.StoreRead:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
@@ -475,9 +472,9 @@ export class FunctionalWasmFunctionAnalysis {
           binderDepth,
           scope,
         );
-      case FunctionalCoreTag.If:
-      case FunctionalCoreTag.StoreWrite:
-      case FunctionalCoreTag.StoreGrow:
+      case CoreTag.If:
+      case CoreTag.StoreWrite:
+      case CoreTag.StoreGrow:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
@@ -494,15 +491,15 @@ export class FunctionalWasmFunctionAnalysis {
           binderDepth,
           scope,
         );
-      case FunctionalCoreTag.Lambda:
-      case FunctionalCoreTag.PatternBind:
+      case CoreTag.Lambda:
+      case CoreTag.PatternBind:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth + 1,
           scope,
         );
-      case FunctionalCoreTag.Let:
+      case CoreTag.Let:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
@@ -514,7 +511,7 @@ export class FunctionalWasmFunctionAnalysis {
           binderDepth + 1,
           scope,
         );
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.LetRec:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
@@ -526,7 +523,7 @@ export class FunctionalWasmFunctionAnalysis {
           binderDepth + 1,
           scope,
         );
-      case FunctionalCoreTag.Case:
+      case CoreTag.Case:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
@@ -538,13 +535,13 @@ export class FunctionalWasmFunctionAnalysis {
           binderDepth,
           scope,
         );
-      case FunctionalCoreTag.CaseArm:
+      case CoreTag.CaseArm:
         return this.#containsSelfReference(
           node.child0,
           functionShape,
           binderDepth,
           scope,
-        ) || node.child1 !== FUNCTIONAL_NO_INDEX && this.#containsSelfReference(
+        ) || node.child1 !== NO_INDEX && this.#containsSelfReference(
               node.child1,
               functionShape,
               binderDepth,
@@ -555,26 +552,26 @@ export class FunctionalWasmFunctionAnalysis {
 
   #containsTailCall(
     nodeIndex: number,
-    loop: FunctionalFunctionShape,
+    loop: FunctionShape,
     binderDepth: number,
   ): boolean {
     if (this.tailArguments(nodeIndex, loop, binderDepth) !== undefined) return true;
     const node = this.#node(nodeIndex);
-    if (node.tag === FunctionalCoreTag.PatternBind) {
+    if (node.tag === CoreTag.PatternBind) {
       return this.#containsTailCall(node.child0, loop, binderDepth + 1);
     }
-    if (node.tag === FunctionalCoreTag.Let || node.tag === FunctionalCoreTag.LetRec) {
+    if (node.tag === CoreTag.Let || node.tag === CoreTag.LetRec) {
       return this.#containsTailCall(node.child1, loop, binderDepth + 1);
     }
-    if (node.tag === FunctionalCoreTag.Case) {
+    if (node.tag === CoreTag.Case) {
       return this.#containsTailCall(node.child1, loop, binderDepth);
     }
-    if (node.tag === FunctionalCoreTag.CaseArm) {
+    if (node.tag === CoreTag.CaseArm) {
       return this.#containsTailCall(node.child0, loop, binderDepth) ||
-        node.child1 !== FUNCTIONAL_NO_INDEX &&
+        node.child1 !== NO_INDEX &&
           this.#containsTailCall(node.child1, loop, binderDepth);
     }
-    if (node.tag === FunctionalCoreTag.If) {
+    if (node.tag === CoreTag.If) {
       return this.#containsTailCall(node.child1, loop, binderDepth) ||
         this.#containsTailCall(node.child2, loop, binderDepth);
     }
@@ -583,7 +580,7 @@ export class FunctionalWasmFunctionAnalysis {
 
   #strictParameters(
     bodyNode: number,
-    loop: FunctionalFunctionShape,
+    loop: FunctionShape,
   ): boolean[] {
     let strict = Array.from({ length: loop.parameterCount }, () => true);
     while (true) {
@@ -596,7 +593,7 @@ export class FunctionalWasmFunctionAnalysis {
 
   #directStrictParameters(
     bodyNode: number,
-    loop: FunctionalFunctionShape,
+    loop: FunctionShape,
   ): boolean[] {
     const demanded = this.#demandedParameters(
       bodyNode,
@@ -610,7 +607,7 @@ export class FunctionalWasmFunctionAnalysis {
 
   #demandedParameters(
     nodeIndex: number,
-    loop: FunctionalFunctionShape,
+    loop: FunctionShape,
     binderDepth: number,
     assumedStrict: readonly boolean[],
     recognizeTailCalls = true,
@@ -622,7 +619,7 @@ export class FunctionalWasmFunctionAnalysis {
       const demanded = new Set<number>();
       for (const [parameter, argument] of tailArguments.entries()) {
         if (
-          argument.evaluationMode !== FunctionalEvaluationMode.StrictEager &&
+          argument.evaluationMode !== EvaluationMode.StrictEager &&
           assumedStrict[parameter] !== true
         ) continue;
         addAll(
@@ -641,12 +638,12 @@ export class FunctionalWasmFunctionAnalysis {
 
     const node = this.#node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Local: {
+      case CoreTag.Local: {
         const parameterDepth = node.payload - binderDepth;
         if (parameterDepth < 0 || parameterDepth >= loop.parameterCount) return new Set();
         return new Set([loop.parameterCount - parameterDepth - 1]);
       }
-      case FunctionalCoreTag.Unary:
+      case CoreTag.Unary:
         return this.#demandedParameters(
           node.child0,
           loop,
@@ -654,7 +651,7 @@ export class FunctionalWasmFunctionAnalysis {
           assumedStrict,
           recognizeTailCalls,
         );
-      case FunctionalCoreTag.Binary:
+      case CoreTag.Binary:
         return union(
           this.#demandedParameters(
             node.child0,
@@ -671,7 +668,7 @@ export class FunctionalWasmFunctionAnalysis {
             recognizeTailCalls,
           ),
         );
-      case FunctionalCoreTag.If:
+      case CoreTag.If:
         return union(
           this.#demandedParameters(
             node.child0,
@@ -697,8 +694,8 @@ export class FunctionalWasmFunctionAnalysis {
             ),
           ),
         );
-      case FunctionalCoreTag.Let:
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.Let:
+      case CoreTag.LetRec:
         return this.#demandedParameters(
           node.child1,
           loop,
@@ -706,7 +703,7 @@ export class FunctionalWasmFunctionAnalysis {
           assumedStrict,
           recognizeTailCalls,
         );
-      case FunctionalCoreTag.Apply:
+      case CoreTag.Apply:
         return this.#demandedParameters(
           node.child0,
           loop,
@@ -714,7 +711,7 @@ export class FunctionalWasmFunctionAnalysis {
           assumedStrict,
           recognizeTailCalls,
         );
-      case FunctionalCoreTag.Case:
+      case CoreTag.Case:
         return this.#demandedParameters(
           node.child0,
           loop,
@@ -731,7 +728,7 @@ export class FunctionalWasmFunctionAnalysis {
     const numericParameters = Array.from({ length: parameterCount }, () => false);
     const visit = (nodeIndex: number, binderDepth: number, numericContext: boolean): void => {
       const node = this.#node(nodeIndex);
-      if (node.tag === FunctionalCoreTag.Local) {
+      if (node.tag === CoreTag.Local) {
         if (!numericContext) return;
         const parameterDepth = node.payload - binderDepth;
         if (parameterDepth < 0 || parameterDepth >= parameterCount) return;
@@ -739,42 +736,42 @@ export class FunctionalWasmFunctionAnalysis {
         return;
       }
       switch (node.tag) {
-        case FunctionalCoreTag.Unary:
+        case CoreTag.Unary:
           visit(
             node.child0,
             binderDepth,
-            node.payload === FunctionalUnaryOperator.Negate,
+            node.payload === UnaryOperator.Negate,
           );
           return;
-        case FunctionalCoreTag.Binary:
+        case CoreTag.Binary:
           visit(node.child0, binderDepth, integerOperator(node.payload));
           visit(node.child1, binderDepth, integerOperator(node.payload));
           return;
-        case FunctionalCoreTag.Lambda:
-        case FunctionalCoreTag.PatternBind:
+        case CoreTag.Lambda:
+        case CoreTag.PatternBind:
           visit(node.child0, binderDepth + 1, false);
           return;
-        case FunctionalCoreTag.Let:
+        case CoreTag.Let:
           visit(node.child0, binderDepth, false);
           visit(node.child1, binderDepth + 1, numericContext);
           return;
-        case FunctionalCoreTag.LetRec:
+        case CoreTag.LetRec:
           visit(node.child0, binderDepth + 1, false);
           visit(node.child1, binderDepth + 1, numericContext);
           return;
-        case FunctionalCoreTag.Apply:
+        case CoreTag.Apply:
           visit(node.child0, binderDepth, false);
           visit(node.child1, binderDepth, false);
           return;
-        case FunctionalCoreTag.If:
+        case CoreTag.If:
           visit(node.child0, binderDepth, false);
           visit(node.child1, binderDepth, numericContext);
           visit(node.child2, binderDepth, numericContext);
           return;
-        case FunctionalCoreTag.Case:
-        case FunctionalCoreTag.CaseArm:
+        case CoreTag.Case:
+        case CoreTag.CaseArm:
           visit(node.child0, binderDepth, false);
-          if (node.child1 !== FUNCTIONAL_NO_INDEX) {
+          if (node.child1 !== NO_INDEX) {
             visit(node.child1, binderDepth, numericContext);
           }
           return;
@@ -786,7 +783,7 @@ export class FunctionalWasmFunctionAnalysis {
     return numericParameters;
   }
 
-  #node(index: number): FunctionalCoreNode {
+  #node(index: number): CoreNode {
     const node = this.#nodes[index];
     if (node === undefined) {
       throw new Error(
@@ -798,46 +795,46 @@ export class FunctionalWasmFunctionAnalysis {
 }
 
 function integerOperator(operator: number): boolean {
-  return operator >= FunctionalBinaryOperator.Equal &&
-      operator <= FunctionalBinaryOperator.Divide ||
-    operator >= FunctionalBinaryOperator.Remainder &&
-      operator <= FunctionalBinaryOperator.ShiftRightUnsigned;
+  return operator >= BinaryOperator.Equal &&
+      operator <= BinaryOperator.Divide ||
+    operator >= BinaryOperator.Remainder &&
+      operator <= BinaryOperator.ShiftRightUnsigned;
 }
 
-function coreNodeChildren(node: FunctionalCoreNode): readonly number[] {
+function coreNodeChildren(node: CoreNode): readonly number[] {
   switch (node.tag) {
-    case FunctionalCoreTag.SignedInteger64:
-    case FunctionalCoreTag.Float64:
-    case FunctionalCoreTag.WholeNumberF64:
-    case FunctionalCoreTag.Integer:
-    case FunctionalCoreTag.Float32:
-    case FunctionalCoreTag.Boolean:
-    case FunctionalCoreTag.Text:
-    case FunctionalCoreTag.Bytes:
-    case FunctionalCoreTag.RuntimeFault:
-    case FunctionalCoreTag.Local:
-    case FunctionalCoreTag.Global:
-    case FunctionalCoreTag.Constructor:
+    case CoreTag.SignedInteger64:
+    case CoreTag.Float64:
+    case CoreTag.WholeNumberF64:
+    case CoreTag.Integer:
+    case CoreTag.Float32:
+    case CoreTag.Boolean:
+    case CoreTag.Text:
+    case CoreTag.Bytes:
+    case CoreTag.RuntimeFault:
+    case CoreTag.Local:
+    case CoreTag.Global:
+    case CoreTag.Constructor:
       return [];
-    case FunctionalCoreTag.Lambda:
-    case FunctionalCoreTag.Unary:
-    case FunctionalCoreTag.NumericConvert:
-    case FunctionalCoreTag.PatternBind:
-    case FunctionalCoreTag.StoreLength:
+    case CoreTag.Lambda:
+    case CoreTag.Unary:
+    case CoreTag.NumericConvert:
+    case CoreTag.PatternBind:
+    case CoreTag.StoreLength:
       return [node.child0];
-    case FunctionalCoreTag.Apply:
-    case FunctionalCoreTag.Let:
-    case FunctionalCoreTag.LetRec:
-    case FunctionalCoreTag.Binary:
-    case FunctionalCoreTag.BufferAppend:
-    case FunctionalCoreTag.Case:
-    case FunctionalCoreTag.CaseArm:
-    case FunctionalCoreTag.StoreNew:
-    case FunctionalCoreTag.StoreRead:
+    case CoreTag.Apply:
+    case CoreTag.Let:
+    case CoreTag.LetRec:
+    case CoreTag.Binary:
+    case CoreTag.BufferAppend:
+    case CoreTag.Case:
+    case CoreTag.CaseArm:
+    case CoreTag.StoreNew:
+    case CoreTag.StoreRead:
       return [node.child0, node.child1];
-    case FunctionalCoreTag.If:
-    case FunctionalCoreTag.StoreWrite:
-    case FunctionalCoreTag.StoreGrow:
+    case CoreTag.If:
+    case CoreTag.StoreWrite:
+    case CoreTag.StoreGrow:
       return [node.child0, node.child1, node.child2];
   }
 }

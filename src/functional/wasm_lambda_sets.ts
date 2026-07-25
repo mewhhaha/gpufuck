@@ -1,11 +1,11 @@
-import { FUNCTIONAL_NO_INDEX, FunctionalCoreTag } from "./abi.ts";
-import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
-import { FUNCTIONAL_INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
+import { CoreTag, NO_INDEX } from "./abi.ts";
+import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
 
 // Wider sets retain the ordinary closure path so adversarial modules cannot inflate dispatch code.
 const MAXIMUM_LAMBDA_SET_SIZE = 64;
 
-export interface FunctionalLambdaSet {
+export interface LambdaSet {
   readonly lambdaNodes: readonly number[];
   readonly complete: boolean;
 }
@@ -37,9 +37,9 @@ interface ConstructorApplication {
  * representation-only: semantic function types remain unchanged, while an incomplete set makes
  * code generation retain the ordinary closure call.
  */
-export class FunctionalLambdaSetAnalysis {
-  readonly #module: GpuFunctionalModule;
-  readonly #nodes: readonly FunctionalCoreNode[];
+export class LambdaSetAnalysis {
+  readonly #module: GpuModule;
+  readonly #nodes: readonly CoreNode[];
   readonly #states: FlowState[];
   readonly #edges: (Set<number> | undefined)[];
   readonly #applicationsByCallee: (ApplicationConstraint[] | undefined)[];
@@ -51,9 +51,9 @@ export class FunctionalLambdaSetAnalysis {
   readonly #externalValue: number;
   readonly #workQueue: number[] = [];
   readonly #queued: boolean[];
-  readonly #lambdaSets: (FunctionalLambdaSet | undefined)[];
+  readonly #lambdaSets: (LambdaSet | undefined)[];
 
-  constructor(module: GpuFunctionalModule, nodes: readonly FunctionalCoreNode[]) {
+  constructor(module: GpuModule, nodes: readonly CoreNode[]) {
     this.#module = module;
     this.#nodes = nodes;
     this.#binderBase = nodes.length;
@@ -80,7 +80,7 @@ export class FunctionalLambdaSetAnalysis {
     this.#markIncomplete(this.#externalValue);
     this.#markEscapingConstructorFieldsIncomplete();
     for (const [constructor, name] of module.constructorNames.entries()) {
-      if (name !== FUNCTIONAL_INIT_CONSTRUCTOR_NAME) continue;
+      if (name !== INIT_CONSTRUCTOR_NAME) continue;
       for (let field = 0; field < module.constructorArities[constructor]!; field++) {
         this.#markIncomplete(this.#constructorField(constructor, field));
       }
@@ -102,7 +102,7 @@ export class FunctionalLambdaSetAnalysis {
     this.#solve();
   }
 
-  lambdaSet(nodeIndex: number): FunctionalLambdaSet {
+  lambdaSet(nodeIndex: number): LambdaSet {
     const cached = this.#lambdaSets[nodeIndex];
     if (cached !== undefined) return cached;
     const state = this.#state(this.#nodeVariable(nodeIndex));
@@ -118,14 +118,14 @@ export class FunctionalLambdaSetAnalysis {
   #visitExpression(nodeIndex: number, environment: number[]): void {
     const node = this.#node(nodeIndex);
     switch (node.tag) {
-      case FunctionalCoreTag.Integer:
-      case FunctionalCoreTag.SignedInteger64:
-      case FunctionalCoreTag.Float32:
-      case FunctionalCoreTag.Float64:
-      case FunctionalCoreTag.WholeNumberF64:
-      case FunctionalCoreTag.Boolean:
+      case CoreTag.Integer:
+      case CoreTag.SignedInteger64:
+      case CoreTag.Float32:
+      case CoreTag.Float64:
+      case CoreTag.WholeNumberF64:
+      case CoreTag.Boolean:
         return;
-      case FunctionalCoreTag.Local: {
+      case CoreTag.Local: {
         const binding = environment[environment.length - node.payload - 1];
         if (binding === undefined) {
           throw new Error(
@@ -135,7 +135,7 @@ export class FunctionalLambdaSetAnalysis {
         this.#addEdge(binding, this.#nodeVariable(nodeIndex));
         return;
       }
-      case FunctionalCoreTag.Global:
+      case CoreTag.Global:
         if (node.payload >= this.#module.definitionCount) {
           throw new Error(
             `functional lambda-set global d${node.payload} at node ${nodeIndex} exceeds ${this.#module.definitionCount} definitions`,
@@ -143,7 +143,7 @@ export class FunctionalLambdaSetAnalysis {
         }
         this.#addEdge(this.#definitionVariable(node.payload), this.#nodeVariable(nodeIndex));
         return;
-      case FunctionalCoreTag.Constructor:
+      case CoreTag.Constructor:
         if (this.#module.constructorArities[node.payload] === undefined) {
           throw new Error(
             `functional lambda-set constructor ${node.payload} at node ${nodeIndex} exceeds ${this.#module.constructorCount} constructors`,
@@ -152,7 +152,7 @@ export class FunctionalLambdaSetAnalysis {
           this.#markIncomplete(this.#nodeVariable(nodeIndex));
         }
         return;
-      case FunctionalCoreTag.Lambda: {
+      case CoreTag.Lambda: {
         this.#addLambda(this.#nodeVariable(nodeIndex), nodeIndex);
         this.#lambdaBodies.set(nodeIndex, node.child0);
         environment.push(this.#binderVariable(nodeIndex));
@@ -160,12 +160,12 @@ export class FunctionalLambdaSetAnalysis {
         environment.pop();
         return;
       }
-      case FunctionalCoreTag.Apply:
+      case CoreTag.Apply:
         this.#visitExpression(node.child0, environment);
         this.#visitExpression(node.child1, environment);
         this.#visitApplication(nodeIndex);
         return;
-      case FunctionalCoreTag.Let:
+      case CoreTag.Let:
         this.#visitExpression(node.child0, environment);
         this.#addEdge(this.#nodeVariable(node.child0), this.#binderVariable(nodeIndex));
         environment.push(this.#binderVariable(nodeIndex));
@@ -173,7 +173,7 @@ export class FunctionalLambdaSetAnalysis {
         environment.pop();
         this.#addEdge(this.#nodeVariable(node.child1), this.#nodeVariable(nodeIndex));
         return;
-      case FunctionalCoreTag.LetRec:
+      case CoreTag.LetRec:
         environment.push(this.#binderVariable(nodeIndex));
         this.#visitExpression(node.child0, environment);
         this.#addEdge(this.#nodeVariable(node.child0), this.#binderVariable(nodeIndex));
@@ -181,41 +181,41 @@ export class FunctionalLambdaSetAnalysis {
         environment.pop();
         this.#addEdge(this.#nodeVariable(node.child1), this.#nodeVariable(nodeIndex));
         return;
-      case FunctionalCoreTag.If:
+      case CoreTag.If:
         this.#visitExpression(node.child0, environment);
         this.#visitExpression(node.child1, environment);
         this.#visitExpression(node.child2, environment);
         this.#addEdge(this.#nodeVariable(node.child1), this.#nodeVariable(nodeIndex));
         this.#addEdge(this.#nodeVariable(node.child2), this.#nodeVariable(nodeIndex));
         return;
-      case FunctionalCoreTag.Unary:
-      case FunctionalCoreTag.NumericConvert:
-      case FunctionalCoreTag.StoreLength:
+      case CoreTag.Unary:
+      case CoreTag.NumericConvert:
+      case CoreTag.StoreLength:
         this.#visitExpression(node.child0, environment);
         return;
-      case FunctionalCoreTag.Binary:
-      case FunctionalCoreTag.BufferAppend:
-      case FunctionalCoreTag.StoreNew:
+      case CoreTag.Binary:
+      case CoreTag.BufferAppend:
+      case CoreTag.StoreNew:
         this.#visitExpression(node.child0, environment);
         this.#visitExpression(node.child1, environment);
         return;
-      case FunctionalCoreTag.StoreRead:
+      case CoreTag.StoreRead:
         this.#visitExpression(node.child0, environment);
         this.#visitExpression(node.child1, environment);
         this.#markIncomplete(this.#nodeVariable(nodeIndex));
         return;
-      case FunctionalCoreTag.StoreWrite:
-      case FunctionalCoreTag.StoreGrow:
+      case CoreTag.StoreWrite:
+      case CoreTag.StoreGrow:
         this.#visitExpression(node.child0, environment);
         this.#visitExpression(node.child1, environment);
         this.#visitExpression(node.child2, environment);
         return;
-      case FunctionalCoreTag.Case:
+      case CoreTag.Case:
         this.#visitExpression(node.child0, environment);
         this.#visitCaseArms(node.child1, environment, nodeIndex);
         return;
-      case FunctionalCoreTag.CaseArm:
-      case FunctionalCoreTag.PatternBind:
+      case CoreTag.CaseArm:
+      case CoreTag.PatternBind:
         throw new Error(
           `functional lambda-set analysis found structural core tag ${node.tag} at expression node ${nodeIndex}`,
         );
@@ -260,9 +260,9 @@ export class FunctionalLambdaSetAnalysis {
     caseNode: number,
   ): void {
     let armIndex = firstArm;
-    while (armIndex !== FUNCTIONAL_NO_INDEX) {
+    while (armIndex !== NO_INDEX) {
       const arm = this.#node(armIndex);
-      if (arm.tag !== FunctionalCoreTag.CaseArm) {
+      if (arm.tag !== CoreTag.CaseArm) {
         throw new Error(
           `functional lambda-set case ${caseNode} links core tag ${arm.tag} at arm node ${armIndex}`,
         );
@@ -278,7 +278,7 @@ export class FunctionalLambdaSetAnalysis {
       const outerEnvironmentDepth = environment.length;
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
         const binding = this.#node(body);
-        if (binding.tag !== FunctionalCoreTag.PatternBind) {
+        if (binding.tag !== CoreTag.PatternBind) {
           throw new Error(
             `functional lambda-set case arm ${armIndex} has ${bindingIndex} bindings before core tag ${binding.tag}; expected ${arity}`,
           );
@@ -396,7 +396,7 @@ export class FunctionalLambdaSetAnalysis {
       for (
         const [childPosition, childIndex] of [node.child0, node.child1, node.child2].entries()
       ) {
-        if (childIndex === FUNCTIONAL_NO_INDEX || childIndex >= this.#nodes.length) continue;
+        if (childIndex === NO_INDEX || childIndex >= this.#nodes.length) continue;
         parents[childIndex]!.push({
           parent: parentIndex,
           child: childPosition as 0 | 1 | 2,
@@ -405,7 +405,7 @@ export class FunctionalLambdaSetAnalysis {
     }
 
     for (const [nodeIndex, node] of this.#nodes.entries()) {
-      if (node.tag !== FunctionalCoreTag.Constructor) continue;
+      if (node.tag !== CoreTag.Constructor) continue;
       const arity = this.#module.constructorArities[node.payload];
       if (arity === undefined || arity === 0) continue;
       let appliedArguments = 0;
@@ -415,7 +415,7 @@ export class FunctionalLambdaSetAnalysis {
         if (uses.length !== 1) break;
         const use = uses[0]!;
         const parent = this.#node(use.parent);
-        if (use.child !== 0 || parent.tag !== FunctionalCoreTag.Apply) break;
+        if (use.child !== 0 || parent.tag !== CoreTag.Apply) break;
         appliedArguments += 1;
         current = use.parent;
       }
@@ -429,11 +429,11 @@ export class FunctionalLambdaSetAnalysis {
   #constructorApplication(nodeIndex: number): ConstructorApplication | undefined {
     const reverseArguments: number[] = [];
     let callee = this.#node(nodeIndex);
-    while (callee.tag === FunctionalCoreTag.Apply) {
+    while (callee.tag === CoreTag.Apply) {
       reverseArguments.push(callee.child1);
       callee = this.#node(callee.child0);
     }
-    if (callee.tag !== FunctionalCoreTag.Constructor) return undefined;
+    if (callee.tag !== CoreTag.Constructor) return undefined;
     const arity = this.#module.constructorArities[callee.payload];
     if (arity === undefined || reverseArguments.length === 0 || reverseArguments.length > arity) {
       return undefined;
@@ -487,7 +487,7 @@ export class FunctionalLambdaSetAnalysis {
     return state;
   }
 
-  #node(index: number): FunctionalCoreNode {
+  #node(index: number): CoreNode {
     const node = this.#nodes[index];
     if (node === undefined) {
       throw new Error(

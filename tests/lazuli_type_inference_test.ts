@@ -8,7 +8,7 @@ import {
   type LazuliTypeDeclaration,
   requestWebGpuDevice,
 } from "../mod.ts";
-import { buildFunctionalSurfaceModule, surface } from "../functional.ts";
+import { buildSurfaceModule, surface } from "../functional.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
@@ -133,7 +133,7 @@ const representativeCorpus = [
 ];
 
 Deno.test("host type inference treats runtime faults as dependency leaves", () => {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [
       {
         name: "failure",
@@ -161,7 +161,7 @@ Deno.test("host type inference treats runtime faults as dependency leaves", () =
 });
 
 Deno.test("host type inference preserves Store element types through persistent updates", () => {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{
       name: "main",
       parameters: [],

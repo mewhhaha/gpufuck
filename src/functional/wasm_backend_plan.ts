@@ -1,56 +1,56 @@
-import { FunctionalCoreTag, FunctionalEvaluationMode, FunctionalEvaluationProfile } from "./abi.ts";
-import type { FunctionalCoreNode, GpuFunctionalModule } from "./compiler_module.ts";
+import { CoreTag, EvaluationMode, EvaluationProfile } from "./abi.ts";
+import type { CoreNode, GpuModule } from "./compiler_module.ts";
 import {
   functionalHostScalarType,
-  type FunctionalWasmEntry,
   functionalWasmEntry,
+  type WasmEntry,
 } from "./wasm_host_boundary.ts";
-import { FunctionalWasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
-import type { FunctionalWasmCompilationOptions } from "./wasm_contract.ts";
-import { FunctionalWasmConstantAnalysis } from "./wasm_constant_analysis.ts";
-import { FunctionalWasmFunctionAnalysis } from "./wasm_function_analysis.ts";
-import type { FunctionalStoragePlan } from "./storage_contract.ts";
-import { createFunctionalStoragePlan } from "./storage_plan.ts";
+import { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
+import type { WasmCompilationOptions } from "./wasm_contract.ts";
+import { WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
+import { WasmFunctionAnalysis } from "./wasm_function_analysis.ts";
+import type { StoragePlan } from "./storage_contract.ts";
+import { createStoragePlan } from "./storage_plan.ts";
 import { requireFirstOrderFunctionalWasmType } from "./wasm_value_codec.ts";
-import { FunctionalWasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
+import { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
 
-export interface FunctionalWasmBackendPlan {
-  readonly module: GpuFunctionalModule;
-  readonly nodes: readonly FunctionalCoreNode[];
-  readonly captureAnalysis: FunctionalWasmCaptureAnalysis;
-  readonly constantAnalysis: FunctionalWasmConstantAnalysis;
-  readonly functionAnalysis: FunctionalWasmFunctionAnalysis;
-  readonly uniqueReuseAnalysis: FunctionalWasmUniqueReuseAnalysis;
-  readonly storage: FunctionalStoragePlan;
-  readonly entry: FunctionalWasmEntry;
+export interface WasmBackendPlan {
+  readonly module: GpuModule;
+  readonly nodes: readonly CoreNode[];
+  readonly captureAnalysis: WasmCaptureAnalysis;
+  readonly constantAnalysis: WasmConstantAnalysis;
+  readonly functionAnalysis: WasmFunctionAnalysis;
+  readonly uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
+  readonly storage: StoragePlan;
+  readonly entry: WasmEntry;
   readonly compactScalarEligible: boolean;
   readonly instrumentedFuel: boolean;
-  readonly options: FunctionalWasmCompilationOptions;
+  readonly options: WasmCompilationOptions;
 }
 
-export function createFunctionalWasmBackendPlan(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
+export function createWasmBackendPlan(
+  module: GpuModule,
+  nodes: readonly CoreNode[],
   instrumentedFuel: boolean,
-  options: FunctionalWasmCompilationOptions,
-): FunctionalWasmBackendPlan {
+  options: WasmCompilationOptions,
+): WasmBackendPlan {
   validateFunctionalWasmSimdMode(options.simd);
-  const captureAnalysis = new FunctionalWasmCaptureAnalysis(nodes);
-  const constantAnalysis = new FunctionalWasmConstantAnalysis(nodes);
-  const storage = createFunctionalStoragePlan(module, nodes, captureAnalysis, {
+  const captureAnalysis = new WasmCaptureAnalysis(nodes);
+  const constantAnalysis = new WasmConstantAnalysis(nodes);
+  const storage = createStoragePlan(module, nodes, captureAnalysis, {
     ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
   });
   const entry = functionalWasmEntry(module);
   validateOwnedTypeExports(module, nodes, options);
   const scalarResult = functionalHostScalarType(entry.result);
   const compactScalarEligible = module.evaluationProfile ===
-      FunctionalEvaluationProfile.StrictEager &&
+      EvaluationProfile.StrictEager &&
     !nodes.some((node) =>
-      node.tag === FunctionalCoreTag.StoreNew ||
-      node.tag === FunctionalCoreTag.StoreLength ||
-      node.tag === FunctionalCoreTag.StoreRead ||
-      node.tag === FunctionalCoreTag.StoreWrite ||
-      node.tag === FunctionalCoreTag.StoreGrow
+      node.tag === CoreTag.StoreNew ||
+      node.tag === CoreTag.StoreLength ||
+      node.tag === CoreTag.StoreRead ||
+      node.tag === CoreTag.StoreWrite ||
+      node.tag === CoreTag.StoreGrow
     ) &&
     module.entryEffects.length === 0 &&
     module.hostCapabilities.every((capability) => capability.fields.length === 0) &&
@@ -65,12 +65,12 @@ export function createFunctionalWasmBackendPlan(
     nodes,
     captureAnalysis,
     constantAnalysis,
-    functionAnalysis: new FunctionalWasmFunctionAnalysis(
+    functionAnalysis: new WasmFunctionAnalysis(
       nodes,
       module.definitionRoots,
       constantAnalysis,
     ),
-    uniqueReuseAnalysis: new FunctionalWasmUniqueReuseAnalysis(module, nodes),
+    uniqueReuseAnalysis: new WasmUniqueReuseAnalysis(module, nodes),
     storage,
     entry,
     compactScalarEligible,
@@ -80,7 +80,7 @@ export function createFunctionalWasmBackendPlan(
 }
 
 export function validateFunctionalWasmSimdMode(
-  simd: FunctionalWasmCompilationOptions["simd"],
+  simd: WasmCompilationOptions["simd"],
 ): void {
   if (
     simd !== undefined && simd !== "portable-scalar" &&
@@ -95,9 +95,9 @@ export function validateFunctionalWasmSimdMode(
 }
 
 function validateOwnedTypeExports(
-  module: GpuFunctionalModule,
-  nodes: readonly FunctionalCoreNode[],
-  options: FunctionalWasmCompilationOptions,
+  module: GpuModule,
+  nodes: readonly CoreNode[],
+  options: WasmCompilationOptions,
 ): void {
   const ownedTypeExports = options.ownedTypeExports ?? [];
   if (!Array.isArray(ownedTypeExports)) {
@@ -108,10 +108,10 @@ function validateOwnedTypeExports(
     throw new TypeError("functional WASM ownedTypeExports require a verified frontend storageCore");
   }
   if (
-    module.evaluationProfile !== FunctionalEvaluationProfile.StrictEager ||
+    module.evaluationProfile !== EvaluationProfile.StrictEager ||
     nodes.some((node) =>
-      (node.tag === FunctionalCoreTag.Apply || node.tag === FunctionalCoreTag.Let) &&
-      node.evaluationMode === FunctionalEvaluationMode.LazyCallByNeed
+      (node.tag === CoreTag.Apply || node.tag === CoreTag.Let) &&
+      node.evaluationMode === EvaluationMode.LazyCallByNeed
     )
   ) {
     throw new TypeError(

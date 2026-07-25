@@ -1,16 +1,16 @@
-import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
+import { WasmValueAbi } from "./wasm_abi.ts";
 import {
-  FunctionalWasmFunctionType,
   type WasmFunctionBody,
+  WasmFunctionTypeIndex,
   WasmInstructions,
   WasmValueType,
 } from "./wasm_binary.ts";
 import {
-  FUNCTIONAL_WASM_ALLOCATION_MAGIC,
-  FUNCTIONAL_WASM_FREE_BLOCK_MAGIC,
-  FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH,
-  FUNCTIONAL_WASM_MINIMUM_ALLOCATION_BYTE_LENGTH,
-  FunctionalWasmRuntimeGlobal,
+  WASM_ALLOCATION_MAGIC,
+  WASM_FREE_BLOCK_MAGIC,
+  WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH,
+  WASM_MINIMUM_ALLOCATION_BYTE_LENGTH,
+  WasmRuntimeGlobal,
 } from "./wasm_runtime_layout.ts";
 
 export const WASM_FAULT_BLACKHOLE = 1;
@@ -25,8 +25,8 @@ export const THUNK_UNEVALUATED = 0;
 export const THUNK_EVALUATING = 1;
 export const THUNK_EVALUATED = 2;
 
-const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
-const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
+const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
+const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 const THUNK_HEADER_BYTE_LENGTH = OBJECT_HEADER_BYTE_LENGTH + VALUE_BYTE_LENGTH;
 
 export function allocateFunction(heapStart: number): WasmFunctionBody {
@@ -42,7 +42,7 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   const currentPages = instructions.addLocal(WasmValueType.I32);
   instructions.emit(0x02, 0x40);
   emitNormalizeAllocationByteLength(instructions, 0, 0);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.FreeListHead);
+  instructions.globalGet(WasmRuntimeGlobal.FreeListHead);
   instructions.localSet(currentFree);
   instructions.emit(0x02, 0x40, 0x03, 0x40);
   instructions.localGet(currentFree);
@@ -64,7 +64,7 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.localSet(replacementFree);
   instructions.emit(0x05);
   instructions.localGet(remainderByteLength);
-  instructions.i32Const(FUNCTIONAL_WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
+  instructions.i32Const(WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
   instructions.emit(0x49, 0x04, 0x40);
   instructions.localGet(currentFree);
   instructions.localSet(previousFree);
@@ -77,7 +77,7 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.localGet(0);
   instructions.emit(0x6a);
   instructions.localTee(replacementFree);
-  instructions.i32Const(FUNCTIONAL_WASM_FREE_BLOCK_MAGIC);
+  instructions.i32Const(WASM_FREE_BLOCK_MAGIC);
   instructions.i32Store(0);
   instructions.localGet(replacementFree);
   instructions.localGet(remainderByteLength);
@@ -93,7 +93,7 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.localGet(previousFree);
   instructions.emit(0x45, 0x04, 0x40);
   instructions.localGet(replacementFree);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.FreeListHead);
+  instructions.globalSet(WasmRuntimeGlobal.FreeListHead);
   instructions.emit(0x05);
   instructions.localGet(previousFree);
   instructions.localGet(replacementFree);
@@ -111,7 +111,7 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.emit(0x0c);
   instructions.unsigned(0);
   instructions.emit(0x0b, 0x0b);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapTop);
+  instructions.globalGet(WasmRuntimeGlobal.HeapTop);
   instructions.localTee(previousTop);
   instructions.localGet(0);
   instructions.emit(0x6a);
@@ -119,11 +119,11 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.localGet(previousTop);
   instructions.emit(0x49);
   instructions.localGet(nextTop);
-  instructions.i32Const(FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH);
+  instructions.i32Const(WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH);
   instructions.emit(0x4b, 0x72, 0x0d);
   instructions.unsigned(0);
   instructions.localGet(nextTop);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapCapacityByteLength);
+  instructions.globalGet(WasmRuntimeGlobal.HeapCapacityByteLength);
   instructions.emit(0x4b, 0x04, 0x40);
   instructions.localGet(nextTop);
   instructions.i32Const(1);
@@ -147,15 +147,15 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   instructions.localGet(requiredPages);
   instructions.i32Const(16);
   instructions.emit(0x74);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.HeapCapacityByteLength);
+  instructions.globalSet(WasmRuntimeGlobal.HeapCapacityByteLength);
   instructions.emit(0x0b);
   instructions.localGet(nextTop);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.HeapTop);
+  instructions.globalSet(WasmRuntimeGlobal.HeapTop);
   emitInitializeAllocation(instructions, previousTop, 0);
   instructions.localGet(previousTop);
   instructions.emit(0x0f, 0x0b);
   emitOutOfMemory(instructions);
-  return functionBody(FunctionalWasmFunctionType.Allocator, instructions, "allocator");
+  return functionBody(WasmFunctionTypeIndex.Allocator, instructions, "allocator");
 }
 
 export function freeFunction(typeIndex: number, heapStart: number): WasmFunctionBody {
@@ -181,7 +181,7 @@ export function freeFunction(typeIndex: number, heapStart: number): WasmFunction
   instructions.localGet(0);
   instructions.emit(0x49, 0x72);
   instructions.localGet(end);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapTop);
+  instructions.globalGet(WasmRuntimeGlobal.HeapTop);
   instructions.emit(0x4b, 0x72, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(0);
   instructions.i32Load(0);
@@ -198,19 +198,19 @@ export function freeFunction(typeIndex: number, heapStart: number): WasmFunction
   instructions.localGet(1);
   instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(0);
-  instructions.i32Const(FUNCTIONAL_WASM_FREE_BLOCK_MAGIC);
+  instructions.i32Const(WASM_FREE_BLOCK_MAGIC);
   instructions.i32Store(0);
   instructions.localGet(0);
   instructions.localGet(1);
   instructions.i32Store(4);
   instructions.localGet(0);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.FreeListHead);
+  instructions.globalGet(WasmRuntimeGlobal.FreeListHead);
   instructions.i32Store(8);
   instructions.localGet(0);
   instructions.i32Const(0);
   instructions.i32Store(12);
   instructions.localGet(0);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.FreeListHead);
+  instructions.globalSet(WasmRuntimeGlobal.FreeListHead);
   return functionBody(typeIndex, instructions, "free-list release");
 }
 
@@ -220,7 +220,7 @@ function emitNormalizeAllocationByteLength(
   outOfMemoryBranchDepth?: number,
 ): void {
   instructions.localGet(byteLength);
-  instructions.i32Const(FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH);
+  instructions.i32Const(WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH);
   instructions.emit(0x4b);
   if (outOfMemoryBranchDepth === undefined) {
     instructions.emit(0x04, 0x40);
@@ -237,18 +237,18 @@ function emitNormalizeAllocationByteLength(
   instructions.emit(0x71);
   instructions.localSet(byteLength);
   instructions.localGet(byteLength);
-  instructions.i32Const(FUNCTIONAL_WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
+  instructions.i32Const(WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
   instructions.emit(0x49, 0x04, 0x40);
-  instructions.i32Const(FUNCTIONAL_WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
+  instructions.i32Const(WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
   instructions.localSet(byteLength);
   instructions.emit(0x0b);
 }
 
 function emitOutOfMemory(instructions: WasmInstructions): void {
   instructions.i32Const(WASM_FAULT_OUT_OF_MEMORY);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFault);
+  instructions.globalSet(WasmRuntimeGlobal.RuntimeFault);
   instructions.i32Const(-1);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFaultNode);
+  instructions.globalSet(WasmRuntimeGlobal.RuntimeFaultNode);
   instructions.emit(0x00);
 }
 
@@ -258,7 +258,7 @@ function emitInitializeAllocation(
   byteLength: number,
 ): void {
   instructions.localGet(pointer);
-  instructions.i32Const(FUNCTIONAL_WASM_ALLOCATION_MAGIC);
+  instructions.i32Const(WASM_ALLOCATION_MAGIC);
   instructions.i32Store(0);
   instructions.localGet(pointer);
   instructions.localGet(byteLength);
@@ -286,12 +286,12 @@ function emitFreeBlockGuard(
   instructions.emit(0x49, 0x72, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(pointer);
   instructions.i32Load(0);
-  instructions.i32Const(FUNCTIONAL_WASM_FREE_BLOCK_MAGIC);
+  instructions.i32Const(WASM_FREE_BLOCK_MAGIC);
   instructions.emit(0x47);
   instructions.localGet(pointer);
   instructions.i32Load(4);
   instructions.localTee(byteLength);
-  instructions.i32Const(FUNCTIONAL_WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
+  instructions.i32Const(WASM_MINIMUM_ALLOCATION_BYTE_LENGTH);
   instructions.emit(0x49);
   instructions.localGet(byteLength);
   instructions.i32Const(7);
@@ -303,7 +303,7 @@ function emitFreeBlockGuard(
   instructions.localGet(pointer);
   instructions.emit(0x49);
   instructions.localGet(end);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.HeapTop);
+  instructions.globalGet(WasmRuntimeGlobal.HeapTop);
   instructions.emit(0x4b, 0x72, 0x72, 0x04, 0x40, 0x00, 0x0b);
 }
 
@@ -318,18 +318,18 @@ function emitAllocationByteLength(
   const headerByteLength = instructions.addLocal(WasmValueType.I32);
   const wideByteLength = instructions.addLocal(WasmValueType.I64);
   instructions.localGet(kind);
-  instructions.i32Const(FUNCTIONAL_WASM_ALLOCATION_MAGIC);
+  instructions.i32Const(WASM_ALLOCATION_MAGIC);
   instructions.emit(0x46, 0x04, 0x40);
   instructions.localGet(pointer);
   instructions.i32Load(4);
   instructions.localSet(byteLength);
   instructions.emit(0x05);
   instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.closure);
+  instructions.i32Const(WasmValueAbi.objectKinds.closure);
   instructions.emit(0x6b);
   instructions.i32Const(
-    FunctionalWasmValueAbi.objectKinds.store -
-      FunctionalWasmValueAbi.objectKinds.closure,
+    WasmValueAbi.objectKinds.store -
+      WasmValueAbi.objectKinds.closure,
   );
   instructions.emit(0x4b);
   instructions.localGet(pointer);
@@ -337,17 +337,17 @@ function emitAllocationByteLength(
   instructions.localGet(pointer);
   instructions.i32Load(8);
   instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.thunk);
+  instructions.i32Const(WasmValueAbi.objectKinds.thunk);
   instructions.emit(0x46, 0x1b);
   instructions.localSet(valueCount);
   instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.numeric);
+  instructions.i32Const(WasmValueAbi.objectKinds.numeric);
   instructions.emit(0x46);
   instructions.localGet(valueCount);
   instructions.i32Const(1);
   instructions.emit(0x47, 0x71);
   instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.resource);
+  instructions.i32Const(WasmValueAbi.objectKinds.resource);
   instructions.emit(0x46);
   instructions.localGet(valueCount);
   instructions.i32Const(0);
@@ -355,19 +355,19 @@ function emitAllocationByteLength(
   instructions.i32Const(1);
   instructions.i32Const(VALUE_BYTE_LENGTH);
   instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.text);
+  instructions.i32Const(WasmValueAbi.objectKinds.text);
   instructions.emit(0x46);
   instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.bytes);
+  instructions.i32Const(WasmValueAbi.objectKinds.bytes);
   instructions.emit(0x46, 0x72, 0x1b);
   instructions.localSet(valueByteLength);
   instructions.i32Const(THUNK_HEADER_BYTE_LENGTH);
   instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
   instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.thunk);
+  instructions.i32Const(WasmValueAbi.objectKinds.thunk);
   instructions.emit(0x46);
   instructions.localGet(kind);
-  instructions.i32Const(FunctionalWasmValueAbi.objectKinds.numeric);
+  instructions.i32Const(WasmValueAbi.objectKinds.numeric);
   instructions.emit(0x46, 0x72, 0x1b);
   instructions.localSet(headerByteLength);
   instructions.localGet(valueCount);
@@ -377,7 +377,7 @@ function emitAllocationByteLength(
   instructions.localGet(headerByteLength);
   instructions.emit(0xad, 0x7c);
   instructions.localTee(wideByteLength);
-  instructions.i64Const(BigInt(FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH));
+  instructions.i64Const(BigInt(WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH));
   instructions.emit(0x56, 0x72, 0x04, 0x40, 0x00, 0x0b);
   instructions.localGet(wideByteLength);
   instructions.emit(0xa7);
@@ -399,21 +399,21 @@ export function forceThunkFunction(): WasmFunctionBody {
   instructions.i32Load(4);
   instructions.emit(0x04, 0x40);
   instructions.i32Const(WASM_FAULT_BLACKHOLE);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFault);
+  instructions.globalSet(WasmRuntimeGlobal.RuntimeFault);
   instructions.i32Const(-1);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.RuntimeFaultNode);
+  instructions.globalSet(WasmRuntimeGlobal.RuntimeFaultNode);
   instructions.emit(0x00, 0x0b);
   instructions.localGet(0);
   instructions.i32Const(THUNK_EVALUATING);
   instructions.i32Store(4);
-  instructions.globalGet(FunctionalWasmRuntimeGlobal.ThunkEvaluations);
+  instructions.globalGet(WasmRuntimeGlobal.ThunkEvaluations);
   instructions.i32Const(1);
   instructions.emit(0x6a);
-  instructions.globalSet(FunctionalWasmRuntimeGlobal.ThunkEvaluations);
+  instructions.globalSet(WasmRuntimeGlobal.ThunkEvaluations);
   instructions.localGet(0);
   instructions.localGet(0);
   instructions.i32Load(8);
-  instructions.callIndirect(FunctionalWasmFunctionType.ThunkForce);
+  instructions.callIndirect(WasmFunctionTypeIndex.ThunkForce);
   instructions.localSet(value);
   instructions.localGet(0);
   instructions.localGet(value);
@@ -424,7 +424,7 @@ export function forceThunkFunction(): WasmFunctionBody {
   instructions.localGet(value);
   instructions.emit(0x0b);
   return functionBody(
-    FunctionalWasmFunctionType.ThunkForce,
+    WasmFunctionTypeIndex.ThunkForce,
     instructions,
     "thunk force slow path",
   );

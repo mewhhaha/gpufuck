@@ -1,6 +1,6 @@
-export const FUNCTIONAL_WASM_GC_ABI_VERSION = 2;
+export const WASM_GC_ABI_VERSION = 2;
 
-export const FunctionalWasmGcValueKind = {
+export const WasmGcValueKind = {
   Integer: 0,
   Boolean: 1,
   Constructor: 2,

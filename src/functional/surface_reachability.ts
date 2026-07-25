@@ -1,17 +1,14 @@
-import type {
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceExpression,
-} from "./surface_contract.ts";
+import type { SurfaceDefinition, SurfaceExpression } from "./surface_contract.ts";
 
-export interface FunctionalSurfaceReachability {
+export interface SurfaceReachability {
   readonly definitionNames: ReadonlySet<string>;
   readonly referencedSymbols: ReadonlySet<string>;
 }
 
 export function analyzeFunctionalSurfaceReachability(
-  definitions: readonly FunctionalSurfaceDefinition[],
+  definitions: readonly SurfaceDefinition[],
   roots: readonly string[],
-): FunctionalSurfaceReachability {
+): SurfaceReachability {
   const definitionsByName = new Map(definitions.map((definition) => [definition.name, definition]));
   const definitionNames = new Set<string>();
   const referencedSymbols = new Set<string>();
@@ -24,7 +21,7 @@ export function analyzeFunctionalSurfaceReachability(
     if (definition === undefined) continue;
     definitionNames.add(definitionName);
 
-    const expressions: FunctionalSurfaceExpression[] = [definition.body];
+    const expressions: SurfaceExpression[] = [definition.body];
     while (expressions.length > 0) {
       const expression = expressions.pop()!;
       switch (expression.kind) {

@@ -5,10 +5,10 @@ import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { LAZULI_DEFINITION_WORD_LENGTH, LazuliDefinitionWord } from "../src/semantic/abi.ts";
 import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";
 import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
-import { GpuFunctionalSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
-import type { GpuFunctionalCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
-import { FunctionalCompilationStatus } from "../src/semantic/compiler_shader.ts";
-import { FunctionalInferenceStatus } from "../src/semantic/type_inference_shader.ts";
+import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
+import type { GpuCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
+import { CompilationStatus } from "../src/semantic/compiler_shader.ts";
+import { InferenceStatus } from "../src/semantic/type_inference_shader.ts";
 
 const DEFAULT_SOURCE_PATH = "examples/lazuli/brainfuck_compiler.laz";
 const SAMPLE_COUNT = 5;
@@ -68,7 +68,7 @@ const device = await adapter.requestDevice();
 const deviceInitializationMilliseconds = performance.now() - deviceStart;
 try {
   const compilerStart = performance.now();
-  const compiler = await GpuFunctionalSemanticCompiler.create(device);
+  const compiler = await GpuSemanticCompiler.create(device);
   const compilerInitializationMilliseconds = performance.now() - compilerStart;
 
   const warmupSource = "fn main = 0;";
@@ -107,7 +107,7 @@ try {
         { maximumSteps: MAXIMUM_STEPS, maximumStepsPerDispatch },
         undefined,
         {
-          observeDispatch: (observation: GpuFunctionalCompilationDispatchObservation) => {
+          observeDispatch: (observation: GpuCompilationDispatchObservation) => {
             const now = performance.now();
             dispatches.push({
               elapsedMilliseconds: now - previousDispatch,
@@ -335,9 +335,9 @@ function definitionRoots(surface: typeof semanticSurface): readonly number[] {
 }
 
 function dispatchPhase(
-  observation: GpuFunctionalCompilationDispatchObservation,
+  observation: GpuCompilationDispatchObservation,
 ): DispatchProfile["phase"] {
-  if (observation.semanticStatus === FunctionalCompilationStatus.Pending) return "resolution";
-  if (observation.inferenceStatus === FunctionalInferenceStatus.Complete) return "complete";
+  if (observation.semanticStatus === CompilationStatus.Pending) return "resolution";
+  if (observation.inferenceStatus === InferenceStatus.Complete) return "complete";
   return "inference";
 }

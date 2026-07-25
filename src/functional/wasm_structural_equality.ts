@@ -1,17 +1,17 @@
-import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
+import { WasmValueAbi } from "./wasm_abi.ts";
 import { type WasmFunctionBody, WasmInstructions, WasmValueType } from "./wasm_binary.ts";
 import { functionBody } from "./wasm_runtime_binary.ts";
 
-const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
-const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
-const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
-const BYTES_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.bytes;
-const ARRAY_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.array;
-const SLICE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.slice;
-const RESOURCE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.resource;
-const IMMEDIATE_TAG_MASK = FunctionalWasmValueAbi.immediateTags.bitMask;
-const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
-const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
+const CONSTRUCTOR_OBJECT_KIND = WasmValueAbi.objectKinds.constructor;
+const NUMERIC_OBJECT_KIND = WasmValueAbi.objectKinds.numeric;
+const TEXT_OBJECT_KIND = WasmValueAbi.objectKinds.text;
+const BYTES_OBJECT_KIND = WasmValueAbi.objectKinds.bytes;
+const ARRAY_OBJECT_KIND = WasmValueAbi.objectKinds.array;
+const SLICE_OBJECT_KIND = WasmValueAbi.objectKinds.slice;
+const RESOURCE_OBJECT_KIND = WasmValueAbi.objectKinds.resource;
+const IMMEDIATE_TAG_MASK = WasmValueAbi.immediateTags.bitMask;
+const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
+const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 
 export function structuralEqualityFunction(options: {
   readonly typeIndex: number;
@@ -140,7 +140,7 @@ function emitNumericEquality(
   instructions.emit(0x0f, 0x0b);
 
   instructions.localGet(numericKind);
-  instructions.i32Const(FunctionalWasmValueAbi.numericKinds.signedInteger64);
+  instructions.i32Const(WasmValueAbi.numericKinds.signedInteger64);
   instructions.emit(0x46, 0x04, 0x40);
   instructions.localGet(leftPointer);
   instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH);
@@ -148,7 +148,7 @@ function emitNumericEquality(
   instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH);
   instructions.emit(0x51, 0x0f, 0x0b);
   instructions.localGet(numericKind);
-  instructions.i32Const(FunctionalWasmValueAbi.numericKinds.float32);
+  instructions.i32Const(WasmValueAbi.numericKinds.float32);
   instructions.emit(0x46, 0x04, 0x40);
   instructions.localGet(leftPointer);
   instructions.f32Load(OBJECT_HEADER_BYTE_LENGTH);

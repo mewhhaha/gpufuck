@@ -5,12 +5,12 @@
  */
 import { equal, ok } from "node:assert/strict";
 
-import { FunctionalBinaryOperator, type FunctionalSpan, surface } from "../functional.ts";
+import { BinaryOperator, type Span, surface } from "../functional.ts";
 
-const SPAN: FunctionalSpan = { startByte: 10, endByte: 20 };
+const SPAN: Span = { startByte: 10, endByte: 20 };
 
-function spanOf(expression: unknown): FunctionalSpan | undefined {
-  return (expression as { readonly span?: FunctionalSpan }).span;
+function spanOf(expression: unknown): Span | undefined {
+  return (expression as { readonly span?: Span }).span;
 }
 
 Deno.test("the default builder emits no span, so existing output is unchanged", () => {
@@ -29,7 +29,7 @@ Deno.test("at() stamps the node each helper produces", () => {
   equal(spanOf(surface.at(SPAN).integer(1)), SPAN);
   equal(
     spanOf(
-      surface.at(SPAN).binary(FunctionalBinaryOperator.Add, surface.integer(1), surface.integer(2)),
+      surface.at(SPAN).binary(BinaryOperator.Add, surface.integer(1), surface.integer(2)),
     ),
     SPAN,
   );

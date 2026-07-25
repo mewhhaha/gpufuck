@@ -1,4 +1,4 @@
-import type { GpuFunctionalCompiler } from "../../../functional.ts";
+import type { GpuCompiler } from "../../../functional.ts";
 import type { Test262ExecutionMode, Test262Metadata } from "./test262.ts";
 import { lowerTest262NegativeTest, lowerTest262PositiveTest } from "./test262_harness.ts";
 
@@ -35,7 +35,7 @@ export type Test262ExecutionResponse =
   | { readonly ok: false; readonly message: string; readonly stack: string | null };
 
 export async function compileTest262Case(
-  compiler: GpuFunctionalCompiler,
+  compiler: GpuCompiler,
   request: Test262ExecutionRequest,
 ): Promise<Test262ExecutionCaseResult> {
   const testCase = request.executionCase;

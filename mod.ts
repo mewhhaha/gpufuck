@@ -7,8 +7,7 @@
 export * from "./functional.ts";
 export {
   type EncodedLazuliSurface,
-  FUNCTIONAL_MAXIMUM_PARSE_DEPTH,
-  type FunctionalFrontendResult,
+  type FrontendResult,
   LAZULI_ABI_VERSION,
   LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
   LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH,
@@ -24,6 +23,7 @@ export {
   type LazuliTypeDeclaration,
   type LazuliTypeSchema,
   LazuliUnaryOperator,
+  MAXIMUM_PARSE_DEPTH,
 } from "./src/semantic/abi.ts";
 export {
   GpuLazuliCompiler,

@@ -10,10 +10,7 @@ import {
   lazuliDiagnosticFromFunctional,
   lazuliSurfaceToFunctionalModule,
 } from "./functional_adapter.ts";
-import {
-  GpuFunctionalCompiler,
-  validateFunctionalCompilationOptions,
-} from "../functional/compiler.ts";
+import { GpuCompiler, validateFunctionalCompilationOptions } from "../functional/compiler.ts";
 
 export type {
   GpuLazuliModule,
@@ -27,14 +24,14 @@ type PreparedLazuliSource =
   | { readonly ok: false; readonly result: LazuliCompileResult };
 
 export class GpuLazuliCompiler {
-  readonly #compiler: GpuFunctionalCompiler;
+  readonly #compiler: GpuCompiler;
 
-  private constructor(compiler: GpuFunctionalCompiler) {
+  private constructor(compiler: GpuCompiler) {
     this.#compiler = compiler;
   }
 
   static async create(device: GPUDevice): Promise<GpuLazuliCompiler> {
-    return new GpuLazuliCompiler(await GpuFunctionalCompiler.create(device));
+    return new GpuLazuliCompiler(await GpuCompiler.create(device));
   }
 
   async compile(

@@ -1,4 +1,4 @@
-import { GpuFunctionalCompiler, requestWebGpuDevice } from "../../functional.ts";
+import { GpuCompiler, requestWebGpuDevice } from "../../functional.ts";
 import { lowerJavaScriptAotSource } from "./mod.ts";
 
 type CliOutput = Pick<Console, "error" | "log">;
@@ -26,7 +26,7 @@ export async function main(
 
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuFunctionalCompiler.create(device);
+    const compiler = await GpuCompiler.create(device);
     const compilation = await compiler.compileModule(frontend.lowered.module);
     if (!compilation.ok) {
       for (const diagnostic of compilation.diagnostics) {

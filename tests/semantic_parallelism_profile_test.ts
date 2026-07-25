@@ -1,6 +1,6 @@
 import { deepStrictEqual } from "node:assert/strict";
 
-import { FunctionalCoreTag, FunctionalEvaluationMode } from "../functional.ts";
+import { CoreTag, EvaluationMode } from "../functional.ts";
 import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";
 import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
 
@@ -33,26 +33,26 @@ Deno.test("definition parallelism profiles report work, span, width, and recursi
 
 function globalNode(definition: number): LazuliCoreNode {
   return {
-    tag: FunctionalCoreTag.Global,
+    tag: CoreTag.Global,
     payload: definition,
     child0: 0xffff_ffff,
     child1: 0xffff_ffff,
     child2: 0xffff_ffff,
     sourceByteOffset: 0,
     sourceEndByte: 0,
-    evaluationMode: FunctionalEvaluationMode.StrictEager,
+    evaluationMode: EvaluationMode.StrictEager,
   };
 }
 
 function integerNode(): LazuliCoreNode {
   return {
-    tag: FunctionalCoreTag.Integer,
+    tag: CoreTag.Integer,
     payload: 42,
     child0: 0xffff_ffff,
     child1: 0xffff_ffff,
     child2: 0xffff_ffff,
     sourceByteOffset: 0,
     sourceEndByte: 0,
-    evaluationMode: FunctionalEvaluationMode.StrictEager,
+    evaluationMode: EvaluationMode.StrictEager,
   };
 }

@@ -1,16 +1,16 @@
 import {
+  BinaryOperator,
   type EncodedFunctionalModule,
-  FunctionalBinaryOperator,
-  FunctionalNumericConversion,
-  type FunctionalSourceType,
-  type FunctionalTypeSchema,
-  FunctionalUnaryOperator,
+  NumericConversion,
+  type SourceType,
+  type TypeSchema,
+  UnaryOperator,
 } from "../../../src/functional/abi.ts";
 import {
-  buildFunctionalSurfaceModule,
-  type FunctionalSurfaceCaseArm,
-  type FunctionalSurfaceDefinition,
-  type FunctionalSurfaceExpression,
+  buildSurfaceModule,
+  type SurfaceCaseArm,
+  type SurfaceDefinition,
+  type SurfaceExpression,
 } from "../../../src/functional/surface_builder.ts";
 import { analyzeFunctionalSurfaceReachability } from "../../../src/functional/surface_reachability.ts";
 import type {
@@ -51,7 +51,7 @@ import * as Runtime from "./runtime_contract.ts";
 
 export interface LoweredJavaScriptRuntimeModule {
   readonly sourceModule: JavaScriptAotModule;
-  readonly definitions: readonly FunctionalSurfaceDefinition[];
+  readonly definitions: readonly SurfaceDefinition[];
   readonly module: EncodedFunctionalModule;
 }
 
@@ -63,13 +63,13 @@ export interface JavaScriptRuntimeLoweringOptions {
 }
 
 type RuntimeExpressionContinuation = (
-  state: FunctionalSurfaceExpression,
-  value: FunctionalSurfaceExpression,
-) => FunctionalSurfaceExpression;
+  state: SurfaceExpression,
+  value: SurfaceExpression,
+) => SurfaceExpression;
 
 type RuntimeStatementContinuation = (
-  state: FunctionalSurfaceExpression,
-) => FunctionalSurfaceExpression;
+  state: SurfaceExpression,
+) => SurfaceExpression;
 
 type RuntimeEntryResultKind = "boolean" | "number" | "string";
 type RuntimeExpressionResultKind = RuntimeEntryResultKind | "never";
@@ -95,22 +95,22 @@ type RuntimeFunctionSyntax =
   | Extract<JavaScriptAotExpression, { readonly kind: "function" }>;
 
 interface RuntimeAccessorDescriptor {
-  readonly getter: FunctionalSurfaceExpression;
-  readonly setter: FunctionalSurfaceExpression;
+  readonly getter: SurfaceExpression;
+  readonly setter: SurfaceExpression;
   readonly enumerable: boolean;
   readonly configurable: boolean;
 }
 
-const runtimeNumericOperators: Readonly<Partial<Record<string, FunctionalBinaryOperator>>> = {
-  "+": FunctionalBinaryOperator.AddFloat64,
-  "-": FunctionalBinaryOperator.SubtractFloat64,
-  "*": FunctionalBinaryOperator.MultiplyFloat64,
-  "/": FunctionalBinaryOperator.DivideFloat64,
-  "%": FunctionalBinaryOperator.RemainderFloat64,
-  "<": FunctionalBinaryOperator.LessFloat64,
-  "<=": FunctionalBinaryOperator.LessEqualFloat64,
-  ">": FunctionalBinaryOperator.GreaterFloat64,
-  ">=": FunctionalBinaryOperator.GreaterEqualFloat64,
+const runtimeNumericOperators: Readonly<Partial<Record<string, BinaryOperator>>> = {
+  "+": BinaryOperator.AddFloat64,
+  "-": BinaryOperator.SubtractFloat64,
+  "*": BinaryOperator.MultiplyFloat64,
+  "/": BinaryOperator.DivideFloat64,
+  "%": BinaryOperator.RemainderFloat64,
+  "<": BinaryOperator.LessFloat64,
+  "<=": BinaryOperator.LessEqualFloat64,
+  ">": BinaryOperator.GreaterFloat64,
+  ">=": BinaryOperator.GreaterEqualFloat64,
 };
 const JAVASCRIPT_RUNTIME_ERROR_CONSTRUCTORS = new Set([
   "Error",
@@ -237,7 +237,7 @@ class JavaScriptRuntimeLowering {
         : emptyState,
       entry.body,
     );
-    const entryDefinition: FunctionalSurfaceDefinition = {
+    const entryDefinition: SurfaceDefinition = {
       name: entry.name,
       parameters: [],
       annotation: null,
@@ -253,7 +253,7 @@ class JavaScriptRuntimeLowering {
       ),
       span: entry.span,
     };
-    const functionDefinitions: FunctionalSurfaceDefinition[] = [];
+    const functionDefinitions: SurfaceDefinition[] = [];
     for (let index = 0; index < this.#functions.length; index++) {
       functionDefinitions.push(this.lowerFunctionDefinition(this.#functions[index]!));
     }
@@ -301,7 +301,7 @@ class JavaScriptRuntimeLowering {
     return {
       sourceModule: this.sourceModule,
       definitions,
-      module: buildFunctionalSurfaceModule(
+      module: buildSurfaceModule(
         definitions,
         runtime.typeDeclarations,
         entry.name,
@@ -312,7 +312,7 @@ class JavaScriptRuntimeLowering {
 
   private lowerFunctionDefinition(
     runtimeFunction: RuntimeFunction,
-  ): FunctionalSurfaceDefinition {
+  ): SurfaceDefinition {
     const heapName = this.freshName("functionHeap");
     const realmName = this.freshName("functionRealm");
     const environmentName = this.freshName("capturedEnvironment");
@@ -361,7 +361,7 @@ class JavaScriptRuntimeLowering {
         runtimeFunction.parameterInitializers.flat(),
       );
     }
-    const lowerBody = (readyState: FunctionalSurfaceExpression) => {
+    const lowerBody = (readyState: SurfaceExpression) => {
       const bodyState = this.extendFunctionStateWithDeclarations(
         readyState,
         runtimeFunction.body,
@@ -405,13 +405,13 @@ class JavaScriptRuntimeLowering {
   private initializeRuntimeParameters(
     runtimeFunction: RuntimeFunction,
     parameterIndex: number,
-    state: FunctionalSurfaceExpression,
-    arguments_: readonly FunctionalSurfaceExpression[],
+    state: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
     onReady: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const initializers = runtimeFunction.parameterInitializers[parameterIndex];
     if (initializers === undefined) return onReady(state);
-    const continueInitialization = (initializerState: FunctionalSurfaceExpression) =>
+    const continueInitialization = (initializerState: SurfaceExpression) =>
       this.initializeRuntimeParameters(
         runtimeFunction,
         parameterIndex + 1,
@@ -419,7 +419,7 @@ class JavaScriptRuntimeLowering {
         arguments_,
         onReady,
       );
-    const runInitializers = (parameterState: FunctionalSurfaceExpression) => {
+    const runInitializers = (parameterState: SurfaceExpression) => {
       if (initializers.length === 0) return continueInitialization(parameterState);
       return this.resumeNormalCompletion(
         this.lowerStatements(initializers, 0, parameterState),
@@ -447,8 +447,8 @@ class JavaScriptRuntimeLowering {
       );
     }
     const initializeArgument = (
-      parameterState: FunctionalSurfaceExpression,
-      value: FunctionalSurfaceExpression,
+      parameterState: SurfaceExpression,
+      value: SurfaceExpression,
     ) =>
       this.initializeBinding(
         parameterState,
@@ -481,12 +481,12 @@ class JavaScriptRuntimeLowering {
   }
 
   private defineRuntimeArgumentsBinding(
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     runtimeFunction: RuntimeFunction,
-    callee: FunctionalSurfaceExpression,
-    argumentCount: FunctionalSurfaceExpression,
-    arguments_: readonly FunctionalSurfaceExpression[],
-  ): FunctionalSurfaceExpression {
+    callee: SurfaceExpression,
+    argumentCount: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
+  ): SurfaceExpression {
     if (
       runtimeFunction.thisMode === "lexical" || !runtimeFunction.usesArguments ||
       runtimeFunction.parameters.includes("arguments")
@@ -527,7 +527,7 @@ class JavaScriptRuntimeLowering {
                     call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
                       {
                         kind: "numeric-convert",
-                        conversion: FunctionalNumericConversion.SignedInteger32ToFloat64,
+                        conversion: NumericConversion.SignedInteger32ToFloat64,
                         value: argumentCount,
                         span,
                       },
@@ -558,7 +558,7 @@ class JavaScriptRuntimeLowering {
                 for (let index = 0; index < arguments_.length; index++) {
                   argumentsHeap = conditional(
                     binary(
-                      FunctionalBinaryOperator.Less,
+                      BinaryOperator.Less,
                       integer(index, span),
                       argumentCount,
                       span,
@@ -668,9 +668,9 @@ class JavaScriptRuntimeLowering {
   }
 
   private extendFunctionStateWithDeclarations(
-    base: FunctionalSurfaceExpression,
+    base: SurfaceExpression,
     statements: readonly JavaScriptAotStatement[],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     let state = base;
     const names = new Set<string>();
     for (const declaration of runtimeVarDeclarations(statements)) {
@@ -688,10 +688,10 @@ class JavaScriptRuntimeLowering {
   }
 
   private extendLexicalStateWithDeclarations(
-    base: FunctionalSurfaceExpression,
+    base: SurfaceExpression,
     statements: readonly JavaScriptAotStatement[],
     existingNames: ReadonlySet<string> = new Set(),
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     let state = base;
     const names = new Set(existingNames);
     for (const statement of statements) {
@@ -720,9 +720,9 @@ class JavaScriptRuntimeLowering {
   private initializeHoistedFunctions(
     statements: readonly JavaScriptAotStatement[],
     index: number,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onReady: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const statement = statements[index];
     if (statement === undefined) return onReady(state);
     if (statement.kind !== "function-declaration" || statement.classMethods !== undefined) {
@@ -747,8 +747,8 @@ class JavaScriptRuntimeLowering {
   private lowerStatements(
     statements: readonly JavaScriptAotStatement[],
     index: number,
-    state: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    state: SurfaceExpression,
+  ): SurfaceExpression {
     const statement = statements[index];
     if (statement === undefined) {
       return call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
@@ -789,9 +789,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerStatement(
     statement: JavaScriptAotStatement,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     switch (statement.kind) {
       case "function-declaration": {
         if (statement.classMethods === undefined) return onNormal(state);
@@ -902,17 +902,17 @@ class JavaScriptRuntimeLowering {
 
   private lowerExpressionStatement(
     expression: JavaScriptAotExpression,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return this.lowerExpression(expression, state, (nextState) => onNormal(nextState));
   }
 
   private lowerStatementBranch(
     statements: readonly JavaScriptAotStatement[],
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const span = statements[0]?.span ?? this.sourceModule.span;
     const stateName = this.freshName("blockState");
     const heapName = this.freshName("blockHeap");
@@ -947,9 +947,9 @@ class JavaScriptRuntimeLowering {
   private lowerVarDeclarations(
     statement: Extract<JavaScriptAotStatement, { readonly kind: "var" }>,
     index: number,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const declaration = statement.declarations[index];
     if (declaration === undefined) return onNormal(state);
     if (declaration.value === null) {
@@ -967,9 +967,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerTryCatch(
     statement: Extract<JavaScriptAotStatement, { readonly kind: "try" }>,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (statement.finallyBody !== null) {
       throw new JavaScriptAotLoweringError(
         statement.span,
@@ -1053,10 +1053,10 @@ class JavaScriptRuntimeLowering {
 
   private lowerCatch(
     statement: Extract<JavaScriptAotStatement, { readonly kind: "try" }>,
-    thrownState: FunctionalSurfaceExpression,
-    thrownValue: FunctionalSurfaceExpression,
+    thrownState: SurfaceExpression,
+    thrownValue: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const stateName = this.freshName("caughtState");
     const heapName = this.freshName("caughtHeap");
     const outerContextName = this.freshName("catchOuterContext");
@@ -1105,11 +1105,11 @@ class JavaScriptRuntimeLowering {
   }
 
   private restoreCompletionContext(
-    completion: FunctionalSurfaceExpression,
-    context: FunctionalSurfaceExpression,
+    completion: SurfaceExpression,
+    context: SurfaceExpression,
     span: JavaScriptAotStatement["span"],
-  ): FunctionalSurfaceExpression {
-    const restoredState = (stateName: string): FunctionalSurfaceExpression => {
+  ): SurfaceExpression {
+    const restoredState = (stateName: string): SurfaceExpression => {
       const heapName = this.freshName("restoredHeap");
       const discardedContextName = this.freshName("discardedContext");
       const bindingsName = this.freshName("restoredBindings");
@@ -1178,10 +1178,10 @@ class JavaScriptRuntimeLowering {
   }
 
   private resumeNormalCompletion(
-    completion: FunctionalSurfaceExpression,
+    completion: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
     span: JavaScriptAotStatement["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const normalStateName = this.freshName("resumedCatchState");
     const normalValueName = this.freshName("resumedCatchValue");
     const returnStateName = this.freshName("resumedReturnState");
@@ -1233,10 +1233,10 @@ class JavaScriptRuntimeLowering {
   }
 
   private resumeExpressionCompletion(
-    completion: FunctionalSurfaceExpression,
+    completion: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const normalStateName = this.freshName("expressionState");
     const normalValueName = this.freshName("expressionValue");
     const returnStateName = this.freshName("expressionReturnState");
@@ -1289,9 +1289,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerPropertyAssignment(
     statement: Extract<JavaScriptAotStatement, { readonly kind: "property-assignment" }>,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (statement.operator !== "=") {
       throw new JavaScriptAotLoweringError(
         statement.span,
@@ -1330,7 +1330,7 @@ class JavaScriptRuntimeLowering {
               const objectValue = call(Runtime.JAVASCRIPT_VALUE_OBJECT, [
                 identity,
               ], statement.target.span);
-              const complete = (completedState: FunctionalSurfaceExpression) =>
+              const complete = (completedState: SurfaceExpression) =>
                 call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [
                   completedState,
                   reference(Runtime.JAVASCRIPT_VALUE_UNDEFINED, statement.span),
@@ -1443,9 +1443,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerExpression(
     expression: JavaScriptAotExpression,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     switch (expression.kind) {
       case "number":
         return onValue(
@@ -1717,10 +1717,10 @@ class JavaScriptRuntimeLowering {
 
   private allocateRuntimeError(
     name: string,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const stateName = this.freshName("errorState");
     const heapName = this.freshName("errorHeap");
     const contextName = this.freshName("errorContext");
@@ -1762,7 +1762,7 @@ class JavaScriptRuntimeLowering {
 
   private lowerRuntimeReferenceErrorDefinition(
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceDefinition {
+  ): SurfaceDefinition {
     const stateName = this.freshName("referenceErrorState");
     return {
       name: JAVASCRIPT_RUNTIME_THROW_REFERENCE_ERROR,
@@ -1784,7 +1784,7 @@ class JavaScriptRuntimeLowering {
 
   private lowerRuntimeTypeErrorDefinition(
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceDefinition {
+  ): SurfaceDefinition {
     const stateName = this.freshName("typeErrorState");
     return {
       name: JAVASCRIPT_RUNTIME_THROW_TYPE_ERROR,
@@ -1806,9 +1806,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerFunctionValue(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "function" }>,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const runtimeFunction = this.preparedRuntimeFunction(expression);
     if (expression.name !== null) {
       return this.allocateNamedRuntimeFunction(expression.name, runtimeFunction, state, onValue);
@@ -1819,9 +1819,9 @@ class JavaScriptRuntimeLowering {
   private allocateNamedRuntimeFunction(
     name: string,
     runtimeFunction: RuntimeFunction,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const span = runtimeFunction.span;
     const stateName = this.freshName("namedFunctionState");
     const heapName = this.freshName("namedFunctionHeap");
@@ -2105,9 +2105,9 @@ class JavaScriptRuntimeLowering {
 
   private allocateRuntimeFunction(
     runtimeFunction: RuntimeFunction,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const span = runtimeFunction.span;
     const stateName = this.freshName("functionValueState");
     const heapName = this.freshName("functionValueHeap");
@@ -2192,12 +2192,12 @@ class JavaScriptRuntimeLowering {
 
   private allocateClassPrototype(
     methods: readonly JavaScriptAotClassMethod[],
-    state: FunctionalSurfaceExpression,
-    constructorValue: FunctionalSurfaceExpression,
-    constructorIdentity: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    constructorValue: SurfaceExpression,
+    constructorIdentity: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const stateName = this.freshName("classState");
     const heapName = this.freshName("classHeap");
     const contextName = this.freshName("classContext");
@@ -2287,10 +2287,10 @@ class JavaScriptRuntimeLowering {
   private defineClassMethods(
     methods: readonly JavaScriptAotClassMethod[],
     index: number,
-    state: FunctionalSurfaceExpression,
-    prototypeIdentity: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    prototypeIdentity: SurfaceExpression,
     onReady: RuntimeStatementContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const method = methods[index];
     if (method === undefined) return onReady(state);
     return this.lowerExpression(method.value, state, (methodState, methodValue) => {
@@ -2338,9 +2338,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerCall(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "call" }>,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (isRuntimeDefinePropertyCall(expression)) {
       return this.lowerDefinePropertyCall(expression, state, onValue);
     }
@@ -2645,8 +2645,8 @@ class JavaScriptRuntimeLowering {
               const prefix = source.slice(0, matchIndex);
               const suffix = source.slice(matchIndex + search.length);
               const replacedValue = (
-                nextState: FunctionalSurfaceExpression,
-                replacementText: FunctionalSurfaceExpression,
+                nextState: SurfaceExpression,
+                replacementText: SurfaceExpression,
               ) =>
                 onValue(
                   nextState,
@@ -2814,11 +2814,11 @@ class JavaScriptRuntimeLowering {
 
   private lowerCallArguments(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "call" }>,
-    state: FunctionalSurfaceExpression,
-    callee: FunctionalSurfaceExpression,
-    thisValue: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    callee: SurfaceExpression,
+    thisValue: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return this.lowerArguments(
       expression.arguments,
       0,
@@ -2838,9 +2838,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerDefinePropertyCall(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "call" }>,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (expression.arguments.length !== 3) {
       throw new JavaScriptAotLoweringError(
         expression.span,
@@ -2921,13 +2921,13 @@ class JavaScriptRuntimeLowering {
   private lowerAccessorDescriptor(
     properties: Extract<JavaScriptAotExpression, { readonly kind: "object" }>["properties"],
     index: number,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     descriptor: RuntimeAccessorDescriptor,
     onDescriptor: (
-      state: FunctionalSurfaceExpression,
+      state: SurfaceExpression,
       descriptor: RuntimeAccessorDescriptor,
-    ) => FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    ) => SurfaceExpression,
+  ): SurfaceExpression {
     const property = properties[index];
     if (property === undefined) return onDescriptor(state, descriptor);
     if (property.name === "get" || property.name === "set") {
@@ -3027,13 +3027,13 @@ class JavaScriptRuntimeLowering {
   }
 
   private invokeRuntimeCallable(
-    callee: FunctionalSurfaceExpression,
-    state: FunctionalSurfaceExpression,
-    thisValue: FunctionalSurfaceExpression,
-    arguments_: readonly FunctionalSurfaceExpression[],
+    callee: SurfaceExpression,
+    state: SurfaceExpression,
+    thisValue: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const stateName = this.freshName("callState");
     const heapName = this.freshName("callHeap");
     const callerContextName = this.freshName("callerContext");
@@ -3135,13 +3135,13 @@ class JavaScriptRuntimeLowering {
   private lowerArguments(
     arguments_: readonly JavaScriptAotExpression[],
     index: number,
-    state: FunctionalSurfaceExpression,
-    values: readonly FunctionalSurfaceExpression[],
+    state: SurfaceExpression,
+    values: readonly SurfaceExpression[],
     onArguments: (
-      state: FunctionalSurfaceExpression,
-      values: readonly FunctionalSurfaceExpression[],
-    ) => FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+      state: SurfaceExpression,
+      values: readonly SurfaceExpression[],
+    ) => SurfaceExpression,
+  ): SurfaceExpression {
     const argument = arguments_[index];
     if (argument === undefined) return onArguments(state, values);
     return this.lowerExpression(
@@ -3160,16 +3160,16 @@ class JavaScriptRuntimeLowering {
   }
 
   private dispatchCall(
-    target: FunctionalSurfaceExpression,
-    heap: FunctionalSurfaceExpression,
-    realm: FunctionalSurfaceExpression,
-    environment: FunctionalSurfaceExpression,
-    bindings: FunctionalSurfaceExpression,
-    thisValue: FunctionalSurfaceExpression,
-    callee: FunctionalSurfaceExpression,
-    arguments_: readonly FunctionalSurfaceExpression[],
+    target: SurfaceExpression,
+    heap: SurfaceExpression,
+    realm: SurfaceExpression,
+    environment: SurfaceExpression,
+    bindings: SurfaceExpression,
+    thisValue: SurfaceExpression,
+    callee: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const maximumArgumentCount = this.maximumRuntimeArgumentCount();
     const paddedArguments = Array.from(
       { length: maximumArgumentCount },
@@ -3204,7 +3204,7 @@ class JavaScriptRuntimeLowering {
 
   private lowerRuntimeCallDispatcher(
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceDefinition {
+  ): SurfaceDefinition {
     const targetName = this.freshName("dispatchTarget");
     const calleeName = this.freshName("dispatchCallee");
     const heapName = this.freshName("dispatchHeap");
@@ -3249,17 +3249,17 @@ class JavaScriptRuntimeLowering {
   }
 
   private buildRuntimeCallDispatch(
-    target: FunctionalSurfaceExpression,
-    heap: FunctionalSurfaceExpression,
-    realm: FunctionalSurfaceExpression,
-    environment: FunctionalSurfaceExpression,
-    bindings: FunctionalSurfaceExpression,
-    thisValue: FunctionalSurfaceExpression,
-    callee: FunctionalSurfaceExpression,
-    argumentCount: FunctionalSurfaceExpression,
-    arguments_: readonly FunctionalSurfaceExpression[],
+    target: SurfaceExpression,
+    heap: SurfaceExpression,
+    realm: SurfaceExpression,
+    environment: SurfaceExpression,
+    bindings: SurfaceExpression,
+    thisValue: SurfaceExpression,
+    callee: SurfaceExpression,
+    argumentCount: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     let dispatch = runtimeFault(
       "JavaScript callable target is not registered in this module",
       span,
@@ -3327,7 +3327,7 @@ class JavaScriptRuntimeLowering {
         }], span);
       dispatch = conditional(
         binary(
-          FunctionalBinaryOperator.Equal,
+          BinaryOperator.Equal,
           target,
           integer(runtimeFunction.id, span),
           span,
@@ -3354,16 +3354,16 @@ class JavaScriptRuntimeLowering {
   }
 
   private resumeCall(
-    completion: FunctionalSurfaceExpression,
-    callerContext: FunctionalSurfaceExpression,
+    completion: SurfaceExpression,
+    callerContext: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return this.withSharedExpressionContinuation(onValue, span, (resume) => {
       const resumeReturnedValue = (
         completedStateName: string,
         valueName: string,
-      ): FunctionalSurfaceExpression => {
+      ): SurfaceExpression => {
         const heapName = this.freshName("returnedHeap");
         const functionContextName = this.freshName("returnedFunctionContext");
         const bindingsName = this.freshName("returnedBindings");
@@ -3384,7 +3384,7 @@ class JavaScriptRuntimeLowering {
       const resumeThrow = (
         completedStateName: string,
         valueName: string,
-      ): FunctionalSurfaceExpression => {
+      ): SurfaceExpression => {
         const heapName = this.freshName("thrownHeap");
         const functionContextName = this.freshName("thrownFunctionContext");
         const bindingsName = this.freshName("thrownBindings");
@@ -3444,8 +3444,8 @@ class JavaScriptRuntimeLowering {
   private withSharedExpressionContinuation(
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-    body: (resume: RuntimeExpressionContinuation) => FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    body: (resume: RuntimeExpressionContinuation) => SurfaceExpression,
+  ): SurfaceExpression {
     const continuationName = this.freshName("expressionContinuation");
     const stateName = this.freshName("continuationState");
     const valueName = this.freshName("continuationValue");
@@ -3464,9 +3464,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerObject(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "object" }>,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return this.lowerObjectWithPrototype(
       expression,
       state,
@@ -3477,10 +3477,10 @@ class JavaScriptRuntimeLowering {
 
   private lowerObjectWithPrototype(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "object" }>,
-    state: FunctionalSurfaceExpression,
-    prototype: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    prototype: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const stateName = this.freshName("objectState");
     const heapName = this.freshName("objectHeap");
     const contextName = this.freshName("objectContext");
@@ -3532,11 +3532,11 @@ class JavaScriptRuntimeLowering {
   private lowerObjectProperties(
     properties: Extract<JavaScriptAotExpression, { readonly kind: "object" }>["properties"],
     index: number,
-    state: FunctionalSurfaceExpression,
-    objectValue: FunctionalSurfaceExpression,
-    identity: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    objectValue: SurfaceExpression,
+    identity: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const property = properties[index];
     if (property === undefined) return onValue(state, objectValue);
     return this.lowerExpression(property.value, state, (propertyState, propertyValue) => {
@@ -3582,15 +3582,15 @@ class JavaScriptRuntimeLowering {
   }
 
   private readProperty(
-    state: FunctionalSurfaceExpression,
-    receiver: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    receiver: SurfaceExpression,
     propertyName: string,
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const complete = (
-      completedState: FunctionalSurfaceExpression,
-      value: FunctionalSurfaceExpression,
+      completedState: SurfaceExpression,
+      value: SurfaceExpression,
     ) => call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [completedState, value], span);
     const readCompletion = match(
       receiver,
@@ -3661,11 +3661,11 @@ class JavaScriptRuntimeLowering {
   }
 
   private toRuntimePrimitive(
-    state: FunctionalSurfaceExpression,
-    value: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    value: SurfaceExpression,
     onPrimitive: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return this.resumeExpressionCompletion(
       call(JAVASCRIPT_RUNTIME_TO_PRIMITIVE, [state, value], span),
       onPrimitive,
@@ -3675,14 +3675,14 @@ class JavaScriptRuntimeLowering {
 
   private lowerRuntimePrimitiveDefinition(
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceDefinition {
+  ): SurfaceDefinition {
     const stateName = this.freshName("primitiveState");
     const valueName = this.freshName("primitiveValue");
     const state = reference(stateName, span);
     const value = reference(valueName, span);
     const complete = (
-      completedState: FunctionalSurfaceExpression,
-      primitive: FunctionalSurfaceExpression,
+      completedState: SurfaceExpression,
+      primitive: SurfaceExpression,
     ) => call(Runtime.JAVASCRIPT_COMPLETION_NORMAL, [completedState, primitive], span);
     const conversion = match(
       value,
@@ -3692,7 +3692,7 @@ class JavaScriptRuntimeLowering {
         (primitive) => complete(state, primitive),
         (identity) => {
           const receiver = call(Runtime.JAVASCRIPT_VALUE_OBJECT, [identity], span);
-          const tryToString = (nextState: FunctionalSurfaceExpression) =>
+          const tryToString = (nextState: SurfaceExpression) =>
             this.readProperty(
               nextState,
               receiver,
@@ -3756,12 +3756,12 @@ class JavaScriptRuntimeLowering {
   }
 
   private acceptRuntimePrimitive(
-    state: FunctionalSurfaceExpression,
-    value: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    value: SurfaceExpression,
     onPrimitive: RuntimeExpressionContinuation,
-    onObject: () => FunctionalSurfaceExpression,
+    onObject: () => SurfaceExpression,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return match(
       value,
       primitiveOrObjectValueArms(
@@ -3775,13 +3775,13 @@ class JavaScriptRuntimeLowering {
   }
 
   private invokeRuntimeMethodIfCallable(
-    state: FunctionalSurfaceExpression,
-    method: FunctionalSurfaceExpression,
-    receiver: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    method: SurfaceExpression,
+    receiver: SurfaceExpression,
     onResult: RuntimeExpressionContinuation,
     onUnavailable: RuntimeStatementContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const stateName = this.freshName("methodState");
     const heapName = this.freshName("methodHeap");
     const contextName = this.freshName("methodContext");
@@ -3813,9 +3813,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerUnary(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "unary" }>,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (expression.operator === "typeof") {
       return this.lowerExpression(expression.value, state, (valueState, value) => {
         const stateName = this.freshName("typeofState");
@@ -3869,7 +3869,7 @@ class JavaScriptRuntimeLowering {
                 call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
                   expression.operator === "+" ? number : {
                     kind: "unary",
-                    operator: FunctionalUnaryOperator.NegateFloat64,
+                    operator: UnaryOperator.NegateFloat64,
                     value: number,
                     span: expression.span,
                   },
@@ -3891,7 +3891,7 @@ class JavaScriptRuntimeLowering {
                 call(Runtime.JAVASCRIPT_VALUE_NUMBER, [
                   expression.operator === "+" ? number : {
                     kind: "unary",
-                    operator: FunctionalUnaryOperator.NegateFloat64,
+                    operator: UnaryOperator.NegateFloat64,
                     value: number,
                     span: expression.span,
                   },
@@ -3912,9 +3912,9 @@ class JavaScriptRuntimeLowering {
 
   private lowerBinary(
     expression: Extract<JavaScriptAotExpression, { readonly kind: "binary" }>,
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     onValue: RuntimeExpressionContinuation,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (
       expression.operator === "instanceof" && expression.right.kind === "name" &&
       JAVASCRIPT_RUNTIME_ERROR_CONSTRUCTORS.has(expression.right.name)
@@ -3996,7 +3996,7 @@ class JavaScriptRuntimeLowering {
                                 reference(stateName, expression.span),
                                 call(Runtime.JAVASCRIPT_VALUE_BOOLEAN, [
                                   target === "Error" ? boolean(true, expression.span) : binary(
-                                    FunctionalBinaryOperator.StructuralEqual,
+                                    BinaryOperator.StructuralEqual,
                                     reference(errorName, expression.span),
                                     text(target, expression.span),
                                     expression.span,
@@ -4325,11 +4325,11 @@ class JavaScriptRuntimeLowering {
   }
 
   private lookupBinding(
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     name: string,
     onValue: RuntimeExpressionContinuation,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const stateName = this.freshName("bindingState");
     const valueName = this.freshName("bindingValue");
     return letExpression(
@@ -4396,12 +4396,12 @@ class JavaScriptRuntimeLowering {
   }
 
   private initializeBinding(
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     name: string,
-    value: FunctionalSurfaceExpression,
+    value: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
     span: JavaScriptAotStatement["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return this.updateBinding(
       state,
       JAVASCRIPT_RUNTIME_INITIALIZE_BINDING,
@@ -4413,12 +4413,12 @@ class JavaScriptRuntimeLowering {
   }
 
   private setBinding(
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     name: string,
-    value: FunctionalSurfaceExpression,
+    value: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
     span: JavaScriptAotStatement["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return this.updateBinding(
       state,
       JAVASCRIPT_RUNTIME_SET_BINDING,
@@ -4430,13 +4430,13 @@ class JavaScriptRuntimeLowering {
   }
 
   private updateBinding(
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     operation: string,
     name: string,
-    value: FunctionalSurfaceExpression,
+    value: SurfaceExpression,
     onNormal: RuntimeStatementContinuation,
     span: JavaScriptAotStatement["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const stateName = this.freshName("environmentState");
     return letExpression(
       stateName,
@@ -4454,7 +4454,7 @@ class JavaScriptRuntimeLowering {
     name: string,
     onNormal: RuntimeStatementContinuation,
     span: JavaScriptAotStatement["span"],
-  ): readonly FunctionalSurfaceCaseArm[] {
+  ): readonly SurfaceCaseArm[] {
     const updatedStateName = this.freshName("updatedBindingState");
     return [{
       constructor: Runtime.JAVASCRIPT_BINDING_UPDATE_NOT_FOUND,
@@ -4500,8 +4500,8 @@ class JavaScriptRuntimeLowering {
 
   private expectObjectArms(
     span: JavaScriptAotExpression["span"],
-    onObject: (identity: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
-  ): readonly FunctionalSurfaceCaseArm[] {
+    onObject: (identity: SurfaceExpression) => SurfaceExpression,
+  ): readonly SurfaceCaseArm[] {
     const identityName = this.freshName("objectIdentity");
     return valueCaseArms(
       Runtime.JAVASCRIPT_VALUE_OBJECT,
@@ -4513,10 +4513,10 @@ class JavaScriptRuntimeLowering {
   }
 
   private objectOrTypeErrorArms(
-    state: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
     span: JavaScriptAotExpression["span"],
-    onObject: (identity: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
-  ): readonly FunctionalSurfaceCaseArm[] {
+    onObject: (identity: SurfaceExpression) => SurfaceExpression,
+  ): readonly SurfaceCaseArm[] {
     const identityName = this.freshName("propertyReceiverIdentity");
     return primitiveOrObjectValueArms(
       identityName,
@@ -4527,10 +4527,10 @@ class JavaScriptRuntimeLowering {
   }
 
   private expectNumber(
-    value: FunctionalSurfaceExpression,
+    value: SurfaceExpression,
     span: JavaScriptAotExpression["span"],
-    onNumber: (number: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    onNumber: (number: SurfaceExpression) => SurfaceExpression,
+  ): SurfaceExpression {
     const numberName = this.freshName("numberValue");
     return match(
       value,
@@ -4546,10 +4546,10 @@ class JavaScriptRuntimeLowering {
   }
 
   private expectBoolean(
-    value: FunctionalSurfaceExpression,
+    value: SurfaceExpression,
     span: JavaScriptAotExpression["span"],
-    onBoolean: (boolean: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    onBoolean: (boolean: SurfaceExpression) => SurfaceExpression,
+  ): SurfaceExpression {
     const booleanName = this.freshName("booleanValue");
     return match(
       value,
@@ -4565,10 +4565,10 @@ class JavaScriptRuntimeLowering {
   }
 
   private expectString(
-    value: FunctionalSurfaceExpression,
+    value: SurfaceExpression,
     span: JavaScriptAotExpression["span"],
-    onString: (text: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    onString: (text: SurfaceExpression) => SurfaceExpression,
+  ): SurfaceExpression {
     const stringName = this.freshName("stringValue");
     return match(
       value,
@@ -4584,11 +4584,11 @@ class JavaScriptRuntimeLowering {
   }
 
   private unwrapEntryCompletion(
-    completion: FunctionalSurfaceExpression,
+    completion: SurfaceExpression,
     span: JavaScriptAotFunctionDeclaration["span"],
     resultKind: RuntimeEntryResultKind,
-  ): FunctionalSurfaceExpression {
-    const unwrapValue = (value: FunctionalSurfaceExpression) => {
+  ): SurfaceExpression {
+    const unwrapValue = (value: SurfaceExpression) => {
       switch (resultKind) {
         case "boolean":
           return this.expectBoolean(value, span, (boolean) => boolean);
@@ -4638,11 +4638,11 @@ class JavaScriptRuntimeLowering {
   }
 
   private unwrapRuntimeThrow(
-    state: FunctionalSurfaceExpression,
-    thrownValue: FunctionalSurfaceExpression,
-    unexpected: FunctionalSurfaceExpression,
+    state: SurfaceExpression,
+    thrownValue: SurfaceExpression,
+    unexpected: SurfaceExpression,
     span: JavaScriptAotExpression["span"],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const identityName = this.freshName("uncaughtErrorIdentity");
     const heapName = this.freshName("uncaughtErrorHeap");
     const nextIdentityName = this.freshName("uncaughtErrorNextIdentity");
@@ -4692,7 +4692,7 @@ class JavaScriptRuntimeLowering {
                   binders: [errorName],
                   body: conditional(
                     binary(
-                      FunctionalBinaryOperator.StructuralEqual,
+                      BinaryOperator.StructuralEqual,
                       reference(errorName, span),
                       text("ReferenceError", span),
                       span,
@@ -5304,8 +5304,8 @@ function runtimeExpressionNeedsSharedCallDispatcher(
 function runtimeFunctionType(
   argumentCount: number,
   span: JavaScriptAotExpression["span"],
-): FunctionalSourceType {
-  const named = (name: string): FunctionalTypeSchema => ({ kind: "named", name, arguments: [] });
+): SourceType {
+  const named = (name: string): TypeSchema => ({ kind: "named", name, arguments: [] });
   return curriedRuntimeType([
     named(Runtime.JAVASCRIPT_HEAP_TYPE),
     named(Runtime.JAVASCRIPT_REALM_TYPE),
@@ -5321,7 +5321,7 @@ function runtimeFunctionType(
 function runtimeDispatcherType(
   argumentCount: number,
   span: JavaScriptAotExpression["span"],
-): FunctionalSourceType {
+): SourceType {
   const functionType = runtimeFunctionType(argumentCount, span);
   const { startByte: _startByte, endByte: _endByte, ...result } = functionType;
   return {
@@ -5334,10 +5334,10 @@ function runtimeDispatcherType(
 }
 
 function curriedRuntimeType(
-  parameters: readonly FunctionalTypeSchema[],
+  parameters: readonly TypeSchema[],
   span: JavaScriptAotExpression["span"],
-): FunctionalSourceType {
-  let type: FunctionalTypeSchema = {
+): SourceType {
+  let type: TypeSchema = {
     kind: "named",
     name: Runtime.JAVASCRIPT_COMPLETION_TYPE,
     arguments: [],
@@ -5998,9 +5998,9 @@ function valueCaseArms(
   expectedConstructor: string,
   fieldName: string,
   span: JavaScriptAotExpression["span"],
-  onExpected: (field: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
+  onExpected: (field: SurfaceExpression) => SurfaceExpression,
   failureMessage: string,
-): readonly FunctionalSurfaceCaseArm[] {
+): readonly SurfaceCaseArm[] {
   const constructors = [
     { name: Runtime.JAVASCRIPT_VALUE_UNDEFINED, carriesField: false },
     { name: Runtime.JAVASCRIPT_VALUE_NULL, carriesField: false },
@@ -6025,9 +6025,9 @@ function valueCaseArms(
 function primitiveOrObjectValueArms(
   fieldName: string,
   span: JavaScriptAotExpression["span"],
-  onPrimitive: (value: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
-  onObject: (identity: FunctionalSurfaceExpression) => FunctionalSurfaceExpression,
-): readonly FunctionalSurfaceCaseArm[] {
+  onPrimitive: (value: SurfaceExpression) => SurfaceExpression,
+  onObject: (identity: SurfaceExpression) => SurfaceExpression,
+): readonly SurfaceCaseArm[] {
   const primitiveConstructors = [
     { name: Runtime.JAVASCRIPT_VALUE_UNDEFINED, carriesField: false },
     { name: Runtime.JAVASCRIPT_VALUE_NULL, carriesField: false },
@@ -6060,43 +6060,43 @@ function primitiveOrObjectValueArms(
 function reference(
   name: string,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "name", name, span };
 }
 
 function float64(
   value: number,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "float-64", value, span };
 }
 
 function integer(
   value: number,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "integer", value, span };
 }
 
 function boolean(
   value: boolean,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "boolean", value, span };
 }
 
 function text(
   value: string,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "text", value, span };
 }
 
 function call(
   calleeName: string,
-  arguments_: readonly FunctionalSurfaceExpression[],
+  arguments_: readonly SurfaceExpression[],
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   let expression = reference(calleeName, span);
   for (const argument of arguments_) {
     expression = { kind: "apply", callee: expression, argument, span };
@@ -6105,43 +6105,43 @@ function call(
 }
 
 function binary(
-  operator: FunctionalBinaryOperator,
-  left: FunctionalSurfaceExpression,
-  right: FunctionalSurfaceExpression,
+  operator: BinaryOperator,
+  left: SurfaceExpression,
+  right: SurfaceExpression,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "binary", operator, left, right, span };
 }
 
 function conditional(
-  condition: FunctionalSurfaceExpression,
-  consequent: FunctionalSurfaceExpression,
-  alternate: FunctionalSurfaceExpression,
+  condition: SurfaceExpression,
+  consequent: SurfaceExpression,
+  alternate: SurfaceExpression,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "if", condition, consequent, alternate, span };
 }
 
 function letExpression(
   name: string,
-  value: FunctionalSurfaceExpression,
-  body: FunctionalSurfaceExpression,
+  value: SurfaceExpression,
+  body: SurfaceExpression,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "let", name, value, body, span };
 }
 
 function match(
-  value: FunctionalSurfaceExpression,
-  arms: readonly FunctionalSurfaceCaseArm[],
+  value: SurfaceExpression,
+  arms: readonly SurfaceCaseArm[],
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "case", value, arms, span };
 }
 
 function runtimeFault(
   message: string,
   span: JavaScriptAotExpression["span"],
-): FunctionalSurfaceExpression {
+): SurfaceExpression {
   return { kind: "runtime-fault", message, span };
 }

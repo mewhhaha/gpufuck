@@ -6,22 +6,22 @@
 import { equal, ok } from "node:assert/strict";
 
 import {
-  buildFunctionalSurfaceModule,
-  compileFunctionalModuleToWasm,
-  FunctionalBinaryOperator,
-  FunctionalEvaluationProfile,
-  GpuFunctionalCompiler,
+  BinaryOperator,
+  buildSurfaceModule,
+  compileModuleToWasm,
+  EvaluationProfile,
+  GpuCompiler,
   requestWebGpuDevice,
-  runFunctionalWasmModule,
+  runWasmModule,
   surface,
 } from "../functional.ts";
 
 let device: GPUDevice | undefined;
-let compiler: GpuFunctionalCompiler | undefined;
+let compiler: GpuCompiler | undefined;
 
 Deno.test.beforeAll(async () => {
   device = await requestWebGpuDevice();
-  compiler = await GpuFunctionalCompiler.create(device);
+  compiler = await GpuCompiler.create(device);
 });
 
 Deno.test.afterAll(() => {
@@ -30,18 +30,18 @@ Deno.test.afterAll(() => {
   compiler = undefined;
 });
 
-function functionalCompiler(): GpuFunctionalCompiler {
+function functionalCompiler(): GpuCompiler {
   if (compiler === undefined) throw new Error("functional compiler was not initialized");
   return compiler;
 }
 
 async function compileEntry(body: Parameters<typeof surface.apply>[0]) {
-  const module = buildFunctionalSurfaceModule(
+  const module = buildSurfaceModule(
     [{ name: "main", parameters: [], annotation: null, body }],
     [],
     "main",
     0,
-    { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalCompiler().compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
@@ -52,13 +52,13 @@ async function compileEntry(body: Parameters<typeof surface.apply>[0]) {
 Deno.test("emits a WebAssembly artifact that runs to the expected value", async () => {
   const compilation = await compileEntry(
     surface.binary(
-      FunctionalBinaryOperator.Add,
+      BinaryOperator.Add,
       surface.integer(20),
-      surface.binary(FunctionalBinaryOperator.Multiply, surface.integer(11), surface.integer(2)),
+      surface.binary(BinaryOperator.Multiply, surface.integer(11), surface.integer(2)),
     ),
   );
   try {
-    const execution = await runFunctionalWasmModule(compilation.module);
+    const execution = await runWasmModule(compilation.module);
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
   } finally {
@@ -69,7 +69,7 @@ Deno.test("emits a WebAssembly artifact that runs to the expected value", async 
 Deno.test("emits a well-formed WebAssembly binary that instantiates standalone", async () => {
   const compilation = await compileEntry(surface.integer(7));
   try {
-    const bytes = await compileFunctionalModuleToWasm(compilation.module);
+    const bytes = await compileModuleToWasm(compilation.module);
     ok(bytes.byteLength > 8, `artifact was ${bytes.byteLength} bytes`);
     // Magic number and version: the emitted bytes must be a real module, not a stub.
     equal(Array.from(bytes.slice(0, 4)).join(","), "0,97,115,109");
@@ -82,13 +82,13 @@ Deno.test("emits a well-formed WebAssembly binary that instantiates standalone",
 Deno.test("executes 64-bit float arithmetic that the GPU evaluator delegates to WebAssembly", async () => {
   const compilation = await compileEntry(
     surface.binary(
-      FunctionalBinaryOperator.AddFloat64,
+      BinaryOperator.AddFloat64,
       surface.float64(1.5),
       surface.float64(2.25),
     ),
   );
   try {
-    const execution = await runFunctionalWasmModule(compilation.module);
+    const execution = await runWasmModule(compilation.module);
     equal(execution.value.kind, "float-64");
     equal(execution.value.kind === "float-64" ? execution.value.value : undefined, 3.75);
   } finally {

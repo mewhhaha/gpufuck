@@ -1,104 +1,100 @@
-import {
-  FunctionalBinaryOperator,
-  type FunctionalBinaryOperator as FunctionalBinaryOperatorValue,
-} from "./abi.ts";
+import { BinaryOperator, type BinaryOperator as BinaryOperatorValue } from "./abi.ts";
 import type {
-  FunctionalSurfaceDefinition,
-  FunctionalSurfaceExpression,
-  FunctionalSurfaceTypeDeclaration,
+  SurfaceDefinition,
+  SurfaceExpression,
+  SurfaceTypeDeclaration,
 } from "./surface_contract.ts";
-import type { FunctionalTypeSchema } from "./schema_contract.ts";
+import type { TypeSchema } from "./schema_contract.ts";
 import { surface } from "./surface_builder.ts";
 import {
-  FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
-  FUNCTIONAL_F32X4_TYPE_NAME,
-  FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
-  FUNCTIONAL_MASK32X4_TYPE_NAME,
-  FunctionalF32x4Definition,
+  F32X4_CONSTRUCTOR_NAME,
+  F32X4_TYPE_NAME,
+  F32x4Definition,
+  MASK32X4_CONSTRUCTOR_NAME,
+  MASK32X4_TYPE_NAME,
 } from "./fixed_vector_contract.ts";
 
 export {
-  FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
-  FUNCTIONAL_F32X4_TYPE_NAME,
-  FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
-  FUNCTIONAL_MASK32X4_TYPE_NAME,
-  FunctionalF32x4Definition,
+  F32X4_CONSTRUCTOR_NAME,
+  F32X4_TYPE_NAME,
+  F32x4Definition,
+  MASK32X4_CONSTRUCTOR_NAME,
+  MASK32X4_TYPE_NAME,
 } from "./fixed_vector_contract.ts";
 
-const FLOAT32_TYPE: FunctionalTypeSchema = Object.freeze({ kind: "float-32" });
-const BOOLEAN_TYPE: FunctionalTypeSchema = Object.freeze({ kind: "boolean" });
-const F32X4_TYPE: FunctionalTypeSchema = Object.freeze({
+const FLOAT32_TYPE: TypeSchema = Object.freeze({ kind: "float-32" });
+const BOOLEAN_TYPE: TypeSchema = Object.freeze({ kind: "boolean" });
+const F32X4_TYPE: TypeSchema = Object.freeze({
   kind: "named",
-  name: FUNCTIONAL_F32X4_TYPE_NAME,
+  name: F32X4_TYPE_NAME,
   arguments: Object.freeze([]),
 });
-const MASK32X4_TYPE: FunctionalTypeSchema = Object.freeze({
+const MASK32X4_TYPE: TypeSchema = Object.freeze({
   kind: "named",
-  name: FUNCTIONAL_MASK32X4_TYPE_NAME,
+  name: MASK32X4_TYPE_NAME,
   arguments: Object.freeze([]),
 });
 
-export const FUNCTIONAL_FIXED_VECTOR_TYPE_DECLARATIONS:
-  readonly FunctionalSurfaceTypeDeclaration[] = Object.freeze([
-    Object.freeze({
-      name: FUNCTIONAL_F32X4_TYPE_NAME,
-      parameters: Object.freeze([]),
-      constructors: Object.freeze([Object.freeze({
-        name: FUNCTIONAL_F32X4_CONSTRUCTOR_NAME,
-        fields: Object.freeze(
-          Array.from(
-            { length: 4 },
-            (_, lane) => Object.freeze({ name: `lane${lane}`, type: FLOAT32_TYPE }),
-          ),
+export const FIXED_VECTOR_TYPE_DECLARATIONS: readonly SurfaceTypeDeclaration[] = Object.freeze([
+  Object.freeze({
+    name: F32X4_TYPE_NAME,
+    parameters: Object.freeze([]),
+    constructors: Object.freeze([Object.freeze({
+      name: F32X4_CONSTRUCTOR_NAME,
+      fields: Object.freeze(
+        Array.from(
+          { length: 4 },
+          (_, lane) => Object.freeze({ name: `lane${lane}`, type: FLOAT32_TYPE }),
         ),
-      })]),
-    }),
-    Object.freeze({
-      name: FUNCTIONAL_MASK32X4_TYPE_NAME,
-      parameters: Object.freeze([]),
-      constructors: Object.freeze([Object.freeze({
-        name: FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME,
-        fields: Object.freeze(
-          Array.from(
-            { length: 4 },
-            (_, lane) => Object.freeze({ name: `lane${lane}`, type: BOOLEAN_TYPE }),
-          ),
+      ),
+    })]),
+  }),
+  Object.freeze({
+    name: MASK32X4_TYPE_NAME,
+    parameters: Object.freeze([]),
+    constructors: Object.freeze([Object.freeze({
+      name: MASK32X4_CONSTRUCTOR_NAME,
+      fields: Object.freeze(
+        Array.from(
+          { length: 4 },
+          (_, lane) => Object.freeze({ name: `lane${lane}`, type: BOOLEAN_TYPE }),
         ),
-      })]),
-    }),
-  ]);
+      ),
+    })]),
+  }),
+]);
 
-export const FUNCTIONAL_FIXED_VECTOR_DEFINITIONS: readonly FunctionalSurfaceDefinition[] = Object
+export const FIXED_VECTOR_DEFINITIONS: readonly SurfaceDefinition[] = Object
   .freeze([
     vectorDefinition(
-      FunctionalF32x4Definition.Splat,
+      F32x4Definition.Splat,
       ["value"],
       functionType([FLOAT32_TYPE], F32X4_TYPE),
       f32x4Constructor(Array.from({ length: 4 }, () => surface.name("value"))),
     ),
     vectorBinaryDefinition(
-      FunctionalF32x4Definition.Add,
-      FunctionalBinaryOperator.AddFloat32,
+      F32x4Definition.Add,
+      BinaryOperator.AddFloat32,
     ),
     vectorBinaryDefinition(
-      FunctionalF32x4Definition.Subtract,
-      FunctionalBinaryOperator.SubtractFloat32,
+      F32x4Definition.Subtract,
+      BinaryOperator.SubtractFloat32,
     ),
     vectorBinaryDefinition(
-      FunctionalF32x4Definition.Multiply,
-      FunctionalBinaryOperator.MultiplyFloat32,
+      F32x4Definition.Multiply,
+      BinaryOperator.MultiplyFloat32,
     ),
     vectorBinaryDefinition(
-      FunctionalF32x4Definition.Divide,
-      FunctionalBinaryOperator.DivideFloat32,
+      F32x4Definition.Divide,
+      BinaryOperator.DivideFloat32,
     ),
     vectorComparisonDefinition(
-      FunctionalF32x4Definition.Equal,
-      FunctionalBinaryOperator.EqualFloat32,
+      F32x4Definition.Equal,
+      BinaryOperator.EqualFloat32,
     ),
     vectorComparisonDefinition(
-      FunctionalF32x4Definition.Less,
-      FunctionalBinaryOperator.LessFloat32,
+      F32x4Definition.Less,
+      BinaryOperator.LessFloat32,
     ),
     vectorSelectDefinition(),
     ...Array.from({ length: 4 }, (_, lane) => vectorExtractDefinition(lane)),
@@ -110,97 +106,96 @@ export const FUNCTIONAL_FIXED_VECTOR_DEFINITIONS: readonly FunctionalSurfaceDefi
   ]);
 
 export const functionalF32x4: Readonly<{
-  readonly type: FunctionalTypeSchema;
-  readonly maskType: FunctionalTypeSchema;
+  readonly type: TypeSchema;
+  readonly maskType: TypeSchema;
   make(
     lanes: readonly [
-      FunctionalSurfaceExpression,
-      FunctionalSurfaceExpression,
-      FunctionalSurfaceExpression,
-      FunctionalSurfaceExpression,
+      SurfaceExpression,
+      SurfaceExpression,
+      SurfaceExpression,
+      SurfaceExpression,
     ],
-  ): FunctionalSurfaceExpression;
-  splat(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
+  ): SurfaceExpression;
+  splat(value: SurfaceExpression): SurfaceExpression;
   add(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+  ): SurfaceExpression;
   subtract(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+  ): SurfaceExpression;
   multiply(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+  ): SurfaceExpression;
   divide(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+  ): SurfaceExpression;
   equal(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+  ): SurfaceExpression;
   less(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+  ): SurfaceExpression;
   select(
-    mask: FunctionalSurfaceExpression,
-    whenTrue: FunctionalSurfaceExpression,
-    whenFalse: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
-  extractLane(vector: FunctionalSurfaceExpression, lane: number): FunctionalSurfaceExpression;
+    mask: SurfaceExpression,
+    whenTrue: SurfaceExpression,
+    whenFalse: SurfaceExpression,
+  ): SurfaceExpression;
+  extractLane(vector: SurfaceExpression, lane: number): SurfaceExpression;
   replaceLane(
-    vector: FunctionalSurfaceExpression,
+    vector: SurfaceExpression,
     lane: number,
-    value: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
-  reduceAdd(vector: FunctionalSurfaceExpression): FunctionalSurfaceExpression;
+    value: SurfaceExpression,
+  ): SurfaceExpression;
+  reduceAdd(vector: SurfaceExpression): SurfaceExpression;
   map(
-    transform: FunctionalSurfaceExpression,
-    vector: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    transform: SurfaceExpression,
+    vector: SurfaceExpression,
+  ): SurfaceExpression;
   zip(
-    combine: FunctionalSurfaceExpression,
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    combine: SurfaceExpression,
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+  ): SurfaceExpression;
   fold(
-    combine: FunctionalSurfaceExpression,
-    initial: FunctionalSurfaceExpression,
-    vector: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression;
+    combine: SurfaceExpression,
+    initial: SurfaceExpression,
+    vector: SurfaceExpression,
+  ): SurfaceExpression;
 }> = Object.freeze({
   type: F32X4_TYPE,
   maskType: MASK32X4_TYPE,
   make: f32x4Constructor,
-  splat: (value) => vectorCall(FunctionalF32x4Definition.Splat, [value]),
-  add: (left, right) => vectorCall(FunctionalF32x4Definition.Add, [left, right]),
-  subtract: (left, right) => vectorCall(FunctionalF32x4Definition.Subtract, [left, right]),
-  multiply: (left, right) => vectorCall(FunctionalF32x4Definition.Multiply, [left, right]),
-  divide: (left, right) => vectorCall(FunctionalF32x4Definition.Divide, [left, right]),
-  equal: (left, right) => vectorCall(FunctionalF32x4Definition.Equal, [left, right]),
-  less: (left, right) => vectorCall(FunctionalF32x4Definition.Less, [left, right]),
+  splat: (value) => vectorCall(F32x4Definition.Splat, [value]),
+  add: (left, right) => vectorCall(F32x4Definition.Add, [left, right]),
+  subtract: (left, right) => vectorCall(F32x4Definition.Subtract, [left, right]),
+  multiply: (left, right) => vectorCall(F32x4Definition.Multiply, [left, right]),
+  divide: (left, right) => vectorCall(F32x4Definition.Divide, [left, right]),
+  equal: (left, right) => vectorCall(F32x4Definition.Equal, [left, right]),
+  less: (left, right) => vectorCall(F32x4Definition.Less, [left, right]),
   select: (mask, whenTrue, whenFalse) =>
-    vectorCall(FunctionalF32x4Definition.Select, [mask, whenTrue, whenFalse]),
+    vectorCall(F32x4Definition.Select, [mask, whenTrue, whenFalse]),
   extractLane(vector, lane) {
     return vectorCall(extractDefinition(lane), [vector]);
   },
   replaceLane(vector, lane, value) {
     return vectorCall(replaceDefinition(lane), [vector, value]);
   },
-  reduceAdd: (vector) => vectorCall(FunctionalF32x4Definition.ReduceAdd, [vector]),
-  map: (transform, vector) => vectorCall(FunctionalF32x4Definition.Map, [transform, vector]),
-  zip: (combine, left, right) => vectorCall(FunctionalF32x4Definition.Zip, [combine, left, right]),
-  fold: (combine, initial, vector) =>
-    vectorCall(FunctionalF32x4Definition.Fold, [combine, initial, vector]),
+  reduceAdd: (vector) => vectorCall(F32x4Definition.ReduceAdd, [vector]),
+  map: (transform, vector) => vectorCall(F32x4Definition.Map, [transform, vector]),
+  zip: (combine, left, right) => vectorCall(F32x4Definition.Zip, [combine, left, right]),
+  fold: (combine, initial, vector) => vectorCall(F32x4Definition.Fold, [combine, initial, vector]),
 });
 
 function vectorBinaryDefinition(
   name: string,
-  operator: FunctionalBinaryOperatorValue,
-): FunctionalSurfaceDefinition {
+  operator: BinaryOperatorValue,
+): SurfaceDefinition {
   return vectorDefinition(
     name,
     ["left", "right"],
@@ -223,8 +218,8 @@ function vectorBinaryDefinition(
 
 function vectorComparisonDefinition(
   name: string,
-  operator: FunctionalBinaryOperatorValue,
-): FunctionalSurfaceDefinition {
+  operator: BinaryOperatorValue,
+): SurfaceDefinition {
   return vectorDefinition(
     name,
     ["left", "right"],
@@ -245,9 +240,9 @@ function vectorComparisonDefinition(
   );
 }
 
-function vectorSelectDefinition(): FunctionalSurfaceDefinition {
+function vectorSelectDefinition(): SurfaceDefinition {
   return vectorDefinition(
-    FunctionalF32x4Definition.Select,
+    F32x4Definition.Select,
     ["mask", "whenTrue", "whenFalse"],
     functionType([MASK32X4_TYPE, F32X4_TYPE, F32X4_TYPE], F32X4_TYPE),
     mask32x4Case("mask", "maskLane", (maskLanes) => {
@@ -268,7 +263,7 @@ function vectorSelectDefinition(): FunctionalSurfaceDefinition {
   );
 }
 
-function vectorExtractDefinition(lane: number): FunctionalSurfaceDefinition {
+function vectorExtractDefinition(lane: number): SurfaceDefinition {
   return vectorDefinition(
     extractDefinition(lane),
     ["vector"],
@@ -277,7 +272,7 @@ function vectorExtractDefinition(lane: number): FunctionalSurfaceDefinition {
   );
 }
 
-function vectorReplaceDefinition(lane: number): FunctionalSurfaceDefinition {
+function vectorReplaceDefinition(lane: number): SurfaceDefinition {
   return vectorDefinition(
     replaceDefinition(lane),
     ["vector", "replacement"],
@@ -293,24 +288,24 @@ function vectorReplaceDefinition(lane: number): FunctionalSurfaceDefinition {
   );
 }
 
-function vectorReduceAddDefinition(): FunctionalSurfaceDefinition {
+function vectorReduceAddDefinition(): SurfaceDefinition {
   return vectorDefinition(
-    FunctionalF32x4Definition.ReduceAdd,
+    F32x4Definition.ReduceAdd,
     ["vector"],
     functionType([F32X4_TYPE], FLOAT32_TYPE),
     f32x4Case("vector", "lane", ([lane0, lane1, lane2, lane3]) =>
       surface.binary(
-        FunctionalBinaryOperator.AddFloat32,
-        surface.binary(FunctionalBinaryOperator.AddFloat32, lane0!, lane1!),
-        surface.binary(FunctionalBinaryOperator.AddFloat32, lane2!, lane3!),
+        BinaryOperator.AddFloat32,
+        surface.binary(BinaryOperator.AddFloat32, lane0!, lane1!),
+        surface.binary(BinaryOperator.AddFloat32, lane2!, lane3!),
       )),
   );
 }
 
-function vectorMapDefinition(): FunctionalSurfaceDefinition {
+function vectorMapDefinition(): SurfaceDefinition {
   const transformType = functionType([FLOAT32_TYPE], FLOAT32_TYPE);
   return vectorDefinition(
-    FunctionalF32x4Definition.Map,
+    F32x4Definition.Map,
     ["transform", "vector"],
     functionType([transformType, F32X4_TYPE], F32X4_TYPE),
     f32x4Case(
@@ -322,10 +317,10 @@ function vectorMapDefinition(): FunctionalSurfaceDefinition {
   );
 }
 
-function vectorZipDefinition(): FunctionalSurfaceDefinition {
+function vectorZipDefinition(): SurfaceDefinition {
   const combineType = functionType([FLOAT32_TYPE, FLOAT32_TYPE], FLOAT32_TYPE);
   return vectorDefinition(
-    FunctionalF32x4Definition.Zip,
+    F32x4Definition.Zip,
     ["combine", "left", "right"],
     functionType([combineType, F32X4_TYPE, F32X4_TYPE], F32X4_TYPE),
     f32x4Case(
@@ -346,14 +341,14 @@ function vectorZipDefinition(): FunctionalSurfaceDefinition {
   );
 }
 
-function vectorFoldDefinition(): FunctionalSurfaceDefinition {
+function vectorFoldDefinition(): SurfaceDefinition {
   const combineType = functionType([FLOAT32_TYPE, FLOAT32_TYPE], FLOAT32_TYPE);
   return vectorDefinition(
-    FunctionalF32x4Definition.Fold,
+    F32x4Definition.Fold,
     ["combine", "initial", "vector"],
     functionType([combineType, FLOAT32_TYPE, F32X4_TYPE], FLOAT32_TYPE),
     f32x4Case("vector", "lane", (lanes) =>
-      lanes.reduce<FunctionalSurfaceExpression>(
+      lanes.reduce<SurfaceExpression>(
         (accumulator, lane) => surface.apply(surface.name("combine"), accumulator, lane),
         surface.name("initial"),
       )),
@@ -363,25 +358,25 @@ function vectorFoldDefinition(): FunctionalSurfaceDefinition {
 function f32x4Case(
   value: string,
   binderPrefix: string,
-  body: (lanes: readonly FunctionalSurfaceExpression[]) => FunctionalSurfaceExpression,
-): FunctionalSurfaceExpression {
-  return vectorCase(FUNCTIONAL_F32X4_CONSTRUCTOR_NAME, value, binderPrefix, body);
+  body: (lanes: readonly SurfaceExpression[]) => SurfaceExpression,
+): SurfaceExpression {
+  return vectorCase(F32X4_CONSTRUCTOR_NAME, value, binderPrefix, body);
 }
 
 function mask32x4Case(
   value: string,
   binderPrefix: string,
-  body: (lanes: readonly FunctionalSurfaceExpression[]) => FunctionalSurfaceExpression,
-): FunctionalSurfaceExpression {
-  return vectorCase(FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME, value, binderPrefix, body);
+  body: (lanes: readonly SurfaceExpression[]) => SurfaceExpression,
+): SurfaceExpression {
+  return vectorCase(MASK32X4_CONSTRUCTOR_NAME, value, binderPrefix, body);
 }
 
 function vectorCase(
   constructor: string,
   value: string,
   binderPrefix: string,
-  body: (lanes: readonly FunctionalSurfaceExpression[]) => FunctionalSurfaceExpression,
-): FunctionalSurfaceExpression {
+  body: (lanes: readonly SurfaceExpression[]) => SurfaceExpression,
+): SurfaceExpression {
   const binders = Array.from({ length: 4 }, (_, lane) => `${binderPrefix}${lane}`);
   return {
     kind: "case",
@@ -395,21 +390,21 @@ function vectorCase(
 }
 
 function f32x4Constructor(
-  lanes: readonly FunctionalSurfaceExpression[],
-): FunctionalSurfaceExpression {
-  return vectorConstructor(FUNCTIONAL_F32X4_CONSTRUCTOR_NAME, lanes);
+  lanes: readonly SurfaceExpression[],
+): SurfaceExpression {
+  return vectorConstructor(F32X4_CONSTRUCTOR_NAME, lanes);
 }
 
 function mask32x4Constructor(
-  lanes: readonly FunctionalSurfaceExpression[],
-): FunctionalSurfaceExpression {
-  return vectorConstructor(FUNCTIONAL_MASK32X4_CONSTRUCTOR_NAME, lanes);
+  lanes: readonly SurfaceExpression[],
+): SurfaceExpression {
+  return vectorConstructor(MASK32X4_CONSTRUCTOR_NAME, lanes);
 }
 
 function vectorConstructor(
   constructor: string,
-  lanes: readonly FunctionalSurfaceExpression[],
-): FunctionalSurfaceExpression {
+  lanes: readonly SurfaceExpression[],
+): SurfaceExpression {
   if (lanes.length !== 4) {
     throw new RangeError(`functional fixed vector requires 4 lanes; received ${lanes.length}`);
   }
@@ -418,17 +413,17 @@ function vectorConstructor(
 
 function vectorCall(
   definition: string,
-  arguments_: readonly FunctionalSurfaceExpression[],
-): FunctionalSurfaceExpression {
+  arguments_: readonly SurfaceExpression[],
+): SurfaceExpression {
   return surface.apply(surface.name(definition), ...arguments_);
 }
 
 function vectorDefinition(
   name: string,
   parameters: readonly string[],
-  annotation: FunctionalTypeSchema,
-  body: FunctionalSurfaceExpression,
-): FunctionalSurfaceDefinition {
+  annotation: TypeSchema,
+  body: SurfaceExpression,
+): SurfaceDefinition {
   // Native lowering trusts these reserved definitions, so their scalar bodies must not be mutable.
   const pendingObjects: object[] = [body];
   const frozenObjects = new Set<object>();
@@ -445,10 +440,10 @@ function vectorDefinition(
 }
 
 function functionType(
-  parameters: readonly FunctionalTypeSchema[],
-  result: FunctionalTypeSchema,
-): FunctionalTypeSchema {
-  return parameters.reduceRight<FunctionalTypeSchema>(
+  parameters: readonly TypeSchema[],
+  result: TypeSchema,
+): TypeSchema {
+  return parameters.reduceRight<TypeSchema>(
     (body, parameter) => Object.freeze({ kind: "function", parameter, result: body }),
     result,
   );
@@ -457,20 +452,20 @@ function functionType(
 function extractDefinition(lane: number): string {
   requireLane(lane);
   return [
-    FunctionalF32x4Definition.ExtractLane0,
-    FunctionalF32x4Definition.ExtractLane1,
-    FunctionalF32x4Definition.ExtractLane2,
-    FunctionalF32x4Definition.ExtractLane3,
+    F32x4Definition.ExtractLane0,
+    F32x4Definition.ExtractLane1,
+    F32x4Definition.ExtractLane2,
+    F32x4Definition.ExtractLane3,
   ][lane]!;
 }
 
 function replaceDefinition(lane: number): string {
   requireLane(lane);
   return [
-    FunctionalF32x4Definition.ReplaceLane0,
-    FunctionalF32x4Definition.ReplaceLane1,
-    FunctionalF32x4Definition.ReplaceLane2,
-    FunctionalF32x4Definition.ReplaceLane3,
+    F32x4Definition.ReplaceLane0,
+    F32x4Definition.ReplaceLane1,
+    F32x4Definition.ReplaceLane2,
+    F32x4Definition.ReplaceLane3,
   ][lane]!;
 }
 

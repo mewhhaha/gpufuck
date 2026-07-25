@@ -1,44 +1,39 @@
-import {
-  FUNCTIONAL_PAIR_CONSTRUCTOR_NAME,
-  FUNCTIONAL_UNIT_CONSTRUCTOR_NAME,
-  type FunctionalType,
-  type FunctionalTypeSchema,
-} from "./abi.ts";
-import { completeFunctionalTypeDeclarations, type GpuFunctionalModule } from "./compiler_module.ts";
+import { PAIR_CONSTRUCTOR_NAME, type Type, type TypeSchema, UNIT_CONSTRUCTOR_NAME } from "./abi.ts";
+import { completeFunctionalTypeDeclarations, type GpuModule } from "./compiler_module.ts";
 import { instantiateSchema } from "./schema_contract.ts";
-import type { FunctionalWasmHostValue } from "./wasm_contract.ts";
+import type { WasmHostValue } from "./wasm_contract.ts";
 import {
-  FUNCTIONAL_ARRAY_TYPE_NAME,
-  FUNCTIONAL_BYTES_TYPE_NAME,
-  FUNCTIONAL_RESOURCE_TYPE_PREFIX,
-  FUNCTIONAL_SLICE_TYPE_NAME,
-  FUNCTIONAL_TEXT_TYPE_NAME,
-  FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME,
+  ARRAY_TYPE_NAME,
+  BYTES_TYPE_NAME,
+  RESOURCE_TYPE_PREFIX,
+  SLICE_TYPE_NAME,
+  TEXT_TYPE_NAME,
+  WHOLE_NUMBER_F64_TYPE_NAME,
 } from "./host_contract.ts";
-import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
-import { FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH } from "./wasm_runtime_layout.ts";
+import { WasmValueAbi } from "./wasm_abi.ts";
+import { WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH } from "./wasm_runtime_layout.ts";
 
-const CONSTRUCTOR_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.constructor;
-const NUMERIC_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.numeric;
-const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
-const BYTES_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.bytes;
-const ARRAY_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.array;
-const SLICE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.slice;
-const RESOURCE_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.resource;
-const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
-const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
-const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
+const CONSTRUCTOR_OBJECT_KIND = WasmValueAbi.objectKinds.constructor;
+const NUMERIC_OBJECT_KIND = WasmValueAbi.objectKinds.numeric;
+const TEXT_OBJECT_KIND = WasmValueAbi.objectKinds.text;
+const BYTES_OBJECT_KIND = WasmValueAbi.objectKinds.bytes;
+const ARRAY_OBJECT_KIND = WasmValueAbi.objectKinds.array;
+const SLICE_OBJECT_KIND = WasmValueAbi.objectKinds.slice;
+const RESOURCE_OBJECT_KIND = WasmValueAbi.objectKinds.resource;
+const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
+const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
+const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 const MAXIMUM_DESCRIBED_TYPE_CHARACTER_LENGTH = 4096;
 const MAXIMUM_DESCRIBED_TYPE_NODE_COUNT = 512;
 
-export type FunctionalWasmValue = FunctionalWasmHostValue;
+export type WasmValue = WasmHostValue;
 
-export class FunctionalWasmValueError extends Error {
+export class WasmValueError extends Error {
   readonly kind: "result-too-large" | "cyclic-result";
 
   constructor(kind: "result-too-large" | "cyclic-result", message: string) {
     super(message);
-    this.name = "FunctionalWasmValueError";
+    this.name = "WasmValueError";
     this.kind = kind;
   }
 }
@@ -68,13 +63,13 @@ export function forgetEncodedFunctionalWasmValue(
   allocationGroups.get(instance)?.delete(Number(BigInt.asUintN(32, encoded)));
 }
 
-export function describeFunctionalType(type: FunctionalType): string {
+export function describeType(type: Type): string {
   type DescribeFrame =
-    | { readonly kind: "type"; readonly type: FunctionalType }
+    | { readonly kind: "type"; readonly type: Type }
     | { readonly kind: "text"; readonly text: string }
-    | { readonly kind: "leave"; readonly type: FunctionalType };
+    | { readonly kind: "leave"; readonly type: Type };
   const frames: DescribeFrame[] = [{ kind: "type", type }];
-  const activeTypes = new Set<FunctionalType>();
+  const activeTypes = new Set<Type>();
   const output: string[] = [];
   let characterLength = 0;
   let describedNodes = 0;
@@ -91,7 +86,7 @@ export function describeFunctionalType(type: FunctionalType): string {
     return false;
   };
   const pushSeparatedTypes = (
-    types: readonly FunctionalType[],
+    types: readonly Type[],
     opening: string,
     closing: string,
   ): void => {
@@ -139,30 +134,30 @@ export function describeFunctionalType(type: FunctionalType): string {
         frames.push({ kind: "text", text: "unit" });
         break;
       case "named": {
-        if (frame.type.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME) {
+        if (frame.type.name === WHOLE_NUMBER_F64_TYPE_NAME) {
           frames.push({ kind: "text", text: "whole number (f64)" });
           break;
         }
-        if (frame.type.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+        if (frame.type.name === TEXT_TYPE_NAME) {
           frames.push({ kind: "text", text: "text" });
           break;
         }
-        if (frame.type.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+        if (frame.type.name === BYTES_TYPE_NAME) {
           frames.push({ kind: "text", text: "bytes" });
           break;
         }
-        if (frame.type.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
+        if (frame.type.name.startsWith(RESOURCE_TYPE_PREFIX)) {
           frames.push({
             kind: "text",
             text: `resource(${
-              decodeURIComponent(frame.type.name.slice(FUNCTIONAL_RESOURCE_TYPE_PREFIX.length))
+              decodeURIComponent(frame.type.name.slice(RESOURCE_TYPE_PREFIX.length))
             })`,
           });
           break;
         }
-        const name = frame.type.name === FUNCTIONAL_ARRAY_TYPE_NAME
+        const name = frame.type.name === ARRAY_TYPE_NAME
           ? "array"
-          : frame.type.name === FUNCTIONAL_SLICE_TYPE_NAME
+          : frame.type.name === SLICE_TYPE_NAME
           ? "slice"
           : frame.type.name;
         if (frame.type.arguments.length === 0) {
@@ -185,11 +180,11 @@ export function describeFunctionalType(type: FunctionalType): string {
   return output.join("");
 }
 
-export function encodeFunctionalWasmValue(
+export function encodeWasmValue(
   instance: WebAssembly.Instance,
-  module: GpuFunctionalModule,
-  type: FunctionalType,
-  value: FunctionalWasmValue,
+  module: GpuModule,
+  type: Type,
+  value: WasmValue,
 ): bigint {
   const memory = instance.exports.memory;
   const allocate = instance.exports.allocate;
@@ -208,9 +203,9 @@ export function encodeFunctionalWasmValue(
       );
     }
     const alignedByteLength = Math.ceil(byteLength / 8) * 8;
-    if (alignedByteLength > FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH) {
+    if (alignedByteLength > WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH) {
       throw new RangeError(
-        `functional WASM allocation requires ${alignedByteLength} aligned bytes; maximum is ${FUNCTIONAL_WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH}`,
+        `functional WASM allocation requires ${alignedByteLength} aligned bytes; maximum is ${WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH}`,
       );
     }
     const rawPointer = allocate(alignedByteLength) as number;
@@ -261,8 +256,8 @@ export function encodeFunctionalWasmValue(
   type EncodeFrame =
     | {
       readonly kind: "value";
-      readonly expected: FunctionalType;
-      readonly input: FunctionalWasmValue;
+      readonly expected: Type;
+      readonly input: WasmValue;
     }
     | {
       readonly kind: "object";
@@ -271,7 +266,7 @@ export function encodeFunctionalWasmValue(
       readonly fieldCount: number;
       readonly source: object;
     };
-  const encode = (expected: FunctionalType, input: FunctionalWasmValue): bigint => {
+  const encode = (expected: Type, input: WasmValue): bigint => {
     const pending: EncodeFrame[] = [{ kind: "value", expected, input }];
     const encodedFields: bigint[] = [];
     const activeValues = new WeakSet<object>();
@@ -303,12 +298,12 @@ export function encodeFunctionalWasmValue(
         typeof (candidate as { readonly kind?: unknown }).kind !== "string"
       ) {
         throw new TypeError(
-          `functional WASM argument expected ${describeFunctionalType(currentType)}; received ${
+          `functional WASM argument expected ${describeType(currentType)}; received ${
             candidate === null ? "null" : typeof candidate
           }`,
         );
       }
-      const currentValue = candidate as FunctionalWasmValue;
+      const currentValue = candidate as WasmValue;
       if (currentType.kind === "integer") {
         if (currentValue.kind !== "integer") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
@@ -341,7 +336,7 @@ export function encodeFunctionalWasmValue(
         if (currentValue.kind !== "unit") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
-        const constructorIndex = module.constructorNames.indexOf(FUNCTIONAL_UNIT_CONSTRUCTOR_NAME);
+        const constructorIndex = module.constructorNames.indexOf(UNIT_CONSTRUCTOR_NAME);
         if (constructorIndex < 0) {
           throw new Error("functional WASM input omitted unit constructor");
         }
@@ -366,7 +361,7 @@ export function encodeFunctionalWasmValue(
         }
         encodedFields.push(allocateObject(
           NUMERIC_OBJECT_KIND,
-          FunctionalWasmValueAbi.numericKinds.signedInteger64,
+          WasmValueAbi.numericKinds.signedInteger64,
           [payload],
         ));
         continue;
@@ -383,7 +378,7 @@ export function encodeFunctionalWasmValue(
         }
         encodedFields.push(allocateObject(
           NUMERIC_OBJECT_KIND,
-          FunctionalWasmValueAbi.numericKinds.float32,
+          WasmValueAbi.numericKinds.float32,
           [BigInt(float32Bits(payload))],
         ));
         continue;
@@ -400,7 +395,7 @@ export function encodeFunctionalWasmValue(
         }
         encodedFields.push(allocateObject(
           NUMERIC_OBJECT_KIND,
-          FunctionalWasmValueAbi.numericKinds.float64,
+          WasmValueAbi.numericKinds.float64,
           [BigInt.asIntN(64, float64Bits(payload))],
         ));
         continue;
@@ -410,7 +405,7 @@ export function encodeFunctionalWasmValue(
       }
       if (
         currentType.kind === "named" &&
-        currentType.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME
+        currentType.name === WHOLE_NUMBER_F64_TYPE_NAME
       ) {
         if (currentValue.kind !== "integer") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
@@ -427,12 +422,12 @@ export function encodeFunctionalWasmValue(
         }
         encodedFields.push(allocateObject(
           NUMERIC_OBJECT_KIND,
-          FunctionalWasmValueAbi.numericKinds.float64,
+          WasmValueAbi.numericKinds.float64,
           [BigInt.asIntN(64, float64Bits(payload))],
         ));
         continue;
       }
-      if (currentType.kind === "named" && currentType.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+      if (currentType.kind === "named" && currentType.name === TEXT_TYPE_NAME) {
         if (currentValue.kind !== "text") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
@@ -447,7 +442,7 @@ export function encodeFunctionalWasmValue(
         );
         continue;
       }
-      if (currentType.kind === "named" && currentType.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+      if (currentType.kind === "named" && currentType.name === BYTES_TYPE_NAME) {
         if (currentValue.kind !== "bytes") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
@@ -464,10 +459,10 @@ export function encodeFunctionalWasmValue(
       }
       if (
         currentType.kind === "named" &&
-        (currentType.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
-          currentType.name === FUNCTIONAL_SLICE_TYPE_NAME)
+        (currentType.name === ARRAY_TYPE_NAME ||
+          currentType.name === SLICE_TYPE_NAME)
       ) {
-        const valueKind = currentType.name === FUNCTIONAL_ARRAY_TYPE_NAME ? "array" : "slice";
+        const valueKind = currentType.name === ARRAY_TYPE_NAME ? "array" : "slice";
         if (currentValue.kind !== valueKind) {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
@@ -495,14 +490,14 @@ export function encodeFunctionalWasmValue(
           pending.push({
             kind: "value",
             expected: elementType,
-            input: values[index] as FunctionalWasmValue,
+            input: values[index] as WasmValue,
           });
         }
         continue;
       }
       if (
         currentType.kind === "named" &&
-        currentType.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
+        currentType.name.startsWith(RESOURCE_TYPE_PREFIX)
       ) {
         if (currentValue.kind !== "resource") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
@@ -527,7 +522,7 @@ export function encodeFunctionalWasmValue(
             }`,
           );
         }
-        const constructorIndex = module.constructorNames.indexOf(FUNCTIONAL_PAIR_CONSTRUCTOR_NAME);
+        const constructorIndex = module.constructorNames.indexOf(PAIR_CONSTRUCTOR_NAME);
         if (constructorIndex < 0) {
           throw new Error("functional WASM input omitted tuple constructor");
         }
@@ -542,12 +537,12 @@ export function encodeFunctionalWasmValue(
         pending.push({
           kind: "value",
           expected: currentType.values[1],
-          input: values[1] as FunctionalWasmValue,
+          input: values[1] as WasmValue,
         });
         pending.push({
           kind: "value",
           expected: currentType.values[0],
-          input: values[0] as FunctionalWasmValue,
+          input: values[0] as WasmValue,
         });
         continue;
       }
@@ -598,7 +593,7 @@ export function encodeFunctionalWasmValue(
         pending.push({
           kind: "value",
           expected: fieldTypes[index]!,
-          input: fields[index] as FunctionalWasmValue,
+          input: fields[index] as WasmValue,
         });
       }
     }
@@ -660,15 +655,15 @@ export function releaseEncodedFunctionalWasmValue(
   groups.delete(root);
 }
 
-export function decodeFunctionalWasmValue(
+export function decodeWasmValue(
   instance: WebAssembly.Instance,
-  module: GpuFunctionalModule,
-  type: FunctionalType,
+  module: GpuModule,
+  type: Type,
   rawResult: number | bigint,
   maximumResultNodes: number,
   maximumResultBytes = 1_048_576,
-): FunctionalWasmValue {
-  return decodeFunctionalWasmValueWithScalarRepresentation(
+): WasmValue {
+  return decodeWasmValueWithScalarRepresentation(
     instance,
     module,
     type,
@@ -679,15 +674,15 @@ export function decodeFunctionalWasmValue(
   );
 }
 
-export function decodeFunctionalWasmBoxedValue(
+export function decodeWasmBoxedValue(
   instance: WebAssembly.Instance,
-  module: GpuFunctionalModule,
-  type: FunctionalType,
+  module: GpuModule,
+  type: Type,
   rawResult: number | bigint,
   maximumResultNodes: number,
   maximumResultBytes = 1_048_576,
-): FunctionalWasmValue {
-  return decodeFunctionalWasmValueWithScalarRepresentation(
+): WasmValue {
+  return decodeWasmValueWithScalarRepresentation(
     instance,
     module,
     type,
@@ -698,15 +693,15 @@ export function decodeFunctionalWasmBoxedValue(
   );
 }
 
-function decodeFunctionalWasmValueWithScalarRepresentation(
+function decodeWasmValueWithScalarRepresentation(
   instance: WebAssembly.Instance,
-  module: GpuFunctionalModule,
-  type: FunctionalType,
+  module: GpuModule,
+  type: Type,
   rawResult: number | bigint,
   maximumResultNodes: number,
   maximumResultBytes: number,
   scalarRepresentation: "native" | "boxed",
-): FunctionalWasmValue {
+): WasmValue {
   if (!Number.isSafeInteger(maximumResultNodes) || maximumResultNodes < 1) {
     throw new RangeError(
       `functional WASM maximumResultNodes must be a positive safe integer; received ${maximumResultNodes}`,
@@ -735,7 +730,7 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
   if (scalarRepresentation === "native" && type.kind === "unit") return { kind: "unit" };
   if (type.kind === "function") {
     throw new TypeError(
-      `functional WASM cannot decode function result ${describeFunctionalType(type)}`,
+      `functional WASM cannot decode function result ${describeType(type)}`,
     );
   }
   const memory = instance.exports.memory;
@@ -748,37 +743,37 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     | {
       readonly kind: "value";
       readonly rawValue: bigint;
-      readonly expected: FunctionalType;
+      readonly expected: Type;
     }
     | {
       readonly kind: "collection";
       readonly pointer: number;
       readonly valueKind: "array" | "slice";
-      readonly elementType: FunctionalType;
+      readonly elementType: Type;
       readonly valueCount: number;
       nextIndex: number;
-      readonly values: FunctionalWasmValue[];
+      readonly values: WasmValue[];
     }
     | {
       readonly kind: "constructor";
       readonly pointer: number;
-      readonly expected: Extract<FunctionalType, { readonly kind: "tuple" | "named" }>;
+      readonly expected: Extract<Type, { readonly kind: "tuple" | "named" }>;
       readonly constructorName: string;
-      readonly fieldTypes: readonly FunctionalType[];
+      readonly fieldTypes: readonly Type[];
       nextIndex: number;
-      readonly fields: FunctionalWasmValue[];
+      readonly fields: WasmValue[];
     };
 
   let decodedNodes = 0;
   let decodedBytes = 0;
-  let decodedResult: FunctionalWasmValue | undefined;
+  let decodedResult: WasmValue | undefined;
   const activePointers = new Set<number>();
   const frames: DecodeFrame[] = [{
     kind: "value",
     rawValue: BigInt(rawResult),
     expected: type,
   }];
-  const appendDecodedValue = (value: FunctionalWasmValue): void => {
+  const appendDecodedValue = (value: WasmValue): void => {
     const parent = frames.at(-1);
     if (parent === undefined) {
       decodedResult = value;
@@ -872,7 +867,7 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
 
     decodedNodes += 1;
     if (decodedNodes > maximumResultNodes) {
-      throw new FunctionalWasmValueError(
+      throw new WasmValueError(
         "result-too-large",
         `functional WASM result exceeded maximumResultNodes ${maximumResultNodes}`,
       );
@@ -910,7 +905,7 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     }
     if (
       expected.kind === "named" &&
-      expected.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME
+      expected.name === WHOLE_NUMBER_F64_TYPE_NAME
     ) {
       frames.pop();
       appendDecodedValue(decodeBoxedWholeNumberF64(memory, forced));
@@ -918,7 +913,7 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     }
     const pointer = Number(BigInt.asUintN(32, forced));
     if (activePointers.has(pointer)) {
-      throw new FunctionalWasmValueError(
+      throw new WasmValueError(
         "cyclic-result",
         `functional WASM structured result contains a cycle through pointer ${pointer}`,
       );
@@ -931,11 +926,11 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     }
     const objectKind = view.getUint32(pointer, true);
     const valueCount = view.getUint32(pointer + 8, true);
-    if (expected.kind === "named" && expected.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+    if (expected.kind === "named" && expected.name === TEXT_TYPE_NAME) {
       requireObjectKind(pointer, objectKind, TEXT_OBJECT_KIND, "text");
       decodedBytes += valueCount;
       if (decodedBytes > maximumResultBytes) {
-        throw new FunctionalWasmValueError(
+        throw new WasmValueError(
           "result-too-large",
           `functional WASM result exceeded maximumResultBytes ${maximumResultBytes}`,
         );
@@ -948,11 +943,11 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
       });
       continue;
     }
-    if (expected.kind === "named" && expected.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+    if (expected.kind === "named" && expected.name === BYTES_TYPE_NAME) {
       requireObjectKind(pointer, objectKind, BYTES_OBJECT_KIND, "bytes");
       decodedBytes += valueCount;
       if (decodedBytes > maximumResultBytes) {
-        throw new FunctionalWasmValueError(
+        throw new WasmValueError(
           "result-too-large",
           `functional WASM result exceeded maximumResultBytes ${maximumResultBytes}`,
         );
@@ -966,10 +961,10 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
     }
     if (
       expected.kind === "named" &&
-      (expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
-        expected.name === FUNCTIONAL_SLICE_TYPE_NAME)
+      (expected.name === ARRAY_TYPE_NAME ||
+        expected.name === SLICE_TYPE_NAME)
     ) {
-      const valueKind = expected.name === FUNCTIONAL_ARRAY_TYPE_NAME ? "array" : "slice";
+      const valueKind = expected.name === ARRAY_TYPE_NAME ? "array" : "slice";
       requireObjectKind(
         pointer,
         objectKind,
@@ -992,7 +987,7 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
       };
       continue;
     }
-    if (expected.kind === "named" && expected.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)) {
+    if (expected.kind === "named" && expected.name.startsWith(RESOURCE_TYPE_PREFIX)) {
       requireObjectKind(pointer, objectKind, RESOURCE_OBJECT_KIND, "resource");
       frames.pop();
       appendDecodedValue({ kind: "resource", id: view.getUint32(pointer + 4, true) });
@@ -1037,12 +1032,12 @@ function decodeFunctionalWasmValueWithScalarRepresentation(
 }
 
 export function requireFirstOrderFunctionalWasmType(
-  module: GpuFunctionalModule,
-  type: FunctionalType,
+  module: GpuModule,
+  type: Type,
   location: string,
 ): void {
   const visitedNamedTypes = new Set<string>();
-  const visit = (current: FunctionalType, path: string): void => {
+  const visit = (current: Type, path: string): void => {
     switch (current.kind) {
       case "integer":
       case "signed-integer-64":
@@ -1064,12 +1059,12 @@ export function requireFirstOrderFunctionalWasmType(
           visit(argument, `${path}.arguments[${index}]`);
         }
         if (
-          current.name === FUNCTIONAL_TEXT_TYPE_NAME ||
-          current.name === FUNCTIONAL_BYTES_TYPE_NAME ||
-          current.name === FUNCTIONAL_WHOLE_NUMBER_F64_TYPE_NAME ||
-          current.name === FUNCTIONAL_ARRAY_TYPE_NAME ||
-          current.name === FUNCTIONAL_SLICE_TYPE_NAME ||
-          current.name.startsWith(FUNCTIONAL_RESOURCE_TYPE_PREFIX)
+          current.name === TEXT_TYPE_NAME ||
+          current.name === BYTES_TYPE_NAME ||
+          current.name === WHOLE_NUMBER_F64_TYPE_NAME ||
+          current.name === ARRAY_TYPE_NAME ||
+          current.name === SLICE_TYPE_NAME ||
+          current.name.startsWith(RESOURCE_TYPE_PREFIX)
         ) return;
         const key = JSON.stringify(current);
         if (visitedNamedTypes.has(key)) return;
@@ -1112,10 +1107,10 @@ function decodeBoxedNumeric(
   memory: WebAssembly.Memory,
   rawValue: bigint,
   expected: Extract<
-    FunctionalType,
+    Type,
     { readonly kind: "signed-integer-64" | "float-32" | "float-64" }
   >,
-): FunctionalWasmValue {
+): WasmValue {
   const pointer = Number(BigInt.asUintN(32, rawValue));
   const view = new DataView(memory.buffer);
   if (pointer > view.byteLength - (OBJECT_HEADER_BYTE_LENGTH + VALUE_BYTE_LENGTH)) {
@@ -1131,7 +1126,7 @@ function decodeBoxedNumeric(
     );
   }
   if (expected.kind === "signed-integer-64") {
-    if (numericKind !== FunctionalWasmValueAbi.numericKinds.signedInteger64) {
+    if (numericKind !== WasmValueAbi.numericKinds.signedInteger64) {
       throw new Error(`functional WASM i64 pointer ${pointer} has numeric kind ${numericKind}`);
     }
     return {
@@ -1140,7 +1135,7 @@ function decodeBoxedNumeric(
     };
   }
   if (expected.kind === "float-32") {
-    if (numericKind !== FunctionalWasmValueAbi.numericKinds.float32) {
+    if (numericKind !== WasmValueAbi.numericKinds.float32) {
       throw new Error(`functional WASM f32 pointer ${pointer} has numeric kind ${numericKind}`);
     }
     return {
@@ -1148,7 +1143,7 @@ function decodeBoxedNumeric(
       value: view.getFloat32(pointer + OBJECT_HEADER_BYTE_LENGTH, true),
     };
   }
-  if (numericKind !== FunctionalWasmValueAbi.numericKinds.float64) {
+  if (numericKind !== WasmValueAbi.numericKinds.float64) {
     throw new Error(`functional WASM f64 pointer ${pointer} has numeric kind ${numericKind}`);
   }
   return {
@@ -1160,7 +1155,7 @@ function decodeBoxedNumeric(
 function decodeBoxedWholeNumberF64(
   memory: WebAssembly.Memory,
   rawValue: bigint,
-): FunctionalWasmValue {
+): WasmValue {
   const pointer = Number(BigInt.asUintN(32, rawValue));
   const view = new DataView(memory.buffer);
   if (pointer > view.byteLength - (OBJECT_HEADER_BYTE_LENGTH + VALUE_BYTE_LENGTH)) {
@@ -1172,7 +1167,7 @@ function decodeBoxedWholeNumberF64(
   const numericKind = view.getUint32(pointer + 4, true);
   if (
     objectKind !== NUMERIC_OBJECT_KIND ||
-    numericKind !== FunctionalWasmValueAbi.numericKinds.float64
+    numericKind !== WasmValueAbi.numericKinds.float64
   ) {
     throw new Error(
       `functional WASM whole-number f64 pointer ${pointer} has object kind ${objectKind} and numeric kind ${numericKind}`,
@@ -1187,9 +1182,9 @@ function decodeBoxedWholeNumberF64(
   return { kind: "integer", value };
 }
 
-function wasmArgumentTypeMismatch(type: FunctionalType, value: FunctionalWasmValue): TypeError {
+function wasmArgumentTypeMismatch(type: Type, value: WasmValue): TypeError {
   return new TypeError(
-    `functional WASM argument expected ${describeFunctionalType(type)}; received ${value.kind}`,
+    `functional WASM argument expected ${describeType(type)}; received ${value.kind}`,
   );
 }
 
@@ -1222,12 +1217,12 @@ function boundedBytes(
 }
 
 export function functionalStructuredFieldTypes(
-  module: GpuFunctionalModule,
-  type: Extract<FunctionalType, { readonly kind: "tuple" | "named" }>,
+  module: GpuModule,
+  type: Extract<Type, { readonly kind: "tuple" | "named" }>,
   constructorName: string,
-): readonly FunctionalType[] {
+): readonly Type[] {
   if (type.kind === "tuple") {
-    if (constructorName !== FUNCTIONAL_PAIR_CONSTRUCTOR_NAME) {
+    if (constructorName !== PAIR_CONSTRUCTOR_NAME) {
       throw new Error(
         `functional WASM tuple result used constructor ${JSON.stringify(constructorName)}`,
       );
@@ -1250,7 +1245,7 @@ export function functionalStructuredFieldTypes(
       }`,
     );
   }
-  const parameters = new Map<string, FunctionalType>();
+  const parameters = new Map<string, Type>();
   if (constructor.result === undefined) {
     for (const [index, parameter] of declaration.parameters.entries()) {
       const argument = type.arguments[index];
@@ -1264,7 +1259,7 @@ export function functionalStructuredFieldTypes(
   } else if (!matchConstructorResult(constructor.result, type, parameters)) {
     throw new Error(
       `functional WASM constructor ${JSON.stringify(constructorName)} does not inhabit ${
-        describeFunctionalType(type)
+        describeType(type)
       }`,
     );
   }
@@ -1272,9 +1267,9 @@ export function functionalStructuredFieldTypes(
 }
 
 function matchConstructorResult(
-  schema: FunctionalTypeSchema,
-  type: FunctionalType,
-  parameters: Map<string, FunctionalType>,
+  schema: TypeSchema,
+  type: Type,
+  parameters: Map<string, Type>,
 ): boolean {
   switch (schema.kind) {
     case "integer":
@@ -1309,7 +1304,7 @@ function matchConstructorResult(
   }
 }
 
-function sameFunctionalType(left: FunctionalType, right: FunctionalType): boolean {
+function sameFunctionalType(left: Type, right: Type): boolean {
   if (left.kind !== right.kind) return false;
   switch (left.kind) {
     case "integer":

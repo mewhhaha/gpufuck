@@ -1,14 +1,10 @@
+import { BinaryOperator, type EncodedFunctionalModule, EvaluationProfile } from "./abi.ts";
 import {
-  type EncodedFunctionalModule,
-  FunctionalBinaryOperator,
-  FunctionalEvaluationProfile,
-} from "./abi.ts";
-import {
-  buildFunctionalSurfaceModule,
-  type FunctionalSurfaceCaseArm,
-  type FunctionalSurfaceDefinition,
-  type FunctionalSurfaceExpression,
+  buildSurfaceModule,
   surface,
+  type SurfaceCaseArm,
+  type SurfaceDefinition,
+  type SurfaceExpression,
 } from "./surface_builder.ts";
 import type {
   TypeCoreExpression,
@@ -43,7 +39,7 @@ export function lowerTypeCoreProgram(
     functionNames.set(typeFunction.name, `$TypeCoreFunction${functionIndex}`);
   }
   const lowering = new TypeCoreLowering(symbols, functionNames);
-  const definitions: FunctionalSurfaceDefinition[] = validated.program.functions.map(
+  const definitions: SurfaceDefinition[] = validated.program.functions.map(
     (typeFunction) => ({
       name: requiredFunctionName(functionNames, typeFunction.name),
       parameters: typeFunction.parameters.map((parameter) => parameter.name),
@@ -69,12 +65,12 @@ export function lowerTypeCoreProgram(
   });
 
   return {
-    module: buildFunctionalSurfaceModule(
+    module: buildSurfaceModule(
       definitions,
       typeCoreRuntimeDeclarations(),
       TYPE_CORE_ENTRY_DEFINITION,
       validated.sourceByteLength,
-      { evaluationProfile: FunctionalEvaluationProfile.StrictEager },
+      { evaluationProfile: EvaluationProfile.StrictEager },
     ),
     symbolValues: symbols.values,
     entryKind: validated.entryKind,
@@ -91,8 +87,8 @@ class TypeCoreLowering {
 
   expression(
     expression: TypeCoreExpression,
-    environment: ReadonlyMap<string, FunctionalSurfaceExpression>,
-  ): FunctionalSurfaceExpression {
+    environment: ReadonlyMap<string, SurfaceExpression>,
+  ): SurfaceExpression {
     switch (expression.kind) {
       case "type":
         return this.wrapType(this.typeExpression(expression.type, environment));
@@ -136,9 +132,9 @@ class TypeCoreLowering {
         };
       case "integer-operation": {
         const operator = {
-          add: FunctionalBinaryOperator.Add,
-          subtract: FunctionalBinaryOperator.Subtract,
-          multiply: FunctionalBinaryOperator.Multiply,
+          add: BinaryOperator.Add,
+          subtract: BinaryOperator.Subtract,
+          multiply: BinaryOperator.Multiply,
         }[expression.operator];
         return this.construct(
           TypeCoreRuntimeConstructor.ValueInteger,
@@ -193,8 +189,8 @@ class TypeCoreLowering {
 
   private typeExpression(
     expression: TypeCoreTypeExpression,
-    environment: ReadonlyMap<string, FunctionalSurfaceExpression>,
-  ): FunctionalSurfaceExpression {
+    environment: ReadonlyMap<string, SurfaceExpression>,
+  ): SurfaceExpression {
     switch (expression.kind) {
       case "integer":
         return this.construct(TypeCoreRuntimeConstructor.TypeInteger);
@@ -227,8 +223,8 @@ class TypeCoreLowering {
 
   private patternCondition(
     pattern: TypeCorePattern,
-    value: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    value: SurfaceExpression,
+  ): SurfaceExpression {
     switch (pattern.kind) {
       case "bind":
         return surface.boolean(true);
@@ -257,8 +253,8 @@ class TypeCoreLowering {
 
   private typePatternCondition(
     pattern: TypeCoreTypePattern,
-    type: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    type: SurfaceExpression,
+  ): SurfaceExpression {
     switch (pattern.kind) {
       case "integer":
         return this.caseType(type, {
@@ -300,9 +296,9 @@ class TypeCoreLowering {
   }
 
   private listPatternCondition(
-    list: FunctionalSurfaceExpression,
+    list: SurfaceExpression,
     patterns: readonly TypeCorePattern[],
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (patterns.length === 0) {
       return this.caseList(list, {
         nil: () => surface.boolean(true),
@@ -342,8 +338,8 @@ class TypeCoreLowering {
 
   private collectPatternBindings(
     pattern: TypeCorePattern,
-    value: FunctionalSurfaceExpression,
-    environment: Map<string, FunctionalSurfaceExpression>,
+    value: SurfaceExpression,
+    environment: Map<string, SurfaceExpression>,
     projections: PatternProjection[],
   ): void {
     switch (pattern.kind) {
@@ -370,8 +366,8 @@ class TypeCoreLowering {
 
   private collectTypePatternBindings(
     pattern: TypeCoreTypePattern,
-    type: FunctionalSurfaceExpression,
-    environment: Map<string, FunctionalSurfaceExpression>,
+    type: SurfaceExpression,
+    environment: Map<string, SurfaceExpression>,
     projections: PatternProjection[],
   ): void {
     switch (pattern.kind) {
@@ -464,8 +460,8 @@ class TypeCoreLowering {
 
   private bindPatternProjections(
     projections: readonly PatternProjection[],
-    body: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    body: SurfaceExpression,
+  ): SurfaceExpression {
     let expression = body;
     for (let projectionIndex = projections.length - 1; projectionIndex >= 0; projectionIndex--) {
       const projection = projections[projectionIndex];
@@ -482,43 +478,43 @@ class TypeCoreLowering {
     return expression;
   }
 
-  private unwrapType(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+  private unwrapType(value: SurfaceExpression): SurfaceExpression {
     return this.caseCompileValue(value, {
       type: (type) => type,
     }, this.unitType());
   }
 
-  private unwrapInteger(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+  private unwrapInteger(value: SurfaceExpression): SurfaceExpression {
     return this.caseCompileValue(value, {
       integer: (integer) => integer,
     }, surface.integer(0));
   }
 
-  private unwrapBoolean(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+  private unwrapBoolean(value: SurfaceExpression): SurfaceExpression {
     return this.caseCompileValue(value, {
       boolean: (boolean) => boolean,
     }, surface.boolean(false));
   }
 
-  private unwrapSymbol(value: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+  private unwrapSymbol(value: SurfaceExpression): SurfaceExpression {
     return this.caseCompileValue(value, {
       symbol: (symbol) => symbol,
     }, surface.integer(0));
   }
 
-  private wrapType(type: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+  private wrapType(type: SurfaceExpression): SurfaceExpression {
     return this.construct(TypeCoreRuntimeConstructor.ValueType, type);
   }
 
-  private wrapBoolean(boolean: FunctionalSurfaceExpression): FunctionalSurfaceExpression {
+  private wrapBoolean(boolean: SurfaceExpression): SurfaceExpression {
     return this.construct(TypeCoreRuntimeConstructor.ValueBoolean, boolean);
   }
 
-  private unitType(): FunctionalSurfaceExpression {
+  private unitType(): SurfaceExpression {
     return this.construct(TypeCoreRuntimeConstructor.TypeUnit);
   }
 
-  private valueList(values: readonly FunctionalSurfaceExpression[]): FunctionalSurfaceExpression {
+  private valueList(values: readonly SurfaceExpression[]): SurfaceExpression {
     let list = this.emptyValueList();
     for (let valueIndex = values.length - 1; valueIndex >= 0; valueIndex--) {
       const value = values[valueIndex];
@@ -528,14 +524,14 @@ class TypeCoreLowering {
     return list;
   }
 
-  private emptyValueList(): FunctionalSurfaceExpression {
+  private emptyValueList(): SurfaceExpression {
     return this.construct(TypeCoreRuntimeConstructor.ListNil);
   }
 
   private booleanEquals(
-    boolean: FunctionalSurfaceExpression,
+    boolean: SurfaceExpression,
     expected: boolean,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     if (expected) return boolean;
     return {
       kind: "if",
@@ -546,9 +542,9 @@ class TypeCoreLowering {
   }
 
   private and(
-    left: FunctionalSurfaceExpression,
-    right: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+  ): SurfaceExpression {
     return {
       kind: "if",
       condition: left,
@@ -559,16 +555,16 @@ class TypeCoreLowering {
 
   private construct(
     constructor: string,
-    ...fields: readonly FunctionalSurfaceExpression[]
-  ): FunctionalSurfaceExpression {
+    ...fields: readonly SurfaceExpression[]
+  ): SurfaceExpression {
     return surface.apply(surface.name(constructor), ...fields);
   }
 
   private caseCompileValue(
-    value: FunctionalSurfaceExpression,
+    value: SurfaceExpression,
     branches: CompileValueCaseBranches,
-    fallback: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    fallback: SurfaceExpression,
+  ): SurfaceExpression {
     const type = this.temporary("valueType");
     const integer = this.temporary("valueInteger");
     const boolean = this.temporary("valueBoolean");
@@ -602,10 +598,10 @@ class TypeCoreLowering {
   }
 
   private caseType(
-    type: FunctionalSurfaceExpression,
+    type: SurfaceExpression,
     branches: TypeCaseBranches,
-    fallback: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceExpression {
+    fallback: SurfaceExpression,
+  ): SurfaceExpression {
     const name = this.temporary("typeName");
     const arguments_ = this.temporary("typeArguments");
     const first = this.temporary("typeFirst");
@@ -639,20 +635,20 @@ class TypeCoreLowering {
   }
 
   private caseList(
-    list: FunctionalSurfaceExpression,
+    list: SurfaceExpression,
     branches: ListCaseBranches,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     const head = this.temporary("listHead");
     const tail = this.temporary("listTail");
     return this.caseListWithBindings(list, head, tail, branches);
   }
 
   private caseListWithBindings(
-    list: FunctionalSurfaceExpression,
+    list: SurfaceExpression,
     head: string,
     tail: string,
     branches: ListCaseBranches,
-  ): FunctionalSurfaceExpression {
+  ): SurfaceExpression {
     return {
       kind: "case",
       value: list,
@@ -670,8 +666,8 @@ class TypeCoreLowering {
   private caseArm(
     constructor: string,
     binders: readonly string[],
-    body: FunctionalSurfaceExpression,
-  ): FunctionalSurfaceCaseArm {
+    body: SurfaceExpression,
+  ): SurfaceCaseArm {
     return { constructor, binders, body };
   }
 
@@ -681,41 +677,41 @@ class TypeCoreLowering {
 }
 
 interface CompileValueCaseBranches {
-  readonly type?: (type: FunctionalSurfaceExpression) => FunctionalSurfaceExpression;
-  readonly integer?: (integer: FunctionalSurfaceExpression) => FunctionalSurfaceExpression;
-  readonly boolean?: (boolean: FunctionalSurfaceExpression) => FunctionalSurfaceExpression;
-  readonly symbol?: (symbol: FunctionalSurfaceExpression) => FunctionalSurfaceExpression;
+  readonly type?: (type: SurfaceExpression) => SurfaceExpression;
+  readonly integer?: (integer: SurfaceExpression) => SurfaceExpression;
+  readonly boolean?: (boolean: SurfaceExpression) => SurfaceExpression;
+  readonly symbol?: (symbol: SurfaceExpression) => SurfaceExpression;
 }
 
 interface TypeCaseBranches {
-  readonly integer?: () => FunctionalSurfaceExpression;
-  readonly boolean?: () => FunctionalSurfaceExpression;
-  readonly unit?: () => FunctionalSurfaceExpression;
+  readonly integer?: () => SurfaceExpression;
+  readonly boolean?: () => SurfaceExpression;
+  readonly unit?: () => SurfaceExpression;
   readonly named?: (
-    name: FunctionalSurfaceExpression,
-    arguments_: FunctionalSurfaceExpression,
-  ) => FunctionalSurfaceExpression;
+    name: SurfaceExpression,
+    arguments_: SurfaceExpression,
+  ) => SurfaceExpression;
   readonly tuple?: (
-    first: FunctionalSurfaceExpression,
-    second: FunctionalSurfaceExpression,
-  ) => FunctionalSurfaceExpression;
+    first: SurfaceExpression,
+    second: SurfaceExpression,
+  ) => SurfaceExpression;
   readonly function?: (
-    parameter: FunctionalSurfaceExpression,
-    result: FunctionalSurfaceExpression,
-  ) => FunctionalSurfaceExpression;
+    parameter: SurfaceExpression,
+    result: SurfaceExpression,
+  ) => SurfaceExpression;
 }
 
 interface ListCaseBranches {
-  readonly nil: () => FunctionalSurfaceExpression;
+  readonly nil: () => SurfaceExpression;
   readonly cons: (
-    head: FunctionalSurfaceExpression,
-    tail: FunctionalSurfaceExpression,
-  ) => FunctionalSurfaceExpression;
+    head: SurfaceExpression,
+    tail: SurfaceExpression,
+  ) => SurfaceExpression;
 }
 
 interface PatternProjection {
   readonly name: string;
-  readonly value: FunctionalSurfaceExpression;
+  readonly value: SurfaceExpression;
 }
 
 class CompileTimeSymbolTable {

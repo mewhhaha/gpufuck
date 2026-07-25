@@ -71,8 +71,8 @@ lower into nominal declarations, explicit dictionaries, linked artifacts, and un
 [`recursive_groups.ts`](src/functional/recursive_groups.ts) lambda-lifts local SCCs into top-level
 ones with captures made explicit.
 
-**Surface sugar** is elaborated on the host during `buildFunctionalSurfaceModule`, behind a feature
-mask so a module that uses none of it pays nothing. `recursive_groups.ts` is the precedent and
+**Surface sugar** is elaborated on the host during `buildSurfaceModule`, behind a feature mask so a
+module that uses none of it pays nothing. `recursive_groups.ts` is the precedent and
 `case_defaults.ts` follows it: a `case` may carry an `otherwise` arm, which expands to the
 exhaustive form the Core requires by filling in the constructors the arms omit and binding the
 fallback once so arms share it. The scrutinee is bound once too, so it is evaluated once and can be
@@ -98,15 +98,15 @@ unreachable records, and excessive depth before anything is trusted.
 
 **Resolved Core** is the trusted semantic input to evaluation. Nodes carry numeric local depths,
 definition and constructor indices, child indices, span bytes, and evaluation mode; names are never
-resolved twice. The decoded shape is `FunctionalCoreNode` in
+resolved twice. The decoded shape is `CoreNode` in
 [`compiler_module.ts`](src/functional/compiler_module.ts); the packed form stays on buffers owned by
-`GpuFunctionalModule`, with `readCoreNodes()` as an explicit readback. Indexed runtime state uses
-the neutral `Store a` primitive — persistent new, length, checked read, write, and growth, bounded
-to 16,777,216 elements — which keeps JavaScript object semantics inside the JavaScript frontend.
+`GpuModule`, with `readCoreNodes()` as an explicit readback. Indexed runtime state uses the neutral
+`Store a` primitive — persistent new, length, checked read, write, and growth, bounded to 16,777,216
+elements — which keeps JavaScript object semantics inside the JavaScript frontend.
 
 ## 4. Modules, linking, and packed ABIs
 
-The frontend emits one `FunctionalModuleArtifact` per source module.
+The frontend emits one `ModuleArtifact` per source module.
 [`module_linker.ts`](src/functional/module_linker.ts) validates artifact structure, qualifies every
 definition, nominal type, and constructor, rewrites references, turns each import alias into an
 annotated boundary definition, checks evaluation-profile and host-capability compatibility, rejects
@@ -130,10 +130,10 @@ failure and impossible internal state propagate as infrastructure errors.
 [`compiler.ts`](src/functional/compiler.ts) is the language-neutral facade: it validates options and
 device-derived size limits, normalizes host contracts, admits work under a transient memory budget,
 and delegates to `src/semantic/`. Some internal names retain `Lazuli` for ABI compatibility, but no
-source syntax reaches the shaders. `GpuFunctionalCompiler.create(device)` builds and validates the
-pipelines once, reading shader compilation messages before asynchronous pipeline creation so invalid
-WGSL fails at initialization rather than on the first user source; device limits determine maximum
-node, definition, type, constructor, and transient storage. [`webgpu.ts`](src/webgpu.ts) requests
+source syntax reaches the shaders. `GpuCompiler.create(device)` builds and validates the pipelines
+once, reading shader compilation messages before asynchronous pipeline creation so invalid WGSL
+fails at initialization rather than on the first user source; device limits determine maximum node,
+definition, type, constructor, and transient storage. [`webgpu.ts`](src/webgpu.ts) requests
 `maxStorageBuffersPerShaderStage` of 16 (clamped to adapter support) because the existing kernels
 already bind all eight WebGPU guarantees by default, and opts into `timestamp-query` when available.
 
@@ -225,11 +225,10 @@ It owns parsing, its own semantic Core, and the lowering into Functional Surface
 `experiments/gpufuck/core_lowering.ts` is its entire backend adapter. It has no other code
 generator, so deleting gpufuck's Wasm emission leaves Ducklang with no target at all.
 
-What it imports from `functional.ts`: `GpuFunctionalCompiler` and `requestWebGpuDevice`,
-`linkFunctionalModules` and the `surface` builders, `compileFunctionalModuleToWasm`,
-`runFunctionalWasmModule` and `runFunctionalWasmModuleAsync` with their `init` and host-value types,
-`planFunctionalModuleStorage`, and `GpuFunctionalComptimeExecutor`. Storage planning, comptime, and
-the host boundary are load-bearing for it, not vestigial.
+What it imports from `functional.ts`: `GpuCompiler` and `requestWebGpuDevice`, `linkModules` and the
+`surface` builders, `compileModuleToWasm`, `runWasmModule` and `runWasmModuleAsync` with their
+`init` and host-value types, `planModuleStorage`, and `GpuComptimeExecutor`. Storage planning,
+comptime, and the host boundary are load-bearing for it, not vestigial.
 
 The coupling is a **relative import**, `../../../gpufuck/functional.ts`, not a JSR version range.
 There is no pin and no release step between the two projects: a change here reaches Ducklang on its
@@ -240,10 +239,10 @@ broken and the suite stays green.
 
 ## 8. Runtimes
 
-A successful `GpuFunctionalModule` owns resolved node, definition, and constructor buffers, plus
-counts, roots, qualified names, arities, the entry and its inferred type, nominal declarations, host
+A successful `GpuModule` owns resolved node, definition, and constructor buffers, plus counts,
+roots, qualified names, arities, the entry and its inferred type, nominal declarations, host
 capability contracts, source ranges, evaluation profile, and an idempotent `destroy()`. Two runtimes
-consume it, and `GpuFunctionalEvaluator.evaluate` chooses between them without the caller deciding.
+consume it, and `GpuEvaluator.evaluate` chooses between them without the caller deciding.
 
 [`evaluator.ts`](src/functional/evaluator.ts) is a bounded graph reducer over resolved Core
 supporting strict and call-by-need binding, lane-local fuel, bounded heap and stack, cancellation,
@@ -264,16 +263,16 @@ the delegated path.
 The delegation is not free of seams, and they are contract violations rather than diagnostics: the
 bounded-Wasm path throws a `TypeError` for the GPU-only `maximumStepsPerDispatch`, `heapSlots`, and
 `stackFrames` options, and for any module declaring host capabilities, because `evaluate()` has
-nowhere to take a runner `init` — such a program must go through `runFunctionalWasmModule` instead.
-Its step budget is capped at 1,000,000, below the evaluator's configurable fuel.
+nowhere to take a runner `init` — such a program must go through `runWasmModule` instead. Its step
+budget is capped at 1,000,000, below the evaluator's configurable fuel.
 
 Ahead-of-time emission is the other consumer.
-[`wasm_artifacts.ts`](src/functional/wasm_artifacts.ts) exposes `compileFunctionalModuleToWasm` over
-two code generators — `linear-memory`, optionally with a caller-supplied storage plan, owned-type
-exports, or Wasm SIMD, and `wasm-gc` — memoizing artifacts per module and per resolved-Core
-fingerprint. Host capability declarations and `wasmExports` are consumed here: capabilities become
-the imported host boundary emitted by [`wasm_host_emitter.ts`](src/functional/wasm_host_emitter.ts),
-and exported definitions become module exports.
+[`wasm_artifacts.ts`](src/functional/wasm_artifacts.ts) exposes `compileModuleToWasm` over two code
+generators — `linear-memory`, optionally with a caller-supplied storage plan, owned-type exports, or
+Wasm SIMD, and `wasm-gc` — memoizing artifacts per module and per resolved-Core fingerprint. Host
+capability declarations and `wasmExports` are consumed here: capabilities become the imported host
+boundary emitted by [`wasm_host_emitter.ts`](src/functional/wasm_host_emitter.ts), and exported
+definitions become module exports.
 
 ## 9. The retarget
 
@@ -309,19 +308,19 @@ to parallelize. BASELINE.md records that criterion so it cannot be quietly relax
 
 `F1xxx` covers structural, resolution, and work-limit diagnostics and `F2xxx` covers type,
 annotation, coverage, and inference diagnostics; both arrive in the compile result. `F3001`–`F3012`
-are evaluation faults, and `F4001`–`F4007` are `FunctionalLinkError`. WebGPU and device errors
-reject or throw with a `cause`, and a compiler bug or corrupt trusted state throws. Spans are UTF-8
-byte offsets because packed source evidence must be independent of JavaScript UTF-16 indexing;
+are evaluation faults, and `F4001`–`F4007` are `LinkError`. WebGPU and device errors reject or throw
+with a `cause`, and a compiler bug or corrupt trusted state throws. Spans are UTF-8 byte offsets
+because packed source evidence must be independent of JavaScript UTF-16 indexing;
 `locateFunctionalSpan()` and `locateFunctionalDiagnostic()` map neutral evidence back to a module,
 and the frontend maps that offset to lines, columns, and its own wording. Cancellation is not a
 diagnostic — it rejects with the caller's abort reason.
 
 The application owns the `GPUDevice`; pipelines live for the device's lifetime; upload and inference
 workspaces belong to one compilation and are released on every success, failure, and cancellation
-path; Core buffers belong to a successful `GpuFunctionalModule` until `destroy()`; evaluator heap,
-stack, and readback belong to one evaluation. Workspace growth temporarily owns both old and
-replacement buffers, transferring only after the copy and state patch complete. Catch blocks cannot
-continue with ambiguous ownership, and module destruction is idempotent.
+path; Core buffers belong to a successful `GpuModule` until `destroy()`; evaluator heap, stack, and
+readback belong to one evaluation. Workspace growth temporarily owns both old and replacement
+buffers, transferring only after the copy and state patch complete. Catch blocks cannot continue
+with ambiguous ownership, and module destruction is idempotent.
 
 ## 11. Frontends
 

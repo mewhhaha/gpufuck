@@ -1,20 +1,15 @@
-import {
-  FUNCTIONAL_BYTES_TYPE_NAME,
-  FUNCTIONAL_TEXT_TYPE_NAME,
-  type FunctionalHostType,
-  FunctionalWasmIntrinsic,
-} from "./host_contract.ts";
-import { FunctionalWasmValueAbi } from "./wasm_abi.ts";
-import { FunctionalWasmFunctionType, type WasmInstructions, WasmValueType } from "./wasm_binary.ts";
+import { BYTES_TYPE_NAME, type HostType, TEXT_TYPE_NAME, WasmIntrinsic } from "./host_contract.ts";
+import { WasmValueAbi } from "./wasm_abi.ts";
+import { WasmFunctionTypeIndex, type WasmInstructions, WasmValueType } from "./wasm_binary.ts";
 import { WASM_FAULT_OUT_OF_BOUNDS, WASM_FAULT_OUT_OF_MEMORY } from "./wasm_runtime_binary.ts";
 
-const TEXT_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.text;
-const BYTES_OBJECT_KIND = FunctionalWasmValueAbi.objectKinds.bytes;
-const OBJECT_HEADER_BYTE_LENGTH = FunctionalWasmValueAbi.objectHeaderByteLength;
-const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = FunctionalWasmValueAbi.objectReferenceCountByteOffset;
-const VALUE_BYTE_LENGTH = FunctionalWasmValueAbi.valueByteLength;
+const TEXT_OBJECT_KIND = WasmValueAbi.objectKinds.text;
+const BYTES_OBJECT_KIND = WasmValueAbi.objectKinds.bytes;
+const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
+const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
+const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 
-interface FunctionalWasmHostEmitterContext {
+interface WasmHostEmitterContext {
   readonly ownedRuntimeEnabled: boolean;
   allocateFunctionIndex(): number;
   emitDecodeInteger(instructions: WasmInstructions): void;
@@ -25,29 +20,29 @@ interface FunctionalWasmHostEmitterContext {
   emitRuntimeFault(instructions: WasmInstructions, fault: number): void;
 }
 
-export class FunctionalWasmHostEmitter {
-  readonly #context: FunctionalWasmHostEmitterContext;
+export class WasmHostEmitter {
+  readonly #context: WasmHostEmitterContext;
 
-  constructor(context: FunctionalWasmHostEmitterContext) {
+  constructor(context: WasmHostEmitterContext) {
     this.#context = context;
   }
 
   emitIntrinsic(
     instructions: WasmInstructions,
-    intrinsic: FunctionalWasmIntrinsic,
-    parameter: FunctionalHostType,
-    resultType: FunctionalHostType,
+    intrinsic: WasmIntrinsic,
+    parameter: HostType,
+    resultType: HostType,
   ): void {
     const argument = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(argument);
-    if (intrinsic === FunctionalWasmIntrinsic.BufferByteLength) {
+    if (intrinsic === WasmIntrinsic.BufferByteLength) {
       const pointer = this.bufferPointer(instructions, argument, parameter);
       instructions.localGet(pointer);
       instructions.i32Load(8);
       this.#context.emitEncodeInteger(instructions);
       return;
     }
-    if (intrinsic === FunctionalWasmIntrinsic.BufferConvert) {
+    if (intrinsic === WasmIntrinsic.BufferConvert) {
       const pointer = this.bufferPointer(instructions, argument, parameter);
       const length = instructions.addLocal(WasmValueType.I32);
       instructions.localGet(pointer);
@@ -74,7 +69,7 @@ export class FunctionalWasmHostEmitter {
 
     const tuple = this.objectPointer(instructions, argument);
     const first = this.objectField(instructions, tuple, 0);
-    if (intrinsic === FunctionalWasmIntrinsic.BufferByteGet) {
+    if (intrinsic === WasmIntrinsic.BufferByteGet) {
       const indexValue = this.objectField(instructions, tuple, 1);
       const pointer = this.bufferPointer(instructions, first, parameter.values[0]);
       const index = this.decodedInteger(instructions, indexValue);
@@ -88,7 +83,7 @@ export class FunctionalWasmHostEmitter {
     }
 
     const second = this.objectField(instructions, tuple, 1);
-    if (intrinsic === FunctionalWasmIntrinsic.BufferGenerate) {
+    if (intrinsic === WasmIntrinsic.BufferGenerate) {
       const length = this.decodedInteger(instructions, first);
       instructions.localGet(length);
       instructions.i32Const(0);
@@ -118,7 +113,7 @@ export class FunctionalWasmHostEmitter {
       this.#context.emitEncodeInteger(instructions);
       instructions.localGet(generator);
       instructions.i32Load(4);
-      instructions.callIndirect(FunctionalWasmFunctionType.ClosureCall);
+      instructions.callIndirect(WasmFunctionTypeIndex.ClosureCall);
       this.#context.emitForceValue(instructions);
       this.#context.emitDecodeInteger(instructions);
       instructions.i32Store8(OBJECT_HEADER_BYTE_LENGTH);
@@ -134,7 +129,7 @@ export class FunctionalWasmHostEmitter {
     }
     const bufferType = parameter.values[0];
     const left = this.bufferPointer(instructions, first, bufferType);
-    if (intrinsic === FunctionalWasmIntrinsic.BufferByteSlice) {
+    if (intrinsic === WasmIntrinsic.BufferByteSlice) {
       const bounds = this.objectPointer(instructions, second);
       const startValue = this.objectField(instructions, bounds, 0);
       const endValue = this.objectField(instructions, bounds, 1);
@@ -168,11 +163,11 @@ export class FunctionalWasmHostEmitter {
     }
 
     const right = this.bufferPointer(instructions, second, parameter.values[1]);
-    if (intrinsic === FunctionalWasmIntrinsic.BufferAppend) {
+    if (intrinsic === WasmIntrinsic.BufferAppend) {
       this.emitBufferAppend(instructions, left, right, bufferType, -1);
       return;
     }
-    if (intrinsic === FunctionalWasmIntrinsic.BufferEqual) {
+    if (intrinsic === WasmIntrinsic.BufferEqual) {
       this.emitBufferEquality(instructions, left, right, -1);
       return;
     }
@@ -209,7 +204,7 @@ export class FunctionalWasmHostEmitter {
 
   emitBufferAppendValues(
     instructions: WasmInstructions,
-    type: FunctionalHostType,
+    type: HostType,
     nodeIndex: number,
   ): void {
     const rightValue = instructions.addLocal(WasmValueType.I64);
@@ -253,7 +248,7 @@ export class FunctionalWasmHostEmitter {
   private bufferPointer(
     instructions: WasmInstructions,
     value: number,
-    type: FunctionalHostType,
+    type: HostType,
   ): number {
     const pointer = this.objectPointer(instructions, value);
     instructions.localGet(pointer);
@@ -265,11 +260,11 @@ export class FunctionalWasmHostEmitter {
     return pointer;
   }
 
-  private bufferObjectKind(type: FunctionalHostType): number {
-    if (type.kind === "named" && type.name === FUNCTIONAL_TEXT_TYPE_NAME) {
+  private bufferObjectKind(type: HostType): number {
+    if (type.kind === "named" && type.name === TEXT_TYPE_NAME) {
       return TEXT_OBJECT_KIND;
     }
-    if (type.kind === "named" && type.name === FUNCTIONAL_BYTES_TYPE_NAME) {
+    if (type.kind === "named" && type.name === BYTES_TYPE_NAME) {
       return BYTES_OBJECT_KIND;
     }
     throw new Error(`functional WASM intrinsic received non-buffer type ${type.kind}`);
@@ -342,7 +337,7 @@ export class FunctionalWasmHostEmitter {
     instructions: WasmInstructions,
     left: number,
     right: number,
-    type: FunctionalHostType,
+    type: HostType,
     nodeIndex: number,
   ): void {
     const leftLength = instructions.addLocal(WasmValueType.I32);

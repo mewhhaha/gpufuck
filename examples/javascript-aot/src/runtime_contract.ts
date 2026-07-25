@@ -1,11 +1,11 @@
-import type { FunctionalSurfaceTypeDeclaration } from "../../../src/functional/surface_builder.ts";
+import type { SurfaceTypeDeclaration } from "../../../src/functional/surface_builder.ts";
 import {
-  FUNCTIONAL_MAXIMUM_STORE_LENGTH,
   functionalStoreType,
+  MAXIMUM_STORE_LENGTH,
 } from "../../../src/functional/store_contract.ts";
 
-export const JAVASCRIPT_MAXIMUM_OBJECT_COUNT = FUNCTIONAL_MAXIMUM_STORE_LENGTH;
-export const JAVASCRIPT_MAXIMUM_BINDING_COUNT = FUNCTIONAL_MAXIMUM_STORE_LENGTH;
+export const JAVASCRIPT_MAXIMUM_OBJECT_COUNT = MAXIMUM_STORE_LENGTH;
+export const JAVASCRIPT_MAXIMUM_BINDING_COUNT = MAXIMUM_STORE_LENGTH;
 
 export const JAVASCRIPT_VALUE_TYPE = "$javascript#Value";
 export const JAVASCRIPT_VALUE_UNDEFINED = "$javascript#Undefined";
@@ -138,7 +138,7 @@ const completionTargetType = namedType(JAVASCRIPT_COMPLETION_TARGET_TYPE);
 
 export function javascriptRuntimeTypeDeclarations(
   sourceByteLength: number,
-): readonly FunctionalSurfaceTypeDeclaration[] {
+): readonly SurfaceTypeDeclaration[] {
   const span = { startByte: sourceByteLength, endByte: sourceByteLength };
   return [{
     name: JAVASCRIPT_VALUE_TYPE,

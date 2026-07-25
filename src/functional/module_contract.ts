@@ -1,21 +1,21 @@
-export interface FunctionalSourceRange {
+export interface SourceRange {
   readonly module: string;
   readonly startByte: number;
   readonly endByte: number;
 }
 
-export interface FunctionalWasmExportDeclaration {
+export interface WasmExportDeclaration {
   readonly name: string;
   readonly definition: string;
 }
 
-const FUNCTIONAL_MODULE_NAME_SEPARATOR = "::";
+const MODULE_NAME_SEPARATOR = "::";
 
 export function matchesFunctionalQualifiedName(actual: string, localName: string): boolean {
-  return actual === localName || actual.endsWith(`${FUNCTIONAL_MODULE_NAME_SEPARATOR}${localName}`);
+  return actual === localName || actual.endsWith(`${MODULE_NAME_SEPARATOR}${localName}`);
 }
 
 export function unqualifiedFunctionalName(name: string): string {
-  const separator = name.lastIndexOf(FUNCTIONAL_MODULE_NAME_SEPARATOR);
-  return separator < 0 ? name : name.slice(separator + FUNCTIONAL_MODULE_NAME_SEPARATOR.length);
+  const separator = name.lastIndexOf(MODULE_NAME_SEPARATOR);
+  return separator < 0 ? name : name.slice(separator + MODULE_NAME_SEPARATOR.length);
 }

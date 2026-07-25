@@ -56,17 +56,25 @@ Three surface primitives, each because two unrelated frontends hand-rolled the s
 
 ### Changed
 
-- `GpuFunctionalEvaluator.evaluate` now selects a runtime instead of rejecting programs. It inspects
-  resolved Core before dispatch and delegates programs needing 64-bit floats, portable whole-number
-  f64, text, bytes, runtime faults, buffer append, stores, structural equality, 32-bit float
-  division, or 32-bit square root to bounded WebAssembly execution; everything else runs on the GPU
-  evaluator. Callers pass no flag. The delegated path rejects the GPU-only dispatch, heap, and stack
-  options with a `TypeError` and caps semantic steps at 1,000,000.
+- **Every public name lost its `Functional`/`FUNCTIONAL_` prefix.** The module is called
+  `functional.ts`; repeating that in `FunctionalSurfaceExpression` and `FUNCTIONAL_NODE_WORD_LENGTH`
+  bought nothing a namespace import does not already give. So `SurfaceExpression`, `CoreNode`,
+  `WasmExecution`, `NODE_WORD_LENGTH`, `GpuCompiler`, and 359 others. Two names could not simply
+  lose the prefix: `FunctionalWasmFunctionType` became `WasmFunctionTypeIndex`, because
+  `WasmFunctionType` is the unrelated signature interface in the same file, and the private
+  `GpuEvaluator.createBackend` overload became `createWithCollectionSyntax` to make room for the
+  public one.
+- `GpuEvaluator.evaluate` now selects a runtime instead of rejecting programs. It inspects resolved
+  Core before dispatch and delegates programs needing 64-bit floats, portable whole-number f64,
+  text, bytes, runtime faults, buffer append, stores, structural equality, 32-bit float division, or
+  32-bit square root to bounded WebAssembly execution; everything else runs on the GPU evaluator.
+  Callers pass no flag. The delegated path rejects the GPU-only dispatch, heap, and stack options
+  with a `TypeError` and caps semantic steps at 1,000,000.
 - Gleam's `Int` now lowers to 64-bit integers instead of the f64-backed JavaScript model. Division
   and remainder keep Gleam's rules: a zero divisor yields `0`, and division truncates toward zero.
-- `renderFunctionalCompilationTrace` renders 64-bit values as exact unquoted digits. They arrive as
-  BigInt, which `JSON.stringify` refuses; quoting them would change the shape every checked-in trace
-  uses and routing them through `Number` would lose precision past 2^53.
+- `renderCompilationTrace` renders 64-bit values as exact unquoted digits. They arrive as BigInt,
+  which `JSON.stringify` refuses; quoting them would change the shape every checked-in trace uses
+  and routing them through `Number` would lose precision past 2^53.
 - `requestWebGpuDevice()` now requests `maxStorageBuffersPerShaderStage` of 16, clamped to adapter
   support, and opts into `timestamp-query` when the adapter exposes it.
 - Documented the measured baseline and its kill criteria in `BASELINE.md`, and corrected the
