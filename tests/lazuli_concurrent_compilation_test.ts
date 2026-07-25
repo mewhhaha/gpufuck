@@ -5,7 +5,7 @@ import { LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH } from "../src/semantic/abi.ts";
 import {
   GpuDispatchScheduler,
   MAXIMUM_GPU_DISPATCH_BATCH_SIZE,
-} from "../src/functional/gpu_dispatch_scheduler.ts";
+} from "../src/semantic/gpu_dispatch_scheduler.ts";
 
 interface FakeCommandEncoder extends GPUCommandEncoder {
   readonly lanes: number[];

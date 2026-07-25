@@ -15,7 +15,7 @@ export * from "./src/functional/compiler_module.ts";
 export * from "./src/functional/core_artifact.ts";
 export * from "./src/functional/diagnostics.ts";
 export * from "./src/functional/evaluator.ts";
-export * from "./src/functional/gpu_dispatch_scheduler.ts";
+export * from "./src/semantic/gpu_dispatch_scheduler.ts";
 export * from "./src/functional/host_contract.ts";
 export * from "./src/functional/recursive_groups.ts";
 export * from "./src/functional/store_contract.ts";

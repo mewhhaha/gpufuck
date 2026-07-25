@@ -4,7 +4,7 @@ import {
   LazuliCompilationStateWord,
   LazuliCompilationStatus,
 } from "./compiler_shader.ts";
-import type { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
+import type { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
 import type {
   GpuLazuliSemanticCompilationPass,
   GpuLazuliSemanticStateSnapshot,

@@ -27,7 +27,7 @@ import {
   type LazuliBatchCompilationInput,
   type LazuliBatchCompilationInstrumentation,
 } from "./gpu_batch_compiler.ts";
-import { GpuDispatchScheduler } from "../functional/gpu_dispatch_scheduler.ts";
+import { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
 import type { GpuLazuliSemanticPipelines } from "./gpu_semantic_contract.ts";
 import { runGpuLazuliCompilationInference } from "./gpu_type_inference_runner.ts";
 import type { GpuLazuliCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
