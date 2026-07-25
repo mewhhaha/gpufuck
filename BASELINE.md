@@ -63,6 +63,53 @@ kernel-level improvement is bounded by this until parsing moves or gets faster.
 For reference, baba parses at ~0.43 µs/byte (≈2.3 MB/s) with a ~17 µs fixed cost per call, where
 tree-sitter does 10–30 MB/s. A 10x parser improvement would outweigh the entire retarget.
 
+## 2026-07-25 — against the Gleam compiler, on one large real module
+
+The throughput numbers above use a synthetic corpus of two-definition modules, which measures
+_batching_. This measures the opposite case, and the one a language implementer actually has: a
+single large program, compiled once, against the production compiler for that language.
+
+Corpus: `gleam-lang/stdlib` at `bacc20c`, nineteen source modules, 252 KB, all reachable — the entry
+binds every one of the 353 public functions, so nothing is pruned. Reproduce with
+`deno task bench:gleam-stdlib <checkout> <entry.gleam>`. Same machine as above; Gleam 1.17.0.
+
+| Compiler                          | Cold, whole process |
+| --------------------------------- | ------------------: |
+| `gleam build --target javascript` |              146 ms |
+| gpufuck                           |            4,890 ms |
+
+**gpufuck is ~33x slower**, and it is doing strictly less: Gleam typechecks _and_ emits 49
+JavaScript files to disk, while gpufuck writes nothing and its Gleam frontend covers a subset of the
+language. Gleam's warm incremental build is 23 ms.
+
+Where gpufuck's time goes (medians of 9, 49,964 surface nodes):
+
+| Phase                               |       Median |   Share |
+| ----------------------------------- | -----------: | ------: |
+| Parse (baba)                        |        83 ms |      2% |
+| Lower to surface                    |        67 ms |      2% |
+| **GPU name resolution + inference** | **3,806 ms** | **96%** |
+| Emit WebAssembly (1.7 MB)           |        25 ms |      1% |
+| WebGPU device and pipeline setup    |       250 ms |       — |
+
+The GPU phase alone is **26x Gleam's entire build**. This is the same defect the table above
+records, seen without batching to hide it: the resolve-and-infer kernel is one lane running a serial
+state machine, so a 49,964-node module is 49,964 sequential transitions on a single GPU thread — the
+worst possible shape for the hardware. Batch throughput was 9.7x slower than the CPU;
+single-large-module latency is 33x, because there is nothing to amortize the per-transition cost
+against.
+
+Note the inversion against the synthetic corpus: there, parsing was 74% of the CPU path and the
+Amdahl ceiling was the story. Here parsing is 2%. On real input the GPU phase _is_ the cost, so the
+ceiling argument does not apply and node-level parallelism is worth the whole budget.
+
+Two measurement traps this benchmark hit, recorded so the next person does not:
+
+- Lowering prunes to what the entry reaches. A small `main` lowered 252 KB of Gleam to **66 surface
+  nodes** and produced a meaningless 124 ms. The entry must root every export.
+- `compileModuleToWasm` memoizes per module, so a median over repeats times a cache hit and reports
+  0.8 ms for a 25 ms operation. Each sample needs a freshly compiled module.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
