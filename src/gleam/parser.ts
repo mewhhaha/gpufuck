@@ -675,20 +675,28 @@ function parseStringToken(
   offsets: BabaUtf8ByteOffsets,
 ): Extract<GleamExpression, { readonly kind: "string" }> {
   try {
+    // Gleam writes `\u{H...}`; JSON only understands `\uHHHH`, so rewrite before handing the token
+    // to `JSON.parse`. Match the backslash run itself rather than the character before it: an
+    // earlier version consumed the preceding character, which meant adjacent escapes such as
+    // `\u{0020}\u{0009}` matched only every other one and left the rest for JSON to reject. An odd
+    // run ends in the backslash that opens the escape; an even run is escaped pairs followed by
+    // literal `u{...}`.
     const jsonString = token.text.replace(
-      /(^|[^\\])((?:\\\\)*)\\u\{([0-9A-Fa-f]{1,6})\}/g,
-      (_escape, prefix: string, escapedPairs: string, hex: string) => {
+      /(\\+)u\{([0-9A-Fa-f]{1,6})\}/g,
+      (whole, backslashes: string, hex: string) => {
+        if (backslashes.length % 2 === 0) return whole;
         const codePoint = Number.parseInt(hex, 16);
         if (codePoint > 0x10ffff || codePoint >= 0xd800 && codePoint <= 0xdfff) {
           throw new RangeError(`invalid Unicode codepoint U+${hex.toUpperCase()}`);
         }
+        const escapedPairs = backslashes.slice(0, -1);
         if (codePoint <= 0xffff) {
-          return `${prefix}${escapedPairs}\\u${codePoint.toString(16).padStart(4, "0")}`;
+          return `${escapedPairs}\\u${codePoint.toString(16).padStart(4, "0")}`;
         }
         const scalar = codePoint - 0x10000;
         const high = 0xd800 + (scalar >> 10);
         const low = 0xdc00 + (scalar & 0x3ff);
-        return `${prefix}${escapedPairs}\\u${high.toString(16)}\\u${low.toString(16)}`;
+        return `${escapedPairs}\\u${high.toString(16)}\\u${low.toString(16)}`;
       },
     );
     return {
@@ -966,12 +974,9 @@ function staticBitArrayLiteral(
   const maximumBitLength = 1_000_000;
   const bits: number[] = [];
   const appendInteger = (integer: number, bitLength: number): void => {
-    if (bitLength < 0) {
-      throw new GleamSyntaxError(
-        segments[0]?.span ?? { startByte: 0, endByte: 0 },
-        `A static Gleam bit-array segment cannot have negative size ${bitLength}.`,
-      );
-    }
+    // A negative size is legal Gleam and contributes no bits, rather than being a syntax error:
+    // upstream's own suite asserts `bit_size(<<0:-8>>) == 0` and `bit_size(<<0:-1>>) == 0`.
+    if (bitLength <= 0) return;
     if (bits.length + bitLength > maximumBitLength) {
       throw new GleamSyntaxError(
         segments[0]?.span ?? { startByte: 0, endByte: 0 },
@@ -980,7 +985,6 @@ function staticBitArrayLiteral(
         }.`,
       );
     }
-    if (bitLength === 0) return;
     const value = BigInt.asUintN(bitLength, BigInt(integer));
     for (let index = bitLength - 1; index >= 0; index--) {
       bits.push(Number(value >> BigInt(index) & 1n));

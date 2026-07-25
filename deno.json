@@ -32,6 +32,7 @@
     "bench:throughput": "deno run --unstable-webgpu --allow-read=language/lazuli/generated benchmarks/compile_throughput_bench.ts",
     "check": "deno check mod.ts functional.ts gleam.ts gleam_cli.ts lazuli_cli.ts benchmarks/*.ts examples/javascript-aot/*.ts tests/*.ts tools/*.ts playground/build.ts",
     "check:gleam-stdlib": "deno run --allow-read --allow-run=git --allow-write=/tmp tools/check_gleam_stdlib.ts",
+    "check:gleam-stdlib-wasm": "deno run --allow-read --allow-run=git --unstable-webgpu tools/check_gleam_stdlib_wasm.ts",
     "check:javascript-test262": "deno run --allow-read --allow-run=git,deno,ps --allow-write=/tmp examples/javascript-aot/check_test262.ts",
     "compile:lazuli": "deno run --allow-read lazuli_cli.ts compile",
     "fmt": "deno fmt --check",
