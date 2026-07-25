@@ -227,9 +227,9 @@ high. A faster parser would outweigh the entire retarget.
 
 ## 7. External consumers
 
-**Ducklang is why the WebAssembly backend exists.** Ducklang is a separate language project — an
-Interaction Calculus inspired language, kept in a checkout beside this one — whose own README states
-its pipeline as:
+**Ducklang is why the WebAssembly backend exists.** Ducklang is a separate language project — a
+functional language compiling to WebAssembly, kept in a checkout beside this one — whose own README
+states its pipeline as:
 
 ```text
 Source -> Frontend -> semantic Core -> gpufuck Functional Core -> Wasm
