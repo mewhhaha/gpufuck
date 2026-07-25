@@ -9,12 +9,12 @@ import {
   LazuliSurfaceTag,
   LazuliSurfaceWord,
 } from "../src/semantic/abi.ts";
-import { LazuliSemanticCompilerErrorCode } from "../src/semantic/compilation_diagnostics.ts";
+import { FunctionalSemanticCompilerErrorCode } from "../src/semantic/compilation_diagnostics.ts";
 import {
   createLazuliSymbolLookup,
-  LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC,
-  LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
-  LazuliSymbolLookupWord,
+  FUNCTIONAL_INDEXED_LOCAL_RESOLUTION_MAGIC,
+  FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH,
+  FunctionalSymbolLookupWord,
 } from "../src/semantic/symbol_lookup.ts";
 
 Deno.test("indexed lowering plans resolve local, global, and constructor names", () => {
@@ -33,7 +33,7 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
       lowering: {
         coreTag: LazuliCoreTag.Local,
         corePayload: 0,
-        errorCode: LazuliSemanticCompilerErrorCode.None,
+        errorCode: FunctionalSemanticCompilerErrorCode.None,
         errorDetail: LAZULI_NO_INDEX,
       },
     },
@@ -42,7 +42,7 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
       lowering: {
         coreTag: LazuliCoreTag.Global,
         corePayload: 0,
-        errorCode: LazuliSemanticCompilerErrorCode.None,
+        errorCode: FunctionalSemanticCompilerErrorCode.None,
         errorDetail: LAZULI_NO_INDEX,
       },
     },
@@ -51,7 +51,7 @@ Deno.test("indexed lowering plans resolve local, global, and constructor names",
       lowering: {
         coreTag: LazuliCoreTag.Constructor,
         corePayload: 1,
-        errorCode: LazuliSemanticCompilerErrorCode.None,
+        errorCode: FunctionalSemanticCompilerErrorCode.None,
         errorDetail: LAZULI_NO_INDEX,
       },
     },
@@ -67,7 +67,7 @@ Deno.test("indexed lowering plans retain the first deterministic semantic diagno
   deepStrictEqual(loweringRecord(unknownLookup, unknownSurface, unknownNode.index), {
     coreTag: LazuliSurfaceTag.Name,
     corePayload: unknownNode.payload,
-    errorCode: LazuliSemanticCompilerErrorCode.UnknownName,
+    errorCode: FunctionalSemanticCompilerErrorCode.UnknownName,
     errorDetail: unknownNode.payload,
   });
 
@@ -81,7 +81,7 @@ Deno.test("indexed lowering plans retain the first deterministic semantic diagno
   equal(loweringHeader(duplicateLookup, duplicateSurface).errorNode, repeatedArm.index);
   equal(
     loweringRecord(duplicateLookup, duplicateSurface, repeatedArm.index).errorCode,
-    LazuliSemanticCompilerErrorCode.DuplicateCaseArm,
+    FunctionalSemanticCompilerErrorCode.DuplicateCaseArm,
   );
 });
 
@@ -123,13 +123,13 @@ function loweringHeader(
   lookup: Uint32Array,
   surface: EncodedLazuliSurface,
 ): { readonly errorNode: number } {
-  const offset = surface.symbolNames.length * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH;
+  const offset = surface.symbolNames.length * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH;
   equal(
-    lookup[offset + LazuliSymbolLookupWord.Definition],
-    LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC,
+    lookup[offset + FunctionalSymbolLookupWord.Definition],
+    FUNCTIONAL_INDEXED_LOCAL_RESOLUTION_MAGIC,
   );
   return {
-    errorNode: lookup[offset + LazuliSymbolLookupWord.CaseNode]!,
+    errorNode: lookup[offset + FunctionalSymbolLookupWord.CaseNode]!,
   };
 }
 
@@ -139,11 +139,11 @@ function loweringRecord(
   node: number,
 ): LoweringRecord {
   const offset = (surface.symbolNames.length + 1 + node) *
-    LAZULI_SYMBOL_LOOKUP_WORD_LENGTH;
+    FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH;
   return {
-    coreTag: lookup[offset + LazuliSymbolLookupWord.Definition]!,
-    corePayload: lookup[offset + LazuliSymbolLookupWord.Type]!,
-    errorCode: lookup[offset + LazuliSymbolLookupWord.Constructor]!,
-    errorDetail: lookup[offset + LazuliSymbolLookupWord.CaseNode]!,
+    coreTag: lookup[offset + FunctionalSymbolLookupWord.Definition]!,
+    corePayload: lookup[offset + FunctionalSymbolLookupWord.Type]!,
+    errorCode: lookup[offset + FunctionalSymbolLookupWord.Constructor]!,
+    errorDetail: lookup[offset + FunctionalSymbolLookupWord.CaseNode]!,
   };
 }

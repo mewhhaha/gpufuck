@@ -1,16 +1,16 @@
-export interface GpuLazuliSemanticPipelines {
+export interface GpuFunctionalSemanticPipelines {
   readonly compilation: GPUComputePipeline;
   readonly plannedLowering: GPUComputePipeline;
 }
 
-export interface GpuLazuliSemanticCompilationPass {
-  readonly pipelines: GpuLazuliSemanticPipelines;
+export interface GpuFunctionalSemanticCompilationPass {
+  readonly pipelines: GpuFunctionalSemanticPipelines;
   readonly bindGroup: GPUBindGroup;
   readonly stateBuffer: GPUBuffer;
   readonly plannedLoweringWorkgroups: number;
 }
 
-export interface GpuLazuliSemanticStateSnapshot {
+export interface GpuFunctionalSemanticStateSnapshot {
   readonly nodeCount: number;
   readonly definitionCount: number;
   readonly typeCount: number;

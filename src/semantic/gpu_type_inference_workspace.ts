@@ -3,26 +3,26 @@ import {
   LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
   LAZULI_NO_INDEX,
 } from "./abi.ts";
-import { LazuliCompilationStateWord, LazuliCompilationStatus } from "./compiler_shader.ts";
+import { FunctionalCompilationStateWord, FunctionalCompilationStatus } from "./compiler_shader.ts";
 import type {
-  GpuLazuliTypeInferenceOptions,
-  GpuLazuliTypeInferenceWorkspaceCapacities,
+  GpuFunctionalTypeInferenceOptions,
+  GpuFunctionalTypeInferenceWorkspaceCapacities,
   InferenceStateSnapshot,
   WorkspaceCapacities,
   WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
 import {
-  LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
-  LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
-  LAZULI_INFERENCE_FRAME_WORD_LENGTH,
-  LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
-  LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
-  LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
-  LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
-  LazuliInferenceDiagnosticCode,
-  LazuliInferenceSchedulerWord,
-  LazuliInferenceStateWord,
-  LazuliInferenceStatus,
+  FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS,
+  FUNCTIONAL_INFERENCE_ENVIRONMENT_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_FRAME_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_REFINEMENT_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH,
+  FunctionalInferenceDiagnosticCode,
+  FunctionalInferenceSchedulerWord,
+  FunctionalInferenceStateWord,
+  FunctionalInferenceStatus,
   type prepareLazuliInferenceShaderMetadata,
 } from "./type_inference_shader.ts";
 
@@ -30,7 +30,8 @@ const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 export const INITIAL_INFERENCE_OUTPUT_RECORD_CAPACITY = 64;
 const INITIAL_TYPE_RECORDS_PER_INPUT = 4;
 const INITIAL_MINIMUM_FRAME_CAPACITY = 64;
-export const INFERENCE_INTERNAL_STATE_BYTE_LENGTH = LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH *
+export const INFERENCE_INTERNAL_STATE_BYTE_LENGTH =
+  FUNCTIONAL_INFERENCE_INTERNAL_STATE_WORD_LENGTH *
   WORD_BYTES;
 // Staged output copies need a substantial dispatch quantum to amortize their bandwidth cost.
 const COMBINED_READBACK_MINIMUM_DISPATCH_TRANSITIONS = 256;
@@ -66,7 +67,7 @@ export function workspaceLayout(
   schemaNodeCount: number,
   typeParameterCount: number,
   limits: GPUSupportedLimits,
-  overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
+  overrides: GpuFunctionalTypeInferenceWorkspaceCapacities | undefined,
 ): WorkspaceLayout {
   const inferenceInputs = checkedSum(
     "inference input count",
@@ -128,7 +129,7 @@ export function workspaceLayout(
     checkedProduct(
       "definition scratch",
       surface.definitionCount,
-      LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
+      FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS,
     ),
     Math.max(schemaScratchCapacity, inferredTypeTraversalCapacity),
   );
@@ -144,7 +145,7 @@ export function workspaceLayout(
     checkedProduct(
       "minimum scratch arena capacity",
       surface.definitionCount,
-      LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
+      FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS,
     ),
     overrides,
   );
@@ -154,7 +155,7 @@ export function workspaceLayout(
 function optionsWorkspaceCapacities(
   defaults: WorkspaceCapacities,
   minimumScratchCapacity: number,
-  overrides: GpuLazuliTypeInferenceWorkspaceCapacities | undefined,
+  overrides: GpuFunctionalTypeInferenceWorkspaceCapacities | undefined,
 ): WorkspaceCapacities {
   const capacity = (name: string, value: number | undefined, fallback: number): number => {
     const selected = value ?? fallback;
@@ -195,7 +196,7 @@ function createWorkspaceLayout(
   const environmentBase = checkedProduct(
     "type arena words",
     capacities.type,
-    LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
+    FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH,
   );
   const frameBase = checkedSum(
     "environment arena base",
@@ -203,7 +204,7 @@ function createWorkspaceLayout(
     checkedProduct(
       "environment arena words",
       capacities.environment,
-      LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
+      FUNCTIONAL_INFERENCE_ENVIRONMENT_WORD_LENGTH,
     ),
   );
   const refinementBase = checkedSum(
@@ -212,7 +213,7 @@ function createWorkspaceLayout(
     checkedProduct(
       "frame arena words",
       capacities.frame,
-      LAZULI_INFERENCE_FRAME_WORD_LENGTH,
+      FUNCTIONAL_INFERENCE_FRAME_WORD_LENGTH,
     ),
   );
   const scratchBase = checkedSum(
@@ -221,7 +222,7 @@ function createWorkspaceLayout(
     checkedProduct(
       "refinement arena words",
       capacities.refinement,
-      LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
+      FUNCTIONAL_INFERENCE_REFINEMENT_WORD_LENGTH,
     ),
   );
   const workspaceWordLength = checkedSum(
@@ -235,7 +236,7 @@ function createWorkspaceLayout(
     checkedProduct(
       "output words",
       capacities.output,
-      LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
+      FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
     ),
     limits,
   );
@@ -257,7 +258,7 @@ function createWorkspaceLayout(
 
 export function createInitialState(
   options: Pick<
-    GpuLazuliTypeInferenceOptions,
+    GpuFunctionalTypeInferenceOptions,
     "surface" | "maximumSteps" | "maximumStepsPerDispatch" | "initialSteps"
   >,
   metadata: ReturnType<typeof prepareLazuliInferenceShaderMetadata>,
@@ -267,66 +268,66 @@ export function createInitialState(
   const state = new ArrayBuffer(INFERENCE_INTERNAL_STATE_BYTE_LENGTH);
   const words = new DataView(state);
   const set = (word: number, value: number) => words.setUint32(word * WORD_BYTES, value, true);
-  set(LazuliInferenceStateWord.NodeCount, options.surface.nodeCount);
-  set(LazuliInferenceStateWord.DefinitionCount, options.surface.definitionCount);
-  set(LazuliInferenceStateWord.TypeCount, options.surface.typeCount);
-  set(LazuliInferenceStateWord.ConstructorCount, options.surface.constructorCount);
-  set(LazuliInferenceStateWord.SchemaNodeCount, metadata.schemaNodeCount);
-  set(LazuliInferenceStateWord.MainSymbol, options.surface.entrySymbol);
+  set(FunctionalInferenceStateWord.NodeCount, options.surface.nodeCount);
+  set(FunctionalInferenceStateWord.DefinitionCount, options.surface.definitionCount);
+  set(FunctionalInferenceStateWord.TypeCount, options.surface.typeCount);
+  set(FunctionalInferenceStateWord.ConstructorCount, options.surface.constructorCount);
+  set(FunctionalInferenceStateWord.SchemaNodeCount, metadata.schemaNodeCount);
+  set(FunctionalInferenceStateWord.MainSymbol, options.surface.entrySymbol);
   set(
-    LazuliInferenceStateWord.MaximumTransitionsPerDispatch,
+    FunctionalInferenceStateWord.MaximumTransitionsPerDispatch,
     Math.min(options.maximumStepsPerDispatch, options.maximumSteps - (options.initialSteps ?? 0)),
   );
-  set(LazuliInferenceStateWord.TypeBase, layout.typeBase);
-  set(LazuliInferenceStateWord.TypeCapacity, layout.typeCapacity);
-  set(LazuliInferenceStateWord.EnvironmentBase, layout.environmentBase);
-  set(LazuliInferenceStateWord.EnvironmentCapacity, layout.environmentCapacity);
-  set(LazuliInferenceStateWord.FrameBase, layout.frameBase);
-  set(LazuliInferenceStateWord.FrameCapacity, layout.frameCapacity);
-  set(LazuliInferenceStateWord.RefinementBase, layout.refinementBase);
-  set(LazuliInferenceStateWord.RefinementCapacity, layout.refinementCapacity);
-  set(LazuliInferenceStateWord.ScratchBase, layout.scratchBase);
-  set(LazuliInferenceStateWord.ScratchCapacity, layout.scratchCapacity);
-  set(LazuliInferenceStateWord.OutputCapacity, layout.outputCapacity);
-  set(LazuliInferenceStateWord.DefinitionAnnotationBase, metadata.definitionAnnotationBase);
-  set(LazuliInferenceStateWord.SchemaBase, metadata.schemaBase);
-  set(LazuliInferenceStateWord.TypeParameterBase, metadata.typeParameterBase);
-  set(LazuliInferenceStateWord.TypeParameterCount, metadata.typeParameterCount);
+  set(FunctionalInferenceStateWord.TypeBase, layout.typeBase);
+  set(FunctionalInferenceStateWord.TypeCapacity, layout.typeCapacity);
+  set(FunctionalInferenceStateWord.EnvironmentBase, layout.environmentBase);
+  set(FunctionalInferenceStateWord.EnvironmentCapacity, layout.environmentCapacity);
+  set(FunctionalInferenceStateWord.FrameBase, layout.frameBase);
+  set(FunctionalInferenceStateWord.FrameCapacity, layout.frameCapacity);
+  set(FunctionalInferenceStateWord.RefinementBase, layout.refinementBase);
+  set(FunctionalInferenceStateWord.RefinementCapacity, layout.refinementCapacity);
+  set(FunctionalInferenceStateWord.ScratchBase, layout.scratchBase);
+  set(FunctionalInferenceStateWord.ScratchCapacity, layout.scratchCapacity);
+  set(FunctionalInferenceStateWord.OutputCapacity, layout.outputCapacity);
+  set(FunctionalInferenceStateWord.DefinitionAnnotationBase, metadata.definitionAnnotationBase);
+  set(FunctionalInferenceStateWord.SchemaBase, metadata.schemaBase);
+  set(FunctionalInferenceStateWord.TypeParameterBase, metadata.typeParameterBase);
+  set(FunctionalInferenceStateWord.TypeParameterCount, metadata.typeParameterCount);
   set(
-    LazuliInferenceStateWord.TypeParameterOffsetsBase,
+    FunctionalInferenceStateWord.TypeParameterOffsetsBase,
     metadata.typeParameterOffsetsBase,
   );
-  set(LazuliInferenceStateWord.ConstructorFieldBase, metadata.constructorFieldBase);
-  set(LazuliInferenceStateWord.ConstructorFieldCount, metadata.constructorFieldCount);
+  set(FunctionalInferenceStateWord.ConstructorFieldBase, metadata.constructorFieldBase);
+  set(FunctionalInferenceStateWord.ConstructorFieldCount, metadata.constructorFieldCount);
   set(
-    LazuliInferenceStateWord.ConstructorFieldOffsetsBase,
+    FunctionalInferenceStateWord.ConstructorFieldOffsetsBase,
     metadata.constructorFieldOffsetsBase,
   );
-  set(LazuliInferenceStateWord.ConstructorResultBase, metadata.constructorResultBase);
-  set(LazuliInferenceStateWord.IndexedMetadataFooterBase, metadata.indexedMetadataFooterBase);
-  set(LazuliInferenceStateWord.UntouchableTypeCutoff, LAZULI_NO_INDEX);
-  set(LazuliInferenceStateWord.IndexedEliminationAllowed, 1);
-  set(LazuliInferenceStateWord.IndexedEliminationRestrictionSymbol, LAZULI_NO_INDEX);
+  set(FunctionalInferenceStateWord.ConstructorResultBase, metadata.constructorResultBase);
+  set(FunctionalInferenceStateWord.IndexedMetadataFooterBase, metadata.indexedMetadataFooterBase);
+  set(FunctionalInferenceStateWord.UntouchableTypeCutoff, LAZULI_NO_INDEX);
+  set(FunctionalInferenceStateWord.IndexedEliminationAllowed, 1);
+  set(FunctionalInferenceStateWord.IndexedEliminationRestrictionSymbol, LAZULI_NO_INDEX);
   const initialSteps = syntheticSemanticSuccess ? options.initialSteps ?? 0 : 0;
-  set(LazuliInferenceSchedulerWord.PreviousSemanticSteps, initialSteps);
+  set(FunctionalInferenceSchedulerWord.PreviousSemanticSteps, initialSteps);
   const setSemantic = (word: number, value: number) =>
-    set(LazuliInferenceSchedulerWord.SemanticState + word, value);
-  setSemantic(LazuliCompilationStateWord.NodeCount, options.surface.nodeCount);
-  setSemantic(LazuliCompilationStateWord.DefinitionCount, options.surface.definitionCount);
-  setSemantic(LazuliCompilationStateWord.TypeCount, options.surface.typeCount);
-  setSemantic(LazuliCompilationStateWord.ConstructorCount, options.surface.constructorCount);
-  setSemantic(LazuliCompilationStateWord.EntrySymbol, options.surface.entrySymbol);
+    set(FunctionalInferenceSchedulerWord.SemanticState + word, value);
+  setSemantic(FunctionalCompilationStateWord.NodeCount, options.surface.nodeCount);
+  setSemantic(FunctionalCompilationStateWord.DefinitionCount, options.surface.definitionCount);
+  setSemantic(FunctionalCompilationStateWord.TypeCount, options.surface.typeCount);
+  setSemantic(FunctionalCompilationStateWord.ConstructorCount, options.surface.constructorCount);
+  setSemantic(FunctionalCompilationStateWord.EntrySymbol, options.surface.entrySymbol);
   setSemantic(
-    LazuliCompilationStateWord.Status,
-    syntheticSemanticSuccess ? LazuliCompilationStatus.Ok : LazuliCompilationStatus.Pending,
+    FunctionalCompilationStateWord.Status,
+    syntheticSemanticSuccess ? FunctionalCompilationStatus.Ok : FunctionalCompilationStatus.Pending,
   );
-  setSemantic(LazuliCompilationStateWord.ErrorSource, LAZULI_NO_INDEX);
-  setSemantic(LazuliCompilationStateWord.ErrorDetail, LAZULI_NO_INDEX);
-  setSemantic(LazuliCompilationStateWord.EntryDefinition, LAZULI_NO_INDEX);
-  setSemantic(LazuliCompilationStateWord.TotalSteps, initialSteps);
-  setSemantic(LazuliCompilationStateWord.MaximumSteps, options.maximumSteps);
+  setSemantic(FunctionalCompilationStateWord.ErrorSource, LAZULI_NO_INDEX);
+  setSemantic(FunctionalCompilationStateWord.ErrorDetail, LAZULI_NO_INDEX);
+  setSemantic(FunctionalCompilationStateWord.EntryDefinition, LAZULI_NO_INDEX);
+  setSemantic(FunctionalCompilationStateWord.TotalSteps, initialSteps);
+  setSemantic(FunctionalCompilationStateWord.MaximumSteps, options.maximumSteps);
   setSemantic(
-    LazuliCompilationStateWord.MaximumStepsPerDispatch,
+    FunctionalCompilationStateWord.MaximumStepsPerDispatch,
     options.maximumStepsPerDispatch,
   );
   return state;
@@ -362,12 +363,12 @@ export function inferredTypeOutputByteLength(outputCount: number): number {
   return checkedProduct(
     "inferred type output bytes",
     outputCount,
-    LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
+    FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
   );
 }
 
 export async function createInferenceBuffers(
-  options: GpuLazuliTypeInferenceOptions,
+  options: GpuFunctionalTypeInferenceOptions,
   metadataWords: Uint32Array,
   layout: WorkspaceLayout,
   initialState: ArrayBuffer,
@@ -762,7 +763,7 @@ export async function createExpandedWorkspace(
       expandedBuffer,
       expandedLayout.typeBase,
       state.typeTop,
-      LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
+      FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH,
     );
     copyWorkspaceRegion(
       commands,
@@ -771,7 +772,7 @@ export async function createExpandedWorkspace(
       expandedBuffer,
       expandedLayout.environmentBase,
       state.environmentTop,
-      LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
+      FUNCTIONAL_INFERENCE_ENVIRONMENT_WORD_LENGTH,
     );
     copyWorkspaceRegion(
       commands,
@@ -780,7 +781,7 @@ export async function createExpandedWorkspace(
       expandedBuffer,
       expandedLayout.frameBase,
       state.frameTop,
-      LAZULI_INFERENCE_FRAME_WORD_LENGTH,
+      FUNCTIONAL_INFERENCE_FRAME_WORD_LENGTH,
     );
     copyWorkspaceRegion(
       commands,
@@ -789,7 +790,7 @@ export async function createExpandedWorkspace(
       expandedBuffer,
       expandedLayout.refinementBase,
       state.refinementTop,
-      LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
+      FUNCTIONAL_INFERENCE_REFINEMENT_WORD_LENGTH,
     );
     copyWorkspaceRegion(
       commands,
@@ -861,7 +862,11 @@ export async function copyOutputForGrowth(
 ): Promise<void> {
   const byteLength = checkedProduct(
     "live output growth bytes",
-    checkedProduct("live output growth words", outputCount, LAZULI_INFERENCE_OUTPUT_WORD_LENGTH),
+    checkedProduct(
+      "live output growth words",
+      outputCount,
+      FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
+    ),
     WORD_BYTES,
   );
   if (byteLength === 0) return;
@@ -899,15 +904,15 @@ export function resumeOutputAfterGrowth(
 ): void {
   for (
     const [word, value] of [
-      [LazuliInferenceStateWord.OutputCapacity, outputCapacity],
-      [LazuliInferenceStateWord.Status, LazuliInferenceStatus.Pending],
-      [LazuliInferenceStateWord.ErrorCode, LazuliInferenceDiagnosticCode.None],
-      [LazuliInferenceStateWord.ErrorStartByte, 0],
-      [LazuliInferenceStateWord.ErrorEndByte, 0],
-      [LazuliInferenceStateWord.ErrorDetail, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorOperand0, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorOperand1, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorContext, 0],
+      [FunctionalInferenceStateWord.OutputCapacity, outputCapacity],
+      [FunctionalInferenceStateWord.Status, FunctionalInferenceStatus.Pending],
+      [FunctionalInferenceStateWord.ErrorCode, FunctionalInferenceDiagnosticCode.None],
+      [FunctionalInferenceStateWord.ErrorStartByte, 0],
+      [FunctionalInferenceStateWord.ErrorEndByte, 0],
+      [FunctionalInferenceStateWord.ErrorDetail, LAZULI_NO_INDEX],
+      [FunctionalInferenceStateWord.ErrorOperand0, LAZULI_NO_INDEX],
+      [FunctionalInferenceStateWord.ErrorOperand1, LAZULI_NO_INDEX],
+      [FunctionalInferenceStateWord.ErrorContext, 0],
     ] as const
   ) {
     writeStateWord(device, stateBuffer, word, value);
@@ -915,24 +920,24 @@ export function resumeOutputAfterGrowth(
 }
 
 export function isWorkspaceArenaExhaustion(errorCode: number): boolean {
-  return errorCode === LazuliInferenceDiagnosticCode.TypeArenaExhausted ||
-    errorCode === LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted ||
-    errorCode === LazuliInferenceDiagnosticCode.FrameArenaExhausted ||
-    errorCode === LazuliInferenceDiagnosticCode.RefinementArenaExhausted ||
-    errorCode === LazuliInferenceDiagnosticCode.ScratchArenaExhausted;
+  return errorCode === FunctionalInferenceDiagnosticCode.TypeArenaExhausted ||
+    errorCode === FunctionalInferenceDiagnosticCode.EnvironmentArenaExhausted ||
+    errorCode === FunctionalInferenceDiagnosticCode.FrameArenaExhausted ||
+    errorCode === FunctionalInferenceDiagnosticCode.RefinementArenaExhausted ||
+    errorCode === FunctionalInferenceDiagnosticCode.ScratchArenaExhausted;
 }
 
 export function workspaceArenaCapacity(layout: WorkspaceLayout, errorCode: number): number {
   switch (errorCode) {
-    case LazuliInferenceDiagnosticCode.TypeArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.TypeArenaExhausted:
       return layout.typeCapacity;
-    case LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.EnvironmentArenaExhausted:
       return layout.environmentCapacity;
-    case LazuliInferenceDiagnosticCode.FrameArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.FrameArenaExhausted:
       return layout.frameCapacity;
-    case LazuliInferenceDiagnosticCode.RefinementArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.RefinementArenaExhausted:
       return layout.refinementCapacity;
-    case LazuliInferenceDiagnosticCode.ScratchArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.ScratchArenaExhausted:
       return layout.scratchCapacity;
     default:
       throw new Error(`cannot read capacity for non-workspace arena error ${errorCode}`);
@@ -951,19 +956,19 @@ export function growWorkspaceLayout(
     checkedProduct(`${inferenceArenaName(errorCode)} arena growth`, currentCapacity, 2),
   );
   return createWorkspaceLayout({
-    type: errorCode === LazuliInferenceDiagnosticCode.TypeArenaExhausted
+    type: errorCode === FunctionalInferenceDiagnosticCode.TypeArenaExhausted
       ? doubledCapacity
       : layout.typeCapacity,
-    environment: errorCode === LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted
+    environment: errorCode === FunctionalInferenceDiagnosticCode.EnvironmentArenaExhausted
       ? doubledCapacity
       : layout.environmentCapacity,
-    frame: errorCode === LazuliInferenceDiagnosticCode.FrameArenaExhausted
+    frame: errorCode === FunctionalInferenceDiagnosticCode.FrameArenaExhausted
       ? doubledCapacity
       : layout.frameCapacity,
-    refinement: errorCode === LazuliInferenceDiagnosticCode.RefinementArenaExhausted
+    refinement: errorCode === FunctionalInferenceDiagnosticCode.RefinementArenaExhausted
       ? doubledCapacity
       : layout.refinementCapacity,
-    scratch: errorCode === LazuliInferenceDiagnosticCode.ScratchArenaExhausted
+    scratch: errorCode === FunctionalInferenceDiagnosticCode.ScratchArenaExhausted
       ? doubledCapacity
       : layout.scratchCapacity,
     output: outputCapacity,
@@ -977,24 +982,24 @@ export function resumeWorkspaceAfterGrowth(
 ): void {
   for (
     const [word, value] of [
-      [LazuliInferenceStateWord.TypeBase, layout.typeBase],
-      [LazuliInferenceStateWord.TypeCapacity, layout.typeCapacity],
-      [LazuliInferenceStateWord.EnvironmentBase, layout.environmentBase],
-      [LazuliInferenceStateWord.EnvironmentCapacity, layout.environmentCapacity],
-      [LazuliInferenceStateWord.FrameBase, layout.frameBase],
-      [LazuliInferenceStateWord.FrameCapacity, layout.frameCapacity],
-      [LazuliInferenceStateWord.RefinementBase, layout.refinementBase],
-      [LazuliInferenceStateWord.RefinementCapacity, layout.refinementCapacity],
-      [LazuliInferenceStateWord.ScratchBase, layout.scratchBase],
-      [LazuliInferenceStateWord.ScratchCapacity, layout.scratchCapacity],
-      [LazuliInferenceStateWord.Status, LazuliInferenceStatus.Pending],
-      [LazuliInferenceStateWord.ErrorCode, LazuliInferenceDiagnosticCode.None],
-      [LazuliInferenceStateWord.ErrorStartByte, 0],
-      [LazuliInferenceStateWord.ErrorEndByte, 0],
-      [LazuliInferenceStateWord.ErrorDetail, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorOperand0, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorOperand1, LAZULI_NO_INDEX],
-      [LazuliInferenceStateWord.ErrorContext, 0],
+      [FunctionalInferenceStateWord.TypeBase, layout.typeBase],
+      [FunctionalInferenceStateWord.TypeCapacity, layout.typeCapacity],
+      [FunctionalInferenceStateWord.EnvironmentBase, layout.environmentBase],
+      [FunctionalInferenceStateWord.EnvironmentCapacity, layout.environmentCapacity],
+      [FunctionalInferenceStateWord.FrameBase, layout.frameBase],
+      [FunctionalInferenceStateWord.FrameCapacity, layout.frameCapacity],
+      [FunctionalInferenceStateWord.RefinementBase, layout.refinementBase],
+      [FunctionalInferenceStateWord.RefinementCapacity, layout.refinementCapacity],
+      [FunctionalInferenceStateWord.ScratchBase, layout.scratchBase],
+      [FunctionalInferenceStateWord.ScratchCapacity, layout.scratchCapacity],
+      [FunctionalInferenceStateWord.Status, FunctionalInferenceStatus.Pending],
+      [FunctionalInferenceStateWord.ErrorCode, FunctionalInferenceDiagnosticCode.None],
+      [FunctionalInferenceStateWord.ErrorStartByte, 0],
+      [FunctionalInferenceStateWord.ErrorEndByte, 0],
+      [FunctionalInferenceStateWord.ErrorDetail, LAZULI_NO_INDEX],
+      [FunctionalInferenceStateWord.ErrorOperand0, LAZULI_NO_INDEX],
+      [FunctionalInferenceStateWord.ErrorOperand1, LAZULI_NO_INDEX],
+      [FunctionalInferenceStateWord.ErrorContext, 0],
     ] as const
   ) {
     writeStateWord(device, stateBuffer, word, value);
@@ -1013,7 +1018,7 @@ export function discardGrowthTransition(
   writeStateWord(
     device,
     stateBuffer,
-    LazuliInferenceStateWord.Transitions,
+    FunctionalInferenceStateWord.Transitions,
     resumedTransitions,
   );
   return resumedTransitions;
@@ -1032,17 +1037,17 @@ export function writeStateWord(
 
 export function inferenceArenaName(errorCode: number): string {
   switch (errorCode) {
-    case LazuliInferenceDiagnosticCode.TypeArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.TypeArenaExhausted:
       return "type";
-    case LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.EnvironmentArenaExhausted:
       return "environment";
-    case LazuliInferenceDiagnosticCode.FrameArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.FrameArenaExhausted:
       return "frame";
-    case LazuliInferenceDiagnosticCode.RefinementArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.RefinementArenaExhausted:
       return "refinement";
-    case LazuliInferenceDiagnosticCode.ScratchArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.ScratchArenaExhausted:
       return "scratch";
-    case LazuliInferenceDiagnosticCode.OutputArenaExhausted:
+    case FunctionalInferenceDiagnosticCode.OutputArenaExhausted:
       return "output";
     default:
       return `unknown (${errorCode})`;

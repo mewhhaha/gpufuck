@@ -1,8 +1,9 @@
 import {
   type EncodedLazuliSurface,
+  FUNCTIONAL_MAXIMUM_PARSE_DEPTH,
+  type FunctionalFrontendResult,
   LAZULI_CONSTRUCTOR_WORD_LENGTH,
   LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
-  LAZULI_MAXIMUM_PARSE_DEPTH,
   LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH,
   LAZULI_MAXIMUM_SURFACE_NODES,
   LAZULI_NO_INDEX,
@@ -12,7 +13,6 @@ import {
   LazuliConstructorWord,
   LazuliDefinitionWord,
   type LazuliDiagnostic,
-  type LazuliFrontendResult,
   type LazuliSourceType,
   type LazuliSpan,
   LazuliSurfaceTag,
@@ -31,7 +31,7 @@ const LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH = 256;
 
 export interface ParsedLazuliSource {
   readonly sourceByteLength: number;
-  readonly frontend: LazuliFrontendResult;
+  readonly frontend: FunctionalFrontendResult;
 }
 
 interface SynchronousFileReader {
@@ -309,7 +309,7 @@ function getLazuliParser(): LazuliParser {
 }
 
 /** Parses Lazuli source into the stable surface-node ABI without resolving names. */
-export function parseLazuliSource(source: string): LazuliFrontendResult {
+export function parseLazuliSource(source: string): FunctionalFrontendResult {
   return parseLazuliSourceForCompilation(source).frontend;
 }
 
@@ -324,7 +324,7 @@ export function parseLazuliSourceForCompilation(source: string): ParsedLazuliSou
 function parseLazuliSourceWithOffsets(
   source: string,
   byteOffsets: Utf8ByteOffsets,
-): LazuliFrontendResult {
+): FunctionalFrontendResult {
   if (byteOffsets.byteLength > LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH) {
     return failure(limitDiagnostic(
       `Source is ${byteOffsets.byteLength} bytes; the ABI limit is ${LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH}.`,
@@ -460,9 +460,9 @@ function parseLazuliSourceWithOffsets(
         { startByte: 0, endByte: byteOffsets.byteLength },
       ));
     }
-    if (summary.maximumDepth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+    if (summary.maximumDepth > FUNCTIONAL_MAXIMUM_PARSE_DEPTH) {
       return failure(limitDiagnostic(
-        `Surface depth is ${summary.maximumDepth}; the ABI limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+        `Surface depth is ${summary.maximumDepth}; the ABI limit is ${FUNCTIONAL_MAXIMUM_PARSE_DEPTH}.`,
         { startByte: 0, endByte: byteOffsets.byteLength },
       ));
     }
@@ -474,7 +474,7 @@ function parseLazuliSourceWithOffsets(
   } catch (error) {
     if (isCallStackOverflow(error)) {
       return failure(limitDiagnostic(
-        `Source nesting exceeded the parser's stack-safe limit; the ABI depth limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+        `Source nesting exceeded the parser's stack-safe limit; the ABI depth limit is ${FUNCTIONAL_MAXIMUM_PARSE_DEPTH}.`,
         { startByte: 0, endByte: byteOffsets.byteLength },
       ));
     }
@@ -490,7 +490,7 @@ function parseLazuliSourceWithOffsets(
 
 class ParseDepthLimit extends Error {
   constructor(readonly span: Utf16Span, depth: number) {
-    super(`Surface depth is ${depth}; the ABI limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`);
+    super(`Surface depth is ${depth}; the ABI limit is ${FUNCTIONAL_MAXIMUM_PARSE_DEPTH}.`);
   }
 }
 
@@ -621,7 +621,7 @@ function builtinDataDeclarations(
 }
 
 function ensureParseDepth(depth: number, span: Utf16Span): void {
-  if (depth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+  if (depth > FUNCTIONAL_MAXIMUM_PARSE_DEPTH) {
     throw new ParseDepthLimit(span, depth);
   }
 }
@@ -643,7 +643,7 @@ function parenthesisDepthDiagnostic(
       depth++;
       if (depth > LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH) {
         return limitDiagnostic(
-          `Parenthesis depth is ${depth}; the parser's stack-safe limit is ${LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH} and the ABI limit is ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+          `Parenthesis depth is ${depth}; the parser's stack-safe limit is ${LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH} and the ABI limit is ${FUNCTIONAL_MAXIMUM_PARSE_DEPTH}.`,
           byteOffsets.span({ start: index, end: index + 1 }),
         );
       }
@@ -2787,7 +2787,7 @@ function tokenFieldArray(
   return tokens;
 }
 
-function failure(diagnostic: LazuliDiagnostic): LazuliFrontendResult {
+function failure(diagnostic: LazuliDiagnostic): FunctionalFrontendResult {
   return { ok: false, diagnostics: [diagnostic] };
 }
 

@@ -7,51 +7,51 @@ import {
   LAZULI_TYPE_BYTE_LENGTH,
 } from "./abi.ts";
 import {
-  LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
-  LAZULI_COMPILER_SHADER,
-  LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE,
-  LazuliCompilationInternalStateWord as InternalStateWord,
-  LazuliCompilationStateWord as StateWord,
-  LazuliCompilationStatus as Status,
+  FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
+  FUNCTIONAL_COMPILER_SHADER,
+  FUNCTIONAL_PLANNED_LOWERING_WORKGROUP_SIZE,
+  FunctionalCompilationInternalStateWord as InternalStateWord,
+  FunctionalCompilationStateWord as StateWord,
+  FunctionalCompilationStatus as Status,
 } from "./compiler_shader.ts";
 import {
   diagnosticFromSemanticState,
   formatInvalidSurfaceState,
   formatSemanticState,
-  LazuliSemanticCompilerErrorCode as ErrorCode,
+  FunctionalSemanticCompilerErrorCode as ErrorCode,
   semanticWorkLimitDiagnostic,
 } from "./compilation_diagnostics.ts";
 import { CompiledGpuLazuliModule, type LazuliCompileResult } from "./compiler_module.ts";
 import {
   compileLazuliBatch,
-  type LazuliBatchCompilationInput,
-  type LazuliBatchCompilationInstrumentation,
+  type FunctionalBatchCompilationInput,
+  type FunctionalBatchCompilationInstrumentation,
 } from "./gpu_batch_compiler.ts";
 import { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
-import type { GpuLazuliSemanticPipelines } from "./gpu_semantic_contract.ts";
+import type { GpuFunctionalSemanticPipelines } from "./gpu_semantic_contract.ts";
 import { runGpuLazuliCompilationInference } from "./gpu_type_inference_runner.ts";
-import type { GpuLazuliCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
-import { LAZULI_TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
+import type { GpuFunctionalCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
+import { FUNCTIONAL_TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
 import { createLazuliSymbolLookup } from "./symbol_lookup.ts";
 
-export interface LazuliSemanticCompilationLimits {
+export interface FunctionalSemanticCompilationLimits {
   readonly maximumSteps: number;
   readonly maximumStepsPerDispatch: number;
 }
 
-export interface LazuliSemanticCompilationInstrumentation {
-  readonly observeDispatch: (observation: GpuLazuliCompilationDispatchObservation) => void;
+export interface FunctionalSemanticCompilationInstrumentation {
+  readonly observeDispatch: (observation: GpuFunctionalCompilationDispatchObservation) => void;
 }
 
-export class GpuLazuliSemanticCompiler {
+export class GpuFunctionalSemanticCompiler {
   readonly #device: GPUDevice;
-  readonly #pipelines: GpuLazuliSemanticPipelines;
+  readonly #pipelines: GpuFunctionalSemanticPipelines;
   readonly #inferencePipeline: GPUComputePipeline;
   readonly #dispatchScheduler: GpuDispatchScheduler;
 
   private constructor(
     device: GPUDevice,
-    pipelines: GpuLazuliSemanticPipelines,
+    pipelines: GpuFunctionalSemanticPipelines,
     inferencePipeline: GPUComputePipeline,
   ) {
     this.#device = device;
@@ -60,14 +60,14 @@ export class GpuLazuliSemanticCompiler {
     this.#dispatchScheduler = new GpuDispatchScheduler(device);
   }
 
-  static async create(device: GPUDevice): Promise<GpuLazuliSemanticCompiler> {
+  static async create(device: GPUDevice): Promise<GpuFunctionalSemanticCompiler> {
     const shaderModule = device.createShaderModule({
       label: "Lazuli semantic compiler",
-      code: LAZULI_COMPILER_SHADER,
+      code: FUNCTIONAL_COMPILER_SHADER,
     });
     const inferenceShaderModule = device.createShaderModule({
       label: "Lazuli type inference",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
+      code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
     });
     const [compilation, inferenceCompilation] = await Promise.all([
       shaderModule.getCompilationInfo(),
@@ -137,7 +137,7 @@ export class GpuLazuliSemanticCompiler {
           },
         }),
       ]);
-      return new GpuLazuliSemanticCompiler(
+      return new GpuFunctionalSemanticCompiler(
         device,
         {
           compilation: compilationPipeline,
@@ -153,11 +153,11 @@ export class GpuLazuliSemanticCompiler {
   async compile(
     surface: EncodedLazuliSurface,
     sourceByteLength: number,
-    limits: LazuliSemanticCompilationLimits,
+    limits: FunctionalSemanticCompilationLimits,
     signal: AbortSignal | undefined,
-    instrumentation?: LazuliSemanticCompilationInstrumentation,
+    instrumentation?: FunctionalSemanticCompilationInstrumentation,
   ): Promise<LazuliCompileResult> {
-    const initialState = new ArrayBuffer(LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH);
+    const initialState = new ArrayBuffer(FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH);
     const initialStateView = new DataView(initialState);
     initialStateView.setUint32(StateWord.NodeCount * 4, surface.nodeCount, true);
     initialStateView.setUint32(StateWord.DefinitionCount * 4, surface.definitionCount, true);
@@ -213,7 +213,7 @@ export class GpuLazuliSemanticCompiler {
       Uint32Array.BYTES_PER_ELEMENT,
     );
     const allocationEvidence =
-      `surface nodes=${surfaceNodeByteLength} bytes, core nodes=${surfaceNodeByteLength} bytes, definitions=${definitionByteLength} bytes, algebraic types=${typeByteLength} bytes, constructors=${constructorByteLength} bytes, state=${LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH} bytes`;
+      `surface nodes=${surfaceNodeByteLength} bytes, core nodes=${surfaceNodeByteLength} bytes, definitions=${definitionByteLength} bytes, algebraic types=${typeByteLength} bytes, constructors=${constructorByteLength} bytes, state=${FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH} bytes`;
 
     try {
       this.#device.pushErrorScope("validation");
@@ -247,7 +247,7 @@ export class GpuLazuliSemanticCompiler {
         });
         stateBuffer = this.#device.createBuffer({
           label: "Lazuli compilation state",
-          size: LAZULI_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
+          size: FUNCTIONAL_COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         symbolLookupBuffer = this.#device.createBuffer({
@@ -317,9 +317,9 @@ export class GpuLazuliSemanticCompiler {
       }
 
       const plannedLoweringWorkgroups = surface.nodeCount <
-          LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE
+          FUNCTIONAL_PLANNED_LOWERING_WORKGROUP_SIZE
         ? 0
-        : Math.ceil(surface.nodeCount / LAZULI_PLANNED_LOWERING_WORKGROUP_SIZE);
+        : Math.ceil(surface.nodeCount / FUNCTIONAL_PLANNED_LOWERING_WORKGROUP_SIZE);
       const combined = await runGpuLazuliCompilationInference({
         device: this.#device,
         pipeline: this.#inferencePipeline,
@@ -440,9 +440,9 @@ export class GpuLazuliSemanticCompiler {
   }
 
   async compileBatch(
-    inputs: readonly LazuliBatchCompilationInput[],
+    inputs: readonly FunctionalBatchCompilationInput[],
     signal: AbortSignal | undefined,
-    instrumentation?: LazuliBatchCompilationInstrumentation,
+    instrumentation?: FunctionalBatchCompilationInstrumentation,
   ): Promise<readonly LazuliCompileResult[]> {
     return await compileLazuliBatch(
       this.#device,

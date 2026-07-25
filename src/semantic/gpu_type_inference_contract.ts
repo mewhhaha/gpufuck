@@ -1,15 +1,15 @@
 import type { EncodedLazuliSurface } from "./abi.ts";
-import type { GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
-import type { LazuliTypeInferenceResult } from "./type_inference.ts";
+import type { GpuFunctionalSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
+import type { FunctionalTypeInferenceResult } from "./type_inference.ts";
 
-export interface GpuLazuliTypeInferenceBuffers {
+export interface GpuFunctionalTypeInferenceBuffers {
   readonly coreNodeBuffer: GPUBuffer;
   readonly definitionBuffer: GPUBuffer;
   readonly typeBuffer: GPUBuffer;
   readonly constructorBuffer: GPUBuffer;
 }
 
-export interface GpuLazuliTypeInferenceOptions extends GpuLazuliTypeInferenceBuffers {
+export interface GpuFunctionalTypeInferenceOptions extends GpuFunctionalTypeInferenceBuffers {
   readonly device: GPUDevice;
   readonly pipeline: GPUComputePipeline;
   readonly surface: EncodedLazuliSurface;
@@ -20,18 +20,18 @@ export interface GpuLazuliTypeInferenceOptions extends GpuLazuliTypeInferenceBuf
   readonly sourceByteLength?: number;
   readonly signal?: AbortSignal;
   /** Internal runner controls used to exercise arena growth without changing compiler APIs. */
-  readonly initialWorkspaceCapacities?: GpuLazuliTypeInferenceWorkspaceCapacities;
+  readonly initialWorkspaceCapacities?: GpuFunctionalTypeInferenceWorkspaceCapacities;
   /** Internal runner observation point invoked after each completed dispatch. */
-  readonly observeDispatch?: (observation: GpuLazuliTypeInferenceDispatchObservation) => void;
+  readonly observeDispatch?: (observation: GpuFunctionalTypeInferenceDispatchObservation) => void;
   /** Internal profiling point covering both semantic resolution and inference dispatches. */
   readonly observeCompilationDispatch?: (
-    observation: GpuLazuliCompilationDispatchObservation,
+    observation: GpuFunctionalCompilationDispatchObservation,
   ) => void;
   /** Internal test hook invoked on the prepared schema buffer before upload. */
   readonly mutateMetadataForTest?: (words: Uint32Array) => void;
 }
 
-export interface GpuLazuliCompilationDispatchObservation {
+export interface GpuFunctionalCompilationDispatchObservation {
   readonly semanticStatus: number;
   readonly semanticSteps: number;
   readonly inferenceStatus: number;
@@ -39,7 +39,7 @@ export interface GpuLazuliCompilationDispatchObservation {
   readonly requiredCapacity: number;
 }
 
-export interface GpuLazuliTypeInferenceWorkspaceCapacities {
+export interface GpuFunctionalTypeInferenceWorkspaceCapacities {
   readonly type?: number;
   readonly environment?: number;
   readonly frame?: number;
@@ -48,7 +48,7 @@ export interface GpuLazuliTypeInferenceWorkspaceCapacities {
   readonly output?: number;
 }
 
-export interface GpuLazuliTypeInferenceDispatchObservation {
+export interface GpuFunctionalTypeInferenceDispatchObservation {
   readonly status: number;
   readonly errorCode: number;
   readonly requiredCapacity: number;
@@ -61,19 +61,19 @@ export interface GpuLazuliTypeInferenceDispatchObservation {
   readonly outputCapacity: number;
 }
 
-export type GpuLazuliTypeInferenceRun = LazuliTypeInferenceResult & {
+export type GpuFunctionalTypeInferenceRun = FunctionalTypeInferenceResult & {
   readonly transitions: number;
   readonly totalSteps: number;
 };
 
-export type GpuLazuliCompilationInferenceRun =
+export type GpuFunctionalCompilationInferenceRun =
   | {
-    readonly semanticState: GpuLazuliSemanticStateSnapshot;
-    readonly inference: GpuLazuliTypeInferenceRun;
+    readonly semanticState: GpuFunctionalSemanticStateSnapshot;
+    readonly inference: GpuFunctionalTypeInferenceRun;
     readonly coreNodeBytes?: ArrayBuffer;
   }
   | {
-    readonly semanticState: GpuLazuliSemanticStateSnapshot;
+    readonly semanticState: GpuFunctionalSemanticStateSnapshot;
     readonly inference?: never;
   };
 

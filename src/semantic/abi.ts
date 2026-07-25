@@ -2,7 +2,7 @@ export const LAZULI_ABI_VERSION = 5;
 export const LAZULI_NO_INDEX = 0xffffffff;
 export const LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
 export const LAZULI_MAXIMUM_SURFACE_NODES = 65_536;
-export const LAZULI_MAXIMUM_PARSE_DEPTH = 512;
+export const FUNCTIONAL_MAXIMUM_PARSE_DEPTH = 512;
 export const LAZULI_MAXIMUM_CONSTRUCTOR_ARITY = 256;
 
 export const LAZULI_NODE_WORD_LENGTH = 8;
@@ -294,21 +294,21 @@ export type LazuliTypeSchema =
     readonly body: LazuliTypeSchema;
   };
 
-export interface LazuliConstructorFieldDeclaration {
+export interface FunctionalConstructorFieldDeclaration {
   readonly name: string;
   readonly type: LazuliTypeSchema;
 }
 
-export interface LazuliConstructorDeclaration {
+export interface FunctionalConstructorDeclaration {
   readonly name: string;
-  readonly fields: readonly LazuliConstructorFieldDeclaration[];
+  readonly fields: readonly FunctionalConstructorFieldDeclaration[];
   readonly result?: LazuliTypeSchema;
 }
 
 export interface LazuliTypeDeclaration {
   readonly name: string;
   readonly parameters: readonly string[];
-  readonly constructors: readonly LazuliConstructorDeclaration[];
+  readonly constructors: readonly FunctionalConstructorDeclaration[];
 }
 
 export type LazuliSourceType = LazuliTypeSchema & LazuliSpan;
@@ -356,7 +356,7 @@ export interface EncodedLazuliSurface {
   readonly typeDeclarations: readonly EncodedLazuliTypeDeclaration[];
 }
 
-export type LazuliFrontendResult =
+export type FunctionalFrontendResult =
   | { readonly ok: true; readonly surface: EncodedLazuliSurface }
   | {
     readonly ok: false;

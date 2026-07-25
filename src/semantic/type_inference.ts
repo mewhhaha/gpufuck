@@ -19,7 +19,7 @@ import {
   LazuliUnaryOperator,
 } from "./abi.ts";
 
-export interface LazuliTypeInferenceSuccess {
+export interface FunctionalTypeInferenceSuccess {
   readonly ok: true;
   readonly mainType: LazuliType;
   readonly typeDeclarations: readonly LazuliTypeDeclaration[];
@@ -27,12 +27,14 @@ export interface LazuliTypeInferenceSuccess {
   readonly constructorFieldTypes: readonly (readonly LazuliTypeSchema[])[];
 }
 
-export interface LazuliTypeInferenceFailure {
+export interface FunctionalTypeInferenceFailure {
   readonly ok: false;
   readonly diagnostic: LazuliDiagnostic;
 }
 
-export type LazuliTypeInferenceResult = LazuliTypeInferenceSuccess | LazuliTypeInferenceFailure;
+export type FunctionalTypeInferenceResult =
+  | FunctionalTypeInferenceSuccess
+  | FunctionalTypeInferenceFailure;
 
 interface InferenceVariable {
   readonly kind: "variable";
@@ -236,7 +238,7 @@ class InferenceContext {
     this.#surface = surface;
   }
 
-  infer(): LazuliTypeInferenceSuccess {
+  infer(): FunctionalTypeInferenceSuccess {
     this.validateMetadataCounts();
     this.indexDefinitions();
     this.indexTypeDeclarationShapes();
@@ -2202,7 +2204,7 @@ class InferenceContext {
  * `definitionTypes` entry per definition and one `typeDeclarations` entry per encoded type;
  * constructors and their fields remain in the same order as the word-buffer ABI.
  */
-export function inferLazuliTypes(surface: EncodedLazuliSurface): LazuliTypeInferenceResult {
+export function inferLazuliTypes(surface: EncodedLazuliSurface): FunctionalTypeInferenceResult {
   try {
     return new InferenceContext(surface).infer();
   } catch (error) {

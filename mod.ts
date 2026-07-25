@@ -7,9 +7,10 @@
 export * from "./functional.ts";
 export {
   type EncodedLazuliSurface,
+  FUNCTIONAL_MAXIMUM_PARSE_DEPTH,
+  type FunctionalFrontendResult,
   LAZULI_ABI_VERSION,
   LAZULI_MAXIMUM_CONSTRUCTOR_ARITY,
-  LAZULI_MAXIMUM_PARSE_DEPTH,
   LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH,
   LAZULI_MAXIMUM_SURFACE_NODES,
   LAZULI_NO_INDEX,
@@ -17,7 +18,6 @@ export {
   LazuliCoreTag,
   type LazuliDiagnostic,
   type LazuliDiagnosticCode,
-  type LazuliFrontendResult,
   type LazuliSpan,
   LazuliSurfaceTag,
   type LazuliType,

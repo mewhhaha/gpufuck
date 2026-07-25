@@ -4,7 +4,7 @@ import {
   LAZULI_NO_INDEX,
   LAZULI_NODE_BYTE_LENGTH,
 } from "./abi.ts";
-import { LazuliCompilationStatus } from "./compiler_shader.ts";
+import { FunctionalCompilationStatus } from "./compiler_shader.ts";
 import {
   diagnosticFromSemanticState,
   formatInvalidSurfaceState,
@@ -13,7 +13,7 @@ import {
 } from "./compilation_diagnostics.ts";
 import { CompiledGpuLazuliModule, type LazuliCompileResult } from "./compiler_module.ts";
 import type { BatchLane } from "./gpu_batch_compiler.ts";
-import type { GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
+import type { GpuFunctionalSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 import type { InferenceStateSnapshot } from "./gpu_type_inference_contract.ts";
 import {
   decodeMainType,
@@ -22,18 +22,18 @@ import {
 } from "./gpu_type_inference_results.ts";
 import { inferredTypeOutputByteLength } from "./gpu_type_inference_workspace.ts";
 import {
-  LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
-  LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
-  LazuliInferenceDiagnosticCode,
-  LazuliInferenceMetadataFailure,
-  LazuliInferenceStatus,
+  FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH,
+  FunctionalInferenceDiagnosticCode,
+  FunctionalInferenceMetadataFailure,
+  FunctionalInferenceStatus,
 } from "./type_inference_shader.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
 
 export interface TerminalInference {
   readonly state: InferenceStateSnapshot;
-  readonly semanticState: GpuLazuliSemanticStateSnapshot;
+  readonly semanticState: GpuFunctionalSemanticStateSnapshot;
 }
 
 interface ModuleBuffers {
@@ -57,7 +57,7 @@ export async function finishBatchInferenceResults(
 ): Promise<void> {
   const successfulLaneIndexes: number[] = [];
   for (const [laneIndex, completed] of terminal.entries()) {
-    if (completed?.state.status === LazuliInferenceStatus.Complete) {
+    if (completed?.state.status === FunctionalInferenceStatus.Complete) {
       successfulLaneIndexes.push(laneIndex);
     }
   }
@@ -129,7 +129,7 @@ export async function finishBatchInferenceResults(
           }
           commands.copyBufferToBuffer(
             outputBuffer,
-            lane.outputBase * LAZULI_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
+            lane.outputBase * FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
             outputReadback,
             outputOffsets.get(laneIndex)!,
             inferredTypeOutputByteLength(completed.state.outputCount),
@@ -180,7 +180,7 @@ export async function finishBatchInferenceResults(
       if (completed === undefined) continue;
       const lane = lanes[laneIndex]!;
       const totalSteps = completed.semanticState.totalSteps + completed.state.transitions;
-      if (completed.state.status === LazuliInferenceStatus.Complete) {
+      if (completed.state.status === FunctionalInferenceStatus.Complete) {
         const byteLength = inferredTypeOutputByteLength(completed.state.outputCount);
         const fastOutput = terminalOutputs[laneIndex];
         const offset = outputOffsets.get(laneIndex);
@@ -290,9 +290,9 @@ function allocateModuleBuffers(device: GPUDevice, lane: BatchLane): ModuleBuffer
 
 export function batchSemanticFailure(
   lane: BatchLane,
-  state: GpuLazuliSemanticStateSnapshot,
+  state: GpuFunctionalSemanticStateSnapshot,
 ): LazuliCompileResult {
-  if (state.status === LazuliCompilationStatus.Diagnostic) {
+  if (state.status === FunctionalCompilationStatus.Diagnostic) {
     const diagnostic = diagnosticFromSemanticState(
       state,
       lane.surface,
@@ -305,7 +305,7 @@ export function batchSemanticFailure(
     }
     return { ok: false, diagnostics: [diagnostic] };
   }
-  if (state.status === LazuliCompilationStatus.StepLimit) {
+  if (state.status === FunctionalCompilationStatus.StepLimit) {
     return {
       ok: false,
       diagnostics: [semanticWorkLimitDiagnostic(
@@ -315,7 +315,7 @@ export function batchSemanticFailure(
       )],
     };
   }
-  if (state.status === LazuliCompilationStatus.InvalidSurface) {
+  if (state.status === FunctionalCompilationStatus.InvalidSurface) {
     throw new Error(
       `GPU Lazuli packed lane rejected an impossible encoded surface: ${
         formatInvalidSurfaceState(state)
@@ -328,12 +328,12 @@ export function batchSemanticFailure(
 }
 
 function requiresDiagnosticWorkspace(state: InferenceStateSnapshot): boolean {
-  return state.errorCode === LazuliInferenceDiagnosticCode.TypeMismatch ||
-    state.errorCode === LazuliInferenceDiagnosticCode.InfiniteType ||
-    (state.errorCode === LazuliInferenceDiagnosticCode.InvalidTypeMetadata &&
-      (state.errorContext === LazuliInferenceMetadataFailure.InvalidEmptyCaseScrutinee ||
-        state.errorContext >= LazuliInferenceMetadataFailure.IndexedExpectedTypeUnresolved)) ||
-    (state.errorCode === LazuliInferenceDiagnosticCode.NonConcreteMain &&
+  return state.errorCode === FunctionalInferenceDiagnosticCode.TypeMismatch ||
+    state.errorCode === FunctionalInferenceDiagnosticCode.InfiniteType ||
+    (state.errorCode === FunctionalInferenceDiagnosticCode.InvalidTypeMetadata &&
+      (state.errorContext === FunctionalInferenceMetadataFailure.InvalidEmptyCaseScrutinee ||
+        state.errorContext >= FunctionalInferenceMetadataFailure.IndexedExpectedTypeUnresolved)) ||
+    (state.errorCode === FunctionalInferenceDiagnosticCode.NonConcreteMain &&
       state.errorOperand0 !== LAZULI_NO_INDEX);
 }
 
@@ -343,7 +343,7 @@ async function readLaneTypeWorkspace(
   lane: BatchLane,
   state: InferenceStateSnapshot,
 ): Promise<DataView> {
-  const byteLength = state.typeTop * LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH * WORD_BYTES;
+  const byteLength = state.typeTop * FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH * WORD_BYTES;
   if (byteLength === 0) {
     throw new Error(`GPU Lazuli packed lane ${lane.resultIndex} omitted diagnostic types`);
   }

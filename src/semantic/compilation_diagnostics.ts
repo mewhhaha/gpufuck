@@ -11,9 +11,9 @@ import {
   LazuliSurfaceWord,
   LazuliTypeWord,
 } from "./abi.ts";
-import type { GpuLazuliSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
+import type { GpuFunctionalSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 
-export const LazuliSemanticCompilerErrorCode = {
+export const FunctionalSemanticCompilerErrorCode = {
   None: 0,
   UnknownName: 1,
   DuplicateDefinition: 2,
@@ -32,13 +32,13 @@ export const LazuliSemanticCompilerErrorCode = {
 } as const;
 
 export function diagnosticFromSemanticState(
-  state: GpuLazuliSemanticStateSnapshot,
+  state: GpuFunctionalSemanticStateSnapshot,
   surface: EncodedLazuliSurface,
   sourceByteLength: number,
 ): LazuliDiagnostic | undefined {
   const symbolName = symbolNameFor(surface, state.errorDetail);
   switch (state.errorCode) {
-    case LazuliSemanticCompilerErrorCode.UnknownName: {
+    case FunctionalSemanticCompilerErrorCode.UnknownName: {
       const span = nodeSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       return {
@@ -48,7 +48,7 @@ export function diagnosticFromSemanticState(
         span,
       };
     }
-    case LazuliSemanticCompilerErrorCode.DuplicateDefinition: {
+    case FunctionalSemanticCompilerErrorCode.DuplicateDefinition: {
       const span = definitionSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       const previous = previousDefinitionSpan(surface, state.errorSource, state.errorDetail);
@@ -62,7 +62,7 @@ export function diagnosticFromSemanticState(
           : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
-    case LazuliSemanticCompilerErrorCode.MissingMain:
+    case FunctionalSemanticCompilerErrorCode.MissingMain:
       if (state.errorSource !== LAZULI_NO_INDEX || state.errorDetail !== surface.entrySymbol) {
         return undefined;
       }
@@ -72,7 +72,7 @@ export function diagnosticFromSemanticState(
         message: `missing required entry definition ${symbolName}`,
         span: { startByte: sourceByteLength, endByte: sourceByteLength },
       };
-    case LazuliSemanticCompilerErrorCode.DuplicateType: {
+    case FunctionalSemanticCompilerErrorCode.DuplicateType: {
       const span = typeSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       const previous = previousTypeSpan(surface, state.errorSource, state.errorDetail);
@@ -86,7 +86,7 @@ export function diagnosticFromSemanticState(
           : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
-    case LazuliSemanticCompilerErrorCode.DuplicateConstructor: {
+    case FunctionalSemanticCompilerErrorCode.DuplicateConstructor: {
       const span = constructorSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       const previous = previousConstructorSpan(surface, state.errorSource, state.errorDetail);
@@ -100,7 +100,7 @@ export function diagnosticFromSemanticState(
           : { related: [{ message: "first declaration", span: previous }] }),
       };
     }
-    case LazuliSemanticCompilerErrorCode.DefinitionConstructorCollision: {
+    case FunctionalSemanticCompilerErrorCode.DefinitionConstructorCollision: {
       const span = topLevelSymbolSpanAt(surface, state.errorSource, state.errorDetail);
       if (span === undefined) return undefined;
       const previous = previousTopLevelSymbolSpan(surface, state.errorSource, state.errorDetail);
@@ -114,7 +114,7 @@ export function diagnosticFromSemanticState(
           : { related: [{ message: "conflicting declaration", span: previous }] }),
       };
     }
-    case LazuliSemanticCompilerErrorCode.UnknownCaseConstructor: {
+    case FunctionalSemanticCompilerErrorCode.UnknownCaseConstructor: {
       const span = surfaceNodeSpanAt(
         surface,
         state.errorSource,
@@ -129,7 +129,7 @@ export function diagnosticFromSemanticState(
         span,
       };
     }
-    case LazuliSemanticCompilerErrorCode.PatternArityMismatch: {
+    case FunctionalSemanticCompilerErrorCode.PatternArityMismatch: {
       const arm = caseArmDetails(surface, state.errorSource, state.errorDetail);
       if (arm === undefined) return undefined;
       return {
@@ -141,7 +141,7 @@ export function diagnosticFromSemanticState(
         span: arm.span,
       };
     }
-    case LazuliSemanticCompilerErrorCode.DuplicateCaseArm: {
+    case FunctionalSemanticCompilerErrorCode.DuplicateCaseArm: {
       const span = surfaceNodeSpanAt(
         surface,
         state.errorSource,
@@ -240,22 +240,22 @@ export function semanticWorkLimitDiagnostic(
   };
 }
 
-export function formatSemanticState(state: GpuLazuliSemanticStateSnapshot): string {
+export function formatSemanticState(state: GpuFunctionalSemanticStateSnapshot): string {
   return `nodeCount=${state.nodeCount}, definitionCount=${state.definitionCount}, typeCount=${state.typeCount}, constructorCount=${state.constructorCount}, entrySymbol=${state.entrySymbol}, status=${state.status}, errorCode=${state.errorCode}, errorSource=${state.errorSource}, errorDetail=${state.errorDetail}, entryDefinition=${state.entryDefinition}`;
 }
 
-export function formatInvalidSurfaceState(state: GpuLazuliSemanticStateSnapshot): string {
+export function formatInvalidSurfaceState(state: GpuFunctionalSemanticStateSnapshot): string {
   const reason = (() => {
     switch (state.errorCode) {
-      case LazuliSemanticCompilerErrorCode.InvalidCounts:
+      case FunctionalSemanticCompilerErrorCode.InvalidCounts:
         return "record counts exceed their bound storage buffers";
-      case LazuliSemanticCompilerErrorCode.InvalidNode:
+      case FunctionalSemanticCompilerErrorCode.InvalidNode:
         return `node ${state.errorDetail} violates a tag, child, parent, or preorder invariant`;
-      case LazuliSemanticCompilerErrorCode.InvalidDefinition:
+      case FunctionalSemanticCompilerErrorCode.InvalidDefinition:
         return `definition ${state.errorDetail} violates a root or source-order invariant`;
-      case LazuliSemanticCompilerErrorCode.InvalidType:
+      case FunctionalSemanticCompilerErrorCode.InvalidType:
         return `type ${state.errorDetail} violates a constructor-range or source-order invariant`;
-      case LazuliSemanticCompilerErrorCode.InvalidConstructor:
+      case FunctionalSemanticCompilerErrorCode.InvalidConstructor:
         return `constructor ${state.errorDetail} violates a type, arity, or source-order invariant`;
       default:
         return `unknown invariant error ${state.errorCode}`;

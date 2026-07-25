@@ -1,16 +1,16 @@
 import type { EncodedLazuliSurface } from "./abi.ts";
 import {
-  LAZULI_COMPILATION_STATE_BYTE_LENGTH,
-  LazuliCompilationStateWord,
-  LazuliCompilationStatus,
+  FUNCTIONAL_COMPILATION_STATE_BYTE_LENGTH,
+  FunctionalCompilationStateWord,
+  FunctionalCompilationStatus,
 } from "./compiler_shader.ts";
 import type { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
 import type {
-  GpuLazuliSemanticCompilationPass,
-  GpuLazuliSemanticStateSnapshot,
+  GpuFunctionalSemanticCompilationPass,
+  GpuFunctionalSemanticStateSnapshot,
 } from "./gpu_semantic_contract.ts";
 import type {
-  GpuLazuliTypeInferenceOptions,
+  GpuFunctionalTypeInferenceOptions,
   InferenceStateSnapshot,
   WorkspaceLayout,
 } from "./gpu_type_inference_contract.ts";
@@ -21,26 +21,26 @@ import {
   inferredTypeOutputByteLength,
 } from "./gpu_type_inference_workspace.ts";
 import {
-  LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
-  LAZULI_TYPE_INFERENCE_SHADER,
-  LazuliInferenceSchedulerWord,
-  LazuliInferenceStateWord,
+  FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH,
+  FUNCTIONAL_TYPE_INFERENCE_SHADER,
+  FunctionalInferenceSchedulerWord,
+  FunctionalInferenceStateWord,
 } from "./type_inference_shader.ts";
 
 const WORD_BYTES = Uint32Array.BYTES_PER_ELEMENT;
-export const SEMANTIC_SNAPSHOT_BYTE_OFFSET = LazuliInferenceSchedulerWord.SemanticState *
+export const SEMANTIC_SNAPSHOT_BYTE_OFFSET = FunctionalInferenceSchedulerWord.SemanticState *
   WORD_BYTES;
 
 /** Creates the shader module used with {@link runGpuLazuliTypeInference}. */
 export function createLazuliTypeInferenceShaderModule(device: GPUDevice): GPUShaderModule {
   return device.createShaderModule({
     label: "Lazuli type inference",
-    code: LAZULI_TYPE_INFERENCE_SHADER,
+    code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
   });
 }
 
 export async function createInferenceBindGroup(
-  options: GpuLazuliTypeInferenceOptions,
+  options: GpuFunctionalTypeInferenceOptions,
   metadataBuffer: GPUBuffer,
   workspaceBuffer: GPUBuffer,
   outputBuffer: GPUBuffer,
@@ -92,9 +92,9 @@ export async function createInferenceBindGroup(
 }
 
 export async function runSemanticCompilationToCompletion(
-  options: GpuLazuliTypeInferenceOptions,
-  semanticPass: GpuLazuliSemanticCompilationPass,
-): Promise<GpuLazuliSemanticStateSnapshot> {
+  options: GpuFunctionalTypeInferenceOptions,
+  semanticPass: GpuFunctionalSemanticCompilationPass,
+): Promise<GpuFunctionalSemanticStateSnapshot> {
   let readbackBuffer: GPUBuffer | undefined;
   let mapped = false;
   options.device.pushErrorScope("validation");
@@ -102,7 +102,7 @@ export async function runSemanticCompilationToCompletion(
   try {
     readbackBuffer = options.device.createBuffer({
       label: "Lazuli semantic preflight fallback readback",
-      size: LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+      size: FUNCTIONAL_COMPILATION_STATE_BYTE_LENGTH,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     creationValidation = options.device.popErrorScope();
@@ -142,7 +142,7 @@ export async function runSemanticCompilationToCompletion(
           0,
           readbackBuffer,
           0,
-          LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+          FUNCTIONAL_COMPILATION_STATE_BYTE_LENGTH,
         );
         options.signal?.throwIfAborted();
         options.device.queue.submit([commands.finish()]);
@@ -182,7 +182,7 @@ export async function runSemanticCompilationToCompletion(
           `GPU Lazuli semantic preflight fallback returned invalid progress: previousSteps=${previousSteps}, steps=${semanticState.totalSteps}, maximumStepsPerDispatch=${options.maximumStepsPerDispatch}`,
         );
       }
-      if (semanticState.status !== LazuliCompilationStatus.Pending) return semanticState;
+      if (semanticState.status !== FunctionalCompilationStatus.Pending) return semanticState;
       previousSteps = semanticState.totalSteps;
     }
   } finally {
@@ -204,7 +204,7 @@ export async function dispatchForReadback(
   coreReadbackByteOffset: number,
   coreReadbackByteLength: number,
   surface: EncodedLazuliSurface,
-  semanticPass: GpuLazuliSemanticCompilationPass | undefined,
+  semanticPass: GpuFunctionalSemanticCompilationPass | undefined,
   signal: AbortSignal | undefined,
   dispatchScheduler: GpuDispatchScheduler | undefined,
 ): Promise<void> {
@@ -286,7 +286,7 @@ function encodeInferenceDispatch(
   coreNodeBuffer: GPUBuffer,
   coreReadbackByteOffset: number,
   coreReadbackByteLength: number,
-  semanticPass: GpuLazuliSemanticCompilationPass | undefined,
+  semanticPass: GpuFunctionalSemanticCompilationPass | undefined,
 ): void {
   if (semanticPass !== undefined) {
     encodeSemanticCompilation(commands, semanticPass, 1);
@@ -295,7 +295,7 @@ function encodeInferenceDispatch(
       0,
       stateBuffer,
       SEMANTIC_SNAPSHOT_BYTE_OFFSET,
-      LAZULI_COMPILATION_STATE_BYTE_LENGTH,
+      FUNCTIONAL_COMPILATION_STATE_BYTE_LENGTH,
     );
   }
   const pass = commands.beginComputePass({ label: "Infer Lazuli types" });
@@ -332,7 +332,7 @@ function encodeInferenceDispatch(
 
 function encodeSemanticCompilation(
   commands: GPUCommandEncoder,
-  semanticPass: GpuLazuliSemanticCompilationPass,
+  semanticPass: GpuFunctionalSemanticCompilationPass,
   laneCount: number,
 ): void {
   const compilation = commands.beginComputePass({
@@ -401,7 +401,7 @@ export async function readDiagnosticWorkspace(
   const byteLength = checkedProduct(
     "type diagnostic workspace bytes",
     state.typeTop,
-    LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH * WORD_BYTES,
+    FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH * WORD_BYTES,
   );
   if (byteLength === 0) return new DataView(new ArrayBuffer(0));
 
@@ -463,43 +463,43 @@ export function readInferenceState(
 ): InferenceStateSnapshot {
   const word = (offset: number) => view.getUint32(byteOffset + offset * WORD_BYTES, true);
   return {
-    status: word(LazuliInferenceStateWord.Status),
-    errorCode: word(LazuliInferenceStateWord.ErrorCode),
-    errorStartByte: word(LazuliInferenceStateWord.ErrorStartByte),
-    errorEndByte: word(LazuliInferenceStateWord.ErrorEndByte),
-    errorDetail: word(LazuliInferenceStateWord.ErrorDetail),
-    errorOperand0: word(LazuliInferenceStateWord.ErrorOperand0),
-    errorOperand1: word(LazuliInferenceStateWord.ErrorOperand1),
-    errorContext: word(LazuliInferenceStateWord.ErrorContext),
-    transitions: word(LazuliInferenceStateWord.Transitions),
-    phase: word(LazuliInferenceStateWord.Phase),
-    typeTop: word(LazuliInferenceStateWord.TypeTop),
-    environmentTop: word(LazuliInferenceStateWord.EnvironmentTop),
-    frameTop: word(LazuliInferenceStateWord.FrameTop),
-    refinementTop: word(LazuliInferenceStateWord.RefinementTop),
-    outputRoot: word(LazuliInferenceStateWord.OutputRoot),
-    outputCount: word(LazuliInferenceStateWord.OutputCount),
+    status: word(FunctionalInferenceStateWord.Status),
+    errorCode: word(FunctionalInferenceStateWord.ErrorCode),
+    errorStartByte: word(FunctionalInferenceStateWord.ErrorStartByte),
+    errorEndByte: word(FunctionalInferenceStateWord.ErrorEndByte),
+    errorDetail: word(FunctionalInferenceStateWord.ErrorDetail),
+    errorOperand0: word(FunctionalInferenceStateWord.ErrorOperand0),
+    errorOperand1: word(FunctionalInferenceStateWord.ErrorOperand1),
+    errorContext: word(FunctionalInferenceStateWord.ErrorContext),
+    transitions: word(FunctionalInferenceStateWord.Transitions),
+    phase: word(FunctionalInferenceStateWord.Phase),
+    typeTop: word(FunctionalInferenceStateWord.TypeTop),
+    environmentTop: word(FunctionalInferenceStateWord.EnvironmentTop),
+    frameTop: word(FunctionalInferenceStateWord.FrameTop),
+    refinementTop: word(FunctionalInferenceStateWord.RefinementTop),
+    outputRoot: word(FunctionalInferenceStateWord.OutputRoot),
+    outputCount: word(FunctionalInferenceStateWord.OutputCount),
   };
 }
 
 export function readSemanticState(
   view: DataView,
   byteOffset: number,
-): GpuLazuliSemanticStateSnapshot {
+): GpuFunctionalSemanticStateSnapshot {
   const word = (offset: number) => view.getUint32(byteOffset + offset * WORD_BYTES, true);
   return {
-    nodeCount: word(LazuliCompilationStateWord.NodeCount),
-    definitionCount: word(LazuliCompilationStateWord.DefinitionCount),
-    typeCount: word(LazuliCompilationStateWord.TypeCount),
-    constructorCount: word(LazuliCompilationStateWord.ConstructorCount),
-    entrySymbol: word(LazuliCompilationStateWord.EntrySymbol),
-    status: word(LazuliCompilationStateWord.Status),
-    errorCode: word(LazuliCompilationStateWord.ErrorCode),
-    errorSource: word(LazuliCompilationStateWord.ErrorSource),
-    errorDetail: word(LazuliCompilationStateWord.ErrorDetail),
-    entryDefinition: word(LazuliCompilationStateWord.EntryDefinition),
-    totalSteps: word(LazuliCompilationStateWord.TotalSteps),
-    maximumSteps: word(LazuliCompilationStateWord.MaximumSteps),
-    maximumStepsPerDispatch: word(LazuliCompilationStateWord.MaximumStepsPerDispatch),
+    nodeCount: word(FunctionalCompilationStateWord.NodeCount),
+    definitionCount: word(FunctionalCompilationStateWord.DefinitionCount),
+    typeCount: word(FunctionalCompilationStateWord.TypeCount),
+    constructorCount: word(FunctionalCompilationStateWord.ConstructorCount),
+    entrySymbol: word(FunctionalCompilationStateWord.EntrySymbol),
+    status: word(FunctionalCompilationStateWord.Status),
+    errorCode: word(FunctionalCompilationStateWord.ErrorCode),
+    errorSource: word(FunctionalCompilationStateWord.ErrorSource),
+    errorDetail: word(FunctionalCompilationStateWord.ErrorDetail),
+    entryDefinition: word(FunctionalCompilationStateWord.EntryDefinition),
+    totalSteps: word(FunctionalCompilationStateWord.TotalSteps),
+    maximumSteps: word(FunctionalCompilationStateWord.MaximumSteps),
+    maximumStepsPerDispatch: word(FunctionalCompilationStateWord.MaximumStepsPerDispatch),
   };
 }

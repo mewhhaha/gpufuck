@@ -7,8 +7,8 @@ import {
   typeLimitDiagnostic,
 } from "../semantic/compilation_diagnostics.ts";
 import {
-  GpuLazuliSemanticCompiler,
-  type LazuliSemanticCompilationLimits,
+  type FunctionalSemanticCompilationLimits,
+  GpuFunctionalSemanticCompiler,
 } from "../semantic/gpu_semantic_compiler.ts";
 import { publicTypeMetadata } from "../semantic/gpu_type_inference_results.ts";
 import {
@@ -68,7 +68,7 @@ const COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH = 16_384;
 
 export class GpuFunctionalCompiler {
   readonly #device: GPUDevice;
-  readonly #semanticCompiler: GpuLazuliSemanticCompiler;
+  readonly #semanticCompiler: GpuFunctionalSemanticCompiler;
   readonly #compilationAdmission: CompilationAdmissionQueue;
   readonly #maximumNodeCount: number;
   readonly #maximumDefinitionCount: number;
@@ -77,7 +77,7 @@ export class GpuFunctionalCompiler {
 
   private constructor(
     device: GPUDevice,
-    semanticCompiler: GpuLazuliSemanticCompiler,
+    semanticCompiler: GpuFunctionalSemanticCompiler,
     maximumNodeCount: number,
     maximumDefinitionCount: number,
     maximumTypeCount: number,
@@ -130,7 +130,7 @@ export class GpuFunctionalCompiler {
       );
     }
 
-    const semanticCompiler = await GpuLazuliSemanticCompiler.create(device);
+    const semanticCompiler = await GpuFunctionalSemanticCompiler.create(device);
     return new GpuFunctionalCompiler(
       device,
       semanticCompiler,
@@ -534,7 +534,7 @@ export function validateFunctionalCompilationOptions(
 
 function compilationLimits(
   options: FunctionalCompilationOptions,
-): LazuliSemanticCompilationLimits {
+): FunctionalSemanticCompilationLimits {
   return {
     maximumSteps: boundedCompilationOption(
       "maximumSteps",

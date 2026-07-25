@@ -14,22 +14,22 @@ import {
   LazuliUnaryOperator,
 } from "./abi.ts";
 import {
-  LAZULI_COMPILATION_STATE_WORD_LENGTH,
-  LazuliCompilationStatus,
+  FUNCTIONAL_COMPILATION_STATE_WORD_LENGTH,
+  FunctionalCompilationStatus,
 } from "./compiler_shader.ts";
 import {
   type FlattenedLazuliTypeSchemas,
-  LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
-  LAZULI_TYPE_SCHEMA_WORD_LENGTH,
-  LazuliTypeSchemaMetadataWord,
-  LazuliTypeSchemaWord,
+  FUNCTIONAL_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
+  FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH,
+  FunctionalTypeSchemaMetadataWord,
+  FunctionalTypeSchemaWord,
 } from "./type_schema_abi.ts";
 
 /** Canonical linked-preorder source-type node supplied in binding 4. */
-export const LAZULI_INFERENCE_SCHEMA_WORD_LENGTH = LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-export const LazuliInferenceSchemaWord = LazuliTypeSchemaWord;
+export const FUNCTIONAL_INFERENCE_SCHEMA_WORD_LENGTH = FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
+export const FunctionalInferenceSchemaWord = FunctionalTypeSchemaWord;
 
-export const LazuliInferenceSchemaTag = {
+export const FunctionalInferenceSchemaTag = {
   Integer: 1,
   Boolean: 2,
   Unit: 3,
@@ -48,24 +48,24 @@ export const LazuliInferenceSchemaTag = {
  * these fixed-width tables. Child, parameter, and field offsets are relative
  * to their respective scalar tables.
  */
-export const LAZULI_INFERENCE_TYPE_METADATA_WORD_LENGTH = 4;
-export const LazuliInferenceTypeMetadataWord = {
+export const FUNCTIONAL_INFERENCE_TYPE_METADATA_WORD_LENGTH = 4;
+export const FunctionalInferenceTypeMetadataWord = {
   FirstParameter: 0,
   ParameterCount: 1,
   FirstConstructor: 2,
   ConstructorCount: 3,
 } as const;
 
-export const LAZULI_INFERENCE_CONSTRUCTOR_METADATA_WORD_LENGTH = 3;
-export const LazuliInferenceConstructorMetadataWord = {
+export const FUNCTIONAL_INFERENCE_CONSTRUCTOR_METADATA_WORD_LENGTH = 3;
+export const FunctionalInferenceConstructorMetadataWord = {
   FirstField: 0,
   FieldCount: 1,
   ResultRoot: 2,
 } as const;
 
 /** Internal type records occupy the caller-provided type region in binding 5. */
-export const LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH = 5;
-export const LazuliInferenceTypeRecordWord = {
+export const FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH = 5;
+export const FunctionalInferenceTypeRecordWord = {
   Kind: 0,
   Payload: 1,
   Child0: 2,
@@ -73,7 +73,7 @@ export const LazuliInferenceTypeRecordWord = {
   Mark: 4,
 } as const;
 
-export const LazuliInferenceInternalTypeKind = {
+export const FunctionalInferenceInternalTypeKind = {
   Variable: 1,
   Generic: 2,
   Rigid: 3,
@@ -96,18 +96,18 @@ export const LazuliInferenceInternalTypeKind = {
   ApplicationCacheTrie: 20,
 } as const;
 
-export const LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH = 4;
-export const LazuliInferenceEnvironmentWord = {
+export const FUNCTIONAL_INFERENCE_ENVIRONMENT_WORD_LENGTH = 4;
+export const FunctionalInferenceEnvironmentWord = {
   Type: 0,
   Parent: 1,
   Depth: 2,
   Skip: 3,
 } as const;
 
-export const LAZULI_INFERENCE_FRAME_WORD_LENGTH = 12;
-export const LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH = 2;
-export const LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS = 10;
-export const LazuliInferenceFrameWord = {
+export const FUNCTIONAL_INFERENCE_FRAME_WORD_LENGTH = 12;
+export const FUNCTIONAL_INFERENCE_REFINEMENT_WORD_LENGTH = 2;
+export const FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS = 10;
+export const FunctionalInferenceFrameWord = {
   Node: 0,
   Stage: 1,
   Environment: 2,
@@ -123,8 +123,8 @@ export const LazuliInferenceFrameWord = {
 } as const;
 
 /** Concrete linked-preorder schema nodes in binding 6. */
-export const LAZULI_INFERENCE_OUTPUT_WORD_LENGTH = 6;
-export const LazuliInferenceOutputWord = {
+export const FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH = 6;
+export const FunctionalInferenceOutputWord = {
   Tag: 0,
   Symbol: 1,
   FirstChild: 2,
@@ -133,7 +133,7 @@ export const LazuliInferenceOutputWord = {
   EndByte: 5,
 } as const;
 
-export const LazuliInferenceOutputTag = {
+export const FunctionalInferenceOutputTag = {
   Integer: 1,
   Boolean: 2,
   Unit: 3,
@@ -145,7 +145,7 @@ export const LazuliInferenceOutputTag = {
   Float64: 11,
 } as const;
 
-export const LazuliInferenceStatus = {
+export const FunctionalInferenceStatus = {
   Uninitialized: 0,
   Pending: 1,
   Complete: 2,
@@ -155,7 +155,7 @@ export const LazuliInferenceStatus = {
 } as const;
 
 /** Numeric counterparts of L2010/L2101-L2104 plus bounded-arena failures. */
-export const LazuliInferenceDiagnosticCode = {
+export const FunctionalInferenceDiagnosticCode = {
   None: 0,
   NonExhaustiveCase: 2010,
   InvalidTypeMetadata: 2101,
@@ -174,9 +174,9 @@ export const LazuliInferenceDiagnosticCode = {
 /**
  * Stable `ErrorContext` values for L2101. `ErrorDetail` and the two error
  * operands use the category-specific meanings documented on
- * `LazuliInferenceStateWord`.
+ * `FunctionalInferenceStateWord`.
  */
-export const LazuliInferenceMetadataFailure = {
+export const FunctionalInferenceMetadataFailure = {
   UnknownName: 1,
   UnknownCaseConstructor: 2,
   CaseFieldCountMismatch: 3,
@@ -211,7 +211,7 @@ export const LazuliInferenceMetadataFailure = {
  * Diagnostic payloads are durable workspace references/scalars:
  *
  * - L2010: `ErrorDetail` is the missing constructor symbol.
- * - L2101: `ErrorContext` is `LazuliInferenceMetadataFailure`; `ErrorDetail`
+ * - L2101: `ErrorContext` is `FunctionalInferenceMetadataFailure`; `ErrorDetail`
  *   identifies the primary symbol/index, while `ErrorOperand0/1` carry any
  *   expected/received evidence required by that category. Name/type failures
  *   put the offending symbol in `ErrorDetail`; case-field, type-argument, and
@@ -228,16 +228,17 @@ export const LazuliInferenceMetadataFailure = {
  * - L2104: `ErrorDetail` is the main symbol and `ErrorOperand0` is its inferred
  *   type root, or `LAZULI_NO_INDEX` when main has no definition.
  */
-export const LAZULI_INFERENCE_STATE_WORD_LENGTH = 73;
-export const LAZULI_INFERENCE_SCHEDULER_WORD_LENGTH = 1 +
-  LAZULI_COMPILATION_STATE_WORD_LENGTH;
-export const LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH = LAZULI_INFERENCE_STATE_WORD_LENGTH +
-  LAZULI_INFERENCE_SCHEDULER_WORD_LENGTH;
-export const LazuliInferenceSchedulerWord = {
-  PreviousSemanticSteps: LAZULI_INFERENCE_STATE_WORD_LENGTH,
-  SemanticState: LAZULI_INFERENCE_STATE_WORD_LENGTH + 1,
+export const FUNCTIONAL_INFERENCE_STATE_WORD_LENGTH = 73;
+export const FUNCTIONAL_INFERENCE_SCHEDULER_WORD_LENGTH = 1 +
+  FUNCTIONAL_COMPILATION_STATE_WORD_LENGTH;
+export const FUNCTIONAL_INFERENCE_INTERNAL_STATE_WORD_LENGTH =
+  FUNCTIONAL_INFERENCE_STATE_WORD_LENGTH +
+  FUNCTIONAL_INFERENCE_SCHEDULER_WORD_LENGTH;
+export const FunctionalInferenceSchedulerWord = {
+  PreviousSemanticSteps: FUNCTIONAL_INFERENCE_STATE_WORD_LENGTH,
+  SemanticState: FUNCTIONAL_INFERENCE_STATE_WORD_LENGTH + 1,
 } as const;
-export const LazuliInferenceStateWord = {
+export const FunctionalInferenceStateWord = {
   NodeCount: 0,
   DefinitionCount: 1,
   TypeCount: 2,
@@ -317,7 +318,7 @@ export const LazuliInferenceStateWord = {
   Reserved1: 54,
 } as const;
 
-export interface LazuliInferenceShaderMetadata {
+export interface FunctionalInferenceShaderMetadata {
   readonly words: Uint32Array;
   /** Surface and synthetic schema identifier spelling keyed by encoded ID. */
   readonly identifierNames: readonly string[];
@@ -392,7 +393,7 @@ function prepareIndexedInferenceMetadata(
       writeFailure(
         typeValidation,
         typeIndex,
-        LazuliInferenceMetadataFailure.DuplicateTypeName,
+        FunctionalInferenceMetadataFailure.DuplicateTypeName,
         startByte,
         endByte,
         symbol,
@@ -411,7 +412,7 @@ function prepareIndexedInferenceMetadata(
         writeFailure(
           typeValidation,
           typeIndex,
-          LazuliInferenceMetadataFailure.RepeatedTypeParameter,
+          FunctionalInferenceMetadataFailure.RepeatedTypeParameter,
           startByte,
           endByte,
           symbol,
@@ -424,29 +425,30 @@ function prepareIndexedInferenceMetadata(
     }
   }
 
-  const schemaCount = flattened.schemaWords.length / LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+  const schemaCount = flattened.schemaWords.length / FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
   const schemaParameterPositions = new Uint32Array(schemaCount);
   schemaParameterPositions.fill(LAZULI_NO_INDEX);
   const syntheticSchemaConstructors = new Uint32Array(schemaCount);
   syntheticSchemaConstructors.fill(LAZULI_NO_INDEX);
   const typesWithExplicitResults = new Uint32Array(surface.typeCount);
   const schemaWord = (schemaIndex: number, word: number): number =>
-    flattened.schemaWords[schemaIndex * LAZULI_TYPE_SCHEMA_WORD_LENGTH + word]!;
+    flattened.schemaWords[schemaIndex * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH + word]!;
   const parameterNodes = (root: number): readonly number[] => {
     const parameters: number[] = [];
     const pending = [root];
     while (pending.length !== 0) {
       const schemaIndex = pending.pop()!;
       if (
-        schemaWord(schemaIndex, LazuliTypeSchemaWord.Tag) === LazuliInferenceSchemaTag.Parameter
+        schemaWord(schemaIndex, FunctionalTypeSchemaWord.Tag) ===
+          FunctionalInferenceSchemaTag.Parameter
       ) {
         parameters.push(schemaIndex);
       }
       const children: number[] = [];
-      let child = schemaWord(schemaIndex, LazuliTypeSchemaWord.FirstChild);
+      let child = schemaWord(schemaIndex, FunctionalTypeSchemaWord.FirstChild);
       while (child !== LAZULI_NO_INDEX) {
         children.push(child);
-        child = schemaWord(child, LazuliTypeSchemaWord.NextSibling);
+        child = schemaWord(child, FunctionalTypeSchemaWord.NextSibling);
       }
       for (let index = children.length - 1; index >= 0; index--) pending.push(children[index]!);
     }
@@ -462,11 +464,12 @@ function prepareIndexedInferenceMetadata(
       if (schemaIndex === undefined) {
         throw new Error("Lazuli definition annotation traversal ended unexpectedly.");
       }
-      const tag = schemaWord(schemaIndex, LazuliTypeSchemaWord.Tag);
+      const tag = schemaWord(schemaIndex, FunctionalTypeSchemaWord.Tag);
       if (
-        tag === LazuliInferenceSchemaTag.Parameter || tag === LazuliInferenceSchemaTag.Forall
+        tag === FunctionalInferenceSchemaTag.Parameter ||
+        tag === FunctionalInferenceSchemaTag.Forall
       ) {
-        const parameter = schemaWord(schemaIndex, LazuliTypeSchemaWord.Symbol);
+        const parameter = schemaWord(schemaIndex, FunctionalTypeSchemaWord.Symbol);
         let position = parameterPositions.get(parameter);
         if (position === undefined) {
           position = parameterPositions.size;
@@ -475,13 +478,13 @@ function prepareIndexedInferenceMetadata(
         schemaParameterPositions[schemaIndex] = position;
       }
       const children: number[] = [];
-      let child = schemaWord(schemaIndex, LazuliTypeSchemaWord.FirstChild);
+      let child = schemaWord(schemaIndex, FunctionalTypeSchemaWord.FirstChild);
       while (child !== LAZULI_NO_INDEX) {
         children.push(child);
-        child = schemaWord(child, LazuliTypeSchemaWord.NextSibling);
+        child = schemaWord(child, FunctionalTypeSchemaWord.NextSibling);
       }
       // Named schemas await each child; binary schemas push both onto the LIFO frame stack.
-      if (tag === LazuliInferenceSchemaTag.Named) {
+      if (tag === FunctionalInferenceSchemaTag.Named) {
         for (let index = children.length - 1; index >= 0; index--) {
           pending.push(children[index]!);
         }
@@ -519,8 +522,8 @@ function prepareIndexedInferenceMetadata(
     const resultRoot = flattened.constructorResultRoots[constructorIndex]!;
     syntheticSchemaConstructors[resultRoot] = constructorIndex;
     if (
-      schemaWord(resultRoot, LazuliTypeSchemaWord.StartByte) !== LAZULI_NO_INDEX ||
-      schemaWord(resultRoot, LazuliTypeSchemaWord.EndByte) !== LAZULI_NO_INDEX
+      schemaWord(resultRoot, FunctionalTypeSchemaWord.StartByte) !== LAZULI_NO_INDEX ||
+      schemaWord(resultRoot, FunctionalTypeSchemaWord.EndByte) !== LAZULI_NO_INDEX
     ) {
       typesWithExplicitResults[typeIndex] = 1;
     }
@@ -528,7 +531,7 @@ function prepareIndexedInferenceMetadata(
     const resultParameters = new Set<number>();
     let failureWritten = false;
     for (const schemaIndex of [...fieldParameterNodes, ...resultParameterNodes]) {
-      const parameter = schemaWord(schemaIndex, LazuliTypeSchemaWord.Symbol);
+      const parameter = schemaWord(schemaIndex, FunctionalTypeSchemaWord.Symbol);
       const position = parameterPositions.get(parameter);
       if (position !== undefined) {
         schemaParameterPositions[schemaIndex] = position;
@@ -537,9 +540,9 @@ function prepareIndexedInferenceMetadata(
       writeFailure(
         constructorValidation,
         constructorIndex,
-        LazuliInferenceMetadataFailure.UndeclaredTypeParameter,
-        schemaWord(schemaIndex, LazuliTypeSchemaWord.StartByte),
-        schemaWord(schemaIndex, LazuliTypeSchemaWord.EndByte),
+        FunctionalInferenceMetadataFailure.UndeclaredTypeParameter,
+        schemaWord(schemaIndex, FunctionalTypeSchemaWord.StartByte),
+        schemaWord(schemaIndex, FunctionalTypeSchemaWord.EndByte),
         parameter,
         typeIndex,
         constructorSymbol,
@@ -548,25 +551,25 @@ function prepareIndexedInferenceMetadata(
       break;
     }
     if (failureWritten) continue;
-    const resultTag = schemaWord(resultRoot, LazuliTypeSchemaWord.Tag);
-    const resultSymbol = schemaWord(resultRoot, LazuliTypeSchemaWord.Symbol);
+    const resultTag = schemaWord(resultRoot, FunctionalTypeSchemaWord.Tag);
+    const resultSymbol = schemaWord(resultRoot, FunctionalTypeSchemaWord.Symbol);
     const declaredSymbol = surface.typeWords[
       typeIndex * LAZULI_TYPE_WORD_LENGTH + LazuliTypeWord.Symbol
     ]!;
-    let resultHeadIsValid = resultTag === LazuliInferenceSchemaTag.Named &&
+    let resultHeadIsValid = resultTag === FunctionalInferenceSchemaTag.Named &&
       resultSymbol === declaredSymbol;
     if (typeIndex + 2 === surface.typeCount) {
-      resultHeadIsValid = resultTag === LazuliInferenceSchemaTag.Unit;
+      resultHeadIsValid = resultTag === FunctionalInferenceSchemaTag.Unit;
     } else if (typeIndex + 1 === surface.typeCount) {
-      resultHeadIsValid = resultTag === LazuliInferenceSchemaTag.Tuple;
+      resultHeadIsValid = resultTag === FunctionalInferenceSchemaTag.Tuple;
     }
     if (!resultHeadIsValid) {
       writeFailure(
         constructorValidation,
         constructorIndex,
-        LazuliInferenceMetadataFailure.InvalidConstructorResult,
-        schemaWord(resultRoot, LazuliTypeSchemaWord.StartByte),
-        schemaWord(resultRoot, LazuliTypeSchemaWord.EndByte),
+        FunctionalInferenceMetadataFailure.InvalidConstructorResult,
+        schemaWord(resultRoot, FunctionalTypeSchemaWord.StartByte),
+        schemaWord(resultRoot, FunctionalTypeSchemaWord.EndByte),
         constructorIndex,
         resultRoot,
         declaredSymbol,
@@ -574,17 +577,17 @@ function prepareIndexedInferenceMetadata(
       continue;
     }
     for (const schemaIndex of resultParameterNodes) {
-      resultParameters.add(schemaWord(schemaIndex, LazuliTypeSchemaWord.Symbol));
+      resultParameters.add(schemaWord(schemaIndex, FunctionalTypeSchemaWord.Symbol));
     }
     for (const schemaIndex of fieldParameterNodes) {
-      const parameter = schemaWord(schemaIndex, LazuliTypeSchemaWord.Symbol);
+      const parameter = schemaWord(schemaIndex, FunctionalTypeSchemaWord.Symbol);
       if (resultParameters.has(parameter)) continue;
       writeFailure(
         constructorValidation,
         constructorIndex,
-        LazuliInferenceMetadataFailure.HiddenConstructorFieldParameter,
-        schemaWord(schemaIndex, LazuliTypeSchemaWord.StartByte),
-        schemaWord(schemaIndex, LazuliTypeSchemaWord.EndByte),
+        FunctionalInferenceMetadataFailure.HiddenConstructorFieldParameter,
+        schemaWord(schemaIndex, FunctionalTypeSchemaWord.StartByte),
+        schemaWord(schemaIndex, FunctionalTypeSchemaWord.EndByte),
         constructorIndex,
         parameter,
         resultRoot,
@@ -632,11 +635,11 @@ function prepareIndexedInferenceMetadata(
 export function prepareLazuliInferenceShaderMetadata(
   surface: EncodedLazuliSurface,
   flattened: FlattenedLazuliTypeSchemas,
-): LazuliInferenceShaderMetadata {
-  const schemaCount = flattened.schemaWords.length / LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+): FunctionalInferenceShaderMetadata {
+  const schemaCount = flattened.schemaWords.length / FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
   if (!Number.isInteger(schemaCount)) {
     throw new Error(
-      `Lazuli schema buffer has ${flattened.schemaWords.length} words; expected a multiple of ${LAZULI_TYPE_SCHEMA_WORD_LENGTH}.`,
+      `Lazuli schema buffer has ${flattened.schemaWords.length} words; expected a multiple of ${FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH}.`,
     );
   }
   const parameterNames = new Map<number, string>();
@@ -652,14 +655,14 @@ export function prepareLazuliInferenceShaderMetadata(
     parameterNames.set(symbol, name);
   };
   for (let schemaIndex = 0; schemaIndex < schemaCount; schemaIndex++) {
-    const source = schemaIndex * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-    const tag = flattened.schemaWords[source + LazuliTypeSchemaWord.Tag];
-    const symbol = flattened.schemaWords[source + LazuliTypeSchemaWord.Symbol];
+    const source = schemaIndex * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
+    const tag = flattened.schemaWords[source + FunctionalTypeSchemaWord.Tag];
+    const symbol = flattened.schemaWords[source + FunctionalTypeSchemaWord.Symbol];
     if (tag === undefined || symbol === undefined) {
       throw new Error(`Lazuli schema record ${schemaIndex} is incomplete.`);
     }
     if (
-      tag === LazuliInferenceSchemaTag.Parameter || tag === LazuliInferenceSchemaTag.Forall
+      tag === FunctionalInferenceSchemaTag.Parameter || tag === FunctionalInferenceSchemaTag.Forall
     ) {
       const parameterName = flattened.identifierNames[symbol];
       if (parameterName === undefined) {
@@ -695,9 +698,9 @@ export function prepareLazuliInferenceShaderMetadata(
 
   const header = flattened.metadataWords;
   if (
-    header[LazuliTypeSchemaMetadataWord.AbiVersion] !== LAZULI_ABI_VERSION ||
-    header[LazuliTypeSchemaMetadataWord.HeaderWordLength] !==
-      LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH
+    header[FunctionalTypeSchemaMetadataWord.AbiVersion] !== LAZULI_ABI_VERSION ||
+    header[FunctionalTypeSchemaMetadataWord.HeaderWordLength] !==
+      FUNCTIONAL_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH
   ) {
     throw new Error("Lazuli schema metadata has an incompatible header.");
   }
@@ -714,18 +717,18 @@ export function prepareLazuliInferenceShaderMetadata(
     parameterNames,
     schemaNodeCount: schemaCount,
     definitionAnnotationBase: offset(
-      LazuliTypeSchemaMetadataWord.DefinitionAnnotationRootsOffset,
+      FunctionalTypeSchemaMetadataWord.DefinitionAnnotationRootsOffset,
     ),
-    schemaBase: offset(LazuliTypeSchemaMetadataWord.SchemaWordsOffset),
-    typeParameterBase: offset(LazuliTypeSchemaMetadataWord.TypeParameterSymbolsOffset),
+    schemaBase: offset(FunctionalTypeSchemaMetadataWord.SchemaWordsOffset),
+    typeParameterBase: offset(FunctionalTypeSchemaMetadataWord.TypeParameterSymbolsOffset),
     typeParameterCount: flattened.typeParameterSymbols.length,
-    typeParameterOffsetsBase: offset(LazuliTypeSchemaMetadataWord.TypeParameterOffsetsOffset),
-    constructorFieldBase: offset(LazuliTypeSchemaMetadataWord.ConstructorFieldRootsOffset),
+    typeParameterOffsetsBase: offset(FunctionalTypeSchemaMetadataWord.TypeParameterOffsetsOffset),
+    constructorFieldBase: offset(FunctionalTypeSchemaMetadataWord.ConstructorFieldRootsOffset),
     constructorFieldCount: flattened.constructorFieldRoots.length,
     constructorFieldOffsetsBase: offset(
-      LazuliTypeSchemaMetadataWord.ConstructorFieldOffsetsOffset,
+      FunctionalTypeSchemaMetadataWord.ConstructorFieldOffsetsOffset,
     ),
-    constructorResultBase: offset(LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset),
+    constructorResultBase: offset(FunctionalTypeSchemaMetadataWord.ConstructorResultRootsOffset),
     indexedMetadataFooterBase: indexed.footerBase,
   });
 }
@@ -742,7 +745,7 @@ export function prepareLazuliInferenceShaderMetadata(
  * Only the definition vectors are statically required; temporary operations
  * report their exact required capacity before indexing through it.
  */
-export const LAZULI_TYPE_INFERENCE_SHADER = /* wgsl */ `
+export const FUNCTIONAL_TYPE_INFERENCE_SHADER = /* wgsl */ `
 struct CoreNode {
   tag: u32,
   payload: u32,
@@ -924,7 +927,7 @@ const STATUS_COMPLETE: u32 = 2u;
 const STATUS_DIAGNOSTIC: u32 = 3u;
 const STATUS_INVALID_INPUT: u32 = 4u;
 const STATUS_EXHAUSTED: u32 = 5u;
-const SEMANTIC_STATUS_OK: u32 = ${LazuliCompilationStatus.Ok}u;
+const SEMANTIC_STATUS_OK: u32 = ${FunctionalCompilationStatus.Ok}u;
 
 const ERROR_NONE: u32 = 0u;
 const ERROR_NON_EXHAUSTIVE_CASE: u32 = 2010u;
@@ -961,28 +964,28 @@ fn output_address(index: u32) -> u32 {
   return state.semantic.resolution_node + index;
 }
 
-const METADATA_CASE_FIELD_COUNT_MISMATCH: u32 = ${LazuliInferenceMetadataFailure.CaseFieldCountMismatch}u;
-const METADATA_UNDECLARED_TYPE_PARAMETER: u32 = ${LazuliInferenceMetadataFailure.UndeclaredTypeParameter}u;
-const METADATA_UNKNOWN_TYPE: u32 = ${LazuliInferenceMetadataFailure.UnknownType}u;
-const METADATA_TYPE_ARGUMENT_COUNT_MISMATCH: u32 = ${LazuliInferenceMetadataFailure.TypeArgumentCountMismatch}u;
-const METADATA_UNSUPPORTED_EXPRESSION: u32 = ${LazuliInferenceMetadataFailure.UnsupportedExpression}u;
-const METADATA_INVALID_DEFINITION_ANNOTATION: u32 = ${LazuliInferenceMetadataFailure.InvalidDefinitionAnnotation}u;
-const METADATA_INVALID_TYPE_DECLARATION: u32 = ${LazuliInferenceMetadataFailure.InvalidTypeDeclaration}u;
-const METADATA_REPEATED_TYPE_PARAMETER: u32 = ${LazuliInferenceMetadataFailure.RepeatedTypeParameter}u;
-const METADATA_INVALID_CONSTRUCTOR: u32 = ${LazuliInferenceMetadataFailure.InvalidConstructor}u;
-const METADATA_CONSTRUCTOR_FIELD_COUNT_MISMATCH: u32 = ${LazuliInferenceMetadataFailure.ConstructorFieldCountMismatch}u;
-const METADATA_INVALID_CONSTRUCTOR_FIELD: u32 = ${LazuliInferenceMetadataFailure.InvalidConstructorField}u;
-const METADATA_INVALID_SCHEMA_SHAPE: u32 = ${LazuliInferenceMetadataFailure.InvalidSchemaShape}u;
-const METADATA_INVALID_SCHEMA_CONVERSION: u32 = ${LazuliInferenceMetadataFailure.InvalidSchemaConversion}u;
-const METADATA_DUPLICATE_TYPE_NAME: u32 = ${LazuliInferenceMetadataFailure.DuplicateTypeName}u;
-const METADATA_INVALID_EMPTY_CASE_SCRUTINEE: u32 = ${LazuliInferenceMetadataFailure.InvalidEmptyCaseScrutinee}u;
-const METADATA_INVALID_CONSTRUCTOR_RESULT: u32 = ${LazuliInferenceMetadataFailure.InvalidConstructorResult}u;
-const METADATA_HIDDEN_CONSTRUCTOR_FIELD_PARAMETER: u32 = ${LazuliInferenceMetadataFailure.HiddenConstructorFieldParameter}u;
-const METADATA_INDEXED_EXPECTED_TYPE_MISSING: u32 = ${LazuliInferenceMetadataFailure.IndexedExpectedTypeMissing}u;
-const METADATA_INDEXED_EXPECTED_TYPE_UNRESOLVED: u32 = ${LazuliInferenceMetadataFailure.IndexedExpectedTypeUnresolved}u;
-const METADATA_INDEXED_SCRUTINEE_UNRESOLVED: u32 = ${LazuliInferenceMetadataFailure.IndexedScrutineeUnresolved}u;
-const METADATA_INDEXED_SCRUTINEE_TYPE_MISMATCH: u32 = ${LazuliInferenceMetadataFailure.IndexedScrutineeTypeMismatch}u;
-const METADATA_UNTOUCHABLE_INDEXED_VARIABLE: u32 = ${LazuliInferenceMetadataFailure.UntouchableIndexedVariable}u;
+const METADATA_CASE_FIELD_COUNT_MISMATCH: u32 = ${FunctionalInferenceMetadataFailure.CaseFieldCountMismatch}u;
+const METADATA_UNDECLARED_TYPE_PARAMETER: u32 = ${FunctionalInferenceMetadataFailure.UndeclaredTypeParameter}u;
+const METADATA_UNKNOWN_TYPE: u32 = ${FunctionalInferenceMetadataFailure.UnknownType}u;
+const METADATA_TYPE_ARGUMENT_COUNT_MISMATCH: u32 = ${FunctionalInferenceMetadataFailure.TypeArgumentCountMismatch}u;
+const METADATA_UNSUPPORTED_EXPRESSION: u32 = ${FunctionalInferenceMetadataFailure.UnsupportedExpression}u;
+const METADATA_INVALID_DEFINITION_ANNOTATION: u32 = ${FunctionalInferenceMetadataFailure.InvalidDefinitionAnnotation}u;
+const METADATA_INVALID_TYPE_DECLARATION: u32 = ${FunctionalInferenceMetadataFailure.InvalidTypeDeclaration}u;
+const METADATA_REPEATED_TYPE_PARAMETER: u32 = ${FunctionalInferenceMetadataFailure.RepeatedTypeParameter}u;
+const METADATA_INVALID_CONSTRUCTOR: u32 = ${FunctionalInferenceMetadataFailure.InvalidConstructor}u;
+const METADATA_CONSTRUCTOR_FIELD_COUNT_MISMATCH: u32 = ${FunctionalInferenceMetadataFailure.ConstructorFieldCountMismatch}u;
+const METADATA_INVALID_CONSTRUCTOR_FIELD: u32 = ${FunctionalInferenceMetadataFailure.InvalidConstructorField}u;
+const METADATA_INVALID_SCHEMA_SHAPE: u32 = ${FunctionalInferenceMetadataFailure.InvalidSchemaShape}u;
+const METADATA_INVALID_SCHEMA_CONVERSION: u32 = ${FunctionalInferenceMetadataFailure.InvalidSchemaConversion}u;
+const METADATA_DUPLICATE_TYPE_NAME: u32 = ${FunctionalInferenceMetadataFailure.DuplicateTypeName}u;
+const METADATA_INVALID_EMPTY_CASE_SCRUTINEE: u32 = ${FunctionalInferenceMetadataFailure.InvalidEmptyCaseScrutinee}u;
+const METADATA_INVALID_CONSTRUCTOR_RESULT: u32 = ${FunctionalInferenceMetadataFailure.InvalidConstructorResult}u;
+const METADATA_HIDDEN_CONSTRUCTOR_FIELD_PARAMETER: u32 = ${FunctionalInferenceMetadataFailure.HiddenConstructorFieldParameter}u;
+const METADATA_INDEXED_EXPECTED_TYPE_MISSING: u32 = ${FunctionalInferenceMetadataFailure.IndexedExpectedTypeMissing}u;
+const METADATA_INDEXED_EXPECTED_TYPE_UNRESOLVED: u32 = ${FunctionalInferenceMetadataFailure.IndexedExpectedTypeUnresolved}u;
+const METADATA_INDEXED_SCRUTINEE_UNRESOLVED: u32 = ${FunctionalInferenceMetadataFailure.IndexedScrutineeUnresolved}u;
+const METADATA_INDEXED_SCRUTINEE_TYPE_MISMATCH: u32 = ${FunctionalInferenceMetadataFailure.IndexedScrutineeTypeMismatch}u;
+const METADATA_UNTOUCHABLE_INDEXED_VARIABLE: u32 = ${FunctionalInferenceMetadataFailure.UntouchableIndexedVariable}u;
 
 const PHASE_VALIDATE: u32 = 1u;
 const PHASE_TARJAN: u32 = 2u;
@@ -1042,9 +1045,9 @@ const TYPE_LAZY_CONSTRUCTOR: u32 = 19u;
 const TYPE_APPLICATION_CACHE_TRIE: u32 = 20u;
 const TYPE_INSTANTIATION_BRANCH: u32 = 21u;
 const TYPE_RECORD_WORDS: u32 = 5u;
-const ENVIRONMENT_WORDS: u32 = ${LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH}u;
+const ENVIRONMENT_WORDS: u32 = ${FUNCTIONAL_INFERENCE_ENVIRONMENT_WORD_LENGTH}u;
 const FRAME_WORDS: u32 = 12u;
-const REFINEMENT_WORDS: u32 = ${LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH}u;
+const REFINEMENT_WORDS: u32 = ${FUNCTIONAL_INFERENCE_REFINEMENT_WORD_LENGTH}u;
 
 const FRAME_EXPRESSION: u32 = 0u;
 const FRAME_PRUNE: u32 = 1u;
@@ -1342,12 +1345,12 @@ fn cache_application_result(definition: u32, argument: u32, result: u32) -> bool
 
 fn temporary_base() -> u32 {
   return state.scratch_base +
-    state.definition_count * ${LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
+    state.definition_count * ${FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
 }
 
 fn temporary_capacity() -> u32 {
   return state.scratch_capacity -
-    state.definition_count * ${LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
+    state.definition_count * ${FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
 }
 
 fn type_address(type_index: u32) -> u32 {
@@ -4603,7 +4606,7 @@ fn validation_transition() {
   if section == 0u {
     let schema_length = arrayLength(&schema_words);
     let scratch_required =
-      state.definition_count * ${LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
+      state.definition_count * ${FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS}u;
     if state.maximum_transitions_per_dispatch == 0u ||
       !range_is_valid(state.semantic.phase, state.node_count, arrayLength(&core_nodes)) ||
       !range_is_valid(

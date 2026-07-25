@@ -12,13 +12,13 @@ import {
   LazuliSurfaceWord,
   LazuliTypeWord,
 } from "./abi.ts";
-import { LazuliSemanticCompilerErrorCode } from "./compilation_diagnostics.ts";
+import { FunctionalSemanticCompilerErrorCode } from "./compilation_diagnostics.ts";
 
-export const LAZULI_SYMBOL_LOOKUP_WORD_LENGTH = 4;
-export const LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC = 0x4c5a4c52;
-export const LAZULI_INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC = 0x4c5a4c53;
+export const FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH = 4;
+export const FUNCTIONAL_INDEXED_LOCAL_RESOLUTION_MAGIC = 0x4c5a4c52;
+export const FUNCTIONAL_INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC = 0x4c5a4c53;
 
-export const LazuliSymbolLookupWord = {
+export const FunctionalSymbolLookupWord = {
   Definition: 0,
   Type: 1,
   Constructor: 2,
@@ -28,7 +28,7 @@ export const LazuliSymbolLookupWord = {
 export function createLazuliSymbolLookup(surface: EncodedLazuliSurface): Uint32Array {
   const symbolCount = surface.symbolNames.length;
   const words = new Uint32Array(
-    lazuliSymbolLookupRecordCount(surface) * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH,
+    functionalSymbolLookupRecordCount(surface) * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH,
   );
   words.fill(LAZULI_NO_INDEX);
   recordFirstIndices(
@@ -36,7 +36,7 @@ export function createLazuliSymbolLookup(surface: EncodedLazuliSurface): Uint32A
     surface.definitionWords,
     LAZULI_DEFINITION_WORD_LENGTH,
     LazuliDefinitionWord.Symbol,
-    LazuliSymbolLookupWord.Definition,
+    FunctionalSymbolLookupWord.Definition,
     symbolCount,
   );
   recordFirstIndices(
@@ -44,7 +44,7 @@ export function createLazuliSymbolLookup(surface: EncodedLazuliSurface): Uint32A
     surface.typeWords,
     LAZULI_TYPE_WORD_LENGTH,
     LazuliTypeWord.Symbol,
-    LazuliSymbolLookupWord.Type,
+    FunctionalSymbolLookupWord.Type,
     symbolCount,
   );
   recordFirstIndices(
@@ -52,14 +52,14 @@ export function createLazuliSymbolLookup(surface: EncodedLazuliSurface): Uint32A
     surface.constructorWords,
     LAZULI_CONSTRUCTOR_WORD_LENGTH,
     LazuliConstructorWord.Symbol,
-    LazuliSymbolLookupWord.Constructor,
+    FunctionalSymbolLookupWord.Constructor,
     symbolCount,
   );
   recordLocalResolutions(words, surface, symbolCount);
   return words;
 }
 
-export function lazuliSymbolLookupRecordCount(surface: EncodedLazuliSurface): number {
+export function functionalSymbolLookupRecordCount(surface: EncodedLazuliSurface): number {
   return surface.symbolNames.length + 1 + surface.nodeCount;
 }
 
@@ -74,7 +74,7 @@ function recordFirstIndices(
   for (let recordIndex = 0; recordIndex < records.length / recordWordLength; recordIndex++) {
     const symbol = records[recordIndex * recordWordLength + symbolWord]!;
     if (symbol >= symbolCount) continue;
-    const offset = symbol * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH + lookupWord;
+    const offset = symbol * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH + lookupWord;
     if (lookupWords[offset] === LAZULI_NO_INDEX) lookupWords[offset] = recordIndex;
   }
 }
@@ -108,18 +108,18 @@ function recordLocalResolutions(
   );
   if (loweringPlan === undefined) return;
 
-  const header = symbolCount * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH;
-  words[header + LazuliSymbolLookupWord.Definition] = LAZULI_INDEXED_LOCAL_RESOLUTION_MAGIC;
-  words[header + LazuliSymbolLookupWord.Type] = surface.nodeCount;
-  words[header + LazuliSymbolLookupWord.CaseNode] = loweringPlan.errorNode;
+  const header = symbolCount * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH;
+  words[header + FunctionalSymbolLookupWord.Definition] = FUNCTIONAL_INDEXED_LOCAL_RESOLUTION_MAGIC;
+  words[header + FunctionalSymbolLookupWord.Type] = surface.nodeCount;
+  words[header + FunctionalSymbolLookupWord.CaseNode] = loweringPlan.errorNode;
   for (let node = 0; node < surface.nodeCount; node++) {
     const plannedNode = loweringPlan.nodes[node];
     if (plannedNode === undefined) return;
-    const record = (symbolCount + 1 + node) * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH;
-    words[record + LazuliSymbolLookupWord.Definition] = plannedNode.coreTag;
-    words[record + LazuliSymbolLookupWord.Type] = plannedNode.corePayload;
-    words[record + LazuliSymbolLookupWord.Constructor] = plannedNode.errorCode;
-    words[record + LazuliSymbolLookupWord.CaseNode] = plannedNode.errorDetail;
+    const record = (symbolCount + 1 + node) * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH;
+    words[record + FunctionalSymbolLookupWord.Definition] = plannedNode.coreTag;
+    words[record + FunctionalSymbolLookupWord.Type] = plannedNode.corePayload;
+    words[record + FunctionalSymbolLookupWord.Constructor] = plannedNode.errorCode;
+    words[record + FunctionalSymbolLookupWord.CaseNode] = plannedNode.errorDetail;
   }
 }
 
@@ -130,7 +130,7 @@ interface PlannedLoweringNode {
   readonly errorDetail: number;
 }
 
-interface LazuliLoweringPlan {
+interface FunctionalLoweringPlan {
   readonly nodes: readonly PlannedLoweringNode[];
   readonly errorNode: number;
 }
@@ -141,7 +141,7 @@ function createLoweringPlan(
   localDepths: Uint32Array,
   bindingUses: Uint8Array,
   symbolCount: number,
-): LazuliLoweringPlan | undefined {
+): FunctionalLoweringPlan | undefined {
   const nodes: PlannedLoweringNode[] = [];
   const lastCaseBySymbol = new Uint32Array(symbolCount);
   lastCaseBySymbol.fill(LAZULI_NO_INDEX);
@@ -173,14 +173,14 @@ function createLoweringPlan(
         corePayload: tag === LazuliSurfaceTag.Let || tag === LazuliSurfaceTag.StrictLet
           ? bindingUses[node] ?? 0
           : payload,
-        errorCode: LazuliSemanticCompilerErrorCode.None,
+        errorCode: FunctionalSemanticCompilerErrorCode.None,
         errorDetail: LAZULI_NO_INDEX,
       };
     }
     nodes.push(plannedNode);
     if (
       errorNode === LAZULI_NO_INDEX &&
-      plannedNode.errorCode !== LazuliSemanticCompilerErrorCode.None
+      plannedNode.errorCode !== FunctionalSemanticCompilerErrorCode.None
     ) {
       errorNode = node;
     }
@@ -199,42 +199,42 @@ function planName(
     return {
       coreTag: LazuliCoreTag.Local,
       corePayload: localDepth,
-      errorCode: LazuliSemanticCompilerErrorCode.None,
+      errorCode: FunctionalSemanticCompilerErrorCode.None,
       errorDetail: LAZULI_NO_INDEX,
     };
   }
   const definition = lookupWord(
     lookupWords,
     symbol,
-    LazuliSymbolLookupWord.Definition,
+    FunctionalSymbolLookupWord.Definition,
     symbolCount,
   );
   if (definition !== LAZULI_NO_INDEX) {
     return {
       coreTag: LazuliCoreTag.Global,
       corePayload: definition,
-      errorCode: LazuliSemanticCompilerErrorCode.None,
+      errorCode: FunctionalSemanticCompilerErrorCode.None,
       errorDetail: LAZULI_NO_INDEX,
     };
   }
   const constructor = lookupWord(
     lookupWords,
     symbol,
-    LazuliSymbolLookupWord.Constructor,
+    FunctionalSymbolLookupWord.Constructor,
     symbolCount,
   );
   if (constructor !== LAZULI_NO_INDEX) {
     return {
       coreTag: LazuliCoreTag.Constructor,
       corePayload: constructor,
-      errorCode: LazuliSemanticCompilerErrorCode.None,
+      errorCode: FunctionalSemanticCompilerErrorCode.None,
       errorDetail: LAZULI_NO_INDEX,
     };
   }
   return {
     coreTag: LazuliSurfaceTag.Name,
     corePayload: symbol,
-    errorCode: LazuliSemanticCompilerErrorCode.UnknownName,
+    errorCode: FunctionalSemanticCompilerErrorCode.UnknownName,
     errorDetail: symbol,
   };
 }
@@ -250,14 +250,14 @@ function planCaseArm(
   const constructor = lookupWord(
     lookupWords,
     symbol,
-    LazuliSymbolLookupWord.Constructor,
+    FunctionalSymbolLookupWord.Constructor,
     symbolCount,
   );
   if (constructor === LAZULI_NO_INDEX) {
     return {
       coreTag: LazuliSurfaceTag.CaseArm,
       corePayload: symbol,
-      errorCode: LazuliSemanticCompilerErrorCode.UnknownCaseConstructor,
+      errorCode: FunctionalSemanticCompilerErrorCode.UnknownCaseConstructor,
       errorDetail: symbol,
     };
   }
@@ -271,7 +271,7 @@ function planCaseArm(
     return {
       coreTag: LazuliSurfaceTag.CaseArm,
       corePayload: constructor,
-      errorCode: LazuliSemanticCompilerErrorCode.PatternArityMismatch,
+      errorCode: FunctionalSemanticCompilerErrorCode.PatternArityMismatch,
       errorDetail: node,
     };
   }
@@ -282,7 +282,7 @@ function planCaseArm(
     return {
       coreTag: LazuliSurfaceTag.CaseArm,
       corePayload: constructor,
-      errorCode: LazuliSemanticCompilerErrorCode.DuplicateCaseArm,
+      errorCode: FunctionalSemanticCompilerErrorCode.DuplicateCaseArm,
       errorDetail: symbol,
     };
   }
@@ -290,7 +290,7 @@ function planCaseArm(
   return {
     coreTag: LazuliSurfaceTag.CaseArm,
     corePayload: constructor,
-    errorCode: LazuliSemanticCompilerErrorCode.None,
+    errorCode: FunctionalSemanticCompilerErrorCode.None,
     errorDetail: LAZULI_NO_INDEX,
   };
 }
@@ -332,7 +332,7 @@ function lookupWord(
   symbolCount: number,
 ): number {
   if (symbol >= symbolCount) return LAZULI_NO_INDEX;
-  return words[symbol * LAZULI_SYMBOL_LOOKUP_WORD_LENGTH + word] ?? LAZULI_NO_INDEX;
+  return words[symbol * FUNCTIONAL_SYMBOL_LOOKUP_WORD_LENGTH + word] ?? LAZULI_NO_INDEX;
 }
 
 function normalizedCoreTag(tag: number): number {

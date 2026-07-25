@@ -7,13 +7,13 @@ import {
   LazuliCoreTag,
 } from "./abi.ts";
 import type {
-  LazuliConstructorDeclaration,
+  FunctionalConstructorDeclaration,
   LazuliType,
   LazuliTypeDeclaration,
   LazuliTypeSchema,
 } from "./abi.ts";
 import type { GpuLazuliModule } from "./compiler_module.ts";
-import { LAZULI_EVALUATOR_SHADER } from "./evaluator_shader.ts";
+import { FUNCTIONAL_EVALUATOR_SHADER } from "./evaluator_shader.ts";
 
 const HEAP_SLOT_BYTE_LENGTH = 32;
 const STACK_FRAME_BYTE_LENGTH = 32;
@@ -377,7 +377,10 @@ interface InputModuleIndex {
   readonly types: ReadonlyMap<string, LazuliTypeDeclaration>;
   readonly constructors: ReadonlyMap<
     string,
-    { readonly owner: LazuliTypeDeclaration; readonly declaration: LazuliConstructorDeclaration }
+    {
+      readonly owner: LazuliTypeDeclaration;
+      readonly declaration: FunctionalConstructorDeclaration;
+    }
   >;
   readonly constructorIndexes: ReadonlyMap<string, number>;
 }
@@ -486,7 +489,10 @@ function createInputModuleIndex(module: GpuLazuliModule): InputModuleIndex {
   const types = new Map<string, LazuliTypeDeclaration>();
   const constructors = new Map<
     string,
-    { readonly owner: LazuliTypeDeclaration; readonly declaration: LazuliConstructorDeclaration }
+    {
+      readonly owner: LazuliTypeDeclaration;
+      readonly declaration: FunctionalConstructorDeclaration;
+    }
   >();
   for (const declaration of module.typeDeclarations) {
     types.set(declaration.name, declaration);
@@ -1806,7 +1812,7 @@ export class GpuLazuliEvaluator {
 
     const shaderModule = device.createShaderModule({
       label: "Lazuli lazy evaluator",
-      code: LAZULI_EVALUATOR_SHADER,
+      code: FUNCTIONAL_EVALUATOR_SHADER,
     });
     const shaderCompilation = await shaderModule.getCompilationInfo();
     const shaderErrors = shaderCompilation.messages.filter((message) => message.type === "error");

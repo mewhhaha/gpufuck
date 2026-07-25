@@ -1,8 +1,8 @@
 import { deepStrictEqual, equal, ok, throws } from "node:assert/strict";
 
 import {
+  FUNCTIONAL_MAXIMUM_PARSE_DEPTH,
   LAZULI_ABI_VERSION,
-  LAZULI_MAXIMUM_PARSE_DEPTH,
   LAZULI_NO_INDEX,
   LAZULI_TYPE_WORD_LENGTH,
   type LazuliType,
@@ -13,12 +13,12 @@ import {
   decodeLazuliType,
   decodeLazuliTypeSchema,
   flattenLazuliTypeSchemas,
-  LAZULI_TYPE_SCHEMA_ABI_VERSION,
-  LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
-  LAZULI_TYPE_SCHEMA_WORD_LENGTH,
-  LazuliTypeSchemaMetadataWord,
-  LazuliTypeSchemaTag,
-  LazuliTypeSchemaWord,
+  FUNCTIONAL_TYPE_SCHEMA_ABI_VERSION,
+  FUNCTIONAL_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
+  FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH,
+  FunctionalTypeSchemaMetadataWord,
+  FunctionalTypeSchemaTag,
+  FunctionalTypeSchemaWord,
   serializeLazuliType,
 } from "../src/semantic/type_schema_abi.ts";
 
@@ -41,51 +41,51 @@ Deno.test("canonical schema metadata packs every ABI-v5 table into one buffer", 
   const surface = parsedCanonicalSurface();
   const flattened = flattenLazuliTypeSchemas(surface);
 
-  equal(LAZULI_TYPE_SCHEMA_ABI_VERSION, LAZULI_ABI_VERSION);
-  equal(LAZULI_TYPE_SCHEMA_WORD_LENGTH, 6);
+  equal(FUNCTIONAL_TYPE_SCHEMA_ABI_VERSION, LAZULI_ABI_VERSION);
+  equal(FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH, 6);
   equal(
-    flattened.metadataWords[LazuliTypeSchemaMetadataWord.AbiVersion],
+    flattened.metadataWords[FunctionalTypeSchemaMetadataWord.AbiVersion],
     LAZULI_ABI_VERSION,
   );
   equal(
-    flattened.metadataWords[LazuliTypeSchemaMetadataWord.HeaderWordLength],
-    LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
+    flattened.metadataWords[FunctionalTypeSchemaMetadataWord.HeaderWordLength],
+    FUNCTIONAL_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH,
   );
 
   const tables = [
     [
-      LazuliTypeSchemaMetadataWord.SchemaWordsOffset,
-      LazuliTypeSchemaMetadataWord.SchemaWordsLength,
+      FunctionalTypeSchemaMetadataWord.SchemaWordsOffset,
+      FunctionalTypeSchemaMetadataWord.SchemaWordsLength,
       flattened.schemaWords,
     ],
     [
-      LazuliTypeSchemaMetadataWord.DefinitionAnnotationRootsOffset,
-      LazuliTypeSchemaMetadataWord.DefinitionAnnotationRootsLength,
+      FunctionalTypeSchemaMetadataWord.DefinitionAnnotationRootsOffset,
+      FunctionalTypeSchemaMetadataWord.DefinitionAnnotationRootsLength,
       flattened.definitionAnnotationRoots,
     ],
     [
-      LazuliTypeSchemaMetadataWord.TypeParameterOffsetsOffset,
-      LazuliTypeSchemaMetadataWord.TypeParameterOffsetsLength,
+      FunctionalTypeSchemaMetadataWord.TypeParameterOffsetsOffset,
+      FunctionalTypeSchemaMetadataWord.TypeParameterOffsetsLength,
       flattened.typeParameterOffsets,
     ],
     [
-      LazuliTypeSchemaMetadataWord.TypeParameterSymbolsOffset,
-      LazuliTypeSchemaMetadataWord.TypeParameterSymbolsLength,
+      FunctionalTypeSchemaMetadataWord.TypeParameterSymbolsOffset,
+      FunctionalTypeSchemaMetadataWord.TypeParameterSymbolsLength,
       flattened.typeParameterSymbols,
     ],
     [
-      LazuliTypeSchemaMetadataWord.ConstructorFieldOffsetsOffset,
-      LazuliTypeSchemaMetadataWord.ConstructorFieldOffsetsLength,
+      FunctionalTypeSchemaMetadataWord.ConstructorFieldOffsetsOffset,
+      FunctionalTypeSchemaMetadataWord.ConstructorFieldOffsetsLength,
       flattened.constructorFieldOffsets,
     ],
     [
-      LazuliTypeSchemaMetadataWord.ConstructorFieldRootsOffset,
-      LazuliTypeSchemaMetadataWord.ConstructorFieldRootsLength,
+      FunctionalTypeSchemaMetadataWord.ConstructorFieldRootsOffset,
+      FunctionalTypeSchemaMetadataWord.ConstructorFieldRootsLength,
       flattened.constructorFieldRoots,
     ],
     [
-      LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset,
-      LazuliTypeSchemaMetadataWord.ConstructorResultRootsLength,
+      FunctionalTypeSchemaMetadataWord.ConstructorResultRootsOffset,
+      FunctionalTypeSchemaMetadataWord.ConstructorResultRootsLength,
       flattened.constructorResultRoots,
     ],
   ] as const;
@@ -131,9 +131,12 @@ Deno.test("canonical schema metadata packs every ABI-v5 table into one buffer", 
 
   const boxResultRoot = flattened.constructorResultRoots[0];
   ok(boxResultRoot !== undefined);
-  const boxResultRecord = boxResultRoot * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-  equal(flattened.schemaWords[boxResultRecord + LazuliTypeSchemaWord.StartByte], LAZULI_NO_INDEX);
-  equal(flattened.schemaWords[boxResultRecord + LazuliTypeSchemaWord.EndByte], LAZULI_NO_INDEX);
+  const boxResultRecord = boxResultRoot * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
+  equal(
+    flattened.schemaWords[boxResultRecord + FunctionalTypeSchemaWord.StartByte],
+    LAZULI_NO_INDEX,
+  );
+  equal(flattened.schemaWords[boxResultRecord + FunctionalTypeSchemaWord.EndByte], LAZULI_NO_INDEX);
 });
 
 Deno.test("explicit constructor results retain their indexed schema and source span", () => {
@@ -157,9 +160,9 @@ Deno.test("explicit constructor results retain their indexed schema and source s
       ],
     },
   );
-  const record = root * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-  equal(flattened.schemaWords[record + LazuliTypeSchemaWord.StartByte], result.startByte);
-  equal(flattened.schemaWords[record + LazuliTypeSchemaWord.EndByte], result.endByte);
+  const record = root * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
+  equal(flattened.schemaWords[record + FunctionalTypeSchemaWord.StartByte], result.startByte);
+  equal(flattened.schemaWords[record + FunctionalTypeSchemaWord.EndByte], result.endByte);
 });
 
 Deno.test("flattened records preserve source spans and decode parameterized schemas", () => {
@@ -176,14 +179,14 @@ Deno.test("flattened records preserve source spans and decode parameterized sche
 
   const field = surface.typeDeclarations[0]?.constructors[0]?.fields[0]?.type;
   ok(field !== undefined);
-  const fieldRecord = fieldRoot * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-  equal(flattened.schemaWords[fieldRecord + LazuliTypeSchemaWord.StartByte], field.startByte);
-  equal(flattened.schemaWords[fieldRecord + LazuliTypeSchemaWord.EndByte], field.endByte);
-  const firstChild = flattened.schemaWords[fieldRecord + LazuliTypeSchemaWord.FirstChild];
+  const fieldRecord = fieldRoot * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
+  equal(flattened.schemaWords[fieldRecord + FunctionalTypeSchemaWord.StartByte], field.startByte);
+  equal(flattened.schemaWords[fieldRecord + FunctionalTypeSchemaWord.EndByte], field.endByte);
+  const firstChild = flattened.schemaWords[fieldRecord + FunctionalTypeSchemaWord.FirstChild];
   ok(firstChild !== undefined && firstChild !== LAZULI_NO_INDEX);
-  const childRecord = firstChild * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-  equal(flattened.schemaWords[childRecord + LazuliTypeSchemaWord.StartByte], field.startByte);
-  equal(flattened.schemaWords[childRecord + LazuliTypeSchemaWord.EndByte], field.endByte);
+  const childRecord = firstChild * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
+  equal(flattened.schemaWords[childRecord + FunctionalTypeSchemaWord.StartByte], field.startByte);
+  equal(flattened.schemaWords[childRecord + FunctionalTypeSchemaWord.EndByte], field.endByte);
 
   deepStrictEqual(
     decodeLazuliTypeSchema(flattened.schemaWords, fieldRoot, flattened.identifierNames),
@@ -209,25 +212,25 @@ Deno.test("concrete types round-trip through the shared six-word records", () =>
   };
   const serialized = serializeLazuliType(type, ["Box"]);
 
-  equal(serialized.schemaWords.length % LAZULI_TYPE_SCHEMA_WORD_LENGTH, 0);
+  equal(serialized.schemaWords.length % FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH, 0);
   for (
     let record = 0;
-    record < serialized.schemaWords.length / LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+    record < serialized.schemaWords.length / FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
     record++
   ) {
-    const offset = record * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-    equal(serialized.schemaWords[offset + LazuliTypeSchemaWord.StartByte], 0);
-    equal(serialized.schemaWords[offset + LazuliTypeSchemaWord.EndByte], 0);
+    const offset = record * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
+    equal(serialized.schemaWords[offset + FunctionalTypeSchemaWord.StartByte], 0);
+    equal(serialized.schemaWords[offset + FunctionalTypeSchemaWord.EndByte], 0);
   }
   deepStrictEqual(decodeLazuliType(serialized.schemaWords, serialized.root, ["Box"]), type);
 });
 
 Deno.test("rank-2 forall schemas decode through canonical records", () => {
   const words = schemaWords([
-    [LazuliTypeSchemaTag.Forall, 0, 1, LAZULI_NO_INDEX, 0, 0],
-    [LazuliTypeSchemaTag.Function, LAZULI_NO_INDEX, 2, LAZULI_NO_INDEX, 0, 0],
-    [LazuliTypeSchemaTag.Parameter, 0, LAZULI_NO_INDEX, 3, 0, 0],
-    [LazuliTypeSchemaTag.Parameter, 0, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 0, 0],
+    [FunctionalTypeSchemaTag.Forall, 0, 1, LAZULI_NO_INDEX, 0, 0],
+    [FunctionalTypeSchemaTag.Function, LAZULI_NO_INDEX, 2, LAZULI_NO_INDEX, 0, 0],
+    [FunctionalTypeSchemaTag.Parameter, 0, LAZULI_NO_INDEX, 3, 0, 0],
+    [FunctionalTypeSchemaTag.Parameter, 0, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 0, 0],
   ]);
 
   deepStrictEqual(decodeLazuliTypeSchema(words, 0, ["T"]), {
@@ -247,8 +250,8 @@ Deno.test("schema decoding rejects cycles, reused records, and malformed links",
     () =>
       decodeLazuliTypeSchema(
         schemaWords([
-          [LazuliTypeSchemaTag.Named, 0, 1, LAZULI_NO_INDEX, 0, 0],
-          [LazuliTypeSchemaTag.Integer, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 0, 0, 0],
+          [FunctionalTypeSchemaTag.Named, 0, 1, LAZULI_NO_INDEX, 0, 0],
+          [FunctionalTypeSchemaTag.Integer, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 0, 0, 0],
         ]),
         0,
         ["Box"],
@@ -260,11 +263,11 @@ Deno.test("schema decoding rejects cycles, reused records, and malformed links",
     () =>
       decodeLazuliTypeSchema(
         schemaWords([
-          [LazuliTypeSchemaTag.Tuple, LAZULI_NO_INDEX, 1, LAZULI_NO_INDEX, 0, 0],
-          [LazuliTypeSchemaTag.Named, 0, 3, 2, 0, 0],
-          [LazuliTypeSchemaTag.Named, 0, 3, LAZULI_NO_INDEX, 0, 0],
+          [FunctionalTypeSchemaTag.Tuple, LAZULI_NO_INDEX, 1, LAZULI_NO_INDEX, 0, 0],
+          [FunctionalTypeSchemaTag.Named, 0, 3, 2, 0, 0],
+          [FunctionalTypeSchemaTag.Named, 0, 3, LAZULI_NO_INDEX, 0, 0],
           [
-            LazuliTypeSchemaTag.Integer,
+            FunctionalTypeSchemaTag.Integer,
             LAZULI_NO_INDEX,
             LAZULI_NO_INDEX,
             LAZULI_NO_INDEX,
@@ -282,9 +285,9 @@ Deno.test("schema decoding rejects cycles, reused records, and malformed links",
     () =>
       decodeLazuliTypeSchema(
         schemaWords([
-          [LazuliTypeSchemaTag.Integer, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 1, 0, 0],
+          [FunctionalTypeSchemaTag.Integer, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 1, 0, 0],
           [
-            LazuliTypeSchemaTag.Boolean,
+            FunctionalTypeSchemaTag.Boolean,
             LAZULI_NO_INDEX,
             LAZULI_NO_INDEX,
             LAZULI_NO_INDEX,
@@ -304,7 +307,7 @@ Deno.test("schema decoding rejects bad symbols, child counts, and nesting depth"
     () =>
       decodeLazuliTypeSchema(
         schemaWords([
-          [LazuliTypeSchemaTag.Named, 1, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 0, 0],
+          [FunctionalTypeSchemaTag.Named, 1, LAZULI_NO_INDEX, LAZULI_NO_INDEX, 0, 0],
         ]),
         0,
         ["Box"],
@@ -316,9 +319,9 @@ Deno.test("schema decoding rejects bad symbols, child counts, and nesting depth"
     () =>
       decodeLazuliTypeSchema(
         schemaWords([
-          [LazuliTypeSchemaTag.Tuple, LAZULI_NO_INDEX, 1, LAZULI_NO_INDEX, 0, 0],
+          [FunctionalTypeSchemaTag.Tuple, LAZULI_NO_INDEX, 1, LAZULI_NO_INDEX, 0, 0],
           [
-            LazuliTypeSchemaTag.Integer,
+            FunctionalTypeSchemaTag.Integer,
             LAZULI_NO_INDEX,
             LAZULI_NO_INDEX,
             LAZULI_NO_INDEX,
@@ -333,9 +336,9 @@ Deno.test("schema decoding rejects bad symbols, child counts, and nesting depth"
   );
 
   const nestedRecords: [number, number, number, number, number, number][] = [];
-  for (let depth = 0; depth <= LAZULI_MAXIMUM_PARSE_DEPTH; depth++) {
+  for (let depth = 0; depth <= FUNCTIONAL_MAXIMUM_PARSE_DEPTH; depth++) {
     nestedRecords.push([
-      LazuliTypeSchemaTag.Named,
+      FunctionalTypeSchemaTag.Named,
       0,
       depth + 1,
       LAZULI_NO_INDEX,
@@ -344,7 +347,7 @@ Deno.test("schema decoding rejects bad symbols, child counts, and nesting depth"
     ]);
   }
   nestedRecords.push([
-    LazuliTypeSchemaTag.Integer,
+    FunctionalTypeSchemaTag.Integer,
     LAZULI_NO_INDEX,
     LAZULI_NO_INDEX,
     LAZULI_NO_INDEX,

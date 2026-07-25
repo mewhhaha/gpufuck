@@ -8,39 +8,39 @@ import {
   requestWebGpuDevice,
 } from "../mod.ts";
 import type {
-  GpuLazuliCompilationDispatchObservation,
-  GpuLazuliTypeInferenceDispatchObservation,
-  GpuLazuliTypeInferenceWorkspaceCapacities,
+  GpuFunctionalCompilationDispatchObservation,
+  GpuFunctionalTypeInferenceDispatchObservation,
+  GpuFunctionalTypeInferenceWorkspaceCapacities,
 } from "../src/semantic/gpu_type_inference_contract.ts";
 import { runGpuLazuliTypeInference } from "../src/semantic/gpu_type_inference_runner.ts";
-import { GpuLazuliSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
-import { LazuliCompilationStatus } from "../src/semantic/compiler_shader.ts";
+import { GpuFunctionalSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
+import { FunctionalCompilationStatus } from "../src/semantic/compiler_shader.ts";
 import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
 import {
-  LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS,
-  LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
-  LAZULI_INFERENCE_FRAME_WORD_LENGTH,
-  LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
-  LAZULI_INFERENCE_OUTPUT_WORD_LENGTH,
-  LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
-  LAZULI_INFERENCE_STATE_WORD_LENGTH,
-  LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH,
-  LAZULI_TYPE_INFERENCE_SHADER,
-  LazuliInferenceDiagnosticCode,
-  LazuliInferenceSchedulerWord,
-  LazuliInferenceStatus,
+  FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS,
+  FUNCTIONAL_INFERENCE_ENVIRONMENT_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_FRAME_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_INTERNAL_STATE_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_REFINEMENT_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_STATE_WORD_LENGTH,
+  FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH,
+  FUNCTIONAL_TYPE_INFERENCE_SHADER,
+  FunctionalInferenceDiagnosticCode,
+  FunctionalInferenceSchedulerWord,
+  FunctionalInferenceStatus,
 } from "../src/semantic/type_inference_shader.ts";
 import {
-  LAZULI_TYPE_SCHEMA_WORD_LENGTH,
-  LazuliTypeSchemaMetadataWord,
-  LazuliTypeSchemaWord,
+  FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH,
+  FunctionalTypeSchemaMetadataWord,
+  FunctionalTypeSchemaWord,
 } from "../src/semantic/type_schema_abi.ts";
 
 interface InferenceControls {
-  readonly capacities?: GpuLazuliTypeInferenceWorkspaceCapacities;
+  readonly capacities?: GpuFunctionalTypeInferenceWorkspaceCapacities;
   readonly maximumStepsPerDispatch?: number;
   readonly signal?: AbortSignal;
-  readonly onDispatch?: (observation: GpuLazuliTypeInferenceDispatchObservation) => void;
+  readonly onDispatch?: (observation: GpuFunctionalTypeInferenceDispatchObservation) => void;
   readonly mutateMetadataForTest?: (words: Uint32Array) => void;
 }
 
@@ -71,8 +71,8 @@ async function runInferenceWithCapacities(
     buffers.push(buffer);
     return buffer;
   };
-  const observations: GpuLazuliTypeInferenceDispatchObservation[] = [];
-  const compilationObservations: GpuLazuliCompilationDispatchObservation[] = [];
+  const observations: GpuFunctionalTypeInferenceDispatchObservation[] = [];
+  const compilationObservations: GpuFunctionalCompilationDispatchObservation[] = [];
   try {
     const result = await runGpuLazuliTypeInference({
       device,
@@ -110,7 +110,7 @@ function shaderMinimumScratchCapacity(source: string): number {
   const parsing = parseLazuliSource(source);
   ok(parsing.ok);
   if (!parsing.ok) throw new Error("unreachable");
-  return parsing.surface.definitionCount * LAZULI_INFERENCE_DEFINITION_SCRATCH_VECTORS;
+  return parsing.surface.definitionCount * FUNCTIONAL_INFERENCE_DEFINITION_SCRATCH_VECTORS;
 }
 
 function assertSuccessfulInference(
@@ -142,16 +142,16 @@ function typeNodeCount(type: LazuliType): number {
 }
 
 Deno.test("GPU inference keeps its ABI-v5 state prefix ahead of the scheduler envelope", () => {
-  equal(LAZULI_INFERENCE_STATE_WORD_LENGTH, 73);
-  equal(LazuliInferenceSchedulerWord.PreviousSemanticSteps, 73);
-  equal(LazuliInferenceSchedulerWord.SemanticState, 74);
-  equal(LAZULI_INFERENCE_INTERNAL_STATE_WORD_LENGTH, 98);
+  equal(FUNCTIONAL_INFERENCE_STATE_WORD_LENGTH, 73);
+  equal(FunctionalInferenceSchedulerWord.PreviousSemanticSteps, 73);
+  equal(FunctionalInferenceSchedulerWord.SemanticState, 74);
+  equal(FUNCTIONAL_INFERENCE_INTERNAL_STATE_WORD_LENGTH, 98);
 });
 
 Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel boundary", async () => {
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const compiler = await GpuFunctionalSemanticCompiler.create(device);
     const compileMissingMain = async (definitionCount: number, maximumSteps = 10_000_000) => {
       const source = Array.from(
         { length: definitionCount },
@@ -160,7 +160,7 @@ Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel b
       const parsed = parseLazuliSource(source);
       ok(parsed.ok);
       if (!parsed.ok) throw new Error("semantic scaling fixture did not parse");
-      const observations: GpuLazuliCompilationDispatchObservation[] = [];
+      const observations: GpuFunctionalCompilationDispatchObservation[] = [];
       const result = await compiler.compile(
         parsed.surface,
         source.length,
@@ -208,7 +208,7 @@ Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel b
 Deno.test("planned semantic lowering matches the scalar fallback in its first dispatch", async () => {
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const compiler = await GpuFunctionalSemanticCompiler.create(device);
     const source = [
       ...Array.from(
         { length: 160 },
@@ -219,7 +219,7 @@ Deno.test("planned semantic lowering matches the scalar fallback in its first di
     const parsed = parseLazuliSource(source);
     ok(parsed.ok);
     if (!parsed.ok) throw new Error("planned lowering fixture did not parse");
-    const observations: GpuLazuliCompilationDispatchObservation[] = [];
+    const observations: GpuFunctionalCompilationDispatchObservation[] = [];
     const compilation = await compiler.compile(
       parsed.surface,
       source.length,
@@ -229,7 +229,7 @@ Deno.test("planned semantic lowering matches the scalar fallback in its first di
     );
 
     ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
-    equal(observations[0]?.semanticStatus, LazuliCompilationStatus.Ok);
+    equal(observations[0]?.semanticStatus, FunctionalCompilationStatus.Ok);
     if (!compilation.ok) return;
     const plannedNodes = await compilation.module.readCoreNodes();
     const fallback = await compiler.compile(
@@ -253,7 +253,7 @@ Deno.test("planned semantic lowering matches the scalar fallback in its first di
 Deno.test("planned semantic lowering reports its first diagnostic", async () => {
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const compiler = await GpuFunctionalSemanticCompiler.create(device);
     const source = [
       ...Array.from(
         { length: 80 },
@@ -264,7 +264,7 @@ Deno.test("planned semantic lowering reports its first diagnostic", async () => 
     const parsed = parseLazuliSource(source);
     ok(parsed.ok);
     if (!parsed.ok) throw new Error("planned diagnostic fixture did not parse");
-    const observations: GpuLazuliCompilationDispatchObservation[] = [];
+    const observations: GpuFunctionalCompilationDispatchObservation[] = [];
     const compilation = await compiler.compile(
       parsed.surface,
       source.length,
@@ -276,7 +276,7 @@ Deno.test("planned semantic lowering reports its first diagnostic", async () => 
     equal(compilation.ok, false);
     if (!compilation.ok) equal(compilation.diagnostics[0].code, "L2001");
     equal(observations.length, 1);
-    equal(observations[0]?.semanticStatus, LazuliCompilationStatus.Diagnostic);
+    equal(observations[0]?.semanticStatus, FunctionalCompilationStatus.Diagnostic);
   } finally {
     device.destroy();
   }
@@ -285,11 +285,11 @@ Deno.test("planned semantic lowering reports its first diagnostic", async () => 
 Deno.test("pathological type and case shapes stay within proportional compiler work", async () => {
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const compiler = await GpuFunctionalSemanticCompiler.create(device);
     const compile = async (source: string) => {
       const parsed = parseLazuliSource(source);
       if (!parsed.ok) throw new Error(parsed.diagnostics[0].message);
-      const observations: GpuLazuliCompilationDispatchObservation[] = [];
+      const observations: GpuFunctionalCompilationDispatchObservation[] = [];
       const result = await compiler.compile(
         parsed.surface,
         new TextEncoder().encode(source).byteLength,
@@ -512,7 +512,7 @@ Deno.test("pathological type and case shapes stay within proportional compiler w
 Deno.test("packed inference falls back only the exhausted lane", async () => {
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const compiler = await GpuFunctionalSemanticCompiler.create(device);
     const sources = ["let main = (1, true);", "let main = 42;"] as const;
     const inputs = sources.map((source, index) => {
       const parsed = parseLazuliSource(source);
@@ -551,7 +551,7 @@ Deno.test("packed inference falls back only the exhausted lane", async () => {
 Deno.test("packed inference keeps 512 representative programs in one GPU pack", async () => {
   const device = await requestWebGpuDevice();
   try {
-    const compiler = await GpuLazuliSemanticCompiler.create(device);
+    const compiler = await GpuFunctionalSemanticCompiler.create(device);
     const source = await Deno.readTextFile("examples/lazuli/brainfuck_compiler.laz");
     const parsed = parseLazuliSource(source);
     ok(parsed.ok);
@@ -586,7 +586,7 @@ Deno.test("GPU inference rejects a constructor result root outside the schema ta
   try {
     const shader = device.createShaderModule({
       label: "Lazuli malformed result metadata test shader",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
+      code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli malformed result metadata test pipeline",
@@ -604,7 +604,7 @@ Deno.test("GPU inference rejects a constructor result root outside the schema ta
         maximumStepsPerDispatch: 1,
         mutateMetadataForTest: (words) => {
           const resultBase = words[
-            LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset
+            FunctionalTypeSchemaMetadataWord.ConstructorResultRootsOffset
           ];
           ok(resultBase !== undefined);
           words[resultBase] = LAZULI_NO_INDEX;
@@ -630,7 +630,7 @@ Deno.test("GPU inference validates the shape of sentinel-marked constructor resu
   try {
     const shader = device.createShaderModule({
       label: "Lazuli malformed synthetic result shader",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
+      code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli malformed synthetic result pipeline",
@@ -646,15 +646,15 @@ Deno.test("GPU inference validates the shape of sentinel-marked constructor resu
       source,
       {
         mutateMetadataForTest: (words) => {
-          const schemaBase = words[LazuliTypeSchemaMetadataWord.SchemaWordsOffset];
+          const schemaBase = words[FunctionalTypeSchemaMetadataWord.SchemaWordsOffset];
           const resultBase = words[
-            LazuliTypeSchemaMetadataWord.ConstructorResultRootsOffset
+            FunctionalTypeSchemaMetadataWord.ConstructorResultRootsOffset
           ];
           ok(schemaBase !== undefined && resultBase !== undefined);
           const root = words[resultBase];
           ok(root !== undefined && root !== LAZULI_NO_INDEX);
           words[
-            schemaBase + root * LAZULI_TYPE_SCHEMA_WORD_LENGTH + LazuliTypeSchemaWord.Tag
+            schemaBase + root * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH + FunctionalTypeSchemaWord.Tag
           ] = 99;
         },
       },
@@ -719,7 +719,7 @@ Deno.test("GPU inference cancels after an observed dispatch and leaves the compi
   try {
     const shader = device.createShaderModule({
       label: "Lazuli cancellation test shader",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
+      code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli cancellation test pipeline",
@@ -758,7 +758,7 @@ Deno.test("GPU inference observer aborts a terminal dispatch before returning ou
   try {
     const shader = device.createShaderModule({
       label: "Lazuli terminal cancellation test shader",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
+      code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli terminal cancellation test pipeline",
@@ -776,7 +776,7 @@ Deno.test("GPU inference observer aborts a terminal dispatch before returning ou
           maximumStepsPerDispatch: 4_096,
           signal: controller.signal,
           onDispatch: (observation) => {
-            if (observation.status !== LazuliInferenceStatus.Complete) return;
+            if (observation.status !== FunctionalInferenceStatus.Complete) return;
             terminalDispatches++;
             controller.abort(new Error("cancel terminal inference dispatch"));
           },
@@ -798,7 +798,7 @@ Deno.test("GPU inference observer aborts an exhausted dispatch before arena grow
   try {
     const shader = device.createShaderModule({
       label: "Lazuli exhausted cancellation test shader",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
+      code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli exhausted cancellation test pipeline",
@@ -818,8 +818,8 @@ Deno.test("GPU inference observer aborts an exhausted dispatch before arena grow
           signal: controller.signal,
           onDispatch: (observation) => {
             if (
-              observation.status !== LazuliInferenceStatus.Exhausted ||
-              observation.errorCode !== LazuliInferenceDiagnosticCode.OutputArenaExhausted
+              observation.status !== FunctionalInferenceStatus.Exhausted ||
+              observation.errorCode !== FunctionalInferenceDiagnosticCode.OutputArenaExhausted
             ) return;
             exhaustedDispatches++;
             controller.abort(new Error("cancel exhausted inference dispatch"));
@@ -842,7 +842,7 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
   try {
     const shader = device.createShaderModule({
       label: "Lazuli workspace growth test shader",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
+      code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli workspace growth test pipeline",
@@ -858,24 +858,24 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
         name: "type",
         source: "let main = 0;",
         capacities: { type: 1 },
-        errorCode: LazuliInferenceDiagnosticCode.TypeArenaExhausted,
-        capacity: (observation: GpuLazuliTypeInferenceDispatchObservation) =>
+        errorCode: FunctionalInferenceDiagnosticCode.TypeArenaExhausted,
+        capacity: (observation: GpuFunctionalTypeInferenceDispatchObservation) =>
           observation.typeCapacity,
       },
       {
         name: "environment",
         source: "let main = (outer => inner => outer) 1 true;",
         capacities: { environment: 1 },
-        errorCode: LazuliInferenceDiagnosticCode.EnvironmentArenaExhausted,
-        capacity: (observation: GpuLazuliTypeInferenceDispatchObservation) =>
+        errorCode: FunctionalInferenceDiagnosticCode.EnvironmentArenaExhausted,
+        capacity: (observation: GpuFunctionalTypeInferenceDispatchObservation) =>
           observation.environmentCapacity,
       },
       {
         name: "frame",
         source: "let main = (1, 2);",
         capacities: { frame: 1 },
-        errorCode: LazuliInferenceDiagnosticCode.FrameArenaExhausted,
-        capacity: (observation: GpuLazuliTypeInferenceDispatchObservation) =>
+        errorCode: FunctionalInferenceDiagnosticCode.FrameArenaExhausted,
+        capacity: (observation: GpuFunctionalTypeInferenceDispatchObservation) =>
           observation.frameCapacity,
       },
       {
@@ -883,24 +883,24 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
         source:
           "data Equal a b = Refl : Equal a a; let cast : Equal a b -> a -> b = proof => value => case proof of | Refl -> value end; let main = cast Refl 42;",
         capacities: { refinement: 1 },
-        errorCode: LazuliInferenceDiagnosticCode.RefinementArenaExhausted,
-        capacity: (observation: GpuLazuliTypeInferenceDispatchObservation) =>
+        errorCode: FunctionalInferenceDiagnosticCode.RefinementArenaExhausted,
+        capacity: (observation: GpuFunctionalTypeInferenceDispatchObservation) =>
           observation.refinementCapacity,
       },
       {
         name: "scratch",
         source: scratchSource,
         capacities: { scratch: shaderMinimumScratchCapacity(scratchSource) },
-        errorCode: LazuliInferenceDiagnosticCode.ScratchArenaExhausted,
-        capacity: (observation: GpuLazuliTypeInferenceDispatchObservation) =>
+        errorCode: FunctionalInferenceDiagnosticCode.ScratchArenaExhausted,
+        capacity: (observation: GpuFunctionalTypeInferenceDispatchObservation) =>
           observation.scratchCapacity,
       },
       {
         name: "output",
         source: "let main = (1, 2);",
         capacities: { output: 1 },
-        errorCode: LazuliInferenceDiagnosticCode.OutputArenaExhausted,
-        capacity: (observation: GpuLazuliTypeInferenceDispatchObservation) =>
+        errorCode: FunctionalInferenceDiagnosticCode.OutputArenaExhausted,
+        capacity: (observation: GpuFunctionalTypeInferenceDispatchObservation) =>
           observation.outputCapacity,
       },
     ] as const;
@@ -928,7 +928,7 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
         `${fixture.name} growth changed the final semantic transition count`,
       );
       const exhaustedIndex = observations.findIndex((observation) =>
-        observation.status === LazuliInferenceStatus.Exhausted &&
+        observation.status === FunctionalInferenceStatus.Exhausted &&
         observation.errorCode === fixture.errorCode
       );
       ok(exhaustedIndex >= 0, `${fixture.name} fixture did not exhaust its target arena`);
@@ -988,7 +988,7 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
       { capacities: { output: 1 }, maximumStepsPerDispatch: 1 },
     );
     const outputExhaustion = outputFuel.observations.findIndex((observation) =>
-      observation.errorCode === LazuliInferenceDiagnosticCode.OutputArenaExhausted
+      observation.errorCode === FunctionalInferenceDiagnosticCode.OutputArenaExhausted
     );
     ok(outputExhaustion >= 0);
     const exhausted = outputFuel.observations[outputExhaustion];
@@ -1006,28 +1006,28 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
       {
         name: "type",
         capacities: {
-          type: Math.floor(maximumStorageWords / LAZULI_INFERENCE_TYPE_RECORD_WORD_LENGTH) + 1,
+          type: Math.floor(maximumStorageWords / FUNCTIONAL_INFERENCE_TYPE_RECORD_WORD_LENGTH) + 1,
         },
       },
       {
         name: "environment",
         capacities: {
           environment: Math.floor(
-            maximumStorageWords / LAZULI_INFERENCE_ENVIRONMENT_WORD_LENGTH,
+            maximumStorageWords / FUNCTIONAL_INFERENCE_ENVIRONMENT_WORD_LENGTH,
           ) + 1,
         },
       },
       {
         name: "frame",
         capacities: {
-          frame: Math.floor(maximumStorageWords / LAZULI_INFERENCE_FRAME_WORD_LENGTH) + 1,
+          frame: Math.floor(maximumStorageWords / FUNCTIONAL_INFERENCE_FRAME_WORD_LENGTH) + 1,
         },
       },
       {
         name: "refinement",
         capacities: {
           refinement: Math.floor(
-            maximumStorageWords / LAZULI_INFERENCE_REFINEMENT_WORD_LENGTH,
+            maximumStorageWords / FUNCTIONAL_INFERENCE_REFINEMENT_WORD_LENGTH,
           ) + 1,
         },
       },
@@ -1035,7 +1035,7 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
       {
         name: "output",
         capacities: {
-          output: Math.floor(maximumStorageWords / LAZULI_INFERENCE_OUTPUT_WORD_LENGTH) + 1,
+          output: Math.floor(maximumStorageWords / FUNCTIONAL_INFERENCE_OUTPUT_WORD_LENGTH) + 1,
         },
       },
     ] as const;
@@ -1082,7 +1082,7 @@ Deno.test("GPU inference transition counts are invariant across dispatch quanta"
   try {
     const shader = device.createShaderModule({
       label: "Lazuli transition invariance test shader",
-      code: LAZULI_TYPE_INFERENCE_SHADER,
+      code: FUNCTIONAL_TYPE_INFERENCE_SHADER,
     });
     const pipeline = await device.createComputePipelineAsync({
       label: "Lazuli transition invariance test pipeline",

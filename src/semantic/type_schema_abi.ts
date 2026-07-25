@@ -1,9 +1,9 @@
 import {
   type EncodedLazuliSurface,
+  FUNCTIONAL_MAXIMUM_PARSE_DEPTH,
   LAZULI_ABI_VERSION,
   LAZULI_CONSTRUCTOR_WORD_LENGTH,
   LAZULI_DEFINITION_WORD_LENGTH,
-  LAZULI_MAXIMUM_PARSE_DEPTH,
   LAZULI_NO_INDEX,
   LAZULI_TYPE_WORD_LENGTH,
   LazuliConstructorWord,
@@ -13,16 +13,16 @@ import {
 } from "./abi.ts";
 
 /** The schema buffer accompanies version 5 of the Lazuli surface ABI. */
-export const LAZULI_TYPE_SCHEMA_ABI_VERSION = LAZULI_ABI_VERSION;
-export const LAZULI_TYPE_SCHEMA_WORD_LENGTH = 6;
-export const LAZULI_TYPE_SCHEMA_BYTE_LENGTH = LAZULI_TYPE_SCHEMA_WORD_LENGTH *
+export const FUNCTIONAL_TYPE_SCHEMA_ABI_VERSION = LAZULI_ABI_VERSION;
+export const FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH = 6;
+export const FUNCTIONAL_TYPE_SCHEMA_BYTE_LENGTH = FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH *
   Uint32Array.BYTES_PER_ELEMENT;
-export const LAZULI_TYPE_SCHEMA_METADATA_ARRAY_COUNT = 7;
-export const LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH = 2 +
-  LAZULI_TYPE_SCHEMA_METADATA_ARRAY_COUNT * 2;
+export const FUNCTIONAL_TYPE_SCHEMA_METADATA_ARRAY_COUNT = 7;
+export const FUNCTIONAL_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH = 2 +
+  FUNCTIONAL_TYPE_SCHEMA_METADATA_ARRAY_COUNT * 2;
 
 /** Word positions for one compact, linked-preorder type-schema record. */
-export const LazuliTypeSchemaWord = {
+export const FunctionalTypeSchemaWord = {
   Tag: 0,
   Symbol: 1,
   FirstChild: 2,
@@ -32,7 +32,7 @@ export const LazuliTypeSchemaWord = {
 } as const;
 
 /** Header positions for the single schema metadata storage-buffer binding. */
-export const LazuliTypeSchemaMetadataWord = {
+export const FunctionalTypeSchemaMetadataWord = {
   AbiVersion: 0,
   HeaderWordLength: 1,
   SchemaWordsOffset: 2,
@@ -55,7 +55,7 @@ export const LazuliTypeSchemaMetadataWord = {
  * Tags stored in `schemaWords`. `Symbol` holds a named-type surface symbol or a schema
  * parameter ID; a missing child or sibling is represented by `LAZULI_NO_INDEX`.
  */
-export const LazuliTypeSchemaTag = {
+export const FunctionalTypeSchemaTag = {
   Integer: 1,
   Boolean: 2,
   Unit: 3,
@@ -69,7 +69,8 @@ export const LazuliTypeSchemaTag = {
   Float64: 11,
 } as const;
 
-export type LazuliTypeSchemaTag = (typeof LazuliTypeSchemaTag)[keyof typeof LazuliTypeSchemaTag];
+export type FunctionalTypeSchemaTag =
+  (typeof FunctionalTypeSchemaTag)[keyof typeof FunctionalTypeSchemaTag];
 
 /** Numeric buffers ready to upload alongside an ABI-v5 Lazuli surface. */
 export interface FlattenedLazuliTypeSchemas {
@@ -77,7 +78,7 @@ export interface FlattenedLazuliTypeSchemas {
   readonly metadataWords: Uint32Array;
   /** Surface symbol names followed by synthetic identifiers used only by schema records. */
   readonly identifierNames: readonly string[];
-  /** Linked-preorder records, each `LAZULI_TYPE_SCHEMA_WORD_LENGTH` words long. */
+  /** Linked-preorder records, each `FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH` words long. */
   readonly schemaWords: Uint32Array;
   /** One schema root per encoded definition, or `LAZULI_NO_INDEX` when unannotated. */
   readonly definitionAnnotationRoots: Uint32Array;
@@ -348,22 +349,22 @@ function decodeLazuliTypeRecords(
   identifierNames: readonly string[],
   allowParameters: boolean,
 ): LazuliTypeSchema {
-  if (schemaWords.length % LAZULI_TYPE_SCHEMA_WORD_LENGTH !== 0) {
+  if (schemaWords.length % FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH !== 0) {
     throw new Error(
-      `Lazuli type schema has ${schemaWords.length} words, not a multiple of ${LAZULI_TYPE_SCHEMA_WORD_LENGTH}.`,
+      `Lazuli type schema has ${schemaWords.length} words, not a multiple of ${FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH}.`,
     );
   }
   if (root === LAZULI_NO_INDEX) {
     throw new Error("Lazuli type schema root must not be LAZULI_NO_INDEX.");
   }
 
-  const recordCount = schemaWords.length / LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+  const recordCount = schemaWords.length / FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
   const used = new Set<number>();
   const active = new Set<number>();
   const decode = (index: number, depth: number): LazuliTypeSchema => {
-    if (depth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+    if (depth > FUNCTIONAL_MAXIMUM_PARSE_DEPTH) {
       throw new Error(
-        `Lazuli type schema exceeds the ABI nesting limit of ${LAZULI_MAXIMUM_PARSE_DEPTH} at record ${index}.`,
+        `Lazuli type schema exceeds the ABI nesting limit of ${FUNCTIONAL_MAXIMUM_PARSE_DEPTH} at record ${index}.`,
       );
     }
     if (!Number.isInteger(index) || index < 0 || index >= recordCount) {
@@ -381,12 +382,20 @@ function decodeLazuliTypeRecords(
     active.add(index);
 
     try {
-      const offset = index * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
-      const tag = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.Tag, index);
-      const symbol = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.Symbol, index);
-      const firstChild = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.FirstChild, index);
-      const startByte = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.StartByte, index);
-      const endByte = requiredWord(schemaWords, offset + LazuliTypeSchemaWord.EndByte, index);
+      const offset = index * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
+      const tag = requiredWord(schemaWords, offset + FunctionalTypeSchemaWord.Tag, index);
+      const symbol = requiredWord(schemaWords, offset + FunctionalTypeSchemaWord.Symbol, index);
+      const firstChild = requiredWord(
+        schemaWords,
+        offset + FunctionalTypeSchemaWord.FirstChild,
+        index,
+      );
+      const startByte = requiredWord(
+        schemaWords,
+        offset + FunctionalTypeSchemaWord.StartByte,
+        index,
+      );
+      const endByte = requiredWord(schemaWords, offset + FunctionalTypeSchemaWord.EndByte, index);
       const isSyntheticResultRoot = depth === 0 &&
         startByte === LAZULI_NO_INDEX && endByte === LAZULI_NO_INDEX;
       if (startByte > endByte && !isSyntheticResultRoot) {
@@ -416,10 +425,10 @@ function decodeLazuliTypeRecords(
             );
           }
           values.push(decode(child, depth + 1));
-          const childOffset = child * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+          const childOffset = child * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
           const sibling = requiredWord(
             schemaWords,
-            childOffset + LazuliTypeSchemaWord.NextSibling,
+            childOffset + FunctionalTypeSchemaWord.NextSibling,
             child,
           );
           if (sibling !== LAZULI_NO_INDEX && sibling <= child) {
@@ -460,31 +469,31 @@ function decodeLazuliTypeRecords(
       };
 
       switch (tag) {
-        case LazuliTypeSchemaTag.Integer:
+        case FunctionalTypeSchemaTag.Integer:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "integer" });
-        case LazuliTypeSchemaTag.SignedInteger64:
+        case FunctionalTypeSchemaTag.SignedInteger64:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "signed-integer-64" });
-        case LazuliTypeSchemaTag.Float32:
+        case FunctionalTypeSchemaTag.Float32:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "float-32" });
-        case LazuliTypeSchemaTag.Float64:
+        case FunctionalTypeSchemaTag.Float64:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "float-64" });
-        case LazuliTypeSchemaTag.Boolean:
+        case FunctionalTypeSchemaTag.Boolean:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "boolean" });
-        case LazuliTypeSchemaTag.Unit:
+        case FunctionalTypeSchemaTag.Unit:
           noSymbol();
           noChildren();
           return Object.freeze({ kind: "unit" });
-        case LazuliTypeSchemaTag.Parameter: {
+        case FunctionalTypeSchemaTag.Parameter: {
           const name = symbolName(identifierNames, symbol, index);
           noChildren();
           if (!allowParameters) {
@@ -492,7 +501,7 @@ function decodeLazuliTypeRecords(
           }
           return Object.freeze({ kind: "parameter", name });
         }
-        case LazuliTypeSchemaTag.Tuple: {
+        case FunctionalTypeSchemaTag.Tuple: {
           noSymbol();
           const values = children(2);
           const left = values[0];
@@ -508,13 +517,13 @@ function decodeLazuliTypeRecords(
             ],
           });
         }
-        case LazuliTypeSchemaTag.Named:
+        case FunctionalTypeSchemaTag.Named:
           return Object.freeze({
             kind: "named",
             name: symbolName(identifierNames, symbol, index),
             arguments: Object.freeze(children(null)),
           });
-        case LazuliTypeSchemaTag.Function: {
+        case FunctionalTypeSchemaTag.Function: {
           noSymbol();
           const values = children(2);
           const parameter = values[0];
@@ -524,7 +533,7 @@ function decodeLazuliTypeRecords(
           }
           return Object.freeze({ kind: "function", parameter, result });
         }
-        case LazuliTypeSchemaTag.Forall: {
+        case FunctionalTypeSchemaTag.Forall: {
           const parameter = symbolName(identifierNames, symbol, index);
           const values = children(1);
           const body = values[0];
@@ -556,10 +565,10 @@ function decodeLazuliTypeRecords(
   };
 
   const decoded = decode(root, 0);
-  const rootOffset = root * LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+  const rootOffset = root * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
   const rootSibling = requiredWord(
     schemaWords,
-    rootOffset + LazuliTypeSchemaWord.NextSibling,
+    rootOffset + FunctionalTypeSchemaWord.NextSibling,
     root,
   );
   if (rootSibling !== LAZULI_NO_INDEX) {
@@ -597,15 +606,15 @@ class TypeSchemaEncoder {
       readonly syntheticResultRoot: boolean;
     },
   ): number {
-    if (depth > LAZULI_MAXIMUM_PARSE_DEPTH) {
+    if (depth > FUNCTIONAL_MAXIMUM_PARSE_DEPTH) {
       throw new Error(
-        `${context} exceeds the ABI nesting limit of ${LAZULI_MAXIMUM_PARSE_DEPTH}.`,
+        `${context} exceeds the ABI nesting limit of ${FUNCTIONAL_MAXIMUM_PARSE_DEPTH}.`,
       );
     }
     if (type === null || typeof type !== "object" || !("kind" in type)) {
       throw new Error(`${context} is not a Lazuli type schema.`);
     }
-    const index = this.words.length / LAZULI_TYPE_SCHEMA_WORD_LENGTH;
+    const index = this.words.length / FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH;
     if (index >= LAZULI_NO_INDEX) {
       throw new Error(`${context} exceeds the maximum schema-record index ${LAZULI_NO_INDEX - 1}.`);
     }
@@ -614,7 +623,7 @@ class TypeSchemaEncoder {
       ? { startByte: LAZULI_NO_INDEX, endByte: LAZULI_NO_INDEX }
       : declaredSpan;
 
-    const write = (tag: LazuliTypeSchemaTag, symbol = LAZULI_NO_INDEX): number => {
+    const write = (tag: FunctionalTypeSchemaTag, symbol = LAZULI_NO_INDEX): number => {
       this.words.push(
         tag,
         symbol,
@@ -630,11 +639,15 @@ class TypeSchemaEncoder {
       for (const child of children) {
         const childIndex = this.encodeAtDepth(child, context, depth + 1, declaredSpan, options);
         if (previous === LAZULI_NO_INDEX) {
-          this.words[index * LAZULI_TYPE_SCHEMA_WORD_LENGTH + LazuliTypeSchemaWord.FirstChild] =
-            childIndex;
+          this
+            .words[
+              index * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH + FunctionalTypeSchemaWord.FirstChild
+            ] = childIndex;
         } else {
-          this.words[previous * LAZULI_TYPE_SCHEMA_WORD_LENGTH + LazuliTypeSchemaWord.NextSibling] =
-            childIndex;
+          this
+            .words[
+              previous * FUNCTIONAL_TYPE_SCHEMA_WORD_LENGTH + FunctionalTypeSchemaWord.NextSibling
+            ] = childIndex;
         }
         previous = childIndex;
       }
@@ -642,28 +655,28 @@ class TypeSchemaEncoder {
 
     switch (type.kind) {
       case "integer":
-        return write(LazuliTypeSchemaTag.Integer);
+        return write(FunctionalTypeSchemaTag.Integer);
       case "signed-integer-64":
-        return write(LazuliTypeSchemaTag.SignedInteger64);
+        return write(FunctionalTypeSchemaTag.SignedInteger64);
       case "float-32":
-        return write(LazuliTypeSchemaTag.Float32);
+        return write(FunctionalTypeSchemaTag.Float32);
       case "float-64":
-        return write(LazuliTypeSchemaTag.Float64);
+        return write(FunctionalTypeSchemaTag.Float64);
       case "boolean":
-        return write(LazuliTypeSchemaTag.Boolean);
+        return write(FunctionalTypeSchemaTag.Boolean);
       case "unit":
-        return write(LazuliTypeSchemaTag.Unit);
+        return write(FunctionalTypeSchemaTag.Unit);
       case "parameter":
         requireTypeName(type.name, `${context} parameter`);
         return write(
-          LazuliTypeSchemaTag.Parameter,
+          FunctionalTypeSchemaTag.Parameter,
           this.#identifiers.parameterId(type.name, `${context} parameter`),
         );
       case "tuple":
         if (!Array.isArray(type.values) || type.values.length !== 2) {
           throw new Error(`${context} tuple must have exactly two type values.`);
         }
-        write(LazuliTypeSchemaTag.Tuple);
+        write(FunctionalTypeSchemaTag.Tuple);
         attachChildren(type.values);
         return index;
       case "named":
@@ -678,12 +691,12 @@ class TypeSchemaEncoder {
           !this.#identifiers.hasNamedType(type.name)
         ) {
           return write(
-            LazuliTypeSchemaTag.Parameter,
+            FunctionalTypeSchemaTag.Parameter,
             this.#identifiers.parameterId(type.name, `${context} implicit parameter`),
           );
         }
         write(
-          LazuliTypeSchemaTag.Named,
+          FunctionalTypeSchemaTag.Named,
           this.#identifiers.namedTypeSymbol(
             type.name,
             `${context} named type`,
@@ -695,7 +708,7 @@ class TypeSchemaEncoder {
         if (type.parameter === undefined || type.result === undefined) {
           throw new Error(`${context} function must have parameter and result types.`);
         }
-        write(LazuliTypeSchemaTag.Function);
+        write(FunctionalTypeSchemaTag.Function);
         attachChildren([type.parameter, type.result]);
         return index;
       case "forall": {
@@ -708,7 +721,7 @@ class TypeSchemaEncoder {
         }
         requireTypeName(parameter, `${context} forall parameter`);
         write(
-          LazuliTypeSchemaTag.Forall,
+          FunctionalTypeSchemaTag.Forall,
           this.#identifiers.parameterId(parameter, `${context} forall parameter`),
         );
         const body: LazuliTypeSchema = remaining.length === 0
@@ -989,7 +1002,7 @@ function packSchemaMetadata(
   ],
   identifierNames: readonly string[],
 ): FlattenedLazuliTypeSchemas {
-  let totalWords = LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
+  let totalWords = FUNCTIONAL_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
   for (const array of arrays) {
     if (array.length > LAZULI_NO_INDEX - totalWords) {
       throw new Error("Lazuli type schema metadata exceeds the maximum ABI buffer length.");
@@ -998,10 +1011,10 @@ function packSchemaMetadata(
   }
 
   const metadataWords = new Uint32Array(totalWords);
-  metadataWords[LazuliTypeSchemaMetadataWord.AbiVersion] = LAZULI_TYPE_SCHEMA_ABI_VERSION;
-  metadataWords[LazuliTypeSchemaMetadataWord.HeaderWordLength] =
-    LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
-  let offset = LAZULI_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
+  metadataWords[FunctionalTypeSchemaMetadataWord.AbiVersion] = FUNCTIONAL_TYPE_SCHEMA_ABI_VERSION;
+  metadataWords[FunctionalTypeSchemaMetadataWord.HeaderWordLength] =
+    FUNCTIONAL_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
+  let offset = FUNCTIONAL_TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH;
   const views = arrays.map((array, arrayIndex) => {
     const headerOffset = 2 + arrayIndex * 2;
     metadataWords[headerOffset] = offset;
