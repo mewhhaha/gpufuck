@@ -2306,7 +2306,7 @@ function encodeSurface(
     definitionCount: definitions.length,
     typeCount: dataDeclarations.length,
     constructorCount: constructorWords.length / LAZULI_CONSTRUCTOR_WORD_LENGTH,
-    mainSymbol: symbols.id("main"),
+    entrySymbol: symbols.id("main"),
     symbolNames: symbols.names,
     definitionTypes: definitions.map((definition) => ({
       annotation: definition.annotation === null

@@ -31,7 +31,7 @@ export function lazuliSurfaceToFunctionalModule(
     definitionCount: surface.definitionCount,
     typeCount: surface.typeCount,
     constructorCount: surface.constructorCount,
-    entrySymbol: surface.mainSymbol,
+    entrySymbol: surface.entrySymbol,
     symbolNames: surface.symbolNames,
     definitionTypes: surface.definitionTypes,
     typeDeclarations: surface.typeDeclarations,

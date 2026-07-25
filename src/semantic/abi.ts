@@ -350,7 +350,7 @@ export interface EncodedLazuliSurface {
   readonly definitionCount: number;
   readonly typeCount: number;
   readonly constructorCount: number;
-  readonly mainSymbol: number;
+  readonly entrySymbol: number;
   readonly symbolNames: readonly string[];
   readonly definitionTypes: readonly EncodedLazuliDefinitionType[];
   readonly typeDeclarations: readonly EncodedLazuliTypeDeclaration[];

@@ -43,7 +43,7 @@ export function syntheticSemanticState(
     definitionCount: options.surface.definitionCount,
     typeCount: options.surface.typeCount,
     constructorCount: options.surface.constructorCount,
-    entrySymbol: options.surface.mainSymbol,
+    entrySymbol: options.surface.entrySymbol,
     status: LazuliCompilationStatus.Ok,
     errorCode: 0,
     errorSource: LAZULI_NO_INDEX,

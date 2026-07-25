@@ -809,21 +809,13 @@ function validateRecordTable(
   }
 }
 
+/**
+ * An encoded module carries every field the packed surface does, so this is the identity. It stays
+ * exported because it is part of the published surface, and it keeps the widening explicit at the
+ * call sites that pass a module where a surface is expected.
+ */
 export function semanticSurfaceFromModule(module: EncodedFunctionalModule): EncodedLazuliSurface {
-  return {
-    nodeWords: module.nodeWords,
-    definitionWords: module.definitionWords,
-    typeWords: module.typeWords,
-    constructorWords: module.constructorWords,
-    nodeCount: module.nodeCount,
-    definitionCount: module.definitionCount,
-    typeCount: module.typeCount,
-    constructorCount: module.constructorCount,
-    mainSymbol: module.entrySymbol,
-    symbolNames: module.symbolNames,
-    definitionTypes: module.definitionTypes,
-    typeDeclarations: module.typeDeclarations,
-  };
+  return module;
 }
 
 function failedLimit(

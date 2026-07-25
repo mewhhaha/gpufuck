@@ -272,7 +272,7 @@ export function createInitialState(
   set(LazuliInferenceStateWord.TypeCount, options.surface.typeCount);
   set(LazuliInferenceStateWord.ConstructorCount, options.surface.constructorCount);
   set(LazuliInferenceStateWord.SchemaNodeCount, metadata.schemaNodeCount);
-  set(LazuliInferenceStateWord.MainSymbol, options.surface.mainSymbol);
+  set(LazuliInferenceStateWord.MainSymbol, options.surface.entrySymbol);
   set(
     LazuliInferenceStateWord.MaximumTransitionsPerDispatch,
     Math.min(options.maximumStepsPerDispatch, options.maximumSteps - (options.initialSteps ?? 0)),
@@ -315,7 +315,7 @@ export function createInitialState(
   setSemantic(LazuliCompilationStateWord.DefinitionCount, options.surface.definitionCount);
   setSemantic(LazuliCompilationStateWord.TypeCount, options.surface.typeCount);
   setSemantic(LazuliCompilationStateWord.ConstructorCount, options.surface.constructorCount);
-  setSemantic(LazuliCompilationStateWord.EntrySymbol, options.surface.mainSymbol);
+  setSemantic(LazuliCompilationStateWord.EntrySymbol, options.surface.entrySymbol);
   setSemantic(
     LazuliCompilationStateWord.Status,
     syntheticSemanticSuccess ? LazuliCompilationStatus.Ok : LazuliCompilationStatus.Pending,

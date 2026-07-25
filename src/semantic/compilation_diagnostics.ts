@@ -63,7 +63,7 @@ export function diagnosticFromSemanticState(
       };
     }
     case LazuliSemanticCompilerErrorCode.MissingMain:
-      if (state.errorSource !== LAZULI_NO_INDEX || state.errorDetail !== surface.mainSymbol) {
+      if (state.errorSource !== LAZULI_NO_INDEX || state.errorDetail !== surface.entrySymbol) {
         return undefined;
       }
       return {

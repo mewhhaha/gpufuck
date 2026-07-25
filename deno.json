@@ -48,6 +48,7 @@
       "mod.ts",
       "playground",
       "src/gleam_functional",
+      "src/lazuli",
       "tests",
       "tools"
     ]

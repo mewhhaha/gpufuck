@@ -665,7 +665,7 @@ function createSemanticState(lane: BatchLane): Uint8Array {
   set(LazuliCompilationStateWord.DefinitionCount, lane.surface.definitionCount);
   set(LazuliCompilationStateWord.TypeCount, lane.surface.typeCount);
   set(LazuliCompilationStateWord.ConstructorCount, lane.surface.constructorCount);
-  set(LazuliCompilationStateWord.EntrySymbol, lane.surface.mainSymbol);
+  set(LazuliCompilationStateWord.EntrySymbol, lane.surface.entrySymbol);
   set(LazuliCompilationStateWord.ErrorCode, LazuliSemanticCompilerErrorCode.None);
   set(LazuliCompilationStateWord.ErrorSource, LAZULI_NO_INDEX);
   set(LazuliCompilationStateWord.ErrorDetail, LAZULI_NO_INDEX);

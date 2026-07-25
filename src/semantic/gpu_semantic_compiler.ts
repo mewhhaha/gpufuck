@@ -163,7 +163,7 @@ export class GpuLazuliSemanticCompiler {
     initialStateView.setUint32(StateWord.DefinitionCount * 4, surface.definitionCount, true);
     initialStateView.setUint32(StateWord.TypeCount * 4, surface.typeCount, true);
     initialStateView.setUint32(StateWord.ConstructorCount * 4, surface.constructorCount, true);
-    initialStateView.setUint32(StateWord.EntrySymbol * 4, surface.mainSymbol, true);
+    initialStateView.setUint32(StateWord.EntrySymbol * 4, surface.entrySymbol, true);
     initialStateView.setUint32(StateWord.Status * 4, 0, true);
     initialStateView.setUint32(StateWord.ErrorCode * 4, ErrorCode.None, true);
     initialStateView.setUint32(StateWord.ErrorSource * 4, LAZULI_NO_INDEX, true);

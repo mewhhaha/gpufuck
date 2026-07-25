@@ -245,7 +245,7 @@ class InferenceContext {
     const components = this.definitionComponents();
     for (const component of components) this.inferDefinitionComponent(component);
 
-    const mainScheme = this.#definitionSchemes.get(this.#surface.mainSymbol);
+    const mainScheme = this.#definitionSchemes.get(this.#surface.entrySymbol);
     if (mainScheme === undefined) {
       throw this.failure("L2104", "main has no inferred type", { startByte: 0, endByte: 0 });
     }
@@ -253,7 +253,7 @@ class InferenceContext {
       throw this.failure(
         "L2104",
         `main must have a concrete type; inferred ${this.formatType(mainScheme.type)}`,
-        this.definitionSpan(this.#definitionBySymbol.get(this.#surface.mainSymbol)),
+        this.definitionSpan(this.#definitionBySymbol.get(this.#surface.entrySymbol)),
       );
     }
 
