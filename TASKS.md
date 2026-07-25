@@ -145,10 +145,30 @@ batch items.
 ### 7. Parallelise the inference kernel
 
 `type_inference_shader.ts` is `@compute @workgroup_size(1)` — one lane of roughly ten thousand. This
-is the retarget's original premise and still the largest theoretical win (10–50× on the GPU phase),
-but it is also the hardest: inference is pointer-chasing and branch-divergent, the worst shape for a
-GPU. Do (6) first — reducing the work is worth more than parallelising work that should not exist,
-and the two multiply.
+is the retarget's original premise and still the largest win available (10–50× on the GPU phase). Do
+(6) first — reducing the work is worth more than parallelising work that should not exist, and the
+two multiply.
+
+The pieces exist and three of them are already established here:
+
+- **Constraint generation is a map.** A node's constraints follow from its children's, and resolved
+  Core is already a flat array of fixed-size records with every child at a higher index, so a
+  reverse sweep visits children first. One lane per node, no reordering needed.
+- **Unification can be parallel.** The capability spike in ARCHITECTURE §9 verified that
+  `atomicCompareExchangeWeak` union-find converges under contention. That is the hard primitive and
+  it is not speculative.
+- **Divergence is bucketable.** Every Core node carries a tag; grouping by tag before dispatch gives
+  each warp one node kind instead of eleven.
+
+**One constraint dominates the design.** A GPU round trip in Deno costs 11.3 ms even when the shader
+does nothing (measured, BASELINE.md). One dispatch per dependency wave would spend 21 × 11.3 = 237
+ms on the Gleam stdlib before computing anything — worse than `gleam build`'s entire 146 ms. So the
+whole wavefront has to live inside a single dispatch, as a persistent kernel with in-kernel
+synchronisation, or the work has to move off Deno. Anything that dispatches per wave is dead on
+arrival regardless of how good the kernel is.
+
+And the payoff shows up in throughput, not latency: even a free inference phase leaves parse, lower,
+and emit at 152 ms against Gleam's 146 ms total.
 
 ### 8. The Gleam FFI adapter
 

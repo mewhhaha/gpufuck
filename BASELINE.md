@@ -53,7 +53,7 @@ both columns do the same work.
 
 **Two independent causes, with different fixes.**
 
-1. _Floor (~11.4 ms)._ Deno's `mapAsync` stalls ~11.4 ms per await even on a buffer with nothing
+1. _Floor (~11.3 ms)._ Deno's GPU round trip costs ~11.3 ms per await even on a buffer with nothing
    submitted; eight concurrent awaits cost the same as one. This is the whole of the N=1 number and
    it is a runtime property, not a compiler one. Unmeasured in Chrome.
 2. _Slope (~9.7x)._ The semantic, inference, and evaluator kernels are all
@@ -510,6 +510,35 @@ The structural figures are somewhere between the two. 13% largest definition and
 parallelism beat the Gleam stdlib's 52% and 1.9x, but that reflects a program written as many small
 functions rather than anything the language enforces — Sweep has no rule against a 26,000-node
 function, it just did not happen to contain one.
+
+## 2026-07-25 — the dispatch floor, and what it forecloses
+
+The stall attributed to `mapAsync` throughout this file is not `mapAsync`. Measured directly with a
+one-workgroup shader that increments a single `u32`:
+
+| Round trip                       |   Median |
+| -------------------------------- | -------: |
+| `submit` + `onSubmittedWorkDone` | 11.29 ms |
+| `submit` + copy + `mapAsync`     | 11.30 ms |
+
+**Identical with no readback at all**, so the cost is the submit-to-sync path in Deno's WebGPU, not
+the buffer mapping. The earlier attribution was wrong; the magnitude was right.
+
+This is the hard bound on any single-program latency claim, and it is worth stating plainly because
+it forecloses more than the inference work does:
+
+- One empty round trip costs 11.3 ms. A CPU typechecks a 5,000-node module in about 1 ms. The work
+  in a normal program is smaller than the cost of asking the GPU to do it.
+- Gleam compiles its entire 252 KB standard library in 146 ms — thirteen round trips.
+- A wavefront design with one dispatch per dependency wave would pay 21 x 11.3 = 237 ms on the
+  stdlib in dispatch alone, before computing anything.
+
+So a parallel inference kernel has to keep the whole wavefront inside **one** dispatch — a
+persistent kernel with in-kernel synchronisation — or run somewhere other than Deno. That is a
+design constraint, not a preference.
+
+None of this touches throughput, which is where the measurements already favour the GPU: at batch
+1,024 the fixed cost amortizes to 11 µs per module and gpufuck is ~17x faster than `gleam build`.
 
 ## Kill criteria
 
