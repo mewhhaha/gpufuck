@@ -31,7 +31,7 @@ export {
   type LazuliCompilationOptions,
   type LazuliCompileResult,
   type LazuliCoreNode,
-} from "./src/semantic/compiler.ts";
+} from "./src/lazuli/compiler.ts";
 export {
   GpuLazuliEvaluator,
   type LazuliBatchEvaluationOptions,
@@ -46,6 +46,6 @@ export {
   type LazuliRuntimeFault,
   type LazuliValue,
 } from "./src/semantic/evaluator.ts";
-export { initializeLazuliParser, parseLazuliSource } from "./src/semantic/frontend.ts";
-export { lazuliSurfaceToFunctionalModule } from "./src/semantic/functional_adapter.ts";
+export { initializeLazuliParser, parseLazuliSource } from "./src/lazuli/frontend.ts";
+export { lazuliSurfaceToFunctionalModule } from "./src/lazuli/functional_adapter.ts";
 export { requestWebGpuDevice } from "./src/webgpu.ts";

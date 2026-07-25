@@ -6,11 +6,8 @@ import { GpuFunctionalCompiler } from "../src/functional/compiler.ts";
 import { runFunctionalWasmModule } from "../src/functional/wasm_execution.ts";
 import { describeFunctionalType } from "../src/functional/wasm_value_codec.ts";
 import type { LazuliDiagnostic } from "../src/semantic/abi.ts";
-import {
-  initializeLazuliParser,
-  parseLazuliSourceForCompilation,
-} from "../src/semantic/frontend.ts";
-import { lazuliSurfaceToFunctionalModule } from "../src/semantic/functional_adapter.ts";
+import { initializeLazuliParser, parseLazuliSourceForCompilation } from "../src/lazuli/frontend.ts";
+import { lazuliSurfaceToFunctionalModule } from "../src/lazuli/functional_adapter.ts";
 
 interface Example {
   readonly name: string;

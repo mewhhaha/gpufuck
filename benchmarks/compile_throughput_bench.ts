@@ -6,8 +6,8 @@
  * `inferLazuliTypes`, the host Hindley-Milner implementation the GPU shader is differentially
  * tested against, so the two columns do the same work.
  */
-import { GpuLazuliCompiler } from "../src/semantic/compiler.ts";
-import { parseLazuliSource } from "../src/semantic/frontend.ts";
+import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
+import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { createLazuliSymbolLookup } from "../src/semantic/symbol_lookup.ts";
 import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
 import { requestWebGpuDevice } from "../src/webgpu.ts";

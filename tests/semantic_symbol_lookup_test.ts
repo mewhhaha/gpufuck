@@ -1,6 +1,6 @@
 import { deepStrictEqual, equal, ok } from "node:assert/strict";
 
-import { parseLazuliSource } from "../src/semantic/frontend.ts";
+import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import {
   type EncodedLazuliSurface,
   LAZULI_NO_INDEX,

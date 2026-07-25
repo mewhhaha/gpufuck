@@ -1,7 +1,7 @@
 import { deepStrictEqual, equal, ok } from "node:assert/strict";
 
 import { GpuLazuliCompiler, requestWebGpuDevice } from "../mod.ts";
-import { parseLazuliSource } from "../src/semantic/frontend.ts";
+import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { inferLazuliTypes } from "../src/semantic/type_inference.ts";
 
 interface CorpusProgram {

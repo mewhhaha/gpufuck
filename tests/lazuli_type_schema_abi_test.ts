@@ -8,7 +8,7 @@ import {
   type LazuliType,
   LazuliTypeWord,
 } from "../src/semantic/abi.ts";
-import { parseLazuliSource } from "../src/semantic/frontend.ts";
+import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import {
   decodeLazuliType,
   decodeLazuliTypeSchema,

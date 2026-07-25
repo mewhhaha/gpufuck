@@ -20,7 +20,7 @@ import {
   type LazuliTypeSchema,
   LazuliTypeWord,
   LazuliUnaryOperator,
-} from "./abi.ts";
+} from "../semantic/abi.ts";
 import { createParser, createParserAsync } from "@mewhhaha/baba/runtime/generated-wasm";
 
 type ParseResult = ReturnType<ReturnType<typeof createParser>["parse"]>;

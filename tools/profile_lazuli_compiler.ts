@@ -1,6 +1,6 @@
-import { parseLazuliSource } from "../src/semantic/frontend.ts";
-import { GpuLazuliCompiler } from "../src/semantic/compiler.ts";
-import { lazuliSurfaceToFunctionalModule } from "../src/semantic/functional_adapter.ts";
+import { parseLazuliSource } from "../src/lazuli/frontend.ts";
+import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
+import { lazuliSurfaceToFunctionalModule } from "../src/lazuli/functional_adapter.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { LAZULI_DEFINITION_WORD_LENGTH, LazuliDefinitionWord } from "../src/semantic/abi.ts";
 import type { LazuliCoreNode } from "../src/semantic/compiler_module.ts";

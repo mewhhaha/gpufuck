@@ -1,10 +1,10 @@
-import { LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH } from "./abi.ts";
-import { sourceTooLargeDiagnostic } from "./compilation_diagnostics.ts";
+import { LAZULI_MAXIMUM_SOURCE_BYTE_LENGTH } from "../semantic/abi.ts";
+import { sourceTooLargeDiagnostic } from "../semantic/compilation_diagnostics.ts";
 import type {
   GpuLazuliModule,
   LazuliCompilationOptions,
   LazuliCompileResult,
-} from "./compiler_module.ts";
+} from "../semantic/compiler_module.ts";
 import { parseLazuliSourceForCompilation } from "./frontend.ts";
 import {
   lazuliDiagnosticFromFunctional,
@@ -20,7 +20,7 @@ export type {
   LazuliCompilationOptions,
   LazuliCompileResult,
   LazuliCoreNode,
-} from "./compiler_module.ts";
+} from "../semantic/compiler_module.ts";
 
 type PreparedLazuliSource =
   | { readonly ok: true; readonly module: ReturnType<typeof lazuliSurfaceToFunctionalModule> }
