@@ -1,7 +1,8 @@
 # Changelog
 
-All notable changes to gpufuck are documented here. The project follows
-[Semantic Versioning](https://semver.org/).
+All notable changes to gpufuck are documented here. Releases up to 0.3.0 were published to JSR under
+[Semantic Versioning](https://semver.org/); the project is no longer published, so entries below are
+dated rather than versioned.
 
 ## Unreleased
 
@@ -45,11 +46,13 @@ Three surface primitives, each because two unrelated frontends hand-rolled the s
   express exceptions, generators, async or backtracking, and effects were capped at a 32-bit mask.
   Frontends elaborate effects themselves, as Koka and Eff do.
 - Removed partial evaluation.
-- Removed the browser playground and its GitHub Pages workflow.
-- Removed the `src/lazuli/` re-export shim; its implementation files now live in `src/semantic/`.
-- Reduced the published subpaths to `.` (`functional.ts`) and `./core` (`core.ts`). The `wasm`,
-  `comptime`, `effects`, and `type-services` subpaths no longer exist; the WebAssembly backend,
-  storage planning, and the comptime executor are exported from the root instead.
+- Removed the `src/lazuli/` re-export shim. `src/lazuli/` is now the Lazuli frontend itself, moved
+  out of `src/semantic/` so the neutral layer holds only the GPU semantic compiler.
+- Stopped publishing to JSR, and deleted the release workflow, the version field, and the subpath
+  exports with it. Nothing consumed the package: Ducklang, the only external consumer, imports
+  `functional.ts` by relative path. `functional.ts` is now the sole entry point — `core.ts` and the
+  `wasm`, `comptime`, `effects`, and `type-services` subpaths are gone, and the WebAssembly backend,
+  storage planning, and the comptime executor are reachable from the root.
 
 ### Changed
 

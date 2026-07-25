@@ -325,7 +325,7 @@ continue with ambiguous ownership, and module destruction is idempotent.
 
 ## 11. Frontends
 
-Three live in the repository; none is part of the published entry point. **Lazuli** is the reference
+Three live in the repository; none is reachable from the entry point. **Lazuli** is the reference
 language and compatibility API, not the definition of Functional Core: its Baba-generated parser
 runs on the host, defaults to lazy call-by-need, and exercises inferred functions and recursive
 data, partial type holes, indexed equality proofs, built-in text, bytes, and lists, and host `Init`
@@ -402,7 +402,7 @@ imply totality.
 
 | Concern                | Primary modules                                                                               |
 | ---------------------- | --------------------------------------------------------------------------------------------- |
-| Public API and ABI     | `functional.ts`, `core.ts`, `src/functional/abi.ts`                                           |
+| Public API and ABI     | `functional.ts`, `src/functional/abi.ts`                                                      |
 | Surface and linking    | `surface_builder.ts`, `recursive_groups.ts`, `surface_reachability.ts`, `module_linker.ts`    |
 | Facade and admission   | `compiler.ts`, `compilation_admission.ts`, `gpu_dispatch_scheduler.ts`                        |
 | Host lowering plan     | `src/semantic/symbol_lookup.ts`                                                               |

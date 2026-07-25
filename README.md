@@ -67,9 +67,14 @@ fallback: `requestWebGpuDevice()` throws with setup evidence when WebGPU is disa
 discovery fails, or no adapter is available. A software adapter works for correctness but does not
 predict hardware latency.
 
-```sh
-deno add jsr:@mewhhaha/gpufuck@^0.3.0
+gpufuck is not published to a registry. It is consumed by importing `functional.ts` from a checkout
+beside your own, which is how Ducklang uses it:
+
+```ts
+import { GpuFunctionalCompiler, requestWebGpuDevice } from "../gpufuck/functional.ts";
 ```
+
+Your `deno.json` needs the unstable WebGPU API:
 
 ```json
 {
@@ -77,11 +82,10 @@ deno add jsr:@mewhhaha/gpufuck@^0.3.0
 }
 ```
 
-Two entry points: the root is the complete language-neutral API — compilation, linking, evaluation,
-the WebAssembly backend, storage planning, and the comptime executor — and `./core` is the same
-surface and Core contracts plus GPU compilation, without the evaluator, linker, backend, comptime,
-or trace renderer. The bundled Lazuli, Gleam, and JavaScript AOT frontends are repository examples,
-not published exports.
+`functional.ts` is the whole language-neutral API — compilation, linking, evaluation, the
+WebAssembly backend, storage planning, and the comptime executor. The bundled Lazuli, Gleam, and
+JavaScript AOT frontends are repository examples that live outside it; a consumer never imports
+`src/` directly.
 
 ## Compile and run a first module
 
@@ -96,7 +100,7 @@ import {
   GpuFunctionalEvaluator,
   requestWebGpuDevice,
   surface,
-} from "@mewhhaha/gpufuck";
+} from "../gpufuck/functional.ts";
 
 const source = "main = 40 + 2";
 const module = buildFunctionalSurfaceModule(
@@ -152,7 +156,7 @@ binary — `linear-memory` by default, `wasm-gc` on request — and `runFunction
 in the host engine and decodes the result:
 
 ```ts
-import { compileFunctionalModuleToWasm, runFunctionalWasmModule } from "@mewhhaha/gpufuck";
+import { compileFunctionalModuleToWasm, runFunctionalWasmModule } from "../gpufuck/functional.ts";
 
 const bytes = await compileFunctionalModuleToWasm(compilation.module);
 await Deno.writeFile("main.wasm", bytes);

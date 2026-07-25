@@ -19,8 +19,7 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 
 | Path                         | Responsibility                                                      |
 | ---------------------------- | ------------------------------------------------------------------- |
-| `functional.ts`              | Complete published language-neutral API                             |
-| `core.ts`                    | Surface/Core contracts and GPU compilation, without the evaluator   |
+| `functional.ts`              | The complete language-neutral API, and the only entry point         |
 | `src/functional/`            | Functional ABI, compiler facade, linking, contracts, evaluator      |
 | `src/functional/wasm_*.ts`   | WebAssembly code generators, binary emitter, runtime, host boundary |
 | `src/functional/storage_*`   | Storage plan and Storage Core verification behind the backend       |
@@ -196,15 +195,17 @@ workspace replacement owns both buffers until a successful copy transfers the ac
 catch a WebGPU error merely to return a generic source diagnostic — enrich and rethrow it, or
 translate it at the boundary with its original `cause` preserved.
 
-## Publishing
+## The API boundary
 
-The manifest is `deno.json` and the public entry is `functional.ts`. Run `deno task fmt`, `lint`,
-`check`, and `test`, then `git diff --check` and `deno task publish:dry-run`. Before changing the
-version, confirm the README examples use only public exports, confirm no module reachable from
-`functional.ts` or `core.ts` is caught by `publish.exclude`, include documentation and license
-changes, document ABI changes, and inspect the dry-run package for repository-only frontends or
-generated artifacts that should not ship. The release workflow publishes only tags whose
-`v<version>` name exactly matches `deno.json`.
+gpufuck is not published to a registry and carries no version number. `functional.ts` is the API
+boundary, and consumers reach it by relative path against the working tree — so there is no
+deprecation window and no pin to shield anyone from a change. Removing or renaming an export is
+observable at the consumer's next compile, which makes Ducklang's `just typecheck` the release gate
+that a version bump would otherwise be.
+
+Keep the boundary honest: the README examples must use only exports reachable from `functional.ts`,
+repository-only frontends (`src/lazuli/`, `src/gleam_functional/`, `examples/`) must stay out of it,
+and an ABI change must be documented with its version increment.
 
 ## Commit scope
 
