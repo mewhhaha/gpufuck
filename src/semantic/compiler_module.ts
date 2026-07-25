@@ -103,7 +103,7 @@ export class CompiledGpuSemanticModule implements GpuSemanticModule {
 
   async readCoreNodes(): Promise<readonly CoreNode[]> {
     if (this.#destroyed) {
-      throw new Error("cannot read a destroyed GPU Lazuli module");
+      throw new Error("cannot read a destroyed GPU module");
     }
     if (this.#coreNodes !== undefined) {
       return this.#coreNodes;
@@ -122,12 +122,12 @@ export class CompiledGpuSemanticModule implements GpuSemanticModule {
       let validation: Promise<GPUError | null>;
       try {
         readbackBuffer = this.#device.createBuffer({
-          label: "Lazuli core node readback",
+          label: "core node readback",
           size: byteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
         const commandEncoder = this.#device.createCommandEncoder({
-          label: "Lazuli core node readback commands",
+          label: "core node readback commands",
         });
         commandEncoder.copyBufferToBuffer(this.nodeBuffer, 0, readbackBuffer, 0, byteLength);
         this.#device.queue.submit([commandEncoder.finish()]);
@@ -136,7 +136,7 @@ export class CompiledGpuSemanticModule implements GpuSemanticModule {
         const validationError = await this.#device.popErrorScope();
         if (validationError !== null) {
           throw new Error(
-            `WebGPU rejected Lazuli core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
+            `WebGPU rejected core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
             { cause },
           );
         }
@@ -146,7 +146,7 @@ export class CompiledGpuSemanticModule implements GpuSemanticModule {
       const validationError = await validation;
       if (validationError !== null) {
         throw new Error(
-          `WebGPU rejected Lazuli core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
+          `WebGPU rejected core node readback for ${this.nodeCount} nodes: ${validationError.message}`,
         );
       }
       await readbackBuffer.mapAsync(GPUMapMode.READ);
@@ -175,7 +175,7 @@ function decodeCoreNodes(words: DataView, nodeCount: number): readonly CoreNode[
   const expectedByteLength = nodeCount * NODE_BYTE_LENGTH;
   if (words.byteLength !== expectedByteLength) {
     throw new Error(
-      `GPU Lazuli core readback has ${words.byteLength} bytes for ${nodeCount} nodes; expected ${expectedByteLength}`,
+      `GPU core readback has ${words.byteLength} bytes for ${nodeCount} nodes; expected ${expectedByteLength}`,
     );
   }
   const nodes = new Array<CoreNode>(nodeCount);
@@ -199,7 +199,7 @@ function decodeCoreNodes(words: DataView, nodeCount: number): readonly CoreNode[
 function decodeEvaluationMode(value: number, nodeIndex: number): EvaluationMode {
   if (value === 0 || value === 1) return value;
   throw new Error(
-    `GPU Lazuli module contains unknown evaluation mode ${value} at node ${nodeIndex}`,
+    `GPU module contains unknown evaluation mode ${value} at node ${nodeIndex}`,
   );
 }
 
@@ -242,7 +242,7 @@ function decodeCoreTag(tag: number, nodeIndex: number): KnownCoreTag {
     case CoreTag.Constructor:
       return tag;
     default:
-      throw new Error(`GPU Lazuli module contains unknown core tag ${tag} at node ${nodeIndex}`);
+      throw new Error(`GPU module contains unknown core tag ${tag} at node ${nodeIndex}`);
   }
 }
 

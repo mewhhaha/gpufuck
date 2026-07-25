@@ -43,7 +43,7 @@ export function diagnosticFromSemanticState(
       if (span === undefined) return undefined;
       return {
         stage: "compile",
-        code: "L2001",
+        code: "F2001",
         message: `unknown name ${symbolName}`,
         span,
       };
@@ -54,7 +54,7 @@ export function diagnosticFromSemanticState(
       const previous = previousDefinitionSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
-        code: "L2002",
+        code: "F2002",
         message: `duplicate top-level definition ${symbolName}`,
         span,
         ...(previous === undefined
@@ -68,7 +68,7 @@ export function diagnosticFromSemanticState(
       }
       return {
         stage: "compile",
-        code: "L2003",
+        code: "F2003",
         message: `missing required entry definition ${symbolName}`,
         span: { startByte: sourceByteLength, endByte: sourceByteLength },
       };
@@ -78,7 +78,7 @@ export function diagnosticFromSemanticState(
       const previous = previousTypeSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
-        code: "L2004",
+        code: "F2004",
         message: `duplicate algebraic type ${symbolName}`,
         span,
         ...(previous === undefined
@@ -92,7 +92,7 @@ export function diagnosticFromSemanticState(
       const previous = previousConstructorSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
-        code: "L2005",
+        code: "F2005",
         message: `duplicate constructor ${symbolName}`,
         span,
         ...(previous === undefined
@@ -106,7 +106,7 @@ export function diagnosticFromSemanticState(
       const previous = previousTopLevelSymbolSpan(surface, state.errorSource, state.errorDetail);
       return {
         stage: "compile",
-        code: "L2006",
+        code: "F2006",
         message: `top-level function and constructor share the name ${symbolName}`,
         span,
         ...(previous === undefined
@@ -124,7 +124,7 @@ export function diagnosticFromSemanticState(
       if (span === undefined) return undefined;
       return {
         stage: "compile",
-        code: "L2007",
+        code: "F2007",
         message: `unknown case constructor ${symbolName}`,
         span,
       };
@@ -134,7 +134,7 @@ export function diagnosticFromSemanticState(
       if (arm === undefined) return undefined;
       return {
         stage: "compile",
-        code: "L2008",
+        code: "F2008",
         message: `constructor ${
           symbolNameFor(surface, arm.constructorSymbol)
         } expects ${arm.arity} pattern binders, received ${arm.binderCount}`,
@@ -151,7 +151,7 @@ export function diagnosticFromSemanticState(
       if (span === undefined) return undefined;
       return {
         stage: "compile",
-        code: "L2009",
+        code: "F2009",
         message: `duplicate case arm for constructor ${symbolName}`,
         span,
       };
@@ -167,7 +167,7 @@ export function sourceTooLargeDiagnostic(
 ): SemanticDiagnostic {
   return {
     stage: "parse",
-    code: "L1003",
+    code: "F1003",
     message:
       `source is ${sourceByteLength} UTF-8 bytes; this compiler accepts at most ${maximumSourceByteLength}`,
     span: { startByte: maximumSourceByteLength, endByte: sourceByteLength },
@@ -180,7 +180,7 @@ export function nodeLimitDiagnostic(
 ): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program has ${nodeCount} surface nodes; this device accepts at most ${maximumNodeCount}`,
     span: { startByte: 0, endByte: 0 },
@@ -193,7 +193,7 @@ export function definitionLimitDiagnostic(
 ): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program has ${definitionCount} definitions; this device accepts at most ${maximumDefinitionCount}`,
     span: { startByte: 0, endByte: 0 },
@@ -206,7 +206,7 @@ export function typeLimitDiagnostic(
 ): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program has ${typeCount} algebraic types; this device accepts at most ${maximumTypeCount}`,
     span: { startByte: 0, endByte: 0 },
@@ -219,7 +219,7 @@ export function constructorLimitDiagnostic(
 ): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program has ${constructorCount} constructors; this device accepts at most ${maximumConstructorCount}`,
     span: { startByte: 0, endByte: 0 },
@@ -233,7 +233,7 @@ export function semanticWorkLimitDiagnostic(
 ): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message:
       `program exhausted the compiler limit after ${completedTransitions} serial semantic transitions; the limit is ${maximumSteps}`,
     span: { startByte: 0, endByte: sourceByteLength },

@@ -149,7 +149,7 @@ Deno.test("same GPU compiler batches concurrent results and remains reusable aft
     Object.defineProperty(device, "createBuffer", {
       configurable: true,
       value: (descriptor: GPUBufferDescriptor) => {
-        if (descriptor.label === "Lazuli surface nodes") surfaceNodeAllocations++;
+        if (descriptor.label === "surface nodes") surfaceNodeAllocations++;
         return createBuffer(descriptor);
       },
     });
@@ -236,9 +236,9 @@ Deno.test("same GPU compiler batches concurrent results and remains reusable aft
     ]);
     ok(mixed[0]?.ok);
     equal(mixed[1]?.ok, false);
-    if (mixed[1]?.ok === false) equal(mixed[1].diagnostics[0].code, "L2001");
+    if (mixed[1]?.ok === false) equal(mixed[1].diagnostics[0].code, "F2001");
     equal(mixed[2]?.ok, false);
-    if (mixed[2]?.ok === false) equal(mixed[2].diagnostics[0].code, "L2102");
+    if (mixed[2]?.ok === false) equal(mixed[2].diagnostics[0].code, "F2102");
     for (const result of mixed) if (result.ok) result.module.destroy();
 
     const controller = new AbortController();

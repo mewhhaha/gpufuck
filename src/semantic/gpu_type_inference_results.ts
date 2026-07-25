@@ -78,7 +78,7 @@ export function assertConsistentState(
     (state.outputCount !== 0 && state.outputRoot >= state.outputCount)
   ) {
     throw new Error(
-      `GPU Lazuli compilation returned inconsistent dispatch progress: semanticSteps=${semanticState.totalSteps}, previousSemanticSteps=${previousSemanticSteps}, inferenceTransitions=${state.transitions}, previousInferenceTransitions=${previousTransitions}, maximumTransitions=${dispatchTransitions}, typeTop=${state.typeTop}, environmentTop=${state.environmentTop}, frameTop=${state.frameTop}, refinementTop=${state.refinementTop}, outputRoot=${state.outputRoot}, outputCount=${state.outputCount}`,
+      `GPU compilation returned inconsistent dispatch progress: semanticSteps=${semanticState.totalSteps}, previousSemanticSteps=${previousSemanticSteps}, inferenceTransitions=${state.transitions}, previousInferenceTransitions=${previousTransitions}, maximumTransitions=${dispatchTransitions}, typeTop=${state.typeTop}, environmentTop=${state.environmentTop}, frameTop=${state.frameTop}, refinementTop=${state.refinementTop}, outputRoot=${state.outputRoot}, outputCount=${state.outputCount}`,
     );
   }
 }
@@ -91,7 +91,7 @@ export function fuelExhausted(
   const sourceByteLength = options.sourceByteLength ?? largestSourceOffset(options.surface);
   const diagnostic: SemanticDiagnostic = {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message: `program exhausted the compiler limit after ${
       initialSteps + transitions
     } serial semantic transitions; the limit is ${options.maximumSteps}`,
@@ -114,7 +114,7 @@ export function compilerWorkspaceExhausted(
   const sourceByteLength = options.sourceByteLength ?? largestSourceOffset(options.surface);
   const diagnostic: SemanticDiagnostic = {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message: `program exhausted the GPU compiler ${
       inferenceArenaName(state.errorCode)
     } workspace; required capacity is ${state.errorDetail}${
@@ -138,7 +138,7 @@ export function compilerWorkspacePreflightFailed(
   const sourceByteLength = options.sourceByteLength ?? largestSourceOffset(options.surface);
   const diagnostic: SemanticDiagnostic = {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message: `program exceeds the GPU compiler workspace limit: ${reason}`,
     span: { startByte: 0, endByte: sourceByteLength },
   };
@@ -158,7 +158,7 @@ export function compilerInferenceAllocationFailed(
   const sourceByteLength = options.sourceByteLength ?? largestSourceOffset(options.surface);
   const diagnostic: SemanticDiagnostic = {
     stage: "compile",
-    code: "L1003",
+    code: "F1003",
     message: `program exhausted GPU memory before type inference: ${reason}`,
     span: { startByte: 0, endByte: sourceByteLength },
   };
@@ -181,7 +181,7 @@ export function diagnosticFromState(
     case InferenceDiagnosticCode.NonExhaustiveCase:
       return {
         stage: "compile",
-        code: "L2010",
+        code: "F2010",
         message: `non-exhaustive case; missing constructor ${
           JSON.stringify(
             symbolName(surface, state.errorDetail),
@@ -192,7 +192,7 @@ export function diagnosticFromState(
     case InferenceDiagnosticCode.InvalidTypeMetadata:
       return {
         stage: "compile",
-        code: "L2101",
+        code: "F2101",
         message: metadataFailureMessage(
           state,
           metadata,
@@ -205,7 +205,7 @@ export function diagnosticFromState(
       if (state.errorContext === 1) {
         return {
           stage: "compile",
-          code: "L2102",
+          code: "F2102",
           message: `constructor ${
             JSON.stringify(constructorName(surface, state.errorDetail))
           } is inaccessible: result ${
@@ -228,7 +228,7 @@ export function diagnosticFromState(
       }
       return {
         stage: "compile",
-        code: "L2102",
+        code: "F2102",
         message: `type mismatch: expected ${
           formatWorkspaceType(
             state.errorOperand0,
@@ -244,7 +244,7 @@ export function diagnosticFromState(
     case InferenceDiagnosticCode.InfiniteType:
       return {
         stage: "compile",
-        code: "L2103",
+        code: "F2103",
         message: `cannot construct infinite type by unifying ${
           formatWorkspaceType(
             state.errorOperand0,
@@ -260,7 +260,7 @@ export function diagnosticFromState(
     case InferenceDiagnosticCode.NonConcreteMain:
       return {
         stage: "compile",
-        code: "L2104",
+        code: "F2104",
         message: state.errorOperand0 === NO_INDEX
           ? "main has no inferred type"
           : `main must have a concrete type; inferred ${
@@ -275,7 +275,7 @@ export function diagnosticFromState(
       };
     default:
       throw new Error(
-        `GPU Lazuli type inference returned unknown diagnostic code ${state.errorCode} at ${state.errorStartByte}..${state.errorEndByte}`,
+        `GPU type inference returned unknown diagnostic code ${state.errorCode} at ${state.errorStartByte}..${state.errorEndByte}`,
       );
   }
 }
@@ -306,7 +306,7 @@ function metadataFailureMessage(
         JSON.stringify(name(state.errorDetail))
       } expects ${state.errorOperand0} arguments; received ${state.errorOperand1}`;
     case InferenceMetadataFailure.UnsupportedExpression:
-      return `Unsupported Lazuli expression tag ${state.errorDetail} at node ${state.errorOperand0}.`;
+      return `Unsupported expression tag ${state.errorDetail} at node ${state.errorOperand0}.`;
     case InferenceMetadataFailure.InvalidDefinitionAnnotation:
       return `definition ${state.errorDetail} annotation ${state.errorOperand0} is outside ${state.errorOperand1} schema nodes`;
     case InferenceMetadataFailure.InvalidTypeDeclaration:
@@ -371,7 +371,7 @@ function metadataFailureMessage(
       } with ${formatWorkspaceType(state.errorOperand1, workspace, surface, identifierNames)}`;
     default:
       throw new Error(
-        `GPU Lazuli type inference returned unknown L2101 context ${state.errorContext}`,
+        `GPU type inference returned unknown L2101 context ${state.errorContext}`,
       );
   }
 }
@@ -391,17 +391,17 @@ function invalidConstructorResultMessage(
   const typeIndex = surface.constructorWords[constructorBase + ConstructorWord.Type];
   if (typeIndex === undefined || typeIndex >= surface.typeCount) {
     throw new Error(
-      `GPU Lazuli result diagnostic references missing constructor type ${typeIndex}`,
+      `GPU result diagnostic references missing constructor type ${typeIndex}`,
     );
   }
   const typeSymbol = surface.typeWords[typeIndex * TYPE_WORD_LENGTH + AlgebraicTypeWord.Symbol];
   if (typeSymbol === undefined) {
-    throw new Error(`GPU Lazuli result diagnostic references missing type ${typeIndex}`);
+    throw new Error(`GPU result diagnostic references missing type ${typeIndex}`);
   }
   const firstParameter = metadata.words[metadata.typeParameterOffsetsBase + typeIndex];
   const parameterEnd = metadata.words[metadata.typeParameterOffsetsBase + typeIndex + 1];
   if (firstParameter === undefined || parameterEnd === undefined || parameterEnd < firstParameter) {
-    throw new Error(`GPU Lazuli result diagnostic references invalid type ${typeIndex} metadata`);
+    throw new Error(`GPU result diagnostic references invalid type ${typeIndex} metadata`);
   }
   return `constructor ${JSON.stringify(constructor)} result must have head ${
     JSON.stringify(symbolName(surface, typeSymbol))
@@ -419,7 +419,7 @@ function describeResultSchema(
       metadata.schemaBase + schema * INFERENCE_SCHEMA_WORD_LENGTH + offset
     ];
     if (value === undefined) {
-      throw new Error(`GPU Lazuli result diagnostic references incomplete schema ${schema}`);
+      throw new Error(`GPU result diagnostic references incomplete schema ${schema}`);
     }
     return value;
   };
@@ -458,7 +458,7 @@ function constructorName(surface: EncodedSemanticSurface, constructorIndex: numb
     constructorIndex * CONSTRUCTOR_WORD_LENGTH + ConstructorWord.Symbol
   ];
   if (symbol === undefined) {
-    throw new Error(`GPU Lazuli inference returned unknown constructor ${constructorIndex}`);
+    throw new Error(`GPU inference returned unknown constructor ${constructorIndex}`);
   }
   return symbolName(surface, symbol);
 }
@@ -556,14 +556,14 @@ function formatWorkspaceType(
   const maximumCharacterLength = 4096;
   const maximumNodeCount = 512;
   if (workspace === undefined) {
-    throw new Error("GPU Lazuli type diagnostic omitted its workspace snapshot");
+    throw new Error("GPU type diagnostic omitted its workspace snapshot");
   }
   const typeCount = workspace.byteLength /
     (INFERENCE_TYPE_RECORD_WORD_LENGTH * WORD_BYTES);
   const typeWord = (typeIndex: number, word: number): number => {
     if (!Number.isInteger(typeIndex) || typeIndex < 0 || typeIndex >= typeCount) {
       throw new Error(
-        `GPU Lazuli diagnostic referenced type ${typeIndex} outside ${typeCount} records`,
+        `GPU diagnostic referenced type ${typeIndex} outside ${typeCount} records`,
       );
     }
     return workspace.getUint32(
@@ -583,7 +583,7 @@ function formatWorkspaceType(
         : NO_INDEX;
       if (replacement === NO_INDEX) return current;
       if (seen.has(current)) {
-        throw new Error(`GPU Lazuli diagnostic contains cyclic type link at type ${current}`);
+        throw new Error(`GPU diagnostic contains cyclic type link at type ${current}`);
       }
       seen.add(current);
       current = replacement;
@@ -647,7 +647,7 @@ function formatWorkspaceType(
         const symbol = surface.typeWords[typeOffset];
         if (symbol === undefined) {
           throw new Error(
-            `GPU Lazuli diagnostic named missing type declaration ${typeDeclaration}`,
+            `GPU diagnostic named missing type declaration ${typeDeclaration}`,
           );
         }
         const arguments_: string[] = [];
@@ -656,7 +656,7 @@ function formatWorkspaceType(
         while (list !== NO_INDEX) {
           if (seenLists.has(list) || typeWord(list, 0) !== 10) {
             throw new Error(
-              `GPU Lazuli diagnostic named type ${typeIndex} has invalid argument list`,
+              `GPU diagnostic named type ${typeIndex} has invalid argument list`,
             );
           }
           seenLists.add(list);
@@ -690,7 +690,7 @@ function formatWorkspaceType(
         const symbol = surface.typeWords[typeDeclaration * 5];
         if (symbol === undefined) {
           throw new Error(
-            `GPU Lazuli diagnostic lazy constructor missing type declaration ${typeDeclaration}`,
+            `GPU diagnostic lazy constructor missing type declaration ${typeDeclaration}`,
           );
         }
         const arguments_: string[] = [];
@@ -703,7 +703,7 @@ function formatWorkspaceType(
         while (list !== NO_INDEX) {
           if (seenLists.has(list) || typeWord(list, 0) !== 10) {
             throw new Error(
-              `GPU Lazuli diagnostic lazy constructor ${typeIndex} has invalid argument list`,
+              `GPU diagnostic lazy constructor ${typeIndex} has invalid argument list`,
             );
           }
           seenLists.add(list);
@@ -720,7 +720,7 @@ function formatWorkspaceType(
         }`;
       }
       default:
-        throw new Error(`GPU Lazuli diagnostic type ${typeIndex} has unknown kind ${kind}`);
+        throw new Error(`GPU diagnostic type ${typeIndex} has unknown kind ${kind}`);
     }
   };
   return format(root, false);
@@ -729,14 +729,14 @@ function formatWorkspaceType(
 function identifierName(identifierNames: readonly string[], identifier: number): string {
   const name = identifierNames[identifier];
   if (name === undefined) {
-    throw new Error(`GPU Lazuli inference returned unknown schema identifier ${identifier}`);
+    throw new Error(`GPU inference returned unknown schema identifier ${identifier}`);
   }
   return name;
 }
 
 function symbolName(surface: EncodedSemanticSurface, symbol: number): string {
   const name = surface.symbolNames[symbol];
-  if (name === undefined) throw new Error(`GPU Lazuli inference returned unknown symbol ${symbol}`);
+  if (name === undefined) throw new Error(`GPU inference returned unknown symbol ${symbol}`);
   return name;
 }
 

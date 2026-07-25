@@ -531,10 +531,7 @@ function functionalResult(
   };
 }
 
+/** The two fault types differ only in what a caller is allowed to see, not in their codes. */
 function functionalFault(fault: SemanticRuntimeFault): RuntimeFault {
-  return {
-    ...fault,
-    code: `F${fault.code.slice(1)}`,
-    message: fault.message.replaceAll("Lazuli", "functional"),
-  } as RuntimeFault;
+  return fault as RuntimeFault;
 }

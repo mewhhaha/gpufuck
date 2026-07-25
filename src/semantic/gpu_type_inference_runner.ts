@@ -343,7 +343,7 @@ async function runGpuSemanticTypeInferenceMachine(
       if (state.status === InferenceStatus.Complete) {
         const outputByteLength = inferredTypeOutputByteLength(state.outputCount);
         if (outputByteLength === 0) {
-          throw new Error("GPU Lazuli type inference completed without an output type");
+          throw new Error("GPU type inference completed without an output type");
         }
         let output: DataView;
         if (completedOutput !== undefined) {
@@ -567,10 +567,10 @@ async function runGpuSemanticTypeInferenceMachine(
       }
       if (state.status === InferenceStatus.InvalidInput) {
         throw new Error(
-          `GPU Lazuli type inference rejected the supplied ABI: code=${state.errorCode}, detail=${state.errorDetail}`,
+          `GPU type inference rejected the supplied ABI: code=${state.errorCode}, detail=${state.errorDetail}`,
         );
       }
-      throw new Error(`GPU Lazuli type inference returned unknown status ${state.status}`);
+      throw new Error(`GPU type inference returned unknown status ${state.status}`);
     }
   } finally {
     if (stateReadbackMapped) stateReadbackBuffer?.unmap();

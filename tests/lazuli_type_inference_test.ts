@@ -222,20 +222,20 @@ Deno.test("indexed constructor results match the host across dispatch quanta", a
     {
       source: "data Equal a b = Refl : Equal a a; let main : Equal Int Bool = Refl;",
       ok: false,
-      code: "L2102",
+      code: "F2102",
       message: "type mismatch: expected Bool, received Int",
     },
     {
       source: "data Equal a b = Refl : Bool; let main = 0;",
       ok: false,
-      code: "L2101",
+      code: "F2101",
       message:
         'constructor "Refl" result must have head "Equal" with 2 arguments; received a boolean result',
     },
     {
       source: "data Equal a b = Refl : Equal a; let main = 0;",
       ok: false,
-      code: "L2101",
+      code: "F2101",
       message: 'type "Equal" expects 2 arguments; received 1',
     },
     {
@@ -250,7 +250,7 @@ Deno.test("indexed constructor results match the host across dispatch quanta", a
     {
       source: "data Indexed a b = Mk(value: b) : Indexed a Int; let main = 0;",
       ok: false,
-      code: "L2101",
+      code: "F2101",
       message: 'constructor "Mk" field parameter "b" does not occur in its result',
     },
   ] as const;
@@ -392,7 +392,7 @@ Deno.test("indexed elimination rejects unsound or inaccessible arms on host and 
     {
       source:
         "-- żółć\ndata Tag a = TagInt : Tag Int | TagBool : Tag Bool; let bad : Tag Int -> Int = tag => case tag of | TagInt -> 1 | TagBool -> 0 end; let main = 0;",
-      code: "L2102",
+      code: "F2102",
       message:
         'constructor "TagBool" is inaccessible: result Tag[Bool] is incompatible with scrutinee Tag[Int]',
       span: { startByte: 124, endByte: 139 },
@@ -400,38 +400,38 @@ Deno.test("indexed elimination rejects unsound or inaccessible arms on host and 
     {
       source:
         "data Equal a b = Refl : Equal a a; let bad : Equal Int Bool -> Int = proof => case proof of | Refl -> 0 end; let main = 0;",
-      code: "L2102",
+      code: "F2102",
       message:
         'constructor "Refl" is inaccessible: result Equal[a, a] is incompatible with scrutinee Equal[Int, Bool]',
     },
     {
       source:
         "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let untag = tag => case tag of | TagInt -> 1 | TagBool -> true end; let main = 0;",
-      code: "L2102",
+      code: "F2102",
       message: "type mismatch: expected Int, received Bool",
     },
     {
       source:
         "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let bad : Tag a -> a = tag => case tag of | TagInt -> true | TagBool -> true end; let main = 0;",
-      code: "L2102",
+      code: "F2102",
       message: "type mismatch: expected Int, received Bool",
     },
     {
       source:
         "data Equal a b = Refl : Equal a a; let bad : Int = case (value => value) of | Refl -> 0 end; let main = 0;",
-      code: "L2101",
+      code: "F2101",
       message: 'indexed case requires scrutinee "Equal"; received a -> a',
     },
     {
       source:
         "data Choice a = First : Choice Int | Second : Choice Int; let bad : Choice Int -> Int = value => case value of | First -> 1 end; let main = 0;",
-      code: "L2010",
+      code: "F2010",
       message: 'non-exhaustive case; missing constructor "Second"',
     },
     {
       source:
         "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; fn left tag = right tag; let right : Tag a -> a = tag => case tag of | TagInt -> left tag | TagBool -> left tag end; let main = 0;",
-      code: "L2101",
+      code: "F2101",
       message: "indexed case arm cannot solve pre-existing inference variable",
     },
   ] as const;
@@ -496,17 +496,17 @@ Deno.test("zero-arm cases reject inhabited and unknown scrutinee types with host
   const cases = [
     {
       source: "data Maybe = Nothing | Just; let main = case Nothing of end;",
-      code: "L2010",
+      code: "F2010",
       message: 'non-exhaustive case; missing constructor "Nothing"',
     },
     {
       source: "let main : Int -> Int = value => case value of end;",
-      code: "L2101",
+      code: "F2101",
       message: "empty case requires a zero-constructor named type; received Int",
     },
     {
       source: "let main = value => case value of end;",
-      code: "L2101",
+      code: "F2101",
       message: "empty case requires a zero-constructor named type; received 'a",
     },
   ] as const;
@@ -566,7 +566,7 @@ async function completesWithFuel(
     maximumStepsPerDispatch,
   });
   if (!compilation.ok) {
-    equal(compilation.diagnostics[0].code, "L1003");
+    equal(compilation.diagnostics[0].code, "F1003");
     return false;
   }
   compilation.module.destroy();
@@ -625,7 +625,7 @@ Deno.test("GPU type inference completes exactly at its derived compiler fuel thr
     equal(insufficientBatch.length, 2);
     for (const compilation of insufficientBatch) {
       equal(compilation.ok, false);
-      if (!compilation.ok) equal(compilation.diagnostics[0].code, "L1003");
+      if (!compilation.ok) equal(compilation.diagnostics[0].code, "F1003");
     }
     const exactBatch = await compiler.compileBatch([source, source], {
       maximumSteps: threshold,
@@ -646,7 +646,7 @@ Deno.test("semantic diagnostics take precedence over speculative type inference"
         throw new Error("unreachable");
       }
       equal(compilation.ok, false);
-      equal(compilation.diagnostics[0].code, "L2001");
+      equal(compilation.diagnostics[0].code, "F2001");
       equal(compilation.diagnostics[0].message, 'unknown name "absent"');
     }
 
@@ -656,7 +656,7 @@ Deno.test("semantic diagnostics take precedence over speculative type inference"
     );
     equal(repeatedIndexedArm.ok, false);
     if (!repeatedIndexedArm.ok) {
-      equal(repeatedIndexedArm.diagnostics[0].code, "L2009");
+      equal(repeatedIndexedArm.diagnostics[0].code, "F2009");
       equal(
         repeatedIndexedArm.diagnostics[0].message,
         'duplicate case arm for constructor "Refl"',

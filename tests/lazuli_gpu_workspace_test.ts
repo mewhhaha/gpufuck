@@ -176,17 +176,17 @@ Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel b
     equal(small.result.ok, false);
     equal(large.result.ok, false);
     if (small.result.ok || large.result.ok) return;
-    equal(small.result.diagnostics[0].code, "L2003");
-    equal(large.result.diagnostics[0].code, "L2003");
+    equal(small.result.diagnostics[0].code, "F2003");
+    equal(large.result.diagnostics[0].code, "F2003");
     ok(small.steps > 0);
     ok(large.steps <= small.steps * 2);
 
     const exhausted = await compileMissingMain(512, large.steps - 1);
     equal(exhausted.result.ok, false);
-    if (!exhausted.result.ok) equal(exhausted.result.diagnostics[0].code, "L1003");
+    if (!exhausted.result.ok) equal(exhausted.result.diagnostics[0].code, "F1003");
     const exact = await compileMissingMain(512, large.steps);
     equal(exact.result.ok, false);
-    if (!exact.result.ok) equal(exact.result.diagnostics[0].code, "L2003");
+    if (!exact.result.ok) equal(exact.result.diagnostics[0].code, "F2003");
 
     const recoverySource = "let main = 42;";
     const recovery = parseLazuliSource(recoverySource);
@@ -274,7 +274,7 @@ Deno.test("planned semantic lowering reports its first diagnostic", async () => 
     );
 
     equal(compilation.ok, false);
-    if (!compilation.ok) equal(compilation.diagnostics[0].code, "L2001");
+    if (!compilation.ok) equal(compilation.diagnostics[0].code, "F2001");
     equal(observations.length, 1);
     equal(observations[0]?.semanticStatus, CompilationStatus.Diagnostic);
   } finally {
@@ -614,7 +614,7 @@ Deno.test("GPU inference rejects a constructor result root outside the schema ta
 
     equal(result.ok, false);
     if (result.ok) return;
-    equal(result.diagnostic.code, "L2101");
+    equal(result.diagnostic.code, "F2101");
     equal(
       result.diagnostic.message,
       'constructor "Box" references invalid result schema 4294967295',
@@ -662,7 +662,7 @@ Deno.test("GPU inference validates the shape of sentinel-marked constructor resu
 
     equal(result.ok, false);
     if (result.ok) return;
-    equal(result.diagnostic.code, "L2101");
+    equal(result.diagnostic.code, "F2101");
     ok(result.diagnostic.message.includes("invalid shape: tag 99"));
     deepStrictEqual(result.diagnostic.span, { startByte: 13, endByte: 26 });
   } finally {
@@ -1045,7 +1045,7 @@ Deno.test("GPU inference grows each exhausted arena and preserves inferred types
       );
       ok(!allocationLimit.result.ok, `${capacityLimit.name} limit unexpectedly succeeded`);
       if (allocationLimit.result.ok) throw new Error("unreachable");
-      equal(allocationLimit.result.diagnostic.code, "L1003");
+      equal(allocationLimit.result.diagnostic.code, "F1003");
       ok(allocationLimit.result.diagnostic.message.includes("max"));
     }
   } finally {

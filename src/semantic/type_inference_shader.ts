@@ -458,7 +458,7 @@ function prepareIndexedInferenceMetadata(
     while (pending.length !== 0) {
       const schemaIndex = pending.pop();
       if (schemaIndex === undefined) {
-        throw new Error("Lazuli definition annotation traversal ended unexpectedly.");
+        throw new Error("definition annotation traversal ended unexpectedly.");
       }
       const tag = schemaWord(schemaIndex, TypeSchemaWord.Tag);
       if (
@@ -635,7 +635,7 @@ export function prepareInferenceShaderMetadata(
   const schemaCount = flattened.schemaWords.length / TYPE_SCHEMA_WORD_LENGTH;
   if (!Number.isInteger(schemaCount)) {
     throw new Error(
-      `Lazuli schema buffer has ${flattened.schemaWords.length} words; expected a multiple of ${TYPE_SCHEMA_WORD_LENGTH}.`,
+      `schema buffer has ${flattened.schemaWords.length} words; expected a multiple of ${TYPE_SCHEMA_WORD_LENGTH}.`,
     );
   }
   const parameterNames = new Map<number, string>();
@@ -643,7 +643,7 @@ export function prepareInferenceShaderMetadata(
     const existing = parameterNames.get(symbol);
     if (existing !== undefined && existing !== name) {
       throw new Error(
-        `Lazuli schema parameter ${symbol} is both ${JSON.stringify(existing)} and ${
+        `schema parameter ${symbol} is both ${JSON.stringify(existing)} and ${
           JSON.stringify(name)
         }.`,
       );
@@ -655,7 +655,7 @@ export function prepareInferenceShaderMetadata(
     const tag = flattened.schemaWords[source + TypeSchemaWord.Tag];
     const symbol = flattened.schemaWords[source + TypeSchemaWord.Symbol];
     if (tag === undefined || symbol === undefined) {
-      throw new Error(`Lazuli schema record ${schemaIndex} is incomplete.`);
+      throw new Error(`schema record ${schemaIndex} is incomplete.`);
     }
     if (
       tag === InferenceSchemaTag.Parameter || tag === InferenceSchemaTag.Forall
@@ -663,7 +663,7 @@ export function prepareInferenceShaderMetadata(
       const parameterName = flattened.identifierNames[symbol];
       if (parameterName === undefined) {
         throw new Error(
-          `Lazuli schema parameter record ${schemaIndex} references missing identifier ${symbol}.`,
+          `schema parameter record ${schemaIndex} references missing identifier ${symbol}.`,
         );
       }
       rememberParameterName(symbol, parameterName);
@@ -674,7 +674,7 @@ export function prepareInferenceShaderMetadata(
     const firstParameter = flattened.typeParameterOffsets[typeIndex];
     const parameterEnd = flattened.typeParameterOffsets[typeIndex + 1];
     if (firstParameter === undefined || parameterEnd === undefined) {
-      throw new Error(`Lazuli type ${typeIndex} metadata is incomplete.`);
+      throw new Error(`type ${typeIndex} metadata is incomplete.`);
     }
     for (
       let parameterOffset = 0;
@@ -686,7 +686,7 @@ export function prepareInferenceShaderMetadata(
         ? undefined
         : flattened.identifierNames[parameterSymbol];
       if (parameterSymbol === undefined || parameterName === undefined) {
-        throw new Error(`Lazuli type ${typeIndex} parameter ${parameterOffset} is incomplete.`);
+        throw new Error(`type ${typeIndex} parameter ${parameterOffset} is incomplete.`);
       }
       rememberParameterName(parameterSymbol, parameterName);
     }
@@ -698,11 +698,11 @@ export function prepareInferenceShaderMetadata(
     header[TypeSchemaMetadataWord.HeaderWordLength] !==
       TYPE_SCHEMA_METADATA_HEADER_WORD_LENGTH
   ) {
-    throw new Error("Lazuli schema metadata has an incompatible header.");
+    throw new Error("schema metadata has an incompatible header.");
   }
   if (flattened.constructorResultRoots.length !== surface.constructorCount) {
     throw new Error(
-      `Lazuli schema metadata has ${flattened.constructorResultRoots.length} constructor results; expected ${surface.constructorCount}.`,
+      `schema metadata has ${flattened.constructorResultRoots.length} constructor results; expected ${surface.constructorCount}.`,
     );
   }
   const offset = (word: number): number => header[word] ?? 0;

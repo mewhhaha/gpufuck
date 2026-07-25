@@ -383,22 +383,22 @@ export async function createInferenceBuffers(
   let validation: Promise<GPUError | null>;
   try {
     metadataBuffer = options.device.createBuffer({
-      label: "Lazuli type inference schema metadata",
+      label: "type inference schema metadata",
       size: metadataByteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
     });
     workspaceBuffer = options.device.createBuffer({
-      label: "Lazuli type inference workspace",
+      label: "type inference workspace",
       size: workspaceByteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
     outputBuffer = options.device.createBuffer({
-      label: "Lazuli inferred type output",
+      label: "inferred type output",
       size: outputByteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
     stateBuffer = options.device.createBuffer({
-      label: "Lazuli type inference state",
+      label: "type inference state",
       size: INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
@@ -417,7 +417,7 @@ export async function createInferenceBuffers(
     stateBuffer?.destroy();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli type inference buffers (${allocationEvidence}): ${validationError.message}`,
+        `WebGPU rejected type inference buffers (${allocationEvidence}): ${validationError.message}`,
         { cause },
       );
     }
@@ -437,7 +437,7 @@ export async function createInferenceBuffers(
     outputBuffer.destroy();
     stateBuffer.destroy();
     throw new Error(
-      `WebGPU rejected Lazuli type inference buffers (${allocationEvidence}): ${validationError.message}`,
+      `WebGPU rejected type inference buffers (${allocationEvidence}): ${validationError.message}`,
     );
   }
   if (outOfMemoryError !== null) {
@@ -459,7 +459,7 @@ export async function createInferenceBuffers(
     workspaceBuffer?.destroy();
     outputBuffer?.destroy();
     stateBuffer?.destroy();
-    throw new Error("WebGPU did not create Lazuli type inference buffers");
+    throw new Error("WebGPU did not create type inference buffers");
   }
 
   options.device.pushErrorScope("validation");
@@ -485,7 +485,7 @@ export async function createInferenceBuffers(
     stateBuffer.destroy();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli type inference buffer initialization (${allocationEvidence}): ${validationError.message}`,
+        `WebGPU rejected type inference buffer initialization (${allocationEvidence}): ${validationError.message}`,
         { cause },
       );
     }
@@ -498,7 +498,7 @@ export async function createInferenceBuffers(
     outputBuffer.destroy();
     stateBuffer.destroy();
     throw new Error(
-      `WebGPU rejected Lazuli type inference buffer initialization (${allocationEvidence}): ${initializationError.message}`,
+      `WebGPU rejected type inference buffer initialization (${allocationEvidence}): ${initializationError.message}`,
     );
   }
   return {
@@ -532,10 +532,10 @@ export async function createInferenceReadbackBuffer(
     coreNodeByteLength,
   );
   const errorSubject = coreNodeByteLength > 0
-    ? "Lazuli compilation readback"
+    ? "compilation readback"
     : includesOutput
-    ? "Lazuli inferred type readback"
-    : "Lazuli type inference buffers";
+    ? "inferred type readback"
+    : "type inference buffers";
   device.pushErrorScope("validation");
   device.pushErrorScope("out-of-memory");
   let buffer: GPUBuffer | undefined;
@@ -544,10 +544,10 @@ export async function createInferenceReadbackBuffer(
   try {
     buffer = device.createBuffer({
       label: coreNodeByteLength > 0
-        ? "Lazuli compilation state, output, and core readback"
+        ? "compilation state, output, and core readback"
         : includesOutput
-        ? "Lazuli type inference state and output readback"
-        : "Lazuli type inference state readback",
+        ? "type inference state and output readback"
+        : "type inference state readback",
       size,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
@@ -586,10 +586,10 @@ export async function createInferenceReadbackBuffer(
   if (buffer === undefined) {
     throw new Error(
       coreNodeByteLength > 0
-        ? "WebGPU did not create a Lazuli compilation readback"
+        ? "WebGPU did not create a compilation readback"
         : includesOutput
-        ? "WebGPU did not create Lazuli inferred type readback"
-        : "WebGPU did not create Lazuli type inference buffers",
+        ? "WebGPU did not create inferred type readback"
+        : "WebGPU did not create type inference buffers",
     );
   }
   return { ok: true, buffer };
@@ -611,7 +611,7 @@ export async function createOutputReadbackBuffer(
   let validation: Promise<GPUError | null>;
   try {
     buffer = device.createBuffer({
-      label: "Lazuli inferred type readback",
+      label: "inferred type readback",
       size,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
@@ -619,7 +619,7 @@ export async function createOutputReadbackBuffer(
   } catch (cause) {
     const validationError = await device.popErrorScope();
     if (validationError !== null) {
-      throw new Error(`WebGPU rejected Lazuli inferred type readback: ${validationError.message}`, {
+      throw new Error(`WebGPU rejected inferred type readback: ${validationError.message}`, {
         cause,
       });
     }
@@ -628,10 +628,10 @@ export async function createOutputReadbackBuffer(
   const validationError = await validation;
   if (validationError !== null) {
     buffer?.destroy();
-    throw new Error(`WebGPU rejected Lazuli inferred type readback: ${validationError.message}`);
+    throw new Error(`WebGPU rejected inferred type readback: ${validationError.message}`);
   }
   if (buffer === undefined) {
-    throw new Error("WebGPU did not create Lazuli inferred type readback");
+    throw new Error("WebGPU did not create inferred type readback");
   }
   return buffer;
 }
@@ -648,7 +648,7 @@ export async function createInferenceOutputBuffer(
   let validation: Promise<GPUError | null>;
   try {
     buffer = device.createBuffer({
-      label: "Expanded Lazuli inferred type output",
+      label: "Expanded inferred type output",
       size,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
@@ -666,7 +666,7 @@ export async function createInferenceOutputBuffer(
       return { ok: false, byteLength: size, reason: outOfMemoryError.message };
     }
     if (validationError !== null) {
-      throw new Error(`WebGPU rejected expanded Lazuli type output: ${validationError.message}`, {
+      throw new Error(`WebGPU rejected expanded type output: ${validationError.message}`, {
         cause,
       });
     }
@@ -679,9 +679,9 @@ export async function createInferenceOutputBuffer(
   }
   if (validationError !== null) {
     buffer?.destroy();
-    throw new Error(`WebGPU rejected expanded Lazuli type output: ${validationError.message}`);
+    throw new Error(`WebGPU rejected expanded type output: ${validationError.message}`);
   }
-  if (buffer === undefined) throw new Error("WebGPU did not create expanded Lazuli type output");
+  if (buffer === undefined) throw new Error("WebGPU did not create expanded type output");
   return { ok: true, buffer };
 }
 
@@ -705,7 +705,7 @@ export async function createExpandedWorkspace(
   let validation: Promise<GPUError | null>;
   try {
     expandedBuffer = device.createBuffer({
-      label: "Expanded Lazuli type inference workspace",
+      label: "Expanded type inference workspace",
       size: byteLength,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
     });
@@ -724,7 +724,7 @@ export async function createExpandedWorkspace(
     }
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected expanded Lazuli type inference workspace: ${validationError.message}`,
+        `WebGPU rejected expanded type inference workspace: ${validationError.message}`,
         { cause },
       );
     }
@@ -738,18 +738,18 @@ export async function createExpandedWorkspace(
   if (validationError !== null) {
     expandedBuffer?.destroy();
     throw new Error(
-      `WebGPU rejected expanded Lazuli type inference workspace: ${validationError.message}`,
+      `WebGPU rejected expanded type inference workspace: ${validationError.message}`,
     );
   }
   if (expandedBuffer === undefined) {
-    throw new Error("WebGPU did not create expanded Lazuli type inference workspace");
+    throw new Error("WebGPU did not create expanded type inference workspace");
   }
 
   device.pushErrorScope("validation");
   let copyValidation: Promise<GPUError | null>;
   try {
     const commands = device.createCommandEncoder({
-      label: "Expand Lazuli type inference workspace",
+      label: "Expand type inference workspace",
     });
     copyWorkspaceRegion(
       commands,
@@ -803,7 +803,7 @@ export async function createExpandedWorkspace(
     expandedBuffer.destroy();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli workspace growth for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected workspace growth for ${surface.nodeCount} nodes: ${validationError.message}`,
         { cause },
       );
     }
@@ -813,7 +813,7 @@ export async function createExpandedWorkspace(
     const validationError = await copyValidation;
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli workspace growth for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected workspace growth for ${surface.nodeCount} nodes: ${validationError.message}`,
       );
     }
     await device.queue.onSubmittedWorkDone();
@@ -869,7 +869,7 @@ export async function copyOutputForGrowth(
   device.pushErrorScope("validation");
   let validation: Promise<GPUError | null>;
   try {
-    const commands = device.createCommandEncoder({ label: "Expand Lazuli inferred type output" });
+    const commands = device.createCommandEncoder({ label: "Expand inferred type output" });
     commands.copyBufferToBuffer(source, 0, destination, 0, byteLength);
     device.queue.submit([commands.finish()]);
     validation = device.popErrorScope();
@@ -877,7 +877,7 @@ export async function copyOutputForGrowth(
     const validationError = await device.popErrorScope();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected Lazuli output growth for ${surface.nodeCount} nodes: ${validationError.message}`,
+        `WebGPU rejected output growth for ${surface.nodeCount} nodes: ${validationError.message}`,
         { cause },
       );
     }
@@ -886,7 +886,7 @@ export async function copyOutputForGrowth(
   const validationError = await validation;
   if (validationError !== null) {
     throw new Error(
-      `WebGPU rejected Lazuli output growth for ${surface.nodeCount} nodes: ${validationError.message}`,
+      `WebGPU rejected output growth for ${surface.nodeCount} nodes: ${validationError.message}`,
     );
   }
   await device.queue.onSubmittedWorkDone();
@@ -1007,7 +1007,7 @@ export function discardGrowthTransition(
   state: InferenceStateSnapshot,
 ): number {
   if (state.transitions === 0) {
-    throw new Error("GPU Lazuli type inference exhausted an arena before its first transition");
+    throw new Error("GPU type inference exhausted an arena before its first transition");
   }
   const resumedTransitions = state.transitions - 1;
   writeStateWord(

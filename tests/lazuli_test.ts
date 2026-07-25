@@ -153,7 +153,7 @@ Deno.test("accepts matching annotations and rejects mismatches", async () => {
 
     const mismatch = await compiler.compile("let main : Bool = 42;");
     equal(mismatch.ok, false);
-    if (!mismatch.ok) equal(mismatch.diagnostics[0].code, "L2102");
+    if (!mismatch.ok) equal(mismatch.diagnostics[0].code, "F2102");
   });
 });
 
@@ -162,7 +162,7 @@ Deno.test("reports an occurs-check failure for self-application", async () => {
     const compilation = await compiler.compile("let main = value => value value;");
 
     equal(compilation.ok, false);
-    if (!compilation.ok) equal(compilation.diagnostics[0].code, "L2103");
+    if (!compilation.ok) equal(compilation.diagnostics[0].code, "F2103");
   });
 });
 
@@ -176,7 +176,7 @@ Deno.test("bounds diagnostics for exponentially shared inferred types and remain
 
     equal(failed.ok, false);
     if (failed.ok) return;
-    equal(failed.diagnostics[0].code, "L2103");
+    equal(failed.diagnostics[0].code, "F2103");
     ok(failed.diagnostics[0].message.length <= 9_000);
 
     const recovered = await compiler.compile("let main = 42;");
@@ -190,7 +190,7 @@ Deno.test("rejects a nonconcrete polymorphic main type", async () => {
     const compilation = await compiler.compile("let main = value => value;");
 
     equal(compilation.ok, false);
-    if (!compilation.ok) equal(compilation.diagnostics[0].code, "L2104");
+    if (!compilation.ok) equal(compilation.diagnostics[0].code, "F2104");
   });
 });
 
@@ -401,7 +401,7 @@ Deno.test("rejects a cyclic host input value before GPU evaluation", async () =>
       equal(result.ok, false);
       if (result.ok) return;
       equal(result.fault.kind, "bad-input");
-      equal(result.fault.code, "L3009");
+      equal(result.fault.code, "F3009");
       deepStrictEqual(result.stats, {
         steps: 0,
         allocations: 0,
@@ -511,14 +511,14 @@ Deno.test("reifies and accepts host tuple and unit values", async () => {
 Deno.test("rejects function declarations with more than one parameter", () => {
   const parsing = parseLazuliSource("fn add left right = left + right; let main = add 20 22;");
   equal(parsing.ok, false);
-  if (!parsing.ok) equal(parsing.diagnostics[0].code, "L1001");
+  if (!parsing.ok) equal(parsing.diagnostics[0].code, "F1001");
 });
 
 Deno.test("requires whitespace before every function argument", () => {
   const parsing = parseLazuliSource("let identity = value => value; let main = identity(42);");
   equal(parsing.ok, false);
   if (!parsing.ok) {
-    equal(parsing.diagnostics[0].code, "L1001");
+    equal(parsing.diagnostics[0].code, "F1001");
     match(parsing.diagnostics[0].message, /requires whitespace/i);
   }
 });
@@ -529,7 +529,7 @@ Deno.test("requires whitespace before a specialization type descriptor", () => {
   );
   equal(parsing.ok, false);
   if (!parsing.ok) {
-    equal(parsing.diagnostics[0].code, "L1001");
+    equal(parsing.diagnostics[0].code, "F1001");
     match(parsing.diagnostics[0].message, /requires whitespace/i);
   }
 });
@@ -573,7 +573,7 @@ Deno.test("reports malformed syntax as a parse diagnostic", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L1001");
+    equal(compilation.diagnostics[0].code, "F1001");
     equal(compilation.diagnostics[0].stage, "parse");
   });
 });
@@ -586,7 +586,7 @@ Deno.test("reports deeply nested parser input deterministically", () => {
   for (const parsing of results) {
     equal(parsing.ok, false);
     if (parsing.ok) return;
-    equal(parsing.diagnostics[0].code, "L1003");
+    equal(parsing.diagnostics[0].code, "F1003");
     match(parsing.diagnostics[0].message, /stack-safe limit/);
   }
   deepStrictEqual(results.slice(1), results.slice(0, -1));
@@ -600,7 +600,7 @@ Deno.test("does not throw when source exceeds the generated parser capacity", ()
   const parsing = parseLazuliSource(`${definitions}fn main=0;`);
 
   if (parsing.ok) return;
-  equal(parsing.diagnostics[0].code, "L1003");
+  equal(parsing.diagnostics[0].code, "F1003");
   match(parsing.diagnostics[0].message, /parser's capacity|memory pages/);
 });
 
@@ -621,7 +621,7 @@ Deno.test("classifies the generated parser trace limit as bounded exhaustion", (
 
   equal(parsing.ok, false);
   if (parsing.ok) return;
-  equal(parsing.diagnostics[0].code, "L1003");
+  equal(parsing.diagnostics[0].code, "F1003");
   match(parsing.diagnostics[0].message, /PARSER_TRACE_LIMIT/);
 });
 
@@ -630,7 +630,7 @@ Deno.test("rejects reserved words as declaration names", () => {
 
   equal(parsing.ok, false);
   if (parsing.ok) return;
-  equal(parsing.diagnostics[0].code, "L1001");
+  equal(parsing.diagnostics[0].code, "F1001");
   match(parsing.diagnostics[0].message, /Reserved word \"true\"/);
 });
 
@@ -640,7 +640,7 @@ Deno.test("reports integer literals outside the i32 range", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L1002");
+    equal(compilation.diagnostics[0].code, "F1002");
     match(compilation.diagnostics[0].message, /outside the signed i32 range/);
   });
 });
@@ -654,7 +654,7 @@ Deno.test("reports an unknown name with its UTF-8 byte span", async () => {
     if (compilation.ok) return;
     const diagnostic = compilation.diagnostics[0];
     const startByte = new TextEncoder().encode(source.slice(0, source.indexOf("absent"))).length;
-    equal(diagnostic.code, "L2001");
+    equal(diagnostic.code, "F2001");
     deepStrictEqual(diagnostic.span, { startByte, endByte: startByte + "absent".length });
   });
 });
@@ -667,7 +667,7 @@ Deno.test("reports duplicate top-level definitions", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2002");
+    equal(compilation.diagnostics[0].code, "F2002");
     match(compilation.diagnostics[0].message, /duplicate top-level definition "answer"/);
   });
 });
@@ -693,7 +693,7 @@ Deno.test("validates compiler fuel, dispatch quanta, and cancellation controls",
   await withLazuliRuntime(async ({ compiler }) => {
     const exhausted = await compiler.compile("let main = 42;", { maximumSteps: 1 });
     equal(exhausted.ok, false);
-    if (!exhausted.ok) equal(exhausted.diagnostics[0].code, "L1003");
+    if (!exhausted.ok) equal(exhausted.diagnostics[0].code, "F1003");
 
     await rejects(
       () => compiler.compile("let main = 42;", { maximumStepsPerDispatch: 0 }),
@@ -741,7 +741,7 @@ Deno.test("requires a top-level main definition", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2003");
+    equal(compilation.diagnostics[0].code, "F2003");
     deepStrictEqual(compilation.diagnostics[0].span, {
       startByte: source.length,
       endByte: source.length,
@@ -805,7 +805,7 @@ Deno.test("reports demanded cyclic globals as blackholes", async () => {
     equal(result.ok, false);
     if (result.ok) return;
     equal(result.fault.kind, "blackhole");
-    equal(result.fault.code, "L3005");
+    equal(result.fault.code, "F3005");
   });
 });
 
@@ -950,7 +950,7 @@ Deno.test("rejects malformed core child edges as invalid modules", async () => {
       equal(result.ok, false, `${description} should be rejected`);
       if (result.ok) continue;
       equal(result.fault.kind, "bad-module", description);
-      equal(result.fault.code, "L3001", description);
+      equal(result.fault.code, "F3001", description);
     }
   });
 });
@@ -1024,7 +1024,7 @@ Deno.test("faults safely if a constructor reaches a zero-arm core case", async (
       equal(result.ok, false);
       if (result.ok) return;
       equal(result.fault.kind, "non-exhaustive-case");
-      equal(result.fault.code, "L3008");
+      equal(result.fault.code, "F3008");
       match(result.fault.message, /Fabricated/);
     } finally {
       module.destroy();
@@ -1038,7 +1038,7 @@ Deno.test("reports strict primitive type mismatches during compilation", async (
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2102");
+    equal(compilation.diagnostics[0].code, "F2102");
   });
 });
 
@@ -1049,7 +1049,7 @@ Deno.test("reports division by zero only when demanded", async () => {
     equal(result.ok, false);
     if (result.ok) return;
     equal(result.fault.kind, "divide-by-zero");
-    equal(result.fault.code, "L3007");
+    equal(result.fault.code, "F3007");
   });
 });
 
@@ -1090,13 +1090,13 @@ Deno.test("reports continuation stack exhaustion", async () => {
   });
 });
 
-Deno.test("destroys GPU Lazuli modules idempotently", async () => {
+Deno.test("destroys GPU modules idempotently", async () => {
   await withLazuliRuntime(async ({ compiler }) => {
     const module = await compileModule(compiler, "fn main = 42;");
     module.destroy();
     module.destroy();
 
-    await rejects(() => module.readCoreNodes(), /cannot read a destroyed GPU Lazuli module/);
+    await rejects(() => module.readCoreNodes(), /cannot read a destroyed GPU module/);
   });
 });
 
@@ -1185,7 +1185,7 @@ Deno.test("reports a non-exhaustive constructor case during compilation", async 
 
     equal(result.ok, false);
     if (result.ok) return;
-    equal(result.diagnostics[0].code, "L2010");
+    equal(result.diagnostics[0].code, "F2010");
   });
 });
 
@@ -1197,7 +1197,7 @@ Deno.test("requires a constructor-compatible scrutinee for case", async () => {
 
     equal(result.ok, false);
     if (result.ok) return;
-    equal(result.diagnostics[0].code, "L2102");
+    equal(result.diagnostics[0].code, "F2102");
   });
 });
 
@@ -1210,7 +1210,7 @@ Deno.test("rejects a case pattern with the wrong constructor arity", async () =>
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2008");
+    equal(compilation.diagnostics[0].code, "F2008");
   });
 });
 
@@ -1222,7 +1222,7 @@ Deno.test("rejects an unknown constructor in a case pattern", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2007");
+    equal(compilation.diagnostics[0].code, "F2007");
   });
 });
 
@@ -1234,7 +1234,7 @@ Deno.test("rejects duplicate data type declarations", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2004");
+    equal(compilation.diagnostics[0].code, "F2004");
   });
 });
 
@@ -1246,7 +1246,7 @@ Deno.test("rejects duplicate data constructors", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2005");
+    equal(compilation.diagnostics[0].code, "F2005");
   });
 });
 
@@ -1258,7 +1258,7 @@ Deno.test("rejects a constructor and function sharing a top-level name", async (
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2006");
+    equal(compilation.diagnostics[0].code, "F2006");
   });
 });
 
@@ -1274,7 +1274,7 @@ Deno.test("rejects duplicate constructor arms in one case", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2009");
+    equal(compilation.diagnostics[0].code, "F2009");
   });
 });
 
@@ -1328,7 +1328,7 @@ Deno.test("requires a parameter on a local recursive function", async () => {
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L1001");
+    equal(compilation.diagnostics[0].code, "F1001");
   });
 });
 
@@ -1340,7 +1340,7 @@ Deno.test("limits a local recursive name to its binding expression", async () =>
 
     equal(compilation.ok, false);
     if (compilation.ok) return;
-    equal(compilation.diagnostics[0].code, "L2001");
+    equal(compilation.diagnostics[0].code, "F2001");
   });
 });
 
@@ -1766,7 +1766,7 @@ Deno.test("rejects malformed metadata for only the affected Lazuli batch member"
       equal(results[1]?.ok, false);
       if (results[1]?.ok === false) {
         equal(results[1].fault.kind, "bad-module");
-        equal(results[1].fault.code, "L3001");
+        equal(results[1].fault.code, "F3001");
       }
     } finally {
       module.destroy();
@@ -2113,7 +2113,7 @@ Deno.test("reports invalid host constructors before GPU evaluation", async () =>
       equal(result.ok, false);
       if (result.ok) return;
       equal(result.fault.kind, "bad-input");
-      equal(result.fault.code, "L3009");
+      equal(result.fault.code, "F3009");
       deepStrictEqual(result.stats, {
         steps: 0,
         allocations: 0,
@@ -2156,7 +2156,7 @@ Deno.test("matches indexed constructor results before decoding host fields", asy
       equal(rejected.ok, false);
       if (rejected.ok) return;
       equal(rejected.fault.kind, "bad-input");
-      equal(rejected.fault.code, "L3009");
+      equal(rejected.fault.code, "F3009");
       deepStrictEqual(rejected.stats, {
         steps: 0,
         allocations: 0,
@@ -2206,7 +2206,7 @@ Deno.test("deep results force lazy fields and enforce their node limit", async (
     equal(sizeFault.ok, false);
     if (!sizeFault.ok) {
       equal(sizeFault.fault.kind, "result-too-large");
-      equal(sizeFault.fault.code, "L3010");
+      equal(sizeFault.fault.code, "F3010");
     }
   });
 });
@@ -2222,7 +2222,7 @@ Deno.test("reports cyclic deep results without changing weak-head evaluation", a
     equal(deep.ok, false);
     if (!deep.ok) {
       equal(deep.fault.kind, "cyclic-result");
-      equal(deep.fault.code, "L3011");
+      equal(deep.fault.code, "F3011");
     }
   });
 });

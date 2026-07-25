@@ -102,10 +102,8 @@ export const CORE_V1_PRIMITIVE_CAPABILITIES: readonly PrimitiveCapability[] = Ob
   ] as const,
 );
 
-type DiagnosticCodeOf<Code extends string> = Code extends `L${infer Suffix}` ? `F${Suffix}`
-  : never;
-
-export type DiagnosticCode = DiagnosticCodeOf<SemanticDiagnosticCode>;
+/** One code namespace, shared with the layer that produces them. */
+export type DiagnosticCode = SemanticDiagnosticCode;
 
 export interface RelatedDiagnostic {
   readonly message: string;

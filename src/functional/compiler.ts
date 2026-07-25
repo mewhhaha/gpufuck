@@ -828,7 +828,7 @@ function functionalFailure(diagnostic: SemanticDiagnostic): CompileResult {
 function functionalDiagnostic(diagnostic: SemanticDiagnostic): Diagnostic {
   return {
     stage: "compile",
-    code: `F${diagnostic.code.slice(1)}` as DiagnosticCode,
+    code: diagnostic.code,
     message: diagnostic.message,
     span: diagnostic.span,
     ...(diagnostic.related === undefined ? {} : {

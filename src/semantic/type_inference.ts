@@ -159,7 +159,7 @@ function numericTypeForUnaryOperator(operator: number): InferenceType {
     case 5:
       return FLOAT_32;
     default:
-      throw new Error(`Unsupported Lazuli unary operator ${operator}.`);
+      throw new Error(`Unsupported unary operator ${operator}.`);
   }
 }
 
@@ -171,7 +171,7 @@ function numericTypeForBinaryOperator(operator: number): InferenceType {
   if (operator <= 46) return INTEGER;
   if (operator <= 52) return SIGNED_INTEGER_64;
   if (operator === BinaryOperator.RemainderFloat64) return FLOAT_64;
-  throw new Error(`Unsupported Lazuli binary operator ${operator}.`);
+  throw new Error(`Unsupported binary operator ${operator}.`);
 }
 
 function binaryOperatorIsComparison(operator: number): boolean {
@@ -211,7 +211,7 @@ function numericConversionTypes(operator: number): readonly [InferenceType, Infe
     case 14:
       return [INTEGER, FLOAT_32];
     default:
-      throw new Error(`Unsupported Lazuli numeric conversion ${operator}.`);
+      throw new Error(`Unsupported numeric conversion ${operator}.`);
   }
 }
 
@@ -249,11 +249,11 @@ class InferenceContext {
 
     const mainScheme = this.#definitionSchemes.get(this.#surface.entrySymbol);
     if (mainScheme === undefined) {
-      throw this.failure("L2104", "main has no inferred type", { startByte: 0, endByte: 0 });
+      throw this.failure("F2104", "main has no inferred type", { startByte: 0, endByte: 0 });
     }
     if (this.containsTypeParameter(mainScheme.type)) {
       throw this.failure(
-        "L2104",
+        "F2104",
         `main must have a concrete type; inferred ${this.formatType(mainScheme.type)}`,
         this.definitionSpan(this.#definitionBySymbol.get(this.#surface.entrySymbol)),
       );
@@ -299,7 +299,7 @@ class InferenceContext {
     for (let typeIndex = 0; typeIndex < this.#surface.typeCount; typeIndex++) {
       const declaration = this.#surface.typeDeclarations[typeIndex];
       if (declaration === undefined) {
-        throw new Error(`Lazuli type metadata omitted type ${typeIndex}.`);
+        throw new Error(`type metadata omitted type ${typeIndex}.`);
       }
       const span = this.typeSpan(typeIndex);
       const encodedSymbol = this.typeWord(typeIndex, AlgebraicTypeWord.Symbol);
@@ -350,7 +350,7 @@ class InferenceContext {
     for (let typeIndex = 0; typeIndex < this.#surface.typeCount; typeIndex++) {
       const declaration = this.#surface.typeDeclarations[typeIndex];
       if (declaration === undefined) {
-        throw new Error(`Lazuli type metadata omitted type ${typeIndex}.`);
+        throw new Error(`type metadata omitted type ${typeIndex}.`);
       }
       const typeSpan = this.typeSpan(typeIndex);
       const parameterScope = new Map<string, TypeParameter>();
@@ -375,7 +375,7 @@ class InferenceContext {
         const constructorIndex = firstConstructor + constructorOffset;
         const constructor = declaration.constructors[constructorOffset];
         if (constructor === undefined) {
-          throw new Error(`Lazuli type metadata omitted constructor ${constructorIndex}.`);
+          throw new Error(`type metadata omitted constructor ${constructorIndex}.`);
         }
         const constructorSpan = this.constructorSpan(constructorIndex);
         const encodedTypeIndex = this.constructorWord(constructorIndex, ConstructorWord.Type);
@@ -603,7 +603,7 @@ class InferenceContext {
       const component: number[] = [];
       while (stack.length > 0) {
         const member = stack.pop();
-        if (member === undefined) throw new Error("Lazuli SCC stack ended unexpectedly.");
+        if (member === undefined) throw new Error("SCC stack ended unexpectedly.");
         onStack.delete(member);
         component.push(member);
         if (member === definitionIndex) break;
@@ -704,7 +704,7 @@ class InferenceContext {
           return;
         }
         default:
-          throw new Error(`Unsupported Lazuli surface tag ${tag} at node ${nodeIndex}.`);
+          throw new Error(`Unsupported surface tag ${tag} at node ${nodeIndex}.`);
       }
     };
     visit(rootNode, new Set());
@@ -1054,7 +1054,7 @@ class InferenceContext {
       case ExpressionTag.Case:
         return this.inferCase(nodeIndex, environment, expected);
       default:
-        throw new Error(`Unsupported Lazuli expression tag ${tag} at node ${nodeIndex}.`);
+        throw new Error(`Unsupported expression tag ${tag} at node ${nodeIndex}.`);
     }
   }
 
@@ -1121,7 +1121,7 @@ class InferenceContext {
       if (firstConstructor !== undefined) {
         const symbol = this.constructorWord(firstConstructor, ConstructorWord.Symbol);
         throw this.failure(
-          "L2010",
+          "F2010",
           `non-exhaustive case; missing constructor ${JSON.stringify(this.symbolName(symbol))}`,
           span,
         );
@@ -1158,7 +1158,7 @@ class InferenceContext {
         const binder = arm.binders[binderIndex];
         const field = instantiated.fields[binderIndex];
         if (binder === undefined || field === undefined) {
-          throw new Error(`Lazuli case arm ${armIndex} omitted binder ${binderIndex}.`);
+          throw new Error(`case arm ${armIndex} omitted binder ${binderIndex}.`);
         }
         armEnvironment.set(binder.symbol, { parameters: [], type: field });
       }
@@ -1175,13 +1175,13 @@ class InferenceContext {
         ? undefined
         : this.#typeByName.get(typeDeclaration.name);
       if (shape === undefined) {
-        throw new Error(`Lazuli case refers to missing type ${matchedTypeIndex}.`);
+        throw new Error(`case refers to missing type ${matchedTypeIndex}.`);
       }
       for (const constructorIndex of shape.constructors) {
         const symbol = this.constructorWord(constructorIndex, ConstructorWord.Symbol);
         if (matchedConstructors.has(symbol)) continue;
         throw this.failure(
-          "L2010",
+          "F2010",
           `non-exhaustive case; missing constructor ${JSON.stringify(this.symbolName(symbol))}`,
           span,
         );
@@ -1232,7 +1232,7 @@ class InferenceContext {
     if (scrutineeType.kind === "variable") {
       const declaration = this.#surface.typeDeclarations[shape.typeIndex];
       if (declaration === undefined) {
-        throw new Error(`Lazuli indexed case refers to missing type ${shape.typeIndex}.`);
+        throw new Error(`indexed case refers to missing type ${shape.typeIndex}.`);
       }
       const shapedScrutinee: NamedType = {
         kind: "named",
@@ -1291,7 +1291,7 @@ class InferenceContext {
           !this.matchPatternType(instantiated.result, scrutineeType)
         ) {
           throw this.failure(
-            "L2102",
+            "F2102",
             `constructor ${
               JSON.stringify(constructor.name)
             } is inaccessible: result ${constructorResult} is incompatible with scrutinee ${scrutineeDescription}`,
@@ -1312,7 +1312,7 @@ class InferenceContext {
           const binder = arm.binders[binderIndex];
           const field = instantiated.fields[binderIndex];
           if (binder === undefined || field === undefined) {
-            throw new Error(`Lazuli case arm ${armIndex} omitted binder ${binderIndex}.`);
+            throw new Error(`case arm ${armIndex} omitted binder ${binderIndex}.`);
           }
           armEnvironment.set(binder.symbol, { parameters: [], type: field });
         }
@@ -1357,7 +1357,7 @@ class InferenceContext {
       const constructor = this.#constructorBySymbol.get(constructorSymbol);
       if (constructor === undefined) {
         throw new Error(
-          `Lazuli indexed type ${shape.name} omitted constructor ${constructorIndex}.`,
+          `indexed type ${shape.name} omitted constructor ${constructorIndex}.`,
         );
       }
       const checkpoint = this.#refinementTrail.length;
@@ -1375,7 +1375,7 @@ class InferenceContext {
       }
       if (!compatible || matchedConstructors.has(constructorSymbol)) continue;
       throw this.failure(
-        "L2010",
+        "F2010",
         `non-exhaustive case; missing constructor ${
           JSON.stringify(this.symbolName(constructorSymbol))
         }`,
@@ -1383,7 +1383,7 @@ class InferenceContext {
       );
     }
     if (inferredResult === null) {
-      throw new Error(`Lazuli indexed case ${nodeIndex} did not infer a result type.`);
+      throw new Error(`indexed case ${nodeIndex} did not infer a result type.`);
     }
     return inferredResult;
   }
@@ -1690,7 +1690,7 @@ class InferenceContext {
   private rollbackRefinements(checkpoint: number): void {
     while (this.#refinementTrail.length > checkpoint) {
       const refinement = this.#refinementTrail.pop();
-      if (refinement === undefined) throw new Error("Lazuli refinement trail underflowed.");
+      if (refinement === undefined) throw new Error("refinement trail underflowed.");
       refinement.source.refinement = refinement.previous;
     }
   }
@@ -1737,7 +1737,7 @@ class InferenceContext {
           const leftArgument = left.arguments[index];
           const rightArgument = right.arguments[index];
           if (leftArgument === undefined || rightArgument === undefined) {
-            throw new Error(`Named Lazuli type omitted argument ${index}.`);
+            throw new Error(`Named type omitted argument ${index}.`);
           }
           this.unify(leftArgument, rightArgument, span);
         }
@@ -1770,7 +1770,7 @@ class InferenceContext {
     }
     if (this.occurs(variable, type)) {
       throw this.failure(
-        "L2103",
+        "F2103",
         `cannot construct infinite type by unifying ${this.formatType(variable)} with ${
           this.formatType(type)
         }`,
@@ -1963,7 +1963,7 @@ class InferenceContext {
         });
       case "variable":
       case "rigid":
-        throw new Error(`Cannot expose non-concrete Lazuli type ${this.formatType(pruned)}.`);
+        throw new Error(`Cannot expose non-concrete type ${this.formatType(pruned)}.`);
     }
   }
 
@@ -2039,7 +2039,7 @@ class InferenceContext {
     span: SemanticDiagnostic["span"],
   ): InferenceDiagnostic {
     return this.failure(
-      "L2102",
+      "F2102",
       `type mismatch: expected ${this.formatType(expected)}, received ${this.formatType(received)}`,
       span,
     );
@@ -2049,11 +2049,11 @@ class InferenceContext {
     message: string,
     span: SemanticDiagnostic["span"],
   ): InferenceDiagnostic {
-    return this.failure("L2101", message, span);
+    return this.failure("F2101", message, span);
   }
 
   private failure(
-    code: "L2010" | "L2101" | "L2102" | "L2103" | "L2104",
+    code: "F2010" | "F2101" | "F2102" | "F2103" | "F2104",
     message: string,
     span: SemanticDiagnostic["span"],
   ): InferenceDiagnostic {
@@ -2106,14 +2106,14 @@ class InferenceContext {
   private requiredChild(nodeIndex: number, word: 4 | 5 | 6): number {
     const child = this.nodeWord(nodeIndex, word);
     if (child === NO_INDEX) {
-      throw new Error(`Lazuli node ${nodeIndex} omitted child word ${word}.`);
+      throw new Error(`node ${nodeIndex} omitted child word ${word}.`);
     }
     return child;
   }
 
   private nodeWord(nodeIndex: number, word: number): number {
     const value = this.#surface.nodeWords[nodeIndex * NODE_WORD_LENGTH + word];
-    if (value === undefined) throw new Error(`Lazuli node ${nodeIndex} omitted word ${word}.`);
+    if (value === undefined) throw new Error(`node ${nodeIndex} omitted word ${word}.`);
     return value;
   }
 
@@ -2122,14 +2122,14 @@ class InferenceContext {
       definitionIndex * DEFINITION_WORD_LENGTH + word
     ];
     if (value === undefined) {
-      throw new Error(`Lazuli definition ${definitionIndex} omitted word ${word}.`);
+      throw new Error(`definition ${definitionIndex} omitted word ${word}.`);
     }
     return value;
   }
 
   private typeWord(typeIndex: number, word: number): number {
     const value = this.#surface.typeWords[typeIndex * TYPE_WORD_LENGTH + word];
-    if (value === undefined) throw new Error(`Lazuli type ${typeIndex} omitted word ${word}.`);
+    if (value === undefined) throw new Error(`type ${typeIndex} omitted word ${word}.`);
     return value;
   }
 
@@ -2138,7 +2138,7 @@ class InferenceContext {
       constructorIndex * CONSTRUCTOR_WORD_LENGTH + word
     ];
     if (value === undefined) {
-      throw new Error(`Lazuli constructor ${constructorIndex} omitted word ${word}.`);
+      throw new Error(`constructor ${constructorIndex} omitted word ${word}.`);
     }
     return value;
   }
@@ -2194,7 +2194,7 @@ class InferenceContext {
 
   private requiredMapValue<K, V>(values: ReadonlyMap<K, V>, key: K): V {
     const value = values.get(key);
-    if (value === undefined) throw new Error("Lazuli inference map omitted a required value.");
+    if (value === undefined) throw new Error("inference map omitted a required value.");
     return value;
   }
 }

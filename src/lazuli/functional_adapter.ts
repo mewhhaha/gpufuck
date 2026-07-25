@@ -43,7 +43,7 @@ export function lazuliDiagnosticFromFunctional(
 ): SemanticDiagnostic {
   return {
     stage: "compile",
-    code: `L${diagnostic.code.slice(1)}` as SemanticDiagnosticCode,
+    code: diagnostic.code,
     message: diagnostic.message,
     span: diagnostic.span,
   };

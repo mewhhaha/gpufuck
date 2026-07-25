@@ -74,6 +74,12 @@ Three surface primitives, each because two unrelated frontends hand-rolled the s
   has; `GpuEvaluator` _wraps_ the GPU backend and adds the Wasm fallback. Those are two layers, not
   two names, so they are now `SemanticValue`, `GpuSemanticModule`, and `GpuSemanticEvaluator` —
   named for the layer they belong to.
+- **Diagnostic codes are one namespace.** The semantic layer emitted `L####`, the public API
+  `F####`, and three separate sites did `` `F${code.slice(1)}` `` string surgery between them,
+  bridged by a mapped type that resolved to `never` if either prefix ever changed. The semantic
+  codes are now `F####` too, so the mapped type, the three remaps, and a
+  `replaceAll("Lazuli", "functional")` over fault messages are all deleted — the messages say what
+  they mean at the point they are written.
 - `GpuEvaluator.evaluate` now selects a runtime instead of rejecting programs. It inspects resolved
   Core before dispatch and delegates programs needing 64-bit floats, portable whole-number f64,
   text, bytes, runtime faults, buffer append, stores, structural equality, 32-bit float division, or

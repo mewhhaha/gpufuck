@@ -355,7 +355,7 @@ function parseLazuliSourceWithOffsets(
       }
       const diagnostics = parsed.diagnostics.map((diagnostic): SemanticDiagnostic => ({
         stage: "parse",
-        code: "L1001",
+        code: "F1001",
         message: `${diagnostic.code}: ${diagnostic.message}`,
         span: byteOffsets.span(diagnostic.span),
       }));
@@ -377,7 +377,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ReservedIdentifier) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: `Reserved word ${
             JSON.stringify(error.spelling)
           } cannot be used as an identifier.`,
@@ -387,7 +387,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ReservedBuiltinDeclaration) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -395,7 +395,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ApplicationSpacingError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -403,7 +403,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof TypeApplicationError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -411,7 +411,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof TypeApplicationSpacingError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -419,7 +419,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ConstSpecializationSpacingError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -443,7 +443,7 @@ function parseLazuliSourceWithOffsets(
       if (error instanceof ConstSpecializationError) {
         return failure({
           stage: "parse",
-          code: "L1001",
+          code: "F1001",
           message: error.message,
           span: byteOffsets.span(error.span),
         });
@@ -2183,7 +2183,7 @@ function summarizeDefinitions(
         if (value < minimumI32 || value > maximumI32) {
           integerDiagnostics.push({
             stage: "parse",
-            code: "L1002",
+            code: "F1002",
             message: `Integer ${expression.text} is outside the signed i32 range.`,
             span: byteOffsets.span(expression.span),
           });
@@ -2800,5 +2800,5 @@ function asNonemptyDiagnostics(
 }
 
 function limitDiagnostic(message: string, span: Span): SemanticDiagnostic {
-  return { stage: "parse", code: "L1003", message, span };
+  return { stage: "parse", code: "F1003", message, span };
 }

@@ -190,74 +190,74 @@ export interface SemanticEvaluationStats {
 export type SemanticRuntimeFault =
   | {
     readonly kind: "bad-module";
-    readonly code: "L3001";
+    readonly code: "F3001";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "out-of-fuel";
-    readonly code: "L3002";
+    readonly code: "F3002";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "out-of-heap";
-    readonly code: "L3003";
+    readonly code: "F3003";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "stack-overflow";
-    readonly code: "L3004";
+    readonly code: "F3004";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "blackhole";
-    readonly code: "L3005";
+    readonly code: "F3005";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "type-error";
-    readonly code: "L3006";
+    readonly code: "F3006";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "divide-by-zero";
-    readonly code: "L3007";
+    readonly code: "F3007";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "non-exhaustive-case";
-    readonly code: "L3008";
+    readonly code: "F3008";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "bad-input";
-    readonly code: "L3009";
+    readonly code: "F3009";
     readonly message: string;
     readonly sourceByteOffset: null;
     readonly fieldPath: readonly number[];
   }
   | {
     readonly kind: "result-too-large";
-    readonly code: "L3010";
+    readonly code: "F3010";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "cyclic-result";
-    readonly code: "L3011";
+    readonly code: "F3011";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   }
   | {
     readonly kind: "invalid-numeric-conversion";
-    readonly code: "L3012";
+    readonly code: "F3012";
     readonly message: string;
     readonly sourceByteOffset: number | null;
   };
@@ -389,7 +389,7 @@ function badModuleFault(message: string): SemanticEvaluationResult {
     ok: false,
     fault: {
       kind: "bad-module",
-      code: "L3001",
+      code: "F3001",
       message,
       sourceByteOffset: null,
     },
@@ -407,7 +407,7 @@ function badInputFault(message: string, fieldPath: readonly number[]): SemanticE
     ok: false,
     fault: {
       kind: "bad-input",
-      code: "L3009",
+      code: "F3009",
       message,
       sourceByteOffset: null,
       fieldPath,
@@ -682,14 +682,14 @@ function validateInputValue(
 
   while (pending.length !== 0) {
     const entry = pending.pop();
-    if (entry === undefined) throw new Error("Lazuli input validator traversal ended unexpectedly");
+    if (entry === undefined) throw new Error("input validator traversal ended unexpectedly");
     if ("leave" in entry) {
       activeValues.delete(entry.leave);
       continue;
     }
     const { value, expectedType, path } = entry;
     if (typeof value !== "object" || value === null) {
-      return badInputAtPath(`${inputPathText(path)} must be a tagged Lazuli input value`, path);
+      return badInputAtPath(`${inputPathText(path)} must be a tagged input value`, path);
     }
     if (activeValues.has(value)) {
       return badInputAtPath(`${inputPathText(path)} contains a cyclic host value`, path);
@@ -764,7 +764,7 @@ function validateInputValue(
       for (let fieldIndex = expectedType.values.length - 1; fieldIndex >= 0; fieldIndex--) {
         const fieldType = expectedType.values[fieldIndex];
         if (fieldType === undefined) {
-          throw new Error(`Lazuli tuple type omitted field ${fieldIndex}`);
+          throw new Error(`tuple type omitted field ${fieldIndex}`);
         }
         pending.push({
           value: values[fieldIndex],
@@ -849,7 +849,7 @@ function validateInputValue(
       const fieldType = fieldTypes[fieldIndex];
       if (fieldType === undefined) {
         throw new Error(
-          `Lazuli input constructor ${constructorValue.name} omitted field type ${fieldIndex}`,
+          `input constructor ${constructorValue.name} omitted field type ${fieldIndex}`,
         );
       }
       pending.push({
@@ -874,7 +874,7 @@ function inputParameterType(
 function evaluationOutputType(module: GpuSemanticModule, hasInput: boolean): Type {
   if (!hasInput) return module.mainType;
   if (module.mainType.kind !== "function") {
-    throw new Error("Lazuli evaluator accepted input for a non-function main");
+    throw new Error("evaluator accepted input for a non-function main");
   }
   return module.mainType.result;
 }
@@ -896,12 +896,12 @@ function encodeInputValue(
   for (let inputIndex = 0; inputIndex < entries.length; inputIndex++) {
     const entry = entries[inputIndex];
     if (entry === undefined) {
-      throw new Error(`Lazuli input encoder omitted node ${inputIndex}`);
+      throw new Error(`input encoder omitted node ${inputIndex}`);
     }
     let value = entry.value;
     if (typeof value !== "object" || value === null) {
       return badInputAtPath(
-        `${inputPathText(entry.path)} must be a tagged Lazuli input value`,
+        `${inputPathText(entry.path)} must be a tagged input value`,
         entry.path,
       );
     }
@@ -1016,7 +1016,7 @@ function encodeInputValue(
     }
     if (taggedValue.kind !== "constructor") {
       return badInputAtPath(
-        `${inputPathText(entry.path)}.kind is not a supported Lazuli input kind`,
+        `${inputPathText(entry.path)}.kind is not a supported input kind`,
         entry.path,
       );
     }
@@ -1072,7 +1072,7 @@ function encodeInputValue(
     for (let fieldIndex = 0; fieldIndex < constructorValue.fields.length; fieldIndex++) {
       const fieldType = fieldTypes[fieldIndex];
       if (fieldType === undefined) {
-        throw new Error(`Lazuli input encoder omitted type for field ${fieldIndex}`);
+        throw new Error(`input encoder omitted type for field ${fieldIndex}`);
       }
       entries.push({
         value: constructorValue.fields[fieldIndex],
@@ -1081,7 +1081,7 @@ function encodeInputValue(
       });
     }
     if (entries.length >= NO_INDEX) {
-      throw new RangeError(`Lazuli input contains ${entries.length} nodes, beyond the u32 limit`);
+      throw new RangeError(`input contains ${entries.length} nodes, beyond the u32 limit`);
     }
     words[wordOffset] = VALUE_CONSTRUCTOR;
     words[wordOffset + 1] = constructorIndex;
@@ -1115,7 +1115,7 @@ function expandListInput(
   let list: SemanticInputValue = { kind: "constructor", name: "Nil", fields: [] };
   for (let valueIndex = values.length - 1; valueIndex >= 0; valueIndex--) {
     const value = values[valueIndex];
-    if (value === undefined) throw new Error(`Lazuli list input omitted value ${valueIndex}`);
+    if (value === undefined) throw new Error(`list input omitted value ${valueIndex}`);
     list = { kind: "constructor", name: "Cons", fields: [value, list] };
   }
   return list;
@@ -1298,7 +1298,7 @@ function checkedAggregateCount(
   const totalCount = accumulatedCount + laneCount;
   if (!Number.isSafeInteger(totalCount) || totalCount > NO_INDEX) {
     throw new RangeError(
-      `Lazuli batch ${region} count cannot be represented as a u32: lane=${resultIndex}, accumulated=${accumulatedCount}, laneCount=${laneCount}, total=${totalCount}, maximum=${NO_INDEX}`,
+      `batch ${region} count cannot be represented as a u32: lane=${resultIndex}, accumulated=${accumulatedCount}, laneCount=${laneCount}, total=${totalCount}, maximum=${NO_INDEX}`,
     );
   }
   return totalCount;
@@ -1315,12 +1315,12 @@ function checkedAggregateByteLength(
   const byteLength = Math.max(minimumByteLength, count * elementByteLength);
   if (!Number.isSafeInteger(byteLength)) {
     throw new RangeError(
-      `Lazuli batch ${region} byte length is not a safe integer: count=${count}, elementBytes=${elementByteLength}, bytes=${byteLength}`,
+      `batch ${region} byte length is not a safe integer: count=${count}, elementBytes=${elementByteLength}, bytes=${byteLength}`,
     );
   }
   if (byteLength > maximumBufferByteLength || byteLength > maximumBindingByteLength) {
     throw new RangeError(
-      `Lazuli batch ${region} requires ${byteLength} bytes for ${count} entries, beyond maxBufferSize=${maximumBufferByteLength} or maxStorageBufferBindingSize=${maximumBindingByteLength}`,
+      `batch ${region} requires ${byteLength} bytes for ${count} entries, beyond maxBufferSize=${maximumBufferByteLength} or maxStorageBufferBindingSize=${maximumBindingByteLength}`,
     );
   }
   return byteLength;
@@ -1369,7 +1369,7 @@ function assertConsistentEvaluationCounters(
     snapshot.stats.thunkEvaluations > snapshot.stats.steps
   ) {
     throw new Error(
-      `GPU Lazuli evaluator returned inconsistent counters${laneDescription}: steps=${snapshot.stats.steps}, allocations=${snapshot.stats.allocations}, heapTop=${snapshot.heapTop}, peakStack=${snapshot.stats.peakStack}, stackTop=${snapshot.stackTop}, thunkEvaluations=${snapshot.stats.thunkEvaluations}, initializedDefinitions=${snapshot.initializationDefinition}`,
+      `GPU evaluator returned inconsistent counters${laneDescription}: steps=${snapshot.stats.steps}, allocations=${snapshot.stats.allocations}, heapTop=${snapshot.heapTop}, peakStack=${snapshot.stats.peakStack}, stackTop=${snapshot.stackTop}, thunkEvaluations=${snapshot.stats.thunkEvaluations}, initializedDefinitions=${snapshot.initializationDefinition}`,
     );
   }
 }
@@ -1379,7 +1379,7 @@ function completedBatchResults(
 ): readonly AnySemanticEvaluationResult[] {
   return results.map((result, resultIndex) => {
     if (result === undefined) {
-      throw new Error(`GPU Lazuli evaluator did not produce batch result ${resultIndex}`);
+      throw new Error(`GPU evaluator did not produce batch result ${resultIndex}`);
     }
     return result;
   });
@@ -1452,42 +1452,42 @@ function decodeFault(
     case FAULT_BAD_MODULE:
       return {
         kind: "bad-module",
-        code: "L3001",
+        code: "F3001",
         message: `module contains an invalid tag or index (${state.faultDetail})`,
         sourceByteOffset,
       };
     case FAULT_OUT_OF_FUEL:
       return {
         kind: "out-of-fuel",
-        code: "L3002",
+        code: "F3002",
         message: `evaluation exhausted its limit of ${limits.maximumSteps} steps`,
         sourceByteOffset,
       };
     case FAULT_OUT_OF_HEAP:
       return {
         kind: "out-of-heap",
-        code: "L3003",
+        code: "F3003",
         message: `evaluation exhausted its heap of ${limits.heapSlots} slots`,
         sourceByteOffset,
       };
     case FAULT_STACK_OVERFLOW:
       return {
         kind: "stack-overflow",
-        code: "L3004",
+        code: "F3004",
         message: `evaluation exhausted its continuation stack of ${limits.stackFrames} frames`,
         sourceByteOffset,
       };
     case FAULT_BLACKHOLE:
       return {
         kind: "blackhole",
-        code: "L3005",
+        code: "F3005",
         message: `evaluation demanded thunk ${state.faultDetail} while it was already evaluating`,
         sourceByteOffset,
       };
     case FAULT_TYPE_ERROR:
       return {
         kind: "type-error",
-        code: "L3006",
+        code: "F3006",
         message: `expected ${expectedValueName(state.faultDetail)}, received ${
           actualValueName(state.valueTag)
         }`,
@@ -1496,7 +1496,7 @@ function decodeFault(
     case FAULT_DIVIDE_BY_ZERO:
       return {
         kind: "divide-by-zero",
-        code: "L3007",
+        code: "F3007",
         message: "integer division by zero",
         sourceByteOffset,
       };
@@ -1504,12 +1504,12 @@ function decodeFault(
       const constructorName = module.constructorNames[state.faultDetail];
       if (state.faultDetail >= module.constructorCount || typeof constructorName !== "string") {
         throw new Error(
-          `GPU Lazuli evaluator returned invalid non-exhaustive constructor ${state.faultDetail}`,
+          `GPU evaluator returned invalid non-exhaustive constructor ${state.faultDetail}`,
         );
       }
       return {
         kind: "non-exhaustive-case",
-        code: "L3008",
+        code: "F3008",
         message: `non-exhaustive case: no arm matches constructor "${constructorName}"`,
         sourceByteOffset,
       };
@@ -1517,27 +1517,27 @@ function decodeFault(
     case FAULT_RESULT_TOO_LARGE:
       return {
         kind: "result-too-large",
-        code: "L3010",
+        code: "F3010",
         message: `deep result exceeded its limit of ${limits.resultNodes} nodes`,
         sourceByteOffset,
       };
     case FAULT_CYCLIC_RESULT:
       return {
         kind: "cyclic-result",
-        code: "L3011",
+        code: "F3011",
         message: `deep result contains a constructor cycle through heap value ${state.faultDetail}`,
         sourceByteOffset,
       };
     case FAULT_INVALID_NUMERIC_CONVERSION:
       return {
         kind: "invalid-numeric-conversion",
-        code: "L3012",
+        code: "F3012",
         message:
           `numeric conversion ${state.faultDetail} received NaN, infinity, or an out-of-range value`,
         sourceByteOffset,
       };
     default:
-      throw new Error(`GPU Lazuli evaluator returned unknown fault code ${state.faultCode}`);
+      throw new Error(`GPU evaluator returned unknown fault code ${state.faultCode}`);
   }
 }
 
@@ -1705,7 +1705,7 @@ function decodeValue(
       return { kind: "float-32", value: float32FromBits(valuePayload) };
     case VALUE_BOOLEAN:
       if (valuePayload > 1) {
-        throw new Error(`GPU Lazuli evaluator returned invalid Boolean payload ${valuePayload}`);
+        throw new Error(`GPU evaluator returned invalid Boolean payload ${valuePayload}`);
       }
       return { kind: "boolean", value: valuePayload === 1 };
     case VALUE_CLOSURE:
@@ -1720,7 +1720,7 @@ function decodeValue(
         fieldCount > MAXIMUM_CONSTRUCTOR_ARITY
       ) {
         throw new Error(
-          `GPU Lazuli evaluator returned invalid constructor metadata for index ${valuePayload}`,
+          `GPU evaluator returned invalid constructor metadata for index ${valuePayload}`,
         );
       }
       if (name === "$Unit") return { kind: "unit" };
@@ -1728,7 +1728,7 @@ function decodeValue(
       return { kind: "constructor", name, fieldCount };
     }
     default:
-      throw new Error(`GPU Lazuli evaluator returned unknown value tag ${valueTag}`);
+      throw new Error(`GPU evaluator returned unknown value tag ${valueTag}`);
   }
 }
 
@@ -1805,12 +1805,12 @@ export class GpuSemanticEvaluator {
     );
     if (maximumHeapSlots < 1 || maximumStackFrames < 1 || maximumResultNodes < 1) {
       throw new Error(
-        `WebGPU device storage limit ${maximumStorageBytes} is too small for Lazuli runtime buffers`,
+        `WebGPU device storage limit ${maximumStorageBytes} is too small for runtime buffers`,
       );
     }
 
     const shaderModule = device.createShaderModule({
-      label: "Lazuli lazy evaluator",
+      label: "lazy evaluator",
       code: EVALUATOR_SHADER,
     });
     const shaderCompilation = await shaderModule.getCompilationInfo();
@@ -1819,12 +1819,12 @@ export class GpuSemanticEvaluator {
       const formattedShaderErrors = shaderErrors.map((message) =>
         `${message.lineNum}:${message.linePos}: ${message.message}`
       ).join("\n");
-      throw new Error(`WebGPU rejected the Lazuli evaluator shader:\n${formattedShaderErrors}`);
+      throw new Error(`WebGPU rejected the evaluator shader:\n${formattedShaderErrors}`);
     }
 
     try {
       const pipeline = await device.createComputePipelineAsync({
-        label: "Lazuli lazy evaluator pipeline",
+        label: "lazy evaluator pipeline",
         layout: "auto",
         compute: {
           module: shaderModule,
@@ -1840,7 +1840,7 @@ export class GpuSemanticEvaluator {
         enableCollectionSyntax,
       );
     } catch (cause) {
-      throw new Error("WebGPU could not create the Lazuli evaluator pipeline", { cause });
+      throw new Error("WebGPU could not create the evaluator pipeline", { cause });
     }
   }
 
@@ -2015,7 +2015,7 @@ export class GpuSemanticEvaluator {
     let inputEncoding: EncodedInput | undefined;
     if (options.input !== undefined) {
       if (inputType === undefined || "ok" in inputType) {
-        throw new Error("Lazuli evaluator omitted the main input type");
+        throw new Error("evaluator omitted the main input type");
       }
       const inputIndex = this.#inputModuleIndex(module);
       const inputFault = validateInputValue(
@@ -2062,7 +2062,7 @@ export class GpuSemanticEvaluator {
       inputBufferByteLength > this.#device.limits.maxBufferSize
     ) {
       throw new RangeError(
-        `Lazuli evaluation values require ${inputBufferByteLength} bytes for ${inputNodeCount} input nodes, ${limits.resultNodes} result nodes, and ${caseDispatchCapacity} case dispatch entries, beyond maxBufferSize=${this.#device.limits.maxBufferSize} or maxStorageBufferBindingSize=${maximumModuleBindingSize}`,
+        `evaluation values require ${inputBufferByteLength} bytes for ${inputNodeCount} input nodes, ${limits.resultNodes} result nodes, and ${caseDispatchCapacity} case dispatch entries, beyond maxBufferSize=${this.#device.limits.maxBufferSize} or maxStorageBufferBindingSize=${maximumModuleBindingSize}`,
       );
     }
 
@@ -2088,38 +2088,38 @@ export class GpuSemanticEvaluator {
       let setupValidation: Promise<GPUError | null>;
       try {
         heapBuffer = this.#device.createBuffer({
-          label: "Lazuli evaluation heap",
+          label: "evaluation heap",
           size: heapBufferByteLength,
           usage: GPUBufferUsage.STORAGE,
         });
         stackBuffer = this.#device.createBuffer({
-          label: "Lazuli evaluation continuation stack",
+          label: "evaluation continuation stack",
           size: stackBufferByteLength,
           usage: GPUBufferUsage.STORAGE,
         });
         globalBuffer = this.#device.createBuffer({
-          label: "Lazuli evaluation global thunks",
+          label: "evaluation global thunks",
           size: globalBufferByteLength,
           usage: GPUBufferUsage.STORAGE,
         });
         stateBuffer = this.#device.createBuffer({
-          label: "Lazuli evaluation state",
+          label: "evaluation state",
           size: EVALUATION_STATE_BYTE_LENGTH,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         stateReadbackBuffer = this.#device.createBuffer({
-          label: "Lazuli evaluation state readback",
+          label: "evaluation state readback",
           size: EVALUATION_STATE_BYTE_LENGTH,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
         resultReadbackBuffer = this.#device.createBuffer({
-          label: "Lazuli evaluation deep result readback",
+          label: "evaluation deep result readback",
           size: resultBufferByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
         inputBuffer = this.#device.createBuffer({
-          label: "Lazuli evaluation values",
+          label: "evaluation values",
           size: inputBufferByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
@@ -2135,7 +2135,7 @@ export class GpuSemanticEvaluator {
         this.#device.queue.writeBuffer(stateBuffer, 0, initialState);
 
         bindGroup = this.#device.createBindGroup({
-          label: "Lazuli evaluator bindings",
+          label: "evaluator bindings",
           layout: this.#pipeline.getBindGroupLayout(0),
           entries: [
             {
@@ -2171,7 +2171,7 @@ export class GpuSemanticEvaluator {
         const validationError = await this.#device.popErrorScope();
         if (validationError !== null) {
           throw new Error(
-            `WebGPU rejected Lazuli evaluation setup for ${module.nodeCount} nodes: ${validationError.message}`,
+            `WebGPU rejected evaluation setup for ${module.nodeCount} nodes: ${validationError.message}`,
             { cause },
           );
         }
@@ -2181,7 +2181,7 @@ export class GpuSemanticEvaluator {
       const setupValidationError = await setupValidation;
       if (setupValidationError !== null) {
         throw new Error(
-          `WebGPU rejected Lazuli evaluation setup for ${module.nodeCount} nodes: ${setupValidationError.message}`,
+          `WebGPU rejected evaluation setup for ${module.nodeCount} nodes: ${setupValidationError.message}`,
         );
       }
 
@@ -2192,10 +2192,10 @@ export class GpuSemanticEvaluator {
         let dispatchValidation: Promise<GPUError | null>;
         try {
           const commandEncoder = this.#device.createCommandEncoder({
-            label: "Lazuli evaluation commands",
+            label: "evaluation commands",
           });
           const computePass = commandEncoder.beginComputePass({
-            label: "Evaluate Lazuli module",
+            label: "Evaluate module",
           });
           computePass.setPipeline(this.#pipeline);
           computePass.setBindGroup(0, bindGroup);
@@ -2215,7 +2215,7 @@ export class GpuSemanticEvaluator {
           const validationError = await this.#device.popErrorScope();
           if (validationError !== null) {
             throw new Error(
-              `WebGPU rejected Lazuli evaluation for ${module.nodeCount} nodes: ${validationError.message}`,
+              `WebGPU rejected evaluation for ${module.nodeCount} nodes: ${validationError.message}`,
               { cause },
             );
           }
@@ -2225,7 +2225,7 @@ export class GpuSemanticEvaluator {
         const validationError = await dispatchValidation;
         if (validationError !== null) {
           throw new Error(
-            `WebGPU rejected Lazuli evaluation for ${module.nodeCount} nodes: ${validationError.message}`,
+            `WebGPU rejected evaluation for ${module.nodeCount} nodes: ${validationError.message}`,
           );
         }
 
@@ -2233,7 +2233,7 @@ export class GpuSemanticEvaluator {
           await stateReadbackBuffer.mapAsync(GPUMapMode.READ);
         } catch (cause) {
           throw new Error(
-            `could not read GPU Lazuli evaluation status for ${module.nodeCount} nodes`,
+            `could not read GPU evaluation status for ${module.nodeCount} nodes`,
             { cause },
           );
         }
@@ -2249,7 +2249,7 @@ export class GpuSemanticEvaluator {
         const dispatchSteps = snapshot.stats.steps - previousSteps;
         if (dispatchSteps < 1 || dispatchSteps > limits.maximumStepsPerDispatch) {
           throw new Error(
-            `GPU Lazuli evaluator returned invalid dispatch progress: previousSteps=${previousSteps}, steps=${snapshot.stats.steps}, maximumStepsPerDispatch=${limits.maximumStepsPerDispatch}`,
+            `GPU evaluator returned invalid dispatch progress: previousSteps=${previousSteps}, steps=${snapshot.stats.steps}, maximumStepsPerDispatch=${limits.maximumStepsPerDispatch}`,
           );
         }
 
@@ -2260,7 +2260,7 @@ export class GpuSemanticEvaluator {
             snapshot.faultDetail !== 0 || snapshot.stats.steps >= limits.maximumSteps
           ) {
             throw new Error(
-              `GPU Lazuli evaluator returned inconsistent pending state: fault=${snapshot.faultCode}, source=${snapshot.faultSourceOffset}, detail=${snapshot.faultDetail}, steps=${snapshot.stats.steps}`,
+              `GPU evaluator returned inconsistent pending state: fault=${snapshot.faultCode}, source=${snapshot.faultSourceOffset}, detail=${snapshot.faultDetail}, steps=${snapshot.stats.steps}`,
             );
           }
           previousSteps = snapshot.stats.steps;
@@ -2274,12 +2274,12 @@ export class GpuSemanticEvaluator {
             snapshot.stackTop !== 0
           ) {
             throw new Error(
-              `GPU Lazuli evaluator returned inconsistent success state: fault=${snapshot.faultCode}, source=${snapshot.faultSourceOffset}, stackTop=${snapshot.stackTop}`,
+              `GPU evaluator returned inconsistent success state: fault=${snapshot.faultCode}, source=${snapshot.faultSourceOffset}, stackTop=${snapshot.stackTop}`,
             );
           }
           if (limits.deepResult) {
             const commandEncoder = this.#device.createCommandEncoder({
-              label: "Read Lazuli deep result",
+              label: "Read deep result",
             });
             commandEncoder.copyBufferToBuffer(
               inputBuffer,
@@ -2319,7 +2319,7 @@ export class GpuSemanticEvaluator {
           };
         }
 
-        throw new Error(`GPU Lazuli evaluator returned unknown status ${snapshot.status}`);
+        throw new Error(`GPU evaluator returned unknown status ${snapshot.status}`);
       }
     } finally {
       if (stateReadbackMapped) {
@@ -2350,14 +2350,14 @@ export class GpuSemanticEvaluator {
     options.signal?.throwIfAborted();
     if (options.inputs !== undefined && options.inputs.length !== modules.length) {
       throw new RangeError(
-        `Lazuli batch received ${options.inputs.length} inputs for ${modules.length} modules`,
+        `batch received ${options.inputs.length} inputs for ${modules.length} modules`,
       );
     }
     if (modules.length === 0) return [];
     if (modules.length === 1) {
       const [module] = modules;
       if (module === undefined) {
-        throw new Error("Lazuli batch contains no module at index 0");
+        throw new Error("batch contains no module at index 0");
       }
       return [await this.evaluate(module, scalarOptionsForBatchLane(options, options.inputs?.[0]))];
     }
@@ -2390,7 +2390,7 @@ export class GpuSemanticEvaluator {
       let inputEncoding: EncodedInput | undefined;
       if (inputValue !== undefined) {
         if (inputType === undefined || "ok" in inputType) {
-          throw new Error("Lazuli batch evaluator omitted a main input type");
+          throw new Error("batch evaluator omitted a main input type");
         }
         const inputIndex = this.#inputModuleIndex(module);
         const inputFault = validateInputValue(
@@ -2444,7 +2444,7 @@ export class GpuSemanticEvaluator {
     if (preparedLanes.length === 1) {
       const [lane] = preparedLanes;
       if (lane === undefined) {
-        throw new Error("Lazuli batch contains no prepared lane at index 0");
+        throw new Error("batch contains no prepared lane at index 0");
       }
       results[lane.resultIndex] = await this.evaluate(
         lane.module,
@@ -2459,7 +2459,7 @@ export class GpuSemanticEvaluator {
       preparedLanes.length > maximumWorkgroups
     ) {
       throw new RangeError(
-        `Lazuli batch dispatch requires ${preparedLanes.length} workgroups, beyond u32=${NO_INDEX} or maxComputeWorkgroupsPerDimension=${maximumWorkgroups}`,
+        `batch dispatch requires ${preparedLanes.length} workgroups, beyond u32=${NO_INDEX} or maxComputeWorkgroupsPerDimension=${maximumWorkgroups}`,
       );
     }
 
@@ -2674,52 +2674,52 @@ export class GpuSemanticEvaluator {
       let setupValidation: Promise<GPUError | null>;
       try {
         nodeBuffer = this.#device.createBuffer({
-          label: "Lazuli batch nodes",
+          label: "batch nodes",
           size: nodeByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
         });
         definitionBuffer = this.#device.createBuffer({
-          label: "Lazuli batch definitions",
+          label: "batch definitions",
           size: definitionByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
         });
         constructorBuffer = this.#device.createBuffer({
-          label: "Lazuli batch constructors",
+          label: "batch constructors",
           size: constructorByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
         });
         heapBuffer = this.#device.createBuffer({
-          label: "Lazuli batch heaps",
+          label: "batch heaps",
           size: heapByteLength,
           usage: GPUBufferUsage.STORAGE,
         });
         stackBuffer = this.#device.createBuffer({
-          label: "Lazuli batch continuation stacks",
+          label: "batch continuation stacks",
           size: stackByteLength,
           usage: GPUBufferUsage.STORAGE,
         });
         globalBuffer = this.#device.createBuffer({
-          label: "Lazuli batch global thunks",
+          label: "batch global thunks",
           size: globalByteLength,
           usage: GPUBufferUsage.STORAGE,
         });
         stateBuffer = this.#device.createBuffer({
-          label: "Lazuli batch evaluation states",
+          label: "batch evaluation states",
           size: stateByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         stateReadbackBuffer = this.#device.createBuffer({
-          label: "Lazuli batch evaluation state readback",
+          label: "batch evaluation state readback",
           size: stateByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
         inputBuffer = this.#device.createBuffer({
-          label: "Lazuli batch values",
+          label: "batch values",
           size: valueByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
         });
         resultReadbackBuffer = this.#device.createBuffer({
-          label: "Lazuli batch deep result readback",
+          label: "batch deep result readback",
           size: resultByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
@@ -2727,7 +2727,7 @@ export class GpuSemanticEvaluator {
         this.#device.queue.writeBuffer(inputBuffer, 0, aggregateInputWords);
 
         bindGroup = this.#device.createBindGroup({
-          label: "Lazuli batch evaluator bindings",
+          label: "batch evaluator bindings",
           layout: this.#pipeline.getBindGroupLayout(0),
           entries: [
             { binding: 0, resource: { buffer: nodeBuffer } },
@@ -2745,7 +2745,7 @@ export class GpuSemanticEvaluator {
         const validationError = await this.#device.popErrorScope();
         if (validationError !== null) {
           throw new Error(
-            `WebGPU rejected Lazuli batch evaluation setup for ${lanes.length} lanes: ${validationError.message}`,
+            `WebGPU rejected batch evaluation setup for ${lanes.length} lanes: ${validationError.message}`,
             { cause },
           );
         }
@@ -2755,7 +2755,7 @@ export class GpuSemanticEvaluator {
       const setupValidationError = await setupValidation;
       if (setupValidationError !== null) {
         throw new Error(
-          `WebGPU rejected Lazuli batch evaluation setup for ${lanes.length} lanes: ${setupValidationError.message}`,
+          `WebGPU rejected batch evaluation setup for ${lanes.length} lanes: ${setupValidationError.message}`,
         );
       }
 
@@ -2770,7 +2770,7 @@ export class GpuSemanticEvaluator {
         let dispatchValidation: Promise<GPUError | null>;
         try {
           const commandEncoder = this.#device.createCommandEncoder({
-            label: "Lazuli batch evaluation commands",
+            label: "batch evaluation commands",
           });
           if (!moduleBuffersCopied) {
             for (const lane of lanes) {
@@ -2800,7 +2800,7 @@ export class GpuSemanticEvaluator {
             }
           }
           const computePass = commandEncoder.beginComputePass({
-            label: "Evaluate Lazuli batch",
+            label: "Evaluate batch",
           });
           computePass.setPipeline(this.#pipeline);
           computePass.setBindGroup(0, bindGroup);
@@ -2821,7 +2821,7 @@ export class GpuSemanticEvaluator {
           const validationError = await this.#device.popErrorScope();
           if (validationError !== null) {
             throw new Error(
-              `WebGPU rejected Lazuli batch evaluation for ${lanes.length} lanes: ${validationError.message}`,
+              `WebGPU rejected batch evaluation for ${lanes.length} lanes: ${validationError.message}`,
               { cause },
             );
           }
@@ -2831,7 +2831,7 @@ export class GpuSemanticEvaluator {
         const validationError = await dispatchValidation;
         if (validationError !== null) {
           throw new Error(
-            `WebGPU rejected Lazuli batch evaluation for ${lanes.length} lanes: ${validationError.message}`,
+            `WebGPU rejected batch evaluation for ${lanes.length} lanes: ${validationError.message}`,
           );
         }
 
@@ -2839,7 +2839,7 @@ export class GpuSemanticEvaluator {
           await stateReadbackBuffer.mapAsync(GPUMapMode.READ);
         } catch (cause) {
           throw new Error(
-            `could not read GPU Lazuli batch evaluation status for ${lanes.length} lanes`,
+            `could not read GPU batch evaluation status for ${lanes.length} lanes`,
             { cause },
           );
         }
@@ -2861,7 +2861,7 @@ export class GpuSemanticEvaluator {
               );
               if (currentWord !== expectedWord) {
                 throw new Error(
-                  `GPU Lazuli evaluator changed terminal batch lane ${lane.resultIndex}: word=${word}, previous=${expectedWord}, current=${currentWord}`,
+                  `GPU evaluator changed terminal batch lane ${lane.resultIndex}: word=${word}, previous=${expectedWord}, current=${currentWord}`,
                 );
               }
             }
@@ -2877,12 +2877,12 @@ export class GpuSemanticEvaluator {
           );
           const previousStepCount = previousSteps[laneIndex];
           if (previousStepCount === undefined) {
-            throw new Error(`Lazuli batch has no step counter for lane ${lane.resultIndex}`);
+            throw new Error(`batch has no step counter for lane ${lane.resultIndex}`);
           }
           const dispatchSteps = snapshot.stats.steps - previousStepCount;
           if (dispatchSteps < 1 || dispatchSteps > lane.limits.maximumStepsPerDispatch) {
             throw new Error(
-              `GPU Lazuli evaluator returned invalid dispatch progress for batch lane ${lane.resultIndex}: previousSteps=${previousStepCount}, steps=${snapshot.stats.steps}, maximumStepsPerDispatch=${lane.limits.maximumStepsPerDispatch}`,
+              `GPU evaluator returned invalid dispatch progress for batch lane ${lane.resultIndex}: previousSteps=${previousStepCount}, steps=${snapshot.stats.steps}, maximumStepsPerDispatch=${lane.limits.maximumStepsPerDispatch}`,
             );
           }
 
@@ -2893,7 +2893,7 @@ export class GpuSemanticEvaluator {
               snapshot.faultDetail !== 0 || snapshot.stats.steps >= lane.limits.maximumSteps
             ) {
               throw new Error(
-                `GPU Lazuli evaluator returned inconsistent pending state for batch lane ${lane.resultIndex}: fault=${snapshot.faultCode}, source=${snapshot.faultSourceOffset}, detail=${snapshot.faultDetail}, steps=${snapshot.stats.steps}`,
+                `GPU evaluator returned inconsistent pending state for batch lane ${lane.resultIndex}: fault=${snapshot.faultCode}, source=${snapshot.faultSourceOffset}, detail=${snapshot.faultDetail}, steps=${snapshot.stats.steps}`,
               );
             }
             previousSteps[laneIndex] = snapshot.stats.steps;
@@ -2907,7 +2907,7 @@ export class GpuSemanticEvaluator {
               snapshot.stackTop !== 0
             ) {
               throw new Error(
-                `GPU Lazuli evaluator returned inconsistent success state for batch lane ${lane.resultIndex}: fault=${snapshot.faultCode}, source=${snapshot.faultSourceOffset}, stackTop=${snapshot.stackTop}`,
+                `GPU evaluator returned inconsistent success state for batch lane ${lane.resultIndex}: fault=${snapshot.faultCode}, source=${snapshot.faultSourceOffset}, stackTop=${snapshot.stackTop}`,
               );
             }
             results[lane.resultIndex] = {
@@ -2925,7 +2925,7 @@ export class GpuSemanticEvaluator {
             };
           } else {
             throw new Error(
-              `GPU Lazuli evaluator returned unknown status ${snapshot.status} for batch lane ${lane.resultIndex}`,
+              `GPU evaluator returned unknown status ${snapshot.status} for batch lane ${lane.resultIndex}`,
             );
           }
 
@@ -2944,7 +2944,7 @@ export class GpuSemanticEvaluator {
         if (terminalLaneCount === lanes.length) {
           if (options.resultForm === "deep") {
             const commandEncoder = this.#device.createCommandEncoder({
-              label: "Read Lazuli batch deep results",
+              label: "Read batch deep results",
             });
             commandEncoder.copyBufferToBuffer(
               inputBuffer,

@@ -324,7 +324,7 @@ async function runPackedCompilation(
     device.queue.writeBuffer(inferenceStateBuffer, 0, inferenceStates);
 
     const semanticBindings = device.createBindGroup({
-      label: `Lazuli packed semantic bindings (${lanes.length} lanes)`,
+      label: `packed semantic bindings (${lanes.length} lanes)`,
       layout: semanticPipelines.compilation.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: surfaceBuffer } },
@@ -337,7 +337,7 @@ async function runPackedCompilation(
       ],
     });
     const inferenceBindings = device.createBindGroup({
-      label: `Lazuli packed inference bindings (${lanes.length} lanes)`,
+      label: `packed inference bindings (${lanes.length} lanes)`,
       layout: inferencePipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: coreBuffer } },
@@ -380,7 +380,7 @@ async function runPackedCompilation(
       try {
         await stateReadbackBuffer.mapAsync(GPUMapMode.READ);
       } catch (cause) {
-        throw new Error(`could not read ${lanes.length} packed Lazuli compiler states`, { cause });
+        throw new Error(`could not read ${lanes.length} packed compiler states`, { cause });
       }
       stateReadbackMapped = true;
       const stateBytes = stateReadbackBuffer.getMappedRange().slice(0);
@@ -409,7 +409,7 @@ async function runPackedCompilation(
           (semanticState.status !== CompilationStatus.Ok && inferenceProgress !== 0)
         ) {
           throw new Error(
-            `GPU Lazuli packed lane ${lane.resultIndex} returned invalid progress: semantic=${semanticState.totalSteps}, previousSemantic=${
+            `GPU packed lane ${lane.resultIndex} returned invalid progress: semantic=${semanticState.totalSteps}, previousSemantic=${
               previousSemanticSteps[laneIndex]
             }, inference=${inferenceState.transitions}, previousInference=${
               previousInferenceTransitions[laneIndex]
@@ -485,11 +485,11 @@ async function runPackedCompilation(
         }
         if (inferenceState.status === InferenceStatus.InvalidInput) {
           throw new Error(
-            `GPU Lazuli packed lane ${lane.resultIndex} rejected the supplied ABI: code=${inferenceState.errorCode}, detail=${inferenceState.errorDetail}`,
+            `GPU packed lane ${lane.resultIndex} rejected the supplied ABI: code=${inferenceState.errorCode}, detail=${inferenceState.errorDetail}`,
           );
         }
         throw new Error(
-          `GPU Lazuli packed lane ${lane.resultIndex} returned unknown inference status ${inferenceState.status}`,
+          `GPU packed lane ${lane.resultIndex} returned unknown inference status ${inferenceState.status}`,
         );
       }
     }
@@ -797,17 +797,17 @@ async function allocateBatchBuffers(
     };
     buffers = {
       surface: create(
-        "Lazuli packed surface nodes",
+        "packed surface nodes",
         Math.max(NODE_BYTE_LENGTH, totals.nodes * NODE_BYTE_LENGTH),
         GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
       ),
       core: create(
-        "Lazuli packed core nodes",
+        "packed core nodes",
         Math.max(NODE_BYTE_LENGTH, totals.nodes * NODE_BYTE_LENGTH),
         GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       definitions: create(
-        "Lazuli packed definitions",
+        "packed definitions",
         Math.max(
           DEFINITION_BYTE_LENGTH,
           totals.definitions * DEFINITION_BYTE_LENGTH,
@@ -815,12 +815,12 @@ async function allocateBatchBuffers(
         GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       types: create(
-        "Lazuli packed algebraic types",
+        "packed algebraic types",
         Math.max(TYPE_BYTE_LENGTH, totals.types * TYPE_BYTE_LENGTH),
         GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
       ),
       constructors: create(
-        "Lazuli packed constructors",
+        "packed constructors",
         Math.max(
           CONSTRUCTOR_BYTE_LENGTH,
           totals.constructors * CONSTRUCTOR_BYTE_LENGTH,
@@ -828,12 +828,12 @@ async function allocateBatchBuffers(
         GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       semanticStates: create(
-        "Lazuli packed semantic states",
+        "packed semantic states",
         lanes.length * COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
         GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       symbolLookups: create(
-        "Lazuli packed symbol lookups",
+        "packed symbol lookups",
         Math.max(
           SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
           totals.symbolLookupRecords * SYMBOL_LOOKUP_WORD_LENGTH * WORD_BYTES,
@@ -841,27 +841,27 @@ async function allocateBatchBuffers(
         GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
       ),
       metadata: create(
-        "Lazuli packed inference metadata",
+        "packed inference metadata",
         totals.metadataWords * WORD_BYTES,
         GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
       ),
       workspace: create(
-        "Lazuli packed inference workspace",
+        "packed inference workspace",
         totals.workspaceWords * WORD_BYTES,
         GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       output: create(
-        "Lazuli packed inferred types",
+        "packed inferred types",
         totals.outputRecords * INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES,
         GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       inferenceStates: create(
-        "Lazuli packed inference states",
+        "packed inference states",
         lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH,
         GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
       ),
       stateReadback: create(
-        "Lazuli packed state readback",
+        "packed state readback",
         lanes.length * INFERENCE_INTERNAL_STATE_BYTE_LENGTH +
           totals.fastOutputRecords * INFERENCE_OUTPUT_WORD_LENGTH * WORD_BYTES +
           totals.nodes * NODE_BYTE_LENGTH,
@@ -877,12 +877,12 @@ async function allocateBatchBuffers(
     for (const buffer of created) buffer.destroy();
     if (validation !== null) {
       throw new Error(
-        `WebGPU rejected packed Lazuli compiler buffers for ${lanes.length} lanes: ${validation.message}`,
+        `WebGPU rejected packed compiler buffers for ${lanes.length} lanes: ${validation.message}`,
         cause === undefined ? undefined : { cause },
       );
     }
     throw new PackedAllocationError(
-      `could not allocate packed Lazuli compiler buffers for ${lanes.length} lanes${
+      `could not allocate packed compiler buffers for ${lanes.length} lanes${
         outOfMemory === null ? "" : `: ${outOfMemory.message}`
       }`,
       cause,
@@ -911,9 +911,9 @@ async function dispatchBatch(
   let validation: Promise<GPUError | null>;
   try {
     const commands = device.createCommandEncoder({
-      label: `Compile Lazuli packed batch (${laneCount} lanes)`,
+      label: `Compile packed batch (${laneCount} lanes)`,
     });
-    const semanticPass = commands.beginComputePass({ label: "Resolve packed Lazuli lanes" });
+    const semanticPass = commands.beginComputePass({ label: "Resolve packed lanes" });
     semanticPass.setPipeline(semanticPipelines.compilation);
     semanticPass.setBindGroup(0, semanticBindings);
     semanticPass.dispatchWorkgroups(laneCount);
@@ -927,7 +927,7 @@ async function dispatchBatch(
     );
     if (loweringWorkgroups > 0) {
       const loweringPass = commands.beginComputePass({
-        label: "Lower packed Lazuli nodes",
+        label: "Lower packed nodes",
       });
       loweringPass.setPipeline(semanticPipelines.plannedLowering);
       loweringPass.setBindGroup(0, semanticBindings);
@@ -944,7 +944,7 @@ async function dispatchBatch(
         24 * WORD_BYTES,
       );
     }
-    const inferencePass = commands.beginComputePass({ label: "Infer packed Lazuli lanes" });
+    const inferencePass = commands.beginComputePass({ label: "Infer packed lanes" });
     inferencePass.setPipeline(inferencePipeline);
     inferencePass.setBindGroup(0, inferenceBindings);
     inferencePass.dispatchWorkgroups(laneCount);
@@ -1010,7 +1010,7 @@ async function dispatchBatch(
     const validationError = await device.popErrorScope();
     if (validationError !== null) {
       throw new Error(
-        `WebGPU rejected packed Lazuli compilation for ${laneCount} lanes: ${validationError.message}`,
+        `WebGPU rejected packed compilation for ${laneCount} lanes: ${validationError.message}`,
         { cause },
       );
     }
@@ -1019,7 +1019,7 @@ async function dispatchBatch(
   const validationError = await validation;
   if (validationError !== null) {
     throw new Error(
-      `WebGPU rejected packed Lazuli compilation for ${laneCount} lanes: ${validationError.message}`,
+      `WebGPU rejected packed compilation for ${laneCount} lanes: ${validationError.message}`,
     );
   }
 }
@@ -1075,7 +1075,7 @@ function completeResults(
   results: readonly (SemanticCompileResult | undefined)[],
 ): readonly SemanticCompileResult[] {
   return results.map((result, index) => {
-    if (result === undefined) throw new Error(`Lazuli packed compilation omitted result ${index}`);
+    if (result === undefined) throw new Error(`packed compilation omitted result ${index}`);
     return result;
   });
 }
