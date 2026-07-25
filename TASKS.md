@@ -36,8 +36,14 @@ by 33x: have the frontend split large modules and batch the pieces. Same node co
 
 The dependency structure permits it — 21 shallow waves, 1,035 SCC components, largest SCC of 3, so
 mutual recursion is not the obstacle, and `definition_wavefront.ts` already computes the schedule
-and is used by nothing in the compiler. But **available parallelism is 1.9x**, because one
-definition is 52% of the corpus and a single definition cannot be split. Item 1 is that definition.
+and is used by nothing in the compiler. Definition-level available parallelism is 1.9x, because one
+definition is 52% of the corpus and a definition cannot be split across submodules.
+
+**That 1.9x is the wrong granularity for anything except submodule splitting.** Constraint
+generation works on nodes, not definitions, and at node level the same corpus is **574x wide** at a
+depth of 87 — including `list::sequences`, the definition that caps the 1.9x, which is itself 65
+levels deep and roughly 400x wide inside. See BASELINE.md. Item 7 is where that width is worth
+collecting; splitting into submodules is not.
 
 So the order is: fix the explosion, re-measure available parallelism, and only then decide whether
 wave-scheduled submodule batching is worth building. Inference across waves also needs each
@@ -149,7 +155,9 @@ is the retarget's original premise and still the largest win available (10–50�
 (6) first — reducing the work is worth more than parallelising work that should not exist, and the
 two multiply.
 
-The pieces exist and three of them are already established here:
+**There is far more width than the definition-level figure suggested.** Node-level depth on the
+Gleam stdlib is 87 with an average width of 574 and a widest level of 22,101 — more than the
+concurrent lanes on this adapter. The pieces exist and three of them are already established here:
 
 - **Constraint generation is a map.** A node's constraints follow from its children's, and resolved
   Core is already a flat array of fixed-size records with every child at a higher index, so a

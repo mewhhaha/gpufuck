@@ -540,6 +540,37 @@ design constraint, not a preference.
 None of this touches throughput, which is where the measurements already favour the GPU: at batch
 1,024 the fixed cost amortizes to 11 µs per module and gpufuck is ~17x faster than `gleam build`.
 
+## 2026-07-25 — the width was there, measured at the wrong granularity
+
+Everything above about available parallelism was measured per _definition_, treating each as atomic.
+That gave 1.9x for the Gleam stdlib and the conclusion that one definition being 52% of the corpus
+caps what any parallel design can do. **That conclusion was wrong**, and it was wrong because
+constraint generation does not work on definitions — it works on nodes. A node is ready when its
+children are, and resolved Core already stores every child at a higher index.
+
+Computing each node's height with one reverse sweep:
+
+| Measure                               |    Value |
+| ------------------------------------- | -------: |
+| Nodes                                 |   49,964 |
+| Deepest definition (`uri::to_string`) |       87 |
+| Average width at that depth           | **574x** |
+| Widest single level                   |   22,101 |
+| Levels wider than 1,000               |        6 |
+
+The whole-corpus depth measures 355, but that is the benchmark's synthetic entry again — 353 nested
+`let` bindings are a 353-deep chain by themselves. The deepest thing anyone actually wrote is 87.
+
+And the definition that capped the earlier figure is not a bottleneck at this granularity:
+`list::sequences` is 25,985 nodes and **65 levels deep**, so it is roughly 400x wide inside itself.
+The unit that looked atomic is one of the widest things in the corpus.
+
+22,101 nodes on the widest level is more than the concurrent lanes on this adapter, so that level
+alone saturates it. This does not make single-program latency free — the 11.3 ms dispatch floor
+above still applies, and unification is a separate problem from generating the constraints — but it
+disposes of the claim that a normal program has nothing wide enough to be worth a GPU. It has 574x,
+and the earlier 1.9x was an artifact of asking about the wrong thing.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
