@@ -189,14 +189,24 @@ These shipped in 0.4.0, so renaming them is a breaking change and belongs in the
 lesson is worth keeping: the miss was invisible to the compiler and to the tests, and only showed up
 when someone enumerated the actual export list at runtime — which is now the way to check.
 
-### 11. Frontend API inconsistency
+### 11. Sweep's flat-locals rule is stricter than it needs to be
+
+Rule 5 rejects any repeated binder name in a function, which forbids sibling `match` arms reusing
+one — `One(inner) -> ...; Two(inner) -> ...` is a diagnostic even though the arms are disjoint
+scopes and only one is ever live. The rule exists so name resolution is a table lookup; sibling arms
+do not threaten that, so the check should be per-path rather than per-function.
+
+Found by writing a nested match in `examples/sweep/` and having the compiler reject it, which is the
+right way to find it and an argument for the rule being enforced rather than described.
+
+### 12. Frontend API inconsistency
 
 `parseGleamModule` and `lowerGleamSources` throw for some failures and return diagnostics for
 others. Surface packing and module linking raise. Every tool driving them in bulk has to wrap both
 in `try`/`catch`, and each unguarded throw ends a batch run and reports nothing about the remaining
 work. Pick one convention.
 
-### 12. Nullary Gleam entry allocates a Unit for nothing
+### 13. Nullary Gleam entry allocates a Unit for nothing
 
 A zero-argument Gleam function lowers to `Lambda(Unit)`, and a synthetic `$gleam/entry` module then
 applies it to a freshly constructed `$Unit`. Worth fixing on cleanliness grounds.

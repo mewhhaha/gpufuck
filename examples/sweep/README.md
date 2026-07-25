@@ -113,7 +113,9 @@ the kind of thing only building the real thing tells you.
 ## It is not faster
 
 Measured against Lazuli on the same computation with `deno task bench:sweep`: **identical node
-counts, transition counts within noise.** Rules 1 and 3 need backend changes to pay — a checking
+counts, transition counts within noise.** On a nine-arm nested match — the one shape where the
+single-level rule might have paid, since Lazuli desugars and Sweep nests by hand — Sweep is
+marginally _worse_, 38 nodes against 35. Rules 1 and 3 need backend changes to pay — a checking
 kernel instead of a solver, and an n-ary lambda node instead of unary arrows — and rules 5, 6, and 7
 do not touch this pipeline at all.
 

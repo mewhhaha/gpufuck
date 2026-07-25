@@ -124,6 +124,11 @@ The same computation in Sweep and Lazuli, `deno task bench:sweep`:
 
 **Identical.** Not close — the same node counts exactly, and transition counts within noise.
 
+The one case where Sweep might plausibly have won is nested patterns, since Lazuli desugars them and
+Sweep makes you nest the matches by hand. A nine-arm nested match, both ways: **Lazuli 35 nodes,
+Sweep 38**. Marginally worse, not better. There is no shape yet found where the design pays on this
+pipeline.
+
 That is the prediction at the bottom of this document, confirmed. Every rule either needs a backend
 change to pay (1 and 3), or prevents a pathology rather than accelerating the common case (4), or
 does not touch this pipeline at all (5, 6, 7). A language designed for a compiler that has not been
