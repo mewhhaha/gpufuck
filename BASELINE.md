@@ -377,6 +377,54 @@ slow compile. This is a correctness bug before it is a performance one, and it i
 lever on single-module compile time — the GPU is slow on this corpus partly because the corpus is
 26,000 nodes larger than it should be.
 
+## 2026-07-25 — designing a language to be splittable
+
+Lazuli is ours to change, so: how splittable is it now, and what would designing for it look like?
+
+Today it is in the same regime as Gleam. Same profile, applied to the samples:
+
+| Sample               | Defs | Waves | Available parallelism | Largest definition |
+| -------------------- | ---: | ----: | --------------------: | -----------------: |
+| `brainfuck_compiler` |   20 |     5 |                  2.3x |                22% |
+| `proofs`             |    5 |     2 |                  1.7x |                37% |
+| `syntax-tour`        |    3 |     2 |                  1.0x |                89% |
+| Gleam stdlib         | 1039 |    21 |                  1.9x |                52% |
+
+Two ceilings, and which one binds differs by program. Available parallelism cannot exceed
+`totalWork / largestDefinition`, because a definition is atomic — it cannot be split across
+submodules. Where no definition dominates, dependency depth binds instead. For the Gleam stdlib the
+first is exactly binding: 49,964 / 25,985 = 1.9, the measured figure.
+
+### Restructuring moves it a long way
+
+The same arithmetic written three ways, 40 terms each:
+
+| Shape                                    | Defs | Waves | Parallelism | Largest def |
+| ---------------------------------------- | ---: | ----: | ----------: | ----------: |
+| One expression in `main`                 |    1 |     1 |        1.0x |        100% |
+| One definition per term, flat `main`     |   41 |     2 |        3.3x |         28% |
+| Per term, plus a balanced reduction tree |   80 |     8 |       13.3x |          2% |
+
+Note the tree has _more_ waves and more parallelism: depth was not the constraint, definition size
+was. Bounding definition size is the lever; accepting more waves is the price, and it is cheap.
+
+### None of it is realized
+
+| Shape | Nodes | Definitions | Compile |
+| ----- | ----: | ----------: | ------: |
+| mono  |   239 |           1 | 13.0 ms |
+| split |   279 |          41 | 13.3 ms |
+| tree  |   318 |          80 | 14.0 ms |
+
+Thirteen-fold available parallelism, and the tree compiles _slower_ — more definitions is more work
+for the single lane that processes them. The inference kernel is one lane per module, and
+`definition_wavefront.ts` is not on the compile path, so nothing consumes the structure.
+
+Restructuring a language for splittability is therefore necessary but not sufficient, and doing it
+first would be building a supply with no demand. The consumer has to exist: either split into real
+submodules and batch them through the path that already beats `gleam build` by 17x, or parallelise
+inference across definitions within a module.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

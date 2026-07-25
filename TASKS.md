@@ -44,6 +44,22 @@ wave-scheduled submodule batching is worth building. Inference across waves also
 submodule to declare the types it imports, which is what the earlier wave infers — a sequence of
 batches, each internally parallel, not one flat batch.
 
+**Build the consumer before the supply.** Restructuring a _language_ to be splittable is tempting
+and measurably works on the graph — the same 40-term Lazuli program goes from 1.0x to 13.3x
+available parallelism by bounding definition size and adding a balanced reduction tree. But compile
+time across those three shapes is 13.0, 13.3, and 14.0 ms: the tree is _slower_, because nothing
+consumes the structure and more definitions is more work for the single lane. Two things could
+consume it — submodule batching through the path that already beats `gleam build` by 17x, or
+parallel inference across definitions (item 6). Until one exists, frontend restructuring buys
+nothing.
+
+An untested third lever, worth knowing before designing a language for this: wave sequencing exists
+only because inference must flow a type from a definition to its users. Mandatory (or cached)
+top-level annotations cut that edge, so every definition could be checked in one flat batch with no
+waves at all. That is the trade Go and Zig make, Lazuli already has the annotation syntax, and the
+current wavefront analysis would not credit it because it derives dependencies from references
+rather than from types.
+
 ### 3. WebAssembly emission is 63% of batch cost
 
 At batch 1,024 the split is 22% frontend, 15% GPU, **63% Wasm emission** (442 µs/module). It is also
