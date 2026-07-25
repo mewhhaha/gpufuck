@@ -1,0 +1,23 @@
+-- Rule 4 in practice: every arm names one constructor and binds its fields
+-- positionally. There is no `Circle(0) | Rect(0, _)` and no nesting, so an arm
+-- lowers to exactly one Core arm and a body is never duplicated.
+
+type Shape =
+    Circle(radius: Int)
+  | Rect(width: Int, height: Int)
+  | Point;
+
+export area;
+
+fn area(shape: Shape) -> Int =
+  match shape {
+    Circle(radius) -> 3 * radius * radius;
+    Rect(width, height) -> width * height;
+    Point -> 0;
+  };
+
+fn main() -> Int =
+  -- Rule 5: every local is distinct. `let box = ... in let box = ...` is rejected.
+  let box: Int = area(Rect(6, 7)) in
+  let dot: Int = area(Point) in
+  box + dot;

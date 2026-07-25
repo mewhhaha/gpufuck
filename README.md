@@ -252,6 +252,7 @@ published package, and you should read them rather than import them.
 | --------------------------------------------------- | -------------------------------------------------------------- |
 | [Gleam](examples/gleam/README.md)                   | Strict inference, module linking, pinned stdlib coverage       |
 | [Lazuli](examples/lazuli/)                          | Reference syntax, indexed proofs, host values, and laziness    |
+| [Sweep](examples/sweep/README.md)                   | A language shaped by [DESIGN.md](DESIGN.md); no inference      |
 | [JavaScript AOT](examples/javascript-aot/README.md) | Baba parsing, control flow, lexical exceptions, and strict f64 |
 
 Gleam is the most complete and the one the benchmarks use; drive it with `deno task run:gleam`.

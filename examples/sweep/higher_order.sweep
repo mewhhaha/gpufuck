@@ -1,0 +1,12 @@
+-- A function type is written with its parameter list, matching the n-ary call
+-- syntax. Rule 3 is honest here and dishonest underneath: Core arrows are unary,
+-- so this still folds to `Int -> Int -> Int` in the surface. BASELINE.md measures
+-- that at +90 inference transitions per parameter.
+
+fn apply(f: (Int) -> Int, x: Int) -> Int = f(x);
+
+fn increment(n: Int) -> Int = n + 1;
+
+fn twice(f: (Int) -> Int, x: Int) -> Int = f(f(x));
+
+fn main() -> Int = apply(increment, 40) + twice(increment, 0);

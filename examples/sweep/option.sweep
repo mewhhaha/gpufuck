@@ -1,0 +1,17 @@
+-- A generic nominal type. Rule 6: `Option` is declared, never aliased, so nothing
+-- structural has to be unfolded to compare two of them.
+
+type Option[T] = None | Some(value: T);
+
+-- Rule 2: the caller writes the type argument. `unwrap[Int]` below is not
+-- inference recovering `T` -- it is the program saying what it meant.
+fn unwrap[T](option: Option[T], fallback: T) -> T =
+  match option {
+    None -> fallback;
+    Some(value) -> value;
+  };
+
+fn main() -> Int =
+  let present: Option[Int] = Some(42) in
+  let missing: Option[Int] = None in
+  unwrap[Int](present, 0) + unwrap[Int](missing, 0);

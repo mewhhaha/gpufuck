@@ -1,0 +1,7 @@
+-- Recursion needs nothing special: a top-level name is in scope everywhere, so a
+-- function can call itself without a `rec` keyword or a binding group.
+
+fn factorial(n: Int) -> Int =
+  if n < 2 then 1 else n * factorial(n - 1);
+
+fn main() -> Int = factorial(5);

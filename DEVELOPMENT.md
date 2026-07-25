@@ -28,11 +28,13 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 | `src/webgpu.ts`              | Device request, required limits, and setup diagnostics                 |
 | `src/lazuli/`                | Repository-only Lazuli parser, compiler, and surface adapter           |
 | `src/sweep/`, `sweep.ts`     | Sweep: the language DESIGN.md argues for, with its parser and lowering |
+| `sweep_cli.ts`               | Runs one Sweep program; not part of the API                            |
 | `src/gleam/`                 | Repository-only Gleam parser, lowering, worker pool, trace adapter     |
 | `mod.ts`, `lazuli_cli.ts`    | The Lazuli frontend's own entry point and CLI; not part of the API     |
 | `gleam.ts`, `gleam_cli.ts`   | The Gleam frontend's own entry point and CLI; not part of the API      |
 | `language/lazuli/`, `gleam/` | Baba grammars and generated parser/editor artifacts                    |
 | `examples/lazuli/`           | Lazuli sample programs                                                 |
+| `examples/sweep/`            | Sweep sample programs                                                  |
 | `examples/gleam/`            | Gleam sample modules and traces                                        |
 | `examples/javascript-aot/`   | JavaScript frontend, grammar, and the pinned Test262 harness           |
 | `playground/`                | Browser page bundling the compiler with `deno bundle`, no npm deps     |
