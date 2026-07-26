@@ -110,7 +110,9 @@ try {
       },
     },
   );
-  if (!compilation.ok) throw new Error(`single-module compile failed: ${compilation.diagnostics[0]?.code}`);
+  if (!compilation.ok) {
+    throw new Error(`single-module compile failed: ${compilation.diagnostics[0]?.code}`);
+  }
   compilation.module.destroy();
 
   const singleWasm = await (async () => {

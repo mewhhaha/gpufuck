@@ -9,6 +9,11 @@ numbers below were taken on one machine (Ryzen 7 7800X3D, RTX 4080 SUPER, Deno 2
 them are already the second or third version of a number that was wrong the first time. See
 [BASELINE.md](BASELINE.md) for how each was taken.
 
+For the shapes that break the compiler outright rather than merely slow it down — the ABI node cap,
+the recursion forms that lose tail position, the measurement traps that produced wrong numbers — see
+[CHALLENGES.md](CHALLENGES.md). Items here are things to build; entries there are things to know
+before building them.
+
 ## Closed on 2026-07-26
 
 Numbers stay stable so prose elsewhere still resolves; the measurements live in

@@ -1,0 +1,306 @@
+# Challenges
+
+**The degenerate cases, hard walls, and open problems — what breaks, why it breaks now, and what
+would fix it.**
+
+This file is not a plan and not a measurement record. [TASKS.md](TASKS.md) ranks what to do next and
+[BASELINE.md](BASELINE.md) records what was measured; this one exists so a shape that breaks the
+compiler is written down once instead of being rediscovered. Several entries below were discovered
+by hitting them accidentally while measuring something else, which is the argument for the file.
+
+Each entry states what it is, why it is a problem _now_ rather than in principle, and what would
+address it. Where a fix is speculative it says so — this project has repeatedly been wrong about
+which fix would pay, and the entries reflect that.
+
+## Hard walls
+
+These are not slowness. They are inputs the compiler cannot accept at all, and no amount of tuning
+changes them.
+
+### A module cannot exceed 65,536 surface nodes
+
+`SurfaceExpressionEncoder.reserveNode` throws
+`functional surface module exceeds 65536 expression
+nodes`. Because the frontend links imports into
+one module, **a real project of about 60,000 nodes cannot be handed to this compiler at all.**
+Measured: at ~1,174 nodes per realistic Gleam module, that ceiling arrives at **51 modules**.
+
+Why it matters now: it is reached before anything interesting about performance is. The Gleam
+standard library fits only because it is 17,718 nodes; it did not fit before the or-pattern fix, and
+a project twice the stdlib's size is simply not compilable.
+
+How to tackle it, in increasing order of work:
+
+- **Submodule splitting** ([TASKS](TASKS.md) item 2) sidesteps it — compile pieces separately and
+  batch them, which the ABI permits since the cap is per module. This needs wave sequencing, because
+  inference has to flow a type from a definition to its users. 3.38× available parallelism, 21
+  waves.
+- **Widen the field.** The cap is an ABI property, so raising it is a version bump and touches every
+  packed record. Mechanical, but not local.
+- **Mandatory top-level annotations** cut the dependency edge that forces wave sequencing, so
+  modules could be checked in one flat batch. That is Go's and Zig's bargain, and Lazuli already has
+  the syntax.
+
+### Compilation fuel is capped at 10,000,000 steps
+
+`maximumSteps` rejects anything larger. A program whose inference needs more transitions than that
+cannot be compiled, and the limit is not derived from the input — it is a constant. The Gleam stdlib
+uses 405,343, so there is headroom today, but the headroom is not a property anyone checked.
+
+How to tackle: derive the cap from node count with a generous multiplier, so the failure mode is
+"this program is pathological" rather than "this constant was chosen in 2026".
+
+### No WebGPU means no compiler
+
+By design, and stated in ARCHITECTURE as a decision: there is no CPU fallback, because a silent one
+would have different performance and cancellation behaviour and would make every number in BASELINE
+meaningless. The cost is real — a machine without an adapter cannot use the compiler.
+
+This bites in practice more than it sounds. The playground's own in-app browser during development
+reported **WebGPU present but no adapter granted**, which is a third state beyond "works" and
+"absent" and the page handles it only as an error message.
+
+How to tackle: nothing, without reversing the decision. The honest mitigation is that the CPU oracle
+in `src/semantic/type_inference.ts` already implements the same Hindley–Milner and is differentially
+tested against the shader — it is a fallback that exists but is deliberately not wired up.
+
+## Performance pathologies
+
+### One lane per module, measured three ways
+
+The semantic, inference and evaluator kernels are `@compute @workgroup_size(1)`. Every attempt to
+route around it without changing what a lane does has failed:
+
+| Attempt                              | Result                                     |
+| ------------------------------------ | ------------------------------------------ |
+| Packing modules into warps (8/32/64) | Flat to within noise; reverted             |
+| Splitting generation from solving    | Generation is 31% of transitions, so 1.45× |
+| Definition-level waves               | 3.38×, and 21 round trips cost 237 ms      |
+
+And the cost is quantified: the same nodes cost **0.29 µs each across 256 independent modules and
+11.34 µs linked into one — 39×.** That is the whole penalty, from a third direction.
+
+Why warp packing does not help, since it looks like it should: both shapes launch the same thread
+count, so the unpacked one hides latency with extra warps exactly as well as the packed one fills
+lanes. The workspace is also lane-major — each lane's arena sits at a widely separated base — so
+thirty-two packed lanes issue thirty-two scattered transactions.
+
+How to tackle: node-level parallelism inside a **single** dispatch. The pieces are established —
+`atomicCompareExchangeWeak` union-find converges under contention (ARCHITECTURE §9 spike), Core is a
+flat array with children at higher indices, and node tags allow bucketing by kind to cut divergence.
+Interleaving the workspace across lanes so packed reads coalesce is the one variant never tried, and
+it is an ABI change for an unmeasured gain.
+
+### A GPU round trip costs 11.3 ms in Deno even when empty
+
+Eight concurrent awaits cost the same as one, so this is a per-await latency, not throughput. It is
+the entire N=1 number in the oldest benchmark and it is a runtime property, not a compiler one.
+**Unmeasured in browsers**, which matters because the playground quotes it.
+
+Why it matters now: it forecloses a whole class of design. Anything that dispatches once per
+dependency wave spends 21 × 11.3 = 237 ms on the Gleam stdlib before computing anything — worse than
+`gleam build`'s entire 146 ms. Every parallel-inference design must therefore fit in one dispatch,
+as a persistent kernel with in-kernel synchronisation.
+
+How to tackle: measure it in Chrome first, because the constraint may be Deno-specific and the whole
+design space widens if so. Otherwise, encode dependent passes back-to-back in one command buffer —
+memory is coherent between passes, and `gpu_batch_compiler.ts` already does this for three passes.
+
+### The parser is now 96% of a realistic compile
+
+baba parses at roughly 1.4 MB/s where tree-sitter does 10–30 MB/s. On a 256-module corpus the GPU
+resolves and infers 300,544 nodes in **87.9 ms** while baba takes **2,152.8 ms** on the same input.
+
+This inverted during 2026-07-26. On the pre-fix Gleam standard library the GPU phase was 96% of the
+compile and the parser looked irrelevant; after path halving, contification and the pattern fix, the
+parser is 96% and the GPU is 3.9%. The oldest section of BASELINE predicted exactly this and was
+then ignored for a day.
+
+How to tackle:
+
+- **`ParallelGleamFrontend` already exists** and measured 4.2× on 16 cores, and is on no path any
+  benchmark or the playground uses. That is the cheap half and it is sitting there.
+- **Make baba faster** — a separate project, so work outside this repository. 10× would take the
+  256-module corpus from 2,240 ms to about 300 ms.
+
+### WebAssembly emission is mostly fixed cost per module
+
+`40 + 2` is eight Core nodes and still emits a 1,244-byte code section, because every module carries
+its own allocator, free list and thunk-forcing runtime. The code section is 91–98% of every
+artifact. At batch 1,024 emission was **63% of total cost**, though that figure predates the
+node-count fix and wants re-measuring.
+
+How to tackle: emit function bodies on the GPU — the Core is already in GPU buffers, readback
+measures 1 µs, and bodies are independent across functions and modules. LEB128's data-dependent
+offsets are the obstacle: size pass, prefix sum, then write. Or share one runtime across a batch
+instead of per module.
+
+### The compact-scalar path is attempted for every Gleam module and succeeds for none
+
+100% attempt rate, 0% success, ~105 µs each. The ceiling for fixing it is 347–357 ms against a 419
+ms baseline, so roughly 16% of emission. Two of three variants of the fix were tried and made things
+slower; bailing at the boundary does not work because the entry is a direct call, so emission
+inlines the whole program before reaching a memory instruction.
+
+How to tackle: the abort has to happen inside the expression compiler, not at the boundary. This is
+the one remaining variant.
+
+### Every extra function parameter costs +5 nodes and +90 transitions
+
+Exactly linearly, because Core has only unary lambdas and an n-parameter function becomes n nested
+ones. A five-parameter function costs 3.7× the inference of a one-parameter function. This is an ABI
+property — Gleam, Lazuli and Ducklang all pay it, and no frontend design avoids it.
+
+How to tackle: an n-ary lambda and application node. ABI version bump, so deliberate rather than
+opportunistic.
+
+## Correctness hazards
+
+### Only self-tail-calls become loops
+
+`tailArguments` recognises a `Local` at the self depth or a `Global` matching the recursive
+definition. Everything else grows the stack: **mutual recursion, and non-tail recursion of any
+shape.** There is no WebAssembly tail-call proposal in use — `grep` finds no `return_call` — so the
+`br`-to-loop-header rewrite is the only stack-safety mechanism that exists.
+
+Why it matters now: a program that recurses 100,000 times in a shape the analysis does not recognise
+fails at runtime, not at compile time, and the diagnostic is a host `RangeError` about call stack
+size. That is a bad failure mode for a compiler to have.
+
+How to tackle: emit `return_call` where the target supports it, which turns every tail call into a
+constant-stack operation regardless of shape. Otherwise extend the analysis to mutual recursion via
+the SCC information the inference phase already computes.
+
+### `compileTailPosition` has no `LetRec` case, but the analysis descends into one
+
+`#containsTailCall` recurses into `LetRec.child1`, so a loop can be **detected** through a `LetRec`
+and then not **emitted** through it — the tail call falls to the default branch and becomes an
+ordinary call. This is the same class of defect as the `let`-bound-lambda bug fixed by
+contification, and it is exactly how that one hid: analysis and codegen tail-walkers drifting apart.
+
+Found by reading, not by a failing program. Gleam may never produce a surviving `LetRec`, since
+`recursive_groups.ts` lambda-lifts local SCCs to top level — so this may be unreachable from the
+current frontends. **Unverified either way**, which is the problem.
+
+How to tackle: construct a program that reaches it, through Lazuli or a hand-built surface module.
+If reachable, add the case; if not, make `#containsTailCall` stop at `LetRec` so the two walkers
+agree and the trap closes.
+
+### Contification only handles nullary join points
+
+`joinPointLambda` requires a one-parameter lambda whose parameter is unused and whose arguments are
+effect-free leaves. That covers everything the frontends emit today, because every join point comes
+from `discardName()` applied to `Unit`. A join point that passes a value still becomes a closure and
+still loses tail position.
+
+How to tackle: generalise to arity _k_ with parameter locals, reusing the parallel-assignment
+discipline the tail loop already implements. The encoding is the same; only the argument handling
+grows.
+
+### Nested and multi-subject patterns still cascade
+
+The or-pattern explosion is fixed by sharing the failure continuation, not by compiling a decision
+tree. `lowerPattern` still emits a `case` over every constructor of the type at every level, so a
+deeply nested pattern still produces a cascade — it is linear now rather than exponential, but it is
+not minimal.
+
+How to tackle: a real pattern-matrix compiler (Maranget), where each subject is tested once and each
+arm body appears once with no failure continuations at all. That would also remove the reliance on
+contification, since there would be no join points to contify.
+
+### The CPU oracle is separately O(n^1.30)
+
+`inferTypes` scales as n^1.30 over nine points from 1,334 to 49,964 nodes. `generalize` calls
+`freeEnvironmentParameters`, which walks every type in the whole environment on every `let`; six
+sites copy the entire environment with `new Map(environment)` to add one binding;
+`globalEnvironment()` is rebuilt per SCC component. No Rémy levels, no path compression in `prune`,
+no visited-set memoization.
+
+Why it matters now: it is not on the compile path, so it costs no user anything — but it is the
+**differential oracle** the GPU shader is tested against. Its cost sets a practical ceiling on how
+large a program can be differentially verified, which is a correctness limit rather than a
+performance one.
+
+How to tackle: the same fixes that worked on the shader. Path compression in `prune` is the direct
+analogue of what bought 4.83× on the GPU.
+
+## Measurement traps
+
+Every one of these produced a wrong number that was believed for a while.
+
+### Benchmark shape decides the answer
+
+The recorded 17× batch win is measured on two-definition modules, where the frontend has almost
+nothing to do and the comparison is against Gleam's ~11 ms per-package floor. At 1,174 nodes per
+module the same claim is worth **1.26×**. Neither number is wrong; quoting either without its module
+size is.
+
+Guard: `deno task bench` fixes the corpus so shape cannot drift silently, and README now states the
+17× with its size attached.
+
+### Reachability pruning silently empties a corpus
+
+Lowering prunes to what the entry reaches, so a benchmark with a small `main` measures almost
+nothing. An earlier version of the stdlib benchmark **lowered 252 KB of Gleam to 66 surface nodes**
+and compared that against `gleam build` compiling all nineteen modules.
+
+Guard: `tools/gleam_stdlib_corpus.ts` generates an entry binding all 353 exports, shared by the
+benchmark and the profiler so they cannot diverge.
+
+### Per-node figures were measured on a corpus that was 64% duplication
+
+The 122.3 and 25.3 transitions-per-node figures were taken on the 49,964-node stdlib. After the
+pattern fix the same program is 17,718 nodes, so those are per _duplicated_ node. The ratio between
+them stands; the absolute values never described the program.
+
+### Wall times need a quiet machine, and one run proves nothing
+
+Batch timings spread ~30% run to run: the same tree measured 96.6, 101.2, 108.3, 117.1 and 129.7
+µs/module. A change under about 20% is unmeasured. Worse, a loaded machine (load average 21.9) made
+`parse` — which the change under test did not touch — swing between 245, 724 and 1,237 ms, and made
+a 0.9× ratio read as 0.2×.
+
+Guard: `deno task bench` reports timings but never fails on them, and fails only on exact counters.
+Two changes have been reverted after a proper A/B showed the "win" was noise or a loss.
+
+### Averages hide skew
+
+Node-level available parallelism averaged 574× across the stdlib, which is 50,000 nodes over a depth
+that barely moved. The **median level is 4–24 nodes wide** in every program measured. What
+generalises is the work-weighted figure — 74–99% of nodes sit in levels wider than a warp — not the
+mean.
+
+### The profiling kernel is 40% slower than production
+
+A dynamically indexed store into the private state struct spills it out of registers: 3,668–3,937 ms
+without against 5,173–5,190 ms with. `profile:frames` therefore times the production pipeline and
+counts with a separate build-time shader variant, so a profiled timing cannot be misquoted as a real
+one.
+
+## Environmental
+
+### Concurrent GPU processes cause test failures
+
+VRAM pressure makes WebGPU device creation fail inside tests, with a measured dose-response: 70
+failures with heavy concurrent GPU use, 2 with moderate, 0 with none. The suite also has a known
+intermittent failure at roughly 2 in 17 runs, never reproduced under controlled conditions and
+correlating with concurrent GPU processes.
+
+Why it matters now: a red suite is ambiguous. It might be a regression or it might be a game
+running.
+
+How to tackle: retry device creation with backoff and report VRAM state in the failure, so the
+diagnostic distinguishes "no memory" from "wrong answer".
+
+## Unfinished cleanups
+
+Small, known, and recorded so they are not rediscovered:
+
+- **`semanticSurfaceFromModule` and `functional_adapter.ts`** copy twelve fields each way between
+  two names for identical bytes. Step 4 of the coherence plan was to delete them once both sides
+  shared a vocabulary; it never happened, and they are still on the path.
+- **Nine lowercase `functional*` exports** never lost the prefix that every other name dropped.
+- **Sweep's flat-locals rule** rejects more than DESIGN requires — distinct names in disjoint scopes
+  are still a diagnostic.
+- **Frontend API inconsistency**: some paths throw where siblings return a diagnostic result.
+- **A nullary Gleam entry allocates a `Unit` argument** it never reads.

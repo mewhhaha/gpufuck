@@ -102,7 +102,10 @@ function moduleSource(index: number, functionsPerModule: number): string {
     );
   }
 
-  const sum = Array.from({ length: functionsPerModule }, (_, group) => `score_${group}(${group % 9 + 1})`);
+  const sum = Array.from(
+    { length: functionsPerModule },
+    (_, group) => `score_${group}(${group % 9 + 1})`,
+  );
   parts.push(`pub fn main() -> Int {`, `  ${sum.join(" + ")}`, "}", "");
   return parts.join("\n");
 }
@@ -137,7 +140,10 @@ if (import.meta.main) {
   const corpus = generateGleamCorpus(moduleCount, 6);
   await Deno.mkdir(target, { recursive: true });
   for (const module of corpus.modules) {
-    await Deno.writeTextFile(`${target}/${module.name.replace("corpus/", "")}.gleam`, module.source);
+    await Deno.writeTextFile(
+      `${target}/${module.name.replace("corpus/", "")}.gleam`,
+      module.source,
+    );
   }
   console.log(
     `${corpus.modules.length} modules, ${(corpus.sourceBytes / 1024).toFixed(0)} KB of Gleam ` +

@@ -4,7 +4,9 @@
 is deliberately append-only in spirit — superseded numbers stay, with the correction next to them,
 because several of them were wrong the first time and knowing that is the point.
 
-For what to _do_ about these numbers, ranked, see [TASKS.md](TASKS.md). This file does not plan.
+For what to _do_ about these numbers, ranked, see [TASKS.md](TASKS.md). This file does not plan. For
+the degenerate cases and hard walls behind several of them, and the measurement traps that made some
+of them wrong, see [CHALLENGES.md](CHALLENGES.md).
 
 Every performance claim in the repository is judged against this file. Reproduce the oldest section
 with `deno task bench:throughput`; later sections name their own task.
