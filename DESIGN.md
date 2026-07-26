@@ -12,8 +12,9 @@ stalls on memory latency the scheduler can only partly hide.
 
 Type inference is a fold. Unification threads a mutable substitution through the whole program,
 union-find is pointer chasing by construction, and the work per node is data-dependent. That is the
-worst possible shape, and it is what the current kernel does: one lane, 6.1 million sequential
-transitions at 568 ns each.
+worst possible shape, and it is what the current kernel does: one lane, 1.27 million sequential
+transitions on the Gleam stdlib. (That was 6.1 million until path halving; the shape of the
+algorithm is the point, not the constant.)
 
 So the design question is not "which syntax is cheap" — measured, that is worth 2–4x. It is:
 
@@ -48,13 +49,18 @@ support this rule, and it does not refute it either — it measured annotations 
 engine that solves anyway. A checking-only pipeline is a different algorithm, and its cost is
 unmeasured.
 
-**A later measurement does support it, and it is the largest number on the board.** Charging every
-inference transition to the frame kind that did it, on the Gleam stdlib: solving is **81.2%** of 6.1
-million transitions, generation 11.4%. The three biggest buckets are all things checking does not
-have — `InstantiateVisit` 50.0%, `Prune` (union-find) 16.4%, `ForallSearch` 8.5%. So the rule is not
-aimed at a rounding error; it is aimed at four fifths of the work. What remains unmeasured is the
-constant factor of a checking kernel, which is the whole question and is why the experiment at the
-bottom of this document is still the right next one. See [BASELINE.md](BASELINE.md).
+**A later measurement supports it, though less dramatically than it first appeared.** Charging every
+inference transition to the frame kind that did it, on the Gleam stdlib, solving came out at
+**81.2%** against generation's 11.4% — four fifths of the work being exactly what checking does not
+do. Then path halving removed 4.83x of the transitions, most of them from the solve, and the split
+settled at **49.3% solve against 35.0% generation**.
+
+So the rule still aims at the larger half, and `Prune` (union-find, 16.2%) plus the instantiation
+and forall machinery do not exist in a checking pipeline at all. But the honest version of the claim
+is "about half", not "four fifths", and the first number was inflated by a defect rather than by the
+algorithm. What remains unmeasured is the constant factor of a checking kernel, which is the whole
+question and is why the experiment at the bottom of this document is still the right next one. See
+[BASELINE.md](BASELINE.md).
 
 **2. Explicit type arguments at instantiation. Polymorphism stays, inference of type arguments
 goes.**
@@ -105,7 +111,7 @@ a topologically ordered array with fixed work per lane.
 
 The ceiling is then the dependency depth of the check, not the node count. For the Gleam stdlib the
 definition graph is 21 waves deep — if a node-level sweep is similarly shallow, a 50,000-node module
-is tens of dependent steps rather than 6.1 million sequential ones.
+is tens of dependent steps rather than 1.27 million sequential ones.
 
 That is the argument. It is not a measurement, and the honest position is that the constant factors
 could eat it: a lane doing a fixed-size type check still reads its children's types from memory, and

@@ -1708,6 +1708,30 @@ fn start_prune(type_index: u32) -> bool {
   return true;
 }
 
+/**
+ * Path halving, shared by every site that walks a variable's link chain.
+ *
+ * A bound variable's word 1 means only "forwarded to", so repointing it at its grandparent keeps
+ * the representative identical while permanently shortening the chain, and one charged transition
+ * then covers two hops instead of one. Eight visitors chased these chains and none wrote back, so
+ * the same chains were rewalked; measured, that was 16.4% of stdlib transitions in prune alone.
+ *
+ * Two things this deliberately does not do. It does not compress a rigid chain: refinement lives in
+ * word 3 and is undone by refinement_rollback_transition from a trail of (node, previous value)
+ * pairs, so a shortcut would survive a rollback that restores the link it skipped. And it stops as
+ * soon as the parent is not a bound variable, which leaves TYPE_INSTANCE and TYPE_LAZY_CONSTRUCTOR
+ * for the caller to materialize on its next transition, as before.
+ */
+fn halve_variable_link(current: u32) -> u32 {
+  let parent = type_get(current, 1u);
+  if type_get(parent, 0u) == TYPE_VARIABLE && type_get(parent, 1u) != NO_INDEX {
+    let grandparent = type_get(parent, 1u);
+    type_set(current, 1u, grandparent);
+    return grandparent;
+  }
+  return parent;
+}
+
 fn prune_transition(frame: u32) {
   let current = frame_get(frame, 0u);
   if type_get(current, 0u) == TYPE_INSTANCE {
@@ -1715,7 +1739,7 @@ fn prune_transition(frame: u32) {
     return;
   }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
-    frame_set(frame, 0u, type_get(current, 1u));
+    frame_set(frame, 0u, halve_variable_link(current));
     return;
   }
   if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
@@ -1852,7 +1876,7 @@ fn occurs_visit_transition(frame: u32) {
     return;
   }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
-    frame_set(frame, 0u, type_get(current, 1u));
+    frame_set(frame, 0u, halve_variable_link(current));
     return;
   }
   if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
@@ -2061,7 +2085,7 @@ fn generalize_visit_transition(frame: u32) {
     return;
   }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
-    frame_set(frame, 0u, type_get(current, 1u)); return;
+    frame_set(frame, 0u, halve_variable_link(current)); return;
   }
   if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 3u)); return;
@@ -2149,7 +2173,7 @@ fn instantiate_visit_transition(frame: u32) {
     return;
   }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
-    frame_set(frame, 0u, type_get(current, 1u)); return;
+    frame_set(frame, 0u, halve_variable_link(current)); return;
   }
   if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 3u)); return;
@@ -2296,7 +2320,7 @@ fn forall_search_transition(frame: u32) {
     return;
   }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
-    frame_set(frame, 0u, type_get(current, 1u));
+    frame_set(frame, 0u, halve_variable_link(current));
     return;
   }
   let kind = type_get(current, 0u);
@@ -2404,7 +2428,7 @@ fn concrete_visit_transition(frame: u32) {
     return;
   }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
-    frame_set(frame, 0u, type_get(current, 1u)); return;
+    frame_set(frame, 0u, halve_variable_link(current)); return;
   }
   if frame_get(frame, 2u) == 0u && type_get(current, 0u) == TYPE_RIGID &&
     type_get(current, 3u) != NO_INDEX {
@@ -2577,7 +2601,7 @@ fn fully_zonked_visit_transition(frame: u32) {
     return;
   }
   if type_get(current, 0u) == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
-    frame_set(frame, 0u, type_get(current, 1u)); return;
+    frame_set(frame, 0u, halve_variable_link(current)); return;
   }
   if type_get(current, 0u) == TYPE_RIGID && type_get(current, 3u) != NO_INDEX {
     frame_set(frame, 0u, type_get(current, 3u)); return;
@@ -2639,7 +2663,7 @@ fn rigidify_visit_transition(frame: u32) {
     return;
   }
   if kind == TYPE_VARIABLE && type_get(current, 1u) != NO_INDEX {
-    frame_set(frame, 0u, type_get(current, 1u)); return;
+    frame_set(frame, 0u, halve_variable_link(current)); return;
   }
   if kind == TYPE_VARIABLE {
     type_set(current, 0u, TYPE_RIGID);

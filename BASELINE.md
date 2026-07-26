@@ -79,6 +79,10 @@ Corpus: `gleam-lang/stdlib` at `bacc20c`, nineteen source modules, 252 KB, all r
 binds every one of the 353 public functions, so nothing is pruned. Reproduce with
 `deno task bench:gleam-stdlib <checkout> <entry.gleam>`. Same machine as above; Gleam 1.17.0.
 
+> **Superseded 2026-07-26.** Path halving took the GPU phase from 3,806 ms to 1,019.6 ms and the
+> comparable figure from 25x to **8.0x**. Everything below is the measurement as taken; see "path
+> halving" near the end of this file for what replaced it.
+
 | Compiler                          | Cold, whole process |
 | --------------------------------- | ------------------: |
 | `gleam build --target javascript` |              146 ms |
@@ -707,6 +711,70 @@ either way, so the shares above are unaffected by the instrument's own cost.
 One known imprecision: the buckets sum to one more than `transitions` on runs that grow an arena,
 because `discardGrowthTransition` rewinds the scalar and cannot know which bucket to rewind. The
 tool prints the discrepancy rather than hiding it.
+
+## 2026-07-26 — path halving: 4.83x fewer transitions, and the n^1.68 curve is gone
+
+Acting on the bucket above. `prune_transition` walked a bound variable's link chain one charged
+transition per hop and never wrote back, so every chain was rewalked from the start by every visitor
+that touched it. Grepping for the pattern found **eight** sites doing the identical uncompressed
+chase — prune, occurs, generalize, instantiate, forall-search, concrete, fully-zonked and rigidify
+visitors — now all sharing one `halve_variable_link` helper that points each node at its grandparent
+as it passes.
+
+Only word 1 is compressed. Rigid refinement lives in word 3 and is undone by
+`refinement_rollback_transition` from a trail of (node, previous value) pairs, so shortcutting a
+rigid chain would survive a rollback that restores the link it skipped.
+
+Gleam stdlib, 49,964 nodes, same corpus and machine:
+
+| Bucket           |        Before |         After |    Factor |
+| ---------------- | ------------: | ------------: | --------: |
+| InstantiateVisit |     3,056,557 |        46,954 |   **65x** |
+| ForallSearch     |       521,157 |         7,244 |   **72x** |
+| ConcreteVisit    |       286,311 |        38,877 |      7.4x |
+| Prune            |     1,003,705 |       204,700 |      4.9x |
+| Expression       |       452,709 |       195,591 |      2.3x |
+| GeneralizeVisit  |        27,663 |        16,887 |      1.6x |
+| OccursVisit      |        46,817 |        37,444 |      1.3x |
+| Unify            |       249,253 |       249,253 |         — |
+| **total**        | **6,112,586** | **1,265,365** | **4.83x** |
+
+Unify, Occurs, Constructor, SchemaVisit, LocalLookup and the phase buckets are unchanged to the
+transition, which is the check that only chase-bearing code moved. `Expression` fell 2.3x without
+being touched, because `Apply` stage 41 chases links inline inside its own frame and benefits from
+chains the other eight shortened.
+
+| Measure                          |    Before |          After |
+| -------------------------------- | --------: | -------------: |
+| Inference transitions            | 6,112,586 |      1,265,365 |
+| Transitions per surface node     |     122.3 |       **25.3** |
+| GPU resolve + infer              |  3,806 ms | **1,019.6 ms** |
+| Comparable to `gleam build`      | ~3,956 ms | **1,166.7 ms** |
+| vs `gleam build` (146 ms)        |       25x |       **8.0x** |
+| vs our own CPU oracle (773.6 ms) |      4.7x |       **1.3x** |
+
+**The n^1.68 transition count is gone.** 23.5 transitions per node on a 1,128-node program against
+25.3 on a 49,964-node one — 1.08x over 44x the nodes, which is linear inside the noise. The entire
+superlinearity was uncompressed chains being rewalked, and BASELINE's "5.4x excess worth ~2,800 ms"
+turns out to have been an underestimate: the actual recovery is 2,787 ms of a 3,806 ms phase.
+
+**It buys nothing on small programs, which is the consistency check.** The 1,128-node Lazuli program
+is 26,473 transitions before and after, exactly. Short chains have nothing to halve, which is what
+makes this the same scale effect the bucket table found rather than a second unrelated one.
+
+**No regression on the batch path.** Synthetic two-definition corpus at N=1024, GPU inference share,
+three runs each: 99.5 / 97.9 / 101.9 µs with halving against 102.6 / 105.1 / 98.4 µs without.
+Medians 99.5 and 102.6, comfortably inside the documented 30% band — those modules have no chains to
+compress, so the two extra reads per prune are free rather than a cost.
+
+### What this does to the re-encoding argument
+
+The generate/solve split moves from 11.4/81.2 to **35.0/49.3** — the solve shrank by 8x and
+generation barely moved, so generation's share rose without generation getting cheaper. An
+infinitely parallel generation phase is now an Amdahl ceiling of **1.54x** rather than 1.13x. Still
+not a reason to build it, and the profile is now much flatter — Unify 19.7%, Prune 16.2%, Expression
+15.5% — so there is no single dominant term left to attack. The next real win is occupancy, not
+encoding.
 
 ## Kill criteria
 

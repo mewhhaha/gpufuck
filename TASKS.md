@@ -136,50 +136,43 @@ what would need to be a 73 ms budget to beat Gleam by 2×.
 
 ## Next
 
-### 6. Half of all inference work is copying type schemes
+### 6. ~~Transition count scales as n^1.68~~ — done, 4.83x
 
-The n^1.68 transition count has been located. `deno task profile:frames --gleam <checkout>` charges
-each of the 6.1M transitions to the frame kind on top of the stack, and the distribution is not
-close to even:
+**Fixed.** Eight visitors chased variable link chains one charged transition per hop and never wrote
+back, so every chain was rewalked. One shared `halve_variable_link` helper (path halving) took the
+Gleam stdlib from **6,112,586 transitions to 1,265,365** and the GPU phase from 3,806 ms to 1,019.6
+ms. Per-node cost is 122.3 → 25.3, and the curve is now linear: 23.5 transitions per node at 1,128
+nodes against 25.3 at 49,964. Against `gleam build`, 25x → **8.0x**; against our own CPU oracle,
+4.7x → **1.3x**. Full numbers and the A/B in BASELINE.
 
-| Frame kind       | Share at 49,964 nodes | Share at 1,128 nodes |
-| ---------------- | --------------------: | -------------------: |
-| InstantiateVisit |             **50.0%** |                 0.5% |
-| Prune            |             **16.4%** |                18.4% |
-| ForallSearch     |                  8.5% |                 0.1% |
-| Expression       |                  7.4% |                14.9% |
-| Unify            |                  4.1% |                23.1% |
+What is left in this area, in order:
 
-Three subitems, ranked, all cheaper than any re-encoding:
+**6a. Union by rank is still missing.** Halving shortens chains but orientation is still decided by
+which side happens to be a variable. Cheap to add, unmeasured, and probably small now.
 
-**6a. Instantiation copies the whole scheme graph per use (50.0%, ~3.06M transitions).**
-`start_lazy_instantiate` already defers with a `TYPE_INSTANCE` thunk, but
-`materialize_type_instance` then copies. Sharing rather than copying is the single largest number on
-this list. Note this cuts against the recorded "polymorphism is 2.8x cheaper than monomorphising"
-finding, which was measured on a small synthetic module — see BASELINE.
+**6b. `Apply` stage 41 chases links inline in its own frame** rather than through the shared helper.
+It fell 2.3x for free when the other eight compressed the chains it walks; routing it through
+`halve_variable_link` too would compress them itself.
 
-**6b. `prune` has no path compression and no union by rank (16.4%, ~1.00M transitions).**
-`prune_transition` in `src/semantic/type_inference_shader.ts` walks the variable link chain, charges
-a full transition per hop, and never writes back, so the same chain is rewalked. Textbook fix,
-changes no semantics, and it is a prerequisite for any parallel union-find anyway.
+**6c. Instantiation still copies the scheme graph per use.** `InstantiateVisit` fell 65x to 3.7%, so
+what remained after the chase was removed is small — the 50.0% was almost entirely chain-walking,
+not copying. Reprofile before spending anything here; the premise mostly evaporated.
 
-**6c. `ForallSearch` is 0.1% small and 8.5% large.** Another scale term; unexamined.
-
-This only bites single-module latency. Batching routes around it, which is why it sits below the
-batch items.
+The profile is now flat — Unify 19.7%, Prune 16.2%, Expression 15.5% — with no dominant term. The
+next real win is occupancy (item 7), not further transition-count work.
 
 ### 7. Parallelise the inference kernel — but not by splitting generation from solving
 
 `type_inference_shader.ts` is `@compute @workgroup_size(1)` — one lane of roughly ten thousand. This
-is the retarget's original premise and still the largest structural win available. Do (6) first:
-reducing the work is worth more than parallelising work that should not exist, and the two multiply.
+is the retarget's original premise and now the largest win available outright: item 6 removed the
+work that should not have existed, and what is left is 1.27M transitions still running on one lane.
 
 **The generate-then-solve re-encoding was proposed and killed by measurement before it was built.**
-The plan was one wide dispatch emitting constraints, then a wavefront solve. Profiling says
-generation is **11.4%** of transitions and solving is 81.2%, so an infinitely parallel generation
-phase is an Amdahl ceiling of **1.13x**. Worse, generation's share _falls_ with program size — 40.6%
-at 1,128 nodes, 11.4% at 49,964 — so it is smallest exactly where the GPU is needed. Do not rebuild
-this argument without re-reading BASELINE; it was convincing and it was wrong.
+The plan was one wide dispatch emitting constraints, then a wavefront solve. Profiling said
+generation was **11.4%** of transitions and solving 81.2%, an Amdahl ceiling of **1.13x**. After
+path halving (item 6) the split is 35.0/49.3 and the ceiling is **1.54x** — better, because the
+solve shrank 8x rather than because generation improved, and still not a reason to build it. Do not
+rebuild this argument without re-reading BASELINE; it was convincing and it was wrong.
 
 Three further entanglements would have to be undone even if the split did pay, all found by reading
 the kernel rather than by measurement:

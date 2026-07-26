@@ -172,7 +172,7 @@ const [label, module] = gleamIndex >= 0
   : [Deno.args[0] ?? DEFAULT_SOURCE, await lazuliModule(Deno.args[0] ?? DEFAULT_SOURCE)];
 
 const device = await requestWebGpuDevice();
-const compiler = await GpuSemanticCompiler.create(device, { profileInference: true });
+const surface = semanticSurfaceFromModule(module);
 
 // Cumulative counters, so the last observation of the run carries the whole total.
 let profile: Uint32Array<ArrayBufferLike> = new Uint32Array(
@@ -181,26 +181,45 @@ let profile: Uint32Array<ArrayBufferLike> = new Uint32Array(
 let transitions = 0;
 let semanticSteps = 0;
 
-const started = performance.now();
-const compilation = await compiler.compile(
-  semanticSurfaceFromModule(module),
-  module.sourceByteLength,
-  { maximumSteps: 20_000_000, maximumStepsPerDispatch: 524_288 },
-  undefined,
-  {
-    observeDispatch: (observation: GpuCompilationDispatchObservation) => {
-      if (observation.inferenceTransitions < transitions) return;
-      profile = observation.inferenceProfile;
-      transitions = observation.inferenceTransitions;
-      semanticSteps = observation.semanticSteps;
+async function compileOnce(compiler: GpuSemanticCompiler): Promise<number> {
+  const started = performance.now();
+  const compilation = await compiler.compile(
+    surface,
+    module.sourceByteLength,
+    { maximumSteps: 20_000_000, maximumStepsPerDispatch: 524_288 },
+    undefined,
+    {
+      observeDispatch: (observation: GpuCompilationDispatchObservation) => {
+        if (observation.inferenceTransitions < transitions) return;
+        profile = observation.inferenceProfile;
+        transitions = observation.inferenceTransitions;
+        semanticSteps = observation.semanticSteps;
+      },
     },
-  },
-);
-const elapsed = performance.now() - started;
-if (!compilation.ok) {
-  throw new Error(`compilation failed: ${compilation.diagnostics[0]?.message}`);
+  );
+  const elapsed = performance.now() - started;
+  if (!compilation.ok) {
+    throw new Error(`compilation failed: ${compilation.diagnostics[0]?.message}`);
+  }
+  compilation.module.destroy();
+  return elapsed;
 }
-compilation.module.destroy();
+
+/**
+ * The counting kernel is about 40% slower, so timing it would report a number nobody can compare
+ * against BASELINE. Time the production pipeline, count with the profiling one, and print both --
+ * transition counts are identical either way, which the two runs also cross-check.
+ */
+const productionCompiler = await GpuSemanticCompiler.create(device);
+const samples: number[] = [];
+for (let repetition = 0; repetition < 3; repetition++) {
+  samples.push(await compileOnce(productionCompiler));
+}
+samples.sort((left, right) => left - right);
+const elapsed = samples[1]!;
+
+const profilingCompiler = await GpuSemanticCompiler.create(device, { profileInference: true });
+const profiledMilliseconds = await compileOnce(profilingCompiler);
 device.destroy();
 
 const counted = profile.reduce((total, count) => total + count, 0);
@@ -214,7 +233,8 @@ const percent = (count: number) => `${((count / Math.max(1, counted)) * 100).toF
 console.log(`${label}: ${module.nodeCount} nodes, ${module.definitionCount} definitions`);
 console.log(
   `${transitions.toLocaleString()} inference transitions + ${semanticSteps.toLocaleString()} ` +
-    `semantic steps in ${elapsed.toFixed(0)} ms`,
+    `semantic steps in ${elapsed.toFixed(0)} ms (median of 3, production kernel; ` +
+    `${profiledMilliseconds.toFixed(0)} ms with counters)`,
 );
 if (counted !== transitions) {
   console.log(
