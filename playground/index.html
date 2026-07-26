@@ -25,9 +25,21 @@
           <h2>Gleam source</h2>
           <div id="examples" class="examples"></div>
         </div>
-        <textarea id="source" spellcheck="false" aria-label="Gleam source"></textarea>
+        <div class="editor">
+          <pre id="highlight" class="highlight" aria-hidden="true"></pre>
+          <textarea id="source" spellcheck="false" aria-label="Gleam source"></textarea>
+        </div>
         <div class="actions">
           <button id="run" type="button">Run</button>
+          <label class="batch">
+            <span>Batch</span>
+            <select id="batch">
+              <option value="1" selected>1 module</option>
+              <option value="64">64 modules</option>
+              <option value="256">256 modules</option>
+              <option value="1024">1,024 modules</option>
+            </select>
+          </label>
           <a id="download" href="#" hidden>Download .wasm</a>
         </div>
       </section>
@@ -40,13 +52,28 @@
         <p id="status" class="status" role="status"></p>
         <div id="result" class="result"></div>
       </section>
+
+      <section class="pane pane-wide">
+        <div class="pane-head">
+          <h2>Emitted WebAssembly</h2>
+        </div>
+        <div id="outline" class="outline"></div>
+      </section>
     </main>
 
     <footer>
       <p>
-        The compiler is not fast yet — a single small module is dominated by one GPU readback, which
-        costs about 11 ms in Deno. The measurements and the criteria that would call the approach
-        dead live in <code>BASELINE.md</code>.
+        <strong>What to expect.</strong> A small module here is almost all fixed cost — one GPU
+        readback, measured at about 11 ms under Deno and unmeasured in browsers, so a 200-byte example
+        tells you nothing about the compiler. Pick the generated <em>stress</em> example, or raise the
+        batch count, to see per-module cost instead of that floor.
+      </p>
+      <p>
+        On one large real program — Gleam&rsquo;s standard library, 17,718 nodes — this pipeline is
+        <strong>3.0&times;</strong> slower than <code>gleam build</code>, down from 27&times; earlier
+        the same day. Batching is where it wins: a thousand independent modules compile about
+        <strong>17&times;</strong> faster than a compiler with no cross-package batching. Every number,
+        including the ones that turned out to be wrong, is in <code>BASELINE.md</code>.
       </p>
       <p>
         <a href="https://github.com/mewhhaha/gpufuck">Source</a> ·

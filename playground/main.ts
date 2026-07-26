@@ -9,6 +9,8 @@ import type { SemanticDiagnostic } from "../src/semantic/abi.ts";
 import type { GleamDiagnostic } from "../src/gleam/diagnostic.ts";
 import { lowerGleamSource } from "../src/gleam/frontend.ts";
 import { initializeGleamParser } from "../src/gleam/parser.ts";
+import { renderHighlight } from "./highlight.ts";
+import { readWasmOutline, type WasmOutline } from "./wasm_outline.ts";
 
 interface Example {
   readonly name: string;
@@ -35,6 +37,9 @@ const element = <T extends HTMLElement>(id: string): T => {
 };
 
 const editor = element<HTMLTextAreaElement>("source");
+const highlightLayer = element<HTMLPreElement>("highlight");
+const batchSelect = element<HTMLSelectElement>("batch");
+const outlinePanel = element<HTMLDivElement>("outline");
 const runButton = element<HTMLButtonElement>("run");
 const exampleList = element<HTMLDivElement>("examples");
 const stageList = element<HTMLDListElement>("stages");
@@ -45,6 +50,19 @@ const downloadLink = element<HTMLAnchorElement>("download");
 let runtime: { compiler: GpuCompiler; adapter: string } | undefined;
 let probed: { adapter: GPUAdapter; name: string } | { reason: string } | undefined;
 let artifact: Uint8Array<ArrayBuffer> | undefined;
+
+/**
+ * Repaints the highlight layer and keeps it aligned with the textarea above it.
+ *
+ * The textarea stays the thing that receives input — it keeps native caret, selection, undo, IME and
+ * accessibility, all of which a contenteditable reimplementation would have to earn back. The layer
+ * behind it only has to agree about metrics and scroll offset.
+ */
+function paintHighlight(): void {
+  renderHighlight(editor.value, highlightLayer);
+  highlightLayer.scrollTop = editor.scrollTop;
+  highlightLayer.scrollLeft = editor.scrollLeft;
+}
 
 function setStatus(text: string, tone: "idle" | "busy" | "error" | "ok" = "idle"): void {
   statusLine.textContent = text;
@@ -107,6 +125,66 @@ function renderValue(value: unknown, type: string, wasmBytes: number, stats: str
   resultPanel.append(title, pre, meta);
 }
 
+function clearOutline(note: string): void {
+  outlinePanel.replaceChildren();
+  const empty = document.createElement("p");
+  empty.className = "meta";
+  empty.textContent = note;
+  outlinePanel.append(empty);
+}
+
+function renderOutline(outline: WasmOutline | undefined): void {
+  outlinePanel.replaceChildren();
+  if (outline === undefined) {
+    clearOutline("The module was emitted but could not be read back structurally.");
+    return;
+  }
+  const summary = document.createElement("p");
+  summary.className = "meta";
+  summary.textContent = `${(outline.byteLength / 1024).toFixed(1)} KB · ` +
+    `${outline.functionCount} functions · ${outline.typeCount} signatures · ` +
+    `${outline.importCount} imported functions` +
+    (outline.memoryPages === undefined ? "" : ` · ${outline.memoryPages} memory pages`);
+  outlinePanel.append(summary);
+
+  const table = document.createElement("table");
+  table.className = "sections";
+  const head = document.createElement("tr");
+  for (const label of ["Section", "Bytes", "Share"]) {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    head.append(cell);
+  }
+  table.append(head);
+  for (const section of outline.sections) {
+    const row = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = section.name;
+    const bytes = document.createElement("td");
+    bytes.className = "numeric";
+    bytes.textContent = section.byteLength.toLocaleString();
+    const share = document.createElement("td");
+    share.className = "numeric";
+    share.textContent = `${((section.byteLength / outline.byteLength) * 100).toFixed(1)}%`;
+    row.append(name, bytes, share);
+    table.append(row);
+  }
+  outlinePanel.append(table);
+
+  if (outline.exports.length > 0) {
+    const exports = document.createElement("pre");
+    exports.className = "exports";
+    exports.textContent = outline.exports
+      .map((entry) =>
+        `(export "${entry.name}" (${entry.kind}${
+          entry.signature === undefined ? "" : ` ${entry.signature}`
+        }))`
+      )
+      .join("\n");
+    outlinePanel.append(exports);
+  }
+}
+
 async function probeAdapter(): Promise<{ adapter: GPUAdapter; name: string } | { reason: string }> {
   if (probed !== undefined) return probed;
   if (navigator.gpu === undefined) {
@@ -155,6 +233,80 @@ async function ensureRuntime(): Promise<{ compiler: GpuCompiler; adapter: string
   return runtime;
 }
 
+/**
+ * Compiles the same source as `count` independent modules and reports marginal cost per module.
+ *
+ * This is the shape the GPU actually wins at, and the reason the page offers it: a single small
+ * module is almost entirely one readback, so it measures the floor rather than the compiler. Nothing
+ * is executed here — the point is compile throughput, and running a thousand modules would measure
+ * the interpreter instead.
+ */
+async function compileBatch(count: number): Promise<void> {
+  const timings = new Map<Stage, number>();
+  setStatus("Loading parser…", "busy");
+  await initializeGleamParser(
+    new URL("./parser.wasm", location.href),
+    new URL("./parser.plan", location.href),
+  );
+
+  const parseStart = performance.now();
+  const modules = [];
+  for (let index = 0; index < count; index++) {
+    const parsed = lowerGleamSource(`${MODULE_NAME}_${index}`, editor.value);
+    if (!parsed.ok) {
+      renderStages(timings, "parse");
+      renderDiagnostics("Parse failed", parsed.diagnostics);
+      setStatus("Parse failed", "error");
+      return;
+    }
+    modules.push(parsed.lowered.module);
+  }
+  timings.set("parse", performance.now() - parseStart);
+
+  setStatus("Requesting a WebGPU adapter…", "busy");
+  const { compiler, adapter } = await ensureRuntime();
+
+  setStatus(`Compiling ${count.toLocaleString()} modules on ${adapter}…`, "busy");
+  const compileStart = performance.now();
+  const results = await compiler.compileBatch(modules);
+  const compileMilliseconds = performance.now() - compileStart;
+  timings.set("infer", compileMilliseconds);
+
+  const failed = results.filter((result) => !result.ok);
+  for (const result of results) if (result.ok) result.module.destroy();
+  renderStages(timings, undefined);
+
+  if (failed.length > 0) {
+    const first = failed[0];
+    renderDiagnostics(
+      `${failed.length} of ${count} modules failed`,
+      first !== undefined && !first.ok ? first.diagnostics : [],
+    );
+    setStatus("Batch failed", "error");
+    return;
+  }
+
+  const nodes = modules.reduce((total, module) => total + module.nodeCount, 0);
+  resultPanel.replaceChildren();
+  resultPanel.dataset.state = "ok";
+  const title = document.createElement("h2");
+  title.textContent = "Batch";
+  const pre = document.createElement("pre");
+  pre.textContent = [
+    `${count.toLocaleString()} modules`,
+    `${nodes.toLocaleString()} surface nodes total`,
+    `${compileMilliseconds.toFixed(1)} ms to resolve and infer all of them`,
+    `${(compileMilliseconds * 1000 / count).toFixed(1)} µs per module`,
+  ].join("\n");
+  const meta = document.createElement("p");
+  meta.className = "meta";
+  meta.textContent = "Marginal cost per module is the number that matters; a single module is " +
+    "mostly the one-off readback. Nothing was executed.";
+  resultPanel.append(title, pre, meta);
+  clearOutline("Batch mode compiles but does not emit; switch to 1 module to see a binary.");
+  setStatus(`Compiled ${count.toLocaleString()} modules on ${adapter}`, "ok");
+}
+
 async function compileAndRun(): Promise<void> {
   runButton.disabled = true;
   downloadLink.hidden = true;
@@ -162,6 +314,11 @@ async function compileAndRun(): Promise<void> {
   const timings = new Map<Stage, number>();
   let reached: Stage | undefined;
   try {
+    const batch = Number.parseInt(batchSelect.value, 10);
+    if (Number.isFinite(batch) && batch > 1) {
+      await compileBatch(batch);
+      return;
+    }
     setStatus("Loading parser…", "busy");
     await initializeGleamParser(
       new URL("./parser.wasm", location.href),
@@ -204,6 +361,7 @@ async function compileAndRun(): Promise<void> {
 
       artifact = execution.bytes;
       downloadLink.hidden = false;
+      renderOutline(readWasmOutline(execution.bytes));
       renderStages(timings, reached);
       renderValue(
         execution.value,
@@ -242,6 +400,11 @@ downloadLink.addEventListener("click", (event) => {
 });
 
 runButton.addEventListener("click", () => void compileAndRun());
+editor.addEventListener("input", paintHighlight);
+editor.addEventListener("scroll", () => {
+  highlightLayer.scrollTop = editor.scrollTop;
+  highlightLayer.scrollLeft = editor.scrollLeft;
+});
 editor.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
     event.preventDefault();
@@ -256,6 +419,7 @@ for (const [index, example] of examples.entries()) {
   button.textContent = example.name;
   button.addEventListener("click", () => {
     editor.value = example.source;
+    paintHighlight();
     for (const other of exampleList.children) other.removeAttribute("aria-current");
     button.setAttribute("aria-current", "true");
   });
@@ -266,7 +430,9 @@ for (const [index, example] of examples.entries()) {
   exampleList.append(button);
 }
 
+paintHighlight();
 renderStages(new Map(), undefined);
+clearOutline("Run a module to see its sections, signatures and exports.");
 setStatus("Checking for a WebGPU adapter…", "busy");
 const capability = await probeAdapter();
 if ("reason" in capability) {
