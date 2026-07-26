@@ -776,6 +776,45 @@ not a reason to build it, and the profile is now much flatter — Unify 19.7%, P
 15.5% — so there is no single dominant term left to attack. The next real win is occupancy, not
 encoding.
 
+## 2026-07-26 — warp packing is not the occupancy lever. Measured, reverted
+
+With transition count fixed, the obvious next target was warp utilization. Inference is
+`@compute @workgroup_size(1)` dispatched `laneCount` times, so on this adapter every module owns a
+workgroup that occupies a whole warp with **one of thirty-two lanes active**. Packing several
+modules per workgroup looked like free occupancy.
+
+Synthetic batch corpus at N=1024, GPU inference share, medians of three runs each:
+
+| Workgroup size | Runs (µs)        | Median |
+| -------------: | ---------------- | -----: |
+|      1 _(was)_ | 99.5 97.9 101.9  |   99.5 |
+|              8 | 99.4 97.9 102.4  |   99.4 |
+|             32 | 99.5 98.3 96.0   |   98.3 |
+|             64 | 96.1 107.3 103.3 |  103.3 |
+
+**Flat.** Nothing outside the noise band across a 64x change in workgroup shape. Reverted.
+
+**Divergence is not the explanation, which is what makes this conclusive.** The corpus modules are
+structurally identical — `fn helper{i} n = n * {k}; fn main = helper{i} {i};`, differing only in
+literals — so the packed lanes run in near-lockstep and should have shown the best case for packing.
+They showed nothing.
+
+The explanation is that **thread count was never the constraint; batch size is.** Both shapes launch
+exactly 1,024 threads. Size 1 gives 1,024 warps at 1/32 lane utilization, size 32 gives 32 warps
+fully packed. The kernel is latency-bound on scattered workspace reads, so the extra warps in the
+unpacked shape hide latency exactly as well as the extra lanes fill it in the packed one. Packing
+also makes the access pattern worse, not better: each lane owns a contiguous workspace arena at a
+widely separated base, so thirty-two lanes in one warp issue thirty-two scattered transactions where
+before they were spread across warps.
+
+**What this rules out.** "Make the workgroup bigger" is off the table permanently, and so is any
+occupancy plan that reshapes lanes without changing what a lane does. Batch-level parallelism is
+already saturated — at N=1024 the adapter has all the independent work it can be given. The only
+parallelism left is **inside a single module**, which is the hard problem item 7 describes, and
+which the 11.3 ms dispatch floor constrains to one dispatch. Interleaving the workspace across lanes
+so packed reads coalesce is the one variant not tried, and it is an ABI change for an unmeasured
+gain.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
