@@ -126,8 +126,9 @@ then ignored for a day.
 
 How to tackle:
 
-- **`ParallelGleamFrontend` already exists** and measured 4.2× on 16 cores, and is on no path any
-  benchmark or the playground uses. That is the cheap half and it is sitting there.
+- ~~**Use `ParallelGleamFrontend`**~~ — done, and it was the cheapest win in the project: 4.7–6.5×
+  on 16 cores, taking the 256-module corpus from 2,314 ms to 465 ms. It had been written, tested and
+  left on no path. The playground still cannot use it without browser workers.
 - **Make baba faster.** At 1.16 MB/s against tree-sitter's 10–30 MB/s this is a 10–25×
   _implementation_ gap on the CPU, not an algorithmic wall. It is a separate project
   (`@mewhhaha/baba`), so the work is outside this repository. 10× takes parsing from 1,237 ms to

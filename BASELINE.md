@@ -1127,6 +1127,50 @@ and reports the count rather than choosing silently. A real project past roughly
 be handed to this compiler as one module at all, which is an argument for the submodule splitting in
 TASKS item 2 that has nothing to do with performance.
 
+## 2026-07-26 — the parallel frontend was already built, and it is 6.5x
+
+`ParallelGleamFrontend` has existed for a while, measured at 4.2x on 16 cores, and was on no path
+any benchmark, tool or the playground used. Wired into the corpus benchmark and the suite, it is
+better than recorded.
+
+| Corpus      | Serial frontend | Parallel (16 workers) |  Speedup |
+| ----------- | --------------: | --------------------: | -------: |
+| 64 modules  |        463.4 ms |              128.5 ms |     3.6x |
+| 256 modules |      1,864.9 ms |          **398.0 ms** | **4.7x** |
+
+The corpus benchmark, whose timing includes the whole frontend rather than the suite's warmed pool,
+reports **6.52x** on the same input. Both are recorded because they measure slightly different
+things and neither is wrong.
+
+**Node counts are asserted equal across both paths** — 300,544 either way — and the suite fails if
+they diverge. A parallel frontend that produced different work would be worse than a slow one.
+
+### What it does to the corpus comparison
+
+| Measure                     |     Serial | Parallel frontend |
+| --------------------------- | ---------: | ----------------: |
+| Frontend                    | 2,183.7 ms |      **334.8 ms** |
+| GPU batch                   |   130.5 ms |          130.5 ms |
+| Total                       | 2,314.2 ms |      **465.2 ms** |
+| vs `gleam build` (2,816 ms) |      1.22x |         **6.05x** |
+
+So the 17x claim partly returns, on realistic module sizes this time: **6.05x** rather than 1.26x.
+It cost nothing to get — the code was written, tested and idle.
+
+### Parse against lower, now tracked separately
+
+Splitting the frontend, because attributing all of it to baba over-credited the parser by a third:
+
+| Phase         | 64 modules | 256 modules |
+| ------------- | ---------: | ----------: |
+| Parse         |   339.3 ms |  1,286.6 ms |
+| Lower         |   124.1 ms |    578.3 ms |
+| _Parse share_ |      _73%_ |       _69%_ |
+
+baba is 1.16 MB/s here against tree-sitter's 10–30 MB/s, so parsing is a 10–25x implementation gap
+on the CPU rather than an algorithmic wall. Lowering is the other 31% and has never been profiled;
+both are now timings in `deno task bench` so neither can drift unwatched.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

@@ -57,8 +57,11 @@ Two directions, unmeasured:
 - **Make baba faster.** 1.16 MB/s against tree-sitter's 10–30 MB/s is a 10–25x implementation gap on
   the CPU, not an algorithmic wall. Separate project, so the work is outside this repo; 10x takes
   parsing to ~124 ms.
-- **Look at lowering at all.** 674 ms, never profiled, and it becomes the largest phase in the
-  compile the moment the parser is fixed.
+- **Look at lowering at all.** 578 ms on the 256-module corpus, 31% of the frontend, never profiled.
+  It is now a tracked timing in `deno task bench` so it cannot drift unwatched, but nobody has
+  looked at where it goes. With the parallel frontend in place the whole frontend is 335 ms, so this
+  is ~100 ms of a 465 ms compile — no longer the crisis it looked like, and the reason to profile it
+  is that it is unexamined rather than that it is large.
 - **Parse in parallel on the host.** `ParallelGleamFrontend` already exists and measured 4.2x on 16
   cores, but it is not on the path any benchmark or the playground uses. That is the cheap half.
 

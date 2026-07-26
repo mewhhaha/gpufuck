@@ -17,29 +17,35 @@
       "wasmBytes": 40005
     },
     "timings": {
-      "gpuMilliseconds": 25.3
+      "gpuMilliseconds": 25.4
     }
   },
   "batch-64": {
     "counters": {
       "modules": 64,
       "nodes": 75136,
+      "parallelFrontendNodes": 75136,
       "sourceBytes": 371208
     },
     "timings": {
-      "frontendMilliseconds": 460.7,
-      "gpuMilliseconds": 37
+      "frontendMilliseconds": 463.4,
+      "parseOnlyMilliseconds": 339.3,
+      "parallelFrontendMilliseconds": 128.5,
+      "gpuMilliseconds": 97.2
     }
   },
   "batch-256": {
     "counters": {
       "modules": 256,
       "nodes": 300544,
+      "parallelFrontendNodes": 300544,
       "sourceBytes": 1498968
     },
     "timings": {
-      "frontendMilliseconds": 1834.3,
-      "gpuMilliseconds": 86.6
+      "frontendMilliseconds": 1864.9,
+      "parseOnlyMilliseconds": 1286.6,
+      "parallelFrontendMilliseconds": 398,
+      "gpuMilliseconds": 91.7
     }
   },
   "linked-51-modules": {
@@ -48,7 +54,7 @@
       "nodes": 60031
     },
     "timings": {
-      "gpuMilliseconds": 672.4
+      "gpuMilliseconds": 683.3
     }
   }
 }

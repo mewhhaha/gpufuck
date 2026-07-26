@@ -25,8 +25,10 @@
 import { GpuCompiler, requestWebGpuDevice } from "../functional.ts";
 import { compileModuleToWasm } from "../functional.ts";
 import { type GleamSourceModule, lowerGleamSource, lowerGleamSources } from "../gleam.ts";
+import { parseGleamModule } from "../src/gleam/parser.ts";
 import { generateGleamCorpus } from "../tools/generate_gleam_corpus.ts";
 import { orPatternProgram } from "../tools/or_pattern_program.ts";
+import { ParallelGleamFrontend } from "../src/gleam/parallel_frontend.ts";
 import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import type { GpuCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
@@ -65,6 +67,7 @@ async function timed(run: () => Promise<void> | void): Promise<number> {
 const device = await requestWebGpuDevice();
 const compiler = await GpuCompiler.create(device);
 const semantic = await GpuSemanticCompiler.create(device);
+const pool = ParallelGleamFrontend.create();
 const cases: Record<string, Case> = {};
 
 try {
@@ -156,6 +159,23 @@ try {
         if (!parsed.ok) throw new Error("corpus lowering failed during timing");
       }
     });
+    // Parse alone, so the parse/lower split stays visible. Attributing the whole frontend to baba
+    // over-credited the parser by a third once already.
+    const parseOnlyMilliseconds = await timed(() => {
+      for (const module of slice) parseGleamModule(module.name, module.source);
+    });
+    // The worker pool is warmed first, so worker startup and per-worker baba instantiation are not
+    // inside the measurement. It is reused across cases for the same reason.
+    const units = slice.map((module) => ({
+      name: module.name.replaceAll("/", "_"),
+      source: module.source,
+    }));
+    await pool.lower(units);
+    const parallelFrontendMilliseconds = await timed(async () => {
+      for (const result of await pool.lower(units)) {
+        if (!result.ok) throw new Error(`parallel frontend failed: ${result.diagnostic}`);
+      }
+    });
     const gpuMilliseconds = await timed(async () => {
       const results = await compiler.compileBatch(modules);
       for (const result of results) {
@@ -163,16 +183,28 @@ try {
         result.module.destroy();
       }
     });
+    // Node count is asserted equal across both frontend paths: the parallel one is only useful if it
+    // produces the same work, and a silent divergence would be worse than it being slow.
+    const parallelNodes = (await pool.lower(units)).reduce(
+      (total, result) => total + (result.ok ? result.module.nodeCount : 0),
+      0,
+    );
     cases[`batch-${count}`] = {
       counters: {
         modules: count,
         nodes: modules.reduce((total, module) => total + module.nodeCount, 0),
+        parallelFrontendNodes: parallelNodes,
         sourceBytes: slice.reduce(
           (total, module) => total + new TextEncoder().encode(module.source).byteLength,
           0,
         ),
       },
-      timings: { frontendMilliseconds, gpuMilliseconds },
+      timings: {
+        frontendMilliseconds,
+        parseOnlyMilliseconds,
+        parallelFrontendMilliseconds,
+        gpuMilliseconds,
+      },
     };
   }
 
@@ -205,6 +237,7 @@ try {
     timings: { gpuMilliseconds: linkedGpuMilliseconds },
   };
 } finally {
+  pool.terminate();
   device.destroy();
 }
 

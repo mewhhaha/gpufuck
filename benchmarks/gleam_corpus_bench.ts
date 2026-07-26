@@ -25,6 +25,7 @@
 import { GpuCompiler, requestWebGpuDevice } from "../functional.ts";
 import { lowerGleamSource, lowerGleamSources } from "../gleam.ts";
 import { generateGleamCorpus } from "../tools/generate_gleam_corpus.ts";
+import { ParallelGleamFrontend } from "../src/gleam/parallel_frontend.ts";
 
 /** `gleam build`'s per-package cost with nothing to compile; the floor N packages cannot beat. */
 const GLEAM_PACKAGE_FLOOR_MILLISECONDS = 11;
@@ -50,6 +51,7 @@ const corpus = generateGleamCorpus(moduleCount, 6);
 
 const device = await requestWebGpuDevice();
 const compiler = await GpuCompiler.create(device);
+const pool = ParallelGleamFrontend.create();
 
 try {
   // Throughput: every module independent, one batch, nothing executed.
@@ -68,6 +70,23 @@ try {
       if (!parsed.ok) throw new Error("lowering failed during warm samples");
     }
     parseSamples.push(performance.now() - started);
+  }
+
+  // Parsing and lowering are pure functions of a source string, so they parallelise across units with
+  // nothing shared. The pool is warmed before timing so worker startup and per-worker baba
+  // instantiation stay out of the measurement.
+  const units = corpus.modules.map((module) => ({
+    name: module.name.replaceAll("/", "_"),
+    source: module.source,
+  }));
+  await pool.lower(units);
+  const parallelParseSamples: number[] = [];
+  for (let repetition = 0; repetition < REPETITIONS; repetition++) {
+    const started = performance.now();
+    for (const result of await pool.lower(units)) {
+      if (!result.ok) throw new Error(`parallel frontend failed: ${result.diagnostic}`);
+    }
+    parallelParseSamples.push(performance.now() - started);
   }
 
   const batchSamples: number[] = [];
@@ -125,6 +144,7 @@ ${linkable.map((module) => `  let v${suffix(module)} = m${suffix(module)}.main()
   }
 
   const parseMilliseconds = median(parseSamples);
+  const parallelParseMilliseconds = median(parallelParseSamples);
   const batchMilliseconds = median(batchSamples);
   const latencyMilliseconds = median(latencySamples);
   const gleamFloor = moduleCount * GLEAM_PACKAGE_FLOOR_MILLISECONDS;
@@ -144,6 +164,9 @@ ${linkable.map((module) => `  let v${suffix(module)} = m${suffix(module)}.main()
       repetitions: REPETITIONS,
       throughput: {
         parseAndLowerMilliseconds: Number(parseMilliseconds.toFixed(1)),
+        parallelParseAndLowerMilliseconds: Number(parallelParseMilliseconds.toFixed(1)),
+        frontendWorkers: navigator.hardwareConcurrency ?? 0,
+        frontendSpeedup: Number((parseMilliseconds / parallelParseMilliseconds).toFixed(2)),
         gpuBatchMilliseconds: Number(batchMilliseconds.toFixed(1)),
         totalMilliseconds: Number((parseMilliseconds + batchMilliseconds).toFixed(1)),
         microsecondsPerModule: Number(
@@ -156,6 +179,12 @@ ${linkable.map((module) => `  let v${suffix(module)} = m${suffix(module)}.main()
         gleamAtMeasuredRateMilliseconds: Number(gleamAtRate.toFixed(1)),
         fasterThanGleamAtMeasuredRate: Number(
           (gleamAtRate / (parseMilliseconds + batchMilliseconds)).toFixed(2),
+        ),
+        withParallelFrontendTotalMilliseconds: Number(
+          (parallelParseMilliseconds + batchMilliseconds).toFixed(1),
+        ),
+        withParallelFrontendFasterThanGleam: Number(
+          (gleamAtRate / (parallelParseMilliseconds + batchMilliseconds)).toFixed(2),
         ),
         frontendShareOfTotal: Number(
           (parseMilliseconds / (parseMilliseconds + batchMilliseconds) * 100).toFixed(1),
@@ -175,5 +204,6 @@ ${linkable.map((module) => `  let v${suffix(module)} = m${suffix(module)}.main()
     2,
   ));
 } finally {
+  pool.terminate();
   device.destroy();
 }
