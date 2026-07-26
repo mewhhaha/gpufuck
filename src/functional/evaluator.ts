@@ -59,6 +59,7 @@ export type Value =
   | { readonly kind: "float-32"; readonly value: number }
   | { readonly kind: "float-64"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
+  | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "unit" }
   | { readonly kind: "tuple"; readonly fieldCount: 2 }
   | { readonly kind: "closure" }
@@ -71,6 +72,7 @@ export type DeepValue =
   | { readonly kind: "float-64"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
   | { readonly kind: "closure" }
+  | { readonly kind: "text"; readonly value: string }
   | { readonly kind: "unit" }
   | {
     readonly kind: "tuple";
@@ -172,7 +174,13 @@ export class GpuEvaluator {
   ): Promise<AnyEvaluationResult> {
     const numerics = await moduleNumericRequirements(module);
     if (numerics.boundedWasm) {
-      return await evaluateModuleWithBoundedWasm(module, options);
+      // Which path a module takes is a property of its Core, not of the caller, so a caller cannot
+      // know in advance whether the GPU-only controls apply. Drop them here rather than failing on
+      // a choice this method made. Calling `evaluateModuleWithBoundedWasm` directly still rejects
+      // them, because that caller picked the path.
+      const { maximumStepsPerDispatch: _dispatch, heapSlots: _heap, stackFrames: _stack, ...rest } =
+        options;
+      return await evaluateModuleWithBoundedWasm(module, rest);
     }
     const result = await this.#evaluator.evaluate(
       semanticRuntimeModule(module),
@@ -324,6 +332,7 @@ function shallowValue(
     case "float-32":
     case "float-64":
     case "boolean":
+    case "text":
     case "unit":
     case "closure":
       return value;
@@ -490,6 +499,7 @@ function functionalValueFromWasm(
           fields: value.fields.map((field) => convert(field) as DeepValue),
         };
       case "text":
+        return value;
       case "bytes":
       case "array":
       case "slice":

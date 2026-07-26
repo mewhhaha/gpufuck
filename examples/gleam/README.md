@@ -11,6 +11,19 @@ recursion, and Gleam's strict evaluation order. `Int` lowers to 64-bit integers,
 arithmetic rules — a zero divisor yields `0`, and division truncates toward zero. Aggregate equality
 is structural, and floating-point division by zero produces zero.
 
+| Sample                                 | What it shows                                          |                    Result |
+| -------------------------------------- | ------------------------------------------------------ | ------------------------: |
+| [`factorial.gleam`](factorial.gleam)   | Recursion and a wildcard `case` arm                    |                 `3628800` |
+| [`pipeline.gleam`](pipeline.gleam)     | `\|>` with both a partial call and a bare function     |                      `42` |
+| [`list_fold.gleam`](list_fold.gleam)   | List patterns, spread tails, a function as an argument |                      `42` |
+| [`option_map.gleam`](option_map.gleam) | A generic algebraic type and an anonymous function     |                      `42` |
+| [`records.gleam`](records.gleam)       | Labeled constructors and fields; returns a constructor |         `Rectangle(6, 7)` |
+| [`guards.gleam`](guards.gleam)         | `if` guards, a wildcard, and `<>` concatenation        | `"negative zero small …"` |
+| [`result_use.gleam`](result_use.gleam) | The prelude `Result` and `use` short-circuiting        |                  `Ok(42)` |
+
+The seven single-file samples are what `playground/build.ts` inlines into the browser page, so
+adding one here adds it there.
+
 Run a single module:
 
 ```sh

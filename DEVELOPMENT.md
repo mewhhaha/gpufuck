@@ -37,7 +37,7 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 | `examples/sweep/`            | Sweep sample programs                                                  |
 | `examples/gleam/`            | Gleam sample modules and traces                                        |
 | `examples/javascript-aot/`   | JavaScript frontend, grammar, and the pinned Test262 harness           |
-| `playground/`                | Browser page bundling the compiler with `deno bundle`, no npm deps     |
+| `playground/`                | Browser page compiling Gleam, bundled with `deno bundle`, no npm deps  |
 | `tests/`                     | Behavioral, differential, stress, growth, and cancellation tests       |
 | `benchmarks/`                | Deno benchmark entry points                                            |
 | `tools/`                     | Profiling, the two Gleam stdlib checks, and editor-support scripts     |

@@ -3,6 +3,28 @@
 All notable changes to gpufuck are documented here. The project is published to JSR as
 `@mewhhaha/gpufuck` and follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `Value` and `DeepValue` gained a `text` case. The runtime already produced text — the WebAssembly
+  path decoded it and the semantic layer's own union carried it — but the functional union omitted
+  it, so a `String` entry point threw `cannot expose text boundary values` on the way out instead of
+  failing at compile time. The union was wrong, not the runtime.
+- `initializeGleamParser(wasmUrl, planUrl)`, matching `initializeLazuliParser`. The Gleam parser
+  reads its generated assets with `readFileSync`, which a browser has no answer for.
+
+### Changed
+
+- The GitHub Pages playground compiles **Gleam** rather than Lazuli, and ships the seven single-file
+  samples from `examples/gleam/` instead of the Lazuli ones.
+- `GpuEvaluator.evaluate` now drops `maximumStepsPerDispatch`, `heapSlots`, and `stackFrames` when a
+  module routes to bounded WebAssembly, rather than throwing. Which path a module takes is a
+  property of its Core, so the caller cannot know in advance whether those controls apply.
+  `evaluateModuleWithBoundedWasm` still rejects them, because that caller chose the path.
+- `gleam_cli.ts run` asks for the deep result form, so a constructor result prints its fields rather
+  than its arity. `trace` keeps the shallow form the checked-in traces are written against.
+
 ## 0.4.0 - 2026-07-25
 
 **Every public name changed.** This release is not source-compatible with 0.3.0; see "Every public

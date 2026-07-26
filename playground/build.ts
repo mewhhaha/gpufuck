@@ -17,15 +17,16 @@ async function copy(from: URL, to: string): Promise<number> {
 await Deno.remove(out, { recursive: true }).catch(() => {});
 await Deno.mkdir(out, { recursive: true });
 
-// Examples are inlined so the page needs no fetch waterfall to become interactive.
-const exampleDirectory = new URL("examples/lazuli/", root);
+// Examples are inlined so the page needs no fetch waterfall to become interactive. Only top-level
+// files are taken: `kernel/` is the multi-module sample, and the page has one textarea.
+const exampleDirectory = new URL("examples/gleam/", root);
 const names: string[] = [];
 for await (const entry of Deno.readDir(exampleDirectory)) {
-  if (entry.isFile && entry.name.endsWith(".laz")) names.push(entry.name);
+  if (entry.isFile && entry.name.endsWith(".gleam")) names.push(entry.name);
 }
 names.sort();
 const examples = await Promise.all(names.map(async (name) => ({
-  name: name.replace(/\.laz$/, "").replaceAll("_", " ").replaceAll("-", " "),
+  name: name.replace(/\.gleam$/, "").replaceAll("_", " ").replaceAll("-", " "),
   source: await Deno.readTextFile(new URL(name, exampleDirectory)),
 })));
 await Deno.writeTextFile(new URL("examples.json", out), JSON.stringify(examples));
@@ -46,10 +47,10 @@ const bundle = new Deno.Command(Deno.execPath(), {
 if (!bundle.success) throw new Error("deno bundle failed");
 
 const parserBytes = await copy(
-  new URL("language/lazuli/generated/wasm/parser.wasm", root),
+  new URL("language/gleam/generated/wasm/parser.wasm", root),
   "parser.wasm",
 );
-await copy(new URL("language/lazuli/generated/wasm/parser.plan", root), "parser.plan");
+await copy(new URL("language/gleam/generated/wasm/parser.plan", root), "parser.plan");
 await copy(new URL("index.html", import.meta.url), "index.html");
 await copy(new URL("styles.css", import.meta.url), "styles.css");
 

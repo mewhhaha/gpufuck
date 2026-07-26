@@ -29,4 +29,5 @@ export {
   type ParallelGleamResult,
   type ParallelGleamUnit,
 } from "./src/gleam/parallel_frontend.ts";
+export { initializeGleamParser, parseGleamModule } from "./src/gleam/parser.ts";
 export { type GleamTraceInput, renderGleamTrace } from "./src/gleam/trace.ts";

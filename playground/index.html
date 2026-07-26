@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>gpufuck — compile Lazuli on the GPU</title>
+    <title>gpufuck — compile Gleam on the GPU</title>
     <meta
       name="description"
       content="Resolve names and infer types on WebGPU, then emit and run WebAssembly, entirely in the browser tab."
@@ -14,18 +14,18 @@
     <header>
       <h1>gpufuck</h1>
       <p>
-        Hindley–Milner inference runs on your GPU. The emitted WebAssembly needs no GPU to run.
-        Everything below stays in this tab.
+        A pure subset of Gleam, typechecked by Hindley–Milner inference running on your GPU, then
+        emitted as WebAssembly that needs no GPU to run. Everything below stays in this tab.
       </p>
     </header>
 
     <main>
       <section class="pane">
         <div class="pane-head">
-          <h2>Lazuli source</h2>
+          <h2>Gleam source</h2>
           <div id="examples" class="examples"></div>
         </div>
-        <textarea id="source" spellcheck="false" aria-label="Lazuli source"></textarea>
+        <textarea id="source" spellcheck="false" aria-label="Gleam source"></textarea>
         <div class="actions">
           <button id="run" type="button">Run</button>
           <a id="download" href="#" hidden>Download .wasm</a>

@@ -61,6 +61,50 @@ Deno.test("desugars Gleam pipelines in source order", async () => {
   deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 42n });
 });
 
+Deno.test("evaluates a recursive Gleam factorial through a wildcard arm", async () => {
+  const evaluation = await evaluateSingleExample("examples/gleam/factorial.gleam");
+
+  deepStrictEqual(evaluation, { kind: "signed-integer-64", value: 3628800n });
+});
+
+/**
+ * Text was the one runtime value the evaluator produced but its `Value` union could not name, so a
+ * `String` entry point threw on the way out rather than at compile time.
+ */
+Deno.test("returns a Gleam String result as a text boundary value", async () => {
+  const evaluation = await evaluateSingleExample("examples/gleam/guards.gleam");
+
+  deepStrictEqual(evaluation, { kind: "text", value: "negative zero small large" });
+});
+
+Deno.test("returns a labeled Gleam constructor with its fields in the deep form", async () => {
+  const source = await Deno.readTextFile("examples/gleam/records.gleam");
+  const frontend = lowerGleamSource("records", source);
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+  const { compiler, evaluator } = gleamRuntime();
+  const compilation = await compiler.compileModule(frontend.lowered.module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const evaluation = await evaluator.evaluate(compilation.module, { resultForm: "deep" });
+    ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
+    if (!evaluation.ok) return;
+
+    deepStrictEqual(evaluation.value, {
+      kind: "constructor",
+      name: "records::Rectangle",
+      fieldCount: 2,
+      fields: [
+        { kind: "signed-integer-64", value: 6n },
+        { kind: "signed-integer-64", value: 7n },
+      ],
+    });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("compares the completed Gleam pipeline result", async () => {
   const frontend = lowerGleamSource(
     "pipeline_comparison",

@@ -53,6 +53,10 @@ export async function main(
       const evaluator = await GpuEvaluator.create(device);
       const evaluation = await evaluator.evaluate(compilation.module, {
         heapSlots: gleamHeapSlots(compilation.module),
+        // `run` prints the value, so it wants the whole tree: the shallow form reports a
+        // constructor's arity instead of its fields and refuses text outright. `trace` keeps the
+        // shallow form, because the checked-in traces are written against it.
+        ...(command === "run" ? { resultForm: "deep" as const } : {}),
       });
       if (command === "run") {
         if (!evaluation.ok) {

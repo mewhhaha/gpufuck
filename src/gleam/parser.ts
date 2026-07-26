@@ -1,4 +1,4 @@
-import { createParser } from "@mewhhaha/baba/runtime/generated-wasm";
+import { createParser, createParserAsync } from "@mewhhaha/baba/runtime/generated-wasm";
 import {
   babaChildRule,
   babaOptionalRuleField,
@@ -29,7 +29,12 @@ import { GleamSyntaxError } from "./diagnostic.ts";
 
 type GleamParser = ReturnType<typeof createParser>;
 
+interface SynchronousFileReader {
+  readFileSync(path: string | URL): Uint8Array;
+}
+
 let gleamParser: GleamParser | undefined;
+let gleamParserInitialization: Promise<GleamParser> | undefined;
 
 export function parseGleamModule(
   name: string,
@@ -129,13 +134,46 @@ function isAssertModifier(source: string, start: number): boolean {
   return !/[A-Za-z0-9_]/.test(source[previous - 3] ?? "");
 }
 
+/**
+ * Loads the generated Gleam parser assets for runtimes with no filesystem, which in practice means
+ * the browser: `getGleamParser` reads them synchronously off disk, and there is nothing to read
+ * from in a tab.
+ */
+export async function initializeGleamParser(
+  parserModuleUrl: URL,
+  parserPlanUrl: URL,
+): Promise<void> {
+  if (gleamParser !== undefined) return;
+
+  const initialization = gleamParserInitialization ??
+    createParserAsync({ url: parserModuleUrl, planUrl: parserPlanUrl });
+  gleamParserInitialization = initialization;
+  try {
+    gleamParser = await initialization;
+  } catch (cause) {
+    if (gleamParserInitialization === initialization) gleamParserInitialization = undefined;
+    throw new Error(
+      `could not initialize the Gleam parser from ${parserModuleUrl.href} and ${parserPlanUrl.href}`,
+      { cause },
+    );
+  }
+}
+
 function getGleamParser(): GleamParser {
   if (gleamParser !== undefined) return gleamParser;
+
+  const fileReader = (globalThis as typeof globalThis & { Deno?: SynchronousFileReader }).Deno;
+  if (fileReader === undefined) {
+    throw new Error(
+      "the Gleam parser is not initialized; call initializeGleamParser() before parsing in a browser",
+    );
+  }
+
   gleamParser = createParser({
-    bytes: Deno.readFileSync(
+    bytes: fileReader.readFileSync(
       new URL("../../language/gleam/generated/wasm/parser.wasm", import.meta.url),
     ),
-    plan: Deno.readFileSync(
+    plan: fileReader.readFileSync(
       new URL("../../language/gleam/generated/wasm/parser.plan", import.meta.url),
     ),
   });

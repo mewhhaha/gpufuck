@@ -6,8 +6,9 @@ import { GpuCompiler } from "../src/functional/compiler.ts";
 import { runWasmModule } from "../src/functional/wasm_execution.ts";
 import { describeType } from "../src/functional/wasm_value_codec.ts";
 import type { SemanticDiagnostic } from "../src/semantic/abi.ts";
-import { initializeLazuliParser, parseLazuliSourceForCompilation } from "../src/lazuli/frontend.ts";
-import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
+import type { GleamDiagnostic } from "../src/gleam/diagnostic.ts";
+import { lowerGleamSource } from "../src/gleam/frontend.ts";
+import { initializeGleamParser } from "../src/gleam/parser.ts";
 
 interface Example {
   readonly name: string;
@@ -17,11 +18,15 @@ interface Example {
 type Stage = "parse" | "infer" | "emit";
 
 const STAGE_LABELS: Readonly<Record<Stage, string>> = {
-  parse: "Parse",
+  // Gleam parses and lowers in one call, so splitting these two would mean inventing a boundary.
+  parse: "Parse and lower",
   infer: "Resolve and infer on GPU",
   // Emission and execution share one call, so timing them separately would mean inventing a split.
   emit: "Emit and run WebAssembly",
 };
+
+/** The module name the entry point is compiled under; Gleam needs one and the tab has no path. */
+const MODULE_NAME = "playground";
 
 const element = <T extends HTMLElement>(id: string): T => {
   const found = document.getElementById(id);
@@ -65,7 +70,7 @@ function renderStages(timings: ReadonlyMap<Stage, number>, reached: Stage | unde
 
 function renderDiagnostics(
   heading: string,
-  diagnostics: readonly (SemanticDiagnostic | Diagnostic)[],
+  diagnostics: readonly (SemanticDiagnostic | Diagnostic | GleamDiagnostic)[],
 ): void {
   resultPanel.replaceChildren();
   resultPanel.dataset.state = "error";
@@ -158,17 +163,17 @@ async function compileAndRun(): Promise<void> {
   let reached: Stage | undefined;
   try {
     setStatus("Loading parser…", "busy");
-    await initializeLazuliParser(
+    await initializeGleamParser(
       new URL("./parser.wasm", location.href),
       new URL("./parser.plan", location.href),
     );
 
     reached = "parse";
     const parseStart = performance.now();
-    const parsed = parseLazuliSourceForCompilation(editor.value);
-    if (!parsed.frontend.ok) {
+    const parsed = lowerGleamSource(MODULE_NAME, editor.value);
+    if (!parsed.ok) {
       renderStages(timings, reached);
-      renderDiagnostics("Parse failed", parsed.frontend.diagnostics);
+      renderDiagnostics("Parse failed", parsed.diagnostics);
       setStatus("Parse failed", "error");
       return;
     }
@@ -180,9 +185,7 @@ async function compileAndRun(): Promise<void> {
     setStatus(`Resolving and inferring on ${adapter}…`, "busy");
     reached = "infer";
     const inferStart = performance.now();
-    const compilation = await compiler.compileModule(
-      lazuliSurfaceToModule(parsed.frontend.surface, parsed.sourceByteLength),
-    );
+    const compilation = await compiler.compileModule(parsed.lowered.module);
     if (!compilation.ok) {
       renderStages(timings, reached);
       renderDiagnostics("Typecheck failed", compilation.diagnostics);
