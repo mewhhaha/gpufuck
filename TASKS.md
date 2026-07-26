@@ -37,12 +37,15 @@ Numbers stay stable so prose elsewhere still resolves; the measurements live in
 
 ## Now
 
-### 14. The parser is now the bottleneck
+### 14. The frontend is the bottleneck: 62% parsing, 33% lowering
 
 **Re-measured 2026-07-26 and it has inverted.** On a 256-module corpus of realistic Gleam — 1.46 MB,
 300,544 surface nodes — the GPU resolves and infers everything in **87.9 ms**, 0.29 µs per node,
-while baba takes **2,152.8 ms** to parse and lower it. The frontend is **96.1%** of the compile and
-the GPU is 3.9%.
+while the frontend takes **1,911 ms**. The frontend is **96%** of the compile and the GPU is 3.9%.
+
+Split further, because the first version of this item blamed the parser for all of it and was wrong
+by a third: **parse 1,237 ms at 1.16 MB/s, lower 674 ms.** Lowering — host-side tree walking that
+builds the packed surface arrays — is a third of the frontend and appears nowhere else on this list.
 
 That makes this the largest lever by a wide margin, ahead of the kernel. baba runs at roughly 1.4
 MB/s where tree-sitter does 10–30 MB/s. The oldest section of BASELINE predicted exactly this and
@@ -51,8 +54,11 @@ the compile and the parser looked irrelevant.
 
 Two directions, unmeasured:
 
-- **Make baba faster.** It is a separate project (`@mewhhaha/baba`), so this is work outside this
-  repo, and 10x would take the 256-module corpus from 2,240 ms to about 300 ms.
+- **Make baba faster.** 1.16 MB/s against tree-sitter's 10–30 MB/s is a 10–25x implementation gap on
+  the CPU, not an algorithmic wall. Separate project, so the work is outside this repo; 10x takes
+  parsing to ~124 ms.
+- **Look at lowering at all.** 674 ms, never profiled, and it becomes the largest phase in the
+  compile the moment the parser is fixed.
 - **Parse in parallel on the host.** `ParallelGleamFrontend` already exists and measured 4.2x on 16
   cores, but it is not on the path any benchmark or the playground uses. That is the cheap half.
 

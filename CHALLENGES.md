@@ -106,10 +106,18 @@ How to tackle: measure it in Chrome first, because the constraint may be Deno-sp
 design space widens if so. Otherwise, encode dependent passes back-to-back in one command buffer —
 memory is coherent between passes, and `gpu_batch_compiler.ts` already does this for three passes.
 
-### The parser is now 96% of a realistic compile
+### The frontend is 96% of a realistic compile — 62% parsing, 33% lowering
 
-baba parses at roughly 1.4 MB/s where tree-sitter does 10–30 MB/s. On a 256-module corpus the GPU
-resolves and infers 300,544 nodes in **87.9 ms** while baba takes **2,152.8 ms** on the same input.
+Split on the 256-module corpus (1,464 KB), medians of five:
+
+| Phase                     |     Time |      Rate | Share of frontend |
+| ------------------------- | -------: | --------: | ----------------: |
+| Parse (baba)              | 1,237 ms | 1.16 MB/s |               65% |
+| Lower to packed surface   |   674 ms |         — |               35% |
+| _(GPU resolve and infer)_ |  87.9 ms |         — |                 — |
+
+An earlier version of this entry attributed all 2,152.8 ms of parse-and-lower to baba, which
+over-credited the parser by a third. **Both halves need fixing, and lowering is nobody's plan.**
 
 This inverted during 2026-07-26. On the pre-fix Gleam standard library the GPU phase was 96% of the
 compile and the parser looked irrelevant; after path halving, contification and the pattern fix, the
@@ -120,8 +128,13 @@ How to tackle:
 
 - **`ParallelGleamFrontend` already exists** and measured 4.2× on 16 cores, and is on no path any
   benchmark or the playground uses. That is the cheap half and it is sitting there.
-- **Make baba faster** — a separate project, so work outside this repository. 10× would take the
-  256-module corpus from 2,240 ms to about 300 ms.
+- **Make baba faster.** At 1.16 MB/s against tree-sitter's 10–30 MB/s this is a 10–25×
+  _implementation_ gap on the CPU, not an algorithmic wall. It is a separate project
+  (`@mewhhaha/baba`), so the work is outside this repository. 10× takes parsing from 1,237 ms to
+  ~124 ms.
+- **Do something about lowering.** 674 ms of host-side tree walking to build packed surface arrays,
+  currently unexamined and unmentioned in TASKS. Once the parser is fixed this is the largest item
+  in the compile, ahead of the GPU.
 
 ### WebAssembly emission is mostly fixed cost per module
 
