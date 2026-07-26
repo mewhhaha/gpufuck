@@ -11,12 +11,21 @@ them are already the second or third version of a number that was wrong the firs
 
 ## Now
 
-### 0. Tail calls are lost inside `let`-bound lambdas
+### 0. ~~Tail calls are lost inside `let`-bound lambdas~~ — done
 
-**A live correctness bug.** `#containsTailCall` in `src/functional/wasm_function_analysis.ts`
-descends through `Let`, `Case`, `CaseArm` and `If` but stops at `Lambda`, so a self-tail-call inside
-a `let`-bound lambda compiles to a stack-growing closure call. `lowerSequentialCase` binds every
-later arm to a fallback lambda, which means **guarded Gleam already loses tail recursion**:
+**Fixed by contification.** `joinPointLambda` recognises a `let`-bound one-parameter lambda that
+ignores its parameter and is only ever tail-called, and `compileTailPosition` emits it as a wasm
+`block` label rather than a closure — shared, and still in the enclosing function's tail position.
+The guarded countdown below now completes 100,000 iterations; regression test
+`keeps guarded Gleam
+scalar recursion stack safe`. Note that fixing codegen alone did nothing:
+`#containsTailCall` has to descend into the join body too, or the function is never registered as a
+loop at all.
+
+The bug, for the record: `#containsTailCall` in `src/functional/wasm_function_analysis.ts` descends
+through `Let`, `Case`, `CaseArm` and `If` but stops at `Lambda`, so a self-tail-call inside a
+`let`-bound lambda compiles to a stack-growing closure call. `lowerSequentialCase` binds every later
+arm to a fallback lambda, which means **guarded Gleam already loses tail recursion**:
 
 ```gleam
 fn countdown(n, total) {
@@ -34,29 +43,32 @@ saturated call in tail position, and compile calls to `f` as jumps rather than c
 tail calls inside `B` stay tail calls of the enclosing function. This is a prerequisite for item 1,
 which needs exactly that shape.
 
-### 1. Multi-subject `case` with or-patterns explodes, and hard-fails
+### 1. ~~Multi-subject `case` with or-patterns explodes~~ — done, 2.8x smaller corpus
 
-Two subjects and two or-alternatives per arm: 1 arm is 94 surface nodes, 2 arms 1,214, 3 arms
-19,134, and **4 arms exceeds the 65,536-node ABI cap and throws**. Each arm multiplies by 13–16x.
+**Fixed.** It was body duplication: `lowerPattern` handed the entire rest of the match to every
+non-matching constructor arm of a test, compounding at every level of a nested pattern —
+`(4^2n - 1)/3` copies of each arm body. Binding that continuation to one join point per pattern
+sequence makes it linear, and item 0's contification means the join point costs nothing at runtime.
 
-This is a correctness bug before it is a performance one — modest, idiomatic Gleam fails to compile
-at all. It is also the largest single lever on single-module compile time: `gleam/list::sequences`
-is 62 lines of source and 25,985 Core nodes, which is **52% of the entire stdlib corpus** and 97% of
-its critical path. The GPU looks slow on that corpus partly because the corpus is ~26,000 nodes
-larger than it should be.
+| Arms | Before | After |
+| ---: | -----: | ----: |
+|    1 |     94 |    63 |
+|    2 |  1,214 |   113 |
+|    3 | 19,134 |   163 |
+|    4 | throws |   213 |
 
-**Diagnosed: it is body duplication, and the fix is written but blocked.**
-`deno task
-measure:or-patterns` grows the arm body independently of the pattern matrix and shows 5,
-85 and 1,365 copies of the body at one, two and three arms — `(4^2n - 1)/3`, base-16 exponential.
-The cause is `lowerPattern` handing the whole rest of the match to every non-matching constructor
-arm of a test, compounding at every level of a nested pattern.
+Four arms now compiles instead of exceeding the 65,536-node ABI cap, so the correctness half is
+closed too. Reproduce with `deno task measure:or-patterns`.
 
-Binding that continuation to a join point once takes 19,134 nodes to 163 and makes four arms
-compile. It fails `keeps multiple-subject Gleam recursion stack safe`, because a join point is a
-lambda — **do item 0 first**, then this lands unchanged. Full numbers in BASELINE.
+**The Gleam stdlib corpus shrank from 49,964 nodes to 17,718** — 64.5% of it was duplicated arm
+bodies, more than the 52% estimated from `list::sequences` alone. Inference transitions fell
+1,265,365 → 405,343 and the emitted Wasm 1,745 KB → 999 KB. Every per-node figure recorded before
+this was measured against a corpus 2.8x larger than the program it claimed to compile.
 
-This also caps the "split a module into submodules" idea below — fix it before evaluating that.
+Lowering got _faster_, 6.7x on that corpus, because there are far fewer nodes to build.
+
+Item 2 below was waiting on this; its available-parallelism numbers now want re-measuring against
+the smaller corpus.
 
 ### 2. Splitting a module into submodules caps at 1.9x today
 

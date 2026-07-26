@@ -504,6 +504,38 @@ pub fn main() -> Int {
   );
 });
 
+/**
+ * A guard sends the case down `lowerSequentialCase`, which binds every later arm to a fallback
+ * lambda — so the recursive call sits inside a lambda rather than directly in the arm. That used to
+ * lose tail recursion outright and overflow here, because the analysis stopped its tail walk at
+ * `Lambda`. Contification makes the fallback a label instead of a closure, which puts its body back
+ * in tail position.
+ */
+Deno.test("keeps guarded Gleam scalar recursion stack safe", async () => {
+  const frontend = lowerGleamSource(
+    "guarded_scalar_tail_recursion",
+    `
+fn countdown(n, total) {
+  case n {
+    m if m <= 0 -> total
+    _ -> countdown(n - 1, total + 1)
+  }
+}
+
+pub fn main() -> Int {
+  countdown(100_000, 0)
+}
+`,
+  );
+  ok(frontend.ok, frontend.ok ? undefined : frontend.diagnostics[0].message);
+  if (!frontend.ok) return;
+
+  deepStrictEqual(
+    await evaluateWasm(frontend.lowered),
+    { kind: "signed-integer-64", value: 100000n },
+  );
+});
+
 Deno.test("keeps guarded Gleam constructor recursion stack safe", async () => {
   const frontend = lowerGleamSource(
     "guarded_tail_recursion",

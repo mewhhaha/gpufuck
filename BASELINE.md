@@ -889,6 +889,81 @@ So the two existing pattern paths each pick one of the two failure modes, and ne
 The join-point change was reverted pending contification in the backend, which fixes the tail-call
 bug and makes the frontend change land unchanged. TASKS items 1 and 14.
 
+## 2026-07-26 — contification, and the corpus was 64% duplication
+
+Both halves landed: join-point contification in the WebAssembly backend (TASKS item 0) and the
+frontend join point it unblocks (item 1).
+
+**The backend half.** `joinPointLambda` in `src/functional/wasm_function_analysis.ts` recognises a
+`let` whose value is a one-parameter lambda that ignores its parameter and whose binder is only ever
+tail-called saturated. `compileTailPosition` then emits it as a label rather than a closure:
+
+```
+block $join (void) { <let body> }   ; every call site is `br $join`
+<join body>                          ; emitted once, still in tail position
+```
+
+Every leaf of a tail position branches, so the join body is reachable only through a `br` — which
+makes it shared rather than duplicated, and keeps it in the enclosing function's tail position so
+self-calls inside it stay `br` to the loop header. Backward jumps cannot arise because `Let` is
+non-recursive, so a forward `block` is sufficient and no dispatch variable is needed.
+
+Two things the implementation needed that were not obvious from reading:
+
+- **Codegen alone does nothing.** `#containsTailCall` has to descend into a contifiable join point's
+  body as well, or the enclosing function is never registered as a loop and `compileTailPosition` is
+  never called. Fixing only the emitter left the bug exactly as it was.
+- **Arguments are discarded, not evaluated.** The parameter is dead, so the argument is dead. That
+  is only sound for a leaf — nothing that could carry an effect — and `RuntimeFault` is excluded
+  because it is an effect by itself.
+
+Fixes the live bug: a guarded Gleam countdown now completes 100,000 iterations instead of
+overflowing. Regression test `keeps guarded Gleam scalar recursion stack safe`.
+
+**The frontend half**, re-applied unchanged from the reverted version:
+
+| Arms | Before | After |
+| ---: | -----: | ----: |
+|    1 |     94 |    63 |
+|    2 |  1,214 |   113 |
+|    3 | 19,134 |   163 |
+|    4 | throws |   213 |
+
+Exponential to linear, +50 nodes per arm, and four arms compiles.
+
+### The Gleam stdlib corpus was 64% duplicated nodes
+
+| Measure               |    Before |       After | Factor |
+| --------------------- | --------: | ----------: | -----: |
+| Surface nodes         |    49,964 |  **17,718** |  2.82x |
+| Inference transitions | 1,265,365 | **405,343** |  3.12x |
+| Wasm emitted          |  1,745 KB |      999 KB |  1.75x |
+
+**32,246 nodes of the corpus were duplicated arm bodies.** TASKS estimated `list::sequences` at
+25,985 nodes and 52% of the corpus; the actual reduction is 64.5%, so the estimate was low. Every
+per-node figure recorded before this point was measured against a corpus 2.8x larger than the
+program it claimed to compile, including the 122.3 and 25.3 transitions-per-node numbers.
+
+Lowering also got faster rather than slower, despite the extra node-size check. A/B under identical
+(heavy) machine load, deriving lowering as `parseAndLower - parse`: **125.7 ms with join points
+against 838.2 ms without**, 6.7x, because there are far fewer nodes to build.
+
+### Timings here are provisional: the machine was loaded
+
+These runs happened with load average 21.9 and several `clang++` builds resident, and it shows —
+`parse`, which nothing in this change touches, swung between 245, 724 and 1,237 ms across runs. The
+node counts, transition counts and artifact sizes above are deterministic and unaffected. **The wall
+times are not, and want re-taking on a quiet machine before being quoted.** What was observed:
+
+| Phase                 | Observed | Note                                              |
+| --------------------- | -------: | ------------------------------------------------- |
+| GPU resolve and infer |   422 ms | was 1,019.6 ms                                    |
+| vs our own CPU oracle | **0.2x** | the GPU is faster than the CPU for the first time |
+
+That last figure is the one most worth re-checking: the CPU oracle is single-threaded and suffers
+most under load, so 0.2x is likely flattering. It is also `inferTypes`, which is separately
+O(n^1.30) and not on the compile path.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

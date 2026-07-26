@@ -160,9 +160,19 @@ interface StoreUpdate {
   readonly nodeIndex: number;
 }
 
+/**
+ * A contified join point: a label, not a value. `resultBranchDepth` is the depth recorded just
+ * inside its `block`, so a call site at depth `d` branches to it with `d - resultBranchDepth`.
+ */
+interface JoinPoint {
+  readonly kind: "join-point";
+  readonly resultBranchDepth: number;
+}
+
 type Binding =
   | ValueSource
   | { readonly kind: "v128-f32x4"; readonly index: number }
+  | JoinPoint
   | VirtualLambda
   | VirtualConstructor
   | StaticRecursiveFunction
@@ -5032,6 +5042,12 @@ class WasmCompiler {
         throw new Error(
           `functional WASM attempted to box an internal F32x4 local ${source.index} outside a vector boundary`,
         );
+      case "join-point":
+        // Unreachable by construction: `joinPointLambda` only contifies a binder whose every
+        // reference is a tail call, so nothing can ask for its value.
+        throw new Error(
+          "functional WASM attempted to materialise a contified join point as a value",
+        );
       case "virtual-lambda": {
         const lambda = this.node(source.node);
         if (lambda.tag !== CoreTag.Lambda) {
@@ -5650,6 +5666,15 @@ class WasmCompiler {
     }
 
     const node = this.node(nodeIndex);
+    if (node.tag === CoreTag.Apply) {
+      const callee = this.node(node.child0);
+      const binding = callee.tag === CoreTag.Local ? environment[callee.payload] : undefined;
+      if (binding?.kind === "join-point") {
+        // The argument is a nullary constructor and the parameter is dead, so the call is a jump.
+        instructions.branch(resultBranchDepth - binding.resultBranchDepth);
+        return;
+      }
+    }
     if (node.tag === CoreTag.If) {
       const selectedBranch = this.constantIfBranch(node, environment);
       if (selectedBranch !== undefined) {
@@ -5695,6 +5720,45 @@ class WasmCompiler {
       return;
     }
     if (node.tag === CoreTag.Let) {
+      const joinLambda = this.#functionAnalysis.joinPointLambda(nodeIndex);
+      if (joinLambda !== undefined) {
+        // block $join (void) { <let body> } <join body>
+        //
+        // Every leaf of a tail position branches, so control reaches the join body only through a
+        // `br` to the block's end. That makes the body shared rather than duplicated, and leaves it
+        // in the enclosing function's tail position so its own self-calls stay branches.
+        //
+        // This has to run before `virtualLambda` below, which would otherwise win and inline the
+        // body at each call site through `compileExpression` -- out of tail position, which is the
+        // behaviour that lost tail recursion in the first place.
+        instructions.emit(0x02, 0x40);
+        this.compileTailPosition(
+          instructions,
+          node.child1,
+          [{ kind: "join-point", resultBranchDepth: resultBranchDepth + 1 }, ...environment],
+          loop,
+          parameterLocals,
+          binderDepth + 1,
+          loopBranchDepth + 1,
+          resultBranchDepth + 1,
+          resultKind,
+        );
+        instructions.emit(0x0b);
+        // `Let` is non-recursive, so the join binder is not in scope in its own value; the lambda
+        // contributes only its dead parameter, which stays unbound.
+        this.compileTailPosition(
+          instructions,
+          this.node(joinLambda).child0,
+          [undefined, ...environment],
+          loop,
+          parameterLocals,
+          binderDepth + 1,
+          loopBranchDepth,
+          resultBranchDepth,
+          resultKind,
+        );
+        return;
+      }
       const virtualValue = this.virtualLambda(node.child0, environment) ??
         (this.scalarSpecializationEnabled()
           ? this.virtualConstructor(node.child0, environment)

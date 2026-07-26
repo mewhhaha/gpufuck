@@ -96,6 +96,43 @@ const GLEAM_TEXT_BYTE_LENGTH = "$gleam_text_byte_length";
 const GLEAM_TEXT_BYTE_SLICE = "$gleam_text_byte_slice";
 const GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT = "$gleam_bit_array_from_utf8_codepoint";
 
+/**
+ * Failure continuations this size or smaller are copied rather than bound to a join point, because
+ * the binding plus a single call already costs about six nodes. The usual failure continuation is
+ * itself a three-node call to an enclosing join point, so this keeps ordinary matches untouched.
+ */
+const JOIN_POINT_MINIMUM_NODES = 8;
+
+/**
+ * Whether an expression has at most `limit` nodes, stopping as soon as it does not.
+ *
+ * Written as a structural walk over anything carrying a string `kind` rather than a case per
+ * surface variant, so a new node kind cannot silently escape the count. It is only ever used as a
+ * threshold, so a small overcount from a nested schema is harmless, and the early exit keeps
+ * calling it at every level of a pattern from turning the lowering quadratic.
+ */
+function surfaceExpressionNodesAtMost(expression: SurfaceExpression, limit: number): boolean {
+  let counted = 0;
+  const pending: unknown[] = [expression];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (Array.isArray(current)) {
+      pending.push(...current);
+      continue;
+    }
+    if (current === null || typeof current !== "object" || ArrayBuffer.isView(current)) continue;
+    if (typeof (current as { readonly kind?: unknown }).kind === "string") {
+      counted += 1;
+      if (counted > limit) return false;
+    }
+    for (const [key, value] of Object.entries(current)) {
+      if (key === "span") continue;
+      if (value !== null && typeof value === "object") pending.push(value);
+    }
+  }
+  return true;
+}
+
 const binaryOperators: Readonly<Record<string, BinaryOperator>> = {
   "==": BinaryOperator.StructuralEqual,
   "!=": BinaryOperator.StructuralNotEqual,
@@ -1542,22 +1579,61 @@ class GleamLowering {
     });
   }
 
+  /**
+   * Binds a failure continuation to a join point and hands back a call to it.
+   *
+   * `SurfaceExpression` is a value tree, so handing the same object to two places emits the nodes
+   * twice — sharing needs a real binding. Without one, `lowerPattern` copies the entire rest of the
+   * match into every non-matching constructor arm of a test, and because that happens at every
+   * level of a nested or multi-subject pattern the copies compound. Measured on two subjects over a
+   * three-constructor type: 16x per arm, so three arms cost 19,134 surface nodes and four exceeded
+   * the 65,536-node ABI cap outright.
+   *
+   * The lambda is not a closure in the end. The WebAssembly backend contifies exactly this shape —
+   * a `let`-bound lambda whose binder is only ever tail-called — into a label, so the continuation
+   * is shared without either duplicating it or losing tail position inside it.
+   *
+   * Continuations at or below {@link JOIN_POINT_MINIMUM_NODES} are passed through untouched. The
+   * binding plus one call costs about six nodes, so hoisting something smaller than that would make
+   * the ordinary single-constructor match bigger — and most matches in real code are that shape.
+   */
+  private shareFailure(failure: SurfaceExpression, span: Span): {
+    readonly bind: (body: SurfaceExpression) => SurfaceExpression;
+    readonly use: () => SurfaceExpression;
+  } {
+    if (surfaceExpressionNodesAtMost(failure, JOIN_POINT_MINIMUM_NODES)) {
+      return { bind: (body) => body, use: () => failure };
+    }
+    const joinName = `$gleam_case_join_${this.#discardIndex++}`;
+    const at = surface.at(span);
+    const parameter = this.discardName();
+    return {
+      bind: (body) => at.let(joinName, at.lambda(parameter, failure), body),
+      use: () => at.apply(name(joinName, span), name(UNIT_CONSTRUCTOR_NAME, span)),
+    };
+  }
+
   private lowerPatternSequence(
     subjects: readonly string[],
     patterns: readonly GleamPattern[],
     success: SurfaceExpression,
     failure: SurfaceExpression,
   ): SurfaceExpression {
+    const first = patterns[0];
+    if (first === undefined) return success;
+    // One join point covers the whole sequence: every `lowerPattern` below then receives a
+    // three-node call, which is under the threshold, so nothing hoists again further down.
+    const shared = this.shareFailure(failure, first.span);
     let result = success;
     for (let index = patterns.length - 1; index >= 0; index--) {
       if (!isIrrefutablePattern(patterns[index]!)) continue;
-      result = this.lowerPattern(subjects[index]!, patterns[index]!, result, failure);
+      result = this.lowerPattern(subjects[index]!, patterns[index]!, result, shared.use());
     }
     for (let index = patterns.length - 1; index >= 0; index--) {
       if (isIrrefutablePattern(patterns[index]!)) continue;
-      result = this.lowerPattern(subjects[index]!, patterns[index]!, result, failure);
+      result = this.lowerPattern(subjects[index]!, patterns[index]!, result, shared.use());
     }
-    return result;
+    return shared.bind(result);
   }
 
   private lowerPattern(

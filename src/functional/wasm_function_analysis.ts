@@ -236,6 +236,146 @@ export class WasmFunctionAnalysis {
       !this.#containsNonTailSelfReference(functionShape.bodyNode, functionShape, 0);
   }
 
+  /**
+   * The lambda node of a `let`-bound join point, or `undefined` when this `let` is not one.
+   *
+   * A join point is a `let` whose value is a one-parameter lambda that ignores its parameter and
+   * whose binder is referenced only as a saturated call in tail position. That shape compiles to a
+   * label rather than a closure: emit the body once after a wasm `block` and turn every call into a
+   * `br` to that block's end. The body then sits in the enclosing function's tail position, so a
+   * self-tail-call inside it is still a branch to the loop header rather than a stack frame.
+   *
+   * This exists because {@link WasmFunctionAnalysis.prototype} stops its tail walk at `Lambda`, so
+   * without it a tail call inside a `let`-bound lambda silently becomes a real call. Guarded Gleam
+   * is exactly this shape — `lowerSequentialCase` binds every later arm to a fallback lambda — and
+   * so lost tail recursion and overflowed the stack at 100,000 iterations.
+   *
+   * Backward jumps never arise: `Let` is non-recursive, so the binder is not in scope inside its own
+   * value and the body cannot call the join point. That is what makes a plain forward `block`
+   * sufficient rather than a `loop` with a dispatch variable.
+   *
+   * The parameter is dead, so the argument is dead too and is never emitted. That is only sound if
+   * evaluating it could not have done anything, so arguments are restricted to leaves — which have
+   * no subexpression to carry an effect — other than `RuntimeFault`, which is an effect by itself.
+   */
+  joinPointLambda(letNode: number): number | undefined {
+    const node = this.#node(letNode);
+    if (node.tag !== CoreTag.Let) return undefined;
+    const lambda = this.#node(node.child0);
+    if (lambda.tag !== CoreTag.Lambda) return undefined;
+    if (this.#referencesLocal(lambda.child0, 0)) return undefined;
+    if (!this.#joinReferencesAreTailCalls(node.child1, 0, true)) return undefined;
+    // A join point nothing branches to would leave its body unreachable rather than shared.
+    if (!this.#referencesLocal(node.child1, 0)) return undefined;
+    return node.child0;
+  }
+
+  /** A leaf carries no subexpression that could have an effect, so a dead one need not be emitted. */
+  #argumentIsDiscardable(nodeIndex: number): boolean {
+    return this.#node(nodeIndex).tag !== CoreTag.RuntimeFault &&
+      this.#children(nodeIndex).length === 0;
+  }
+
+  #referencesLocal(nodeIndex: number, localDepth: number): boolean {
+    const node = this.#node(nodeIndex);
+    if (node.tag === CoreTag.Local) return node.payload === localDepth;
+    for (const [child, depth] of this.#children(nodeIndex)) {
+      if (this.#referencesLocal(child, localDepth + depth)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether every reference to the join binder at `localDepth` is a one-argument call in tail
+   * position. Anything else — a bare reference, an over-application, a call from a value position,
+   * a use inside a nested lambda — means the binder escapes and cannot become a label.
+   */
+  #joinReferencesAreTailCalls(
+    nodeIndex: number,
+    localDepth: number,
+    tail: boolean,
+  ): boolean {
+    const node = this.#node(nodeIndex);
+    if (node.tag === CoreTag.Apply) {
+      const callee = this.#node(node.child0);
+      if (callee.tag === CoreTag.Local && callee.payload === localDepth) {
+        return tail && this.#argumentIsDiscardable(node.child1);
+      }
+    }
+    if (node.tag === CoreTag.Local) return node.payload !== localDepth;
+    for (const [child, depth, childTail] of this.#children(nodeIndex)) {
+      if (!this.#joinReferencesAreTailCalls(child, localDepth + depth, tail && childTail)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Every child of a node as `[childIndex, bindersIntroduced, inheritsTailPosition]`.
+   *
+   * Written once and shared by the join-point predicates so the two cannot disagree about which
+   * positions are tail, and so an unhandled tag is a loud `never` at compile time rather than a
+   * silently unvisited reference.
+   */
+  #children(nodeIndex: number): readonly (readonly [number, number, boolean])[] {
+    const node = this.#node(nodeIndex);
+    const child = (index: number, binders: number, tail: boolean) =>
+      index === NO_INDEX ? [] : [[index, binders, tail] as const];
+    switch (node.tag) {
+      case CoreTag.Integer:
+      case CoreTag.SignedInteger64:
+      case CoreTag.Float32:
+      case CoreTag.Float64:
+      case CoreTag.WholeNumberF64:
+      case CoreTag.Boolean:
+      case CoreTag.Text:
+      case CoreTag.Bytes:
+      case CoreTag.RuntimeFault:
+      case CoreTag.Local:
+      case CoreTag.Global:
+      case CoreTag.Constructor:
+        return [];
+      case CoreTag.Unary:
+      case CoreTag.NumericConvert:
+      case CoreTag.StoreLength:
+        return child(node.child0, 0, false);
+      case CoreTag.Apply:
+      case CoreTag.Binary:
+      case CoreTag.BufferAppend:
+      case CoreTag.StoreNew:
+      case CoreTag.StoreRead:
+        return [...child(node.child0, 0, false), ...child(node.child1, 0, false)];
+      case CoreTag.StoreWrite:
+      case CoreTag.StoreGrow:
+        return [
+          ...child(node.child0, 0, false),
+          ...child(node.child1, 0, false),
+          ...child(node.child2, 0, false),
+        ];
+      case CoreTag.If:
+        return [
+          ...child(node.child0, 0, false),
+          ...child(node.child1, 0, true),
+          ...child(node.child2, 0, true),
+        ];
+      case CoreTag.Lambda:
+        return child(node.child0, 1, false);
+      case CoreTag.PatternBind:
+        return child(node.child0, 1, true);
+      case CoreTag.Let:
+        return [...child(node.child0, 0, false), ...child(node.child1, 1, true)];
+      case CoreTag.LetRec:
+        return [...child(node.child0, 1, false), ...child(node.child1, 1, true)];
+      case CoreTag.Case:
+        return [...child(node.child0, 0, false), ...child(node.child1, 0, true)];
+      case CoreTag.CaseArm:
+        return [...child(node.child0, 0, true), ...child(node.child1, 0, true)];
+    }
+    const unhandled: never = node.tag;
+    throw new Error(`WebAssembly join-point analysis met an unknown Core tag ${unhandled}`);
+  }
+
   #containsNonTailSelfReference(
     nodeIndex: number,
     functionShape: FunctionShape,
@@ -561,7 +701,13 @@ export class WasmFunctionAnalysis {
       return this.#containsTailCall(node.child0, loop, binderDepth + 1);
     }
     if (node.tag === CoreTag.Let || node.tag === CoreTag.LetRec) {
-      return this.#containsTailCall(node.child1, loop, binderDepth + 1);
+      if (this.#containsTailCall(node.child1, loop, binderDepth + 1)) return true;
+      // A contified join point's body is emitted in tail position, so a self-call inside it is a
+      // tail call. Detecting that here is what registers the enclosing function as a loop at all --
+      // codegen can only contify a function it was told is one.
+      const joinLambda = node.tag === CoreTag.Let ? this.joinPointLambda(nodeIndex) : undefined;
+      if (joinLambda === undefined) return false;
+      return this.#containsTailCall(this.#node(joinLambda).child0, loop, binderDepth + 1);
     }
     if (node.tag === CoreTag.Case) {
       return this.#containsTailCall(node.child1, loop, binderDepth);
