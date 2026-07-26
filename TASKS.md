@@ -32,6 +32,28 @@ Numbers stay stable so prose elsewhere still resolves; the measurements live in
 
 ## Now
 
+### 14. The parser is now the bottleneck
+
+**Re-measured 2026-07-26 and it has inverted.** On a 256-module corpus of realistic Gleam — 1.46 MB,
+300,544 surface nodes — the GPU resolves and infers everything in **87.9 ms**, 0.29 µs per node,
+while baba takes **2,152.8 ms** to parse and lower it. The frontend is **96.1%** of the compile and
+the GPU is 3.9%.
+
+That makes this the largest lever by a wide margin, ahead of the kernel. baba runs at roughly 1.4
+MB/s where tree-sitter does 10–30 MB/s. The oldest section of BASELINE predicted exactly this and
+was then buried for a day, because on the pre-fix Gleam standard library the GPU phase was 96% of
+the compile and the parser looked irrelevant.
+
+Two directions, unmeasured:
+
+- **Make baba faster.** It is a separate project (`@mewhhaha/baba`), so this is work outside this
+  repo, and 10x would take the 256-module corpus from 2,240 ms to about 300 ms.
+- **Parse in parallel on the host.** `ParallelGleamFrontend` already exists and measured 4.2x on 16
+  cores, but it is not on the path any benchmark or the playground uses. That is the cheap half.
+
+It also reframes item 7. A free GPU inference phase now saves 87.9 ms of a 2,240 ms corpus compile;
+the 12x it needs is real for single-module latency and close to irrelevant for throughput.
+
 ### 7. Parallelise the inference kernel — node-level, inside one dispatch
 
 `type_inference_shader.ts` is `@compute @workgroup_size(1)` — one lane of roughly ten thousand, now

@@ -116,6 +116,12 @@ per-package cost is a floor; gpufuck amortizes to roughly 630 µs per module. If
 project, use a normal compiler. If you are compiling a thousand user programs — a playground, a
 package registry, a CI corpus — this is the interesting shape.
 
+**That 17× holds at that corpus's module size and not in general.** On modules of about 1,200 nodes
+— `deno task bench:gleam-corpus 256`, 1.46 MB of Gleam — the GPU resolves and infers 300,544 nodes
+in **87.9 ms**, which is 0.29 µs per node and genuinely fast. But baba then takes 2,152.8 ms to
+parse and lower the same input, so the frontend is **96% of the compile** and the end-to-end win
+drops to 1.26×. The GPU compiles quickly; the compiler does not, and the parser is why.
+
 Single-module latency is the weak case, and it improved 8.9× on 2026-07-26 — the Gleam standard
 library went from 3,956 ms to 442.1 ms, or 27× off `gleam build` to **3.0×**. None of that came from
 making the GPU wider. Two defects accounted for all of it: a union-find that walked variable chains

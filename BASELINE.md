@@ -1056,6 +1056,69 @@ single dispatch**, which is the hard problem, and nothing cheaper is left standi
 - Dispatch count: 2, worth 7%.
 - Generation as a parallel map: capped at 1.45x by its own share.
 
+## 2026-07-26 — a big corpus, and the bottleneck has moved to the parser
+
+Asked for a large example that proves it compiles fast. `deno task bench:gleam-corpus [modules]`
+generates realistic Gleam — nominal types, recursive trees, guards, `Result` plumbing, tail
+accumulators, roughly 1,174 surface nodes per module — and measures the two shapes separately,
+because gpufuck behaves oppositely on them.
+
+| Measure                     | 64 modules | 256 modules |
+| --------------------------- | ---------: | ----------: |
+| Source                      |   362.5 KB |  1,463.8 KB |
+| Surface nodes               |     75,136 | **300,544** |
+| **GPU batch compile**       |  **42 ms** | **87.9 ms** |
+| GPU cost per node           |    0.56 µs | **0.29 µs** |
+| Parse and lower (baba, CPU) |   521.3 ms |  2,152.8 ms |
+| **Frontend share of total** |  **92.5%** |   **96.1%** |
+| Total                       |   563.2 ms |  2,240.7 ms |
+| vs `gleam build`            |       1.2x |   **1.26x** |
+
+**The GPU compiles 300,544 nodes in 87.9 ms.** That is the part that is fast, and it is not close:
+0.29 µs per node, improving with scale. Resolving names and running Hindley-Milner over 1.46 MB of
+Gleam costs less than a tenth of a second.
+
+**The compiler is not fast, because the GPU is now 3.9% of it.** baba takes 2,152.8 ms to parse and
+lower the same input — 24x longer than the GPU spends compiling it — so end to end this beats
+`gleam build` by 1.26x rather than by anything worth a headline.
+
+This is exactly what the oldest section of this file predicted and then stopped being true for a
+while: "baba parses at ~0.43 µs/byte where tree-sitter does 10–30 MB/s. A 10x parser improvement
+would outweigh the entire retarget." On the real stdlib the GPU phase was 96% of the compile and the
+parser looked irrelevant. After path halving, contification and the pattern fix, that has inverted.
+
+### The recorded 17x holds only at toy module size
+
+BASELINE records batch throughput as ~17x `gleam build`, and that number is not wrong — it is
+measured on two-definition modules, where the frontend has almost nothing to do and the comparison
+is against Gleam's ~11 ms per-package floor. At 1,174 nodes per module the frontend is 96% of the
+work and the same claim is worth 1.26x.
+
+Both Gleam bounds are reported, and at this size they coincide: the per-package floor (256 x 11 ms =
+2,816 ms) and Gleam's measured rate on the standard library (257.3 KB per 146 ms, so 1,463.8 KB in
+~831 ms) — the floor is larger, so the floor is what binds, and it is the bound generous to gpufuck.
+
+### Batching is worth 39x on identical nodes
+
+The same generated modules, compiled the two ways:
+
+| Shape                   | GPU cost per node |
+| ----------------------- | ----------------: |
+| 256 independent modules |       **0.29 µs** |
+| one linked module       |      **11.34 µs** |
+
+**39x, for the same nodes.** The batch path runs one lane per module and fills the adapter; the
+linked path runs one lane for the whole program. This is the single-lane kernel measured from a
+third direction, and it agrees with the other two.
+
+### "One big project" is not a shape this compiler accepts
+
+The linked case is capped by the ABI, not by speed. A module may hold 65,536 surface nodes, and at
+~1,174 nodes per module that ceiling arrives at **51 modules** — the benchmark links as many as fit
+and reports the count rather than choosing silently. A real project past roughly 60,000 nodes cannot
+be handed to this compiler as one module at all, which is an argument for the submodule splitting in
+TASKS item 2 that has nothing to do with performance.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
