@@ -79,9 +79,10 @@ Corpus: `gleam-lang/stdlib` at `bacc20c`, nineteen source modules, 252 KB, all r
 binds every one of the 353 public functions, so nothing is pruned. Reproduce with
 `deno task bench:gleam-stdlib <checkout> <entry.gleam>`. Same machine as above; Gleam 1.17.0.
 
-> **Superseded 2026-07-26.** Path halving took the GPU phase from 3,806 ms to 1,019.6 ms and the
-> comparable figure from 25x to **8.0x**. Everything below is the measurement as taken; see "path
-> halving" near the end of this file for what replaced it.
+> **Superseded twice on 2026-07-26.** Path halving took the GPU phase from 3,806 ms to 1,019.6 ms,
+> then contification and the pattern-lowering fix took it to 322.7 ms and the corpus from 49,964
+> nodes to 17,718 — so the comparable figure went 27x → 8.0x → **3.0x**. Everything below is the
+> measurement as taken; see "contification" near the end of this file for the current numbers.
 
 | Compiler                          | Cold, whole process |
 | --------------------------------- | ------------------: |
@@ -753,6 +754,10 @@ chains the other eight shortened.
 | vs `gleam build` (146 ms)        |       25x |       **8.0x** |
 | vs our own CPU oracle (773.6 ms) |      4.7x |       **1.3x** |
 
+Both columns are on the 49,964-node corpus. The pattern-lowering fix later showed 64% of those nodes
+were duplicated arm bodies, so the per-node figures in this table — 122.3 and 25.3 — are per
+_duplicated_ node. The ratio between them stands; the absolute values do not describe the program.
+
 **The n^1.68 transition count is gone.** 23.5 transitions per node on a 1,128-node program against
 25.3 on a 49,964-node one — 1.08x over 44x the nodes, which is linear inside the noise. The entire
 superlinearity was uncompressed chains being rewalked, and BASELINE's "5.4x excess worth ~2,800 ms"
@@ -948,21 +953,41 @@ Lowering also got faster rather than slower, despite the extra node-size check. 
 (heavy) machine load, deriving lowering as `parseAndLower - parse`: **125.7 ms with join points
 against 838.2 ms without**, 6.7x, because there are far fewer nodes to build.
 
-### Timings here are provisional: the machine was loaded
+### Timings, re-taken on a quiet machine
 
-These runs happened with load average 21.9 and several `clang++` builds resident, and it shows —
-`parse`, which nothing in this change touches, swung between 245, 724 and 1,237 ms across runs. The
-node counts, transition counts and artifact sizes above are deterministic and unaffected. **The wall
-times are not, and want re-taking on a quiet machine before being quoted.** What was observed:
+The first run of these happened at load average 21.9 with `clang++` builds resident, and `parse` —
+which nothing in this change touches — swung between 245, 724 and 1,237 ms. Re-taken at load 2.87,
+`parse` is back to 80.8 ms against the 80.2 ms recorded before any of this work, which is what makes
+the rest of the column comparable. Medians of 9.
 
-| Phase                 | Observed | Note                                              |
-| --------------------- | -------: | ------------------------------------------------- |
-| GPU resolve and infer |   422 ms | was 1,019.6 ms                                    |
-| vs our own CPU oracle | **0.2x** | the GPU is faster than the CPU for the first time |
+| Phase                           | Original | After halving | After contification |
+| ------------------------------- | -------: | ------------: | ------------------: |
+| Surface nodes                   |   49,964 |        49,964 |          **17,718** |
+| Parse (baba)                    |    83 ms |       80.2 ms |             80.8 ms |
+| Lower to surface                |    67 ms |       66.8 ms |             38.6 ms |
+| GPU resolve and infer           | 3,806 ms |    1,019.6 ms |        **322.7 ms** |
+| Emit WebAssembly                |    25 ms |       19.5 ms |              7.5 ms |
+| **Comparable to `gleam build`** | 3,956 ms |    1,166.7 ms |        **442.1 ms** |
+| vs `gleam build` (146 ms)       |      27x |          8.0x |            **3.0x** |
+| CPU Hindley-Milner oracle       |   766 ms |      773.6 ms |            364.4 ms |
+| vs our own CPU oracle           |     4.7x |          1.3x |            **0.9x** |
 
-That last figure is the one most worth re-checking: the CPU oracle is single-threaded and suffers
-most under load, so 0.2x is likely flattering. It is also `inferTypes`, which is separately
-O(n^1.30) and not on the compile path.
+**The GPU is now marginally faster than our own CPU Hindley-Milner** on this corpus, 322.7 against
+364.4 ms, for the first time in the project. The loaded run reported that ratio as 0.2x, so it was
+flattering by a factor of four — the CPU oracle is single-threaded and suffers most under load.
+
+Two caveats on that. `inferTypes` is separately O(n^1.30) and not on the compile path, so beating it
+is a weak bar; `gleam build` is the real one and is still 3.0x away. And Gleam is doing strictly
+more work, emitting 49 JavaScript files to disk where gpufuck writes nothing.
+
+Batch throughput is unchanged to slightly better: GPU inference share 92.4 / 90.4 / 90.7 µs, median
+**90.7 µs** against 99.5 µs after path halving. The synthetic corpus has no or-patterns, so there
+was nothing there for the frontend fix to shrink.
+
+Two days of measurement on the same corpus and machine: **3,956 ms to 442.1 ms, 8.9x**, and none of
+it came from making the GPU wider. It came from a union-find that never wrote back and a pattern
+compiler that copied the rest of the match into every constructor arm — both defects, not algorithm
+limits. The single-lane kernel that this project was retargeted to fix is still single-lane.
 
 ## Kill criteria
 
