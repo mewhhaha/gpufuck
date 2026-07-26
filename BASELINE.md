@@ -606,6 +606,108 @@ unification is a separate problem from generating the constraints. But it dispos
 a normal program has nothing wide enough to be worth a GPU, and the earlier 1.9x was an artifact of
 asking about the wrong granularity.
 
+## 2026-07-26 — where the 6.1 million transitions go, and why re-encoding will not pay
+
+The plan was to re-encode Hindley-Milner as constraint _generation_ (one lane per Core node, a map)
+plus a wavefront _solve_, on the argument that the current kernel entangles the two and so cannot
+use the node-level width measured above. Before writing the kernel, the split was measured:
+`deno task profile:frames --gleam <stdlib-checkout>` charges every transition to the frame kind on
+top of the stack. Same corpus, same 49,964 nodes, and the total reproduces BASELINE's figure exactly
+at 6,112,586.
+
+| Frame kind           |   Transitions |     Share | Group    |
+| -------------------- | ------------: | --------: | -------- |
+| **InstantiateVisit** | **3,056,557** | **50.0%** | solve    |
+| **Prune**            | **1,003,705** | **16.4%** | solve    |
+| ForallSearch         |       521,157 |      8.5% | solve    |
+| Expression           |       452,709 |      7.4% | generate |
+| ConcreteVisit        |       286,311 |      4.7% | overhead |
+| Unify                |       249,253 |      4.1% | solve    |
+| Constructor          |        94,051 |      1.5% | generate |
+| SchemaVisit          |        70,601 |      1.2% | generate |
+| everything else (17) |       378,242 |      6.2% | mixed    |
+
+| Group     |   Transitions |     Share |
+| --------- | ------------: | --------: |
+| generate  |       699,519 |     11.4% |
+| **solve** | **4,966,457** | **81.2%** |
+| overhead  |       446,611 |      7.3% |
+
+**The re-encoding is dead, and this is what killed it.** Generation is 11.4% of the work. Making it
+infinitely parallel is an Amdahl ceiling of **1.13x** — 122.3 transitions per node become 108.3.
+Every argument for the split was correct about the shape of the algorithm and wrong about where the
+time was, which is the same mistake the definition-granularity width measurement made.
+
+### The prize is somewhere else, and it is bigger
+
+**Half of all inference work is copying polymorphic type schemes.** `InstantiateVisit` is 50.0% of
+6.1 million transitions on its own. That also locates the n^1.68 superlinearity recorded above,
+because the blowup is entirely a scale effect — the same profile on a 1,128-node Lazuli program:
+
+| Bucket           |   1,128 nodes |          49,964 nodes |
+| ---------------- | ------------: | --------------------: |
+| InstantiateVisit |    120 (0.5%) | 3,056,557 (**50.0%**) |
+| Prune            | 4,869 (18.4%) |     1,003,705 (16.4%) |
+| ForallSearch     |     17 (0.1%) |        521,157 (8.5%) |
+| Expression       | 3,953 (14.9%) |        452,709 (7.4%) |
+| _generate_       |       _40.6%_ |               _11.4%_ |
+| _solve_          |       _46.0%_ |               _81.2%_ |
+
+Generation's share **falls** with program size, from 40.6% to 11.4%, because the solve grows
+superlinearly underneath it. So the bigger the program — exactly the case the GPU needs — the less
+there is to gain from parallelising generation.
+
+Three things are now ranked ahead of any re-encoding, all cheaper than one:
+
+1. **Instantiation sharing (50.0%).** `start_lazy_instantiate` already defers the copy with a
+   `TYPE_INSTANCE` thunk, but `materialize_type_instance` then copies the whole scheme graph per
+   use. At stdlib scale that is three million transitions of graph copying.
+2. **Path compression in `prune` (16.4%).** `prune_transition`
+   (`src/semantic/type_inference_shader.ts`) walks the variable link chain and never writes back, so
+   every hop costs a full transition and the same chain is rewalked. There is no union by rank
+   either. This is the textbook fix and it changes no semantics.
+3. **`ForallSearch` (8.5%)**, which is 0.1% small and 8.5% large — another scale term.
+
+### The same number is the best evidence yet for DESIGN.md rule 1
+
+Killing the re-encoding is not the same as vindicating the current algorithm, and the two
+conclusions are easy to confuse. Re-encoding _keeps_ the solve and merely reorganises it, so it is
+capped by the 11.4%. Rule 1 — full annotations, checking rather than inference — **deletes** the
+solve, and the solve is 81.2%.
+
+DESIGN.md flags, honestly, that the only number it had was "annotations are worth ~9%", and that
+this neither supports nor refutes the rule because it measured annotations fed to an engine that
+solves anyway. This is the better number. A checking-only pipeline has no unification variables, so
+`Prune` (16.4%) does not exist; explicit type arguments make instantiation a substitution into a
+known scheme rather than a search, which is most of `InstantiateVisit` (50.0%) and all of
+`ForallSearch` (8.5%).
+
+That remains an argument rather than a measurement — the constant factors of a checking kernel are
+still unknown, and this repository has been wrong about constant factors before. But the cheapest
+experiment DESIGN.md proposes is now the one with the largest measured number behind it, and Sweep
+is the frontend already sitting there to run it against.
+
+### A previous finding does not survive the scale
+
+BASELINE records that one polymorphic function instantiated 30 times costs 1,449 transitions where
+thirty monomorphic copies cost 4,050, concluding polymorphism is 2.8x cheaper than monomorphising.
+That was measured on a small synthetic module. At stdlib scale instantiation is half of all work, so
+the conclusion is at best size-dependent. It is not evidence for monomorphising — that would
+multiply the node count — but "polymorphism is cheap" should not be quoted without the size.
+
+### The instrument costs 40%, so it is a second pipeline
+
+The counters are a build-time shader variant (`TYPE_INFERENCE_PROFILE_SHADER`), not a runtime flag.
+A dynamically indexed store into the private state struct spills it out of registers: measured over
+three runs each, **3,668-3,937 ms without the store against 5,173-5,190 ms with it**. Keeping the
+`profile` array in the struct while never indexing it costs nothing, so both variants share one ABI,
+one workspace and one set of buffers, and only the pipeline differs. Transition counts are identical
+either way, so the shares above are unaffected by the instrument's own cost.
+
+One known imprecision: the buckets sum to one more than `transitions` on runs that grow an arena,
+because `discardGrowthTransition` rewinds the scalar and cannot know which bucket to rewind. The
+tool prints the discrepancy rather than hiding it.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

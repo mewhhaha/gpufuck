@@ -228,12 +228,70 @@ export const InferenceMetadataFailure = {
 export const INFERENCE_STATE_WORD_LENGTH = 73;
 export const INFERENCE_SCHEDULER_WORD_LENGTH = 1 +
   COMPILATION_STATE_WORD_LENGTH;
+
+/**
+ * Transitions are charged one per iteration of the `infer_lane` loop, and the counter is a single
+ * scalar, which tells you the total and nothing about the shape. These buckets split it by the work
+ * the transition actually did: one per `FRAME_*` kind, then one per phase for the transitions that
+ * run with an empty frame stack.
+ *
+ * The split is what decides whether inference can be re-encoded as constraint generation plus a
+ * solve, so it needs to be measurable rather than argued.
+ */
+export const INFERENCE_PROFILE_FRAME_BUCKETS = 33;
+export const INFERENCE_PROFILE_PHASE_BUCKETS = 5;
+export const INFERENCE_PROFILE_BUCKET_COUNT = INFERENCE_PROFILE_FRAME_BUCKETS +
+  INFERENCE_PROFILE_PHASE_BUCKETS;
+
 export const INFERENCE_INTERNAL_STATE_WORD_LENGTH = INFERENCE_STATE_WORD_LENGTH +
-  INFERENCE_SCHEDULER_WORD_LENGTH;
+  INFERENCE_SCHEDULER_WORD_LENGTH + INFERENCE_PROFILE_BUCKET_COUNT;
 export const InferenceSchedulerWord = {
   PreviousSemanticSteps: INFERENCE_STATE_WORD_LENGTH,
   SemanticState: INFERENCE_STATE_WORD_LENGTH + 1,
+  Profile: INFERENCE_STATE_WORD_LENGTH + INFERENCE_SCHEDULER_WORD_LENGTH,
 } as const;
+
+/** Bucket names in bucket order; index 33..37 are the empty-frame-stack phases. */
+export const INFERENCE_PROFILE_BUCKET_NAMES: readonly string[] = [
+  "Expression",
+  "Prune",
+  "Unify",
+  "Occurs",
+  "OccursVisit",
+  "Generalize",
+  "GeneralizeVisit",
+  "Instantiate",
+  "InstantiateVisit",
+  "SchemaConvert",
+  "SchemaVisit",
+  "MappingLookup",
+  "Constructor",
+  "LocalLookup",
+  "CaseBind",
+  "CaseCoverage",
+  "Concrete",
+  "ConcreteVisit",
+  "Serialize",
+  "EpochClear",
+  "FindType",
+  "SchemaParameterCheck",
+  "FieldParameterRecoverability",
+  "PatternMatch",
+  "RefinementRollback",
+  "FullyZonked",
+  "FullyZonkedVisit",
+  "Rigidify",
+  "RigidifyVisit",
+  "IndexedShape",
+  "Subsume",
+  "ForallSearch",
+  "SchemaOccurrence",
+  "phase:unset",
+  "phase:validate",
+  "phase:tarjan",
+  "phase:component",
+  "phase:serialize",
+];
 export const InferenceStateWord = {
   NodeCount: 0,
   DefinitionCount: 1,
@@ -741,7 +799,25 @@ export function prepareInferenceShaderMetadata(
  * Only the definition vectors are statically required; temporary operations
  * report their exact required capacity before indexing through it.
  */
-export const TYPE_INFERENCE_SHADER = /* wgsl */ `
+/**
+ * The profile counters are a build-time variant rather than a runtime flag because the store is not
+ * free: a dynamically indexed write into the private state struct spills it out of registers, and
+ * measured on the Gleam stdlib that costs 3,670 -> 5,180 ms, about 40%. Keeping the array in the
+ * struct costs nothing as long as nothing indexes it, so both variants share one ABI and one set of
+ * buffers, and only the pipeline differs.
+ */
+function typeInferenceShader(profile: boolean): string {
+  const chargeProfileBucket = profile
+    ? `
+    // Charge the transition to whatever is on top of the frame stack, so the single scalar
+    // transition count can be read as a shape rather than only as a total.
+    var bucket = PROFILE_FRAME_BUCKETS + min(state.phase, PROFILE_PHASE_BUCKETS - 1u);
+    if state.frame_top > 0u {
+      bucket = min(frame_get(state.frame_top - 1u, 10u), PROFILE_FRAME_BUCKETS - 1u);
+    }
+    state.profile[bucket] += 1u;`
+    : "";
+  return /* wgsl */ `
 struct CoreNode {
   tag: u32,
   payload: u32,
@@ -897,6 +973,7 @@ struct InferenceState {
   indexed_metadata_footer_base: u32,
   previous_semantic_steps: u32,
   semantic: SemanticCompilationState,
+  profile: array<u32, ${INFERENCE_PROFILE_BUCKET_COUNT}>,
 }
 
 @group(0) @binding(0) var<storage, read> core_nodes: array<CoreNode>;
@@ -1078,6 +1155,9 @@ const FRAME_INDEXED_SHAPE: u32 = 29u;
 const FRAME_SUBSUME: u32 = 30u;
 const FRAME_FORALL_SEARCH: u32 = 31u;
 const FRAME_SCHEMA_OCCURRENCE: u32 = 32u;
+
+const PROFILE_FRAME_BUCKETS: u32 = ${INFERENCE_PROFILE_FRAME_BUCKETS}u;
+const PROFILE_PHASE_BUCKETS: u32 = ${INFERENCE_PROFILE_PHASE_BUCKETS}u;
 
 fn type_kind_is_primitive(kind: u32) -> bool {
   return kind == TYPE_INTEGER || kind == TYPE_BOOLEAN || kind == TYPE_UNIT ||
@@ -5527,6 +5607,7 @@ fn infer_lane() {
   loop {
     if dispatch_transitions >= dispatch_limit ||
       state.status != STATUS_PENDING { break; }
+${chargeProfileBucket}
     if state.phase == PHASE_VALIDATE { validation_transition(); }
     else if state.phase == PHASE_TARJAN { tarjan_transition(); }
     else if state.phase == PHASE_COMPONENT { component_transition(); }
@@ -5548,3 +5629,12 @@ fn infer_types(@builtin(global_invocation_id) invocation: vec3<u32>) {
   inference_states[lane_index] = state;
 }
 `;
+}
+
+export const TYPE_INFERENCE_SHADER = typeInferenceShader(false);
+
+/**
+ * Same kernel, plus a per-frame-kind transition histogram in `InferenceState.profile`. Drives
+ * `tools/profile_inference_frames.ts`; about 40% slower, so it is never the production pipeline.
+ */
+export const TYPE_INFERENCE_PROFILE_SHADER = typeInferenceShader(true);

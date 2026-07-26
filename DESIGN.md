@@ -48,6 +48,14 @@ support this rule, and it does not refute it either — it measured annotations 
 engine that solves anyway. A checking-only pipeline is a different algorithm, and its cost is
 unmeasured.
 
+**A later measurement does support it, and it is the largest number on the board.** Charging every
+inference transition to the frame kind that did it, on the Gleam stdlib: solving is **81.2%** of 6.1
+million transitions, generation 11.4%. The three biggest buckets are all things checking does not
+have — `InstantiateVisit` 50.0%, `Prune` (union-find) 16.4%, `ForallSearch` 8.5%. So the rule is not
+aimed at a rounding error; it is aimed at four fifths of the work. What remains unmeasured is the
+constant factor of a checking kernel, which is the whole question and is why the experiment at the
+bottom of this document is still the right next one. See [BASELINE.md](BASELINE.md).
+
 **2. Explicit type arguments at instantiation. Polymorphism stays, inference of type arguments
 goes.**
 

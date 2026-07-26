@@ -31,7 +31,7 @@ import { GpuDispatchScheduler } from "./gpu_dispatch_scheduler.ts";
 import type { GpuSemanticPipelines } from "./gpu_semantic_contract.ts";
 import { runGpuSemanticCompilationInference } from "./gpu_type_inference_runner.ts";
 import type { GpuCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
-import { TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
+import { TYPE_INFERENCE_PROFILE_SHADER, TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
 import { createSymbolLookup } from "./symbol_lookup.ts";
 
 export interface SemanticCompilationLimits {
@@ -60,14 +60,21 @@ export class GpuSemanticCompiler {
     this.#dispatchScheduler = new GpuDispatchScheduler(device);
   }
 
-  static async create(device: GPUDevice): Promise<GpuSemanticCompiler> {
+  /**
+   * `profileInference` swaps in the histogram-counting inference kernel. It is about 40% slower, so
+   * it exists for `tools/profile_inference_frames.ts` and never for a timing measurement.
+   */
+  static async create(
+    device: GPUDevice,
+    options: { readonly profileInference?: boolean } = {},
+  ): Promise<GpuSemanticCompiler> {
     const shaderModule = device.createShaderModule({
       label: "semantic compiler",
       code: COMPILER_SHADER,
     });
     const inferenceShaderModule = device.createShaderModule({
-      label: "type inference",
-      code: TYPE_INFERENCE_SHADER,
+      label: options.profileInference ? "type inference (profiling)" : "type inference",
+      code: options.profileInference ? TYPE_INFERENCE_PROFILE_SHADER : TYPE_INFERENCE_SHADER,
     });
     const [compilation, inferenceCompilation] = await Promise.all([
       shaderModule.getCompilationInfo(),

@@ -21,6 +21,7 @@ import {
   inferredTypeOutputByteLength,
 } from "./gpu_type_inference_workspace.ts";
 import {
+  INFERENCE_PROFILE_BUCKET_COUNT,
   INFERENCE_TYPE_RECORD_WORD_LENGTH,
   InferenceSchedulerWord,
   InferenceStateWord,
@@ -479,7 +480,23 @@ export function readInferenceState(
     refinementTop: word(InferenceStateWord.RefinementTop),
     outputRoot: word(InferenceStateWord.OutputRoot),
     outputCount: word(InferenceStateWord.OutputCount),
+    profile: readInferenceProfile(view, byteOffset),
   };
+}
+
+/**
+ * Per-frame-kind transition counts, in `INFERENCE_PROFILE_BUCKET_NAMES` order. Cumulative across
+ * dispatches, like `transitions` itself, so the terminal readback carries the whole run.
+ */
+export function readInferenceProfile(view: DataView, byteOffset = 0): Uint32Array {
+  const profile = new Uint32Array(INFERENCE_PROFILE_BUCKET_COUNT);
+  for (let bucket = 0; bucket < INFERENCE_PROFILE_BUCKET_COUNT; bucket++) {
+    profile[bucket] = view.getUint32(
+      byteOffset + (InferenceSchedulerWord.Profile + bucket) * WORD_BYTES,
+      true,
+    );
+  }
+  return profile;
 }
 
 export function readSemanticState(

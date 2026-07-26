@@ -53,6 +53,7 @@
     "playground:build": "deno run -A playground/build.ts",
     "playground:serve": "deno run -A playground/build.ts && deno run -A jsr:@std/http/file-server --port 8080 playground/dist",
     "profile:semantic-compiler": "deno run --allow-read tools/profile_semantic_compiler.ts",
+    "profile:frames": "deno run --unstable-webgpu --allow-read tools/profile_inference_frames.ts",
     "publish:dry-run": "deno publish --dry-run",
     "run:gleam": "deno run --allow-read gleam_cli.ts run",
     "run:javascript-aot": "deno run --allow-read examples/javascript-aot/cli.ts",

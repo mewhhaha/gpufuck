@@ -22,6 +22,8 @@ import {
   INFERENCE_FRAME_WORD_LENGTH,
   INFERENCE_INTERNAL_STATE_WORD_LENGTH,
   INFERENCE_OUTPUT_WORD_LENGTH,
+  INFERENCE_PROFILE_BUCKET_COUNT,
+  INFERENCE_PROFILE_BUCKET_NAMES,
   INFERENCE_REFINEMENT_WORD_LENGTH,
   INFERENCE_STATE_WORD_LENGTH,
   INFERENCE_TYPE_RECORD_WORD_LENGTH,
@@ -145,7 +147,12 @@ Deno.test("GPU inference keeps its ABI-v5 state prefix ahead of the scheduler en
   equal(INFERENCE_STATE_WORD_LENGTH, 73);
   equal(InferenceSchedulerWord.PreviousSemanticSteps, 73);
   equal(InferenceSchedulerWord.SemanticState, 74);
-  equal(INFERENCE_INTERNAL_STATE_WORD_LENGTH, 98);
+  // The profile histogram goes last precisely so it cannot shift the scheduler envelope above it;
+  // both kernel variants carry it, so there is one state stride rather than two.
+  equal(InferenceSchedulerWord.Profile, 98);
+  equal(INFERENCE_PROFILE_BUCKET_COUNT, 38);
+  equal(INFERENCE_PROFILE_BUCKET_NAMES.length, INFERENCE_PROFILE_BUCKET_COUNT);
+  equal(INFERENCE_INTERNAL_STATE_WORD_LENGTH, 136);
 });
 
 Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel boundary", async () => {

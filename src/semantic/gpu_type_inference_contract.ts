@@ -36,6 +36,8 @@ export interface GpuCompilationDispatchObservation {
   readonly semanticSteps: number;
   readonly inferenceStatus: number;
   readonly inferenceTransitions: number;
+  /** Cumulative per-frame-kind split of {@link inferenceTransitions}. */
+  readonly inferenceProfile: Uint32Array;
   readonly requiredCapacity: number;
 }
 
@@ -53,6 +55,8 @@ export interface GpuTypeInferenceDispatchObservation {
   readonly errorCode: number;
   readonly requiredCapacity: number;
   readonly transitions: number;
+  /** Cumulative per-frame-kind split of {@link transitions}. */
+  readonly profile: Uint32Array;
   readonly typeCapacity: number;
   readonly environmentCapacity: number;
   readonly frameCapacity: number;
@@ -94,6 +98,12 @@ export interface InferenceStateSnapshot {
   readonly refinementTop: number;
   readonly outputRoot: number;
   readonly outputCount: number;
+  /**
+   * Cumulative transition count per frame kind, in `INFERENCE_PROFILE_BUCKET_NAMES` order. Splits
+   * `transitions` into the work it was spent on, which is what says whether inference can be
+   * re-encoded as generation plus a solve.
+   */
+  readonly profile: Uint32Array;
 }
 
 export interface WorkspaceLayout {

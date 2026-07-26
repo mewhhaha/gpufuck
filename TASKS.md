@@ -136,17 +136,83 @@ what would need to be a 73 ms budget to beat Gleam by 2×.
 
 ## Next
 
-### 6. GPU inference transition count scales as n^1.68
+### 6. Half of all inference work is copying type schemes
 
-6.1M transitions for 49,964 nodes, 122 per node. At the small-module rate the corpus would need 1.14
-million — a **5.4× excess**, worth ~2,800 ms of a 3,469 ms inference phase. Per-transition cost is
-_not_ the problem and actually improves with scale (1,205 → 568 ns), so this is algorithmic.
+The n^1.68 transition count has been located. `deno task profile:frames --gleam <checkout>` charges
+each of the 6.1M transitions to the frame kind on top of the stack, and the distribution is not
+close to even:
 
-Work per node jumps sevenfold between 4,417 and 33,864 nodes, which suggests a threshold rather than
-a smooth drift. Isolate that threshold first; it is the cheapest lead on the largest number.
+| Frame kind       | Share at 49,964 nodes | Share at 1,128 nodes |
+| ---------------- | --------------------: | -------------------: |
+| InstantiateVisit |             **50.0%** |                 0.5% |
+| Prune            |             **16.4%** |                18.4% |
+| ForallSearch     |                  8.5% |                 0.1% |
+| Expression       |                  7.4% |                14.9% |
+| Unify            |                  4.1% |                23.1% |
+
+Three subitems, ranked, all cheaper than any re-encoding:
+
+**6a. Instantiation copies the whole scheme graph per use (50.0%, ~3.06M transitions).**
+`start_lazy_instantiate` already defers with a `TYPE_INSTANCE` thunk, but
+`materialize_type_instance` then copies. Sharing rather than copying is the single largest number on
+this list. Note this cuts against the recorded "polymorphism is 2.8x cheaper than monomorphising"
+finding, which was measured on a small synthetic module — see BASELINE.
+
+**6b. `prune` has no path compression and no union by rank (16.4%, ~1.00M transitions).**
+`prune_transition` in `src/semantic/type_inference_shader.ts` walks the variable link chain, charges
+a full transition per hop, and never writes back, so the same chain is rewalked. Textbook fix,
+changes no semantics, and it is a prerequisite for any parallel union-find anyway.
+
+**6c. `ForallSearch` is 0.1% small and 8.5% large.** Another scale term; unexamined.
 
 This only bites single-module latency. Batching routes around it, which is why it sits below the
 batch items.
+
+### 7. Parallelise the inference kernel — but not by splitting generation from solving
+
+`type_inference_shader.ts` is `@compute @workgroup_size(1)` — one lane of roughly ten thousand. This
+is the retarget's original premise and still the largest structural win available. Do (6) first:
+reducing the work is worth more than parallelising work that should not exist, and the two multiply.
+
+**The generate-then-solve re-encoding was proposed and killed by measurement before it was built.**
+The plan was one wide dispatch emitting constraints, then a wavefront solve. Profiling says
+generation is **11.4%** of transitions and solving is 81.2%, so an infinitely parallel generation
+phase is an Amdahl ceiling of **1.13x**. Worse, generation's share _falls_ with program size — 40.6%
+at 1,128 nodes, 11.4% at 49,964 — so it is smallest exactly where the GPU is needed. Do not rebuild
+this argument without re-reading BASELINE; it was convincing and it was wrong.
+
+Three further entanglements would have to be undone even if the split did pay, all found by reading
+the kernel rather than by measurement:
+
+- **Generation is not bottom-up.** Expected types propagate _downward_ through frame word 11, and
+  `Apply` stage 41 branches on the _pruned_ callee's kind. Which constraint to emit depends on
+  having solved earlier ones.
+- **Allocation order is load-bearing.** `Apply` records `state.type_top` watermarks and hands them
+  to unify to elide the occurs check. That encodes sequential allocation order as a semantic
+  invariant and does not survive a parallel map.
+- **There is backtracking inside "generation."** The rigid-refinement trail is a mutable undo log
+  with rollback checkpoints taken at case-arm entry.
+
+What survives from the original argument:
+
+- **Node-level width is real and grows with program size.** Depth 87 on the Gleam stdlib, mean width
+  579, widest level 22,101. Across five programs, 74–99% of nodes sit in levels wider than a warp,
+  and width grows ~14x for 70x the nodes. The crossover is in the thousands of nodes.
+- **Unification can be parallel.** The capability spike in ARCHITECTURE §9 verified that
+  `atomicCompareExchangeWeak` union-find converges under contention. That is the hard primitive and
+  it is not speculative — and it is the 81.2%, not the 11.4%.
+- **Divergence is bucketable.** Every Core node carries a tag; grouping by tag before dispatch gives
+  each warp one node kind instead of eleven.
+
+**One constraint dominates the design.** A GPU round trip in Deno costs 11.3 ms even when the shader
+does nothing (measured, BASELINE.md). One dispatch per dependency wave would spend 21 × 11.3 = 237
+ms on the Gleam stdlib before computing anything — worse than `gleam build`'s entire 146 ms. So the
+whole wavefront has to live inside a single dispatch, as a persistent kernel with in-kernel
+synchronisation, or the work has to move off Deno. Anything that dispatches per wave is dead on
+arrival regardless of how good the kernel is.
+
+And the payoff shows up in throughput, not latency: even a free inference phase leaves parse, lower,
+and emit at 152 ms against Gleam's 146 ms total.
 
 ### 7. Parallelise the inference kernel
 

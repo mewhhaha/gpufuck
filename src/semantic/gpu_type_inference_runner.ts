@@ -302,6 +302,7 @@ async function runGpuSemanticTypeInferenceMachine(
         semanticSteps: semanticState.totalSteps,
         inferenceStatus: state.status,
         inferenceTransitions: state.transitions,
+        inferenceProfile: state.profile,
         requiredCapacity: state.errorDetail,
       });
       if (semanticState.status === CompilationStatus.Pending) {
@@ -316,6 +317,7 @@ async function runGpuSemanticTypeInferenceMachine(
         errorCode: state.errorCode,
         requiredCapacity: state.errorDetail,
         transitions: state.transitions,
+        profile: state.profile,
         typeCapacity: layout.typeCapacity,
         environmentCapacity: layout.environmentCapacity,
         frameCapacity: layout.frameCapacity,
