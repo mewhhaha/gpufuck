@@ -14,6 +14,7 @@ import {
   lowerGleamSources,
   renderGleamTrace,
 } from "../gleam.ts";
+import { generateGleamCorpus } from "../tools/generate_gleam_corpus.ts";
 
 interface GleamRuntime {
   readonly device: GPUDevice;
@@ -511,6 +512,38 @@ pub fn main() -> Int {
  * `Lambda`. Contification makes the fallback a label instead of a closure, which puts its body back
  * in tail position.
  */
+/**
+ * A packed-ABI limit used to escape `lowerGleamSources` as a bare `RangeError`, which ended a batch
+ * run and reported nothing about the remaining modules. Every failure a caller can be handed now
+ * comes back as a result.
+ *
+ * Reached by linking rather than by one huge module, because baba's own trace limit stops a single
+ * source long before the node cap does — the ABI ceiling is only reachable through imports, which is
+ * also the shape a real project has.
+ */
+Deno.test("reports a surface-node limit as a diagnostic rather than throwing", () => {
+  const modules = [...generateGleamCorpus(64, 6).modules];
+  const entry: GleamSourceModule = {
+    name: "limit_entry",
+    source: `${modules.map((module, index) => `import ${module.name} as m${index}`).join("\n")}
+
+pub fn main() -> Int {
+${modules.map((_, index) => `  let v${index} = m${index}.main()`).join("\n")}
+  ${modules.map((_, index) => `v${index}`).join(" + ")}
+}
+`,
+  };
+  const frontend = lowerGleamSources([...modules, entry], {
+    module: entry.name,
+    exportName: "main",
+  });
+  ok(!frontend.ok);
+  if (frontend.ok) return;
+  equal(frontend.diagnostics[0].code, "G1004");
+  equal(frontend.diagnostics[0].stage, "limit");
+  match(frontend.diagnostics[0].message, /exceeds 65536/);
+});
+
 Deno.test("keeps guarded Gleam scalar recursion stack safe", async () => {
   const frontend = lowerGleamSource(
     "guarded_scalar_tail_recursion",

@@ -29,7 +29,7 @@ import { GpuCompiler, type GpuModule } from "./compiler.ts";
 import { type DeepValue, evaluateModuleWithBoundedWasm, GpuEvaluator } from "./evaluator.ts";
 import { createModuleArtifact, linkModules, type ModuleArtifact } from "./module_linker.ts";
 import type { SurfaceExpression, SurfaceTypeDeclaration } from "./surface_builder.ts";
-import { functionalResolvedCoreFingerprint } from "./wasm_artifacts.ts";
+import { resolvedCoreFingerprint } from "./wasm_artifacts.ts";
 
 const DEFAULT_MAXIMUM_COMPTIME_STEPS = 1_000_000;
 const DEFAULT_MAXIMUM_OUTPUT_NODES = 4_096;
@@ -158,7 +158,7 @@ export class GpuComptimeExecutor {
       );
     }
     try {
-      const fingerprint = await functionalResolvedCoreFingerprint(compilation.module);
+      const fingerprint = await resolvedCoreFingerprint(compilation.module);
       options.signal?.throwIfAborted();
       return {
         ok: true,

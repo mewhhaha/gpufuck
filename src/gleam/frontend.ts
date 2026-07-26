@@ -171,6 +171,23 @@ export function lowerGleamSources(
         }],
       };
     }
+    // A packed-ABI limit — the 65,536-node cap on a surface module is the one reached in practice —
+    // arrives as a bare RangeError from surface packing. Returning it as a diagnostic keeps this
+    // function's contract single: every failure a caller can be handed comes back as a result, so
+    // driving it over many modules does not need a try/catch to avoid losing the rest of the batch.
+    if (error instanceof RangeError) {
+      const module = modules[0]!;
+      return {
+        ok: false,
+        diagnostics: [{
+          stage: "limit",
+          code: "G1004",
+          module: module.name,
+          span: module.span,
+          message: error.message,
+        }],
+      };
+    }
     throw error;
   }
 }

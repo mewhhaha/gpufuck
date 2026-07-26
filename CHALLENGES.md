@@ -316,15 +316,37 @@ running.
 How to tackle: retry device creation with backoff and report VRAM state in the failure, so the
 diagnostic distinguishes "no memory" from "wrong answer".
 
-## Unfinished cleanups
+## Cleanups, closed 2026-07-26
 
-Small, known, and recorded so they are not rediscovered:
+All five are resolved, three by changing code and two by deciding not to:
 
-- **`semanticSurfaceFromModule` and `functional_adapter.ts`** copy twelve fields each way between
-  two names for identical bytes. Step 4 of the coherence plan was to delete them once both sides
-  shared a vocabulary; it never happened, and they are still on the path.
-- **Nine lowercase `functional*` exports** never lost the prefix that every other name dropped.
-- **Sweep's flat-locals rule** rejects more than DESIGN requires — distinct names in disjoint scopes
-  are still a diagnostic.
-- **Frontend API inconsistency**: some paths throw where siblings return a diagnostic result.
-- **A nullary Gleam entry allocates a `Unit` argument** it never reads.
+- **The identity rename is gone.** `semanticSurfaceFromModule` had already been reduced to
+  `return module` by an earlier pass — the twelve-field copy this file described was long dead, and
+  only the indirection survived. Deleted, along with its nine call sites.
+- **Nine `functional*` exports renamed** to `f32x4`, `hostFieldRepresentationType`, `hostFieldType`,
+  `resolvedCoreFingerprint`, `storeType`, `thunkType`, `wasmArenaDepth`, `wasmArenaInstance` and
+  `wasmInstanceArenaDepth`. `resolvedCoreFingerprint` needed the private helper beside it renamed to
+  `fingerprintResolvedCore` first, which is why that one kept its prefix when the others lost
+  theirs. Eighteen `functional*` names remain, all module-private, so they are noise rather than
+  API.
+- **Sweep's flat-locals rule is scoped per path.** Sibling `match` arms and the two branches of an
+  `if` are disjoint — only one is ever live — so reusing a binder across them threatens no scope
+  chain. `checkFlatLocals` copies the live set per branch; nested shadowing on one path is still a
+  diagnostic. The pass never fed a table in the first place: its return value was discarded, so this
+  changed what is legal and nothing about lowering.
+- **A packed-ABI limit is now a diagnostic**, `G1004` at stage `limit`, rather than a bare
+  `RangeError` escaping `lowerGleamSources`. This was not hypothetical: it killed a benchmark run
+  earlier the same day, which is exactly the failure the entry described — one unguarded throw
+  ending a batch and reporting nothing about the rest. Reachable only by linking, because baba's own
+  trace limit stops a single source long before the node cap does.
+
+Two decided against, with the reasoning kept so they are not reopened:
+
+- **The nullary Gleam entry stays.** A synthetic `$gleam/entry` applies a zero-argument `main` to
+  `Unit`, costing 3 nodes and 1 definition. It cannot be removed independently: Core lambdas are
+  unary, so a nullary Gleam function must become `Lambda(_)` and something must apply it. Lowering
+  the entry to a value instead would break a program that both calls `main()` and passes `main` as a
+  value. This is a symptom of Core lacking n-ary lambdas — [TASKS](TASKS.md) item 3 — and disappears
+  with it.
+- **The remaining eighteen private `functional*` names stay.** Renaming them touches far more call
+  sites than the public nine for no consumer-visible gain.

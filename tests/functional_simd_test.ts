@@ -5,10 +5,10 @@ import {
   buildSurfaceModule,
   compileModuleToWasm,
   EvaluationProfile,
+  f32x4,
   F32x4Definition,
   FIXED_VECTOR_DEFINITIONS,
   FIXED_VECTOR_TYPE_DECLARATIONS,
-  functionalF32x4,
   GpuCompiler,
   linkModules,
   requestWebGpuDevice,
@@ -37,13 +37,13 @@ function functionalWasmCompiler(): GpuCompiler {
 }
 
 Deno.test("fixed F32x4 builders reject lanes outside the four-lane shape", () => {
-  const vector = functionalF32x4.splat(surface.float32(0));
+  const vector = f32x4.splat(surface.float32(0));
   throws(
-    () => functionalF32x4.extractLane(vector, -1),
+    () => f32x4.extractLane(vector, -1),
     /lane must be an integer within \[0, 3\]; received -1/,
   );
   throws(
-    () => functionalF32x4.replaceLane(vector, 4, surface.float32(0)),
+    () => f32x4.replaceLane(vector, 4, surface.float32(0)),
     /lane must be an integer within \[0, 3\]; received 4/,
   );
 });
@@ -72,7 +72,7 @@ Deno.test("canonical fixed-vector definitions are deeply immutable", () => {
 });
 
 Deno.test("linked fixed-vector definitions retain native SIMD lowering", async () => {
-  const vector = functionalF32x4.make([
+  const vector = f32x4.make([
     surface.float32(1),
     surface.float32(2),
     surface.float32(3),
@@ -87,8 +87,8 @@ Deno.test("linked fixed-vector definitions retain native SIMD lowering", async (
         parameters: ["mask"],
         annotation: {
           kind: "function",
-          parameter: functionalF32x4.maskType,
-          result: functionalF32x4.maskType,
+          parameter: f32x4.maskType,
+          result: f32x4.maskType,
         },
         body: surface.name("mask"),
       },
@@ -100,8 +100,8 @@ Deno.test("linked fixed-vector definitions retain native SIMD lowering", async (
           parameter: { kind: "integer" },
           result: {
             kind: "function",
-            parameter: functionalF32x4.type,
-            result: functionalF32x4.type,
+            parameter: f32x4.type,
+            result: f32x4.type,
           },
         },
         body: surface.name("vector"),
@@ -110,21 +110,21 @@ Deno.test("linked fixed-vector definitions retain native SIMD lowering", async (
         name: "main",
         parameters: [],
         annotation: { kind: "float-32" },
-        body: functionalF32x4.reduceAdd(
-          functionalF32x4.select(
+        body: f32x4.reduceAdd(
+          f32x4.select(
             surface.apply(
               surface.name("identityMask"),
-              functionalF32x4.equal(vector, vector),
+              f32x4.equal(vector, vector),
             ),
             surface.apply(
               surface.name("second"),
               surface.integer(0),
-              functionalF32x4.multiply(
+              f32x4.multiply(
                 vector,
-                functionalF32x4.splat(surface.float32(2)),
+                f32x4.splat(surface.float32(2)),
               ),
             ),
-            functionalF32x4.splat(surface.float32(0)),
+            f32x4.splat(surface.float32(0)),
           ),
         ),
       },
@@ -158,18 +158,18 @@ Deno.test("linked fixed-vector definitions retain native SIMD lowering", async (
 });
 
 Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", async () => {
-  const vector = functionalF32x4.make([
+  const vector = f32x4.make([
     surface.float32(1),
     surface.float32(2),
     surface.float32(3),
     surface.float32(4),
   ]);
-  const selected = functionalF32x4.select(
-    functionalF32x4.less(vector, functionalF32x4.splat(surface.float32(3))),
-    functionalF32x4.add(vector, functionalF32x4.splat(surface.float32(10))),
-    functionalF32x4.multiply(vector, functionalF32x4.splat(surface.float32(2))),
+  const selected = f32x4.select(
+    f32x4.less(vector, f32x4.splat(surface.float32(3))),
+    f32x4.add(vector, f32x4.splat(surface.float32(10))),
+    f32x4.multiply(vector, f32x4.splat(surface.float32(2))),
   );
-  const mapped = functionalF32x4.map(
+  const mapped = f32x4.map(
     surface.lambda(
       "value",
       surface.binary(
@@ -180,7 +180,7 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
     ),
     selected,
   );
-  const zipped = functionalF32x4.zip(
+  const zipped = f32x4.zip(
     surface.lambda(
       "left",
       surface.lambda(
@@ -193,7 +193,7 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
       ),
     ),
     mapped,
-    functionalF32x4.replaceLane(vector, 2, surface.float32(20)),
+    f32x4.replaceLane(vector, 2, surface.float32(20)),
   );
   const encoded = buildSurfaceModule(
     [
@@ -202,7 +202,7 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
         name: "main",
         parameters: [],
         annotation: { kind: "float-32" },
-        body: functionalF32x4.fold(
+        body: f32x4.fold(
           surface.lambda(
             "accumulator",
             surface.lambda(
@@ -268,22 +268,22 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
 });
 
 Deno.test("native F32x4 lane operations, comparisons, and reductions preserve Float32 results", async () => {
-  const quotient = functionalF32x4.divide(
-    functionalF32x4.subtract(
-      functionalF32x4.make([
+  const quotient = f32x4.divide(
+    f32x4.subtract(
+      f32x4.make([
         surface.float32(8),
         surface.float32(12),
         surface.float32(16),
         surface.float32(20),
       ]),
-      functionalF32x4.splat(surface.float32(4)),
+      f32x4.splat(surface.float32(4)),
     ),
-    functionalF32x4.splat(surface.float32(4)),
+    f32x4.splat(surface.float32(4)),
   );
-  const selected = functionalF32x4.select(
-    functionalF32x4.equal(
+  const selected = f32x4.select(
+    f32x4.equal(
       quotient,
-      functionalF32x4.make([
+      f32x4.make([
         surface.float32(1),
         surface.float32(2),
         surface.float32(0),
@@ -291,9 +291,9 @@ Deno.test("native F32x4 lane operations, comparisons, and reductions preserve Fl
       ]),
     ),
     quotient,
-    functionalF32x4.splat(surface.float32(10)),
+    f32x4.splat(surface.float32(10)),
   );
-  const repaired = functionalF32x4.replaceLane(selected, 2, surface.float32(3));
+  const repaired = f32x4.replaceLane(selected, 2, surface.float32(3));
   const encoded = buildSurfaceModule(
     [
       ...FIXED_VECTOR_DEFINITIONS,
@@ -303,8 +303,8 @@ Deno.test("native F32x4 lane operations, comparisons, and reductions preserve Fl
         annotation: { kind: "float-32" },
         body: surface.binary(
           BinaryOperator.AddFloat32,
-          functionalF32x4.reduceAdd(repaired),
-          functionalF32x4.extractLane(repaired, 1),
+          f32x4.reduceAdd(repaired),
+          f32x4.extractLane(repaired, 1),
         ),
       },
     ],
@@ -339,22 +339,22 @@ Deno.test("strict F32x4 functions use an allocation-free internal vector worker"
         parameters: ["vector"],
         annotation: {
           kind: "function",
-          parameter: functionalF32x4.type,
-          result: functionalF32x4.type,
+          parameter: f32x4.type,
+          result: f32x4.type,
         },
-        body: functionalF32x4.multiply(
+        body: f32x4.multiply(
           surface.name("vector"),
-          functionalF32x4.splat(surface.float32(2)),
+          f32x4.splat(surface.float32(2)),
         ),
       },
       {
         name: "main",
         parameters: [],
         annotation: { kind: "float-32" },
-        body: functionalF32x4.reduceAdd(
+        body: f32x4.reduceAdd(
           surface.apply(
             surface.name("doubleVector"),
-            functionalF32x4.make([
+            f32x4.make([
               surface.float32(1),
               surface.float32(2),
               surface.float32(3),
@@ -389,7 +389,7 @@ Deno.test("strict F32x4 functions use an allocation-free internal vector worker"
 });
 
 Deno.test("native vectors preserve values across ordinary boxed function boundaries", async () => {
-  const vector = functionalF32x4.make([
+  const vector = f32x4.make([
     surface.float32(1),
     surface.float32(2),
     surface.float32(3),
@@ -403,8 +403,8 @@ Deno.test("native vectors preserve values across ordinary boxed function boundar
         parameters: ["mask"],
         annotation: {
           kind: "function",
-          parameter: functionalF32x4.maskType,
-          result: functionalF32x4.maskType,
+          parameter: f32x4.maskType,
+          result: f32x4.maskType,
         },
         body: surface.name("mask"),
       },
@@ -416,8 +416,8 @@ Deno.test("native vectors preserve values across ordinary boxed function boundar
           parameter: { kind: "integer" },
           result: {
             kind: "function",
-            parameter: functionalF32x4.type,
-            result: functionalF32x4.type,
+            parameter: f32x4.type,
+            result: f32x4.type,
           },
         },
         body: surface.name("vector"),
@@ -426,14 +426,14 @@ Deno.test("native vectors preserve values across ordinary boxed function boundar
         name: "main",
         parameters: [],
         annotation: { kind: "float-32" },
-        body: functionalF32x4.reduceAdd(
-          functionalF32x4.select(
+        body: f32x4.reduceAdd(
+          f32x4.select(
             surface.apply(
               surface.name("identityMask"),
-              functionalF32x4.equal(vector, vector),
+              f32x4.equal(vector, vector),
             ),
             surface.apply(surface.name("second"), surface.integer(0), vector),
-            functionalF32x4.splat(surface.float32(0)),
+            f32x4.splat(surface.float32(0)),
           ),
         ),
       },
@@ -468,8 +468,8 @@ Deno.test("requested SIMD preserves lazy lane evaluation through scalar fallback
         name: "main",
         parameters: [],
         annotation: { kind: "float-32" },
-        body: functionalF32x4.extractLane(
-          functionalF32x4.make([
+        body: f32x4.extractLane(
+          f32x4.make([
             surface.float32(42),
             surface.runtimeFault("unused vector lane was forced"),
             surface.float32(0),

@@ -199,7 +199,7 @@ export class GpuCompiler {
         options.signal?.throwIfAborted();
         return await this.#semanticCompiler.compileBatch(
           accepted.map(({ module }) => ({
-            surface: semanticSurfaceFromModule(module),
+            surface: module,
             sourceByteLength: module.sourceByteLength,
             ...limits,
           })),
@@ -250,7 +250,7 @@ export class GpuCompiler {
   ): Promise<GpuModule> {
     validateEncodedModule(encodedModule);
     const coreNodeBytes = encodeCoreArtifact(encodedModule, artifact);
-    const surface = semanticSurfaceFromModule(encodedModule);
+    const surface = encodedModule;
     const entryDefinition = findEntryDefinition(encodedModule);
     const buffers: GPUBuffer[] = [];
     this.#device.pushErrorScope("validation");
@@ -800,10 +800,6 @@ function validateRecordTable(
  * exported because it is part of the published surface, and it keeps the widening explicit at the
  * call sites that pass a module where a surface is expected.
  */
-export function semanticSurfaceFromModule(module: EncodedModule): EncodedSemanticSurface {
-  return module;
-}
-
 function failedLimit(
   message: string,
   startByte: number,

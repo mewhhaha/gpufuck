@@ -105,7 +105,7 @@ export const FIXED_VECTOR_DEFINITIONS: readonly SurfaceDefinition[] = Object
     vectorFoldDefinition(),
   ]);
 
-export const functionalF32x4: Readonly<{
+export const f32x4: Readonly<{
   readonly type: TypeSchema;
   readonly maskType: TypeSchema;
   make(

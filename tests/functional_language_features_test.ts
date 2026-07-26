@@ -4,12 +4,12 @@ import {
   BinaryOperator,
   buildSurfaceModule,
   EvaluationProfile,
-  functionalThunkType,
   GpuCompiler,
   GpuEvaluator,
   requestWebGpuDevice,
   surface,
   type SurfaceExpression,
+  thunkType,
 } from "../functional.ts";
 
 let device: GPUDevice | undefined;
@@ -179,7 +179,7 @@ async function compileAndRunThunkModule(forceTwice: boolean) {
     [{
       name: "declaredThunk",
       parameters: [],
-      annotation: functionalThunkType({ kind: "integer" }),
+      annotation: thunkType({ kind: "integer" }),
       body: surface.delay(surface.integer(5)),
     }, { name: "main", parameters: [], annotation: null, body }],
     [],

@@ -25,8 +25,8 @@ import {
   ARRAY_TYPE_NAME,
   BYTES_TYPE_NAME,
   ERASED_TYPE_NAME,
-  functionalHostFieldRepresentationType,
-  functionalHostFieldType,
+  hostFieldRepresentationType,
+  hostFieldType,
   INIT_CONSTRUCTOR_NAME,
   INIT_TYPE_NAME,
   normalizeHostCapabilities,
@@ -71,7 +71,7 @@ interface SurfaceTypeTraversal {
   remainingNodes: number;
 }
 
-export function functionalThunkType(value: TypeSchema): TypeSchema {
+export function thunkType(value: TypeSchema): TypeSchema {
   return {
     kind: "named",
     name: THUNK_TYPE_NAME,
@@ -537,7 +537,7 @@ function hostInitTypeDeclaration(
       fields: capabilities.flatMap((capability) =>
         capability.fields.map((field) => ({
           name: `${capability.name}.${field.name}`,
-          type: functionalHostFieldType(field),
+          type: hostFieldType(field),
           span,
         }))
       ),
@@ -652,8 +652,8 @@ function collectBoundaryTypeNames(
   for (const definition of definitions) visitExpression(definition.body);
   for (const capability of capabilities) {
     for (const field of capability.fields) {
-      visit(functionalHostFieldType(field));
-      visit(functionalHostFieldRepresentationType(field));
+      visit(hostFieldType(field));
+      visit(hostFieldRepresentationType(field));
     }
   }
   return names;

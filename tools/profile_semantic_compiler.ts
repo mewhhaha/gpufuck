@@ -1,7 +1,6 @@
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { GpuLazuliCompiler } from "../src/lazuli/compiler.ts";
 import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
-import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { DEFINITION_WORD_LENGTH, DefinitionWord } from "../src/semantic/abi.ts";
 import type { CoreNode } from "../src/semantic/compiler_module.ts";
 import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
@@ -46,7 +45,7 @@ if (!parsed.ok) {
 
 const adapterStart = performance.now();
 const functionalModule = lazuliSurfaceToModule(parsed.surface, sourceBytes);
-const semanticSurface = semanticSurfaceFromModule(functionalModule);
+const semanticSurface = functionalModule;
 const functionalAdapterMilliseconds = performance.now() - adapterStart;
 
 const warmParseAndSurfacePackingMilliseconds: number[] = [];
@@ -57,7 +56,7 @@ for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
   warmParseAndSurfacePackingMilliseconds.push(performance.now() - warmParseStart);
   if (!warmParsed.ok) throw new Error("profile source stopped parsing during warm samples");
   const warmAdapterStart = performance.now();
-  semanticSurfaceFromModule(lazuliSurfaceToModule(warmParsed.surface, sourceBytes));
+  lazuliSurfaceToModule(warmParsed.surface, sourceBytes);
   warmAdapterMilliseconds.push(performance.now() - warmAdapterStart);
 }
 
@@ -74,11 +73,9 @@ try {
   const warmupSource = "fn main = 0;";
   const warmupParsed = parseLazuliSource(warmupSource);
   if (!warmupParsed.ok) throw new Error("internal profiling warmup did not parse");
-  const warmupSurface = semanticSurfaceFromModule(
-    lazuliSurfaceToModule(
-      warmupParsed.surface,
-      new TextEncoder().encode(warmupSource).byteLength,
-    ),
+  const warmupSurface = lazuliSurfaceToModule(
+    warmupParsed.surface,
+    new TextEncoder().encode(warmupSource).byteLength,
   );
   const warmupStart = performance.now();
   const warmup = await compiler.compile(

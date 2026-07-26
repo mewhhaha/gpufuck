@@ -85,54 +85,69 @@ function lowerType(type: SweepType): TypeSchema {
   }
 }
 
-/** Rule 5: one flat table per function, so a name resolves without walking a scope chain. */
-function collectLocals(fn: SweepFunction): Set<string> {
-  const locals = new Set<string>();
-  const declare = (name: string, span: SweepSpan) => {
-    if (locals.has(name)) {
+/**
+ * Rule 5: a name resolves without walking a scope chain, so no binder may shadow another that is
+ * live on the same path.
+ *
+ * Scoped per path rather than per function, which is the weakest check the rule actually needs.
+ * Sibling `match` arms and the two branches of an `if` are disjoint — only one is ever live — so
+ * `One(inner) -> ...; Two(inner) -> ...` reuses a name without any scope chain existing to walk.
+ * Rejecting that was stricter than DESIGN requires, and it was found by writing a nested match in
+ * `examples/sweep/` and having the compiler refuse it.
+ *
+ * The return value is deliberately absent: nothing builds a table from this. Lowering resolves names
+ * through the surface builder's own de Bruijn handling, so this pass only decides whether the program
+ * is legal.
+ */
+function checkFlatLocals(fn: SweepFunction): void {
+  const declare = (name: string, span: SweepSpan, live: Set<string>) => {
+    if (live.has(name)) {
       fail(
-        `local ${JSON.stringify(name)} is already bound in ${
+        `local ${JSON.stringify(name)} is already bound on this path in ${
           JSON.stringify(fn.name)
-        }; Sweep locals are flat and unique`,
+        }; Sweep locals must be unique where they are simultaneously in scope`,
         span,
       );
     }
-    locals.add(name);
+    live.add(name);
   };
-  for (const parameter of fn.parameters) declare(parameter.name, fn.span);
-  const walk = (expression: SweepExpression): void => {
+  const parameters = new Set<string>();
+  for (const parameter of fn.parameters) declare(parameter.name, fn.span, parameters);
+  const walk = (expression: SweepExpression, live: Set<string>): void => {
     switch (expression.kind) {
       case "let":
-        declare(expression.name, expression.span);
-        walk(expression.value);
-        walk(expression.body);
+        // The bound value is evaluated before the binder exists, so it is checked without it.
+        walk(expression.value, live);
+        declare(expression.name, expression.span, live);
+        walk(expression.body, live);
         return;
       case "match":
-        walk(expression.subject);
+        walk(expression.subject, live);
         for (const arm of expression.arms) {
-          for (const binder of arm.binders) declare(binder, arm.span);
-          walk(arm.body);
+          // A fresh copy per arm: arms cannot see each other's binders.
+          const armLive = new Set(live);
+          for (const binder of arm.binders) declare(binder, arm.span, armLive);
+          walk(arm.body, armLive);
         }
         return;
       case "if":
-        walk(expression.condition);
-        walk(expression.consequent);
-        walk(expression.alternate);
+        walk(expression.condition, live);
+        walk(expression.consequent, new Set(live));
+        walk(expression.alternate, new Set(live));
         return;
       case "binary":
-        walk(expression.left);
-        walk(expression.right);
+        walk(expression.left, live);
+        walk(expression.right, live);
         return;
       case "call":
       case "construct":
-        for (const argument of expression.arguments) walk(argument);
+        for (const argument of expression.arguments) walk(argument, live);
         return;
       default:
         return;
     }
   };
-  walk(fn.body);
-  return locals;
+  walk(fn.body, parameters);
 }
 
 function lowerExpression(expression: SweepExpression): SurfaceExpression {
@@ -191,7 +206,7 @@ function lowerExpression(expression: SweepExpression): SurfaceExpression {
 }
 
 function lowerFunction(fn: SweepFunction): SurfaceDefinition {
-  collectLocals(fn);
+  checkFlatLocals(fn);
   // Rule 1: the annotation is total. Type parameters are left free rather than wrapped in a
   // `forall` -- the ABI reserves explicit quantifiers for rank-N parameter positions and rejects one
   // at the top of a definition, so a top-level scheme is written with free parameters and closed by

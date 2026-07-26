@@ -518,7 +518,7 @@ function requireTypeKind(
   }
 }
 
-export function functionalHostFieldType(
+export function hostFieldType(
   field: HostFieldDeclaration,
 ): TypeSchema {
   if (field.kind === "value") return field.type;
@@ -529,7 +529,7 @@ export function functionalHostFieldType(
   };
 }
 
-export function functionalHostFieldRepresentationType(
+export function hostFieldRepresentationType(
   field: HostFieldDeclaration,
 ): TypeSchema {
   if (field.kind === "value") return field.representation ?? field.type;

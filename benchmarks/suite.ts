@@ -30,7 +30,6 @@ import { generateGleamCorpus } from "../tools/generate_gleam_corpus.ts";
 import { orPatternProgram } from "../tools/or_pattern_program.ts";
 import { ParallelGleamFrontend } from "../src/gleam/parallel_frontend.ts";
 import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
-import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import type { GpuCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
 
 const BASELINE_PATH = new URL("./baseline.json", import.meta.url);
@@ -100,7 +99,7 @@ try {
   // and it is what located both defects fixed today.
   let transitions = 0;
   let semanticSteps = 0;
-  const surface = semanticSurfaceFromModule(singleModule);
+  const surface = singleModule;
   const compilation = await semantic.compile(
     surface,
     singleModule.sourceByteLength,

@@ -60,17 +60,17 @@ export function beginWasmArena(
   return arena;
 }
 
-export function functionalWasmArenaInstance(
+export function wasmArenaInstance(
   arena: WasmArena,
 ): WebAssembly.Instance {
   return activeArenaRecord(arena).instance;
 }
 
-export function functionalWasmArenaDepth(arena: WasmArena): number {
+export function wasmArenaDepth(arena: WasmArena): number {
   return activeArenaRecord(arena).state.depth;
 }
 
-export function functionalWasmInstanceArenaDepth(instance: WebAssembly.Instance): number {
+export function wasmInstanceArenaDepth(instance: WebAssembly.Instance): number {
   return arenaStacks.get(instance)?.length ?? 0;
 }
 

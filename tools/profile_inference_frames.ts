@@ -30,7 +30,6 @@ import { requestWebGpuDevice } from "../functional.ts";
 import type { EncodedModule } from "../functional.ts";
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
-import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { lowerGleamSources } from "../gleam.ts";
 import { readGleamStdlib } from "./gleam_stdlib_corpus.ts";
 import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
@@ -124,7 +123,7 @@ const [label, module] = gleamIndex >= 0
   : [Deno.args[0] ?? DEFAULT_SOURCE, await lazuliModule(Deno.args[0] ?? DEFAULT_SOURCE)];
 
 const device = await requestWebGpuDevice();
-const surface = semanticSurfaceFromModule(module);
+const surface = module;
 
 // Cumulative counters, so the last observation of the run carries the whole total.
 let profile: Uint32Array<ArrayBufferLike> = new Uint32Array(

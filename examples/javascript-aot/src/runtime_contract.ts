@@ -1,8 +1,5 @@
 import type { SurfaceTypeDeclaration } from "../../../src/functional/surface_builder.ts";
-import {
-  functionalStoreType,
-  MAXIMUM_STORE_LENGTH,
-} from "../../../src/functional/store_contract.ts";
+import { MAXIMUM_STORE_LENGTH, storeType } from "../../../src/functional/store_contract.ts";
 
 export const JAVASCRIPT_MAXIMUM_OBJECT_COUNT = MAXIMUM_STORE_LENGTH;
 export const JAVASCRIPT_MAXIMUM_BINDING_COUNT = MAXIMUM_STORE_LENGTH;
@@ -309,7 +306,7 @@ export function javascriptRuntimeTypeDeclarations(
       name: JAVASCRIPT_HEAP,
       fields: [
         { name: "nextIdentity", type: integerType, span },
-        { name: "objects", type: functionalStoreType(objectRecordType), span },
+        { name: "objects", type: storeType(objectRecordType), span },
       ],
       span,
     }],
@@ -342,7 +339,7 @@ export function javascriptRuntimeTypeDeclarations(
       name: JAVASCRIPT_BINDING_STORE,
       fields: [
         { name: "nextIdentity", type: integerType, span },
-        { name: "cells", type: functionalStoreType(bindingStateType), span },
+        { name: "cells", type: storeType(bindingStateType), span },
       ],
       span,
     }],

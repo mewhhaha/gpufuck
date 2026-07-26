@@ -72,6 +72,35 @@ Deno.test("Sweep rejects a shadowed local", () => {
   match(lowered.diagnostics[0]!.message, /already bound/);
 });
 
+/**
+ * Rule 5 is scoped per path, not per function. Sibling `match` arms are disjoint — only one is ever
+ * live — so reusing a binder across them threatens no scope chain, and the two branches of an `if`
+ * are disjoint for the same reason. Rejecting these was stricter than DESIGN requires.
+ */
+Deno.test("Sweep allows a binder reused across disjoint scopes", () => {
+  const arms = compileSweepSource(
+    "t",
+    `type T = One(value: Int) | Two(value: Int);
+fn pick(t: T) -> Int =
+  match t {
+    One(inner) -> inner + 1;
+    Two(inner) -> inner + 2;
+  };
+fn main() -> Int = pick(One(1));
+`,
+  );
+  ok(arms.ok, arms.ok ? undefined : arms.diagnostics[0]!.message);
+
+  const branches = compileSweepSource(
+    "t",
+    `fn choose(flag: Bool) -> Int =
+  if flag then let value: Int = 1 in value else let value: Int = 2 in value;
+fn main() -> Int = choose(true);
+`,
+  );
+  ok(branches.ok, branches.ok ? undefined : branches.diagnostics[0]!.message);
+});
+
 /** Rule 5 again: a parameter and a local cannot collide either. */
 Deno.test("Sweep rejects a local shadowing a parameter", () => {
   const lowered = compileSweepSource(

@@ -9,7 +9,6 @@ import {
   type TypeDeclaration,
 } from "../mod.ts";
 import { buildSurfaceModule, surface } from "../functional.ts";
-import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { inferTypes } from "../src/semantic/type_inference.ts";
 
@@ -153,7 +152,7 @@ Deno.test("host type inference treats runtime faults as dependency leaves", () =
     0,
   );
 
-  const inference = inferTypes(semanticSurfaceFromModule(module));
+  const inference = inferTypes(module);
 
   ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
   if (!inference.ok) return;
@@ -185,7 +184,7 @@ Deno.test("host type inference preserves Store element types through persistent 
     0,
   );
 
-  const inference = inferTypes(semanticSurfaceFromModule(module));
+  const inference = inferTypes(module);
 
   ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
   if (inference.ok) deepStrictEqual(inference.mainType, { kind: "boolean" });

@@ -269,44 +269,45 @@ Note the shader does _not_ share this algorithm: it has Rémy levels, epoch-mark
 persistent skip-list environment, and lazy instantiation. The two are differentially tested on
 results, not asymptotics.
 
-### 10. Nine exports never lost the prefix
+### 10. ~~Nine exports never lost the prefix~~ — done
 
-The 0.4.0 rename covered `Functional*` but not names _starting_ with lowercase `functional`, because
-the enumeration regex anchored on the capital. Still exported from `functional.ts`:
+All nine renamed: `f32x4`, `hostFieldRepresentationType`, `hostFieldType`,
+`resolvedCoreFingerprint`, `storeType`, `thunkType`, `wasmArenaDepth`, `wasmArenaInstance`,
+`wasmInstanceArenaDepth`.
 
-`functionalF32x4`, `functionalHostFieldRepresentationType`, `functionalHostFieldType`,
-`functionalResolvedCoreFingerprint`, `functionalStoreType`, `functionalThunkType`,
-`functionalWasmArenaDepth`, `functionalWasmArenaInstance`, `functionalWasmInstanceArenaDepth`.
+`resolvedCoreFingerprint` needed the private helper beside it renamed to `fingerprintResolvedCore`
+first — a same-module collision is why that one kept its prefix when the others lost theirs.
 
-These shipped in 0.4.0, so renaming them is a breaking change and belongs in the next one. The
-lesson is worth keeping: the miss was invisible to the compiler and to the tests, and only showed up
-when someone enumerated the actual export list at runtime — which is now the way to check.
+Eighteen `functional*` names remain, all module-private, so they are noise rather than API. Left
+alone deliberately: renaming them touches far more call sites for no consumer-visible gain.
 
-### 11. Sweep's flat-locals rule is stricter than it needs to be
+### 11. ~~Sweep's flat-locals rule is stricter than it needs to be~~ — done
 
-Rule 5 rejects any repeated binder name in a function, which forbids sibling `match` arms reusing
-one — `One(inner) -> ...; Two(inner) -> ...` is a diagnostic even though the arms are disjoint
-scopes and only one is ever live. The rule exists so name resolution is a table lookup; sibling arms
-do not threaten that, so the check should be per-path rather than per-function.
+Scoped per path. `checkFlatLocals` copies the live-name set for each `match` arm and each `if`
+branch, so `One(inner) -> ...; Two(inner) -> ...` is accepted while nested shadowing on one path is
+still a diagnostic. The pass never fed a table — its return value was discarded — so this changed
+what is legal and nothing about lowering. Tested both ways in `tests/sweep_test.ts`.
 
-Found by writing a nested match in `examples/sweep/` and having the compiler reject it, which is the
-right way to find it and an argument for the rule being enforced rather than described.
+### 12. ~~Frontend API inconsistency~~ — mostly done
 
-### 12. Frontend API inconsistency
+A packed-ABI limit now returns `G1004` at stage `limit` instead of escaping `lowerGleamSources` as a
+bare `RangeError`. That was the instance that actually bit: it killed a benchmark run on 2026-07-26,
+ending the batch and reporting nothing about the remaining modules.
 
-`parseGleamModule` and `lowerGleamSources` throw for some failures and return diagnostics for
-others. Surface packing and module linking raise. Every tool driving them in bulk has to wrap both
-in `try`/`catch`, and each unguarded throw ends a batch run and reports nothing about the remaining
-work. Pick one convention.
+Still inconsistent, and deliberately: `parseGleamModule` throws `GleamSyntaxError`. It is the
+lower-level entry point and `lowerGleamSources` already catches it, so callers going through the
+documented API get a result. Anyone reaching past it accepts the throw.
 
-### 13. Nullary Gleam entry allocates a Unit for nothing
+### 13. ~~Nullary Gleam entry allocates a Unit for nothing~~ — closed, not fixable alone
 
-A zero-argument Gleam function lowers to `Lambda(Unit)`, and a synthetic `$gleam/entry` module then
-applies it to a freshly constructed `$Unit`. Worth fixing on cleanliness grounds.
+Measured at 3 nodes and 1 definition, and the `Unit` is a static load rather than an allocation, so
+there was never a cost. It also cannot be removed independently: Core lambdas are unary, so a
+zero-argument Gleam function must become `Lambda(_)` and something has to apply it. Lowering the
+entry to a value instead would break a program that both calls `main()` and passes `main` as a
+value.
 
-It was investigated as a performance item and is **not** one: every nullary constructor compiles to
-`i32Const(offset); i64Load(0)`, so any program mentioning `None`, `Nil`, or an enum tag uses linear
-memory regardless of how the entry is built.
+Subsumed by item 3 — n-ary lambdas in Core give a genuine zero-arity function and this disappears
+with them.
 
 ## Not planned
 

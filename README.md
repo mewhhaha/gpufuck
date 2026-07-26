@@ -188,10 +188,9 @@ type is found. `let-rec-group` is the only node kind with no builder.
 Traps need no host capability: `surface.runtimeFault(message)` is a first-class node that infers as
 a fresh variable, so it typechecks wherever a diverging expression belongs.
 
-`F32x4` is name-based. Build it with `functionalF32x4`, splice in `FIXED_VECTOR_TYPE_DECLARATIONS`
-and `FIXED_VECTOR_DEFINITIONS`, and compile with `{ simd: "wasm-simd" }` for native `v128`
-instructions. Declaring your own four-field vector type instead gets you scalar-correct results and
-no SIMD.
+`F32x4` is name-based. Build it with `f32x4`, splice in `FIXED_VECTOR_TYPE_DECLARATIONS` and
+`FIXED_VECTOR_DEFINITIONS`, and compile with `{ simd: "wasm-simd" }` for native `v128` instructions.
+Declaring your own four-field vector type instead gets you scalar-correct results and no SIMD.
 
 ### Typing
 

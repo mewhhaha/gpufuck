@@ -126,7 +126,7 @@ async function sharedWasmArtifact(
   module: GpuModule,
   nodes: readonly CoreNode[],
 ): Promise<WasmArtifact> {
-  const fingerprint = await resolvedCoreFingerprint(module, nodes);
+  const fingerprint = await fingerprintResolvedCore(module, nodes);
   const cached = wasmArtifactsByResolvedCore.get(fingerprint);
   if (cached !== undefined) {
     wasmArtifactsByResolvedCore.delete(fingerprint);
@@ -171,7 +171,7 @@ async function sharedFuelInstrumentedWasm(
   module: GpuModule,
   nodes: readonly CoreNode[],
 ): Promise<WasmArtifact & { readonly executable: WebAssembly.Module }> {
-  const fingerprint = await resolvedCoreFingerprint(module, nodes);
+  const fingerprint = await fingerprintResolvedCore(module, nodes);
   const cached = instrumentedWasmByResolvedCore.get(fingerprint);
   if (cached !== undefined) {
     instrumentedWasmByResolvedCore.delete(fingerprint);
@@ -204,7 +204,7 @@ function evictOldestResolvedCoreArtifacts<Value>(
   }
 }
 
-async function resolvedCoreFingerprint(
+async function fingerprintResolvedCore(
   module: GpuModule,
   nodes: readonly CoreNode[],
 ): Promise<string> {
@@ -232,10 +232,10 @@ async function resolvedCoreFingerprint(
   );
 }
 
-export async function functionalResolvedCoreFingerprint(
+export async function resolvedCoreFingerprint(
   module: GpuModule,
 ): Promise<string> {
-  return await resolvedCoreFingerprint(module, await module.readCoreNodes());
+  return await fingerprintResolvedCore(module, await module.readCoreNodes());
 }
 
 async function sha256(value: string): Promise<string> {
