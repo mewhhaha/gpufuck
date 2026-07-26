@@ -566,10 +566,45 @@ And the definition that capped the earlier figure is not a bottleneck at this gr
 The unit that looked atomic is one of the widest things in the corpus.
 
 22,101 nodes on the widest level is more than the concurrent lanes on this adapter, so that level
-alone saturates it. This does not make single-program latency free — the 11.3 ms dispatch floor
-above still applies, and unification is a separate problem from generating the constraints — but it
-disposes of the claim that a normal program has nothing wide enough to be worth a GPU. It has 574x,
-and the earlier 1.9x was an artifact of asking about the wrong thing.
+alone saturates it.
+
+### How typical is that? Width is a function of program size
+
+574x is an average over a very skewed distribution, and the average flatters it. Measured across
+five real programs, reporting the _work-weighted_ view — what share of nodes sit in levels wide
+enough to be worth dispatching:
+
+| Program            |  Nodes | Depth | Mean | Median | >32 | >256 | >1024 |
+| ------------------ | -----: | ----: | ---: | -----: | --: | ---: | ----: |
+| `lazuli proofs`    |     43 |     7 |    6 |      4 |  0% |   0% |    0% |
+| `sweep editor`     |    718 |    17 |   42 |     24 | 74% |  42% |    0% |
+| `sweep vim`        |    923 |    25 |   37 |     12 | 84% |  45% |    0% |
+| `lazuli brainfuck` |  1,128 |    32 |   35 |      6 | 74% |  49% |    0% |
+| Gleam stdlib       | 50,390 |    87 |  579 |     24 | 99% |  97% |   79% |
+
+The median level is 4–24 nodes wide in every one of them, the stdlib included, so 574x is not a
+level anyone will see — it is 50,000 nodes divided by a depth that barely moved.
+
+Two things generalise, and they point the same way:
+
+**Most of the _work_ is in wide levels even when most _levels_ are narrow.** 74–99% of nodes sit in
+levels wider than a warp for every program above 43 nodes. Narrow levels are numerous and cheap; the
+wide ones hold the nodes.
+
+**Width grows much faster than depth.** 70x the nodes buys 5.1x the depth, so mean width grows about
+14x. A bigger program is _more_ parallel, not less — the opposite of the usual intuition about
+critical paths.
+
+Which puts the crossover in the thousands of nodes. A 1,000-node module has levels of a few hundred
+at best, one warp's worth, so a GPU is pointless for it whatever the dispatch cost. A 50,000-node
+module has 79% of its work in levels above 1,024 and genuinely saturates the adapter. That is the
+same conclusion the batch result reached from the other side — the GPU needs volume, and it does not
+care whether the volume arrives as one large program or a thousand small ones.
+
+None of this makes single-program latency free: the 11.3 ms dispatch floor still applies, and
+unification is a separate problem from generating the constraints. But it disposes of the claim that
+a normal program has nothing wide enough to be worth a GPU, and the earlier 1.9x was an artifact of
+asking about the wrong granularity.
 
 ## Kill criteria
 

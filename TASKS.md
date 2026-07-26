@@ -155,9 +155,12 @@ is the retarget's original premise and still the largest win available (10–50�
 (6) first — reducing the work is worth more than parallelising work that should not exist, and the
 two multiply.
 
-**There is far more width than the definition-level figure suggested.** Node-level depth on the
-Gleam stdlib is 87 with an average width of 574 and a widest level of 22,101 — more than the
-concurrent lanes on this adapter. The pieces exist and three of them are already established here:
+**There is far more width than the definition-level figure suggested, and it scales with program
+size.** Node-level depth on the Gleam stdlib is 87 with a mean width of 579 and a widest level of
+22,101 — more than the concurrent lanes on this adapter. Across five programs, 74–99% of nodes sit
+in levels wider than a warp, and width grows ~14x for 70x the nodes, so bigger programs are more
+parallel. The crossover is in the thousands of nodes: a 1,000-node module tops out a few hundred
+wide and is not worth a dispatch. The pieces exist and three of them are already established here:
 
 - **Constraint generation is a map.** A node's constraints follow from its children's, and resolved
   Core is already a flat array of fixed-size records with every child at a higher index, so a
