@@ -116,11 +116,17 @@ per-package cost is a floor; gpufuck amortizes to roughly 630 µs per module. If
 project, use a normal compiler. If you are compiling a thousand user programs — a playground, a
 package registry, a CI corpus — this is the interesting shape.
 
-Single-module latency is genuinely bad, and the cause is known: GPU inference is 96% of that
-compile, it runs one lane of a serial state machine, and its transition count scales as n^1.68.
+Single-module latency is the weak case, and it improved 8.9× on 2026-07-26 — the Gleam standard
+library went from 3,956 ms to 442.1 ms, or 27× off `gleam build` to **3.0×**. None of that came from
+making the GPU wider. Two defects accounted for all of it: a union-find that walked variable chains
+without ever writing back, and a pattern compiler that copied the rest of the match into every
+constructor arm, which alone made 64% of that corpus duplicated nodes.
 
-At batch scale the GPU is no longer the bottleneck at all — the split is roughly 22% frontend, 15%
-GPU, 63% WebAssembly emission. [TASKS.md](TASKS.md) is the ranked list of what to do about that.
+What remains is the thing the project was always about. GPU inference is 322.7 ms of that 442.1, and
+it still runs **one lane** of a serial state machine. Parse and lower together are 119.4 ms, already
+under Gleam's entire 146 ms build, so a free GPU phase would win outright — the bar is 12× on one
+kernel. [BASELINE.md](BASELINE.md) records what has been measured and ruled out;
+[TASKS.md](TASKS.md) ranks what is left.
 
 **Does it produce correct code?** 547 of Gleam's own 1,521 standard-library tests compile to
 WebAssembly and pass upstream's assertions — 97% of those needing no JavaScript FFI adapter. Run it

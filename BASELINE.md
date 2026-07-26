@@ -989,6 +989,73 @@ it came from making the GPU wider. It came from a union-find that never wrote ba
 compiler that copied the rest of the match into every constructor arm — both defects, not algorithm
 limits. The single-lane kernel that this project was retargeted to fix is still single-lane.
 
+## 2026-07-26 — re-measured premises on the deduplicated corpus, and there are no cheap wins left
+
+Every bucket share and parallelism figure on record was taken on the 49,964-node corpus, 64% of
+which turned out to be duplicated arm bodies. Re-taken on the real 17,718-node program.
+
+**Transition count is linear, now confirmed on a real corpus.** 405,343 transitions over 17,718
+nodes is **22.9 per node**, against 23.5 on a 1,128-node Lazuli program — 44x the nodes for a 0.97x
+change. The n^1.68 curve is gone for good, and the earlier 122.3 and 25.3 figures were per
+_duplicated_ node.
+
+**The profile is flat.** No bucket is worth a dedicated fix:
+
+| Bucket          | Share |
+| --------------- | ----: |
+| Unify           | 18.5% |
+| Prune           | 15.3% |
+| Expression      | 15.3% |
+| phase:validate  |  7.7% |
+| Constructor     |  5.2% |
+| SchemaVisit     |  5.2% |
+| phase:tarjan    |  5.1% |
+| everything else | 27.7% |
+
+Grouped: generate 31.0%, solve 49.3%, overhead 19.7%. The generate/solve ratio caps a
+generation-only parallel pass at **1.45x**, so that idea stays dead.
+
+**Definition-level parallelism is 3.38x, up from 1.9x.** The recorded 1.9x was real but was measured
+when `list::sequences` was 52% of the corpus and 97% of its critical path — and that definition was
+mostly duplication. Now:
+
+| Measure                 |     Value |
+| ----------------------- | --------: |
+| Definitions             |     1,039 |
+| SCC components          |     1,035 |
+| Waves                   |        21 |
+| Total work              |    17,718 |
+| Critical path           |     5,242 |
+| Available parallelism   | **3.38x** |
+| Widest wave             |       248 |
+| Largest component       |         3 |
+| Critical path as % work |     29.6% |
+
+Reproduce with `deno task profile:frames --gleam <checkout>`, which now reports both.
+
+**It is not dispatch-bound, contrary to what the per-transition cost suggested.** 796 ns per
+transition overall against the 568 ns recorded at 6.1M transitions looked like fixed cost taking
+over, so the round trips were counted: **2 per compile, ~23 ms, 7% of 323 ms.** The rest is genuine
+compute plus roughly 70 ms of per-compile setup that no longer amortizes over 15x more work. Not a
+lever.
+
+### What this leaves
+
+Single-module latency now breaks down as parse 80.8 + lower 38.6 + GPU 322.7 = 442.1 ms, so **the
+CPU phases alone (119.4 ms) already beat `gleam build`'s entire 146 ms.** A free GPU phase wins
+outright. GPU inference is therefore not one target among several — it is the only one — and it
+needs to reach **under 26.6 ms, which is 12x.**
+
+Definition-level parallelism cannot get there: 3.38x takes 322.7 ms to ~95 ms, for a 215 ms total
+that still loses. It would also need all 21 waves encoded into one command buffer, since 21 round
+trips is 237 ms on its own. So the remaining lever is **node-level parallel inference inside a
+single dispatch**, which is the hard problem, and nothing cheaper is left standing:
+
+- Transition count: linear, flat profile, no dominant bucket.
+- Warp shape: measured flat across 1/8/32/64.
+- Dispatch count: 2, worth 7%.
+- Generation as a parallel map: capped at 1.45x by its own share.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

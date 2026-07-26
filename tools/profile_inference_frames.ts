@@ -1,9 +1,8 @@
 /**
  * Where the inference transitions actually go.
  *
- * BASELINE records 6,112,582 transitions costing 4,048 ms — 96% of GPU compile time — as a single
- * scalar. A total says nothing about whether the algorithm can be re-encoded, so this splits it by
- * the frame kind each transition was charged to, and groups those kinds by what a
+ * The transition count is a single scalar, which gives a total and says nothing about shape. This
+ * charges every transition to the frame kind that did it, and groups those kinds by what a
  * generate-then-solve encoding would do with them:
  *
  *   - **generate**: reads a Core node and its children and emits a constraint. Fixed work per node,
@@ -11,9 +10,14 @@
  *   - **solve**: union-find, unification, occurs, generalize, instantiate. The fold.
  *   - **overhead**: validation, Tarjan, serialization, epoch clearing. Neither, and mostly fixed.
  *
- * The split is the stop-gate on TASKS "re-encode inference": if generation is a thin slice, then
- * making it parallel cannot pay however wide the dispatch, and the effort belongs in the solver
- * instead.
+ * Two findings came out of it, both in BASELINE. Generation is far too small a share for a parallel
+ * generation pass to pay — it was 11.4% and is now 31.0%, an Amdahl ceiling of 1.45x. And the buckets
+ * located the whole n^1.68 curve in eight visitors that walked variable link chains without ever
+ * writing back, which was worth 4.83x once fixed.
+ *
+ * Also reports the round-trip count, because at ~11.3 ms each they stop being a rounding error once
+ * the transition count falls far enough, and definition-level available parallelism, whose recorded
+ * 1.9x was measured on a corpus that was 64% duplicated nodes.
  *
  * Usage:
  *   deno task profile:frames                          # the default Lazuli source
@@ -29,6 +33,8 @@ import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
 import { type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
 import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
+import { DEFINITION_WORD_LENGTH, DefinitionWord } from "../src/semantic/abi.ts";
+import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
 import type { GpuCompilationDispatchObservation } from "../src/semantic/gpu_type_inference_contract.ts";
 import {
   INFERENCE_PROFILE_BUCKET_NAMES,
@@ -181,7 +187,15 @@ let profile: Uint32Array<ArrayBufferLike> = new Uint32Array(
 let transitions = 0;
 let semanticSteps = 0;
 
+/**
+ * Round trips per compile. Each one costs ~11.3 ms in Deno even with nothing submitted, so once the
+ * transition count falls far enough the dispatch count stops being a rounding error and starts being
+ * the bill.
+ */
+let dispatches = 0;
+
 async function compileOnce(compiler: GpuSemanticCompiler): Promise<number> {
+  dispatches = 0;
   const started = performance.now();
   const compilation = await compiler.compile(
     surface,
@@ -190,6 +204,7 @@ async function compileOnce(compiler: GpuSemanticCompiler): Promise<number> {
     undefined,
     {
       observeDispatch: (observation: GpuCompilationDispatchObservation) => {
+        dispatches += 1;
         if (observation.inferenceTransitions < transitions) return;
         profile = observation.inferenceProfile;
         transitions = observation.inferenceTransitions;
@@ -218,6 +233,35 @@ for (let repetition = 0; repetition < 3; repetition++) {
 samples.sort((left, right) => left - right);
 const elapsed = samples[1]!;
 
+/**
+ * Definition-level available parallelism, from the resolved Core the GPU produced.
+ *
+ * Reported here rather than in its own tool because it shares this one's premise: the recorded 1.9x
+ * was measured when one definition was 52% of the corpus, and that definition turned out to be
+ * mostly duplicated arm bodies. Both numbers have to be re-read together or neither means anything.
+ */
+const parallelismCompilation = await productionCompiler.compile(
+  surface,
+  module.sourceByteLength,
+  { maximumSteps: 20_000_000, maximumStepsPerDispatch: 524_288 },
+  undefined,
+);
+if (!parallelismCompilation.ok) {
+  throw new Error(`compilation failed: ${parallelismCompilation.diagnostics[0]?.message}`);
+}
+const coreNodes = await parallelismCompilation.module.readCoreNodes();
+const roots = Array.from({ length: surface.definitionCount }, (_, definition) => {
+  const root = surface.definitionWords[
+    definition * DEFINITION_WORD_LENGTH + DefinitionWord.RootNode
+  ];
+  if (root === undefined) {
+    throw new Error(`surface omits the root node for definition ${definition}`);
+  }
+  return root;
+});
+const parallelism = semanticDefinitionParallelismProfile(roots, coreNodes);
+parallelismCompilation.module.destroy();
+
 const profilingCompiler = await GpuSemanticCompiler.create(device, { profileInference: true });
 const profiledMilliseconds = await compileOnce(profilingCompiler);
 device.destroy();
@@ -235,6 +279,11 @@ console.log(
   `${transitions.toLocaleString()} inference transitions + ${semanticSteps.toLocaleString()} ` +
     `semantic steps in ${elapsed.toFixed(0)} ms (median of 3, production kernel; ` +
     `${profiledMilliseconds.toFixed(0)} ms with counters)`,
+);
+console.log(
+  `${dispatches} round trips at ~11.3 ms each is ~${(dispatches * 11.3).toFixed(0)} ms of the ` +
+    `${elapsed.toFixed(0)} ms; ${(elapsed * 1e6 / Math.max(1, transitions)).toFixed(0)} ns per ` +
+    `transition overall`,
 );
 if (counted !== transitions) {
   console.log(
@@ -269,3 +318,17 @@ console.log(
     `${(totals.generate / Math.max(1, module.nodeCount)).toFixed(1)} generate and ` +
     `${(totals.solve / Math.max(1, module.nodeCount)).toFixed(1)} solve`,
 );
+
+console.log("\n  definition-level parallelism (the premise under submodule splitting)");
+console.log(`    definitions            ${parallelism.definitionCount}`);
+console.log(`    SCC components         ${parallelism.componentCount}`);
+console.log(`    waves                  ${parallelism.waveCount}`);
+console.log(`    total work             ${parallelism.totalWork.toLocaleString()} nodes`);
+console.log(`    critical path          ${parallelism.criticalPathWork.toLocaleString()} nodes`);
+console.log(`    available parallelism  ${parallelism.availableParallelism.toFixed(2)}x`);
+console.log(`    widest wave            ${parallelism.maximumWavefrontDefinitions} definitions`);
+console.log(`    largest component      ${parallelism.largestComponentDefinitions} definitions`);
+const criticalShare = parallelism.totalWork === 0
+  ? 0
+  : (parallelism.criticalPathWork / parallelism.totalWork) * 100;
+console.log(`    critical path is       ${criticalShare.toFixed(1)}% of all work`);

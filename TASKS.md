@@ -9,103 +9,116 @@ numbers below were taken on one machine (Ryzen 7 7800X3D, RTX 4080 SUPER, Deno 2
 them are already the second or third version of a number that was wrong the first time. See
 [BASELINE.md](BASELINE.md) for how each was taken.
 
+## Closed on 2026-07-26
+
+Numbers stay stable so prose elsewhere still resolves; the measurements live in
+[BASELINE.md](BASELINE.md).
+
+- **0. Tail calls lost inside `let`-bound lambdas.** A live correctness bug — guarded Gleam
+  overflowed the stack at 100,000 iterations because `#containsTailCall` stopped at `Lambda`. Fixed
+  by contifying join points: a `let`-bound lambda that is only ever tail-called becomes a wasm
+  `block` label, not a closure. Note that fixing codegen alone did nothing; the analysis has to
+  descend into the join body too, or the function is never registered as a loop at all.
+- **1. Multi-subject `case` with or-patterns exploded.** Body duplication — `lowerPattern` handed
+  the whole rest of the match to every non-matching constructor arm, `(4^2n - 1)/3` copies per arm.
+  One join point per pattern sequence makes it linear: 19,134 nodes to 163 at three arms, and four
+  arms compiles instead of exceeding the ABI cap. **The Gleam stdlib corpus fell from 49,964 nodes
+  to 17,718** — 64.5% was duplicated arm bodies. `deno task
+  measure:or-patterns`.
+- **6. Transition count scaled as n^1.68.** Eight visitors walked variable link chains one charged
+  transition per hop and never wrote back. Path halving plus the smaller corpus took 6,112,586
+  transitions to 405,343, and per-node cost is now flat at 22.9 against 23.5 on a program 44x
+  smaller. The profile that remains has no bucket above 18.5%.
+
 ## Now
 
-### 0. ~~Tail calls are lost inside `let`-bound lambdas~~ — done
+### 7. Parallelise the inference kernel — node-level, inside one dispatch
 
-**Fixed by contification.** `joinPointLambda` recognises a `let`-bound one-parameter lambda that
-ignores its parameter and is only ever tail-called, and `compileTailPosition` emits it as a wasm
-`block` label rather than a closure — shared, and still in the enclosing function's tail position.
-The guarded countdown below now completes 100,000 iterations; regression test
-`keeps guarded Gleam
-scalar recursion stack safe`. Note that fixing codegen alone did nothing:
-`#containsTailCall` has to descend into the join body too, or the function is never registered as a
-loop at all.
+`type_inference_shader.ts` is `@compute @workgroup_size(1)` — one lane of roughly ten thousand, now
+running 405,343 transitions. **This is the only lever left**, and the bar is exact: parse and lower
+are 119.4 ms and already beat `gleam build`'s entire 146 ms, so a free GPU phase wins outright and
+GPU inference has to fall from 322.7 ms to **under 26.6 ms — 12x.**
 
-The bug, for the record: `#containsTailCall` in `src/functional/wasm_function_analysis.ts` descends
-through `Let`, `Case`, `CaseArm` and `If` but stops at `Lambda`, so a self-tail-call inside a
-`let`-bound lambda compiles to a stack-growing closure call. `lowerSequentialCase` binds every later
-arm to a fallback lambda, which means **guarded Gleam already loses tail recursion**:
+Everything cheaper has been measured and ruled out:
 
-```gleam
-fn countdown(n, total) {
-  case n {
-    m if m <= 0 -> total
-    _ -> countdown(n - 1, total + 1)
-  }
-}
-```
+| Lever                         | Result                                 |
+| ----------------------------- | -------------------------------------- |
+| Transition count              | linear; flat profile, no bucket >18.5% |
+| Warp shape (`workgroup_size`) | flat across 1 / 8 / 32 / 64            |
+| Dispatch count                | 2 per compile, 7% of the time          |
+| Generation as a parallel map  | capped at 1.45x by its share           |
+| Definition-level waves        | 3.38x, reaches 215 ms and still loses  |
 
-overflows the stack at 100,000 iterations on `main` today. Valid Gleam, silently miscompiled.
+So it has to be **node-level**, and it has to fit in one dispatch. What is established:
 
-The fix is contification: recognise `let f = \_ -> B in E` where every reference to `f` in `E` is a
-saturated call in tail position, and compile calls to `f` as jumps rather than closure calls, so
-tail calls inside `B` stay tail calls of the enclosing function. This is a prerequisite for item 1,
-which needs exactly that shape.
+- **Node-level width is real and grows with program size.** Depth 87 on the pre-fix stdlib, mean
+  width 579, widest level 22,101. Across five programs 74–99% of nodes sit in levels wider than a
+  warp, and width grows ~14x for 70x the nodes. Worth re-measuring on the deduplicated corpus.
+- **Unification can be parallel.** The capability spike in ARCHITECTURE §9 verified that
+  `atomicCompareExchangeWeak` union-find converges under contention. That is the hard primitive and
+  it is not speculative — and it is the 49.3%, not the 31.0%.
+- **Divergence is bucketable.** Every Core node carries a tag; grouping by tag before dispatch gives
+  each warp one node kind instead of eleven.
 
-### 1. ~~Multi-subject `case` with or-patterns explodes~~ — done, 2.8x smaller corpus
+**One constraint dominates the design.** A GPU round trip in Deno costs 11.3 ms even when the shader
+does nothing. One dispatch per dependency wave would spend 21 × 11.3 = 237 ms on the Gleam stdlib
+before computing anything — worse than `gleam build` entirely. So the whole wavefront has to live
+inside a single dispatch, as a persistent kernel with in-kernel synchronisation, or the work has to
+move off Deno. Anything that dispatches per wave is dead on arrival regardless of kernel quality.
 
-**Fixed.** It was body duplication: `lowerPattern` handed the entire rest of the match to every
-non-matching constructor arm of a test, compounding at every level of a nested pattern —
-`(4^2n - 1)/3` copies of each arm body. Binding that continuation to one join point per pattern
-sequence makes it linear, and item 0's contification means the join point costs nothing at runtime.
+Three entanglements found by reading the kernel would have to be undone, and none of them is about
+the type system:
 
-| Arms | Before | After |
-| ---: | -----: | ----: |
-|    1 |     94 |    63 |
-|    2 |  1,214 |   113 |
-|    3 | 19,134 |   163 |
-|    4 | throws |   213 |
+- **Generation is not bottom-up.** Expected types propagate downward through frame word 11, and
+  `Apply` stage 41 branches on the _pruned_ callee's kind. Which constraint to emit depends on
+  having solved earlier ones.
+- **Allocation order is load-bearing.** `Apply` records `state.type_top` watermarks and hands them
+  to unify to elide the occurs check, encoding sequential allocation order as a semantic invariant.
+- **There is backtracking inside "generation."** The rigid-refinement trail is a mutable undo log
+  with rollback checkpoints taken at case-arm entry.
 
-Four arms now compiles instead of exceeding the 65,536-node ABI cap, so the correctness half is
-closed too. Reproduce with `deno task measure:or-patterns`.
+### 2. Submodule splitting is 3.38x, and that is not enough
 
-**The Gleam stdlib corpus shrank from 49,964 nodes to 17,718** — 64.5% of it was duplicated arm
-bodies, more than the 52% estimated from `list::sequences` alone. Inference transitions fell
-1,265,365 → 405,343 and the emitted Wasm 1,745 KB → 999 KB. Every per-node figure recorded before
-this was measured against a corpus 2.8x larger than the program it claimed to compile.
+Re-measured after item 1. The recorded 1.9x was real but was taken when `list::sequences` was 52% of
+the corpus and 97% of its critical path — and that definition was mostly duplicated arm bodies. On
+the real 17,718-node program:
 
-Lowering got _faster_, 6.7x on that corpus, because there are far fewer nodes to build.
+| Measure                 |     Value |
+| ----------------------- | --------: |
+| Definitions             |     1,039 |
+| SCC components          |     1,035 |
+| Waves                   |        21 |
+| Critical path           |     5,242 |
+| Available parallelism   | **3.38x** |
+| Widest wave             |       248 |
+| Largest component       |         3 |
+| Critical path as % work |     29.6% |
 
-Item 2 below was waiting on this; its available-parallelism numbers now want re-measuring against
-the smaller corpus.
+Reproduce with `deno task profile:frames --gleam <checkout>`. Mutual recursion is not the obstacle —
+the largest SCC is 3 definitions — and `definition_wavefront.ts` already computes the schedule while
+being used by nothing in the compiler.
 
-### 2. Splitting a module into submodules caps at 1.9x today
+**But 3.38x does not win.** GPU inference is 322.7 ms of a 442.1 ms compile and needs to reach 26.6
+ms to beat `gleam build`; 3.38x takes it to ~95 ms for a 215 ms total. It would also need all 21
+waves encoded into a single command buffer, because 21 round trips is 237 ms on its own. So this is
+the wrong granularity for the goal, and item 7's node-level width is where the parallelism actually
+is.
 
-A natural idea, since batching 1,024 modules beats `gleam build` by 17x while one large module loses
-by 33x: have the frontend split large modules and batch the pieces. Same node count, 7.6x apart.
-
-The dependency structure permits it — 21 shallow waves, 1,035 SCC components, largest SCC of 3, so
-mutual recursion is not the obstacle, and `definition_wavefront.ts` already computes the schedule
-and is used by nothing in the compiler. Definition-level available parallelism is 1.9x, because one
-definition is 52% of the corpus and a definition cannot be split across submodules.
-
-**That 1.9x is the wrong granularity for anything except submodule splitting.** Constraint
-generation works on nodes, not definitions, and at node level the same corpus is **574x wide** at a
-depth of 87 — including `list::sequences`, the definition that caps the 1.9x, which is itself 65
-levels deep and roughly 400x wide inside. See BASELINE.md. Item 7 is where that width is worth
-collecting; splitting into submodules is not.
-
-So the order is: fix the explosion, re-measure available parallelism, and only then decide whether
-wave-scheduled submodule batching is worth building. Inference across waves also needs each
-submodule to declare the types it imports, which is what the earlier wave infers — a sequence of
-batches, each internally parallel, not one flat batch.
+What it would still be good for is throughput rather than latency: routing one large module through
+the batch path that already beats `gleam build` by 17x. That remains untested.
 
 **Build the consumer before the supply.** Restructuring a _language_ to be splittable is tempting
 and measurably works on the graph — the same 40-term Lazuli program goes from 1.0x to 13.3x
 available parallelism by bounding definition size and adding a balanced reduction tree. But compile
 time across those three shapes is 13.0, 13.3, and 14.0 ms: the tree is _slower_, because nothing
-consumes the structure and more definitions is more work for the single lane. Two things could
-consume it — submodule batching through the path that already beats `gleam build` by 17x, or
-parallel inference across definitions (item 7). Until one exists, frontend restructuring buys
-nothing.
+consumes the structure and more definitions is more work for the single lane.
 
-An untested third lever, worth knowing before designing a language for this: wave sequencing exists
-only because inference must flow a type from a definition to its users. Mandatory (or cached)
-top-level annotations cut that edge, so every definition could be checked in one flat batch with no
-waves at all. That is the trade Go and Zig make, Lazuli already has the annotation syntax, and the
-current wavefront analysis would not credit it because it derives dependencies from references
-rather than from types.
+An untested lever worth knowing before designing a language for this: wave sequencing exists only
+because inference must flow a type from a definition to its users. Mandatory or cached top-level
+annotations cut that edge, so every definition could be checked in one flat batch with no waves at
+all. That is the trade Go and Zig make, Lazuli already has the annotation syntax, and the current
+wavefront analysis would not credit it because it derives dependencies from references rather than
+from types.
 
 ### 3. Add n-ary lambda and application to Core
 
@@ -137,10 +150,15 @@ within noise. Every rule needs a backend change to pay, prevents a pathology rat
 accelerating the common case, or does not touch this pipeline. Item 3 and a checking-only kernel are
 what would make it pay; the frontend is ready and waiting for them.
 
-### 4. WebAssembly emission is 63% of batch cost
+### 4. WebAssembly emission is 63% of batch cost — premise needs re-measuring
 
-At batch 1,024 the split is 22% frontend, 15% GPU, **63% Wasm emission** (442 µs/module). It is also
-mostly _fixed_ per module: `40 + 2` is 8 Core nodes and still emits a 1,244-byte code section,
+**Re-measure before starting.** That 63% was taken before the pattern-lowering fix cut the Gleam
+stdlib's node count by 2.8x and its emitted Wasm from 1,745 KB to 999 KB. On the single-module path
+emission is now 7.5 ms of 442.1 ms. The batch corpus is synthetic Lazuli with no or-patterns, so its
+split may be unchanged — but nobody has looked.
+
+At batch 1,024 the split was 22% frontend, 15% GPU, **63% Wasm emission** (442 µs/module). It is
+also mostly _fixed_ per module: `40 + 2` is 8 Core nodes and still emits a 1,244-byte code section,
 because every module carries its own allocator, free list, and thunk-forcing runtime. The code
 section is 91–98% of every artifact.
 
@@ -176,85 +194,6 @@ is 22% of batch cost, and it is the hard floor on single-module latency — pars
 what would need to be a 73 ms budget to beat Gleam by 2×.
 
 ## Next
-
-### 6. ~~Transition count scales as n^1.68~~ — done, 4.83x
-
-**Fixed.** Eight visitors chased variable link chains one charged transition per hop and never wrote
-back, so every chain was rewalked. One shared `halve_variable_link` helper (path halving) took the
-Gleam stdlib from **6,112,586 transitions to 1,265,365** and the GPU phase from 3,806 ms to 1,019.6
-ms. Per-node cost is 122.3 → 25.3, and the curve is now linear: 23.5 transitions per node at 1,128
-nodes against 25.3 at 49,964. Against `gleam build`, 25x → **8.0x**; against our own CPU oracle,
-4.7x → **1.3x**. Full numbers and the A/B in BASELINE.
-
-What is left in this area, in order:
-
-**6a. Union by rank is still missing.** Halving shortens chains but orientation is still decided by
-which side happens to be a variable. Cheap to add, unmeasured, and probably small now.
-
-**6b. `Apply` stage 41 chases links inline in its own frame** rather than through the shared helper.
-It fell 2.3x for free when the other eight compressed the chains it walks; routing it through
-`halve_variable_link` too would compress them itself.
-
-**6c. Instantiation still copies the scheme graph per use.** `InstantiateVisit` fell 65x to 3.7%, so
-what remained after the chase was removed is small — the 50.0% was almost entirely chain-walking,
-not copying. Reprofile before spending anything here; the premise mostly evaporated.
-
-The profile is now flat — Unify 19.7%, Prune 16.2%, Expression 15.5% — with no dominant term. The
-next real win is occupancy (item 7), not further transition-count work.
-
-### 7. Parallelise the inference kernel — but not by splitting generation from solving
-
-`type_inference_shader.ts` is `@compute @workgroup_size(1)` — one lane of roughly ten thousand. This
-is the retarget's original premise and now the largest win available outright: item 6 removed the
-work that should not have existed, and what is left is 1.27M transitions still running on one lane.
-
-**The generate-then-solve re-encoding was proposed and killed by measurement before it was built.**
-The plan was one wide dispatch emitting constraints, then a wavefront solve. Profiling said
-generation was **11.4%** of transitions and solving 81.2%, an Amdahl ceiling of **1.13x**. After
-path halving (item 6) the split is 35.0/49.3 and the ceiling is **1.54x** — better, because the
-solve shrank 8x rather than because generation improved, and still not a reason to build it. Do not
-rebuild this argument without re-reading BASELINE; it was convincing and it was wrong.
-
-Three further entanglements would have to be undone even if the split did pay, all found by reading
-the kernel rather than by measurement:
-
-- **Generation is not bottom-up.** Expected types propagate _downward_ through frame word 11, and
-  `Apply` stage 41 branches on the _pruned_ callee's kind. Which constraint to emit depends on
-  having solved earlier ones.
-- **Allocation order is load-bearing.** `Apply` records `state.type_top` watermarks and hands them
-  to unify to elide the occurs check. That encodes sequential allocation order as a semantic
-  invariant and does not survive a parallel map.
-- **There is backtracking inside "generation."** The rigid-refinement trail is a mutable undo log
-  with rollback checkpoints taken at case-arm entry.
-
-What survives from the original argument:
-
-- **Node-level width is real and grows with program size.** Depth 87 on the Gleam stdlib, mean width
-  579, widest level 22,101. Across five programs, 74–99% of nodes sit in levels wider than a warp,
-  and width grows ~14x for 70x the nodes. The crossover is in the thousands of nodes.
-- **Unification can be parallel.** The capability spike in ARCHITECTURE §9 verified that
-  `atomicCompareExchangeWeak` union-find converges under contention. That is the hard primitive and
-  it is not speculative — and it is the 81.2%, not the 11.4%.
-- **Divergence is bucketable.** Every Core node carries a tag; grouping by tag before dispatch gives
-  each warp one node kind instead of eleven.
-
-**Reshaping lanes is not the lever — measured and reverted.** Packing modules into workgroups
-(`workgroup_size` 8, 32 and 64 against the current 1) is flat to within noise on the batch corpus,
-even though those modules are structurally identical and so are the best case for it. Both shapes
-launch the same thread count: the unpacked one hides latency with more warps exactly as well as the
-packed one fills lanes, and packing worsens the access pattern because each lane's workspace arena
-sits at a widely separated base. Batch parallelism is therefore already saturated at N=1024, and the
-only parallelism left is **inside one module**. See BASELINE.
-
-**One constraint dominates the design.** A GPU round trip in Deno costs 11.3 ms even when the shader
-does nothing (measured, BASELINE.md). One dispatch per dependency wave would spend 21 × 11.3 = 237
-ms on the Gleam stdlib before computing anything — worse than `gleam build`'s entire 146 ms. So the
-whole wavefront has to live inside a single dispatch, as a persistent kernel with in-kernel
-synchronisation, or the work has to move off Deno. Anything that dispatches per wave is dead on
-arrival regardless of how good the kernel is.
-
-And the payoff shows up in throughput, not latency: even a free inference phase leaves parse, lower,
-and emit at 152 ms against Gleam's 146 ms total.
 
 ### 8. The Gleam FFI adapter
 

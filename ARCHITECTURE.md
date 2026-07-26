@@ -234,10 +234,15 @@ high. A faster parser would outweigh the entire retarget.
 Throughput inverts the verdict, and both directions are real. `deno task bench:gleam-batch` runs a
 thousand independent Gleam modules end to end — parse, lower, GPU compile, emit Wasm — at 697
 µs/module against the 11 ms per-package floor of `gleam build`, which has no cross-package batching:
-**15.8×** faster. The same pipeline on one large module is **33×** slower than Gleam. At batch 1024
-the split is 22% frontend, 15% GPU, 63% Wasm emission, so on that workload the GPU is the cheapest
-phase and codegen is the one to attack. Which number governs depends entirely on whether the task is
-"build this project" or "compile these thousand programs".
+**15.8×** faster. At batch 1024 the split is 22% frontend, 15% GPU, 63% Wasm emission, so on that
+workload the GPU is the cheapest phase and codegen is the one to attack — though that split predates
+the 2026-07-26 node-count fix and wants re-measuring.
+
+The same pipeline on one large module was 33× slower than Gleam and is now **3.0×**, after removing
+a non-compressing union-find and a pattern compiler that duplicated arm bodies. On that path the GPU
+is emphatically not the cheapest phase: it is 322.7 ms of 442.1, against 119.4 ms for parse and
+lower combined. Which number governs depends entirely on whether the task is "build this project" or
+"compile these thousand programs".
 
 ## 7. External consumers
 
@@ -303,6 +308,43 @@ bounded-Wasm path throws a `TypeError` for the GPU-only `maximumStepsPerDispatch
 nowhere to take a runner `init` — such a program must go through `runWasmModule` instead. Its step
 budget is capped at 1,000,000, below the evaluator's configurable fuel.
 
+### Tail calls, loops, and contified join points
+
+WebAssembly's tail-call proposal is not used; the backend emits only `call` and `call_indirect`.
+Stack safety therefore rests entirely on rewriting self-tail-recursion into a branch.
+[`wasm_function_analysis.ts`](src/functional/wasm_function_analysis.ts) detects a curried lambda
+whose body contains a saturated self-call in tail position, and `compileTailLoop` emits
+`block(result) { loop(void) { … } unreachable }`, turning each such call into a parallel assignment
+of the parameter locals followed by `br` to the loop header. Every leaf of a tail position branches,
+so falling out of the loop is impossible by construction.
+
+**A tail call inside a lambda is not a tail call**, and that used to be a silent miscompilation. The
+tail walk stops at `Lambda`, so a `let`-bound continuation holding a recursive call compiled to a
+closure call that grew the stack — which Gleam's `lowerSequentialCase` hits directly, since it binds
+every later match arm to a fallback lambda. Guarded Gleam overflowed at 100,000 iterations.
+
+`joinPointLambda` fixes it by **contification**. A `let` whose value is a one-parameter lambda that
+ignores its parameter, and whose binder is only ever tail-called saturated, is not a closure at all
+— it is a label:
+
+```
+block $join (void) { <let body> }   ; every call site becomes `br $join`
+<join body>                          ; emitted once, still in tail position
+```
+
+Backward jumps cannot arise, because `Let` is non-recursive and so the binder is not in scope inside
+its own value — which is what makes a forward `block` sufficient rather than a `loop` with a
+dispatch variable. Arguments are discarded rather than emitted, sound only because the parameter is
+dead and the argument is restricted to a leaf, `RuntimeFault` excluded since it is an effect by
+itself.
+
+Two properties worth knowing before touching it. The analysis and the emitter have to move together:
+`#containsTailCall` must descend into the join body or the enclosing function is never registered as
+a loop and the emitter never runs — fixing codegen alone changes nothing. And frontends can rely on
+this: sharing a continuation through a `let`-bound nullary lambda now costs a label rather than a
+closure, which is exactly how Gleam's pattern lowering avoids duplicating the rest of the match into
+every constructor arm.
+
 Ahead-of-time emission is the other consumer.
 [`wasm_artifacts.ts`](src/functional/wasm_artifacts.ts) exposes `compileModuleToWasm` over two code
 generators — `linear-memory`, optionally with a caller-supplied storage plan, owned-type exports, or
@@ -340,6 +382,33 @@ beats the single-threaded CPU it replaces; the honest bar is the ~1.3 µs/module
 host reaches. If node-parallel validation and constraint generation cannot bring 99.7 µs under about
 30 µs, unification and generalization will not close the gap either, since they are strictly harder
 to parallelize. BASELINE.md records that criterion so it cannot be quietly relaxed.
+
+### What the retarget is now known not to be
+
+Three plausible readings of "make it parallel" have been measured and ruled out, and they are worth
+recording here because each one reads as obvious until it is tried:
+
+- **Reshaping lanes does nothing.** Inference is `workgroup_size(1)` dispatched once per module, so
+  every module occupies a warp with one of thirty-two lanes active. Packing modules into workgroups
+  is flat across sizes 1, 8, 32 and 64 — both shapes launch the same thread count, and the unpacked
+  one hides latency with extra warps exactly as well as the packed one fills lanes.
+- **Splitting generation from solving is capped by its own share.** Charging every transition to the
+  frame kind that did it puts constraint generation at 31% and solving at 49%, so an infinitely
+  parallel generation phase is worth 1.45×. It is also not bottom-up in the current kernel: expected
+  types propagate downward and `Apply` branches on a _pruned_ callee, so which constraint to emit
+  depends on having solved earlier ones.
+- **Definition-level waves are the wrong granularity.** 3.38× available parallelism over 21 waves,
+  and 21 round trips would cost 237 ms against `gleam build`'s entire 146 ms.
+
+What survives is node-level parallelism inside a **single** dispatch. The 11.3 ms round-trip floor
+is the binding constraint on the design, not the kernel: anything that dispatches per dependency
+wave loses before it computes anything.
+
+Two defects found along the way are a caution about attributing cost to architecture. Between them,
+a union-find that never wrote back and a pattern compiler that duplicated arm bodies accounted for
+an 8.9× improvement on the Gleam standard library — 27× off `gleam build` down to 3.0× — with no
+change to the one-lane-per-module shape at all. Much of what looked like a parallelism problem was
+ordinary redundant work.
 
 ## 10. Diagnostics and resource ownership
 
@@ -450,20 +519,21 @@ can diverge, and typechecking does not imply totality.
 
 ## 14. Internal source map
 
-| Concern                | Primary modules                                                                                                |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Public API and ABI     | `functional.ts`, `src/functional/abi.ts`, `src/semantic/abi.ts`                                                |
-| Surface and linking    | `surface_builder.ts`, `case_defaults.ts`, `recursive_groups.ts`, `surface_reachability.ts`, `module_linker.ts` |
-| Facade and admission   | `compiler.ts`, `compilation_admission.ts`, `src/semantic/gpu_dispatch_scheduler.ts`                            |
-| Host lowering plan     | `src/semantic/symbol_lookup.ts`                                                                                |
-| GPU lowering           | `compiler_shader.ts`, `gpu_semantic_compiler.ts`, `gpu_batch_compiler.ts`                                      |
-| GPU inference          | `type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts`                  |
-| CPU oracle and schemas | `src/semantic/type_inference.ts`, `type_schema_abi.ts`                                                         |
-| Evaluation             | `src/functional/evaluator.ts`, `src/semantic/evaluator_shader.ts`                                              |
-| Wasm backend           | `wasm_artifacts.ts`, `wasm_codegen.ts`, `wasm_gc_codegen.ts`, `wasm_binary.ts`                                 |
-| Wasm runtime and hosts | `wasm_execution.ts`, `wasm_host_emitter.ts`, `wasm_value_codec.ts`, `wasm_arena.ts`                            |
-| Storage and comptime   | `storage_plan.ts`, `storage_core.ts`, `comptime.ts`                                                            |
-| Diagnostics and device | `src/functional/diagnostics.ts`, `src/semantic/compilation_diagnostics.ts`, `src/webgpu.ts`                    |
+| Concern                    | Primary modules                                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Public API and ABI         | `functional.ts`, `src/functional/abi.ts`, `src/semantic/abi.ts`                                                |
+| Surface and linking        | `surface_builder.ts`, `case_defaults.ts`, `recursive_groups.ts`, `surface_reachability.ts`, `module_linker.ts` |
+| Facade and admission       | `compiler.ts`, `compilation_admission.ts`, `src/semantic/gpu_dispatch_scheduler.ts`                            |
+| Host lowering plan         | `src/semantic/symbol_lookup.ts`                                                                                |
+| GPU lowering               | `compiler_shader.ts`, `gpu_semantic_compiler.ts`, `gpu_batch_compiler.ts`                                      |
+| GPU inference              | `type_inference_shader.ts`, `gpu_type_inference_runner.ts`, `gpu_type_inference_workspace.ts`                  |
+| CPU oracle and schemas     | `src/semantic/type_inference.ts`, `type_schema_abi.ts`                                                         |
+| Evaluation                 | `src/functional/evaluator.ts`, `src/semantic/evaluator_shader.ts`                                              |
+| Wasm backend               | `wasm_artifacts.ts`, `wasm_codegen.ts`, `wasm_gc_codegen.ts`, `wasm_binary.ts`                                 |
+| Tail loops and join points | `wasm_function_analysis.ts`, `wasm_capture_analysis.ts`                                                        |
+| Wasm runtime and hosts     | `wasm_execution.ts`, `wasm_host_emitter.ts`, `wasm_value_codec.ts`, `wasm_arena.ts`                            |
+| Storage and comptime       | `storage_plan.ts`, `storage_core.ts`, `comptime.ts`                                                            |
+| Diagnostics and device     | `src/functional/diagnostics.ts`, `src/semantic/compilation_diagnostics.ts`, `src/webgpu.ts`                    |
 
 Type Core survives the cull as a live subsystem, but adds no execution path: `type_core.ts` and
 `type_core_contract.ts` are its exported surface, `type_core_lowering.ts`, `type_core_runtime.ts`,

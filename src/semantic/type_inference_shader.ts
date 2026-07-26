@@ -366,10 +366,6 @@ export const InferenceStateWord = {
   IndexedEliminationRestrictionKind: 70,
   IndexedEliminationRestrictionSymbol: 71,
   IndexedMetadataFooterBase: 72,
-  /** @deprecated Alias retained for callers using the former reserved word. */
-  Reserved0: 53,
-  /** @deprecated Alias retained for callers using the former reserved word. */
-  Reserved1: 54,
 } as const;
 
 export interface InferenceShaderMetadata {
