@@ -106,36 +106,46 @@ How to tackle: measure it in Chrome first, because the constraint may be Deno-sp
 design space widens if so. Otherwise, encode dependent passes back-to-back in one command buffer —
 memory is coherent between passes, and `gpu_batch_compiler.ts` already does this for three passes.
 
-### The frontend is 96% of a realistic compile — 62% parsing, 33% lowering
+### The frontend is 96% of a realistic compile, and 57% of it is our code
 
-Split on the 256-module corpus (1,464 KB), medians of five:
+Split three ways on the 256-module corpus (1,464 KB), medians of five:
 
-| Phase                     |     Time |      Rate | Share of frontend |
-| ------------------------- | -------: | --------: | ----------------: |
-| Parse (baba)              | 1,237 ms | 1.16 MB/s |               65% |
-| Lower to packed surface   |   674 ms |         — |               35% |
-| _(GPU resolve and infer)_ |  87.9 ms |         — |                 — |
+| Phase                          |    Time |      Rate | Share of frontend |
+| ------------------------------ | ------: | --------: | ----------------: |
+| baba parse                     |  758 ms | 1.89 MB/s |               41% |
+| Our Gleam AST construction     |  477 ms |         — |               26% |
+| Our lowering to packed surface |  578 ms |         — |               31% |
+| _(GPU resolve and infer)_      | 87.9 ms |         — |                 — |
 
-An earlier version of this entry attributed all 2,152.8 ms of parse-and-lower to baba, which
-over-credited the parser by a third. **Both halves need fixing, and lowering is nobody's plan.**
+**This entry has been wrong twice, in the same direction, and that is the lesson.** First it
+attributed all of parse-and-lower to baba, over-crediting the parser by a third. Then it attributed
+all of parsing to baba, when 39% of that is our own walk from baba's cursor into a Gleam AST. The
+frontend is three phases and only one belongs to the dependency, so a claim about "the parser" has
+to say which of the three it means.
 
-This inverted during 2026-07-26. On the pre-fix Gleam standard library the GPU phase was 96% of the
-compile and the parser looked irrelevant; after path halving, contification and the pattern fix, the
-parser is 96% and the GPU is 3.9%. The oldest section of BASELINE predicted exactly this and was
-then ignored for a day.
+The share inverted during 2026-07-26. On the pre-fix Gleam standard library the GPU phase was 96% of
+the compile and the frontend looked irrelevant; after path halving, contification and the pattern
+fix the frontend is 96% and the GPU is 3.9%. The oldest section of BASELINE predicted exactly this
+and was then ignored for a day.
 
 How to tackle:
 
 - ~~**Use `ParallelGleamFrontend`**~~ — done, and it was the cheapest win in the project: 4.7–6.5×
   on 16 cores, taking the 256-module corpus from 2,314 ms to 465 ms. It had been written, tested and
   left on no path. The playground still cannot use it without browser workers.
-- **Make baba faster.** At 1.16 MB/s against tree-sitter's 10–30 MB/s this is a 10–25×
-  _implementation_ gap on the CPU, not an algorithmic wall. It is a separate project
-  (`@mewhhaha/baba`), so the work is outside this repository. 10× takes parsing from 1,237 ms to
-  ~124 ms.
-- **Do something about lowering.** 674 ms of host-side tree walking to build packed surface arrays,
-  currently unexamined and unmentioned in TASKS. Once the parser is fixed this is the largest item
-  in the compile, ahead of the GPU.
+- **Fuse the Gleam AST away.** `parseGleamModule` walks baba's cursor into a `GleamModule` and
+  `lowerGleamSource` then walks that into the packed surface — two full tree walks over the same
+  program, 1,055 ms combined. Lowering straight from the cursor removes one. The largest item here,
+  and entirely ours. Risk: the AST may be load-bearing for diagnostics and for the `use` desugaring,
+  so it may not be a clean fusion.
+- **Make baba faster.** 1.89 MB/s against tree-sitter's 10–30 MB/s is still an implementation gap
+  rather than an algorithmic wall, but it is 41% of the frontend rather than all of it, and it is a
+  separate project (`@mewhhaha/baba`). Worth asking for; not worth waiting for.
+- **A GPU lexer is the speculative version of that**, and its throughput case is weak: 41% of a
+  frontend already at 335 ms with the worker pool is ~140 ms of a 465 ms compile. The residency
+  argument is stronger — tokens produced on-device would feed the GPU pipeline with no round trip —
+  but it cannot pay off alone while 57% of the frontend stays on the CPU. Note ARCHITECTURE lists
+  parsing inside WGSL as an explicit non-goal, so this reverses a recorded decision.
 
 ### WebAssembly emission is mostly fixed cost per module
 

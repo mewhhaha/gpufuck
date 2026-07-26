@@ -37,49 +37,51 @@ Numbers stay stable so prose elsewhere still resolves; the measurements live in
 
 ## Now
 
-### 14. The frontend is the bottleneck: 62% parsing, 33% lowering
+### 14. The frontend is the bottleneck, and 57% of it is our own code
 
 **Re-measured 2026-07-26 and it has inverted.** On a 256-module corpus of realistic Gleam — 1.46 MB,
 300,544 surface nodes — the GPU resolves and infers everything in **87.9 ms**, 0.29 µs per node,
-while the frontend takes **1,911 ms**. The frontend is **96%** of the compile and the GPU is 3.9%.
+while the serial frontend takes **1,865 ms**. The frontend is 96% of the compile and the GPU is
+3.9%.
 
 Split three ways, because the first two versions of this item were both wrong — the first blamed the
 parser for lowering, the second blamed baba for our AST construction:
 
-| Phase                          |   Time | Share |
-| ------------------------------ | -----: | ----: |
-| baba parse                     | 758 ms |   41% |
-| Our Gleam AST construction     | 477 ms |   26% |
-| Our lowering to packed surface | 578 ms |   31% |
+| Phase                          |   Time |      Rate | Share |
+| ------------------------------ | -----: | --------: | ----: |
+| baba parse                     | 758 ms | 1.89 MB/s |   41% |
+| Our Gleam AST construction     | 477 ms |         — |   26% |
+| Our lowering to packed surface | 578 ms |         — |   31% |
 
-**57% of the frontend is our code**, and baba alone runs at 1.89 MB/s rather than the 1.16 MB/s
-recorded when the AST walk was folded in.
+**57% of the frontend is our code.** The oldest section of BASELINE predicted the frontend would
+matter and was then buried for a day, because on the pre-fix Gleam standard library the GPU phase
+was 96% of the compile and the frontend looked irrelevant.
 
-That makes this the largest lever by a wide margin, ahead of the kernel. baba runs at roughly 1.4
-MB/s where tree-sitter does 10–30 MB/s. The oldest section of BASELINE predicted exactly this and
-was then buried for a day, because on the pre-fix Gleam standard library the GPU phase was 96% of
-the compile and the parser looked irrelevant.
+Ranked, with the one that is done first:
 
-Two directions, unmeasured:
-
+- ~~**Parse in parallel on the host.**~~ **Done, and it was the cheapest win in the project.**
+  `ParallelGleamFrontend` had been written, tested, measured at 4.2× and left on no path. Wired into
+  `bench:gleam-corpus` and `bench` it is **4.7–6.5×** on 16 cores, taking the corpus from 2,314 ms
+  to **465 ms** and from 1.22× to **6.05×** against `gleam build`. Node counts are asserted equal
+  across both paths. Still unavailable to the playground, which needs browser workers, and to any
+  public entry point — a consumer has to reach for it deliberately.
 - **Fuse the Gleam AST away.** `parseGleamModule` walks baba's cursor into a `GleamModule` and
   `lowerGleamSource` then walks that into the packed surface — two full tree walks over the same
-  program, 1,055 ms combined. Lowering straight from the cursor removes one. **The largest item here
-  and entirely ours.** Risk: the AST may be load-bearing for diagnostics and the `use` desugaring,
-  so this may not be a clean fusion.
-- **Make baba faster.** 1.89 MB/s against tree-sitter's 10–30 MB/s is still an implementation gap,
-  but it is 41% of the frontend rather than all of it, and it is a separate project. Worth asking
-  for; not worth waiting for.
-- **Look at lowering at all.** 578 ms on the 256-module corpus, 31% of the frontend, never profiled.
-  It is now a tracked timing in `deno task bench` so it cannot drift unwatched, but nobody has
-  looked at where it goes. With the parallel frontend in place the whole frontend is 335 ms, so this
-  is ~100 ms of a 465 ms compile — no longer the crisis it looked like, and the reason to profile it
-  is that it is unexamined rather than that it is large.
-- **Parse in parallel on the host.** `ParallelGleamFrontend` already exists and measured 4.2x on 16
-  cores, but it is not on the path any benchmark or the playground uses. That is the cheap half.
+  program, 1,055 ms combined, 57% of the frontend. Lowering straight from the cursor removes one.
+  **The largest remaining item and entirely ours.** Risk: the AST may be load-bearing for
+  diagnostics and for the `use` desugaring, so it may not be a clean fusion. Measure whether it can
+  be bypassed before committing.
+- **Make baba faster.** 1.89 MB/s against tree-sitter's 10–30 MB/s is an implementation gap rather
+  than an algorithmic wall, but it is 41% of the frontend and a separate project (`@mewhhaha/baba`).
+  Worth asking for; not worth waiting for. A GPU lexer is the speculative version — see
+  [CHALLENGES.md](CHALLENGES.md) for why its throughput case is weak and its residency case is not.
+- **Profile lowering.** 578 ms serial, 31% of the frontend, never examined. Now a tracked timing in
+  `deno task bench` so it cannot drift unwatched. With the pool in place it is ~120 ms of a 465 ms
+  compile, so the reason to look is that it is unexamined rather than that it is large.
 
-It also reframes item 7. A free GPU inference phase now saves 87.9 ms of a 2,240 ms corpus compile;
-the 12x it needs is real for single-module latency and close to irrelevant for throughput.
+It also reframes item 7. A free GPU inference phase saves 88 ms of a **465 ms** corpus compile with
+the pool in place, so the 12× the kernel needs is real for single-module latency and close to
+irrelevant for throughput.
 
 ### 7. Parallelise the inference kernel — node-level, inside one dispatch
 
@@ -233,14 +235,11 @@ Do 4a first: it is contained, and 4b is a large project that should start from a
 
 ### 5. Frontend parallelism has more to give
 
-`ParallelGleamFrontend` got 4.2× on 16 cores, taking parse+lower from 649 ms to 156 ms at batch
-1,024. The theoretical ceiling is ~15×. The gap is worker message copying and per-worker JIT warmup,
-not contention — worth confirming with a profile before assuming which.
-
-Also unaddressed: **baba parses at ~1.4 MB/s**, 58% of parse time, where tree-sitter does 10–30
-MB/s. Our cursor-to-AST layer costs another 40% on top. That is a 3–8× opportunity on a phase that
-is 22% of batch cost, and it is the hard floor on single-module latency — parse alone is 71 ms of
-what would need to be a 73 ms budget to beat Gleam by 2×.
+Folded into item 14, which measured it properly and wired it up. The residual question is the only
+part still open: `ParallelGleamFrontend` reaches 4.7–6.5× on 16 cores against a theoretical ~15×,
+and the gap is believed to be worker message copying plus per-worker JIT warmup rather than
+contention. Worth a profile before assuming which, and worth remembering that a `postMessage` of an
+`EncodedModule` copies every packed array.
 
 ## Next
 

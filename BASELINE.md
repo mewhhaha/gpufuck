@@ -1167,6 +1167,9 @@ Splitting the frontend, because attributing all of it to baba over-credited the 
 | Lower         |   124.1 ms |    578.3 ms |
 | _Parse share_ |      _73%_ |       _69%_ |
 
+> Superseded immediately below: the 1.16 MB/s is baba **plus** our cursor-to-AST walk. baba alone is
+> 1.89 MB/s and is 41% of the frontend, not 69%.
+
 baba is 1.16 MB/s here against tree-sitter's 10–30 MB/s, so parsing is a 10–25x implementation gap
 on the CPU rather than an algorithmic wall. Lowering is the other 31% and has never been profiled;
 both are now timings in `deno task bench` so neither can drift unwatched.
