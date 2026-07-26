@@ -212,12 +212,42 @@ distinguish source exhaustion from infrastructure failure. After shader changes,
 
 ## Benchmarks and profiling
 
+**Start with `deno task bench`.** It is the one command to run before and after a change, it needs
+nothing but the repository and a GPU, and it exits non-zero when something real moved:
+
+```sh
+deno task bench          # run and diff against benchmarks/baseline.json
+deno task bench:save     # accept the current numbers as the new baseline
+```
+
+The suite splits its output in two, and the split is the point:
+
+- **Counters** — node counts, inference transition counts, emitted byte lengths. These reproduce to
+  the digit. A change fails the run, because it means the compiler is doing different work. Both
+  defects found on 2026-07-26 showed up here: the or-pattern explosion as a node count, the
+  non-compressing union-find as a transition count.
+- **Timings** — reported with a delta against the baseline, and they never fail anything. Wall times
+  on this machine spread about 30% run to run and needed a quiet machine before they meant anything;
+  a suite that failed on them would be ignored within a week.
+
+So a red `bench` is a claim about work done, not about speed. Explain it or fix it, then
+`bench:save` once the change is intended, in the same commit.
+
+The `or-patterns` case is worth knowing about specifically: it records `-1` rather than throwing,
+because the regression it guards is a program that stops compiling at all. It reports "this case no
+longer compiles" instead of a stack trace.
+
+The narrower benchmarks stay for the questions the suite does not answer:
+
 ```sh
 deno task bench:throughput
 deno task bench:lazuli
 deno task bench:semantic-wavefront
 deno task bench:gleam-batch
-deno task bench:gleam-stdlib <stdlib-checkout> <all-exports-entry.gleam>
+deno task bench:gleam-corpus [module-count]
+deno task bench:gleam-stdlib <stdlib-checkout> [entry.gleam]
+deno task profile:frames [source | --gleam <stdlib-checkout>]
+deno task measure:or-patterns
 deno task profile:semantic-compiler
 ```
 
@@ -229,9 +259,16 @@ BASELINE.md in the same commit as any change that moves it.
 `bench:gleam-batch` and `bench:gleam-stdlib` are the two ends of one axis, measured against the
 Gleam compiler on real input, and BASELINE.md reports both because either alone misrepresents the
 project: many independent modules compiled together, where batching wins, and one large module
-compiled once, where it loses badly. `bench:gleam-stdlib` needs an entry that binds every public
-function in the corpus — lowering prunes to what the entry reaches, and a small `main` leaves
-gpufuck compiling a handful of nodes while `gleam build` compiles all nineteen modules.
+compiled once, where it loses badly. `bench:gleam-stdlib` generates an entry binding every public
+function in the corpus, because lowering prunes to what the entry reaches and a small `main` leaves
+gpufuck compiling a handful of nodes while `gleam build` compiles all nineteen modules — an earlier
+version measured 252 KB of Gleam as 66 surface nodes. Pass a path to override it.
+
+`bench:gleam-corpus` is the same axis on generated modules of a realistic size, and it is where the
+frontend/GPU split becomes visible: at 256 modules the GPU compiles 300,544 nodes in 87.9 ms while
+baba takes 2,152.8 ms to parse them. `profile:frames` charges every inference transition to the
+frame kind that did it, which is how both of the 2026-07-26 defects were located;
+`measure:or-patterns` separates body duplication from scrutinee re-binding in pattern lowering.
 
 `profile:semantic-compiler` separates cold WebGPU initialization, frontend preparation, semantic
 dispatch, readback, batch behavior, and definition-level work and span. `bench:semantic-wavefront`

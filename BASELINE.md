@@ -9,6 +9,12 @@ For what to _do_ about these numbers, ranked, see [TASKS.md](TASKS.md). This fil
 Every performance claim in the repository is judged against this file. Reproduce the oldest section
 with `deno task bench:throughput`; later sections name their own task.
 
+**`deno task bench` is the machine-readable half of this file.** It records exact counters — node
+counts, inference transition counts, emitted byte lengths — in `benchmarks/baseline.json` and fails
+when one changes, while reporting timings without ever failing on them. That division follows from
+this file's own history: every defect found so far moved a counter, and no wall time here meant
+anything until the machine was quiet. Prose explains; the suite catches.
+
 Marginal cost per module is the number that matters. Totals hide the crossover, because both the CPU
 and GPU paths pay the same host parse — a total-wall-time ratio flatters the GPU.
 

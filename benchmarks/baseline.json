@@ -1,0 +1,54 @@
+{
+  "or-patterns": {
+    "counters": {
+      "arms1": 63,
+      "arms2": 113,
+      "arms3": 163,
+      "arms4": 213
+    },
+    "timings": {}
+  },
+  "single-module": {
+    "counters": {
+      "nodes": 1174,
+      "definitions": 39,
+      "inferenceTransitions": 17939,
+      "semanticSteps": 4835,
+      "wasmBytes": 40005
+    },
+    "timings": {
+      "gpuMilliseconds": 25.3
+    }
+  },
+  "batch-64": {
+    "counters": {
+      "modules": 64,
+      "nodes": 75136,
+      "sourceBytes": 371208
+    },
+    "timings": {
+      "frontendMilliseconds": 460.7,
+      "gpuMilliseconds": 37
+    }
+  },
+  "batch-256": {
+    "counters": {
+      "modules": 256,
+      "nodes": 300544,
+      "sourceBytes": 1498968
+    },
+    "timings": {
+      "frontendMilliseconds": 1834.3,
+      "gpuMilliseconds": 86.6
+    }
+  },
+  "linked-51-modules": {
+    "counters": {
+      "modules": 51,
+      "nodes": 60031
+    },
+    "timings": {
+      "gpuMilliseconds": 672.4
+    }
+  }
+}

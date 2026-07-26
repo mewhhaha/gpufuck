@@ -18,50 +18,7 @@
  * @module
  */
 import { type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
-
-/** Distinct pairs over three constructors, so each arm is a genuinely different cell. */
-const PAIRS = [
-  ["A", "A"],
-  ["B", "B"],
-  ["C", "C"],
-  ["A", "B"],
-  ["B", "C"],
-  ["C", "A"],
-  ["A", "C"],
-  ["B", "A"],
-  ["C", "B"],
-] as const;
-
-/**
- * `armCount` arms, each with two or-alternatives, over two subjects. `bodyTerms` sets the size of
- * every arm body without changing the pattern matrix, which is what isolates body duplication.
- */
-function program(armCount: number, bodyTerms: number): string {
-  const body = (seed: number) =>
-    Array.from({ length: bodyTerms }, (_, term) => `${seed + term}`).join(" + ");
-  const arms = Array.from({ length: armCount }, (_, index) => {
-    const first = PAIRS[(index * 2) % PAIRS.length]!;
-    const second = PAIRS[(index * 2 + 1) % PAIRS.length]!;
-    return `    ${first[0]}, ${first[1]} | ${second[0]}, ${second[1]} -> ${body(index + 1)}`;
-  });
-  return `pub type T {
-  A
-  B
-  C
-}
-
-pub fn choose(x: T, y: T) -> Int {
-  case x, y {
-${arms.join("\n")}
-    _, _ -> 0
-  }
-}
-
-pub fn main() -> Int {
-  choose(A, B)
-}
-`;
-}
+import { orPatternProgram } from "./or_pattern_program.ts";
 
 function nodeCount(source: string): number | string {
   const modules: GleamSourceModule[] = [{ name: "explosion", source }];
@@ -83,7 +40,7 @@ console.log("  -----+-" + BODY_TERMS.map(() => "-".repeat(14)).join("-+-"));
 const counts = new Map<string, number | string>();
 for (const arms of ARM_COUNTS) {
   const cells = BODY_TERMS.map((terms) => {
-    const result = nodeCount(program(arms, terms));
+    const result = nodeCount(orPatternProgram(arms, terms));
     counts.set(`${arms}:${terms}`, result);
     return (typeof result === "number" ? result.toLocaleString() : "throws").padStart(14);
   });

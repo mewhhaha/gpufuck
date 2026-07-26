@@ -34,6 +34,8 @@
   },
   "tasks": {
     "bench:gleam-batch": "deno run --unstable-webgpu --allow-read benchmarks/gleam_batch_throughput_bench.ts",
+    "bench": "deno run --unstable-webgpu --allow-read --allow-write=benchmarks/baseline.json benchmarks/suite.ts",
+    "bench:save": "deno run --unstable-webgpu --allow-read --allow-write=benchmarks/baseline.json benchmarks/suite.ts --save",
     "bench:gleam-corpus": "deno run --unstable-webgpu --allow-read benchmarks/gleam_corpus_bench.ts",
     "generate:corpus": "deno run --allow-read --allow-write tools/generate_gleam_corpus.ts",
     "bench:gleam-stdlib": "deno run --unstable-webgpu --allow-read benchmarks/gleam_stdlib_compile_bench.ts",

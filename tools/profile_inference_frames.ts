@@ -31,7 +31,8 @@ import type { EncodedModule } from "../functional.ts";
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { lazuliSurfaceToModule } from "../src/lazuli/functional_adapter.ts";
 import { semanticSurfaceFromModule } from "../src/functional/compiler.ts";
-import { type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
+import { lowerGleamSources } from "../gleam.ts";
+import { readGleamStdlib } from "./gleam_stdlib_corpus.ts";
 import { GpuSemanticCompiler } from "../src/semantic/gpu_semantic_compiler.ts";
 import { DEFINITION_WORD_LENGTH, DefinitionWord } from "../src/semantic/abi.ts";
 import { semanticDefinitionParallelismProfile } from "../src/semantic/definition_wavefront.ts";
@@ -92,65 +93,10 @@ function group(bucket: number): "generate" | "solve" | "overhead" {
   return "overhead";
 }
 
-const GLEAM_MODULES = [
-  "bit_array",
-  "bool",
-  "bytes_tree",
-  "dict",
-  "dynamic",
-  "dynamic/decode",
-  "float",
-  "function",
-  "int",
-  "io",
-  "list",
-  "option",
-  "order",
-  "pair",
-  "result",
-  "set",
-  "string",
-  "string_tree",
-  "uri",
-] as const;
-
-/**
- * Lowering prunes to what the entry reaches, so profiling a small `main` would profile a handful of
- * nodes. The entry re-exports every public function in the corpus to root the whole library, the
- * same trick `gleam_stdlib_compile_bench.ts` needs and for the same reason.
- */
-function allExportsEntry(sources: readonly GleamSourceModule[]): string {
-  const lines: string[] = [];
-  const calls: string[] = [];
-  for (const module of sources) {
-    const alias = module.name.replaceAll("/", "_");
-    lines.push(`import ${module.name} as ${alias}`);
-    for (const name of exportedFunctions(module.source)) {
-      calls.push(`  let keep_${alias}_${name} = ${alias}.${name}`);
-    }
-  }
-  return `${lines.join("\n")}\n\npub fn main() {\n${calls.join("\n")}\n  Nil\n}\n`;
-}
-
-function exportedFunctions(source: string): string[] {
-  const names: string[] = [];
-  for (const match of source.matchAll(/^pub fn ([a-z_][a-z0-9_]*)\s*\(/gm)) names.push(match[1]!);
-  return names;
-}
-
 async function gleamStdlibModule(checkout: string): Promise<EncodedModule> {
-  const sources: GleamSourceModule[] = await Promise.all(
-    GLEAM_MODULES.map(async (name) => ({
-      name: `gleam/${name}`,
-      source: await Deno.readTextFile(`${checkout}/src/gleam/${name}.gleam`),
-    })),
-  );
-  const entry: GleamSourceModule = {
-    name: "stdlib_entry",
-    source: allExportsEntry(sources),
-  };
-  const frontend = lowerGleamSources([...sources, entry], {
-    module: entry.name,
+  const corpus = await readGleamStdlib(checkout);
+  const frontend = lowerGleamSources(corpus.all, {
+    module: corpus.entry.name,
     exportName: "main",
   });
   if (!frontend.ok) throw new Error(`lowering failed: ${frontend.diagnostics[0]?.message}`);

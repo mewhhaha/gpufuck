@@ -20,6 +20,7 @@ import { parseGleamModule } from "../src/gleam/parser.ts";
 // The CPU oracle the shader is differentially tested against: same Hindley-Milner, same input, so
 // the ratio isolates the GPU rather than comparing two different algorithms.
 import { inferTypes } from "../src/semantic/type_inference.ts";
+import { allExportsEntry } from "../tools/gleam_stdlib_corpus.ts";
 
 const MODULES = [
   "bit_array",
@@ -48,7 +49,7 @@ const REPETITIONS = 9;
 
 const checkout = Deno.args[0];
 if (checkout === undefined) {
-  console.error("usage: gleam_stdlib_compile_bench.ts <stdlib-checkout> <all-exports-entry.gleam>");
+  console.error("usage: gleam_stdlib_compile_bench.ts <stdlib-checkout> [entry.gleam]");
   Deno.exit(2);
 }
 
@@ -63,15 +64,12 @@ const sources: GleamSourceModule[] = await Promise.all(
 // every public function in the corpus, which roots the whole library as reachable. Without this
 // the comparison measures nothing: an earlier version of this benchmark lowered 241 KB of Gleam to
 // 66 surface nodes.
+// The entry is generated rather than required, so the benchmark is reproducible from a checkout
+// alone. An explicit path still overrides it, for comparing against a hand-written entry.
 const entryPath = Deno.args[1];
-if (entryPath === undefined) {
-  console.error("usage: gleam_stdlib_compile_bench.ts <stdlib-checkout> <all-exports-entry.gleam>");
-  Deno.exit(2);
-}
-const entry: GleamSourceModule = {
-  name: "stdlib_entry",
-  source: await Deno.readTextFile(entryPath),
-};
+const entry: GleamSourceModule = entryPath === undefined
+  ? allExportsEntry(sources)
+  : { name: "stdlib_entry", source: await Deno.readTextFile(entryPath) };
 const all = [...sources, entry];
 
 const sourceBytes = all.reduce(
