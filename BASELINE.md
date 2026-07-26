@@ -815,6 +815,80 @@ which the 11.3 ms dispatch floor constrains to one dispatch. Interleaving the wo
 so packed reads coalesce is the one variant not tried, and it is an ABI change for an unmeasured
 gain.
 
+## 2026-07-26 — the or-pattern explosion is body duplication, and the obvious fix is blocked
+
+TASKS item 1 asked for measurement before a fix: is the multi-subject or-pattern blowup duplicating
+arm _bodies_ or re-binding scrutinees? `deno task measure:or-patterns` answers it by growing the
+body without touching the pattern matrix, so the two scale differently.
+
+Two subjects over a three-constructor type, two or-alternatives per arm:
+
+| Arms | body=1 | body=2 | body=4 | Implied body copies |
+| ---: | -----: | -----: | -----: | ------------------: |
+|    1 |     94 |    104 |    124 |                   5 |
+|    2 |  1,214 |  1,384 |  1,724 |                  85 |
+|    3 | 19,134 | 21,864 | 27,324 |               1,365 |
+|    4 | throws | throws | throws |                   — |
+
+Exactly reproduces the recorded 94 / 1,214 / 19,134 / throws. **It is body duplication**: 5, 85 and
+1,365 copies is `(4^2n - 1)/3`, a base-16 exponential in the arm count.
+
+The cause is one line. `lowerPattern` in `src/gleam/lowering.ts` compiles a constructor test as a
+`case` over every constructor of the type, and hands the failure continuation — the entire rest of
+the match — to each non-matching arm:
+
+```
+body: constructor === normalized.constructor
+  ? this.lowerPatternSequence(binders, normalized.arguments, success, failure)
+  : failure,
+```
+
+`SurfaceExpression` is a value tree, so that is a real copy, and because it happens at every level
+of a nested or multi-subject pattern the copies compound.
+
+### The obvious fix works and is blocked by a second, pre-existing bug
+
+Binding the failure continuation to a join point once, exactly as `lowerSequentialCase` already does
+with its `$gleam_case_fallback_N` lambdas, makes it linear:
+
+| Arms | Before | After |
+| ---: | -----: | ----: |
+|    1 |     94 |    63 |
+|    2 |  1,214 |   113 |
+|    3 | 19,134 |   163 |
+|    4 | throws |   213 |
+
++50 nodes per arm, and four arms compiles instead of exceeding the ABI cap. But it fails
+`keeps multiple-subject Gleam recursion stack safe`, because **a join point is a lambda and a tail
+call inside a lambda is not a tail call** — `#containsTailCall` in
+`src/functional/wasm_function_analysis.ts` descends through `Let`, `Case`, `CaseArm` and `If`, and
+stops at `Lambda`.
+
+**That is a live correctness bug on `main`, not a consequence of the fix.** `lowerSequentialCase`
+already binds later arms to fallback lambdas, so guarded Gleam already loses tail calls. Measured on
+an unmodified tree:
+
+```gleam
+fn countdown(n, total) {
+  case n {
+    m if m <= 0 -> total
+    _ -> countdown(n - 1, total + 1)
+  }
+}
+```
+
+overflows the stack at 100,000 iterations. Valid Gleam, silently miscompiled.
+
+So the two existing pattern paths each pick one of the two failure modes, and neither is safe:
+
+| Path                           | Rest of match     | Node count      | Tail calls |
+| ------------------------------ | ----------------- | --------------- | ---------- |
+| `lowerConstructorDecisionCase` | inlined per arm   | **exponential** | preserved  |
+| `lowerSequentialCase`          | bound to a lambda | linear          | **broken** |
+
+The join-point change was reverted pending contification in the backend, which fixes the tail-call
+bug and makes the frontend change land unchanged. TASKS items 1 and 14.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

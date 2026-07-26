@@ -11,6 +11,29 @@ them are already the second or third version of a number that was wrong the firs
 
 ## Now
 
+### 0. Tail calls are lost inside `let`-bound lambdas
+
+**A live correctness bug.** `#containsTailCall` in `src/functional/wasm_function_analysis.ts`
+descends through `Let`, `Case`, `CaseArm` and `If` but stops at `Lambda`, so a self-tail-call inside
+a `let`-bound lambda compiles to a stack-growing closure call. `lowerSequentialCase` binds every
+later arm to a fallback lambda, which means **guarded Gleam already loses tail recursion**:
+
+```gleam
+fn countdown(n, total) {
+  case n {
+    m if m <= 0 -> total
+    _ -> countdown(n - 1, total + 1)
+  }
+}
+```
+
+overflows the stack at 100,000 iterations on `main` today. Valid Gleam, silently miscompiled.
+
+The fix is contification: recognise `let f = \_ -> B in E` where every reference to `f` in `E` is a
+saturated call in tail position, and compile calls to `f` as jumps rather than closure calls, so
+tail calls inside `B` stay tail calls of the enclosing function. This is a prerequisite for item 1,
+which needs exactly that shape.
+
 ### 1. Multi-subject `case` with or-patterns explodes, and hard-fails
 
 Two subjects and two or-alternatives per arm: 1 arm is 94 surface nodes, 2 arms 1,214, 3 arms
@@ -22,10 +45,16 @@ is 62 lines of source and 25,985 Core nodes, which is **52% of the entire stdlib
 its critical path. The GPU looks slow on that corpus partly because the corpus is ~26,000 nodes
 larger than it should be.
 
-The fix is in Gleam's pattern lowering (`src/gleam/lowering.ts`), which desugars nested and
-multi-subject patterns into nested flat `case` expressions and appears to duplicate arm bodies per
-or-alternative per subject. A decision-tree or backtracking-automaton lowering shares the bodies
-instead. Measurement first: confirm the duplication is bodies and not scrutinee re-binding.
+**Diagnosed: it is body duplication, and the fix is written but blocked.**
+`deno task
+measure:or-patterns` grows the arm body independently of the pattern matrix and shows 5,
+85 and 1,365 copies of the body at one, two and three arms — `(4^2n - 1)/3`, base-16 exponential.
+The cause is `lowerPattern` handing the whole rest of the match to every non-matching constructor
+arm of a test, compounding at every level of a nested pattern.
+
+Binding that continuation to a join point once takes 19,134 nodes to 163 and makes four arms
+compile. It fails `keeps multiple-subject Gleam recursion stack safe`, because a join point is a
+lambda — **do item 0 first**, then this lands unchanged. Full numbers in BASELINE.
 
 This also caps the "split a module into submodules" idea below — fix it before evaluating that.
 
