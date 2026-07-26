@@ -43,9 +43,17 @@ Numbers stay stable so prose elsewhere still resolves; the measurements live in
 300,544 surface nodes — the GPU resolves and infers everything in **87.9 ms**, 0.29 µs per node,
 while the frontend takes **1,911 ms**. The frontend is **96%** of the compile and the GPU is 3.9%.
 
-Split further, because the first version of this item blamed the parser for all of it and was wrong
-by a third: **parse 1,237 ms at 1.16 MB/s, lower 674 ms.** Lowering — host-side tree walking that
-builds the packed surface arrays — is a third of the frontend and appears nowhere else on this list.
+Split three ways, because the first two versions of this item were both wrong — the first blamed the
+parser for lowering, the second blamed baba for our AST construction:
+
+| Phase                          |   Time | Share |
+| ------------------------------ | -----: | ----: |
+| baba parse                     | 758 ms |   41% |
+| Our Gleam AST construction     | 477 ms |   26% |
+| Our lowering to packed surface | 578 ms |   31% |
+
+**57% of the frontend is our code**, and baba alone runs at 1.89 MB/s rather than the 1.16 MB/s
+recorded when the AST walk was folded in.
 
 That makes this the largest lever by a wide margin, ahead of the kernel. baba runs at roughly 1.4
 MB/s where tree-sitter does 10–30 MB/s. The oldest section of BASELINE predicted exactly this and
@@ -54,9 +62,14 @@ the compile and the parser looked irrelevant.
 
 Two directions, unmeasured:
 
-- **Make baba faster.** 1.16 MB/s against tree-sitter's 10–30 MB/s is a 10–25x implementation gap on
-  the CPU, not an algorithmic wall. Separate project, so the work is outside this repo; 10x takes
-  parsing to ~124 ms.
+- **Fuse the Gleam AST away.** `parseGleamModule` walks baba's cursor into a `GleamModule` and
+  `lowerGleamSource` then walks that into the packed surface — two full tree walks over the same
+  program, 1,055 ms combined. Lowering straight from the cursor removes one. **The largest item here
+  and entirely ours.** Risk: the AST may be load-bearing for diagnostics and the `use` desugaring,
+  so this may not be a clean fusion.
+- **Make baba faster.** 1.89 MB/s against tree-sitter's 10–30 MB/s is still an implementation gap,
+  but it is 41% of the frontend rather than all of it, and it is a separate project. Worth asking
+  for; not worth waiting for.
 - **Look at lowering at all.** 578 ms on the 256-module corpus, 31% of the frontend, never profiled.
   It is now a tracked timing in `deno task bench` so it cannot drift unwatched, but nobody has
   looked at where it goes. With the parallel frontend in place the whole frontend is 335 ms, so this

@@ -1171,6 +1171,45 @@ baba is 1.16 MB/s here against tree-sitter's 10–30 MB/s, so parsing is a 10–
 on the CPU rather than an algorithmic wall. Lowering is the other 31% and has never been profiled;
 both are now timings in `deno task bench` so neither can drift unwatched.
 
+## 2026-07-26 — 57% of the frontend is our code, not baba's
+
+Before telling the baba repository its parser is the bottleneck, the number was checked. It was
+`parseGleamModule`, which is baba **plus** the walk that turns baba's cursor into a Gleam AST. Split
+on the 256-module corpus, medians of five:
+
+| Phase                          |     Time |      Rate | Share of frontend |
+| ------------------------------ | -------: | --------: | ----------------: |
+| baba parse                     |   758 ms | 1.89 MB/s |               41% |
+| Our Gleam AST construction     |   477 ms |         — |               26% |
+| Our lowering to packed surface |   578 ms |         — |               31% |
+| _frontend total_               | 1,865 ms | 0.79 MB/s |              100% |
+
+**So baba is 41% and our own code is 57%.** The 1.16 MB/s figure recorded earlier was baba plus our
+AST walk; baba alone is **1.89 MB/s**. Both earlier attributions were wrong in the same direction —
+first blaming the parser for lowering, then blaming baba for our AST construction — and the pattern
+is worth noting: the frontend is three phases and only one of them belongs to the dependency.
+
+### What this does to the GPU lexer argument
+
+A GPU lexer in baba would attack 41% of the frontend, and 41% of a frontend that is already 335 ms
+with the worker pool — so about 140 ms of a 465 ms compile. The throughput case for it is much
+weaker than "the parser is the bottleneck" implied.
+
+The residency case survives and is unaffected: tokens produced on-device could feed the GPU pipeline
+without a round trip. But it cannot pay off alone, because our side would still build a Gleam AST on
+the CPU and then lower it — 57% of the frontend that a GPU lexer does not touch.
+
+### The lead that is actually ours
+
+**The intermediate Gleam AST may be skippable.** `parseGleamModule` walks baba's cursor into
+`GleamModule`, and `lowerGleamSource` then walks that into the packed surface — two full tree walks
+over the same program, 1,055 ms combined. Lowering directly from baba's cursor to packed surface
+arrays would remove one of them, and it is entirely within this repository.
+
+Unmeasured, and the obvious risk is that the Gleam AST is load-bearing for diagnostics and for the
+`use` desugaring, so removing it may not be a simple fusion. But it is a larger number than anything
+a GPU lexer would return, and it needs nobody else's repository.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
