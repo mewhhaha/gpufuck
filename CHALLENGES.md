@@ -146,11 +146,20 @@ How to tackle:
 - **The old measurement, for reference.** 1.89 MB/s against tree-sitter's 10–30 MB/s is an
   implementation gap rather than an algorithmic wall, but it is 41% of the frontend rather than all
   of it, and it is a separate project (`@mewhhaha/baba`). Worth asking for; not worth waiting for.
-- **A GPU lexer is the speculative version of that**, and its throughput case is weak: 41% of a
-  frontend already at 335 ms with the worker pool is ~140 ms of a 465 ms compile. The residency
-  argument is stronger — tokens produced on-device would feed the GPU pipeline with no round trip —
-  but it cannot pay off alone while 57% of the frontend stays on the CPU. Note ARCHITECTURE lists
-  parsing inside WGSL as an explicit non-goal, so this reverses a recorded decision.
+- **A GPU lexer exists in baba 7.0.0 and this grammar cannot run it.** Measured, not inferred: the
+  kernel holds the DFA tables in workgroup storage sized by `stateCount × classCount`, and Gleam
+  needs **53,216 B against this device's 49,152 B limit** — refused at `create`, with no
+  storage-buffer fallback implemented. javascript-aot is 40% over; only Lazuli fits. **Grammar size
+  is the gate, and a bigger project does not change it.**
+
+  Even on Lazuli it would not pay. The crossover is between 519 KiB and 2 MiB of source, device
+  setup is 226 ms, and the 65,536-node ABI cap puts the largest compilable module at 327–950 KB
+  depending on density — at or below the crossover. A bigger project is more files, not bigger
+  files, and the lexer is per document, so scaling up multiplies sub-crossover calls that each lose.
+
+  The throughput case was already weak — 41% of a frontend at 335 ms with the worker pool. The
+  residency argument survives in principle but has nothing to run on. Note ARCHITECTURE lists
+  parsing inside WGSL as an explicit non-goal, so this would reverse a recorded decision anyway.
 
 ### WebAssembly emission is mostly fixed cost per module
 

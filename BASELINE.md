@@ -1260,6 +1260,64 @@ defect — a suite that failed at 27% would fire on ordinary machine variation. 
 performance regression can land green, and the honest mitigation is to A/B any dependency bump
 directly rather than trusting the suite to catch it.
 
+## 2026-07-27 — the WebGPU lexer, measured: two of three grammars cannot run it
+
+Asked whether a bigger project would make baba 7.0.0's WebGPU lexer worth using. Measured rather
+than reasoned, and the answer is decided before project size enters into it.
+
+### Grammar size is the gate, not source size
+
+The kernel holds the DFA tables in **workgroup storage**, sized by `stateCount × classCount`. On an
+RTX 4080 SUPER, which reports `maxComputeWorkgroupStorageSize = 49,152 B`:
+
+| Grammar        | Guard-free | Workgroup storage needed |          Verdict |
+| -------------- | ---------: | -----------------------: | ---------------: |
+| lazuli         |        yes |                     fits | runs, chunk 4096 |
+| **gleam**      |        yes |       **53,216 B** (+8%) |      **refused** |
+| javascript-aot |        yes |      **69,056 B** (+40%) |      **refused** |
+
+"A storage-buffer fallback for the DFA tables is not implemented", so this is a refusal at `create`,
+not a slow path. **The Gleam frontend — the one that matters here — cannot use the GPU lexer at
+all**, and it is 8% over on a high-end card. The WebGPU-guaranteed floor is 16,384 B, so Gleam is
+3.2x over what a conforming device must provide.
+
+A bigger project does not change any of this. The grammar is the same size whatever you feed it.
+
+### And on the one grammar that fits, the crossover is above what we can compile
+
+Lazuli, `brainfuck_compiler.laz` repeated, medians of five, GPU timings including readback:
+
+|   KiB | CPU lex | GPU lex | Winner        |
+| ----: | ------: | ------: | ------------- |
+|     4 |  0.2 ms | 12.8 ms | CPU           |
+|    32 |  0.8 ms | 12.9 ms | CPU           |
+|   130 |  2.8 ms | 13.8 ms | CPU           |
+|   519 | 10.8 ms | 16.3 ms | CPU           |
+| 2,077 | 43.4 ms | 23.8 ms | **GPU**       |
+| 4,154 | 90.8 ms | 32.0 ms | **GPU, 2.8x** |
+
+The crossover is between 519 KiB and 2 MiB, broadly matching baba's own ~768 KiB figure. Device
+setup measured **226 ms**, exactly as documented — 2.5x the entire CPU lex of a 4 MiB file, and
+amortizable across many calls in a process but never within one compile. The GPU floor is ~12.8 ms
+even for 4 KiB, which is the same round-trip floor this project has measured everywhere else.
+
+**Our ABI caps a module at 65,536 surface nodes, and that is below the crossover.** At the two
+densities measured — 4.99 bytes per node on the generated corpus, 14.5 on the Gleam standard library
+— the largest compilable single module is **327 KB to 950 KB of source**. The dense case is well
+under the crossover; the sparse case only just reaches it. So even a document at the ABI ceiling is
+marginal at best.
+
+### What a bigger project actually is
+
+More files, not bigger files, and the lexer is per document. Scaling up multiplies the number of
+sub-crossover lex calls, each of which loses. The one shape that would win is concatenating a whole
+project into a single buffer and splitting token records at document boundaries afterwards — that is
+not what the API offers, and lexing across a boundary is not obviously safe, since an unterminated
+string in one file would run into the next.
+
+So the wgpu path is not available to the Gleam frontend on this hardware, and would not pay on the
+workload even where it is.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
