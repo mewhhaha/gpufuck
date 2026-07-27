@@ -32,8 +32,12 @@ const DEFAULT_PLANS = [
 const plans = Deno.args.length > 0 ? Deno.args : DEFAULT_PLANS;
 
 for (const path of plans) {
-  // ".../language/gleam/generated/wasm/parser.plan" -> "gleam"
-  const label = path.split("/").at(-4) ?? path;
+  // ".../language/gleam/generated/wasm/parser.plan" -> "gleam", and the nested example path
+  // ".../examples/javascript-aot/language/generated/..." -> "javascript-aot" rather than "language".
+  const parts = path.split("/");
+  const generated = parts.lastIndexOf("generated");
+  const named = generated > 0 ? parts[generated - 1] : undefined;
+  const label = named === "language" ? parts[generated - 2] ?? path : named ?? path;
   let bytes: Uint8Array;
   try {
     bytes = Deno.readFileSync(path);

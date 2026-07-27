@@ -140,26 +140,43 @@ How to tackle:
   so it may not be a clean fusion.
 - **Make baba faster, and check the direction.** Updating 5.1.0 → 7.0.0 on 2026-07-27, published as
   a parser and lexer improvement, measured **27% slower** on this grammar — 1.20 MB/s down to 0.94
-  MB/s, ranges not overlapping, no opt-in missed. Its new `webgpu-lexer` export is ruled out by its
-  own documentation here: it loses to the CPU below ~768 KiB of source and our modules average 5.7
-  KB. So a version bump is not a free win, and the next one wants an A/B before it is believed.
+  MB/s, ranges not overlapping, no opt-in missed. 7.1.0 restored parity the same day; 7.2.0 is
+  unresolved against 7.1.0 because an unrelated process held 400% CPU throughout. Three bumps in a
+  day, no measured CPU gain — a version bump is not a free win, in either direction.
 - **The old measurement, for reference.** 1.89 MB/s against tree-sitter's 10–30 MB/s is an
   implementation gap rather than an algorithmic wall, but it is 41% of the frontend rather than all
   of it, and it is a separate project (`@mewhhaha/baba`). Worth asking for; not worth waiting for.
-- **A GPU lexer exists in baba 7.0.0 and this grammar cannot run it.** Measured, not inferred: the
-  kernel holds the DFA tables in workgroup storage sized by `stateCount × classCount`, and Gleam
-  needs **53,216 B against this device's 49,152 B limit** — refused at `create`, with no
-  storage-buffer fallback implemented. javascript-aot is 40% over; only Lazuli fits. **Grammar size
-  is the gate, and a bigger project does not change it.**
+- ~~**A GPU lexer exists and this grammar cannot run it.**~~ **The wall is gone as of baba 7.2.0**,
+  about four hours after it was recorded. All three grammars now fit:
 
-  Even on Lazuli it would not pay. The crossover is between 519 KiB and 2 MiB of source, device
-  setup is 226 ms, and the 65,536-node ABI cap puts the largest compilable module at 327–950 KB
-  depending on density — at or below the crossover. A bigger project is more files, not bigger
-  files, and the lexer is per document, so scaling up multiplies sub-crossover calls that each lose.
+  | Grammar        | States | 7.1.0            | 7.2.0    |
+  | -------------- | -----: | ---------------- | -------- |
+  | gleam          |    183 | OVER by 4,064 B  | **FITS** |
+  | lazuli         |     82 | fits             | fits     |
+  | javascript-aot |    238 | OVER by 19,904 B | **FITS** |
 
-  The throughput case was already weak — 41% of a frontend at 335 ms with the worker pool. The
-  residency argument survives in principle but has nothing to run on. Note ARCHITECTURE lists
-  parsing inside WGSL as an explicit non-goal, so this would reverse a recorded decision anyway.
+  The plans did not change shape. 7.1.0 expanded them into a dense `states × classes` table in
+  workgroup storage; 7.2.0 keeps that table in device storage and needs only `512 + 36 × states`, so
+  the `classCount` term that was the whole problem is gone. Automatic, with no option to set.
+  `deno task check:gpu-lexer`.
+
+  **And it is genuinely fast where it applies.** GPU lexing beats CPU parsing above an ~11–16 KiB
+  band, reaching 8.7× at 117 KiB, and scales to **146 MB/s at 15 MiB** — a size the CPU parser
+  cannot reach at all, since it refuses anything past ~147 KiB with `PARSER_TRACE_LIMIT`. The GPU
+  side is flat at 12–13 ms below 100 KiB, which is a submit-and-sync floor rather than work; even at
+  15 MiB only 38 ms of 158 ms is kernel time, the rest readback and sync.
+
+  **What still blocks using it, in order:**
+
+  1. Our modules average **5.7 KiB**, below the crossover, so per-module dispatch loses — and there
+     is no API to lex many modules in one dispatch, which is the only shape that would clear both
+     the size threshold and the setup cost.
+  2. **Setup is 237.8 ms**, about fifteen lexes of the largest file the CPU can parse.
+  3. The comparison is **not like-for-like**: the GPU emits tokens, `parseGleamModule` emits tokens
+     _and_ a Gleam AST, and baba exposes no CPU lexer over the same plan to isolate against. The
+     8.7× flatters the GPU by an unknown factor.
+  4. It is async, experimental, and removable without a major release. ARCHITECTURE also lists
+     parsing inside WGSL as an explicit non-goal, so adopting it reverses a recorded decision.
 
 ### WebAssembly emission is mostly fixed cost per module
 

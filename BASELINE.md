@@ -1340,6 +1340,74 @@ string in one file would run into the next.
 So the wgpu path is not available to the Gleam frontend on this hardware, and would not pay on the
 workload even where it is.
 
+## 2026-07-27 — baba 7.2.0: the GPU lexer wall is gone
+
+Bumped 7.1.0 → 7.2.0. The upgrade is again clean — no source change, three grammars regenerated, 348
+tests passing, every counter unchanged — and this time something real moved.
+
+### All three grammars now fit the GPU lexer
+
+| Grammar        | States | 7.1.0            | 7.2.0    |
+| -------------- | -----: | ---------------- | -------- |
+| gleam          |    183 | OVER by 4,064 B  | **FITS** |
+| lazuli         |     82 | fits             | fits     |
+| javascript-aot |    238 | OVER by 19,904 B | **FITS** |
+
+The plans did not change shape — identical state counts, identical transition counts, the same CSR
+rows. **The kernel stopped expanding them.** 7.1.0 built a dense states × classes table in workgroup
+storage, which for Gleam was 4 × (128 + 183 + 183×63) + 32 × 183 = 53,216 B against 49,152 B
+available. 7.2.0 adds a second path that keeps the dense table in device storage and needs only
+`512 + 36 × states` of workgroup memory — the `classCount` term, which was the entire problem, is
+gone. Selection is automatic, with no option to set.
+
+So the wall recorded on 2026-07-27 as "the WebGPU lexer refuses this grammar" lasted about four
+hours. Reproduce with `deno task check:gpu-lexer`.
+
+### GPU lexing beats CPU parsing above ~11–16 KiB per file
+
+Gleam plan, best of nine, one file at a time:
+
+| Source    | GPU lex | CPU parse |   Ratio |
+| --------- | ------: | --------: | ------: |
+| 7.4 KiB   | 12.2 ms |    6.2 ms |    0.51 |
+| 14.7 KiB  | 13.0 ms |   18.1 ms |    1.39 |
+| 29.3 KiB  | 13.3 ms |   48.7 ms |     3.7 |
+| 117.5 KiB | 15.4 ms |  134.3 ms | **8.7** |
+
+**The crossover is a band, not a point**, roughly 11–16 KiB. The GPU side is flat at 12–13 ms across
+that whole range, which is a fixed submit-and-sync floor rather than work; the CPU side is what
+moves.
+
+Past the CPU's reach the GPU keeps scaling: 0.93 MiB at 49 MB/s, 3.8 MiB at 117 MB/s, 15.3 MiB at
+**146 MB/s** — and 15.3 MiB was the top of the ladder, not a limit. The CPU parser cannot follow:
+117.5 KiB is the largest single source it accepts, and 147.3 KiB throws `PARSER_TRACE_LIMIT`.
+
+Even at 15.3 MiB the kernel is not compute-bound. Of 158 ms total, `gpuStagesTotalMs` is 38 ms;
+readback is 71 ms and submit-and-sync 57 ms.
+
+### Why this still does not help gpufuck today
+
+Four reasons, in order:
+
+1. **It is not a like-for-like comparison.** The GPU produces a token record array;
+   `parseGleamModule` tokenizes _and_ builds the Gleam AST. baba exports no CPU lexer over the same
+   plan, so lex-versus-lex could not be isolated. The 8.7x flatters the GPU by an unknown factor.
+2. **Our files are below the crossover.** The mean corpus module is 5.7 KiB against an 11–16 KiB
+   crossover, so per-module dispatch loses. A win needs many modules batched into one dispatch,
+   which the API does not offer.
+3. **Setup is 237.8 ms**, about 15 lexes of the largest file the CPU can parse.
+4. It remains async, experimental, and removable without a major release.
+
+### The parse A/B did not resolve, and the machine is why
+
+An unrelated `porffor` test run held 386–403% CPU throughout. Within-run spread reached 40–56% while
+the between-version gap was 40–80 ms, and the ordering flipped between interleaved rounds. Both
+versions sit in a 1.09–1.37 s band consistent with 7.1.0's recorded 1,197 ms.
+
+What can be said: **nothing resembling the 7.0.0 regression is present.** That was 1,487 ms, far
+outside every band measured here. Beyond that, 7.2.0 versus 7.1.0 is unresolved and wants re-taking
+on a quiet machine.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

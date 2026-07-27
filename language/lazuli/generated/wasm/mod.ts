@@ -50,6 +50,11 @@ export type AsyncParserInstanceOptions = SharedAsyncParserInstanceOptions;
 export interface ParserInstance {
   lex(source: string, options?: LexOptions): LexTapeResult;
   parse(source: string, options?: ParseOptions): CursorParseResult<RootCursor>;
+  parseRecords(
+    source: string,
+    records: Int32Array,
+    options?: ParseOptions,
+  ): CursorParseResult<RootCursor>;
   validate(source: string, options?: ParseOptions): ValidateParseResult;
   reset(): void;
   dispose(): void;
