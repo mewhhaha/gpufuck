@@ -249,6 +249,16 @@ async function compileBatch(count: number): Promise<void> {
     new URL("./parser.plan", location.href),
   );
 
+  // Parsing is synchronous and single-threaded here — the browser cannot use
+  // `ParallelGleamFrontend`, which needs workers — so a large example at a high batch count is
+  // seconds of blocked main thread. Yielding every few modules keeps the page responsive and lets
+  // the count update, which turns an apparent hang into visible progress.
+  const sourceBytes = new TextEncoder().encode(editor.value).byteLength * count;
+  setStatus(
+    `Parsing ${count.toLocaleString()} x ${(sourceBytes / count / 1024).toFixed(1)} KB = ` +
+      `${(sourceBytes / 1024 / 1024).toFixed(2)} MB of Gleam on one thread...`,
+    "busy",
+  );
   const parseStart = performance.now();
   const modules = [];
   for (let index = 0; index < count; index++) {
@@ -260,6 +270,13 @@ async function compileBatch(count: number): Promise<void> {
       return;
     }
     modules.push(parsed.lowered.module);
+    if ((index & 7) === 7 && index + 1 < count) {
+      setStatus(
+        `Parsed ${(index + 1).toLocaleString()} of ${count.toLocaleString()} modules...`,
+        "busy",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
   timings.set("parse", performance.now() - parseStart);
 
@@ -287,21 +304,26 @@ async function compileBatch(count: number): Promise<void> {
   }
 
   const nodes = modules.reduce((total, module) => total + module.nodeCount, 0);
+  const frontendMilliseconds = timings.get("parse") ?? 0;
   resultPanel.replaceChildren();
   resultPanel.dataset.state = "ok";
   const title = document.createElement("h2");
   title.textContent = "Batch";
   const pre = document.createElement("pre");
   pre.textContent = [
-    `${count.toLocaleString()} modules`,
+    `${count.toLocaleString()} modules, ${(sourceBytes / 1024 / 1024).toFixed(2)} MB of Gleam`,
     `${nodes.toLocaleString()} surface nodes total`,
-    `${compileMilliseconds.toFixed(1)} ms to resolve and infer all of them`,
-    `${(compileMilliseconds * 1000 / count).toFixed(1)} µs per module`,
+    ``,
+    `${frontendMilliseconds.toFixed(0)} ms  parse and lower  (CPU, one thread)`,
+    `${compileMilliseconds.toFixed(0)} ms  resolve and infer (GPU)`,
+    ``,
+    `${(compileMilliseconds * 1000 / count).toFixed(1)} µs per module on the GPU`,
   ].join("\n");
   const meta = document.createElement("p");
   meta.className = "meta";
-  meta.textContent = "Marginal cost per module is the number that matters; a single module is " +
-    "mostly the one-off readback. Nothing was executed.";
+  meta.textContent =
+    "The frontend runs on one CPU thread here: the browser cannot use the worker pool that makes " +
+    "it 4.7-6.5x faster outside it, and parsing does not touch the GPU at all. Nothing was executed.";
   resultPanel.append(title, pre, meta);
   clearOutline("Batch mode compiles but does not emit; switch to 1 module to see a binary.");
   setStatus(`Compiled ${count.toLocaleString()} modules on ${adapter}`, "ok");

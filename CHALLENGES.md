@@ -347,6 +347,38 @@ running.
 How to tackle: retry device creation with backoff and report VRAM state in the failure, so the
 diagnostic distinguishes "no memory" from "wrong answer".
 
+### The browser gets the slowest frontend we have
+
+The playground calls `lowerGleamSource` directly: baba's CPU Wasm parser, **single-threaded, on the
+UI thread**. It uses neither of the two things that make the frontend fast elsewhere.
+
+- **No worker pool.** `ParallelGleamFrontend` is 4.7–6.5x on 16 cores and needs `Worker`, which the
+  playground bundle does not set up. The browser gets none of it.
+- **No GPU lexer.** Nothing in this repository uses baba's `webgpu-lexer` on a compile path, in the
+  browser or out of it. The GPU is used only for name resolution and inference, strictly after
+  parsing has finished on the CPU.
+
+That is fine for a 118-byte example and visible immediately at scale: batch mode compiles N copies
+of whatever is in the editor, so the 57 KB generated `stress` example at 64 modules is **3.57 MB of
+Gleam parsed and lowered on one thread** — measured at 9 s in a normal browser and 26 s in a slower
+one. At 1,024 it would be 57 MB.
+
+Mitigated rather than fixed: the batch loop now yields every eight modules and reports progress, so
+the page stays responsive and the wait is visible instead of looking like a hang. The work is
+unchanged.
+
+Two real fixes, neither done:
+
+- **Workers in the bundle**, which is mechanical and worth 4.7–6.5x. `parallel_frontend_worker.ts`
+  already exists; it is the bundling and the `new Worker(new URL(...))` resolution that need doing.
+- **GPU lexing into `parseRecords`.** baba 7.2.0 added `parseRecords(source, records, options?)`,
+  which consumes exactly the four-i32 token records `WebGpuLexer` emits — so GPU-lex-then-parse is
+  now an expressible pipeline rather than a wish. Per module it still loses, at 5.7 KiB against a
+  14.7 KiB crossover, but batch mode concatenating 64 modules is 3.57 MB in one call, and 3.788 MiB
+  measured at 34 ms on the GPU against a CPU parser that refuses anything past 147 KiB. **The
+  playground's batch mode is the one workload in this repository that is the right shape for the GPU
+  lexer.** Unmeasured end to end.
+
 ## Cleanups, closed 2026-07-26
 
 All five are resolved, three by changing code and two by deciding not to:
