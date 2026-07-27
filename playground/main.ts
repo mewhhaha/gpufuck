@@ -399,7 +399,7 @@ async function compileBatch(count: number): Promise<void> {
     `${count.toLocaleString()} modules, ${(sourceBytes / 1024 / 1024).toFixed(2)} MB of Gleam`,
     `${nodes.toLocaleString()} surface nodes total`,
     ``,
-    `${frontendMilliseconds.toFixed(0)} ms  parse and lower  (CPU, one thread)`,
+    `${frontendMilliseconds.toFixed(0)} ms  parse and lower  (CPU, ${frontendPool.size} workers)`,
     `${compileMilliseconds.toFixed(0)} ms  resolve and infer (GPU)`,
     ``,
     `${(compileMilliseconds * 1000 / count).toFixed(1)} µs per module on the GPU`,
@@ -407,8 +407,9 @@ async function compileBatch(count: number): Promise<void> {
   const meta = document.createElement("p");
   meta.className = "meta";
   meta.textContent =
-    "The frontend runs on one CPU thread here: the browser cannot use the worker pool that makes " +
-    "it 4.7-6.5x faster outside it, and parsing does not touch the GPU at all. Nothing was executed.";
+    `Parsing and lowering run on ${frontendPool.size} CPU workers and never touch the GPU — baba's ` +
+    "lexer is 1% of the frontend, so moving it to the GPU would be worth 1.01x. The GPU line above " +
+    "is name resolution and Hindley-Milner inference only. Nothing was executed.";
   resultPanel.append(title, pre, meta);
   clearOutline("Batch mode compiles but does not emit; switch to 1 module to see a binary.");
   setStatus(`Compiled ${count.toLocaleString()} modules on ${adapter}`, "ok");
