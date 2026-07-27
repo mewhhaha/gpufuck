@@ -1213,6 +1213,53 @@ Unmeasured, and the obvious risk is that the Gleam AST is load-bearing for diagn
 `use` desugaring, so removing it may not be a simple fusion. But it is a larger number than anything
 a GPU lexer would return, and it needs nobody else's repository.
 
+## 2026-07-27 — baba 7.0.0 is 27% slower on this grammar
+
+Updated from 5.1.0 to 7.0.0, which is published as improving parser and lexer performance. On this
+corpus it does the opposite.
+
+The upgrade itself is clean. The breaking change is the generated-artifact format, so all three
+grammars were regenerated; **no source changed**, `RuleCursor` and the parse options are identical
+between the two versions, and 348 tests pass. Every counter in `deno task bench` is unchanged —
+identical node counts, transition counts and emitted Wasm bytes — so 7.0.0 produces the same trees.
+
+Parse throughput, 256 generated modules, 1.43 MB, nine samples each, back to back on a quiet
+machine:
+
+| Version   |       Median |          Rate | Samples   |
+| --------- | -----------: | ------------: | --------- |
+| **5.1.0** | **1,193 ms** | **1.20 MB/s** | 1170–1307 |
+| 7.0.0     |     1,521 ms |     0.94 MB/s | 1458–1543 |
+
+**27% slower, and the ranges do not overlap** — 5.1.0's slowest sample is faster than 7.0.0's
+fastest. There is no opt-in being missed: `LexOptions` and `ParseOptions` are byte-identical between
+versions and the CLI target flags are unchanged.
+
+### The new WebGPU lexer does not apply to this workload
+
+7.0.0 adds a `./runtime/webgpu-lexer` export, which is the shape this project asked for. Its own
+documentation rules it out here, and the numbers are not close:
+
+- it **loses to the CPU below ~768 KiB of source**, and our modules average 5.7 KB;
+- the ~226 ms device setup is "never repaid by any single document";
+- it is **async**, so it cannot be hosted inside the synchronous generated `parser.lex()`;
+- it accepts **guard-free grammars only**;
+- it is marked experimental and may be removed without a major release.
+
+Lexing the whole corpus as one blob would clear the size threshold, but the parser needs a tree per
+module, so that is not the shape available.
+
+### The benchmark suite is blind to this
+
+A 27% regression sits inside the suite's 30% timing-noise band, so `deno task bench` reported
+"within noise" and every counter matched. It was found only by an explicit nine-sample A/B with the
+two versions swapped back to back.
+
+That is the cost of the counters-fail/timings-advise design, and it is the right trade rather than a
+defect — a suite that failed at 27% would fire on ordinary machine variation. But it means a real
+performance regression can land green, and the honest mitigation is to A/B any dependency bump
+directly rather than trusting the suite to catch it.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

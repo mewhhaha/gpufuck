@@ -210,6 +210,28 @@ distinguish source exhaustion from infrastructure failure. After shader changes,
 `deno task check`, the GPU parity, workspace, and concurrent-compilation tests, and then
 `deno task test`.
 
+## Dependency updates
+
+`@mewhhaha/baba` is the only direct dependency, and `deno.json` sets `"minimumDependencyAge": "0"`
+because it is first-party — Deno's default 24-hour hold exists to blunt supply-chain attacks through
+third-party registries, and it only ever blocked publishing and consuming the same package on the
+same day. Everything else in the lock is `@std/*` pinned transitively.
+
+**A major bump changes the generated-artifact format, not the TypeScript API.** Regenerate all three
+grammars in the same commit:
+
+```sh
+deno task generate:gleam
+deno task generate:lazuli
+deno task generate:javascript-aot
+```
+
+**A/B the parser directly; the suite will not catch it.** A 27% parse regression fits inside
+`bench`'s 30% timing-noise band and lands green with every counter matching. Measure both versions
+back to back with nine samples — `git stash` the version pin and the generated artifacts together,
+since a plan built by one version is not comparable under another. That is how 7.0.0 was found to be
+slower than 5.1.0 despite being published as an improvement; see BASELINE.
+
 ## Benchmarks and profiling
 
 **Start with `deno task bench`.** It is the one command to run before and after a change, it needs

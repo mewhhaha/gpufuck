@@ -138,9 +138,14 @@ How to tackle:
   program, 1,055 ms combined. Lowering straight from the cursor removes one. The largest item here,
   and entirely ours. Risk: the AST may be load-bearing for diagnostics and for the `use` desugaring,
   so it may not be a clean fusion.
-- **Make baba faster.** 1.89 MB/s against tree-sitter's 10–30 MB/s is still an implementation gap
-  rather than an algorithmic wall, but it is 41% of the frontend rather than all of it, and it is a
-  separate project (`@mewhhaha/baba`). Worth asking for; not worth waiting for.
+- **Make baba faster, and check the direction.** Updating 5.1.0 → 7.0.0 on 2026-07-27, published as
+  a parser and lexer improvement, measured **27% slower** on this grammar — 1.20 MB/s down to 0.94
+  MB/s, ranges not overlapping, no opt-in missed. Its new `webgpu-lexer` export is ruled out by its
+  own documentation here: it loses to the CPU below ~768 KiB of source and our modules average 5.7
+  KB. So a version bump is not a free win, and the next one wants an A/B before it is believed.
+- **The old measurement, for reference.** 1.89 MB/s against tree-sitter's 10–30 MB/s is an
+  implementation gap rather than an algorithmic wall, but it is 41% of the frontend rather than all
+  of it, and it is a separate project (`@mewhhaha/baba`). Worth asking for; not worth waiting for.
 - **A GPU lexer is the speculative version of that**, and its throughput case is weak: 41% of a
   frontend already at 335 ms with the worker pool is ~140 ms of a 465 ms compile. The residency
   argument is stronger — tokens produced on-device would feed the GPU pipeline with no round trip —
