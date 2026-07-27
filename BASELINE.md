@@ -1385,6 +1385,40 @@ Past the CPU's reach the GPU keeps scaling: 0.93 MiB at 49 MB/s, 3.8 MiB at 117 
 Even at 15.3 MiB the kernel is not compute-bound. Of 158 ms total, `gpuStagesTotalMs` is 38 ms;
 readback is 71 ms and submit-and-sync 57 ms.
 
+### The Gleam GPU lexer, reproducibly
+
+`deno task bench:gpu-lexer` now measures this rather than a scratch probe. Best-of-nine per row,
+because interference can only add time, so the minimum is the honest estimator. `WebGpuLexer.create`
+costs **265.2 ms** one-time and reports `usesStorageTables: true`, which is the 7.2.0 mechanism
+confirming itself.
+
+| Source    |  GPU lex | CPU parse |     Ratio | Tokens |
+| --------- | -------: | --------: | --------: | -----: |
+| 7.4 KiB   | 12.07 ms |   6.38 ms |     0.53x |  3,546 |
+| 11.0 KiB  | 13.10 ms |   9.12 ms |     0.70x |  5,278 |
+| 14.7 KiB  | 13.01 ms |  12.62 ms |     0.97x |  7,010 |
+| 22.0 KiB  | 13.17 ms |  22.07 ms |     1.68x | 10,474 |
+| 29.3 KiB  | 13.18 ms |  27.54 ms |     2.09x | 13,938 |
+| 58.5 KiB  | 12.36 ms |  62.88 ms |     5.09x | 27,794 |
+| 110.0 KiB | 13.32 ms | 127.33 ms | **9.56x** | 52,042 |
+
+Past what the CPU parser will accept at all:
+
+| Source    |  GPU lex |      MB/s |    Tokens |
+| --------- | -------: | --------: | --------: |
+| 0.231 MiB | 14.08 ms |      16.4 |   110,930 |
+| 0.931 MiB | 16.34 ms |      57.0 |   443,474 |
+| 3.788 MiB | 34.19 ms | **110.8** | 1,773,650 |
+
+**Crossover is 14.7 KiB**, where the ratio crosses 1.0. The GPU column is flat at 12–13 ms from 7
+KiB to 110 KiB — a fifteenfold increase in input for no change in time — so below ~100 KiB this is a
+submit-and-sync floor rather than work, and the crossover is really the CPU curve rising to meet a
+constant.
+
+These reproduce an independent measurement taken by a separate agent under different machine load
+(12.16 / 12.90 / 13.10 ms on the GPU side, 8.7x at 117.5 KiB), which is the cross-check that matters
+given the CPU column's sensitivity to load.
+
 ### Why this still does not help gpufuck today
 
 Four reasons, in order:

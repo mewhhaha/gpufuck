@@ -69,6 +69,7 @@ repositories:
 ```sh
 deno task check:gleam-stdlib
 deno task check:gpu-lexer [plan...]
+deno task bench:gpu-lexer
 deno task check:gleam-stdlib-wasm <checkout> [module ...]
 deno task check:javascript-test262
 ```
@@ -226,6 +227,11 @@ deno task generate:gleam
 deno task generate:lazuli
 deno task generate:javascript-aot
 ```
+
+**`deno task bench:gpu-lexer` measures it against the CPU parser** once `check:gpu-lexer` says a
+grammar fits. Read its ratio as an upper bound, not a like-for-like: the kernel emits tokens while
+`parseGleamModule` emits tokens _and_ a Gleam AST, and baba exposes no CPU lexer over the same plan
+to isolate against.
 
 **`deno task check:gpu-lexer` answers whether a grammar can use baba's WebGPU lexer.** Eligibility
 is decided by the grammar, not by the program — the kernel holds the whole DFA in workgroup storage,

@@ -11,7 +11,8 @@
   "minimumDependencyAge": "0",
   "imports": {
     "@mewhhaha/baba": "jsr:@mewhhaha/baba@7.2.0",
-    "@mewhhaha/baba/runtime/generated-wasm": "jsr:@mewhhaha/baba@7.2.0/runtime/generated-wasm"
+    "@mewhhaha/baba/runtime/generated-wasm": "jsr:@mewhhaha/baba@7.2.0/runtime/generated-wasm",
+    "@mewhhaha/baba/runtime/webgpu-lexer": "jsr:@mewhhaha/baba@7.2.0/runtime/webgpu-lexer"
   },
   "compilerOptions": {
     "strict": true,
@@ -37,6 +38,7 @@
     "bench:gleam-batch": "deno run --unstable-webgpu --allow-read benchmarks/gleam_batch_throughput_bench.ts",
     "bench": "deno run --unstable-webgpu --allow-read --allow-write=benchmarks/baseline.json benchmarks/suite.ts",
     "bench:save": "deno run --unstable-webgpu --allow-read --allow-write=benchmarks/baseline.json benchmarks/suite.ts --save",
+    "bench:gpu-lexer": "deno run --unstable-webgpu --allow-read benchmarks/gpu_lexer_bench.ts",
     "bench:gleam-corpus": "deno run --unstable-webgpu --allow-read benchmarks/gleam_corpus_bench.ts",
     "generate:corpus": "deno run --allow-read --allow-write tools/generate_gleam_corpus.ts",
     "bench:gleam-stdlib": "deno run --unstable-webgpu --allow-read benchmarks/gleam_stdlib_compile_bench.ts",
