@@ -1,4 +1,4 @@
-import type { EncodedSemanticSurface, SemanticDiagnostic } from "../semantic/abi.ts";
+import type { SemanticDiagnostic } from "../semantic/abi.ts";
 import { CompiledGpuSemanticModule, type GpuSemanticModule } from "../semantic/compiler_module.ts";
 import {
   constructorLimitDiagnostic,

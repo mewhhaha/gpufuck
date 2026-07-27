@@ -68,6 +68,7 @@ repositories:
 
 ```sh
 deno task check:gleam-stdlib
+deno task check:gpu-lexer [plan...]
 deno task check:gleam-stdlib-wasm <checkout> [module ...]
 deno task check:javascript-test262
 ```
@@ -225,6 +226,11 @@ deno task generate:gleam
 deno task generate:lazuli
 deno task generate:javascript-aot
 ```
+
+**`deno task check:gpu-lexer` answers whether a grammar can use baba's WebGPU lexer.** Eligibility
+is decided by the grammar, not by the program — the kernel holds the whole DFA in workgroup storage,
+so a bigger project never helps. It asks `WebGpuLexer.create` rather than recomputing the size
+formula, so it cannot drift from the implementation.
 
 **A/B the parser directly; the suite will not catch it.** A 27% parse regression fits inside
 `bench`'s 30% timing-noise band and lands green with every counter matching. Measure both versions

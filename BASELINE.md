@@ -1213,7 +1213,7 @@ Unmeasured, and the obvious risk is that the Gleam AST is load-bearing for diagn
 `use` desugaring, so removing it may not be a simple fusion. But it is a larger number than anything
 a GPU lexer would return, and it needs nobody else's repository.
 
-## 2026-07-27 — baba 7.0.0 is 27% slower on this grammar
+## 2026-07-27 — baba 7.0.0 was 27% slower; 7.1.0 recovers it exactly
 
 Updated from 5.1.0 to 7.0.0, which is published as improving parser and lexer performance. On this
 corpus it does the opposite.
@@ -1234,6 +1234,28 @@ machine:
 **27% slower, and the ranges do not overlap** — 5.1.0's slowest sample is faster than 7.0.0's
 fastest. There is no opt-in being missed: `LexOptions` and `ParseOptions` are byte-identical between
 versions and the CLI target flags are unchanged.
+
+### 7.1.0 puts it back
+
+Published the same day and taken back to back with the other two, nine samples each:
+
+| Version   |       Median |          Rate | Range     |
+| --------- | -----------: | ------------: | --------- |
+| 5.1.0     |     1,193 ms |     1.20 MB/s | 1170–1307 |
+| 7.0.0     |     1,487 ms |     0.96 MB/s | 1466–1569 |
+| **7.1.0** | **1,197 ms** | **1.19 MB/s** | 1173–1295 |
+
+**Parity with 5.1.0, to within 0.3%** — the ranges sit on top of each other. 7.0.0 was re-measured
+here rather than quoted from the earlier run, and it reproduced at 1,487 ms against the 1,521 ms
+recorded half an hour before, so the regression was real and is now gone.
+
+7.1.0 is therefore a fix, not an improvement: it recovers what 7.0.0 lost and does not beat the
+version before it. The upgrade is still worth taking — it is where the WebGPU lexer lives and where
+future work lands — but nobody should expect the frontend to get faster from it.
+
+Counters are unchanged again across all three versions, so every one of them produces identical
+trees. The GPU-lexer fit is unchanged too: Gleam still exceeds workgroup storage by 4,064 B,
+javascript-aot by 19,904 B, and Lazuli still fits.
 
 ### The new WebGPU lexer does not apply to this workload
 
