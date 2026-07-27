@@ -11,6 +11,8 @@ import { lowerGleamSource } from "../src/gleam/frontend.ts";
 import { initializeGleamParser } from "../src/gleam/parser.ts";
 import { renderHighlight } from "./highlight.ts";
 import { readWasmOutline, type WasmOutline } from "./wasm_outline.ts";
+import type { WorkerResponse } from "./frontend_worker.ts";
+import type { EncodedModule } from "../functional.ts";
 
 interface Example {
   readonly name: string;
@@ -185,6 +187,86 @@ function renderOutline(outline: WasmOutline | undefined): void {
   }
 }
 
+/**
+ * A worker pool for the frontend, which is 99% of a batch compile.
+ *
+ * Measured 2026-07-27: of a 133 ms frontend, baba's lexer is 1.13 ms. Tree building, the Gleam AST
+ * and lowering are the rest, and all of it is pure per module — so spreading modules across cores is
+ * the only lever with real headroom here. A GPU lexer would cap out at 1.01x.
+ *
+ * Workers are created once and reused, because each instantiates its own baba parser.
+ */
+class FrontendPool {
+  readonly #workers: Worker[] = [];
+
+  get size(): number {
+    return this.#workers.length;
+  }
+
+  #ensure(): readonly Worker[] {
+    if (this.#workers.length > 0) return this.#workers;
+    // One per core less one, leaving the main thread free to stay responsive and submit GPU work.
+    const count = Math.max(1, (navigator.hardwareConcurrency ?? 4) - 1);
+    for (let index = 0; index < count; index++) {
+      this.#workers.push(
+        new Worker(new URL("./frontend_worker.js", location.href), { type: "module" }),
+      );
+    }
+    return this.#workers;
+  }
+
+  async lower(
+    units: readonly { readonly name: string; readonly source: string }[],
+    onProgress: (done: number) => void,
+  ): Promise<readonly ({ ok: true; module: EncodedModule } | { ok: false; diagnostic: string })[]> {
+    const workers = this.#ensure();
+    const wasmUrl = new URL("./parser.wasm", location.href).href;
+    const planUrl = new URL("./parser.plan", location.href).href;
+    const results = new Array<
+      { ok: true; module: EncodedModule } | { ok: false; diagnostic: string } | undefined
+    >(units.length);
+    // Contiguous slices: adjacent units in a batch are similar in size, so this balances without a
+    // scheduler.
+    const perWorker = Math.ceil(units.length / workers.length);
+    let done = 0;
+
+    await Promise.all(workers.map((worker, workerIndex) => {
+      const start = workerIndex * perWorker;
+      const slice = units.slice(start, start + perWorker);
+      if (slice.length === 0) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        worker.onmessage = (event: MessageEvent<readonly WorkerResponse[]>) => {
+          for (const response of event.data) {
+            results[response.id] = response.module === undefined
+              ? { ok: false, diagnostic: response.diagnostic ?? "lowering failed" }
+              : { ok: true, module: response.module };
+          }
+          done += slice.length;
+          onProgress(done);
+          resolve();
+        };
+        worker.onerror = (event) => reject(new Error(`frontend worker failed: ${event.message}`));
+        worker.postMessage(
+          slice.map((unit, offset) => ({
+            id: start + offset,
+            name: unit.name,
+            source: unit.source,
+            wasmUrl,
+            planUrl,
+          })),
+        );
+      });
+    }));
+
+    return results.map((result, index) => {
+      if (result === undefined) throw new Error(`frontend pool dropped unit ${index}`);
+      return result;
+    });
+  }
+}
+
+const frontendPool = new FrontendPool();
+
 async function probeAdapter(): Promise<{ adapter: GPUAdapter; name: string } | { reason: string }> {
   if (probed !== undefined) return probed;
   if (navigator.gpu === undefined) {
@@ -249,35 +331,38 @@ async function compileBatch(count: number): Promise<void> {
     new URL("./parser.plan", location.href),
   );
 
-  // Parsing is synchronous and single-threaded here — the browser cannot use
-  // `ParallelGleamFrontend`, which needs workers — so a large example at a high batch count is
-  // seconds of blocked main thread. Yielding every few modules keeps the page responsive and lets
-  // the count update, which turns an apparent hang into visible progress.
+  // Spread the frontend across workers. It is 99% of a batch compile — baba's lexer is 1% of it —
+  // so this is where the only real headroom is, and the main thread stays free to render progress.
   const sourceBytes = new TextEncoder().encode(editor.value).byteLength * count;
+  const units = Array.from({ length: count }, (_, index) => ({
+    name: `${MODULE_NAME}_${index}`,
+    source: editor.value,
+  }));
   setStatus(
-    `Parsing ${count.toLocaleString()} x ${(sourceBytes / count / 1024).toFixed(1)} KB = ` +
-      `${(sourceBytes / 1024 / 1024).toFixed(2)} MB of Gleam on one thread...`,
+    `Parsing ${(sourceBytes / 1024 / 1024).toFixed(2)} MB of Gleam across ${
+      frontendPool.size ||
+      Math.max(1, (navigator.hardwareConcurrency ?? 4) - 1)
+    } workers…`,
     "busy",
   );
   const parseStart = performance.now();
-  const modules = [];
-  for (let index = 0; index < count; index++) {
-    const parsed = lowerGleamSource(`${MODULE_NAME}_${index}`, editor.value);
-    if (!parsed.ok) {
-      renderStages(timings, "parse");
-      renderDiagnostics("Parse failed", parsed.diagnostics);
-      setStatus("Parse failed", "error");
-      return;
-    }
-    modules.push(parsed.lowered.module);
-    if ((index & 7) === 7 && index + 1 < count) {
-      setStatus(
-        `Parsed ${(index + 1).toLocaleString()} of ${count.toLocaleString()} modules...`,
-        "busy",
-      );
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+  const lowered = await frontendPool.lower(units, (done) => {
+    setStatus(`Parsed ${done.toLocaleString()} of ${count.toLocaleString()} modules…`, "busy");
+  });
+  const parseFailure = lowered.find((result) => !result.ok);
+  if (parseFailure !== undefined && !parseFailure.ok) {
+    renderStages(timings, "parse");
+    resultPanel.replaceChildren();
+    resultPanel.dataset.state = "error";
+    const title = document.createElement("h2");
+    title.textContent = "Parse failed";
+    const message = document.createElement("p");
+    message.textContent = parseFailure.diagnostic;
+    resultPanel.append(title, message);
+    setStatus("Parse failed", "error");
+    return;
   }
+  const modules = lowered.flatMap((result) => (result.ok ? [result.module] : []));
   timings.set("parse", performance.now() - parseStart);
 
   setStatus("Requesting a WebGPU adapter…", "busy");

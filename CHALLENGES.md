@@ -369,15 +369,20 @@ unchanged.
 
 Two real fixes, neither done:
 
-- **Workers in the bundle**, which is mechanical and worth 4.7–6.5x. `parallel_frontend_worker.ts`
-  already exists; it is the bundling and the `new Worker(new URL(...))` resolution that need doing.
-- **GPU lexing into `parseRecords`.** baba 7.2.0 added `parseRecords(source, records, options?)`,
-  which consumes exactly the four-i32 token records `WebGpuLexer` emits — so GPU-lex-then-parse is
-  now an expressible pipeline rather than a wish. Per module it still loses, at 5.7 KiB against a
-  14.7 KiB crossover, but batch mode concatenating 64 modules is 3.57 MB in one call, and 3.788 MiB
-  measured at 34 ms on the GPU against a CPU parser that refuses anything past 147 KiB. **The
-  playground's batch mode is the one workload in this repository that is the right shape for the GPU
-  lexer.** Unmeasured end to end.
+- ~~**Workers in the bundle**~~ — **done.** `playground/frontend_worker.ts` is bundled as a second
+  entry point and the page runs one worker per core less one. Measured live: 64 x the 57 KB stress
+  example went **26 s to 4.9 s, 5.3x**, matching what `ParallelGleamFrontend` reaches under Deno.
+  About 4 s of what remains is one-time startup, fifteen workers each instantiating their own
+  parser.
+- ~~**GPU lexing into `parseRecords`**~~ — **abandoned, and this is the number that ends it.** Split
+  on a 54.8 KB module, baba's lexer is **1.13 ms of a 133 ms frontend, 1%**. Tree building, the
+  Gleam AST and lowering are the other 99%. A free, instantaneous GPU lexer is worth **1.01x** on
+  the frontend, so the pipeline being expressible via 7.2.0's `parseRecords` no longer matters.
+
+  This also corrects `bench:gpu-lexer`'s headline: its 9.56x compares GPU lexing against CPU
+  parse-plus-AST, giving the GPU roughly a twenty-sixth of the work. The benchmark still bounds the
+  kernel usefully — 110 MB/s where the CPU parser refuses input entirely — but the ratio is not a
+  frontend speedup.
 
 ## Cleanups, closed 2026-07-26
 

@@ -6,9 +6,14 @@
  * 49,152 B; 7.2.0 keeps that table in device storage and needs `512 + 36 * states`, so all three of
  * this repository's grammars fit. `deno task check:gpu-lexer` reports the fit.
  *
- * **This is not a like-for-like comparison and the ratio flatters the GPU.** The kernel emits a token
- * record array; `parseGleamModule` emits tokens *and* a Gleam AST. baba exposes no CPU lexer over the
- * same plan, so lex-versus-lex cannot be isolated from here. Read the ratio as an upper bound.
+ * **This is not a like-for-like comparison, and the factor is known.** The kernel emits a token record
+ * array; `parseGleamModule` emits tokens *and* a Gleam AST. Measured separately, baba's own lexer is
+ * 1.13 ms of a 29.16 ms parse and of a 133 ms frontend — so the CPU column here carries roughly
+ * twenty-six times the work the GPU column does. **The ratio below is not a frontend speedup and must
+ * not be quoted as one:** a free GPU lexer is worth 1.01x on the frontend, because lexing is 1% of it.
+ *
+ * What the numbers are still good for is bounding the kernel itself, and showing it scaling past the
+ * point where baba's parser refuses input outright.
  *
  * Two things it is measuring for:
  *

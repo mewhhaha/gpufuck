@@ -97,20 +97,26 @@ examples.push({ name: "stress (generated, large)", source: stressModule(120) });
 
 await Deno.writeTextFile(new URL("examples.json", out), JSON.stringify(examples));
 
-const bundle = new Deno.Command(Deno.execPath(), {
-  args: [
-    "bundle",
-    "--platform",
-    "browser",
-    "--minify",
-    "--output",
-    new URL("main.js", out).pathname,
-    new URL("main.ts", import.meta.url).pathname,
-  ],
-  stdout: "inherit",
-  stderr: "inherit",
-}).outputSync();
-if (!bundle.success) throw new Error("deno bundle failed");
+/**
+ * Two entry points, not one. The frontend worker has to be a separate bundle so `new Worker` has a
+ * URL to fetch; bundling it into `main.js` would leave nothing to load.
+ */
+for (const entry of ["main", "frontend_worker"]) {
+  const bundle = new Deno.Command(Deno.execPath(), {
+    args: [
+      "bundle",
+      "--platform",
+      "browser",
+      "--minify",
+      "--output",
+      new URL(`${entry}.js`, out).pathname,
+      new URL(`${entry}.ts`, import.meta.url).pathname,
+    ],
+    stdout: "inherit",
+    stderr: "inherit",
+  }).outputSync();
+  if (!bundle.success) throw new Error(`deno bundle failed for ${entry}.ts`);
+}
 
 const parserBytes = await copy(
   new URL("language/gleam/generated/wasm/parser.wasm", root),
@@ -121,7 +127,8 @@ await copy(new URL("index.html", import.meta.url), "index.html");
 await copy(new URL("styles.css", import.meta.url), "styles.css");
 
 const bundleBytes = (await Deno.stat(new URL("main.js", out))).size;
+const workerBytes = (await Deno.stat(new URL("frontend_worker.js", out))).size;
 console.log(
   `playground/dist: ${examples.length} examples, bundle ${(bundleBytes / 1024).toFixed(0)}KB, ` +
-    `parser ${(parserBytes / 1024).toFixed(0)}KB`,
+    `worker ${(workerBytes / 1024).toFixed(0)}KB, parser ${(parserBytes / 1024).toFixed(0)}KB`,
 );

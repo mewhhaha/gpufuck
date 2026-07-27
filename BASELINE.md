@@ -1442,6 +1442,52 @@ What can be said: **nothing resembling the 7.0.0 regression is present.** That w
 outside every band measured here. Beyond that, 7.2.0 versus 7.1.0 is unresolved and wants re-taking
 on a quiet machine.
 
+## 2026-07-27 — lexing is 1% of the frontend, so the GPU lexer cannot help
+
+Asked why the browser takes 10 s to parse and lower 64 modules, and whether GPU lexing was being
+used. It was not, and measuring what it _could_ have done settles the question.
+
+Splitting the frontend on a 54.8 KB module, best of nine:
+
+| Stage                     |      Time | Share of frontend |
+| ------------------------- | --------: | ----------------: |
+| baba lex only             |   1.13 ms |            **1%** |
+| baba parse (lex + tree)   |  29.16 ms |               22% |
+| + Gleam AST construction  |  75.52 ms |               57% |
+| + lower to packed surface | 133.11 ms |              100% |
+
+**Lexing is 1.13 ms of 133 ms.** A free, instantaneous GPU lexer caps the frontend win at **1.01x**.
+Tree building, the Gleam AST and lowering are the other 99%, and none of them is what the kernel
+does.
+
+### This corrects yesterday's GPU lexer benchmark
+
+`bench:gpu-lexer` reports 9.56x at 110 KiB and is labelled "not like-for-like, flatters the GPU by
+an unknown factor". The factor is now known: it compares GPU **lexing** against CPU
+**parse-plus-AST**, and on the CPU side lexing is 1.13 ms of a 29.16 ms parse. The comparison gives
+the GPU roughly a twenty-sixth of the work and reports the ratio as a speedup.
+
+The benchmark is still worth keeping — it bounds what the kernel can do and shows it scaling to 110
+MB/s where the CPU parser refuses input at all — but **the 9.56x is not a frontend speedup and must
+not be quoted as one.**
+
+### Workers are the fix, and they are now in the browser
+
+Parsing and lowering are pure per module, so they parallelise with nothing shared. The playground
+now bundles `frontend_worker.ts` as a second entry point and runs one worker per core less one.
+
+Batch of 64 x the 57 KB stress example, 3.57 MB of Gleam, measured live in the same browser:
+
+| Frontend       |         Time |
+| -------------- | -----------: |
+| One thread     |    26,000 ms |
+| **15 workers** | **4,957 ms** |
+
+**5.3x**, consistent with the 4.7–6.5x `ParallelGleamFrontend` reaches under Deno. Roughly 4 s of
+the remaining 4.9 s is one-time startup — fifteen workers each instantiating their own baba parser
+before the first module completes — so the marginal cost after warmup is far lower than the total
+suggests.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
