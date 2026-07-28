@@ -48,10 +48,10 @@ export function compileWasmGc(
   module: GpuModule,
   nodes: readonly CoreNode[],
 ): Uint8Array<ArrayBuffer> {
-  if (module.entryEffects.length !== 0) {
+  if (module.entryEffects.size !== 0) {
     throw new Error(
       `functional WasmGC backend requires a pure entry; received effects ${
-        module.entryEffects.map((effect) => JSON.stringify(effect)).join(", ")
+        [...module.entryEffects].map((effect) => JSON.stringify(effect)).join(", ")
       }`,
     );
   }

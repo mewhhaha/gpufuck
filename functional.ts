@@ -29,6 +29,7 @@ export * from "./src/functional/compiler.ts";
 export * from "./src/functional/compilation_admission.ts";
 export * from "./src/functional/compiler_module.ts";
 export * from "./src/functional/core_artifact.ts";
+export * from "./src/functional/effect_set.ts";
 export * from "./src/semantic/gpu_dispatch_scheduler.ts";
 export * from "./src/functional/compilation_trace.ts";
 

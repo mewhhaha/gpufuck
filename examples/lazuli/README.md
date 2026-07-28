@@ -19,6 +19,20 @@ the module — ABI version, node, definition, type and constructor counts, the c
 arities, and every Core node. `run:lazuli-batch` takes several sources, compiles them as one batch
 and evaluates them as one batch, and reports results in source-path order.
 
+The experimental Baba pipeline keeps lexing, delimiter matching, parsing, and compact CST allocation
+on the GPU before entering Lazuli's existing semantic lowering. It is intentionally not exported
+from `mod.ts` or the published package. Benchmark it against the generated Wasm frontend with:
+
+```sh
+deno task bench:lazuli-baba
+```
+
+The benchmark reuses one WebGPU runtime and measures full ingest, lowering, and semantic compilation
+for 64, 512, and 2,048 declarations. Baba rejects software fallback adapters by default, so these
+numbers require a hardware WebGPU adapter. Baba 7.3 also reserves one compact node per source unit;
+the all-rule Lazuli profile can therefore report `GPU_FRONTEND_NODE_CAPACITY` for tiny, syntax-dense
+inputs even though the broad declaration workloads fit.
+
 | Sample                   | What it demonstrates                                           |
 | ------------------------ | -------------------------------------------------------------- |
 | `answer.laz`             | The smallest whole program: `fn main = 6 * 7;`                 |

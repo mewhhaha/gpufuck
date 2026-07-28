@@ -1,10 +1,12 @@
 import type { Diagnostic, EvaluationProfile, SourceRange, Type, TypeDeclaration } from "./abi.ts";
+import type { EffectSet } from "./effect_set.ts";
 import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
 
 export interface WasmExport {
   readonly name: string;
   readonly definitionIndex: number;
   readonly type: Type;
+  readonly effects: EffectSet;
 }
 
 /** Declared once in the semantic layer; the two used to be field-identical twins. */
@@ -27,7 +29,8 @@ export interface GpuModule {
   readonly definitionRoots: readonly number[];
   readonly entryDefinition: number;
   readonly entryType: Type;
-  readonly entryEffects: readonly string[];
+  readonly entryEffects: EffectSet;
+  readonly definitionEffects: readonly EffectSet[];
   readonly typeDeclarations: readonly TypeDeclaration[];
   readonly hostCapabilities: readonly HostCapabilityDeclaration[];
   readonly hostDefinitions: readonly HostDefinitionBinding[];

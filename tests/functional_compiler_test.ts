@@ -5,11 +5,14 @@ import {
   buildSurfaceModule,
   CORE_V1_PRIMITIVE_CAPABILITIES,
   CoreTag,
+  createModuleArtifact,
+  effectSet,
   type EncodedModule,
   EvaluationProfile,
   ExpressionTag,
   GpuCompiler,
   GpuEvaluator,
+  linkModules,
   locateDiagnostic,
   MAXIMUM_SOURCE_BYTE_LENGTH,
   MODULE_ABI_VERSION,
@@ -79,6 +82,142 @@ Deno.test("surface module construction rejects malformed options at its boundary
         null as never,
       ),
     /surface module options must be an object/,
+  );
+});
+
+Deno.test("effect sets provide deterministic ordinary set operations", () => {
+  const consoleEffects = effectSet("Console.Write", "Console.Read", "Console.Write");
+  const storageEffects = effectSet("Storage");
+
+  deepStrictEqual([...consoleEffects], ["Console.Read", "Console.Write"]);
+  deepStrictEqual(
+    [...consoleEffects.union(storageEffects)],
+    ["Console.Read", "Console.Write", "Storage"],
+  );
+  deepStrictEqual(
+    [...consoleEffects.intersection(effectSet("Console.Write", "Network"))],
+    ["Console.Write"],
+  );
+  deepStrictEqual(
+    [...consoleEffects.difference(effectSet("Console.Read"))],
+    ["Console.Write"],
+  );
+  equal(consoleEffects.isSubsetOf(consoleEffects.union(storageEffects)), true);
+  equal(consoleEffects.isDisjointFrom(storageEffects), true);
+});
+
+Deno.test("infers effect sets through higher-order Core calls", async () => {
+  const consoleEffects = effectSet("Console.Write", "Telemetry");
+  const integer = { kind: "integer" as const };
+  const operationType = {
+    kind: "function" as const,
+    parameter: integer,
+    result: integer,
+  };
+  const module = buildSurfaceModule(
+    [{
+      name: "emit",
+      parameters: [],
+      annotation: operationType,
+      body: surface.runtimeFault("unbound Console.emit"),
+    }, {
+      name: "invoke",
+      parameters: ["callback"],
+      annotation: null,
+      body: surface.apply(surface.name("callback"), surface.integer(42)),
+    }, {
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.apply(surface.name("invoke"), surface.name("emit")),
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Console",
+        fields: [{
+          kind: "operation",
+          name: "emit",
+          effects: consoleEffects,
+          parameter: integer,
+          result: integer,
+        }],
+      }],
+      hostDefinitions: [{
+        definition: "emit",
+        capability: "Console",
+        field: "emit",
+      }],
+    },
+  );
+  const { compiler } = functionalRuntime();
+  const compilation = await compiler.compileModule(module);
+
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    deepStrictEqual([...compilation.module.entryEffects], ["Console.Write", "Telemetry"]);
+    const emit = compilation.module.definitionNames.indexOf("emit");
+    const invoke = compilation.module.definitionNames.indexOf("invoke");
+    const main = compilation.module.definitionNames.indexOf("main");
+    deepStrictEqual([...compilation.module.definitionEffects[emit]!], [
+      "Console.Write",
+      "Telemetry",
+    ]);
+    deepStrictEqual([...compilation.module.definitionEffects[invoke]!], [
+      "Console.Write",
+      "Telemetry",
+    ]);
+    deepStrictEqual([...compilation.module.definitionEffects[main]!], [
+      "Console.Write",
+      "Telemetry",
+    ]);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("linked host operations must declare the same effect set", () => {
+  const integer = { kind: "integer" as const };
+  const artifact = (name: string, effects: ReadonlySet<string>) =>
+    createModuleArtifact({
+      name,
+      definitions: [{
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.integer(0),
+      }],
+      typeDeclarations: [],
+      imports: [],
+      exports: name === "entry" ? [{ name: "main", definition: "main" }] : [],
+      sourceByteLength: 0,
+      options: {
+        hostCapabilities: [{
+          name: "Console",
+          fields: [{
+            kind: "operation",
+            name: "write",
+            effects,
+            parameter: integer,
+            result: integer,
+          }],
+        }],
+      },
+    });
+
+  throws(
+    () =>
+      linkModules(
+        [
+          artifact("entry", effectSet("Console.Write")),
+          artifact("library", effectSet("Telemetry")),
+        ],
+        { module: "entry", exportName: "main" },
+      ),
+    /F4005: functional modules declare incompatible host field "Console.write"/,
   );
 });
 
@@ -592,7 +731,7 @@ Deno.test("rejects a WASM buffer intrinsic with an incompatible signature", () =
             fields: [{
               kind: "operation",
               name: "length",
-              purity: "pure",
+              effects: effectSet(),
               parameter: { kind: "integer" },
               result: { kind: "integer" },
               wasmIntrinsic: WasmIntrinsic.BufferByteLength,

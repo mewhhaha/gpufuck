@@ -52,7 +52,7 @@ export function createWasmBackendPlan(
       node.tag === CoreTag.StoreWrite ||
       node.tag === CoreTag.StoreGrow
     ) &&
-    module.entryEffects.length === 0 &&
+    module.entryEffects.size === 0 &&
     module.hostCapabilities.every((capability) => capability.fields.length === 0) &&
     !entry.takesInit &&
     entry.parameter === undefined &&

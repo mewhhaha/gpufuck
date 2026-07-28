@@ -5,7 +5,7 @@ import type {
   SemanticCompilationOptions,
   SemanticCompileResult,
 } from "../semantic/compiler_module.ts";
-import { parseLazuliSourceForCompilation } from "./frontend.ts";
+import { type ParsedLazuliSource, parseLazuliSourceForCompilation } from "./frontend.ts";
 import { lazuliDiagnosticFromFunctional, lazuliSurfaceToModule } from "./functional_adapter.ts";
 import { GpuCompiler, validateCompilationOptions } from "../functional/compiler.ts";
 
@@ -38,6 +38,22 @@ export class GpuLazuliCompiler {
     validateCompilationOptions(options);
     options.signal?.throwIfAborted();
     const parsed = parseLazuliSourceForCompilation(source);
+    return await this.#compileParsedSource(parsed, options);
+  }
+
+  async compileParsedSource(
+    parsed: ParsedLazuliSource,
+    options: SemanticCompilationOptions = {},
+  ): Promise<SemanticCompileResult> {
+    validateCompilationOptions(options);
+    options.signal?.throwIfAborted();
+    return await this.#compileParsedSource(parsed, options);
+  }
+
+  async #compileParsedSource(
+    parsed: ParsedLazuliSource,
+    options: SemanticCompilationOptions,
+  ): Promise<SemanticCompileResult> {
     const sourceByteLength = parsed.sourceByteLength;
     if (sourceByteLength > MAXIMUM_SOURCE_BYTE_LENGTH) {
       return {

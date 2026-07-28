@@ -7,6 +7,7 @@ import {
   UNIT_CONSTRUCTOR_NAME,
 } from "../functional/abi.ts";
 import { createModuleArtifact, type ModuleArtifact } from "../functional/module_linker.ts";
+import { effectSet } from "../functional/effect_set.ts";
 import {
   BYTES_TYPE_NAME,
   type HostCapabilityDeclaration,
@@ -850,7 +851,7 @@ class GleamLowering {
     const operation: HostOperationDeclaration = {
       kind: "operation",
       name: operationName,
-      purity: "effectful",
+      effects: effectSet(capability),
       parameter: hostParameter,
       result,
     };
@@ -1790,7 +1791,7 @@ class GleamLowering {
     fields.set(operationName, {
       kind: "operation",
       name: operationName,
-      purity: "pure",
+      effects: effectSet(),
       parameter,
       result,
     });
@@ -1868,7 +1869,7 @@ class GleamLowering {
         new Map([["fromUtf8Codepoint", {
           kind: "operation",
           name: "fromUtf8Codepoint",
-          purity: "pure",
+          effects: effectSet(),
           parameter,
           result,
         }]]),
@@ -1915,7 +1916,7 @@ class GleamLowering {
     fields.set("byteLength", {
       kind: "operation",
       name: "byteLength",
-      purity: "pure",
+      effects: effectSet(),
       parameter: text,
       result: integer,
       wasmIntrinsic: WasmIntrinsic.BufferByteLength,
@@ -1923,7 +1924,7 @@ class GleamLowering {
     fields.set("byteSlice", {
       kind: "operation",
       name: "byteSlice",
-      purity: "pure",
+      effects: effectSet(),
       parameter: {
         kind: "tuple",
         values: [text, { kind: "tuple", values: [integer, integer] }],

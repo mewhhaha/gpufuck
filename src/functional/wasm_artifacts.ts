@@ -221,11 +221,20 @@ async function fingerprintResolvedCore(
         constructorArities: module.constructorArities,
         entryDefinition: module.entryDefinition,
         entryType: module.entryType,
-        entryEffects: module.entryEffects,
+        entryEffects: [...module.entryEffects],
+        definitionEffects: module.definitionEffects.map((effects) => [...effects]),
         typeDeclarations: completeTypeDeclarations(module),
-        hostCapabilities: module.hostCapabilities,
+        hostCapabilities: module.hostCapabilities.map((capability) => ({
+          ...capability,
+          fields: capability.fields.map((field) =>
+            field.kind === "operation" ? { ...field, effects: [...field.effects] } : field
+          ),
+        })),
         hostDefinitions: module.hostDefinitions,
-        wasmExports: module.wasmExports,
+        wasmExports: module.wasmExports.map((exported) => ({
+          ...exported,
+          effects: [...exported.effects],
+        })),
         sources: module.sources,
         evaluationProfile: module.evaluationProfile,
       })),

@@ -1,5 +1,6 @@
 import type { WasmExportDeclaration } from "./module_contract.ts";
 import type { EvaluationProfile, TypeSchema } from "./schema_contract.ts";
+import { type EffectSet, effectSetFrom } from "./effect_set.ts";
 
 export type HostType = TypeSchema;
 
@@ -117,7 +118,7 @@ export type WasmLiteral =
 export interface HostOperationDeclaration {
   readonly kind: "operation";
   readonly name: string;
-  readonly purity: "pure" | "effectful";
+  readonly effects: EffectSet;
   readonly execution?: "synchronous" | "suspending";
   readonly parameter: HostType;
   readonly result: HostType;
@@ -266,13 +267,14 @@ export function normalizeHostCapabilities(
           } has unsupported kind ${JSON.stringify(unsupported.kind)}`,
         );
       }
-      if (field.purity !== "pure" && field.purity !== "effectful") {
-        throw new Error(
+      if (!(field.effects instanceof Set)) {
+        throw new TypeError(
           `functional host operation ${
             JSON.stringify(`${declaration.name}.${field.name}`)
-          } has unsupported purity ${JSON.stringify(field.purity)}`,
+          } effects must be a ReadonlySet; received ${JSON.stringify(field.effects)}`,
         );
       }
+      const effects = effectSetFrom(field.effects);
       if (
         field.execution !== undefined && field.execution !== "synchronous" &&
         field.execution !== "suspending"
@@ -291,11 +293,11 @@ export function normalizeHostCapabilities(
             } has unsupported WASM intrinsic ${JSON.stringify(field.wasmIntrinsic)}`,
           );
         }
-        if (field.purity !== "pure" || field.execution === "suspending") {
+        if (effects.size !== 0 || field.execution === "suspending") {
           throw new Error(
             `functional WASM intrinsic ${
               JSON.stringify(`${declaration.name}.${field.name}`)
-            } must be pure and synchronous`,
+            } must have no effects and be synchronous`,
           );
         }
         requireWasmIntrinsicSignature(field, declaration.name);
@@ -374,6 +376,7 @@ export function normalizeHostCapabilities(
       }
       return Object.freeze({
         ...field,
+        effects,
         execution: field.execution ?? "synchronous",
         parameter: Object.freeze({ ...field.parameter }),
         result: Object.freeze({ ...field.result }),

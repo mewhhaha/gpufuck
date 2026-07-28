@@ -35,6 +35,8 @@ import {
 } from "./abi.ts";
 import { CompilationAdmissionQueue } from "./compilation_admission.ts";
 import { type CompiledCoreArtifact, encodeCoreArtifact } from "./core_artifact.ts";
+import { analyzeModuleEffects } from "./effect_analysis.ts";
+import { effectSet } from "./effect_set.ts";
 import { normalizeHostCapabilities } from "./host_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import type { CompilationOptions, CompileResult, GpuModule } from "./compiler_module.ts";
@@ -228,7 +230,7 @@ export class GpuCompiler {
           throw new Error(`functional batch compiler omitted accepted module ${acceptedIndex}`);
         }
         results[entry.resultIndex] = result.ok
-          ? { ok: true, module: publicModule(result.module, entry.module) }
+          ? { ok: true, module: await publicModule(result.module, entry.module) }
           : {
             ok: false,
             diagnostics: result.diagnostics.map(functionalDiagnostic) as [
@@ -311,7 +313,7 @@ export class GpuCompiler {
       publicTypeMetadata(surface).typeDeclarations,
       coreNodeBytes.slice(0, encodedModule.nodeCount * NODE_BYTE_LENGTH),
     );
-    return publicModule(semanticModule, encodedModule);
+    return await publicModule(semanticModule, encodedModule);
   }
 }
 
@@ -356,10 +358,10 @@ function completedBatchResults(
   });
 }
 
-function publicModule(
+async function publicModule(
   module: GpuSemanticModule,
   encodedModule: EncodedModule,
-): GpuModule {
+): Promise<GpuModule> {
   const definitionRoots = Array.from(
     { length: encodedModule.definitionCount },
     (_, definitionIndex) =>
@@ -418,6 +420,7 @@ function publicModule(
       name: exported.name,
       definitionIndex,
       type: concreteType(annotation),
+      effects: effectSet(),
     });
   });
   const hostCapabilities = normalizeHostCapabilities(encodedModule.hostCapabilities);
@@ -466,7 +469,7 @@ function publicModule(
     boundDefinitions.add(binding.definition);
     return Object.freeze({ ...binding });
   });
-  const functional = {
+  const functional: GpuModule = {
     ...module,
     symbolNames: Object.freeze([...encodedModule.symbolNames]),
     definitionNames: Object.freeze(definitionNames),
@@ -478,12 +481,27 @@ function publicModule(
     sources: Object.freeze([...(encodedModule.sources ?? [])]),
     evaluationProfile: encodedModule.evaluationProfile,
     entryType: module.mainType,
-    entryEffects: Object.freeze([]),
+    entryEffects: effectSet(),
+    definitionEffects: Object.freeze(
+      Array.from({ length: encodedModule.definitionCount }, () => effectSet()),
+    ),
     readCoreNodes: async () => await module.readCoreNodes(),
     destroy: () => module.destroy(),
   };
-  registerCompleteTypeDeclarations(functional, encodedModule.typeDeclarations);
-  return functional;
+  const effects = analyzeModuleEffects(functional, await module.readCoreNodes());
+  const completed = {
+    ...functional,
+    entryEffects: effects.entryEffects,
+    definitionEffects: effects.definitionEffects,
+    wasmExports: Object.freeze(functional.wasmExports.map((exported) =>
+      Object.freeze({
+        ...exported,
+        effects: effects.definitionEffects[exported.definitionIndex]!,
+      })
+    )),
+  };
+  registerCompleteTypeDeclarations(completed, encodedModule.typeDeclarations);
+  return completed;
 }
 
 function schemaShape(schema: TypeSchema): unknown {

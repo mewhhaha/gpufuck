@@ -3,10 +3,18 @@
 All notable changes to gpufuck are documented here. The project is published to JSR as
 `@mewhhaha/gpufuck` and follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.5.0 - 2026-07-28
 
 ### Added
 
+- Effects are first-class `ReadonlySet<string>` values in Functional Core lowering. Host operations
+  declare exact sets, the resolved-Core fixed point propagates them through globals, recursion,
+  closures, and higher-order calls, and modules expose per-definition, entry, and WebAssembly-export
+  summaries. Set contents participate in module linking and artifact fingerprints, while backend
+  purity gates now consume the inferred summaries.
+- Lazuli can run Baba's compact lexer, parser, semantic recipes, and surface packing through the GPU
+  frontend pipeline. The generated grammar metadata and parser plan include that profile, with a
+  dedicated benchmark and parity tests against the reference frontend.
 - `Value` and `DeepValue` gained a `text` case. The runtime already produced text — the WebAssembly
   path decoded it and the semantic layer's own union carried it — but the functional union omitted
   it, so a `String` entry point threw `cannot expose text boundary values` on the way out instead of
@@ -16,6 +24,8 @@ All notable changes to gpufuck are documented here. The project is published to 
 
 ### Changed
 
+- `HostOperationDeclaration.purity` was replaced by `effects`. Pure operations declare
+  `effectSet()`, while effectful operations name the capabilities they require.
 - The GitHub Pages playground compiles **Gleam** rather than Lazuli, and ships the seven single-file
   samples from `examples/gleam/` instead of the Lazuli ones.
 - `GpuEvaluator.evaluate` now drops `maximumStepsPerDispatch`, `heapSlots`, and `stackFrames` when a

@@ -22,10 +22,15 @@ import {
   UnaryOperator,
 } from "../semantic/abi.ts";
 import { createParser, createParserAsync } from "@mewhhaha/baba/runtime/generated-wasm";
+import type { decodeGpuFrontendPlan, GpuFrontendResult } from "@mewhhaha/baba/runtime/webgpu";
+
+import type { BabaRuleCursor } from "../baba_frontend.ts";
+import { compactLazuliProgramCursor } from "./baba_gpu_frontend.ts";
 
 type ParseResult = ReturnType<ReturnType<typeof createParser>["parse"]>;
-type AnyRuleCursor = Extract<ParseResult, { readonly ok: true }>["cursor"];
+type AnyRuleCursor = BabaRuleCursor;
 type LazuliParser = ReturnType<typeof createParser>;
+type GpuFrontendPlan = ReturnType<typeof decodeGpuFrontendPlan>;
 
 const LAZULI_MAXIMUM_STACK_SAFE_PARENTHESIS_DEPTH = 256;
 
@@ -321,9 +326,55 @@ export function parseLazuliSourceForCompilation(source: string): ParsedLazuliSou
   };
 }
 
+export function lowerLazuliGpuFrontendResult(
+  source: string,
+  result: GpuFrontendResult,
+  plan: GpuFrontendPlan,
+): ParsedLazuliSource {
+  const byteOffsets = new Utf8ByteOffsets(source);
+  return {
+    sourceByteLength: byteOffsets.byteLength,
+    frontend: parseLazuliSourceWithOffsets(source, byteOffsets, () => {
+      if (!result.ok) {
+        return {
+          ok: false,
+          diagnostics: result.diagnostics.map((diagnostic) => ({
+            code: diagnostic.code,
+            message: diagnostic.message,
+            span: { start: diagnostic.start, end: diagnostic.end },
+          })),
+        };
+      }
+      return {
+        ok: true,
+        cursor: compactLazuliProgramCursor(source, result.program, plan),
+      };
+    }),
+  };
+}
+
+type CursorParseResult =
+  | {
+    readonly ok: true;
+    readonly cursor: AnyRuleCursor;
+    readonly diagnostics?: readonly CursorParseDiagnostic[];
+  }
+  | {
+    readonly ok: false;
+    readonly cursor?: null;
+    readonly diagnostics: readonly CursorParseDiagnostic[];
+  };
+
+interface CursorParseDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly span: Utf16Span;
+}
+
 function parseLazuliSourceWithOffsets(
   source: string,
   byteOffsets: Utf8ByteOffsets,
+  parse: () => CursorParseResult = () => getLazuliParser().parse(source, { preserveTrivia: false }),
 ): FrontendResult {
   if (byteOffsets.byteLength > MAXIMUM_SOURCE_BYTE_LENGTH) {
     return failure(limitDiagnostic(
@@ -336,10 +387,9 @@ function parseLazuliSourceWithOffsets(
 
   const symbols = new SymbolInterner();
   symbols.intern("main");
-  const parser = getLazuliParser();
 
   try {
-    const parsed = parser.parse(source, { preserveTrivia: false });
+    const parsed = parse();
     if (!parsed.ok) {
       if (parsed.diagnostics.length === 0) {
         throw new Error("Lazuli parser failed without diagnostics.");

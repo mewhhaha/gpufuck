@@ -16,6 +16,7 @@ import {
   type TypeSchema,
   UnaryOperator,
 } from "./abi.ts";
+import { effectNames } from "./effect_set.ts";
 import type { CoreNode, GpuModule } from "./compiler.ts";
 import type { EvaluationResult } from "./evaluator.ts";
 import type {
@@ -335,7 +336,7 @@ function formatCoreModule(
 ): string {
   const lines = [
     `entry=d${module.entryDefinition}; type=${formatType(module.entryType)}; effects=${
-      JSON.stringify(module.entryEffects)
+      JSON.stringify(effectNames(module.entryEffects))
     }`,
     "",
     "nodes:",

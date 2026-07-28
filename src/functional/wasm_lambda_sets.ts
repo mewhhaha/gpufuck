@@ -1,5 +1,6 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
 import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import { type EffectSet, effectSetFrom } from "./effect_set.ts";
 import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
 
 // Wider sets retain the ordinary closure path so adversarial modules cannot inflate dispatch code.
@@ -7,11 +8,13 @@ const MAXIMUM_LAMBDA_SET_SIZE = 64;
 
 export interface LambdaSet {
   readonly lambdaNodes: readonly number[];
+  readonly effects: EffectSet;
   readonly complete: boolean;
 }
 
 interface FlowState {
   lambdaNodes: Set<number> | undefined;
+  effectNames: Set<string> | undefined;
   incomplete: boolean;
 }
 
@@ -70,7 +73,7 @@ export class LambdaSetAnalysis {
     const flowVariableCount = this.#externalValue + 1;
     this.#states = Array.from(
       { length: flowVariableCount },
-      () => ({ lambdaNodes: undefined, incomplete: false }),
+      () => ({ lambdaNodes: undefined, effectNames: undefined, incomplete: false }),
     );
     this.#edges = Array.from({ length: flowVariableCount }, () => undefined);
     this.#applicationsByCallee = Array.from({ length: flowVariableCount }, () => undefined);
@@ -89,6 +92,23 @@ export class LambdaSetAnalysis {
     for (const [definition, root] of module.definitionRoots.entries()) {
       this.#visitExpression(root, []);
       this.#addEdge(this.#nodeVariable(root), this.#definitionVariable(definition));
+    }
+    for (const binding of module.hostDefinitions) {
+      const definition = module.definitionNames.indexOf(binding.definition);
+      const capability = module.hostCapabilities.find((candidate) =>
+        candidate.name === binding.capability
+      );
+      const field = capability?.fields.find((candidate) => candidate.name === binding.field);
+      if (definition < 0 || field === undefined) {
+        throw new Error(
+          `functional lambda-set host definition ${
+            JSON.stringify(binding.definition)
+          } could not resolve ${JSON.stringify(`${binding.capability}.${binding.field}`)}`,
+        );
+      }
+      if (field.kind === "operation") {
+        this.#addEffects(this.#definitionVariable(definition), field.effects);
+      }
     }
 
     const entryApplication: ApplicationConstraint = {
@@ -109,6 +129,7 @@ export class LambdaSetAnalysis {
     const lambdaNodes = state.lambdaNodes ?? [];
     const lambdaSet = Object.freeze({
       lambdaNodes: Object.freeze([...lambdaNodes].sort((left, right) => left - right)),
+      effects: effectSetFrom(state.effectNames ?? []),
       complete: !state.incomplete,
     });
     this.#lambdaSets[nodeIndex] = lambdaSet;
@@ -361,7 +382,27 @@ export class LambdaSetAnalysis {
         changed = true;
       }
     }
+    if (sourceState.effectNames !== undefined) {
+      for (const effect of sourceState.effectNames) {
+        if (targetState.effectNames?.has(effect)) continue;
+        targetState.effectNames ??= new Set<string>();
+        targetState.effectNames.add(effect);
+        changed = true;
+      }
+    }
     if (changed) this.#enqueue(target);
+  }
+
+  #addEffects(variable: number, effects: EffectSet): void {
+    const state = this.#state(variable);
+    let changed = false;
+    for (const effect of effects) {
+      if (state.effectNames?.has(effect)) continue;
+      state.effectNames ??= new Set<string>();
+      state.effectNames.add(effect);
+      changed = true;
+    }
+    if (changed) this.#enqueue(variable);
   }
 
   #addLambda(variable: number, lambdaNode: number): void {

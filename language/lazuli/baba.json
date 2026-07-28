@@ -17,5 +17,294 @@
         "reduce": "const_descriptor = type_group"
       }
     ]
+  },
+  "gpuFrontend": {
+    "version": 3,
+    "throughput": "strict",
+    "root": "module",
+    "islands": [
+      { "rule": "module", "boundary": { "kind": "root" } },
+      {
+        "rule": "declaration",
+        "boundary": { "kind": "terminated", "terminal": ";" }
+      },
+      { "rule": "expr", "boundary": { "kind": "root" } },
+      { "rule": "let_rec_expr", "boundary": { "kind": "root" } },
+      { "rule": "let_expr", "boundary": { "kind": "root" } },
+      { "rule": "if_expr", "boundary": { "kind": "root" } },
+      { "rule": "fun_expr", "boundary": { "kind": "root" } },
+      { "rule": "arrow_expr", "boundary": { "kind": "root" } },
+      { "rule": "case_arm", "boundary": { "kind": "root" } },
+      { "rule": "unary", "boundary": { "kind": "root" } },
+      { "rule": "negate", "boundary": { "kind": "root" } },
+      {
+        "rule": "case_expr",
+        "boundary": { "kind": "terminated", "terminal": "end" }
+      },
+      {
+        "rule": "list",
+        "boundary": {
+          "kind": "separated",
+          "open": "[",
+          "close": "]",
+          "separator": ","
+        }
+      },
+      {
+        "rule": "record",
+        "boundary": { "kind": "paired", "open": "{", "close": "}" }
+      },
+      {
+        "rule": "tuple",
+        "boundary": {
+          "kind": "separated",
+          "open": "(",
+          "close": ")",
+          "separator": ","
+        }
+      },
+      {
+        "rule": "group",
+        "boundary": { "kind": "paired", "open": "(", "close": ")" }
+      },
+      { "rule": "source_type", "boundary": { "kind": "root" } },
+      { "rule": "type_function_tail", "boundary": { "kind": "root" } },
+      {
+        "rule": "type_tuple",
+        "boundary": {
+          "kind": "separated",
+          "open": "(",
+          "close": ")",
+          "separator": ","
+        }
+      },
+      {
+        "rule": "type_group",
+        "boundary": { "kind": "paired", "open": "(", "close": ")" }
+      },
+      { "rule": "const_parameter", "boundary": { "kind": "root" } },
+      {
+        "rule": "const_parameter_tuple",
+        "boundary": {
+          "kind": "separated",
+          "open": "(",
+          "close": ")",
+          "separator": ","
+        }
+      },
+      {
+        "rule": "const_parameter_record",
+        "boundary": { "kind": "paired", "open": "{", "close": "}" }
+      },
+      { "rule": "const_descriptor", "boundary": { "kind": "root" } },
+      {
+        "rule": "const_descriptor_tuple",
+        "boundary": {
+          "kind": "separated",
+          "open": "(",
+          "close": ")",
+          "separator": ","
+        }
+      },
+      {
+        "rule": "const_descriptor_record",
+        "boundary": { "kind": "paired", "open": "{", "close": "}" }
+      },
+      { "rule": "data_declaration", "boundary": { "kind": "root" } },
+      { "rule": "data_constructors", "boundary": { "kind": "root" } },
+      { "rule": "data_constructor_tail", "boundary": { "kind": "root" } },
+      { "rule": "constructor_declaration", "boundary": { "kind": "root" } },
+      { "rule": "constructor_result", "boundary": { "kind": "root" } },
+      { "rule": "constructor_fields", "boundary": { "kind": "root" } },
+      { "rule": "constructor_field_list", "boundary": { "kind": "root" } },
+      { "rule": "constructor_field_tail", "boundary": { "kind": "root" } },
+      { "rule": "constructor_field", "boundary": { "kind": "root" } },
+      { "rule": "identifier_list", "boundary": { "kind": "root" } },
+      { "rule": "identifier_tail", "boundary": { "kind": "root" } },
+      { "rule": "definition", "boundary": { "kind": "root" } },
+      { "rule": "let_declaration", "boundary": { "kind": "root" } },
+      { "rule": "let_annotation", "boundary": { "kind": "root" } },
+      { "rule": "const_declaration", "boundary": { "kind": "root" } },
+      { "rule": "const_parameter_bind", "boundary": { "kind": "root" } },
+      { "rule": "const_parameter_field_list", "boundary": { "kind": "root" } },
+      { "rule": "const_parameter_field_tail", "boundary": { "kind": "root" } },
+      { "rule": "const_parameter_field", "boundary": { "kind": "root" } },
+      { "rule": "type_application", "boundary": { "kind": "root" } },
+      { "rule": "type_atom", "boundary": { "kind": "root" } },
+      { "rule": "type_named", "boundary": { "kind": "root" } },
+      { "rule": "type_unit", "boundary": { "kind": "root" } },
+      { "rule": "case_pattern", "boundary": { "kind": "root" } },
+      { "rule": "constructor_pattern", "boundary": { "kind": "root" } },
+      { "rule": "tuple_pattern", "boundary": { "kind": "root" } },
+      { "rule": "unit_pattern", "boundary": { "kind": "root" } },
+      { "rule": "pattern_binders", "boundary": { "kind": "root" } },
+      { "rule": "equality", "boundary": { "kind": "root" } },
+      { "rule": "equality_tail", "boundary": { "kind": "root" } },
+      { "rule": "equality_op", "boundary": { "kind": "root" } },
+      { "rule": "eq", "boundary": { "kind": "root" } },
+      { "rule": "ne", "boundary": { "kind": "root" } },
+      { "rule": "comparison", "boundary": { "kind": "root" } },
+      { "rule": "comparison_tail", "boundary": { "kind": "root" } },
+      { "rule": "comparison_op", "boundary": { "kind": "root" } },
+      { "rule": "lt", "boundary": { "kind": "root" } },
+      { "rule": "le", "boundary": { "kind": "root" } },
+      { "rule": "gt", "boundary": { "kind": "root" } },
+      { "rule": "ge", "boundary": { "kind": "root" } },
+      { "rule": "additive", "boundary": { "kind": "root" } },
+      { "rule": "additive_tail", "boundary": { "kind": "root" } },
+      { "rule": "additive_op", "boundary": { "kind": "root" } },
+      { "rule": "plus", "boundary": { "kind": "root" } },
+      { "rule": "minus", "boundary": { "kind": "root" } },
+      { "rule": "multiplicative", "boundary": { "kind": "root" } },
+      { "rule": "multiplicative_tail", "boundary": { "kind": "root" } },
+      { "rule": "multiplicative_op", "boundary": { "kind": "root" } },
+      { "rule": "star", "boundary": { "kind": "root" } },
+      { "rule": "slash", "boundary": { "kind": "root" } },
+      { "rule": "call", "boundary": { "kind": "root" } },
+      { "rule": "call_argument", "boundary": { "kind": "root" } },
+      { "rule": "primary", "boundary": { "kind": "root" } },
+      { "rule": "named", "boundary": { "kind": "root" } },
+      { "rule": "named_suffix", "boundary": { "kind": "root" } },
+      { "rule": "const_instantiation", "boundary": { "kind": "root" } },
+      { "rule": "const_descriptor_hole", "boundary": { "kind": "root" } },
+      { "rule": "const_descriptor_field_list", "boundary": { "kind": "root" } },
+      { "rule": "const_descriptor_field_tail", "boundary": { "kind": "root" } },
+      { "rule": "const_descriptor_field", "boundary": { "kind": "root" } },
+      { "rule": "string", "boundary": { "kind": "root" } },
+      { "rule": "list_values", "boundary": { "kind": "root" } },
+      { "rule": "list_tail", "boundary": { "kind": "root" } },
+      { "rule": "record_fields", "boundary": { "kind": "root" } },
+      { "rule": "record_tail", "boundary": { "kind": "root" } },
+      { "rule": "record_field", "boundary": { "kind": "root" } },
+      { "rule": "integer", "boundary": { "kind": "root" } },
+      { "rule": "boolean", "boundary": { "kind": "root" } },
+      { "rule": "truth", "boundary": { "kind": "root" } },
+      { "rule": "falsity", "boundary": { "kind": "root" } },
+      { "rule": "unit", "boundary": { "kind": "root" } }
+    ],
+    "semantics": {
+      "rules": {
+        "data_declaration": {
+          "opcode": "scope",
+          "fields": {
+            "constructors": "constructors",
+            "name": "name",
+            "parameters": "parameters"
+          }
+        },
+        "data_constructors": {
+          "opcode": "scope",
+          "fields": { "head": "head", "tail": "tail" }
+        },
+        "data_constructor_tail": {
+          "opcode": "scope",
+          "fields": { "value": "value" }
+        },
+        "constructor_declaration": {
+          "opcode": "scope",
+          "fields": {
+            "fields": "fields",
+            "name": "name",
+            "result": "result"
+          }
+        },
+        "constructor_result": {
+          "opcode": "scope",
+          "fields": { "type": "type" }
+        },
+        "constructor_fields": {
+          "opcode": "scope",
+          "fields": { "values": "values" }
+        },
+        "constructor_field_list": {
+          "opcode": "scope",
+          "fields": { "head": "head", "tail": "tail" }
+        },
+        "definition": {
+          "opcode": "scope",
+          "fields": {
+            "body": "body",
+            "name": "name",
+            "params": "params"
+          }
+        },
+        "let_declaration": {
+          "opcode": "scope",
+          "fields": {
+            "annotation": "annotation",
+            "body": "body",
+            "name": "name"
+          }
+        },
+        "const_declaration": {
+          "opcode": "scope",
+          "fields": {
+            "body": "body",
+            "name": "name",
+            "parameter": "parameter"
+          }
+        },
+        "const_parameter_tuple": {
+          "opcode": "scope",
+          "fields": { "first": "first", "second": "second" }
+        },
+        "source_type": {
+          "opcode": "scope",
+          "fields": { "left": "left", "tail": "tail" }
+        },
+        "type_application": {
+          "opcode": "scope",
+          "fields": { "arguments": "arguments", "callee": "callee" }
+        },
+        "if_expr": {
+          "opcode": "scope",
+          "fields": {
+            "alternate": "alternate",
+            "condition": "condition",
+            "consequent": "consequent"
+          }
+        },
+        "fun_expr": {
+          "opcode": "scope",
+          "fields": { "body": "body", "param": "param" }
+        },
+        "case_expr": {
+          "opcode": "scope",
+          "fields": { "arms": "arms", "scrutinee": "scrutinee" }
+        },
+        "case_arm": {
+          "opcode": "scope",
+          "fields": { "body": "body", "pattern": "pattern" }
+        },
+        "constructor_pattern": {
+          "opcode": "scope",
+          "fields": { "binders": "binders", "name": "name" }
+        },
+        "equality": {
+          "opcode": "scope",
+          "fields": { "left": "left", "rest": "rest" }
+        },
+        "equality_tail": {
+          "opcode": "scope",
+          "fields": { "op": "op", "right": "right" }
+        },
+        "call": {
+          "opcode": "scope",
+          "fields": { "args": "args", "callee": "callee" }
+        },
+        "named": {
+          "opcode": "scope",
+          "fields": { "name": "name", "suffix": "suffix" }
+        },
+        "const_instantiation": {
+          "opcode": "scope",
+          "fields": { "argument": "argument" }
+        },
+        "list": {
+          "opcode": "scope",
+          "fields": { "values": "values" }
+        }
+      }
+    }
   }
 }

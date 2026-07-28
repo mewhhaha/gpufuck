@@ -512,7 +512,7 @@ export function linkModules(
           fields.push(field);
           continue;
         }
-        if (JSON.stringify(previous) === JSON.stringify(field)) continue;
+        if (sameHostField(previous, field)) continue;
         throw new LinkError({
           code: "F4005",
           kind: "incompatible-capability",
@@ -581,6 +581,15 @@ export function linkModules(
     module: { ...module, sources: Object.freeze(sources) },
     sources: Object.freeze(sources),
   };
+}
+
+function sameHostField(
+  left: HostCapabilityDeclaration["fields"][number],
+  right: HostCapabilityDeclaration["fields"][number],
+): boolean {
+  const comparable = (field: HostCapabilityDeclaration["fields"][number]): unknown =>
+    field.kind === "operation" ? { ...field, effects: [...field.effects].sort() } : field;
+  return JSON.stringify(comparable(left)) === JSON.stringify(comparable(right));
 }
 
 function rewriteExpression(

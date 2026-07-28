@@ -780,7 +780,7 @@ class WasmCompiler {
   ): WasmFunctionBody | undefined {
     if (
       this.#module.evaluationProfile !== EvaluationProfile.StrictEager ||
-      this.#module.entryEffects.length !== 0 ||
+      exported.effects.size !== 0 ||
       this.#hostFields.length !== 0 ||
       this.#hasLazyEvaluationBoundary ||
       result.kind !== "integer" ||
@@ -2147,7 +2147,7 @@ class WasmCompiler {
     const profileMakesParameterStrict = this.#module.evaluationProfile ===
         EvaluationProfile.StrictEager &&
       !this.#hasLazyEvaluationBoundary;
-    return this.#module.entryEffects.length === 0 &&
+    return this.#module.entryEffects.size === 0 &&
       (profileMakesParameterStrict ||
         functionShape.strictParameters[parameter] === true) &&
       (functionShape.numericParameters[parameter] === true ||
@@ -5640,7 +5640,7 @@ class WasmCompiler {
             environment,
           );
         } else if (
-          this.#module.entryEffects.length === 0 &&
+          this.#module.entryEffects.size === 0 &&
           loop.strictParameters[parameter] === true &&
           this.#functionAnalysis.canEvaluateEagerly(argumentExpression.node)
         ) {
