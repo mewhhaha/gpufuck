@@ -1,7 +1,14 @@
-import { deepStrictEqual, ok, throws } from "node:assert/strict";
+import { deepStrictEqual, equal, ok, throws } from "node:assert/strict";
 
-import { type CompactFrontendProgram, CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
+import {
+  type CompactFrontendProgram,
+  CpuFrontend,
+  WebGpuRuntime,
+} from "@mewhhaha/baba/runtime/webgpu";
 
+import { MAXIMUM_SOURCE_BYTE_LENGTH } from "../src/semantic/abi.ts";
+import { sourceTooLargeDiagnostic } from "../src/semantic/compilation_diagnostics.ts";
+import { BabaGpuLazuliCompiler } from "../src/lazuli/baba_gpu_compiler.ts";
 import {
   lowerLazuliGpuFrontendResult,
   parseLazuliSourceForCompilation,
@@ -117,6 +124,26 @@ Deno.test("Baba compact frontend rejects disconnected nodes", () => {
       ),
     /node \d+ has 0 incoming node edges/,
   );
+});
+
+Deno.test("Baba GPU compilation rejects oversized source before frontend dispatch", async () => {
+  const runtime = await WebGpuRuntime.create();
+  try {
+    const compiler = await BabaGpuLazuliCompiler.create(runtime, planBytes);
+    const sourceByteLength = MAXIMUM_SOURCE_BYTE_LENGTH + 2;
+    const source = "\u0800".repeat(sourceByteLength / 3);
+    const compilation = await compiler.compile(source);
+
+    equal(compilation.frontendTimings, null);
+    deepStrictEqual(compilation.result, {
+      ok: false,
+      diagnostics: [
+        sourceTooLargeDiagnostic(sourceByteLength, MAXIMUM_SOURCE_BYTE_LENGTH),
+      ],
+    });
+  } finally {
+    runtime.dispose();
+  }
 });
 
 function reverseNonrootNodes(program: CompactFrontendProgram): CompactFrontendProgram {
