@@ -8,6 +8,7 @@ import type {
   SemanticCompilationOptions,
   SemanticCompileResult,
 } from "../semantic/compiler_module.ts";
+import { validateCompilationOptions } from "../functional/compiler.ts";
 import { GpuLazuliCompiler } from "./compiler.ts";
 import { lowerLazuliGpuFrontendResult } from "./frontend.ts";
 
@@ -37,6 +38,8 @@ export class BabaGpuLazuliCompiler {
     source: string,
     options: SemanticCompilationOptions = {},
   ): Promise<BabaGpuLazuliCompilation> {
+    validateCompilationOptions(options);
+    options.signal?.throwIfAborted();
     const ingested = await this.frontend.ingest(source);
     const parsed = lowerLazuliGpuFrontendResult(source, ingested, this.frontend.plan);
     return {
