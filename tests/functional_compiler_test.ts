@@ -90,10 +90,11 @@ Deno.test("surface module construction rejects malformed options at its boundary
 Deno.test("effect sets provide deterministic ordinary set operations", () => {
   const consoleEffects = effectSet("Console.Write", "Console.Read", "Console.Write");
   const storageEffects = effectSet("Storage");
+  const combinedEffects = consoleEffects.union(storageEffects);
 
   deepStrictEqual([...consoleEffects], ["Console.Read", "Console.Write"]);
   deepStrictEqual(
-    [...consoleEffects.union(storageEffects)],
+    [...combinedEffects],
     ["Console.Read", "Console.Write", "Storage"],
   );
   deepStrictEqual(
@@ -104,7 +105,15 @@ Deno.test("effect sets provide deterministic ordinary set operations", () => {
     [...consoleEffects.difference(effectSet("Console.Read"))],
     ["Console.Write"],
   );
-  equal(consoleEffects.isSubsetOf(consoleEffects.union(storageEffects)), true);
+  deepStrictEqual(
+    [...consoleEffects.symmetricDifference(effectSet("Console.Read", "Storage"))],
+    ["Console.Write", "Storage"],
+  );
+  throws(
+    () => (combinedEffects as Set<string>).add("Network"),
+    /functional effect sets are immutable/,
+  );
+  equal(consoleEffects.isSubsetOf(combinedEffects), true);
   equal(consoleEffects.isDisjointFrom(storageEffects), true);
 });
 

@@ -1,4 +1,13 @@
-export type EffectSet = ReadonlySet<string>;
+export interface EffectSet extends ReadonlySet<string> {
+  union(other: ReadonlySetLike<string>): EffectSet;
+  union<U>(other: ReadonlySetLike<U>): Set<string | U>;
+  intersection(other: ReadonlySetLike<string>): EffectSet;
+  intersection<U>(other: ReadonlySetLike<U>): Set<string & U>;
+  difference(other: ReadonlySetLike<unknown>): EffectSet;
+  difference<U>(other: ReadonlySetLike<U>): Set<string>;
+  symmetricDifference(other: ReadonlySetLike<string>): EffectSet;
+  symmetricDifference<U>(other: ReadonlySetLike<U>): Set<string | U>;
+}
 
 export function effectSet(...effects: readonly string[]): EffectSet {
   return effectSetFrom(effects);
@@ -22,8 +31,24 @@ export function effectSetFrom(effects: Iterable<string>): EffectSet {
     add: { value: rejectMutation },
     delete: { value: rejectMutation },
     clear: { value: rejectMutation },
+    union: {
+      value: <U>(other: ReadonlySetLike<U>): EffectSet =>
+        effectSetFrom(Set.prototype.union.call(immutable, other)),
+    },
+    intersection: {
+      value: <U>(other: ReadonlySetLike<U>): EffectSet =>
+        effectSetFrom(Set.prototype.intersection.call(immutable, other)),
+    },
+    difference: {
+      value: (other: ReadonlySetLike<unknown>): EffectSet =>
+        effectSetFrom(Set.prototype.difference.call(immutable, other)),
+    },
+    symmetricDifference: {
+      value: <U>(other: ReadonlySetLike<U>): EffectSet =>
+        effectSetFrom(Set.prototype.symmetricDifference.call(immutable, other)),
+    },
   });
-  return Object.freeze(immutable);
+  return Object.freeze(immutable) as EffectSet;
 }
 
 export function effectNames(effects: EffectSet): readonly string[] {
