@@ -21,7 +21,7 @@
  *
  * @module
  */
-import { decodeLexerPlanTables, WebGpuLexer } from "@mewhhaha/baba/runtime/webgpu-lexer";
+import { decodeLexerPlanTables, WebGpuLexer } from "@mewhhaha/baba/runtime/webgpu";
 
 const DEFAULT_PLANS = [
   "language/gleam/generated/wasm/parser.plan",

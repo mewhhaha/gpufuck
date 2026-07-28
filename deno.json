@@ -10,9 +10,9 @@
   ],
   "minimumDependencyAge": "0",
   "imports": {
-    "@mewhhaha/baba": "jsr:@mewhhaha/baba@7.2.0",
-    "@mewhhaha/baba/runtime/generated-wasm": "jsr:@mewhhaha/baba@7.2.0/runtime/generated-wasm",
-    "@mewhhaha/baba/runtime/webgpu-lexer": "jsr:@mewhhaha/baba@7.2.0/runtime/webgpu-lexer"
+    "@mewhhaha/baba": "jsr:@mewhhaha/baba@7.3.0",
+    "@mewhhaha/baba/runtime/generated-wasm": "jsr:@mewhhaha/baba@7.3.0/runtime/generated-wasm",
+    "@mewhhaha/baba/runtime/webgpu": "jsr:@mewhhaha/baba@7.3.0/runtime/webgpu"
   },
   "compilerOptions": {
     "strict": true,
@@ -54,9 +54,9 @@
     "check:javascript-test262": "deno run --allow-read --allow-run=git,deno,ps --allow-write=/tmp examples/javascript-aot/check_test262.ts",
     "compile:lazuli": "deno run --allow-read lazuli_cli.ts compile",
     "fmt": "deno fmt --check",
-    "generate:gleam": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@7.2.0/cli language/gleam/grammar.baba --metadata language/gleam/baba.json --out language/gleam/generated --name gleam --root module --target wasm",
-    "generate:javascript-aot": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@7.2.0/cli examples/javascript-aot/language/grammar.baba --metadata examples/javascript-aot/language/baba.json --out examples/javascript-aot/language/generated --name javascript-aot --root module --target wasm",
-    "generate:lazuli": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@7.2.0/cli language/lazuli/grammar.baba --metadata language/lazuli/baba.json --out language/lazuli/generated --name lazuli --root module --target wasm",
+    "generate:gleam": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@7.3.0/cli language/gleam/grammar.baba --metadata language/gleam/baba.json --out language/gleam/generated --name gleam --root module --target wasm",
+    "generate:javascript-aot": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@7.3.0/cli examples/javascript-aot/language/grammar.baba --metadata examples/javascript-aot/language/baba.json --out examples/javascript-aot/language/generated --name javascript-aot --root module --target wasm",
+    "generate:lazuli": "deno run --allow-read --allow-write jsr:@mewhhaha/baba@7.3.0/cli language/lazuli/grammar.baba --metadata language/lazuli/baba.json --out language/lazuli/generated --name lazuli --root module --target wasm",
     "lint": "deno lint",
     "playground:build": "deno run -A playground/build.ts",
     "playground:serve": "deno run -A playground/build.ts && deno run -A jsr:@std/http/file-server --port 8080 playground/dist",

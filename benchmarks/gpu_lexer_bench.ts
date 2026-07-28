@@ -26,7 +26,7 @@
  *
  * @module
  */
-import { WebGpuLexer } from "@mewhhaha/baba/runtime/webgpu-lexer";
+import { WebGpuLexer } from "@mewhhaha/baba/runtime/webgpu";
 import { parseGleamModule } from "../src/gleam/parser.ts";
 import { generateGleamCorpus } from "../tools/generate_gleam_corpus.ts";
 

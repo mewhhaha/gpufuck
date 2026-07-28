@@ -13,10 +13,10 @@
     "format": "baba-runtime-implementation",
     "version": 2,
     "semantics": "baba-runtime-portable-v2",
-    "hash": "fnv1a64:cd0b8ccad6602ef5"
+    "hash": "fnv1a64:a32d1dab5ed58e67"
   },
   "core": {
-    "abiVersion": 10,
+    "abiVersion": 11,
     "memory": {
       "export": "memory",
       "pageBytes": 65536,
@@ -75,16 +75,15 @@
           "encodedAction"
         ]
       },
-      "parseTraceResult": {
-        "i32Count": 6,
-        "bytes": 24,
+      "validateResult": {
+        "i32Count": 5,
+        "bytes": 20,
         "fields": [
-          "tokenRecordCount",
-          "traceActionCount",
-          "errorOffset",
+          "parserActionCount",
           "errorState",
-          "tokenReadCount",
-          "reserved"
+          "errorSpecIndex",
+          "errorStart",
+          "errorEnd"
         ]
       },
       "parseCursorResult": {
@@ -197,23 +196,18 @@
         "result": "selectionStatusOneSelectedZeroUnexpectedTwoMultipleChoicesMinusOneInvalid"
       },
       {
-        "name": "parse_trace",
+        "name": "validate",
         "params": [
           "sourcePtr",
           "sourceLength",
-          "tokenPtr",
-          "tokenCapacity",
-          "tracePtr",
-          "traceCapacity",
           "resultPtr",
           "stackPtr",
           "stackCapacity",
           "memoPtr",
           "memoCapacity",
-          "preserveTrivia",
-          "maxTraceActions"
+          "maxParserActions"
         ],
-        "result": "traceStatusZeroOkOneUnexpectedTwoInternalFourTraceLimitFiveAmbiguous"
+        "result": "parseStatusZeroOkOneUnexpectedTwoInternalFourActionLimitFiveAmbiguousSixMemoRequired"
       },
       {
         "name": "parse_cursor",
@@ -239,7 +233,7 @@
           "memoPtr",
           "memoCapacity",
           "preserveTrivia",
-          "maxTraceActions"
+          "maxParserActions"
         ],
         "result": "cursorStatusZeroOkOneUnexpectedTwoInternalThreeCapacityFourTraceLimitFiveAmbiguous"
       },
@@ -266,7 +260,7 @@
           "fragmentStackPtr",
           "fragmentCapacity",
           "preserveTrivia",
-          "maxTraceActions"
+          "maxParserActions"
         ],
         "result": "cursorStatusZeroOkOneUnexpectedTwoInternalThreeCapacityFourTraceLimitFiveAmbiguous"
       },
@@ -289,7 +283,7 @@
           "memoPtr",
           "memoCapacity"
         ],
-        "result": "tokenRecordCountOrMinusOneTokenCapacityMinusTwoMemoCapacity"
+        "result": "tokenRecordCountOrMinusOneTokenCapacityMinusTwoMemoRequired"
       },
       {
         "name": "lex_memo_i32_per_position",
@@ -360,6 +354,11 @@
         "result": "i32"
       },
       {
+        "name": "validate_result_i32_count",
+        "params": [],
+        "result": "i32"
+      },
+      {
         "name": "host_ownership_model",
         "params": [],
         "result": "i32"
@@ -383,21 +382,16 @@
         "reset",
         "writeSource(different source)"
       ]
-    },
-    "parseTraceInput": {
-      "type": "ParseTraceInput",
-      "staleAfter": [
-        "reset"
-      ]
     }
   },
-  "traceStatuses": {
+  "parseStatuses": {
     "ok": 0,
     "unexpected": 1,
     "internal": 2,
-    "branchLimit": 3,
-    "traceLimit": 4,
-    "ambiguous": 5
+    "cursorCapacity": 3,
+    "actionLimit": 4,
+    "ambiguous": 5,
+    "memoRequired": 6
   },
   "parserDiagnosticCodes": {
     "parseLexicalError": 1,

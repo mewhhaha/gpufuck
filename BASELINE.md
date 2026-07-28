@@ -1488,6 +1488,45 @@ the remaining 4.9 s is one-time startup — fifteen workers each instantiating t
 before the first module completes — so the marginal cost after warmup is far lower than the total
 suggests.
 
+## 2026-07-27 — baba 7.3.0 adds a GPU _frontend_, which our grammars do not qualify for
+
+One breaking change and one genuinely new capability.
+
+**The break is a rename.** `./runtime/webgpu-lexer` became `./runtime/webgpu`; three files and the
+import map, no logic. Everything else compiles unchanged — `generated_wasm.ts`'s exports are
+identical to 7.2.0's — and 348 tests pass with every `bench` counter unchanged.
+
+**Smaller DFAs.** The grammar compiler emits fewer states: gleam 183 → **171**, lazuli 82 → **77**,
+javascript-aot 238 → **201**, a 6–16% reduction. All three still fit the GPU lexer. It does not show
+up in parse time: 1,343 ms parse-only on the 256-module corpus against 1,437 / 1,287 recorded for
+7.2.0 / 7.1.0, which is inside the band those two already spanned.
+
+### The new capability is a frontend, not a lexer — and it is gated
+
+`WebGpuFrontend` runs "lexing, structural matching, island recognition, and flat IR allocation in
+one submission", with `ingestResident()` leaving the syntax IR on the device. That is materially
+more than the lexer, and the residency is the argument this repository kept saying was the
+compelling one: IR that never crosses back to the host could feed the GPU pipeline directly. A
+`CpuFrontend` ships alongside it.
+
+**We cannot use it.** It requires an opt-in version-3 GPU frontend section in the plan, and
+`inspectGpuFrontendPlan` returns `null` for all three of our regenerated plans. There is no CLI flag
+to request one — the full flag list has nothing for gpu, frontend or islands — so the section is
+emitted only when the grammar qualifies. Its own documentation says the frontend "requires
+compiler-proven, locally locatable islands", which is a property of the grammar rather than
+something a consumer selects.
+
+So the interesting half of 7.3.0 is unreachable from here without a grammar change, and what that
+change would be is not documented in the package. Worth asking upstream before assuming Gleam's
+grammar could ever qualify.
+
+**It would still be bounded by the 1% finding, but less tightly.** A GPU _lexer_ caps the frontend
+win at 1.01x because lexing is 1% of it. A GPU _frontend_ that also does structural matching and
+flat IR allocation would overlap baba's tree building, which is a further 21% — and if its flat IR
+could be lowered from directly, the intermediate Gleam AST at 57% comes into range too. That is the
+first version of this idea with a plausible path past 1.01x, and it is unmeasured because we cannot
+run it.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

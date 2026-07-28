@@ -1,7 +1,7 @@
 {
   "format": "baba-wasm-runtime",
   "version": 1,
-  "abiVersion": 10,
+  "abiVersion": 11,
   "parserPlan": {
     "format": "baba-parser-plan",
     "version": 2,
@@ -15,7 +15,7 @@
     "format": "baba-runtime-implementation",
     "version": 2,
     "semantics": "baba-runtime-portable-v2",
-    "hash": "fnv1a64:cd0b8ccad6602ef5"
+    "hash": "fnv1a64:a32d1dab5ed58e67"
   },
   "module": "parser.wasm",
   "plan": "parser.plan"
