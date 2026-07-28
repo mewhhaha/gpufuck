@@ -285,6 +285,13 @@ export function normalizeHostCapabilities(
           } has unsupported execution ${JSON.stringify(field.execution)}`,
         );
       }
+      if (field.execution === "suspending" && effects.size === 0) {
+        throw new Error(
+          `functional suspending host operation ${
+            JSON.stringify(`${declaration.name}.${field.name}`)
+          } must declare at least one effect`,
+        );
+      }
       if (field.wasmIntrinsic !== undefined) {
         if (!Object.values(WasmIntrinsic).includes(field.wasmIntrinsic)) {
           throw new Error(

@@ -809,6 +809,32 @@ Deno.test("rejects a WASM buffer intrinsic with an incompatible signature", () =
   );
 });
 
+Deno.test("rejects a suspending host operation with no declared effects", () => {
+  throws(
+    () =>
+      buildSurfaceModule(
+        [{ name: "main", parameters: [], annotation: null, body: surface.integer(42) }],
+        [],
+        "main",
+        0,
+        {
+          hostCapabilities: [{
+            name: "Network",
+            fields: [{
+              kind: "operation",
+              name: "fetch",
+              effects: effectSet(),
+              execution: "suspending",
+              parameter: { kind: "integer" },
+              result: { kind: "integer" },
+            }],
+          }],
+        },
+      ),
+    /suspending host operation "Network.fetch" must declare at least one effect/,
+  );
+});
+
 Deno.test("rejects unsupported functional module envelopes before GPU work", async () => {
   const { compiler } = functionalRuntime();
   const valid = integerModule(42);
