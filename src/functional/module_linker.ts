@@ -7,6 +7,7 @@ import {
 } from "./abi.ts";
 import type { HostCapabilityDeclaration, SurfaceModuleOptions } from "./host_contract.ts";
 import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
+import { effectSetFrom } from "./effect_set.ts";
 import { analyzeSurfaceReachability } from "./surface_reachability.ts";
 import {
   buildSurfaceModule,
@@ -220,6 +221,14 @@ export function createModuleArtifact(
         cause instanceof Error ? cause.message : String(cause)
       }`,
     }, cause);
+  }
+  for (const capability of snapshot.options.hostCapabilities ?? []) {
+    for (const field of capability.fields) {
+      if (field.kind !== "operation") continue;
+      Object.defineProperty(field, "effects", {
+        value: effectSetFrom(field.effects),
+      });
+    }
   }
   const pendingObjects: object[] = [snapshot];
   const frozenObjects = new Set<object>();

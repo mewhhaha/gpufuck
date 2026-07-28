@@ -108,6 +108,16 @@ Deno.test("effect sets provide deterministic ordinary set operations", () => {
   equal(consoleEffects.isDisjointFrom(storageEffects), true);
 });
 
+Deno.test("effect sets reject runtime mutation", () => {
+  const effects = effectSet("Console.Write");
+
+  throws(
+    () => (effects as Set<string>).clear(),
+    /functional effect sets are immutable/,
+  );
+  deepStrictEqual([...effects], ["Console.Write"]);
+});
+
 Deno.test("infers effect sets through higher-order Core calls", async () => {
   const consoleEffects = effectSet("Console.Write", "Telemetry");
   const integer = { kind: "integer" as const };
@@ -266,6 +276,14 @@ Deno.test("linked host operations must declare the same effect set", () => {
         { module: "entry", exportName: "main" },
       ),
     /F4005: functional modules declare incompatible host field "Console.write"/,
+  );
+
+  const snapshot = artifact("snapshot", effectSet("Console.Write"));
+  const operation = snapshot.options.hostCapabilities?.[0]?.fields[0];
+  if (operation?.kind !== "operation") throw new Error("test artifact omitted its operation");
+  throws(
+    () => (operation.effects as Set<string>).add("Telemetry"),
+    /functional effect sets are immutable/,
   );
 });
 

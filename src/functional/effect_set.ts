@@ -14,7 +14,16 @@ export function effectSetFrom(effects: Iterable<string>): EffectSet {
     }
     names.add(effect);
   }
-  return new Set([...names].sort());
+  const immutable = new Set([...names].sort());
+  const rejectMutation = (): never => {
+    throw new TypeError("functional effect sets are immutable");
+  };
+  Object.defineProperties(immutable, {
+    add: { value: rejectMutation },
+    delete: { value: rejectMutation },
+    clear: { value: rejectMutation },
+  });
+  return Object.freeze(immutable);
 }
 
 export function effectNames(effects: EffectSet): readonly string[] {
