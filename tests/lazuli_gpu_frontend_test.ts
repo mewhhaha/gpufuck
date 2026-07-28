@@ -66,6 +66,28 @@ Deno.test("Baba compact frontend diagnostics use the Lazuli parse boundary", () 
   );
 });
 
+Deno.test("Baba compact frontend rejects invalid diagnostic spans", () => {
+  const source = "fn main = ;";
+  const babaResult = babaFrontend.ingest(source);
+  ok(!babaResult.ok, "invalid Lazuli source was accepted by Baba");
+
+  throws(
+    () =>
+      lowerLazuliGpuFrontendResult(
+        source,
+        {
+          ...babaResult,
+          diagnostics: [{
+            ...babaResult.diagnostics[0]!,
+            start: -1,
+          }],
+        },
+        babaFrontend.plan,
+      ),
+    /diagnostic 0 span \[-1, \d+\) is outside source length 11/,
+  );
+});
+
 Deno.test("Baba compact frontend accepts GPU node allocation order", () => {
   const source = "fn main = 6 * 7;";
   const reference = parseLazuliSourceForCompilation(source);

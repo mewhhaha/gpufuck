@@ -336,13 +336,27 @@ export function lowerLazuliGpuFrontendResult(
     sourceByteLength: byteOffsets.byteLength,
     frontend: parseLazuliSourceWithOffsets(source, byteOffsets, () => {
       if (!result.ok) {
+        if (result.diagnostics.length === 0) {
+          throw new Error("Baba GPU frontend failed without diagnostics.");
+        }
         return {
           ok: false,
-          diagnostics: result.diagnostics.map((diagnostic) => ({
-            code: diagnostic.code,
-            message: diagnostic.message,
-            span: { start: diagnostic.start, end: diagnostic.end },
-          })),
+          diagnostics: result.diagnostics.map((diagnostic, index) => {
+            if (
+              diagnostic.start < 0 || diagnostic.end < diagnostic.start ||
+              diagnostic.end > source.length
+            ) {
+              throw new Error(
+                `Baba GPU frontend diagnostic ${index} span ` +
+                  `[${diagnostic.start}, ${diagnostic.end}) is outside source length ${source.length}.`,
+              );
+            }
+            return {
+              code: diagnostic.code,
+              message: diagnostic.message,
+              span: { start: diagnostic.start, end: diagnostic.end },
+            };
+          }),
         };
       }
       return {
