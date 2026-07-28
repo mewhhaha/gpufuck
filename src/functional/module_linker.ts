@@ -209,7 +209,21 @@ export function createModuleArtifact(
   );
   let snapshot: ModuleArtifact;
   try {
-    snapshot = structuredClone(artifact);
+    const cloneableArtifact = {
+      ...artifact,
+      options: {
+        ...artifact.options,
+        ...(artifact.options.hostCapabilities === undefined ? {} : {
+          hostCapabilities: artifact.options.hostCapabilities.map((capability) => ({
+            ...capability,
+            fields: capability.fields.map((field) =>
+              field.kind === "operation" ? { ...field, effects: [...field.effects] } : field
+            ),
+          })),
+        }),
+      },
+    };
+    snapshot = structuredClone(cloneableArtifact) as ModuleArtifact;
   } catch (cause) {
     throw new LinkError({
       code: "F4001",

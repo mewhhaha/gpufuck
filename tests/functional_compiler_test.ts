@@ -124,6 +124,10 @@ Deno.test("effect sets reject runtime mutation", () => {
     () => (effects as Set<string>).clear(),
     /functional effect sets are immutable/,
   );
+  throws(
+    () => Set.prototype.clear.call(effects),
+    /incompatible receiver|not a Set/,
+  );
   deepStrictEqual([...effects], ["Console.Write"]);
 });
 

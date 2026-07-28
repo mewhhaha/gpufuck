@@ -48,7 +48,14 @@ export function effectSetFrom(effects: Iterable<string>): EffectSet {
         effectSetFrom(Set.prototype.symmetricDifference.call(immutable, other)),
     },
   });
-  return Object.freeze(immutable) as EffectSet;
+  Object.freeze(immutable);
+  return new Proxy(immutable, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (Object.prototype.hasOwnProperty.call(target, property)) return value;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as EffectSet;
 }
 
 export function effectNames(effects: EffectSet): readonly string[] {
