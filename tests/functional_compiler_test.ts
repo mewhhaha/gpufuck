@@ -12,6 +12,8 @@ import {
   ExpressionTag,
   GpuCompiler,
   GpuEvaluator,
+  INIT_CONSTRUCTOR_NAME,
+  INIT_TYPE_NAME,
   linkModules,
   locateDiagnostic,
   MAXIMUM_SOURCE_BYTE_LENGTH,
@@ -174,6 +176,52 @@ Deno.test("infers effect sets through higher-order Core calls", async () => {
       "Console.Write",
       "Telemetry",
     ]);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("infers effects from operations supplied through host init", async () => {
+  const consoleEffects = effectSet("Console.Write");
+  const integer = { kind: "integer" as const };
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: ["init"],
+      annotation: {
+        kind: "function",
+        parameter: { kind: "named", name: INIT_TYPE_NAME, arguments: [] },
+        result: integer,
+      },
+      body: surface.case(surface.name("init"), [{
+        constructor: INIT_CONSTRUCTOR_NAME,
+        binders: ["write"],
+        body: surface.apply(surface.name("write"), surface.integer(42)),
+      }]),
+    }],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Console",
+        fields: [{
+          kind: "operation",
+          name: "write",
+          effects: consoleEffects,
+          parameter: integer,
+          result: integer,
+        }],
+      }],
+    },
+  );
+  const { compiler } = functionalRuntime();
+  const compilation = await compiler.compileModule(module);
+
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    deepStrictEqual([...compilation.module.entryEffects], ["Console.Write"]);
   } finally {
     compilation.module.destroy();
   }

@@ -84,8 +84,19 @@ export class LambdaSetAnalysis {
     this.#markEscapingConstructorFieldsIncomplete();
     for (const [constructor, name] of module.constructorNames.entries()) {
       if (name !== INIT_CONSTRUCTOR_NAME) continue;
-      for (let field = 0; field < module.constructorArities[constructor]!; field++) {
+      const arity = module.constructorArities[constructor]!;
+      const hostFields = module.hostCapabilities.flatMap((capability) => capability.fields);
+      if (arity !== hostFields.length) {
+        throw new Error(
+          `functional lambda-set init constructor ${constructor} has arity ${arity}; expected ${hostFields.length} host fields`,
+        );
+      }
+      for (let field = 0; field < arity; field++) {
         this.#markIncomplete(this.#constructorField(constructor, field));
+        const declaration = hostFields[field];
+        if (declaration?.kind === "operation") {
+          this.#addEffects(this.#constructorField(constructor, field), declaration.effects);
+        }
       }
     }
 
