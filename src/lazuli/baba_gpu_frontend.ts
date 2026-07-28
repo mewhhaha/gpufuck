@@ -69,6 +69,42 @@ export function compactLazuliProgramCursor(
   }
 
   for (const cursor of cursors) cursor.connectEdges();
+  const edgeCount = program.edges.length / EDGE_WORD_LENGTH;
+  const edgeOwners = new Uint8Array(edgeCount);
+  const incomingNodeEdges = new Uint32Array(nodeCount);
+  for (let nodeId = 0; nodeId < nodeCount; nodeId += 1) {
+    const nodeOffset = nodeId * NODE_WORD_LENGTH;
+    const edgeStart = requiredWord(program.nodes, nodeOffset + 4, "edge start", nodeId);
+    const nodeEdgeCount = requiredWord(program.nodes, nodeOffset + 5, "edge count", nodeId);
+    for (let edgeId = edgeStart; edgeId < edgeStart + nodeEdgeCount; edgeId += 1) {
+      if (edgeOwners[edgeId] !== 0) {
+        throw new Error(`Baba compact frontend edge ${edgeId} belongs to multiple nodes.`);
+      }
+      edgeOwners[edgeId] = 1;
+      const edgeOffset = edgeId * EDGE_WORD_LENGTH;
+      if (program.edges[edgeOffset + 2] === NODE_TARGET) {
+        const target = requiredWord(program.edges, edgeOffset + 3, "edge target", edgeId);
+        incomingNodeEdges[target]! += 1;
+      }
+    }
+  }
+  const unownedEdge = edgeOwners.findIndex((owner) => owner === 0);
+  if (unownedEdge !== -1) {
+    throw new Error(`Baba compact frontend edge ${unownedEdge} belongs to no node.`);
+  }
+  if (incomingNodeEdges[0] !== 0) {
+    throw new Error(`Baba compact frontend root has ${incomingNodeEdges[0]} incoming node edges.`);
+  }
+  for (let nodeId = 1; nodeId < nodeCount; nodeId += 1) {
+    if (incomingNodeEdges[nodeId] !== 1) {
+      throw new Error(
+        `Baba compact frontend node ${nodeId} has ${
+          incomingNodeEdges[nodeId]
+        } incoming node edges; ` +
+          "expected exactly one.",
+      );
+    }
+  }
   correctCompactSpans(cursors);
 
   const root = cursors[0];

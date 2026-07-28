@@ -1,4 +1,4 @@
-import { deepStrictEqual, ok } from "node:assert/strict";
+import { deepStrictEqual, ok, throws } from "node:assert/strict";
 
 import { type CompactFrontendProgram, CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 
@@ -72,6 +72,50 @@ Deno.test("Baba compact frontend accepts GPU node allocation order", () => {
       babaFrontend.plan,
     ),
     reference,
+  );
+});
+
+Deno.test("Baba compact frontend rejects unowned edge records", () => {
+  const source = "fn main = 42;";
+  const babaResult = babaFrontend.ingest(source);
+  ok(babaResult.ok, "valid Lazuli source was rejected by Baba");
+
+  throws(
+    () =>
+      lowerLazuliGpuFrontendResult(
+        source,
+        {
+          ...babaResult,
+          program: {
+            ...babaResult.program,
+            edges: new Int32Array([...babaResult.program.edges, 0, 0, 0, 0]),
+          },
+        },
+        babaFrontend.plan,
+      ),
+    /edge \d+ belongs to no node/,
+  );
+});
+
+Deno.test("Baba compact frontend rejects disconnected nodes", () => {
+  const source = "fn main = 42;";
+  const babaResult = babaFrontend.ingest(source);
+  ok(babaResult.ok, "valid Lazuli source was rejected by Baba");
+
+  const edges = new Int32Array(babaResult.program.edges);
+  const nodeEdgeOffset = edges.findIndex((word, index) => index % 4 === 2 && word === 1);
+  ok(nodeEdgeOffset !== -1, "Baba fixture has no node edge");
+  edges[nodeEdgeOffset] = 0;
+  edges[nodeEdgeOffset + 1] = 0;
+
+  throws(
+    () =>
+      lowerLazuliGpuFrontendResult(
+        source,
+        { ...babaResult, program: { ...babaResult.program, edges } },
+        babaFrontend.plan,
+      ),
+    /node \d+ has 0 incoming node edges/,
   );
 });
 
