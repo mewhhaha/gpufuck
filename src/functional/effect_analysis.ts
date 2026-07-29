@@ -150,6 +150,8 @@ export function analyzeModuleEffects(
   }
 
   const definitionEffects = module.definitionRoots.map((root, definition) => {
+    const hostEffects = hostEffectsByDefinition.get(definition);
+    if (hostEffects !== undefined) return hostEffects;
     const rootNode = nodes[root];
     if (rootNode === undefined) {
       throw new Error(
@@ -159,7 +161,6 @@ export function analyzeModuleEffects(
     const effectNode = rootNode.tag === CoreTag.Lambda ? rootNode.child0 : root;
     return effectSetFrom([
       ...module.declaredDefinitionEffects[definition]!,
-      ...(hostEffectsByDefinition.get(definition) ?? []),
       ...effectNamesByNode[effectNode]!,
     ]);
   });

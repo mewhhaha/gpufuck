@@ -488,6 +488,22 @@ function normalizeHostDefinitions(
         }`,
       );
     }
+    if (
+      definition.effects !== undefined && definition.effects.size !== 0 &&
+      (
+        field.kind !== "operation" ||
+        definition.effects.size !== field.effects.size ||
+        ![...definition.effects].every((effect) => field.effects.has(effect))
+      )
+    ) {
+      throw new Error(
+        `functional host definition ${JSON.stringify(binding.definition)} declares effects ${
+          JSON.stringify([...definition.effects])
+        }; field ${JSON.stringify(`${binding.capability}.${binding.field}`)} declares ${
+          JSON.stringify(field.kind === "operation" ? [...field.effects] : [])
+        }`,
+      );
+    }
     boundDefinitions.add(binding.definition);
     return Object.freeze({ ...binding });
   }));

@@ -141,22 +141,36 @@ Deno.test("infers effect sets through higher-order Core calls", async () => {
     result: integer,
   };
   const module = buildSurfaceModule(
-    [{
-      name: "emit",
-      parameters: [],
-      annotation: operationType,
-      body: surface.runtimeFault("unbound Console.emit"),
-    }, {
-      name: "invoke",
-      parameters: ["callback"],
-      annotation: null,
-      body: surface.apply(surface.name("callback"), surface.integer(42)),
-    }, {
-      name: "main",
-      parameters: [],
-      annotation: null,
-      body: surface.apply(surface.name("invoke"), surface.name("emit")),
-    }],
+    [
+      defineEffectOperation({
+        name: "tick",
+        parameter: { name: "value", type: integer },
+        result: integer,
+        effects: effectSet("Clock.Tick"),
+        body: surface.name("value"),
+      }),
+      {
+        name: "emit",
+        parameters: [],
+        annotation: operationType,
+        body: surface.lambda(
+          "value",
+          surface.apply(surface.name("tick"), surface.name("value")),
+        ),
+      },
+      {
+        name: "invoke",
+        parameters: ["callback"],
+        annotation: null,
+        body: surface.apply(surface.name("callback"), surface.integer(42)),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: null,
+        body: surface.apply(surface.name("invoke"), surface.name("emit")),
+      },
+    ],
     [],
     "main",
     0,
@@ -185,9 +199,11 @@ Deno.test("infers effect sets through higher-order Core calls", async () => {
   if (!compilation.ok) return;
   try {
     deepStrictEqual([...compilation.module.entryEffects], ["Console.Write", "Telemetry"]);
+    const tick = compilation.module.definitionNames.indexOf("tick");
     const emit = compilation.module.definitionNames.indexOf("emit");
     const invoke = compilation.module.definitionNames.indexOf("invoke");
     const main = compilation.module.definitionNames.indexOf("main");
+    deepStrictEqual([...compilation.module.definitionEffects[tick]!], ["Clock.Tick"]);
     deepStrictEqual([...compilation.module.definitionEffects[emit]!], [
       "Console.Write",
       "Telemetry",
@@ -203,6 +219,52 @@ Deno.test("infers effect sets through higher-order Core calls", async () => {
   } finally {
     compilation.module.destroy();
   }
+});
+
+Deno.test("host-bound definitions reject conflicting source effect declarations", () => {
+  const integer = { kind: "integer" as const };
+
+  throws(
+    () =>
+      buildSurfaceModule(
+        [
+          defineEffectOperation({
+            name: "emit",
+            parameter: { name: "value", type: integer },
+            result: integer,
+            effects: effectSet("Telemetry"),
+            body: surface.name("value"),
+          }),
+          {
+            name: "main",
+            parameters: [],
+            annotation: integer,
+            body: surface.integer(42),
+          },
+        ],
+        [],
+        "main",
+        0,
+        {
+          hostCapabilities: [{
+            name: "Console",
+            fields: [{
+              kind: "operation",
+              name: "emit",
+              effects: effectSet("Console.Write"),
+              parameter: integer,
+              result: integer,
+            }],
+          }],
+          hostDefinitions: [{
+            definition: "emit",
+            capability: "Console",
+            field: "emit",
+          }],
+        },
+      ),
+    /host definition "emit" declares effects \["Telemetry"\]; field "Console\.emit" declares \["Console\.Write"\]/,
+  );
 });
 
 Deno.test("source effects flow through higher-order calls and pure handlers discharge them", async () => {

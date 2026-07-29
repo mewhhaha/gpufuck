@@ -1,7 +1,7 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
 import type { CoreNode, GpuModule } from "./compiler_module.ts";
 import { type EffectSet, effectSetFrom } from "./effect_set.ts";
-import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
+import { type HostFieldDeclaration, INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
 
 // Wider sets retain the ordinary closure path so adversarial modules cannot inflate dispatch code.
 const MAXIMUM_LAMBDA_SET_SIZE = 64;
@@ -100,14 +100,7 @@ export class LambdaSetAnalysis {
       }
     }
 
-    for (const [definition, root] of module.definitionRoots.entries()) {
-      this.#visitExpression(root, []);
-      this.#addEdge(this.#nodeVariable(root), this.#definitionVariable(definition));
-      this.#addEffects(
-        this.#definitionVariable(definition),
-        module.declaredDefinitionEffects[definition]!,
-      );
-    }
+    const hostFieldsByDefinition = new Map<number, HostFieldDeclaration>();
     for (const binding of module.hostDefinitions) {
       const definition = module.definitionNames.indexOf(binding.definition);
       const capability = module.hostCapabilities.find((candidate) =>
@@ -121,9 +114,23 @@ export class LambdaSetAnalysis {
           } could not resolve ${JSON.stringify(`${binding.capability}.${binding.field}`)}`,
         );
       }
-      if (field.kind === "operation") {
-        this.#addEffects(this.#definitionVariable(definition), field.effects);
+      hostFieldsByDefinition.set(definition, field);
+    }
+    for (const [definition, root] of module.definitionRoots.entries()) {
+      const hostField = hostFieldsByDefinition.get(definition);
+      if (hostField !== undefined) {
+        this.#markIncomplete(this.#definitionVariable(definition));
+        if (hostField.kind === "operation") {
+          this.#addEffects(this.#definitionVariable(definition), hostField.effects);
+        }
+        continue;
       }
+      this.#visitExpression(root, []);
+      this.#addEdge(this.#nodeVariable(root), this.#definitionVariable(definition));
+      this.#addEffects(
+        this.#definitionVariable(definition),
+        module.declaredDefinitionEffects[definition]!,
+      );
     }
 
     const entryApplication: ApplicationConstraint = {
