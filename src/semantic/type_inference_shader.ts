@@ -785,7 +785,7 @@ export function prepareInferenceShaderMetadata(
 
 /**
  * Persistent, bounded Hindley-Milner and predicative rank-N inference for resolved core
- * nodes and flattened ABI-v5 type metadata. The eight bindings stay within WebGPU's portable
+ * nodes and flattened ABI-v6 type metadata. The eight bindings stay within WebGPU's portable
  * per-stage storage-buffer minimum. A dispatch performs at most
  * `maximum_transitions_per_dispatch` state-machine transitions; all durable
  * cursors, Tarjan stacks, expression frames, and arenas live in GPU buffers.
@@ -1195,6 +1195,7 @@ const TAG_STORE_LENGTH: u32 = ${CoreTag.StoreLength}u;
 const TAG_STORE_READ: u32 = ${CoreTag.StoreRead}u;
 const TAG_STORE_WRITE: u32 = ${CoreTag.StoreWrite}u;
 const TAG_STORE_GROW: u32 = ${CoreTag.StoreGrow}u;
+const TAG_STORE_EMPTY: u32 = ${CoreTag.StoreEmpty}u;
 
 const OUTPUT_INTEGER: u32 = 1u;
 const OUTPUT_BOOLEAN: u32 = 2u;
@@ -3448,6 +3449,13 @@ fn expression_transition() {
       complete_expression(fresh_variable());
       return;
     }
+    if node.tag == TAG_STORE_EMPTY {
+      if !require_type_slots(3u) { return; }
+      let element = fresh_variable();
+      let arguments = allocate_type(TYPE_LIST, element, NO_INDEX, NO_INDEX);
+      complete_expression(allocate_type(TYPE_NAMED, node.payload, arguments, NO_INDEX));
+      return;
+    }
     if node.tag == TAG_LOCAL {
       let expected = frame_get(frame, 11u);
       if node.payload == 0u && environment != NO_INDEX && expected != NO_INDEX {
@@ -4617,6 +4625,11 @@ fn node_shape_is_valid(node_index: u32) -> bool {
   }
   if node.tag == TAG_RUNTIME_FAULT {
     return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
+      node.evaluation_mode == 0u;
+  }
+  if node.tag == TAG_STORE_EMPTY {
+    return node.payload < state.type_count && type_metadata(node.payload, 1u) == 1u &&
+      node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
       node.evaluation_mode == 0u;
   }
   if node.tag == TAG_STORE_NEW || node.tag == TAG_STORE_READ {

@@ -268,7 +268,8 @@ async function inspectModuleNumericRequirements(
     if (
       node.tag === CoreTag.Text || node.tag === CoreTag.Bytes ||
       node.tag === CoreTag.RuntimeFault || node.tag === CoreTag.BufferAppend ||
-      node.tag === CoreTag.StoreNew || node.tag === CoreTag.StoreLength ||
+      node.tag === CoreTag.StoreEmpty || node.tag === CoreTag.StoreNew ||
+      node.tag === CoreTag.StoreLength ||
       node.tag === CoreTag.StoreRead || node.tag === CoreTag.StoreWrite ||
       node.tag === CoreTag.StoreGrow
     ) {

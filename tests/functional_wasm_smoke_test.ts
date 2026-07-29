@@ -95,3 +95,49 @@ Deno.test("executes 64-bit float arithmetic that the GPU evaluator delegates to 
     compilation.module.destroy();
   }
 });
+
+Deno.test("an empty Store grows to hold a value in linear-memory WebAssembly", async () => {
+  const compilation = await compileEntry(
+    surface.storeRead(
+      surface.storeGrow(
+        surface.storeEmpty(),
+        surface.integer(1),
+        surface.integer(42),
+      ),
+      surface.integer(0),
+    ),
+  );
+  try {
+    const execution = await runWasmModule(compilation.module);
+    equal(execution.value.kind, "integer");
+    equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("an empty Store grows to hold a value in WasmGC", async () => {
+  const compilation = await compileEntry(
+    surface.storeRead(
+      surface.storeGrow(
+        surface.storeEmpty(),
+        surface.integer(1),
+        surface.integer(42),
+      ),
+      surface.integer(0),
+    ),
+  );
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const main = instance.exports.main as unknown as () => unknown;
+    const valueKind = instance.exports.valueKind as unknown as (value: unknown) => number;
+    const valuePayload = instance.exports.valuePayload as unknown as (value: unknown) => number;
+    const value = main();
+
+    equal(valueKind(value), 0);
+    equal(valuePayload(value), 42);
+  } finally {
+    compilation.module.destroy();
+  }
+});

@@ -406,6 +406,61 @@ Deno.test("source effects flow through higher-order calls and pure handlers disc
   }
 });
 
+Deno.test("lexical effect evidence does not intercept an operation closed over by a function", async () => {
+  const integer = { kind: "integer" as const };
+  const module = buildSurfaceModule(
+    [
+      defineEffectOperation({
+        name: "tick",
+        parameter: { name: "value", type: integer },
+        result: integer,
+        effects: effectSet("Tick"),
+        body: surface.binary(
+          BinaryOperator.Add,
+          surface.name("value"),
+          surface.integer(1),
+        ),
+      }),
+      {
+        name: "closedComputation",
+        parameters: ["value"],
+        annotation: null,
+        body: surface.apply(surface.name("tick"), surface.name("value")),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.withEffectHandler(
+          "tick",
+          surface.lambda("value", surface.name("value")),
+          surface.apply(surface.name("closedComputation"), surface.integer(41)),
+        ),
+      },
+    ],
+    [],
+    "main",
+    0,
+  );
+  const { compiler, evaluator } = functionalRuntime();
+
+  const compilation = await compiler.compileModule(module);
+  ok(
+    compilation.ok,
+    compilation.ok ? undefined : compilation.diagnostics[0].message,
+  );
+  if (!compilation.ok) return;
+
+  try {
+    deepStrictEqual([...compilation.module.entryEffects], ["Tick"]);
+    const evaluation = await evaluator.evaluate(compilation.module);
+    if (!evaluation.ok) throw new Error(evaluation.fault.message);
+    deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("definition and export effects include fully applied curried bodies", async () => {
   const integer = { kind: "integer" as const };
   const module = buildSurfaceModule(
@@ -1246,7 +1301,7 @@ Deno.test("rejects unsupported functional module envelopes before GPU work", asy
 
   await rejects(
     () => compiler.compileModule({ ...valid, abiVersion: MODULE_ABI_VERSION + 1 }),
-    /ABI version 6 is unsupported; expected 5/,
+    /ABI version 7 is unsupported; expected 6/,
   );
   await rejects(
     () =>

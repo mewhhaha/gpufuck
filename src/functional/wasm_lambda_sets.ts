@@ -175,6 +175,7 @@ export class LambdaSetAnalysis {
       case CoreTag.Float64:
       case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
+      case CoreTag.StoreEmpty:
         return;
       case CoreTag.Local: {
         const binding = environment[environment.length - node.payload - 1];

@@ -69,7 +69,7 @@ fn main($gleam_unit_parameter) : () -&gt; i64 =
       17i64)
     10i64)</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v5; entry=$gleam/entry::main
+<tr><td><pre><code>ABI v6; entry=$gleam/entry::main
 
 definitions:
   d0 kernel/math::mix root=n0 bytes=0..77 : i64 -&gt; i64 -&gt; i64

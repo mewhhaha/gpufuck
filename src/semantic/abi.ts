@@ -1,4 +1,4 @@
-export const MODULE_ABI_VERSION = 5;
+export const MODULE_ABI_VERSION = 6;
 export const NO_INDEX = 0xffffffff;
 export const MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
 export const MAXIMUM_EXPRESSION_NODES = 65_536;
@@ -80,6 +80,7 @@ export const ExpressionTag = {
   StoreRead: 30,
   StoreWrite: 31,
   StoreGrow: 32,
+  StoreEmpty: 33,
 } as const;
 
 export type ExpressionTag = (typeof ExpressionTag)[keyof typeof ExpressionTag];
@@ -114,6 +115,7 @@ export const CoreTag = {
   StoreRead: ExpressionTag.StoreRead,
   StoreWrite: ExpressionTag.StoreWrite,
   StoreGrow: ExpressionTag.StoreGrow,
+  StoreEmpty: ExpressionTag.StoreEmpty,
 } as const;
 
 export type CoreTag = (typeof CoreTag)[keyof typeof CoreTag];

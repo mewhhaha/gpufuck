@@ -105,7 +105,8 @@ function compactRuntimeGlobals(
     if (node.tag === CoreTag.RuntimeFault) return true;
     if (node.tag === CoreTag.BufferAppend) return true;
     if (
-      node.tag === CoreTag.StoreNew || node.tag === CoreTag.StoreRead ||
+      node.tag === CoreTag.StoreEmpty || node.tag === CoreTag.StoreNew ||
+      node.tag === CoreTag.StoreRead ||
       node.tag === CoreTag.StoreWrite || node.tag === CoreTag.StoreGrow
     ) return true;
     if (node.tag === CoreTag.Binary) {

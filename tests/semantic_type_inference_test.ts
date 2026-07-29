@@ -8,7 +8,7 @@ import {
   type Type,
   type TypeDeclaration,
 } from "../mod.ts";
-import { buildSurfaceModule, surface } from "../functional.ts";
+import { buildSurfaceModule, PAIR_CONSTRUCTOR_NAME, surface } from "../functional.ts";
 import { parseLazuliSource } from "../src/lazuli/frontend.ts";
 import { inferTypes } from "../src/semantic/type_inference.ts";
 
@@ -188,6 +188,52 @@ Deno.test("host type inference preserves Store element types through persistent 
 
   ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
   if (inference.ok) deepStrictEqual(inference.mainType, { kind: "boolean" });
+});
+
+Deno.test("host type inference instantiates a shared empty Store at independent element types", () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.let(
+        "empty",
+        surface.storeEmpty(),
+        surface.apply(
+          surface.name(PAIR_CONSTRUCTOR_NAME),
+          surface.storeRead(
+            surface.storeGrow(
+              surface.name("empty"),
+              surface.integer(1),
+              surface.boolean(true),
+            ),
+            surface.integer(0),
+          ),
+          surface.storeRead(
+            surface.storeGrow(
+              surface.name("empty"),
+              surface.integer(1),
+              surface.integer(42),
+            ),
+            surface.integer(0),
+          ),
+        ),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+
+  const inference = inferTypes(module);
+
+  ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
+  if (inference.ok) {
+    deepStrictEqual(inference.mainType, {
+      kind: "tuple",
+      values: [{ kind: "boolean" }, { kind: "integer" }],
+    });
+  }
 });
 
 Deno.test("GPU type inference matches the host oracle for the 64-program successful corpus", async () => {

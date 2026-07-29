@@ -37,7 +37,7 @@ function schemaWords(
   return Uint32Array.from(records.flatMap((record) => record));
 }
 
-Deno.test("canonical schema metadata packs every ABI-v5 table into one buffer", () => {
+Deno.test("canonical schema metadata packs every ABI-v6 table into one buffer", () => {
   const surface = parsedCanonicalSurface();
   const flattened = flattenTypeSchemas(surface);
 

@@ -703,6 +703,8 @@ function collectBoundaryTypeNames(
         visitExpression(expression.left);
         visitExpression(expression.right);
         return;
+      case "store-empty":
+        return;
       case "case":
         visitExpression(expression.value);
         for (const arm of expression.arms) visitExpression(arm.body);
@@ -808,6 +810,9 @@ function expressionFeatureMask(expression: SurfaceExpression): number {
         features |= SURFACE_FEATURE_STORE;
         visit(nested.initial);
         visit(nested.length);
+        break;
+      case "store-empty":
+        features |= SURFACE_FEATURE_STORE;
         break;
       case "store-length":
         features |= SURFACE_FEATURE_STORE;
@@ -1232,6 +1237,13 @@ class SurfaceExpressionEncoder {
         ]);
         return node;
       }
+      case "store-empty":
+        return this.reserveNode(
+          ExpressionTag.StoreEmpty,
+          this.requiredTypeIndex(STORE_TYPE_NAME),
+          parent,
+          expression.span,
+        );
       case "store-length": {
         const node = this.reserveNode(
           ExpressionTag.StoreLength,
@@ -1559,7 +1571,9 @@ export type SurfaceBuilder = Readonly<{
   ): SurfaceExpression;
   /**
    * Installs lexical effect evidence. Calls through `operation` use `implementation`; passing that
-   * binding through higher-order code keeps the handler in scope and can discharge the effect.
+   * binding through higher-order code keeps the replacement in scope and can discharge the effect.
+   * Calling a function that already closed over the global operation is not dynamically
+   * intercepted.
    */
   withEffectHandler(
     operation: string,
@@ -1605,6 +1619,8 @@ export type SurfaceBuilder = Readonly<{
     length: SurfaceExpression,
     initial: SurfaceExpression,
   ): SurfaceExpression;
+  /** Allocates a zero-length `Store a`; surrounding constraints infer `a`. */
+  storeEmpty(): SurfaceExpression;
   storeLength(store: SurfaceExpression): SurfaceExpression;
   storeRead(
     store: SurfaceExpression,
@@ -1789,6 +1805,9 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       initial: SurfaceExpression,
     ): SurfaceExpression {
       return { kind: "store-new", length, initial, ...spanned };
+    },
+    storeEmpty(): SurfaceExpression {
+      return { kind: "store-empty", ...spanned };
     },
     storeLength(store: SurfaceExpression): SurfaceExpression {
       return { kind: "store-length", store, ...spanned };

@@ -57,7 +57,7 @@ fn main($gleam_unit_parameter) : () -&gt; i64 =
     (Some value -&gt;
       value))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v5; entry=$gleam/entry::main
+<tr><td><pre><code>ABI v6; entry=$gleam/entry::main
 
 definitions:
   d0 option_map::map root=n0 bytes=41..149 : &lt;inferred&gt;

@@ -227,6 +227,7 @@ const SURFACE_STORE_LENGTH: u32 = ${CoreTag.StoreLength}u;
 const SURFACE_STORE_READ: u32 = ${CoreTag.StoreRead}u;
 const SURFACE_STORE_WRITE: u32 = ${CoreTag.StoreWrite}u;
 const SURFACE_STORE_GROW: u32 = ${CoreTag.StoreGrow}u;
+const SURFACE_STORE_EMPTY: u32 = ${CoreTag.StoreEmpty}u;
 
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
@@ -366,6 +367,10 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     }
     case SURFACE_RUNTIME_FAULT: {
       return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
+    }
+    case SURFACE_STORE_EMPTY: {
+      return node.payload < state.type_count && node.child0 == NO_INDEX &&
+        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_BOOLEAN: {
       return node.payload <= 1u && node.child0 == NO_INDEX && node.child1 == NO_INDEX &&

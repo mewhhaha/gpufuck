@@ -106,6 +106,7 @@ export function analyzeStorageReferences(
       case CoreTag.Boolean:
       case CoreTag.Local:
       case CoreTag.Constructor:
+      case CoreTag.StoreEmpty:
         continue;
       case CoreTag.Global: {
         let owner = childGlobalOwners;

@@ -12,7 +12,7 @@ import {
   type TypeSchema,
 } from "./abi.ts";
 
-/** The schema buffer accompanies version 5 of the surface ABI. */
+/** The schema buffer accompanies version 6 of the surface ABI. */
 export const TYPE_SCHEMA_ABI_VERSION = MODULE_ABI_VERSION;
 export const TYPE_SCHEMA_WORD_LENGTH = 6;
 export const TYPE_SCHEMA_BYTE_LENGTH = TYPE_SCHEMA_WORD_LENGTH *
@@ -71,7 +71,7 @@ export const TypeSchemaTag = {
 
 export type TypeSchemaTag = (typeof TypeSchemaTag)[keyof typeof TypeSchemaTag];
 
-/** Numeric buffers ready to upload alongside an ABI-v5 surface. */
+/** Numeric buffers ready to upload alongside an ABI-v6 surface. */
 export interface FlattenedTypeSchemas {
   /** One GPU-uploadable buffer: a fixed header followed by the seven logical arrays below. */
   readonly metadataWords: Uint32Array;
@@ -808,7 +808,7 @@ function validateTypeDeclaration(
   );
   if (firstConstructor !== expectedFirstConstructor) {
     throw new Error(
-      `type ${typeIndex} starts at constructor ${firstConstructor}; ABI-v5 types must start at ${expectedFirstConstructor}.`,
+      `type ${typeIndex} starts at constructor ${firstConstructor}; ABI-v6 types must start at ${expectedFirstConstructor}.`,
     );
   }
   if (

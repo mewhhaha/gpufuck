@@ -253,6 +253,9 @@ class GcCoreEmitter {
       case CoreTag.NumericConvert:
         this.emitNumericConversion(nodeIndex, node, environment);
         return;
+      case CoreTag.StoreEmpty:
+        this.emitStoreEmpty();
+        return;
       case CoreTag.StoreNew:
         this.emitStoreNew(nodeIndex, node, environment);
         return;
@@ -881,6 +884,14 @@ class GcCoreEmitter {
     this.#instructions.refAsNonNull();
     this.#instructions.localGet(length);
     this.#instructions.arrayNew();
+    this.#instructions.structNew();
+  }
+
+  emitStoreEmpty(): void {
+    this.#instructions.i32Const(WasmGcValueKind.Store);
+    this.#instructions.i32Const(0);
+    this.emitEmptyNumericFields();
+    this.#instructions.arrayNewFixed(0);
     this.#instructions.structNew();
   }
 

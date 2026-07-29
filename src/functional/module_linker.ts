@@ -647,6 +647,7 @@ function rewriteExpression(
     case "text":
     case "bytes":
     case "runtime-fault":
+    case "store-empty":
       return { ...expression, span };
     case "name":
       return {

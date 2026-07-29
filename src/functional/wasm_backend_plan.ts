@@ -46,6 +46,7 @@ export function createWasmBackendPlan(
   const compactScalarEligible = module.evaluationProfile ===
       EvaluationProfile.StrictEager &&
     !nodes.some((node) =>
+      node.tag === CoreTag.StoreEmpty ||
       node.tag === CoreTag.StoreNew ||
       node.tag === CoreTag.StoreLength ||
       node.tag === CoreTag.StoreRead ||

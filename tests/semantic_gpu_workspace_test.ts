@@ -143,7 +143,7 @@ function typeNodeCount(type: Type): number {
   return count;
 }
 
-Deno.test("GPU inference keeps its ABI-v5 state prefix ahead of the scheduler envelope", () => {
+Deno.test("GPU inference keeps its ABI-v6 state prefix ahead of the scheduler envelope", () => {
   equal(INFERENCE_STATE_WORD_LENGTH, 73);
   equal(InferenceSchedulerWord.PreviousSemanticSteps, 73);
   equal(InferenceSchedulerWord.SemanticState, 74);

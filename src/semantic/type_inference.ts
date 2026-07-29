@@ -636,6 +636,7 @@ class InferenceContext {
         case ExpressionTag.Text:
         case ExpressionTag.Bytes:
         case ExpressionTag.RuntimeFault:
+        case ExpressionTag.StoreEmpty:
           return;
         case ExpressionTag.Name: {
           if (boundSymbols.has(payload)) return;
@@ -788,6 +789,8 @@ class InferenceContext {
       }
       case ExpressionTag.RuntimeFault:
         return this.inferenceVariable();
+      case ExpressionTag.StoreEmpty:
+        return this.storeType(nodeIndex, this.inferenceVariable(), span);
       case ExpressionTag.Boolean:
         return BOOLEAN;
       case ExpressionTag.Name: {

@@ -217,6 +217,7 @@ function decodeCoreTag(tag: number, nodeIndex: number): KnownCoreTag {
     case CoreTag.Float64:
     case CoreTag.WholeNumberF64:
     case CoreTag.BufferAppend:
+    case CoreTag.StoreEmpty:
     case CoreTag.StoreNew:
     case CoreTag.StoreLength:
     case CoreTag.StoreRead:

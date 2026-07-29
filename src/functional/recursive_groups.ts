@@ -78,6 +78,7 @@ function elaborateExpression(
     case "text":
     case "bytes":
     case "runtime-fault":
+    case "store-empty":
     case "name":
       return expression;
     case "lambda":
@@ -272,6 +273,7 @@ function rewriteNames(
     case "text":
     case "bytes":
     case "runtime-fault":
+    case "store-empty":
       return expression;
     case "name":
       return boundNames.has(expression.name)
@@ -412,6 +414,7 @@ function freeNames(
       case "text":
       case "bytes":
       case "runtime-fault":
+      case "store-empty":
         return;
       case "name":
         if (!scope.has(nested.name)) names.add(nested.name);

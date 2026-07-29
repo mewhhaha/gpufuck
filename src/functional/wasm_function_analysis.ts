@@ -332,6 +332,7 @@ export class WasmFunctionAnalysis {
       case CoreTag.Text:
       case CoreTag.Bytes:
       case CoreTag.RuntimeFault:
+      case CoreTag.StoreEmpty:
       case CoreTag.Local:
       case CoreTag.Global:
       case CoreTag.Constructor:
@@ -585,6 +586,7 @@ export class WasmFunctionAnalysis {
       case CoreTag.Text:
       case CoreTag.Bytes:
       case CoreTag.RuntimeFault:
+      case CoreTag.StoreEmpty:
       case CoreTag.Constructor:
         return false;
       case CoreTag.Unary:
@@ -958,6 +960,7 @@ function coreNodeChildren(node: CoreNode): readonly number[] {
     case CoreTag.Text:
     case CoreTag.Bytes:
     case CoreTag.RuntimeFault:
+    case CoreTag.StoreEmpty:
     case CoreTag.Local:
     case CoreTag.Global:
     case CoreTag.Constructor:

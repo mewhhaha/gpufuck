@@ -111,6 +111,7 @@ function childReferences(
     case CoreTag.Text:
     case CoreTag.Bytes:
     case CoreTag.RuntimeFault:
+    case CoreTag.StoreEmpty:
     case CoreTag.Local:
     case CoreTag.Global:
     case CoreTag.Constructor:
@@ -160,6 +161,7 @@ function isCoreTag(tag: number): boolean {
     case CoreTag.Unary:
     case CoreTag.Binary:
     case CoreTag.BufferAppend:
+    case CoreTag.StoreEmpty:
     case CoreTag.StoreNew:
     case CoreTag.StoreLength:
     case CoreTag.StoreRead:

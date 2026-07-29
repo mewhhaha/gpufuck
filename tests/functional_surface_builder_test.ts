@@ -34,6 +34,7 @@ Deno.test("the default builder emits no span, so existing output is unchanged", 
 
 Deno.test("at() stamps the node each helper produces", () => {
   equal(spanOf(surface.at(SPAN).integer(1)), SPAN);
+  equal(spanOf(surface.at(SPAN).storeEmpty()), SPAN);
   equal(
     spanOf(
       surface.at(SPAN).binary(BinaryOperator.Add, surface.integer(1), surface.integer(2)),

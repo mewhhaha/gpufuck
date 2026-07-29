@@ -1164,6 +1164,9 @@ class WasmCompiler {
         this.#hostEmitter.emitBufferAppendValues(instructions, type, nodeIndex);
         return;
       }
+      case CoreTag.StoreEmpty:
+        this.compileStoreEmpty(instructions);
+        return;
       case CoreTag.StoreNew:
         this.compileStoreNew(instructions, node, nodeIndex, environment);
         return;
@@ -2579,6 +2582,15 @@ class WasmCompiler {
     instructions.i32Const(0);
     instructions.localSet(cursor);
     this.emitStoreFill(instructions, pointer, cursor, length, initial);
+    instructions.localGet(pointer);
+    instructions.emit(0xad);
+  }
+
+  compileStoreEmpty(instructions: WasmInstructions): void {
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(length);
+    const pointer = this.allocateStore(instructions, length);
     instructions.localGet(pointer);
     instructions.emit(0xad);
   }

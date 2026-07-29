@@ -30,7 +30,7 @@ native machine code; impredicative inference or dependent types.
 ```text
 frontend: parse ─► source checks ─► desugar ─► artifacts and spans
     ▼  module artifacts and static linker
-packed Functional ABI, version 5
+packed Functional ABI, version 6
     ▼  CPU: symbol lookup and lowering plan (src/semantic/symbol_lookup.ts)
     ▼  GPU: Core lowering, then the persistent inference machine
 resolved Functional Core
@@ -116,8 +116,9 @@ definition and constructor indices, child indices, span bytes, and evaluation mo
 resolved twice. The decoded shape is `CoreNode` in
 [`compiler_module.ts`](src/functional/compiler_module.ts); the packed form stays on buffers owned by
 `GpuModule`, with `readCoreNodes()` as an explicit readback. Indexed runtime state uses the neutral
-`Store a` primitive — persistent new, length, checked read, write, and growth, bounded to 16,777,216
-elements — which keeps JavaScript object semantics inside the JavaScript frontend.
+`Store a` primitive — persistent empty and initialized allocation, length, checked read, write, and
+growth, bounded to 16,777,216 elements — which keeps JavaScript object semantics inside the
+JavaScript frontend.
 
 ## 4. Modules, linking, and packed ABIs
 
@@ -133,7 +134,7 @@ reachable from the entry, so an unused frontend-runtime builtin adds no GPU type
 is no incremental cache; it was removed and has not returned, so every compilation is cold.
 
 WebGPU storage buffers favor flat fixed-width records, so object graphs become indexed arrays before
-submission. Functional ABI version 5 uses eight `u32` words per Core node, four per definition, five
+submission. Functional ABI version 6 uses eight `u32` words per Core node, four per definition, five
 per nominal type declaration, five per constructor, and six per schema node. Counts are explicit and
 `0xffffffff` is the absent index. Every length, root, child, symbol, arity, profile, capability, and
 span is validated before semantic use. Malformed packed input is an API contract violation and
@@ -561,6 +562,35 @@ symmetric difference.
 This is the evidence-passing fast path, not delimited control. It can replace an operation
 implementation but cannot express `resume`, abortive control, or multi-shot handlers. Adding those
 semantics requires an honest Core control construct and remains a separate project.
+
+### Abortive control boundary
+
+Abortive handlers do not need continuation values. The smallest honest Core extension is an
+operation-indexed abort and a dynamically enclosing abort boundary:
+
+```text
+abort operation argument
+handle-abort operation body (argument -> recovery)
+```
+
+`abort` evaluates its argument and transfers directly to the nearest active boundary for the same
+operation. It has a polymorphic result because its continuation is discarded. `handle-abort` returns
+`body` when it completes normally, or evaluates `recovery` with the abort argument outside the
+handled boundary. The body and recovery must have the same result type. Matching by resolved
+operation identity, rather than only by an effect-label string, prevents one operation from
+accidentally catching another operation that declares the same label.
+
+This boundary must remain effective across ordinary function calls, including calls to functions
+that closed over the aborting operation before the boundary was installed. Effect analysis removes
+only the handled operation's contribution from the body and includes every effect of the recovery.
+The GPU evaluator can implement the transfer by unwinding its explicit evaluation frames; Wasm
+backends may use exception handling or an equivalent tagged completion, but both must preserve the
+same Core behavior.
+
+There is deliberately no `resume` value in this construct. Resumable, multi-shot, generator, async,
+and backtracking handlers require captured delimited continuations, their lifetime and duplication
+rules, and separate backend support. They do not grow out of abortive control by adding an optional
+callback.
 
 ## 15. Technical references
 

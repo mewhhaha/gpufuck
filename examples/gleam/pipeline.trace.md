@@ -38,7 +38,7 @@ fn main($gleam_unit_parameter) : () -&gt; i64 =
         19i64)
       2i64))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v5; entry=$gleam/entry::main
+<tr><td><pre><code>ABI v6; entry=$gleam/entry::main
 
 definitions:
   d0 pipeline::twice root=n0 bytes=0..31 : &lt;inferred&gt;

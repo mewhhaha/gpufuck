@@ -85,6 +85,7 @@ export function analyzeSurfaceReachability(
         case "text":
         case "bytes":
         case "runtime-fault":
+        case "store-empty":
           break;
       }
     }

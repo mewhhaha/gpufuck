@@ -193,6 +193,8 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
       })`;
     case "store-new":
       return `${indent}(store-new\n${nested(expression.length)}\n${nested(expression.initial)})`;
+    case "store-empty":
+      return `${indent}(store-empty)`;
     case "store-length":
       return `${indent}(store-length\n${nested(expression.store)})`;
     case "store-read":

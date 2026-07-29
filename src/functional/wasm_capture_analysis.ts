@@ -26,6 +26,7 @@ export class WasmCaptureAnalysis {
       case CoreTag.Text:
       case CoreTag.Bytes:
       case CoreTag.RuntimeFault:
+      case CoreTag.StoreEmpty:
       case CoreTag.Global:
       case CoreTag.Constructor:
         depths = [];
@@ -101,6 +102,7 @@ export class WasmCaptureAnalysis {
       case CoreTag.Text:
       case CoreTag.Bytes:
       case CoreTag.RuntimeFault:
+      case CoreTag.StoreEmpty:
       case CoreTag.Global:
       case CoreTag.Constructor:
         return 0;
@@ -193,6 +195,7 @@ export class WasmCaptureAnalysis {
       case CoreTag.Text:
       case CoreTag.Bytes:
       case CoreTag.RuntimeFault:
+      case CoreTag.StoreEmpty:
       case CoreTag.Local:
       case CoreTag.Global:
       case CoreTag.Constructor:

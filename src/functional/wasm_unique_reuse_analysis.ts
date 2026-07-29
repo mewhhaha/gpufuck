@@ -130,6 +130,7 @@ export class WasmUniqueReuseAnalysis {
       case CoreTag.Text:
       case CoreTag.Bytes:
       case CoreTag.RuntimeFault:
+      case CoreTag.StoreEmpty:
       case CoreTag.Global:
       case CoreTag.Constructor:
         return EMPTY_CONSUMPTION;

@@ -24,6 +24,7 @@ export type SurfaceExpression =
     readonly right: SurfaceExpression;
     readonly span?: Span;
   }
+  | { readonly kind: "store-empty"; readonly span?: Span }
   | {
     readonly kind: "store-new";
     readonly length: SurfaceExpression;

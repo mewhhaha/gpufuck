@@ -214,16 +214,19 @@ function carries the same label through the higher-order call. Pure code is the 
 Handlers are ordinary lexical evidence. `surface.withEffectHandler("tick", implementation, body)`
 binds a replacement operation within `body`; a pure replacement discharges `Clock.Tick`, including
 when that binding is passed through higher-order code. Nesting handlers removes only the labels
-whose operation bindings they replace. Compilation exposes the original declarations through
+whose operation bindings they replace. This is lexical substitution, not dynamic interception: a
+function defined elsewhere that already refers to the global `tick` remains effectful when called
+inside the handler. Pass the operation into that function explicitly, or inline its body, when the
+replacement must reach it. Compilation exposes the original declarations through
 `GpuModule.declaredDefinitionEffects` and the inferred fixed point through `definitionEffects`,
 `entryEffects`, and each WebAssembly export's `effects`.
 
 Immutable effect sets are not structured-cloneable. Send an encoded module through a Worker with
 `encodeModuleForTransfer()`, then restore it with `decodeTransferredModule()` before compilation.
 
-This evidence-passing path handles ordinary operation replacement. It does not provide a delimited
-continuation or `resume`, so aborting, multi-shot, generator, and async handlers still require a
-future Core control construct rather than pretending a closed function is equivalent.
+This evidence-passing path handles ordinary operation replacement. Abortive control has a smaller
+future Core design described in [ARCHITECTURE.md](ARCHITECTURE.md#abortive-control-boundary), but is
+not implemented. Full resumable and multi-shot handlers remain a separate continuation project.
 
 `F32x4` is name-based. Build it with `f32x4`, splice in `FIXED_VECTOR_TYPE_DECLARATIONS` and
 `FIXED_VECTOR_DEFINITIONS`, and compile with `{ simd: "wasm-simd" }` for native `v128` instructions.
