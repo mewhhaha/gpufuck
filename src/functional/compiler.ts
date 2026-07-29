@@ -37,7 +37,7 @@ import { CompilationAdmissionQueue } from "./compilation_admission.ts";
 import { type CompiledCoreArtifact, encodeCoreArtifact } from "./core_artifact.ts";
 import { analyzeModuleEffects } from "./effect_analysis.ts";
 import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
-import { normalizeHostCapabilities } from "./host_contract.ts";
+import { type HostDefinitionBinding, normalizeHostCapabilities } from "./host_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import type { CompilationOptions, CompileResult, GpuModule } from "./compiler_module.ts";
 import { registerCompleteTypeDeclarations } from "./compiler_module.ts";
@@ -349,6 +349,24 @@ function findEntryDefinition(module: EncodedModule): number {
   );
 }
 
+function encodedDefinitionNames(module: EncodedModule): readonly string[] {
+  return Object.freeze(Array.from(
+    { length: module.definitionCount },
+    (_, definitionIndex) => {
+      const symbol = module.definitionWords[
+        definitionIndex * DEFINITION_WORD_LENGTH + DefinitionWord.Symbol
+      ];
+      const name = symbol === undefined ? undefined : module.symbolNames[symbol];
+      if (name === undefined) {
+        throw new Error(
+          `functional definition ${definitionIndex} references missing symbol ${symbol}`,
+        );
+      }
+      return name;
+    },
+  ));
+}
+
 function completedBatchResults(
   results: readonly (CompileResult | undefined)[],
 ): readonly CompileResult[] {
@@ -369,21 +387,7 @@ async function publicModule(
         definitionIndex * DEFINITION_WORD_LENGTH + DefinitionWord.RootNode
       ]!,
   );
-  const definitionNames = Array.from(
-    { length: encodedModule.definitionCount },
-    (_, definitionIndex) => {
-      const symbol = encodedModule.definitionWords[
-        definitionIndex * DEFINITION_WORD_LENGTH + DefinitionWord.Symbol
-      ];
-      const name = symbol === undefined ? undefined : encodedModule.symbolNames[symbol];
-      if (name === undefined) {
-        throw new Error(
-          `functional definition ${definitionIndex} references missing symbol ${symbol}`,
-        );
-      }
-      return name;
-    },
-  );
+  const definitionNames = encodedDefinitionNames(encodedModule);
   const wasmExports = (encodedModule.wasmExports ?? []).map((exported) => {
     const symbol = encodedModule.symbolNames.indexOf(exported.definition);
     if (symbol < 0) {
@@ -425,68 +429,12 @@ async function publicModule(
   });
   const hostCapabilities = normalizeHostCapabilities(encodedModule.hostCapabilities);
   const declaredDefinitionEffects = normalizedDeclaredDefinitionEffects(encodedModule);
-  const boundDefinitions = new Set<string>();
-  const hostDefinitions = (encodedModule.hostDefinitions ?? []).map((binding, index) => {
-    const definitionIndex = definitionNames.indexOf(binding.definition);
-    if (definitionIndex < 0) {
-      throw new Error(
-        `functional host definition binding ${index} references missing definition ${
-          JSON.stringify(binding.definition)
-        }`,
-      );
-    }
-    if (boundDefinitions.has(binding.definition)) {
-      throw new Error(
-        `functional host definition bindings repeat definition ${
-          JSON.stringify(binding.definition)
-        }`,
-      );
-    }
-    const capability = hostCapabilities.find((candidate) => candidate.name === binding.capability);
-    const field = capability?.fields.find((field) => field.name === binding.field);
-    if (field === undefined) {
-      throw new Error(
-        `functional host definition ${
-          JSON.stringify(binding.definition)
-        } references missing field ${JSON.stringify(`${binding.capability}.${binding.field}`)}`,
-      );
-    }
-    const expectedType: TypeSchema = field.kind === "value"
-      ? field.type
-      : { kind: "function", parameter: field.parameter, result: field.result };
-    const annotation = encodedModule.definitionTypes[definitionIndex]?.annotation;
-    if (
-      annotation === null || annotation === undefined ||
-      JSON.stringify(schemaShape(annotation)) !== JSON.stringify(schemaShape(expectedType))
-    ) {
-      throw new Error(
-        `functional host definition ${JSON.stringify(binding.definition)} annotation ${
-          JSON.stringify(annotation)
-        } does not match field ${JSON.stringify(`${binding.capability}.${binding.field}`)} type ${
-          JSON.stringify(expectedType)
-        }`,
-      );
-    }
-    const declaredEffects = declaredDefinitionEffects[definitionIndex]!;
-    if (
-      declaredEffects.size !== 0 &&
-      (
-        field.kind !== "operation" ||
-        declaredEffects.size !== field.effects.size ||
-        ![...declaredEffects].every((effect) => field.effects.has(effect))
-      )
-    ) {
-      throw new Error(
-        `functional host definition ${JSON.stringify(binding.definition)} declares effects ${
-          JSON.stringify([...declaredEffects])
-        }; field ${JSON.stringify(`${binding.capability}.${binding.field}`)} declares ${
-          JSON.stringify(field.kind === "operation" ? [...field.effects] : [])
-        }`,
-      );
-    }
-    boundDefinitions.add(binding.definition);
-    return Object.freeze({ ...binding });
-  });
+  const hostDefinitions = normalizedEncodedHostDefinitions(
+    encodedModule,
+    definitionNames,
+    hostCapabilities,
+    declaredDefinitionEffects,
+  );
   const functional: GpuModule = {
     ...module,
     symbolNames: Object.freeze([...encodedModule.symbolNames]),
@@ -494,7 +442,7 @@ async function publicModule(
     typeNames: Object.freeze(encodedModule.typeDeclarations.map((declaration) => declaration.name)),
     definitionRoots: Object.freeze(definitionRoots),
     hostCapabilities,
-    hostDefinitions: Object.freeze(hostDefinitions),
+    hostDefinitions,
     wasmExports: Object.freeze(wasmExports),
     sources: Object.freeze([...(encodedModule.sources ?? [])]),
     evaluationProfile: encodedModule.evaluationProfile,
@@ -637,8 +585,8 @@ function validateEncodedModule(module: EncodedModule): void {
     );
   }
   validatePrimitiveCapabilities(module.primitiveCapabilities);
-  normalizeHostCapabilities(module.hostCapabilities);
-  normalizedDeclaredDefinitionEffects(module);
+  const hostCapabilities = normalizeHostCapabilities(module.hostCapabilities);
+  const declaredDefinitionEffects = normalizedDeclaredDefinitionEffects(module);
   if (module.hostDefinitions !== undefined && !Array.isArray(module.hostDefinitions)) {
     throw new Error("functional module host definition bindings must be an array");
   }
@@ -709,6 +657,12 @@ function validateEncodedModule(module: EncodedModule): void {
       `functional module has ${module.typeDeclarations.length} type declarations for ${module.typeCount} type records`,
     );
   }
+  normalizedEncodedHostDefinitions(
+    module,
+    encodedDefinitionNames(module),
+    hostCapabilities,
+    declaredDefinitionEffects,
+  );
 }
 
 function normalizedDeclaredDefinitionEffects(
@@ -731,6 +685,83 @@ function normalizedDeclaredDefinitionEffects(
       );
     }
     return effectSetFrom(effects);
+  }));
+}
+
+function normalizedEncodedHostDefinitions(
+  module: EncodedModule,
+  definitionNames: readonly string[],
+  hostCapabilities: ReturnType<typeof normalizeHostCapabilities>,
+  declaredDefinitionEffects: readonly EffectSet[],
+): readonly HostDefinitionBinding[] {
+  const boundDefinitions = new Set<string>();
+  return Object.freeze((module.hostDefinitions ?? []).map((binding, index) => {
+    if (binding === null || typeof binding !== "object") {
+      throw new TypeError(
+        `functional host definition binding ${index} must be an object; received ${
+          JSON.stringify(binding)
+        }`,
+      );
+    }
+    const definitionIndex = definitionNames.indexOf(binding.definition);
+    if (definitionIndex < 0) {
+      throw new Error(
+        `functional host definition binding ${index} references missing definition ${
+          JSON.stringify(binding.definition)
+        }`,
+      );
+    }
+    if (boundDefinitions.has(binding.definition)) {
+      throw new Error(
+        `functional host definition bindings repeat definition ${
+          JSON.stringify(binding.definition)
+        }`,
+      );
+    }
+    const capability = hostCapabilities.find((candidate) => candidate.name === binding.capability);
+    const field = capability?.fields.find((candidate) => candidate.name === binding.field);
+    if (field === undefined) {
+      throw new Error(
+        `functional host definition ${
+          JSON.stringify(binding.definition)
+        } references missing field ${JSON.stringify(`${binding.capability}.${binding.field}`)}`,
+      );
+    }
+    const expectedType: TypeSchema = field.kind === "value"
+      ? field.type
+      : { kind: "function", parameter: field.parameter, result: field.result };
+    const annotation = module.definitionTypes[definitionIndex]?.annotation;
+    if (
+      annotation === null || annotation === undefined ||
+      JSON.stringify(schemaShape(annotation)) !== JSON.stringify(schemaShape(expectedType))
+    ) {
+      throw new Error(
+        `functional host definition ${JSON.stringify(binding.definition)} annotation ${
+          JSON.stringify(annotation)
+        } does not match field ${JSON.stringify(`${binding.capability}.${binding.field}`)} type ${
+          JSON.stringify(expectedType)
+        }`,
+      );
+    }
+    const declaredEffects = declaredDefinitionEffects[definitionIndex]!;
+    if (
+      declaredEffects.size !== 0 &&
+      (
+        field.kind !== "operation" ||
+        declaredEffects.size !== field.effects.size ||
+        ![...declaredEffects].every((effect) => field.effects.has(effect))
+      )
+    ) {
+      throw new Error(
+        `functional host definition ${JSON.stringify(binding.definition)} declares effects ${
+          JSON.stringify([...declaredEffects])
+        }; field ${JSON.stringify(`${binding.capability}.${binding.field}`)} declares ${
+          JSON.stringify(field.kind === "operation" ? [...field.effects] : [])
+        }`,
+      );
+    }
+    boundDefinitions.add(binding.definition);
+    return Object.freeze({ ...binding });
   }));
 }
 

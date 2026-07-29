@@ -1275,6 +1275,56 @@ Deno.test("rejects incomplete source effect declarations before GPU work", async
   );
 });
 
+Deno.test("rejects encoded host effect conflicts before GPU work", async () => {
+  const integer = { kind: "integer" as const };
+  const module = buildSurfaceModule(
+    [
+      defineEffectOperation({
+        name: "emit",
+        parameter: { name: "value", type: integer },
+        result: integer,
+        effects: effectSet("Console.Write"),
+        body: surface.name("value"),
+      }),
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.integer(42),
+      },
+    ],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Console",
+        fields: [{
+          kind: "operation",
+          name: "emit",
+          effects: effectSet("Console.Write"),
+          parameter: integer,
+          result: integer,
+        }],
+      }],
+      hostDefinitions: [{
+        definition: "emit",
+        capability: "Console",
+        field: "emit",
+      }],
+    },
+  );
+
+  await rejects(
+    () =>
+      functionalRuntime().compiler.compileModule({
+        ...module,
+        declaredDefinitionEffects: [effectSet("Telemetry"), effectSet()],
+      }),
+    /host definition "emit" declares effects \["Telemetry"\]; field "Console\.emit" declares \["Console\.Write"\]/,
+  );
+});
+
 Deno.test("rejects malformed functional record tables with their exact shape", async () => {
   const { compiler } = functionalRuntime();
   const valid = integerModule(42);
