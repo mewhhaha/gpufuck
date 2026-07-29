@@ -6,6 +6,7 @@ import {
   CORE_V1_PRIMITIVE_CAPABILITIES,
   CoreTag,
   createModuleArtifact,
+  defineEffectOperation,
   effectSet,
   type EncodedModule,
   EvaluationProfile,
@@ -204,6 +205,167 @@ Deno.test("infers effect sets through higher-order Core calls", async () => {
   }
 });
 
+Deno.test("source effects flow through higher-order calls and pure handlers discharge them", async () => {
+  const integer = { kind: "integer" as const };
+  const tickImplementation = surface.lambda(
+    "value",
+    surface.binary(
+      BinaryOperator.Add,
+      surface.name("value"),
+      surface.integer(1),
+    ),
+  );
+  const buildModule = (mainBody: SurfaceExpression): EncodedModule =>
+    buildSurfaceModule(
+      [
+        defineEffectOperation({
+          name: "tick",
+          parameter: { name: "value", type: integer },
+          result: integer,
+          effects: effectSet("Tick"),
+          body: surface.binary(
+            BinaryOperator.Add,
+            surface.name("value"),
+            surface.integer(1),
+          ),
+        }),
+        {
+          name: "invoke",
+          parameters: ["operation"],
+          annotation: null,
+          body: surface.apply(surface.name("operation"), surface.integer(41)),
+        },
+        {
+          name: "main",
+          parameters: [],
+          annotation: integer,
+          body: mainBody,
+        },
+      ],
+      [],
+      "main",
+      0,
+    );
+  const unhandled = buildModule(
+    surface.apply(surface.name("invoke"), surface.name("tick")),
+  );
+  const handled = buildModule(
+    surface.withEffectHandler(
+      "tick",
+      tickImplementation,
+      surface.apply(surface.name("invoke"), surface.name("tick")),
+    ),
+  );
+  const { compiler, evaluator } = functionalRuntime();
+
+  const unhandledCompilation = await compiler.compileModule(unhandled);
+  ok(
+    unhandledCompilation.ok,
+    unhandledCompilation.ok ? undefined : unhandledCompilation.diagnostics[0].message,
+  );
+  if (!unhandledCompilation.ok) return;
+  const handledCompilation = await compiler.compileModule(handled);
+  ok(
+    handledCompilation.ok,
+    handledCompilation.ok ? undefined : handledCompilation.diagnostics[0].message,
+  );
+  if (!handledCompilation.ok) {
+    unhandledCompilation.module.destroy();
+    return;
+  }
+
+  try {
+    deepStrictEqual([...unhandledCompilation.module.entryEffects], ["Tick"]);
+    deepStrictEqual([...handledCompilation.module.entryEffects], []);
+    const tick = handledCompilation.module.definitionNames.indexOf("tick");
+    deepStrictEqual([...handledCompilation.module.declaredDefinitionEffects[tick]!], ["Tick"]);
+    deepStrictEqual([...handledCompilation.module.definitionEffects[tick]!], ["Tick"]);
+
+    const [unhandledResult, handledResult] = await Promise.all([
+      evaluator.evaluate(unhandledCompilation.module),
+      evaluator.evaluate(handledCompilation.module),
+    ]);
+    if (!unhandledResult.ok) throw new Error(unhandledResult.fault.message);
+    if (!handledResult.ok) throw new Error(handledResult.fault.message);
+    deepStrictEqual(unhandledResult.value, { kind: "integer", value: 42 });
+    deepStrictEqual(handledResult.value, { kind: "integer", value: 42 });
+  } finally {
+    unhandledCompilation.module.destroy();
+    handledCompilation.module.destroy();
+  }
+});
+
+Deno.test("nested source handlers discharge only the effects they replace", async () => {
+  const integer = { kind: "integer" as const };
+  const identity = surface.lambda("value", surface.name("value"));
+  const operation = (name: string, effect: string) =>
+    defineEffectOperation({
+      name,
+      parameter: { name: "value", type: integer },
+      result: integer,
+      effects: effectSet(effect),
+      body: surface.name("value"),
+    });
+  const computation = surface.binary(
+    BinaryOperator.Add,
+    surface.apply(surface.name("tick"), surface.integer(20)),
+    surface.apply(surface.name("trace"), surface.integer(22)),
+  );
+  const buildModule = (body: SurfaceExpression): EncodedModule =>
+    buildSurfaceModule(
+      [
+        operation("tick", "Tick"),
+        operation("trace", "Trace"),
+        {
+          name: "main",
+          parameters: [],
+          annotation: integer,
+          body,
+        },
+      ],
+      [],
+      "main",
+      0,
+    );
+  const partial = buildModule(
+    surface.withEffectHandler("tick", identity, computation),
+  );
+  const complete = buildModule(
+    surface.withEffectHandler(
+      "tick",
+      identity,
+      surface.withEffectHandler("trace", identity, computation),
+    ),
+  );
+  const { compiler, evaluator } = functionalRuntime();
+  const partialCompilation = await compiler.compileModule(partial);
+  ok(
+    partialCompilation.ok,
+    partialCompilation.ok ? undefined : partialCompilation.diagnostics[0].message,
+  );
+  if (!partialCompilation.ok) return;
+  const completeCompilation = await compiler.compileModule(complete);
+  ok(
+    completeCompilation.ok,
+    completeCompilation.ok ? undefined : completeCompilation.diagnostics[0].message,
+  );
+  if (!completeCompilation.ok) {
+    partialCompilation.module.destroy();
+    return;
+  }
+
+  try {
+    deepStrictEqual([...partialCompilation.module.entryEffects], ["Trace"]);
+    deepStrictEqual([...completeCompilation.module.entryEffects], []);
+    const result = await evaluator.evaluate(completeCompilation.module);
+    if (!result.ok) throw new Error(result.fault.message);
+    deepStrictEqual(result.value, { kind: "integer", value: 42 });
+  } finally {
+    partialCompilation.module.destroy();
+    completeCompilation.module.destroy();
+  }
+});
+
 Deno.test("infers effects from operations supplied through host init", async () => {
   const consoleEffects = effectSet("Console.Write");
   const integer = { kind: "integer" as const };
@@ -298,6 +460,62 @@ Deno.test("linked host operations must declare the same effect set", () => {
     () => (operation.effects as Set<string>).add("Telemetry"),
     /functional effect sets are immutable/,
   );
+});
+
+Deno.test("module linking preserves source effect declarations", async () => {
+  const integer = { kind: "integer" as const };
+  const operationType = {
+    kind: "function" as const,
+    parameter: integer,
+    result: integer,
+  };
+  const library = createModuleArtifact({
+    name: "library",
+    definitions: [defineEffectOperation({
+      name: "tick",
+      parameter: { name: "value", type: integer },
+      result: integer,
+      effects: effectSet("Tick"),
+      body: surface.name("value"),
+    })],
+    typeDeclarations: [],
+    imports: [],
+    exports: [{ name: "tick", definition: "tick", type: operationType }],
+    sourceByteLength: 0,
+    options: {},
+  });
+  const entry = createModuleArtifact({
+    name: "entry",
+    definitions: [{
+      name: "main",
+      parameters: [],
+      annotation: integer,
+      body: surface.apply(surface.name("tick"), surface.integer(42)),
+    }],
+    typeDeclarations: [],
+    imports: [{
+      name: "tick",
+      fromModule: "library",
+      exportName: "tick",
+      type: operationType,
+    }],
+    exports: [{ name: "main", definition: "main", type: integer }],
+    sourceByteLength: 0,
+    options: {},
+  });
+  const linked = linkModules([entry, library], {
+    module: "entry",
+    exportName: "main",
+  });
+  const compilation = await functionalRuntime().compiler.compileModule(linked.module);
+
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    deepStrictEqual([...compilation.module.entryEffects], ["Tick"]);
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("surface type schemas bound expansion of structurally shared annotations", () => {
@@ -476,6 +694,7 @@ function integerModule(value: number, entryName = "entry"): EncodedModule {
     typecheckingProfile: TypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities: [],
+    declaredDefinitionEffects: [effectSet()],
     nodeWords: Uint32Array.of(
       ExpressionTag.Integer,
       0,
@@ -871,6 +1090,19 @@ Deno.test("rejects unsupported functional module envelopes before GPU work", asy
         primitiveCapabilities: valid.primitiveCapabilities.slice(1),
       }),
     /missing=.*signed-integer-i32/,
+  );
+});
+
+Deno.test("rejects incomplete source effect declarations before GPU work", async () => {
+  const { compiler } = functionalRuntime();
+
+  await rejects(
+    () =>
+      compiler.compileModule({
+        ...integerModule(42),
+        declaredDefinitionEffects: [],
+      }),
+    /has 0 declared effect sets for 1 definitions/,
   );
 });
 

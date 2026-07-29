@@ -3,6 +3,7 @@
 
 import type { Diagnostic } from "../src/functional/abi.ts";
 import { GpuCompiler } from "../src/functional/compiler.ts";
+import { decodeTransferredModule } from "../src/functional/module_transfer.ts";
 import { runWasmModule } from "../src/functional/wasm_execution.ts";
 import { describeType } from "../src/functional/wasm_value_codec.ts";
 import type { SemanticDiagnostic } from "../src/semantic/abi.ts";
@@ -239,7 +240,7 @@ class FrontendPool {
           for (const response of event.data) {
             results[response.id] = response.module === undefined
               ? { ok: false, diagnostic: response.diagnostic ?? "lowering failed" }
-              : { ok: true, module: response.module };
+              : { ok: true, module: decodeTransferredModule(response.module) };
           }
           done += slice.length;
           onProgress(done);

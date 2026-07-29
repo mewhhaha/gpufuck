@@ -211,6 +211,11 @@ export function createModuleArtifact(
   try {
     const cloneableArtifact = {
       ...artifact,
+      definitions: artifact.definitions.map((definition) =>
+        definition.effects === undefined
+          ? definition
+          : { ...definition, effects: [...definition.effects] }
+      ),
       options: {
         ...artifact.options,
         ...(artifact.options.hostCapabilities === undefined ? {} : {
@@ -235,6 +240,12 @@ export function createModuleArtifact(
         cause instanceof Error ? cause.message : String(cause)
       }`,
     }, cause);
+  }
+  for (const definition of snapshot.definitions) {
+    if (definition.effects === undefined) continue;
+    Object.defineProperty(definition, "effects", {
+      value: effectSetFrom(definition.effects),
+    });
   }
   for (const capability of snapshot.options.hostCapabilities ?? []) {
     for (const field of capability.fields) {

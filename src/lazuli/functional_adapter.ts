@@ -7,6 +7,7 @@ import {
   MODULE_ABI_VERSION,
   TypecheckingProfile,
 } from "../functional/abi.ts";
+import { effectSet } from "../functional/effect_set.ts";
 
 export function lazuliSurfaceToModule(
   surface: EncodedSemanticSurface,
@@ -19,6 +20,9 @@ export function lazuliSurfaceToModule(
     typecheckingProfile: TypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities: [],
+    declaredDefinitionEffects: Object.freeze(
+      Array.from({ length: surface.definitionCount }, () => effectSet()),
+    ),
     nodeWords: surface.nodeWords,
     definitionWords: surface.definitionWords,
     typeWords: surface.typeWords,

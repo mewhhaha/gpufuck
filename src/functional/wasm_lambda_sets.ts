@@ -103,6 +103,10 @@ export class LambdaSetAnalysis {
     for (const [definition, root] of module.definitionRoots.entries()) {
       this.#visitExpression(root, []);
       this.#addEdge(this.#nodeVariable(root), this.#definitionVariable(definition));
+      this.#addEffects(
+        this.#definitionVariable(definition),
+        module.declaredDefinitionEffects[definition]!,
+      );
     }
     for (const binding of module.hostDefinitions) {
       const definition = module.definitionNames.indexOf(binding.definition);

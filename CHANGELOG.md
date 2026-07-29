@@ -3,6 +3,15 @@
 All notable changes to gpufuck are documented here. The project is published to JSR as
 `@mewhhaha/gpufuck` and follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Surface definitions can declare first-class effect sets. Typed effect operations carry their
+  labels through globals, recursion, closures, higher-order calls, linking, compilation traces, and
+  artifact fingerprints. Lexical handler evidence can replace an operation with a pure
+  implementation, and nested handlers discharge only the labels they replace.
+
 ## 0.5.0 - 2026-07-28
 
 ### Added

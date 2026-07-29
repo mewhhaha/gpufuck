@@ -8,7 +8,10 @@
  * @module
  */
 import { lowerGleamSource } from "../../gleam.ts";
-import type { EncodedModule } from "../../functional.ts";
+import {
+  encodeModuleForTransfer,
+  type TransferEncodedModule,
+} from "../functional/module_transfer.ts";
 
 interface LowerRequest {
   readonly id: number;
@@ -18,7 +21,7 @@ interface LowerRequest {
 
 export interface LowerResponse {
   readonly id: number;
-  readonly module?: EncodedModule;
+  readonly module?: TransferEncodedModule;
   readonly diagnostic?: string;
 }
 
@@ -29,7 +32,7 @@ self.onmessage = (event: MessageEvent<readonly LowerRequest[]>) => {
       const lowered = lowerGleamSource(request.name, request.source);
       responses.push(
         lowered.ok
-          ? { id: request.id, module: lowered.lowered.module }
+          ? { id: request.id, module: encodeModuleForTransfer(lowered.lowered.module) }
           : { id: request.id, diagnostic: lowered.diagnostics[0]?.message ?? "lowering failed" },
       );
     } catch (error) {

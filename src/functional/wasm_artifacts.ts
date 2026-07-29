@@ -222,6 +222,7 @@ async function fingerprintResolvedCore(
         entryDefinition: module.entryDefinition,
         entryType: module.entryType,
         entryEffects: [...module.entryEffects],
+        declaredDefinitionEffects: module.declaredDefinitionEffects.map((effects) => [...effects]),
         definitionEffects: module.definitionEffects.map((effects) => [...effects]),
         typeDeclarations: completeTypeDeclarations(module),
         hostCapabilities: module.hostCapabilities.map((capability) => ({

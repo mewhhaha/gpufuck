@@ -6,6 +6,7 @@ import type {
   TypeSchema,
   UnaryOperator,
 } from "./abi.ts";
+import type { EffectSet } from "./effect_set.ts";
 
 export type SurfaceExpression =
   | { readonly kind: "integer"; readonly value: number; readonly span?: Span }
@@ -154,6 +155,11 @@ export interface SurfaceDefinition {
   readonly name: string;
   readonly parameters: readonly string[];
   readonly annotation: TypeSchema | null;
+  /**
+   * Effects introduced by evaluating or calling this definition. They are unioned with effects
+   * inferred from its body and flow through ordinary higher-order calls.
+   */
+  readonly effects?: EffectSet;
   readonly body: SurfaceExpression;
   readonly span?: Span;
 }

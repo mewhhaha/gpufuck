@@ -81,7 +81,12 @@ export function analyzeModuleEffects(
             `functional effect analysis global d${node.payload} exceeds ${module.definitionCount} definitions`,
           );
         }
-        if (nodes[root]?.tag !== CoreTag.Lambda) dependOn(nodeIndex, root);
+        if (nodes[root]?.tag !== CoreTag.Lambda) {
+          for (const effect of module.declaredDefinitionEffects[node.payload]!) {
+            effectNamesByNode[nodeIndex]!.add(effect);
+          }
+          dependOn(nodeIndex, root);
+        }
         break;
       }
       case CoreTag.Apply: {
@@ -145,8 +150,6 @@ export function analyzeModuleEffects(
   }
 
   const definitionEffects = module.definitionRoots.map((root, definition) => {
-    const declaredHostEffects = hostEffectsByDefinition.get(definition);
-    if (declaredHostEffects !== undefined) return declaredHostEffects;
     const rootNode = nodes[root];
     if (rootNode === undefined) {
       throw new Error(
@@ -154,7 +157,11 @@ export function analyzeModuleEffects(
       );
     }
     const effectNode = rootNode.tag === CoreTag.Lambda ? rootNode.child0 : root;
-    return effectSetFrom(effectNamesByNode[effectNode]!);
+    return effectSetFrom([
+      ...module.declaredDefinitionEffects[definition]!,
+      ...(hostEffectsByDefinition.get(definition) ?? []),
+      ...effectNamesByNode[effectNode]!,
+    ]);
   });
   const entryEffects = definitionEffects[module.entryDefinition];
   if (entryEffects === undefined) {

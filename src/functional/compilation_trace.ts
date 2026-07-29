@@ -105,11 +105,14 @@ function formatNormalizedSurface(
   typeDeclarations: readonly SurfaceTypeDeclaration[],
 ): string {
   const declarations = typeDeclarations.map(formatSurfaceTypeDeclaration);
-  const functions = definitions.map((definition) =>
-    `fn ${definition.name}(${definition.parameters.join(", ")}) : ${
+  const functions = definitions.map((definition) => {
+    const effects = definition.effects === undefined || definition.effects.size === 0
+      ? ""
+      : ` !${JSON.stringify(effectNames(definition.effects))}`;
+    return `fn ${definition.name}(${definition.parameters.join(", ")}) : ${
       definition.annotation === null ? "<inferred>" : formatType(definition.annotation)
-    } =\n${formatExpression(definition.body, 1)}`
-  );
+    }${effects} =\n${formatExpression(definition.body, 1)}`;
+  });
   return [...declarations, ...functions].join("\n\n");
 }
 
@@ -251,6 +254,10 @@ function formatEncodedModule(module: EncodedModule): string {
     lines.push(
       `  d${index} ${symbol(module, name)} root=n${root} bytes=${start}..${end} : ${
         formatDefinitionType(module, index)
+      } effects=${
+        JSON.stringify(
+          effectNames(module.declaredDefinitionEffects[index]!),
+        )
       }`,
     );
   }

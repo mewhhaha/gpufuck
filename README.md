@@ -188,6 +188,40 @@ type is found. `let-rec-group` is the only node kind with no builder.
 Traps need no host capability: `surface.runtimeFault(message)` is a first-class node that infers as
 a fresh variable, so it typechecks wherever a diverging expression belongs.
 
+### Effects
+
+Source effect operations are typed functions whose effect labels travel with the callable value:
+
+```ts
+const tick = defineEffectOperation({
+  name: "tick",
+  parameter: { name: "value", type: { kind: "integer" } },
+  result: { kind: "integer" },
+  effects: effectSet("Clock.Tick"),
+  body: surface.binary(
+    BinaryOperator.Add,
+    surface.name("value"),
+    surface.integer(1),
+  ),
+});
+```
+
+Calling `tick` adds `Clock.Tick` to the enclosing definition's effect summary. Passing it to another
+function carries the same label through the higher-order call. Pure code is the empty set,
+`effectSet()`, and effect sets support `union`, `intersection`, `difference`, and
+`symmetricDifference`.
+
+Handlers are ordinary lexical evidence. `surface.withEffectHandler("tick", implementation, body)`
+binds a replacement operation within `body`; a pure replacement discharges `Clock.Tick`, including
+when that binding is passed through higher-order code. Nesting handlers removes only the labels
+whose operation bindings they replace. Compilation exposes the original declarations through
+`GpuModule.declaredDefinitionEffects` and the inferred fixed point through `definitionEffects`,
+`entryEffects`, and each WebAssembly export's `effects`.
+
+This evidence-passing path handles ordinary operation replacement. It does not provide a delimited
+continuation or `resume`, so aborting, multi-shot, generator, and async handlers still require a
+future Core control construct rather than pretending a closed function is equivalent.
+
 `F32x4` is name-based. Build it with `f32x4`, splice in `FIXED_VECTOR_TYPE_DECLARATIONS` and
 `FIXED_VECTOR_DEFINITIONS`, and compile with `{ simd: "wasm-simd" }` for native `v128` instructions.
 Declaring your own four-field vector type instead gets you scalar-correct results and no SIMD.

@@ -30,6 +30,7 @@ export interface GpuModule {
   readonly entryDefinition: number;
   readonly entryType: Type;
   readonly entryEffects: EffectSet;
+  readonly declaredDefinitionEffects: readonly EffectSet[];
   readonly definitionEffects: readonly EffectSet[];
   readonly typeDeclarations: readonly TypeDeclaration[];
   readonly hostCapabilities: readonly HostCapabilityDeclaration[];

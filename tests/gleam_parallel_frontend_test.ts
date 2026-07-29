@@ -48,6 +48,10 @@ Deno.test("parallel Gleam frontend packs the same surface as the serial frontend
       deepStrictEqual(result.module.nodeWords, serial.lowered.module.nodeWords);
       deepStrictEqual(result.module.definitionWords, serial.lowered.module.definitionWords);
       deepStrictEqual(result.module.symbolNames, serial.lowered.module.symbolNames);
+      deepStrictEqual(
+        result.module.declaredDefinitionEffects.map((effects) => [...effects]),
+        serial.lowered.module.declaredDefinitionEffects.map((effects) => [...effects]),
+      );
     }
   } finally {
     pool.terminate();

@@ -50,6 +50,7 @@ import type {
   EncodedTypeDeclaration,
   SemanticDiagnosticCode,
 } from "../semantic/abi.ts";
+import type { EffectSet } from "./effect_set.ts";
 import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
 import type { SourceRange, WasmExportDeclaration } from "./module_contract.ts";
 import type { EvaluationProfile, Span, TypecheckingProfile } from "./schema_contract.ts";
@@ -126,6 +127,7 @@ export interface EncodedModule {
   readonly primitiveCapabilities: readonly PrimitiveCapability[];
   readonly hostCapabilities?: readonly HostCapabilityDeclaration[];
   readonly hostDefinitions?: readonly HostDefinitionBinding[];
+  readonly declaredDefinitionEffects: readonly EffectSet[];
   readonly wasmExports?: readonly WasmExportDeclaration[];
   readonly sources?: readonly SourceRange[];
   readonly nodeWords: Uint32Array;

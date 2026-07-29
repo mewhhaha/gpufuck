@@ -36,7 +36,7 @@ import {
 import { CompilationAdmissionQueue } from "./compilation_admission.ts";
 import { type CompiledCoreArtifact, encodeCoreArtifact } from "./core_artifact.ts";
 import { analyzeModuleEffects } from "./effect_analysis.ts";
-import { effectSet } from "./effect_set.ts";
+import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
 import { normalizeHostCapabilities } from "./host_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
 import type { CompilationOptions, CompileResult, GpuModule } from "./compiler_module.ts";
@@ -424,6 +424,7 @@ async function publicModule(
     });
   });
   const hostCapabilities = normalizeHostCapabilities(encodedModule.hostCapabilities);
+  const declaredDefinitionEffects = normalizedDeclaredDefinitionEffects(encodedModule);
   const boundDefinitions = new Set<string>();
   const hostDefinitions = (encodedModule.hostDefinitions ?? []).map((binding, index) => {
     const definitionIndex = definitionNames.indexOf(binding.definition);
@@ -482,6 +483,7 @@ async function publicModule(
     evaluationProfile: encodedModule.evaluationProfile,
     entryType: module.mainType,
     entryEffects: effectSet(),
+    declaredDefinitionEffects,
     definitionEffects: Object.freeze(
       Array.from({ length: encodedModule.definitionCount }, () => effectSet()),
     ),
@@ -619,6 +621,7 @@ function validateEncodedModule(module: EncodedModule): void {
   }
   validatePrimitiveCapabilities(module.primitiveCapabilities);
   normalizeHostCapabilities(module.hostCapabilities);
+  normalizedDeclaredDefinitionEffects(module);
   if (module.hostDefinitions !== undefined && !Array.isArray(module.hostDefinitions)) {
     throw new Error("functional module host definition bindings must be an array");
   }
@@ -689,6 +692,29 @@ function validateEncodedModule(module: EncodedModule): void {
       `functional module has ${module.typeDeclarations.length} type declarations for ${module.typeCount} type records`,
     );
   }
+}
+
+function normalizedDeclaredDefinitionEffects(
+  module: EncodedModule,
+): readonly EffectSet[] {
+  const declarations = module.declaredDefinitionEffects;
+  if (!Array.isArray(declarations) || declarations.length !== module.definitionCount) {
+    throw new Error(
+      `functional module has ${
+        Array.isArray(declarations) ? declarations.length : "non-array"
+      } declared effect sets for ${module.definitionCount} definitions`,
+    );
+  }
+  return Object.freeze(declarations.map((effects, definitionIndex) => {
+    if (!(effects instanceof Set)) {
+      throw new TypeError(
+        `functional definition ${definitionIndex} declared effects must be a ReadonlySet; received ${
+          JSON.stringify(effects)
+        }`,
+      );
+    }
+    return effectSetFrom(effects);
+  }));
 }
 
 function validateSources(

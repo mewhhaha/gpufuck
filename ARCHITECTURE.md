@@ -87,8 +87,8 @@ frontends had hand-rolled the same workaround — spans, because no builder emit
 tracking locations abandoned the builder entirely; parameter lists, because every other binding form
 already took one; and the `case` default, because exhaustiveness is enforced and every frontend
 therefore enumerated a type's constructors itself. Sugar that only one frontend wants belongs in
-that frontend. Deleted Effect Core is the counterexample: a subsystem shaped around one idea of
-effects that no frontend adopted.
+that frontend. The deleted continuation-free Effect Core is the counterexample: a subsystem shaped
+around one idea of handlers that no frontend adopted.
 
 Builder coverage is a separate question from sugar. The `let`, `if`, and `case` helpers elaborate
 nothing — they emit the Core shape directly, and only the `otherwise` arm a `case` may carry goes
@@ -283,9 +283,10 @@ generator can be deleted or broken and the rest of the suite stays green.
 ## 8. Runtimes
 
 A successful `GpuModule` owns resolved node, definition, and constructor buffers, plus counts,
-roots, qualified names, arities, the entry and its inferred type, nominal declarations, host
-capability contracts, source ranges, evaluation profile, and an idempotent `destroy()`. Two runtimes
-consume it, and `GpuEvaluator.evaluate` chooses between them without the caller deciding.
+roots, qualified names, arities, the entry and its inferred type and effects, declared and inferred
+per-definition effects, nominal declarations, host capability contracts, source ranges, evaluation
+profile, and an idempotent `destroy()`. Two runtimes consume it, and `GpuEvaluator.evaluate` chooses
+between them without the caller deciding.
 
 [`evaluator.ts`](src/functional/evaluator.ts) is a bounded graph reducer over resolved Core
 supporting strict and call-by-need binding, lane-local fuel, bounded heap and stack, cancellation,
@@ -544,11 +545,22 @@ type-resolution primitive — bounded search over frontend-defined predicates re
 evidence tree, which is what a frontend with traits or `derive` needs. Nothing calls it today; the
 frontends that did were removed.
 
-Effect Core was deleted rather than kept dormant. It lowered a handler to a closed `A -> B` with no
-`resume` parameter, so it could not abort, resume later, or resume twice — which is what exceptions,
-generators, async and backtracking all require — and it capped effects at a 32-bit mask. Frontends
-elaborate effects themselves instead, as Koka and Eff do. A target-level effect system needs
-delimited control in Core, which is a separate project.
+The former Effect Core was deleted rather than kept dormant. It lowered a handler to a closed
+`A -> B` with no `resume` parameter, so it could not abort, resume later, or resume twice — which is
+what exceptions, generators, async and backtracking all require — and it capped effects at a 32-bit
+mask.
+
+The replacement is deliberately smaller and compositional. Surface definitions may declare immutable
+string effect sets; source operations are ordinary typed callable evidence; lambda-flow analysis
+carries their labels through globals, closures, recursion, and higher-order applications; and
+lexical handler evidence replaces an operation binding, discharging its label when the replacement
+is pure. Resolved modules expose declared, per-definition, entry, and WebAssembly-export summaries.
+Set union is the fixed-point join, and the public values also provide intersection, difference, and
+symmetric difference.
+
+This is the evidence-passing fast path, not delimited control. It can replace an operation
+implementation but cannot express `resume`, abortive control, or multi-shot handlers. Adding those
+semantics requires an honest Core control construct and remains a separate project.
 
 ## 15. Technical references
 

@@ -13,6 +13,7 @@
  * @module
  */
 import type { EncodedModule } from "../../functional.ts";
+import { decodeTransferredModule } from "../functional/module_transfer.ts";
 import { lowerGleamSource } from "./frontend.ts";
 import type { LowerResponse } from "./parallel_frontend_worker.ts";
 
@@ -84,7 +85,7 @@ export class ParallelGleamFrontend {
           for (const response of event.data) {
             results[response.id] = response.module === undefined
               ? { ok: false, diagnostic: response.diagnostic ?? "lowering failed" }
-              : { ok: true, module: response.module };
+              : { ok: true, module: decodeTransferredModule(response.module) };
           }
           resolve();
         };

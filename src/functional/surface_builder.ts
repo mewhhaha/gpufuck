@@ -37,6 +37,7 @@ import {
   WHOLE_NUMBER_F64_TYPE_NAME,
 } from "./host_contract.ts";
 import { elaborateCaseDefaults } from "./case_defaults.ts";
+import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
 import { elaborateRecursiveGroups } from "./recursive_groups.ts";
 import { functionalBytesLiteralSymbol } from "./static_literals.ts";
 import type {
@@ -69,6 +70,39 @@ const MAXIMUM_SURFACE_TYPE_NODES = 4_096;
 interface SurfaceTypeTraversal {
   readonly activeTypes: WeakSet<object>;
   remainingNodes: number;
+}
+
+export interface SurfaceEffectOperation {
+  readonly name: string;
+  readonly parameter: {
+    readonly name: string;
+    readonly type: TypeSchema;
+  };
+  readonly result: TypeSchema;
+  readonly effects: EffectSet;
+  readonly body: SurfaceExpression;
+  readonly span?: Span;
+}
+
+/**
+ * Declares an effect operation as ordinary callable evidence. Effect summaries follow the
+ * operation through higher-order calls.
+ */
+export function defineEffectOperation(
+  operation: SurfaceEffectOperation,
+): SurfaceDefinition {
+  return {
+    name: operation.name,
+    parameters: [operation.parameter.name],
+    annotation: {
+      kind: "function",
+      parameter: operation.parameter.type,
+      result: operation.result,
+    },
+    effects: effectSetFrom(operation.effects),
+    body: operation.body,
+    ...(operation.span === undefined ? {} : { span: operation.span }),
+  };
 }
 
 export function thunkType(value: TypeSchema): TypeSchema {
@@ -133,6 +167,19 @@ export function buildSurfaceModule(
     elaboratedDefinitions,
     hostCapabilities,
     options.hostDefinitions,
+  );
+  const declaredDefinitionEffects = Object.freeze(
+    elaboratedDefinitions.map((definition, definitionIndex) => {
+      if (definition.effects === undefined) return effectSet();
+      if (!(definition.effects instanceof Set)) {
+        throw new TypeError(
+          `functional definition ${definitionIndex} effects must be a ReadonlySet; received ${
+            JSON.stringify(definition.effects)
+          }`,
+        );
+      }
+      return effectSetFrom(definition.effects);
+    }),
   );
   const wasmExports = normalizeWasmExports(definitions, options.wasmExports);
   const usesHigherRankTypes =
@@ -238,6 +285,7 @@ export function buildSurfaceModule(
     primitiveCapabilities: CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities,
     hostDefinitions,
+    declaredDefinitionEffects,
     wasmExports,
     nodeWords: Uint32Array.from(encoder.words),
     definitionWords: Uint32Array.from(definitionWords),
@@ -1488,6 +1536,15 @@ export type SurfaceBuilder = Readonly<{
     body: SurfaceExpression,
     valueEvaluation?: EvaluationProfile,
   ): SurfaceExpression;
+  /**
+   * Installs lexical effect evidence. Calls through `operation` use `implementation`; passing that
+   * binding through higher-order code keeps the handler in scope and can discharge the effect.
+   */
+  withEffectHandler(
+    operation: string,
+    implementation: SurfaceExpression,
+    body: SurfaceExpression,
+  ): SurfaceExpression;
   if(
     condition: SurfaceExpression,
     consequent: SurfaceExpression,
@@ -1631,6 +1688,19 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
         value,
         body,
         ...(valueEvaluation === undefined ? {} : { valueEvaluation }),
+        ...spanned,
+      };
+    },
+    withEffectHandler(
+      operation: string,
+      implementation: SurfaceExpression,
+      body: SurfaceExpression,
+    ): SurfaceExpression {
+      return {
+        kind: "let",
+        name: operation,
+        value: implementation,
+        body,
         ...spanned,
       };
     },
