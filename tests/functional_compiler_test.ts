@@ -88,6 +88,51 @@ Deno.test("surface module construction rejects malformed options at its boundary
   );
 });
 
+Deno.test("surface definitions reject malformed effects before host binding reads them", () => {
+  throws(
+    () =>
+      buildSurfaceModule(
+        [{
+          name: "emit",
+          parameters: ["value"],
+          annotation: {
+            kind: "function",
+            parameter: { kind: "integer" },
+            result: { kind: "integer" },
+          },
+          effects: { size: 1 } as never,
+          body: surface.name("value"),
+        }, {
+          name: "main",
+          parameters: [],
+          annotation: { kind: "integer" },
+          body: surface.integer(42),
+        }],
+        [],
+        "main",
+        0,
+        {
+          hostCapabilities: [{
+            name: "Console",
+            fields: [{
+              kind: "operation",
+              name: "emit",
+              effects: effectSet("Console.Write"),
+              parameter: { kind: "integer" },
+              result: { kind: "integer" },
+            }],
+          }],
+          hostDefinitions: [{
+            definition: "emit",
+            capability: "Console",
+            field: "emit",
+          }],
+        },
+      ),
+    /functional definition 0 effects must be a ReadonlySet; received \{"size":1\}/,
+  );
+});
+
 Deno.test("effect sets provide deterministic ordinary set operations", () => {
   const consoleEffects = effectSet("Console.Write", "Console.Read", "Console.Write");
   const storageEffects = effectSet("Storage");

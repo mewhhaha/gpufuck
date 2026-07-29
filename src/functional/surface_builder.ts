@@ -163,11 +163,6 @@ export function buildSurfaceModule(
   const evaluationProfile = options.evaluationProfile ?? EvaluationProfile.StrictEager;
   requireEvaluationProfile(evaluationProfile, "functional surface module");
   const hostCapabilities = normalizeHostCapabilities(options.hostCapabilities);
-  const hostDefinitions = normalizeHostDefinitions(
-    elaboratedDefinitions,
-    hostCapabilities,
-    options.hostDefinitions,
-  );
   const declaredDefinitionEffects = Object.freeze(
     elaboratedDefinitions.map((definition, definitionIndex) => {
       if (definition.effects === undefined) return effectSet();
@@ -180,6 +175,11 @@ export function buildSurfaceModule(
       }
       return effectSetFrom(definition.effects);
     }),
+  );
+  const hostDefinitions = normalizeHostDefinitions(
+    elaboratedDefinitions,
+    hostCapabilities,
+    options.hostDefinitions,
   );
   const wasmExports = normalizeWasmExports(definitions, options.wasmExports);
   const usesHigherRankTypes =
