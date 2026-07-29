@@ -75,12 +75,11 @@ Deno.test("indexed lowering plans retain the first deterministic semantic diagno
     "data Flag = Off | On; let main = case Off of | Off -> 0 | Off -> 1 | On -> 2 end;",
   );
   const duplicateLookup = createSymbolLookup(duplicateSurface);
-  const duplicateArms = surfaceNodes(duplicateSurface, ExpressionTag.CaseArm);
-  const repeatedArm = duplicateArms[1];
-  ok(repeatedArm);
-  equal(loweringHeader(duplicateLookup, duplicateSurface).errorNode, repeatedArm.index);
+  const duplicateCase = surfaceNodes(duplicateSurface, ExpressionTag.Case)[0];
+  ok(duplicateCase);
+  equal(loweringHeader(duplicateLookup, duplicateSurface).errorNode, duplicateCase.index);
   equal(
-    loweringRecord(duplicateLookup, duplicateSurface, repeatedArm.index).errorCode,
+    loweringRecord(duplicateLookup, duplicateSurface, duplicateCase.index).errorCode,
     SemanticCompilerErrorCode.DuplicateCaseArm,
   );
 });

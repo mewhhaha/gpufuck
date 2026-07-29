@@ -1356,9 +1356,10 @@ class WasmCompiler {
       );
     }
     const slot = this.lambdaSlot(lambdaNode);
+    const parameterCount = lambda.child1 === 0 ? 0 : 1;
     const captured = this.prunedCaptures(
       lambda.child0,
-      1,
+      parameterCount,
       environment,
       OBJECT_HEADER_BYTE_LENGTH,
     );
@@ -1372,6 +1373,10 @@ class WasmCompiler {
     nodeIndex: number,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
+    if (node.payload === NO_INDEX) {
+      this.compileZeroArityApply(instructions, node, environment, nodeIndex);
+      return;
+    }
     const uncurriedApplication = this.uncurriedApplication(
       nodeIndex,
       environment,
@@ -1502,6 +1507,40 @@ class WasmCompiler {
     instructions.callIndirect(WasmFunctionTypeIndex.ClosureCall);
   }
 
+  compileZeroArityApply(
+    instructions: WasmInstructions,
+    node: CoreNode,
+    environment: Environment,
+    nodeIndex: number,
+  ): void {
+    const virtualCallee = this.virtualLambda(node.child0, environment);
+    if (virtualCallee !== undefined) {
+      const lambda = this.node(virtualCallee.node);
+      if (lambda.tag === CoreTag.Lambda && lambda.child1 === 0) {
+        this.compileExpression(instructions, lambda.child0, virtualCallee.environment);
+        return;
+      }
+    }
+
+    this.compileExpression(instructions, node.child0, environment);
+    instructions.emit(0xa7);
+    const closure = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(closure);
+    instructions.localGet(closure);
+    const unitConstructor = this.#module.constructorNames.indexOf("$Unit");
+    const unitOffset = this.#nullaryConstructorOffsets[unitConstructor];
+    if (unitConstructor < 0 || unitOffset === undefined) {
+      throw new Error(
+        `functional WASM zero-arity application ${nodeIndex} requires the built-in Unit constructor`,
+      );
+    }
+    instructions.i32Const(unitOffset);
+    instructions.i64Load(0);
+    instructions.localGet(closure);
+    instructions.i32Load(4);
+    instructions.callIndirect(WasmFunctionTypeIndex.ClosureCall);
+  }
+
   uncurriedApplication(
     nodeIndex: number,
     environment: Environment,
@@ -1510,6 +1549,7 @@ class WasmCompiler {
     let baseNode = nodeIndex;
     let node = this.node(baseNode);
     while (node.tag === CoreTag.Apply) {
+      if (node.payload === NO_INDEX) break;
       reverseArguments.push({
         node: node.child1,
         evaluationMode: node.evaluationMode,
@@ -1597,7 +1637,7 @@ class WasmCompiler {
   }
 
   lambdaSet(nodeIndex: number): LambdaSet {
-    this.#lambdaSetAnalysis ??= new LambdaSetAnalysis(
+    this.#lambdaSetAnalysis ??= LambdaSetAnalysis.forWasm(
       this.#module,
       this.#nodes,
     );
@@ -3779,6 +3819,7 @@ class WasmCompiler {
     let baseNode = nodeIndex;
     let node = this.node(baseNode);
     while (node.tag === CoreTag.Apply) {
+      if (node.payload === NO_INDEX) return undefined;
       reverseArguments.push({ node: node.child1, evaluationMode: node.evaluationMode });
       baseNode = node.child0;
       node = this.node(baseNode);
@@ -4595,6 +4636,7 @@ class WasmCompiler {
     let calleeIndex = nodeIndex;
     let callee = this.node(calleeIndex);
     while (callee.tag === CoreTag.Apply) {
+      if (callee.payload === NO_INDEX) return undefined;
       reverseArguments.push({
         node: callee.child1,
         evaluationMode: callee.evaluationMode,
@@ -5460,27 +5502,29 @@ class WasmCompiler {
     this.#lambdaSlots[lambdaNode] = slot;
     const recursiveOwner = this.#recursiveLambdaOwners.get(lambdaNode);
     const bodyInstructions = new WasmInstructions(2);
+    const hasParameter = lambda.child1 !== 0;
     let bodyEnvironment: Environment;
     if (recursiveOwner === undefined) {
       bodyEnvironment = [
-        { kind: "i64-local", index: 1 },
+        ...(hasParameter ? [{ kind: "i64-local", index: 1 } as const] : []),
         ...this.lambdaCaptureEnvironment(
           lambda.child0,
-          1,
+          hasParameter ? 1 : 0,
           OBJECT_HEADER_BYTE_LENGTH,
         ),
       ];
     } else {
+      const selfDepth = hasParameter ? 1 : 0;
       const capturesSelf = this.#captureAnalysis.freeLocalDepths(lambda.child0)
-        .includes(1);
+        .includes(selfDepth);
       const firstOuterCaptureByteOffset = OBJECT_HEADER_BYTE_LENGTH +
         (capturesSelf ? VALUE_BYTE_LENGTH : 0);
       bodyEnvironment = [
-        { kind: "i64-local", index: 1 },
+        ...(hasParameter ? [{ kind: "i64-local", index: 1 } as const] : []),
         capturesSelf ? { kind: "capture", byteOffset: OBJECT_HEADER_BYTE_LENGTH } : undefined,
         ...this.lambdaCaptureEnvironment(
           lambda.child0,
-          2,
+          selfDepth + 1,
           firstOuterCaptureByteOffset,
         ),
       ];

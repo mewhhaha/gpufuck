@@ -66,6 +66,35 @@ Deno.test("emits a WebAssembly artifact that runs to the expected value", async 
   }
 });
 
+Deno.test("executes zero-arity and exact-arity calls without synthetic Core binders", async () => {
+  const compilation = await compileEntry(
+    surface.apply(
+      surface.lambda(
+        [],
+        surface.apply(
+          surface.lambda(
+            ["left", "right"],
+            surface.binary(
+              BinaryOperator.Add,
+              surface.name("left"),
+              surface.name("right"),
+            ),
+          ),
+          surface.integer(20),
+          surface.integer(22),
+        ),
+      ),
+    ),
+  );
+  try {
+    const execution = await runWasmModule(compilation.module);
+    equal(execution.value.kind, "integer");
+    equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("emits a well-formed WebAssembly binary that instantiates standalone", async () => {
   const compilation = await compileEntry(surface.integer(7));
   try {

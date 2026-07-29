@@ -505,20 +505,17 @@ function applyConstantConstructor(
   fields: readonly Constant[],
   span: Span | undefined,
 ): SurfaceExpression {
-  let expression: SurfaceExpression = {
+  const expression: SurfaceExpression = {
     kind: "name",
     name,
     ...(span === undefined ? {} : { span }),
   };
-  for (const field of fields) {
-    expression = {
-      kind: "apply",
-      callee: expression,
-      argument: functionalConstantExpressionUnchecked(field, span),
-      ...(span === undefined ? {} : { span }),
-    };
-  }
-  return expression;
+  return {
+    kind: "apply",
+    callee: expression,
+    arguments: fields.map((field) => functionalConstantExpressionUnchecked(field, span)),
+    ...(span === undefined ? {} : { span }),
+  };
 }
 
 function encodedConstant(constant: Constant): unknown {

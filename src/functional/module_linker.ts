@@ -659,9 +659,9 @@ function rewriteExpression(
         span,
       };
     case "lambda": {
-      addBoundNames(boundNames, [expression.parameter]);
+      addBoundNames(boundNames, expression.parameters);
       const body = rewrite(expression.body);
-      removeBoundNames(boundNames, [expression.parameter]);
+      removeBoundNames(boundNames, expression.parameters);
       return { ...expression, body, span };
     }
     case "let": {
@@ -722,7 +722,7 @@ function rewriteExpression(
       return {
         ...expression,
         callee: rewrite(expression.callee),
-        argument: rewrite(expression.argument),
+        arguments: expression.arguments.map(rewrite),
         span,
       };
     case "unary":

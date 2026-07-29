@@ -40,7 +40,7 @@ export function elaborateCaseDefaults(
         const call: SurfaceExpression = {
           kind: "apply",
           callee: { kind: "name", name: fallback },
-          argument: { kind: "name", name: scrutinee },
+          arguments: [{ kind: "name", name: scrutinee }],
         };
         const expanded: SurfaceCaseArm[] = [
           ...arms,
@@ -57,7 +57,7 @@ export function elaborateCaseDefaults(
           body: {
             kind: "let",
             name: fallback,
-            value: { kind: "lambda", parameter: binder, body },
+            value: { kind: "lambda", parameters: [binder], body },
             body: {
               kind: "case",
               value: { kind: "name", name: scrutinee },
@@ -94,7 +94,7 @@ export function elaborateCaseDefaults(
         return {
           ...expression,
           callee: expand(expression.callee),
-          argument: expand(expression.argument),
+          arguments: expression.arguments.map(expand),
         };
       case "binary":
       case "text-append":

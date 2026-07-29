@@ -311,7 +311,7 @@ Deno.test("compiles annotated elimination from an empty type with no case arms",
       const nodes = await compilation.module.readCoreNodes();
       const emptyCase = nodes.find((node) => node.tag === CoreTag.Case);
       ok(emptyCase);
-      equal(emptyCase.child1, NO_INDEX);
+      equal(emptyCase.child1, 0);
     } finally {
       compilation.module.destroy();
     }
@@ -787,11 +787,12 @@ Deno.test("reads UTF-8 core spans and resolved name payloads", async () => {
 
       const caseArmStartByte = byteOffset(caseArmOffset);
       const caseArmEndByte = byteOffset(source.indexOf("end"));
-      const caseArmIndex = nodes.findIndex((node) =>
-        node.tag === CoreTag.CaseArm && node.payload === 0 &&
-        node.sourceByteOffset === caseArmStartByte
+      const caseAlternative = module.caseAlternatives.find((alternative) =>
+        alternative.constructor === 0 &&
+        alternative.sourceByteOffset === caseArmStartByte
       );
-      ok(caseArmIndex >= 0 && nodeWords[caseArmIndex * 8 + 6] === caseArmEndByte);
+      ok(caseAlternative);
+      equal(caseAlternative.sourceEndByte, caseArmEndByte);
     } finally {
       module.destroy();
     }
@@ -843,6 +844,10 @@ Deno.test("rejects malformed core child edges as invalid modules", async () => {
         definitionCount: 1,
         constructorCount: 0,
         typeCount: 0,
+        parameterCount: 0,
+        arguments: [],
+        caseAlternatives: [],
+        caseBinderCount: 0,
         constructorNames: [],
         constructorArities: [],
         entryDefinition: 0,
@@ -972,7 +977,7 @@ Deno.test("faults safely if a constructor reaches a zero-arm core case", async (
         CoreTag.Case,
         0,
         1,
-        NO_INDEX,
+        0,
         NO_INDEX,
         0,
         0,
@@ -1004,6 +1009,10 @@ Deno.test("faults safely if a constructor reaches a zero-arm core case", async (
       definitionCount: 1,
       constructorCount: 1,
       typeCount: 1,
+      parameterCount: 0,
+      arguments: [],
+      caseAlternatives: [],
+      caseBinderCount: 0,
       constructorNames: ["Fabricated"],
       constructorArities: [0],
       entryDefinition: 0,
@@ -1023,7 +1032,7 @@ Deno.test("faults safely if a constructor reaches a zero-arm core case", async (
       const result = await evaluator.evaluate(module, { maximumSteps: 32, stackFrames: 8 });
       equal(result.ok, false);
       if (result.ok) return;
-      equal(result.fault.kind, "non-exhaustive-case");
+      equal(result.fault.kind, "non-exhaustive-case", result.fault.message);
       equal(result.fault.code, "F3008");
       match(result.fault.message, /Fabricated/);
     } finally {
@@ -1751,6 +1760,10 @@ Deno.test("rejects malformed metadata for only the affected Lazuli batch member"
       definitionCount: module.definitionCount,
       constructorCount: module.constructorCount,
       typeCount: module.typeCount,
+      parameterCount: module.parameterCount,
+      arguments: module.arguments,
+      caseAlternatives: module.caseAlternatives,
+      caseBinderCount: module.caseBinderCount,
       constructorNames: [],
       constructorArities: module.constructorArities,
       entryDefinition: module.entryDefinition,

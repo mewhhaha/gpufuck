@@ -404,7 +404,7 @@ class JavaScriptAotLowering {
       returnContinuationName === null ? value : {
         kind: "apply" as const,
         callee: { kind: "name" as const, name: returnContinuationName, span },
-        argument: value,
+        arguments: [value],
         span,
       };
     const completeThrow = (value: SurfaceExpression) =>
@@ -423,7 +423,7 @@ class JavaScriptAotLowering {
         : {
           kind: "apply" as const,
           callee: { kind: "name" as const, name: throwContinuationName, span },
-          argument: value,
+          arguments: [value],
           span,
         };
     let body = this.lowerStatementScope(
@@ -1185,12 +1185,9 @@ class JavaScriptAotLowering {
       statement.condition,
       loopEnvironment,
     );
-    const callLoop = (currentEnvironment: JavaScriptAotEnvironment) => {
-      let call: SurfaceExpression = {
-        kind: "name",
-        name: loopName,
-        span: statement.span,
-      };
+    const callLoop = (
+      currentEnvironment: JavaScriptAotEnvironment,
+    ): SurfaceExpression => {
       const arguments_: SurfaceExpression[] = [
         { kind: "boolean", value: true, span: statement.span },
         ...mutableNames.map((name) => ({
@@ -1199,10 +1196,12 @@ class JavaScriptAotLowering {
           span: statement.span,
         })),
       ];
-      for (const argument of arguments_) {
-        call = { kind: "apply", callee: call, argument, span: statement.span };
-      }
-      return call;
+      return {
+        kind: "apply",
+        callee: { kind: "name", name: loopName, span: statement.span },
+        arguments: arguments_,
+        span: statement.span,
+      };
     };
     const continueAfterLoop = (currentEnvironment: JavaScriptAotEnvironment) =>
       this.lowerStatements(
@@ -1733,50 +1732,35 @@ class JavaScriptAotLowering {
       );
     }
 
-    let call = this.lowerExpression(expression.callee, environment);
-    const zeroArgumentApplication = expression.arguments.length === 0 && functionArity === 0;
-    if (zeroArgumentApplication) {
-      call = {
-        kind: "apply",
-        callee: call,
-        argument: this.lowerUndefined(expression.span),
-        span: expression.span,
-      };
-    }
-    for (const argument of expression.arguments) {
-      call = {
-        kind: "apply",
-        callee: call,
-        argument: this.lowerExpression(argument, environment),
-        span: expression.span,
-      };
-    }
+    const callArguments = expression.arguments.map((argument) =>
+      this.lowerExpression(argument, environment)
+    );
     const returnedName = this.freshBindingName("returnedValue");
-    call = {
-      kind: "apply",
-      callee: call,
-      argument: {
+    callArguments.push(
+      {
         kind: "lambda",
-        parameter: returnedName,
+        parameters: [returnedName],
         body: onValue({ kind: "name", name: returnedName, span: expression.span }),
         span: expression.span,
       },
-      span: expression.span,
-    };
+    );
     const thrownName = this.freshBindingName("thrownValue");
     return {
       kind: "apply",
-      callee: call,
-      argument: {
-        kind: "lambda",
-        parameter: thrownName,
-        body: onThrow(
-          { kind: "name", name: thrownName, span: expression.span },
-          environment,
-          null,
-        ),
-        span: expression.span,
-      },
+      callee: this.lowerExpression(expression.callee, environment),
+      arguments: [
+        ...callArguments,
+        {
+          kind: "lambda",
+          parameters: [thrownName],
+          body: onThrow(
+            { kind: "name", name: thrownName, span: expression.span },
+            environment,
+            null,
+          ),
+          span: expression.span,
+        },
+      ],
       span: expression.span,
     };
   }
@@ -2097,29 +2081,14 @@ class JavaScriptAotLowering {
         );
       }
     }
-    let result = this.lowerExpression(expression.callee, environment);
-    const zeroArgumentApplication = expression.arguments.length === 0 && (
-      expression.callee.kind === "function" && expression.callee.parameters.length === 0 ||
-      expression.callee.kind === "name" &&
-        environment.get(expression.callee.name)?.zeroArgumentApplication === true
-    );
-    if (zeroArgumentApplication) {
-      result = {
-        kind: "apply",
-        callee: result,
-        argument: this.lowerUndefined(expression.span),
-        span: expression.span,
-      };
-    }
-    for (const argument of expression.arguments) {
-      result = {
-        kind: "apply",
-        callee: result,
-        argument: this.lowerExpression(argument, environment),
-        span: expression.span,
-      };
-    }
-    return result;
+    return {
+      kind: "apply",
+      callee: this.lowerExpression(expression.callee, environment),
+      arguments: expression.arguments.map((argument) =>
+        this.lowerExpression(argument, environment)
+      ),
+      span: expression.span,
+    };
   }
 
   private lowerArrayMethodCall(
@@ -2227,16 +2196,12 @@ class JavaScriptAotLowering {
       "callable",
       statementsMayEscapeThrow(expression.body),
     );
-    let body = loweredFunction.body;
-    for (let index = loweredFunction.parameters.length - 1; index >= 0; index--) {
-      body = {
-        kind: "lambda",
-        parameter: loweredFunction.parameters[index]!,
-        body,
-        span: expression.span,
-      };
-    }
-    return body;
+    return {
+      kind: "lambda",
+      parameters: loweredFunction.parameters,
+      body: loweredFunction.body,
+      span: expression.span,
+    };
   }
 
   private lowerUndefined(
@@ -3036,11 +3001,7 @@ function applyExpressions(
   arguments_: readonly SurfaceExpression[],
   span: { readonly startByte: number; readonly endByte: number },
 ): SurfaceExpression {
-  let expression = callee;
-  for (const argument of arguments_) {
-    expression = { kind: "apply", callee: expression, argument, span };
-  }
-  return expression;
+  return { kind: "apply", callee, arguments: arguments_, span };
 }
 
 function assignedNamesInStatements(

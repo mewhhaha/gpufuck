@@ -1,5 +1,7 @@
 import {
   AlgebraicTypeWord,
+  CASE_ALTERNATIVE_WORD_LENGTH,
+  CaseAlternativeWord,
   CONSTRUCTOR_WORD_LENGTH,
   ConstructorWord,
   DEFINITION_WORD_LENGTH,
@@ -10,6 +12,7 @@ import {
   NodeWord,
   type SemanticDiagnostic,
   TYPE_WORD_LENGTH,
+  UNKNOWN_CONSTRUCTOR_FLAG,
 } from "./abi.ts";
 import type { GpuSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
 
@@ -115,45 +118,39 @@ export function diagnosticFromSemanticState(
       };
     }
     case SemanticCompilerErrorCode.UnknownCaseConstructor: {
-      const span = surfaceNodeSpanAt(
-        surface,
-        state.errorSource,
-        state.errorDetail,
-        ExpressionTag.CaseArm,
-      );
-      if (span === undefined) return undefined;
+      const alternative = caseAlternativeDetails(surface, state.errorSource, state.errorDetail);
+      if (alternative === undefined) return undefined;
       return {
         stage: "compile",
         code: "F2007",
-        message: `unknown case constructor ${symbolName}`,
-        span,
+        message: `unknown case constructor ${
+          symbolNameFor(surface, alternative.constructorSymbol)
+        }`,
+        span: alternative.span,
       };
     }
     case SemanticCompilerErrorCode.PatternArityMismatch: {
-      const arm = caseArmDetails(surface, state.errorSource, state.errorDetail);
-      if (arm === undefined) return undefined;
+      const alternative = caseAlternativeDetails(surface, state.errorSource, state.errorDetail);
+      if (alternative === undefined) return undefined;
       return {
         stage: "compile",
         code: "F2008",
         message: `constructor ${
-          symbolNameFor(surface, arm.constructorSymbol)
-        } expects ${arm.arity} pattern binders, received ${arm.binderCount}`,
-        span: arm.span,
+          symbolNameFor(surface, alternative.constructorSymbol)
+        } expects ${alternative.arity} pattern binders, received ${alternative.binderCount}`,
+        span: alternative.span,
       };
     }
     case SemanticCompilerErrorCode.DuplicateCaseArm: {
-      const span = surfaceNodeSpanAt(
-        surface,
-        state.errorSource,
-        state.errorDetail,
-        ExpressionTag.CaseArm,
-      );
-      if (span === undefined) return undefined;
+      const alternative = caseAlternativeDetails(surface, state.errorSource, state.errorDetail);
+      if (alternative === undefined) return undefined;
       return {
         stage: "compile",
         code: "F2009",
-        message: `duplicate case arm for constructor ${symbolName}`,
-        span,
+        message: `duplicate case arm for constructor ${
+          symbolNameFor(surface, alternative.constructorSymbol)
+        }`,
+        span: alternative.span,
       };
     }
     default:
@@ -439,89 +436,70 @@ function previousRecordSpan(
   return previous;
 }
 
-function surfaceNodeSpanAt(
+function caseAlternativeDetails(
   surface: EncodedSemanticSurface,
   startByte: number,
-  symbol: number,
-  tag: number,
-): SemanticDiagnostic["span"] | undefined {
-  for (let nodeIndex = 0; nodeIndex < surface.nodeCount; nodeIndex++) {
-    const wordOffset = nodeIndex * NODE_WORD_LENGTH;
-    if (
-      surface.nodeWords[wordOffset + NodeWord.Tag] === tag &&
-      surface.nodeWords[wordOffset + NodeWord.StartByte] === startByte &&
-      surface.nodeWords[wordOffset + NodeWord.Payload] === symbol
-    ) {
-      const endByte = surface.nodeWords[wordOffset + NodeWord.EndByte];
-      if (endByte === undefined) return undefined;
-      return { startByte, endByte };
-    }
-  }
-  return undefined;
-}
-
-function caseArmDetails(
-  surface: EncodedSemanticSurface,
-  startByte: number,
-  armIndex: number,
+  alternativeIndex: number,
 ): {
   readonly constructorSymbol: number;
   readonly arity: number;
   readonly binderCount: number;
   readonly span: SemanticDiagnostic["span"];
 } | undefined {
-  if (armIndex >= surface.nodeCount) return undefined;
-  const armOffset = armIndex * NODE_WORD_LENGTH;
-  if (
-    surface.nodeWords[armOffset + NodeWord.Tag] !== ExpressionTag.CaseArm ||
-    surface.nodeWords[armOffset + NodeWord.StartByte] !== startByte
-  ) {
-    return undefined;
-  }
-  const constructorSymbol = surface.nodeWords[armOffset + NodeWord.Payload];
-  const endByte = surface.nodeWords[armOffset + NodeWord.EndByte];
-  const firstPatternOrBody = surface.nodeWords[armOffset + NodeWord.Child0];
-  if (
-    constructorSymbol === undefined || endByte === undefined || firstPatternOrBody === undefined
-  ) {
-    return undefined;
-  }
-
-  let binderCount = 0;
-  let nodeIndex: number = firstPatternOrBody;
-  while (nodeIndex < surface.nodeCount) {
-    const nodeOffset: number = nodeIndex * NODE_WORD_LENGTH;
-    if (surface.nodeWords[nodeOffset + NodeWord.Tag] !== ExpressionTag.PatternBind) {
+  if (alternativeIndex >= surface.caseAlternativeCount) return undefined;
+  let ownerFound = false;
+  for (let nodeIndex = 0; nodeIndex < surface.nodeCount; nodeIndex++) {
+    const nodeOffset = nodeIndex * NODE_WORD_LENGTH;
+    if (
+      surface.nodeWords[nodeOffset + NodeWord.Tag] !== ExpressionTag.Case ||
+      surface.nodeWords[nodeOffset + NodeWord.StartByte] !== startByte
+    ) continue;
+    const firstAlternative = surface.nodeWords[nodeOffset + NodeWord.Payload];
+    const alternativeCount = surface.nodeWords[nodeOffset + NodeWord.Child1];
+    if (
+      firstAlternative !== undefined && alternativeCount !== undefined &&
+      alternativeIndex >= firstAlternative &&
+      alternativeIndex < firstAlternative + alternativeCount
+    ) {
+      ownerFound = true;
       break;
     }
-    binderCount++;
-    const child: number | undefined = surface.nodeWords[nodeOffset + NodeWord.Child0];
-    if (child === undefined) return undefined;
-    nodeIndex = child;
   }
+  if (!ownerFound) return undefined;
 
-  const constructorIndex = findConstructor(surface, constructorSymbol);
-  if (constructorIndex === undefined) return undefined;
-  const arity = surface.constructorWords[
-    constructorIndex * CONSTRUCTOR_WORD_LENGTH + ConstructorWord.Arity
+  const alternativeOffset = alternativeIndex * CASE_ALTERNATIVE_WORD_LENGTH;
+  const constructor = surface.caseAlternativeWords[
+    alternativeOffset + CaseAlternativeWord.Constructor
   ];
-  if (arity === undefined) return undefined;
+  const binderCount = surface.caseAlternativeWords[
+    alternativeOffset + CaseAlternativeWord.BinderCount
+  ];
+  const alternativeStart = surface.caseAlternativeWords[
+    alternativeOffset + CaseAlternativeWord.StartByte
+  ];
+  const alternativeEnd = surface.caseAlternativeWords[
+    alternativeOffset + CaseAlternativeWord.EndByte
+  ];
+  if (
+    constructor === undefined || binderCount === undefined ||
+    alternativeStart === undefined || alternativeEnd === undefined
+  ) return undefined;
+  const unknown = (constructor & UNKNOWN_CONSTRUCTOR_FLAG) !== 0;
+  const constructorSymbol = unknown
+    ? constructor & ~UNKNOWN_CONSTRUCTOR_FLAG
+    : surface.constructorWords[
+      constructor * CONSTRUCTOR_WORD_LENGTH + ConstructorWord.Symbol
+    ];
+  const arity = unknown ? 0 : surface.constructorWords[
+    constructor * CONSTRUCTOR_WORD_LENGTH + ConstructorWord.Arity
+  ];
+  if (constructorSymbol === undefined || arity === undefined) return undefined;
   return {
     constructorSymbol,
     arity,
     binderCount,
-    span: { startByte, endByte },
+    span: { startByte: alternativeStart, endByte: alternativeEnd },
   };
-}
-
-function findConstructor(surface: EncodedSemanticSurface, symbol: number): number | undefined {
-  for (let constructorIndex = 0; constructorIndex < surface.constructorCount; constructorIndex++) {
-    const wordOffset = constructorIndex * CONSTRUCTOR_WORD_LENGTH;
-    if (surface.constructorWords[wordOffset + ConstructorWord.Symbol] === symbol) {
-      return constructorIndex;
-    }
-  }
-  return undefined;
 }
 
 function symbolNameFor(surface: EncodedSemanticSurface, symbol: number): string {

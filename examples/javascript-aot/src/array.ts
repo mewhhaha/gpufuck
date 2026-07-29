@@ -237,9 +237,5 @@ function apply(
   arguments_: readonly SurfaceExpression[],
   span: { readonly startByte: number; readonly endByte: number },
 ): SurfaceExpression {
-  let expression = callee;
-  for (const argument of arguments_) {
-    expression = { kind: "apply", callee: expression, argument, span };
-  }
-  return expression;
+  return { kind: "apply", callee, arguments: arguments_, span };
 }

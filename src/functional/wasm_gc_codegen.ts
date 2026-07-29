@@ -14,6 +14,7 @@ import { functionalWasmEntry } from "./wasm_host_boundary.ts";
 import { WASM_GC_ABI_VERSION, WasmGcValueKind } from "./wasm_gc_contract.ts";
 import { MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
 import { WASM_FAULT_OUT_OF_BOUNDS } from "./wasm_runtime_binary.ts";
+import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 
 const VALUE_TYPE_INDEX = 0;
 const VALUE_FIELDS_TYPE_INDEX = 1;
@@ -77,16 +78,17 @@ export function compileWasmGc(
       `functional WasmGC backend does not yet emit additional callable exports; received ${module.wasmExports.length} declarations`,
     );
   }
+  const loweredNodes = lowerCoreForWasm(module, nodes);
   const entryRoot = module.definitionRoots[module.entryDefinition];
-  if (entryRoot === undefined || entryRoot >= nodes.length) {
+  if (entryRoot === undefined || entryRoot >= loweredNodes.length) {
     throw new Error(
       `functional WasmGC backend entry definition ${module.entryDefinition} references root ${
         String(entryRoot)
-      } outside ${nodes.length} nodes`,
+      } outside ${loweredNodes.length} nodes`,
     );
   }
 
-  const emitter = new GcCoreEmitter(module, nodes);
+  const emitter = new GcCoreEmitter(module, loweredNodes);
   return emitter.emitModule(entryRoot);
 }
 
@@ -213,7 +215,7 @@ class GcCoreEmitter {
         if (this.constructorApplication(nodeIndex) !== undefined) {
           this.emitConstructorApplication(nodeIndex, environment);
         } else {
-          this.emitApplication(node, environment);
+          this.emitApplication(nodeIndex, node, environment);
         }
         return;
       case CoreTag.Lambda:
@@ -344,18 +346,30 @@ class GcCoreEmitter {
 
   constructorApplication(nodeIndex: number): boolean | undefined {
     let callee = this.node(nodeIndex);
-    while (callee.tag === CoreTag.Apply) callee = this.node(callee.child0);
+    while (callee.tag === CoreTag.Apply) {
+      if (callee.payload === NO_INDEX) return undefined;
+      callee = this.node(callee.child0);
+    }
     return callee.tag === CoreTag.Constructor ? true : undefined;
   }
 
   emitApplication(
+    nodeIndex: number,
     node: CoreNode,
     environment: readonly number[],
   ): void {
     this.emitExpression(node.child0, environment);
     const calleeLocal = this.#instructions.addValueLocal();
     this.#instructions.localSet(calleeLocal);
-    if (node.evaluationMode === EvaluationMode.StrictEager) {
+    if (node.payload === NO_INDEX) {
+      const unitConstructor = this.#module.constructorNames.indexOf("$Unit");
+      if (unitConstructor < 0) {
+        throw new Error(
+          `functional WasmGC backend zero-arity application ${nodeIndex} requires the built-in Unit constructor`,
+        );
+      }
+      this.emitLiteralValue(WasmGcValueKind.Constructor, unitConstructor);
+    } else if (node.evaluationMode === EvaluationMode.StrictEager) {
       this.emitExpression(node.child1, environment);
     } else {
       this.emitThunk(node.child1, environment);
@@ -468,7 +482,10 @@ class GcCoreEmitter {
     const slot = this.reserveWorker();
     this.#lambdaWorkers.set(lambdaNode, { slot, captureCount });
     this.compileWorker(slot, captureCount, (captures) => {
-      this.emitExpression(lambda.child0, [1, ...captures]);
+      this.emitExpression(
+        lambda.child0,
+        lambda.child1 === 0 ? captures : [1, ...captures],
+      );
     });
     return slot;
   }

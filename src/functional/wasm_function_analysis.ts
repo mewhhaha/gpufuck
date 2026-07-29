@@ -372,6 +372,8 @@ export class WasmFunctionAnalysis {
         return [...child(node.child0, 0, false), ...child(node.child1, 0, true)];
       case CoreTag.CaseArm:
         return [...child(node.child0, 0, true), ...child(node.child1, 0, true)];
+      case CoreTag.Prim:
+        throw new Error("WebAssembly join-point analysis received an unlowered primop");
     }
     const unhandled: never = node.tag;
     throw new Error(`WebAssembly join-point analysis met an unknown Core tag ${unhandled}`);
@@ -577,6 +579,8 @@ export class WasmFunctionAnalysis {
         node.payload === functionShape.recursiveDefinition;
     }
     switch (node.tag) {
+      case CoreTag.Prim:
+        throw new Error("WebAssembly function analysis received an unlowered primop");
       case CoreTag.Integer:
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
@@ -965,6 +969,8 @@ function coreNodeChildren(node: CoreNode): readonly number[] {
     case CoreTag.Global:
     case CoreTag.Constructor:
       return [];
+    case CoreTag.Prim:
+      throw new Error("WebAssembly function analysis received an unlowered primop");
     case CoreTag.Lambda:
     case CoreTag.Unary:
     case CoreTag.NumericConvert:

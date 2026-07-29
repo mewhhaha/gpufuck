@@ -10,7 +10,11 @@
  */
 export {
   AlgebraicTypeWord,
+  ARGUMENT_WORD_LENGTH,
+  ArgumentWord,
   BinaryOperator,
+  CASE_ALTERNATIVE_WORD_LENGTH,
+  CaseAlternativeWord,
   CONSTRUCTOR_BYTE_LENGTH,
   CONSTRUCTOR_WORD_LENGTH,
   ConstructorWord,
@@ -131,10 +135,16 @@ export interface EncodedModule {
   readonly wasmExports?: readonly WasmExportDeclaration[];
   readonly sources?: readonly SourceRange[];
   readonly nodeWords: Uint32Array;
+  readonly parameterWords: Uint32Array;
+  readonly argumentWords: Uint32Array;
+  readonly caseAlternativeWords: Uint32Array;
+  readonly caseBinderWords: Uint32Array;
   readonly definitionWords: Uint32Array;
   readonly typeWords: Uint32Array;
   readonly constructorWords: Uint32Array;
   readonly nodeCount: number;
+  readonly argumentCount: number;
+  readonly caseAlternativeCount: number;
   readonly definitionCount: number;
   readonly typeCount: number;
   readonly constructorCount: number;

@@ -18,6 +18,7 @@ import {
 } from "./storage_contract.ts";
 import { analyzeStorageReferences } from "./storage_reference_analysis.ts";
 import { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
+import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 
 export {
   type BoundaryStorageDecision,
@@ -34,18 +35,27 @@ export async function planModuleStorage(
   options: StoragePlanningOptions = {},
 ): Promise<StoragePlan> {
   const nodes = await module.readCoreNodes();
-  return createStoragePlan(
-    module,
-    nodes,
-    new WasmCaptureAnalysis(nodes),
-    options,
-  );
+  return createStoragePlan(module, nodes, options);
 }
 
 export function createStoragePlan(
   module: GpuModule,
   nodes: readonly CoreNode[],
-  captureAnalysis: WasmCaptureAnalysis = new WasmCaptureAnalysis(nodes),
+  options: StoragePlanningOptions = {},
+): StoragePlan {
+  const loweredNodes = lowerCoreForWasm(module, nodes);
+  return createLoweredCoreStoragePlan(
+    module,
+    loweredNodes,
+    new WasmCaptureAnalysis(loweredNodes),
+    options,
+  );
+}
+
+export function createLoweredCoreStoragePlan(
+  module: GpuModule,
+  nodes: readonly CoreNode[],
+  captureAnalysis: WasmCaptureAnalysis,
   options: StoragePlanningOptions = {},
 ): StoragePlan {
   const definitionByRoot = new Map<number, number>();
@@ -458,6 +468,8 @@ function coreChildren(
     case CoreTag.Global:
     case CoreTag.Constructor:
       return [];
+    case CoreTag.Prim:
+      throw new Error("functional storage planning received an unlowered primop");
     case CoreTag.Lambda:
     case CoreTag.Unary:
     case CoreTag.NumericConvert:

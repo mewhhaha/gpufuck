@@ -615,12 +615,8 @@ function collectedExpression(names: readonly string[]): SurfaceExpression {
   for (let index = names.length - 1; index >= 0; index--) {
     expression = {
       kind: "apply",
-      callee: {
-        kind: "apply",
-        callee: { kind: "name", name: PAIR_CONSTRUCTOR_NAME },
-        argument: { kind: "name", name: names[index]! },
-      },
-      argument: expression,
+      callee: { kind: "name", name: PAIR_CONSTRUCTOR_NAME },
+      arguments: [{ kind: "name", name: names[index]! }, expression],
     };
   }
   return expression;

@@ -1,4 +1,8 @@
 import {
+  ARGUMENT_WORD_LENGTH,
+  ArgumentWord,
+  CASE_ALTERNATIVE_WORD_LENGTH,
+  CaseAlternativeWord,
   CoreTag,
   DEFINITION_WORD_LENGTH,
   DefinitionWord,
@@ -9,6 +13,7 @@ import {
   type Type,
 } from "./abi.ts";
 import type { CoreNode } from "./compiler_module.ts";
+import { primopDeclaration } from "../semantic/primops.ts";
 
 export interface CompiledCoreArtifact {
   readonly nodes: readonly CoreNode[];
@@ -73,13 +78,51 @@ export function validateCoreArtifact(
         `functional compiled Core node ${nodeIndex} ${childName} references node ${child} outside ${module.nodeCount} nodes`,
       );
     }
+    if (node.tag === CoreTag.Lambda) {
+      validateRange(
+        `functional compiled Core lambda ${nodeIndex} parameters`,
+        node.payload,
+        node.child1,
+        module.parameterWords.length,
+      );
+    }
+    if (node.tag === CoreTag.Apply) {
+      validateRange(
+        `functional compiled Core application ${nodeIndex} arguments`,
+        node.payload,
+        node.child1,
+        module.argumentCount,
+      );
+    }
+    if (node.tag === CoreTag.Case) {
+      validateRange(
+        `functional compiled Core case ${nodeIndex} alternatives`,
+        node.payload,
+        node.child1,
+        module.caseAlternativeCount,
+      );
+    }
+    if (node.tag === CoreTag.Prim) {
+      const declaration = primopDeclaration(node.payload);
+      if (declaration === undefined || declaration.arity !== node.child1) {
+        throw new Error(
+          `functional compiled Core node ${nodeIndex} has invalid primop ${node.payload} with arity ${node.child1}`,
+        );
+      }
+      validateRange(
+        `functional compiled Core primop ${nodeIndex} operands`,
+        node.child0,
+        node.child1,
+        module.argumentCount,
+      );
+    }
     if (node.tag === CoreTag.Global && node.payload >= module.definitionCount) {
       throw new Error(
         `functional compiled Core node ${nodeIndex} references definition ${node.payload} outside ${module.definitionCount} definitions`,
       );
     }
     if (
-      (node.tag === CoreTag.Constructor || node.tag === CoreTag.CaseArm) &&
+      node.tag === CoreTag.Constructor &&
       node.payload >= module.constructorCount
     ) {
       throw new Error(
@@ -87,6 +130,7 @@ export function validateCoreArtifact(
       );
     }
   }
+  validateTrailingMetadata(module, artifact.nodes);
   for (let definitionIndex = 0; definitionIndex < module.definitionCount; definitionIndex++) {
     const root = module.definitionWords[
       definitionIndex * DEFINITION_WORD_LENGTH + DefinitionWord.RootNode
@@ -96,6 +140,73 @@ export function validateCoreArtifact(
       `functional compiled Core definition ${definitionIndex} references root ${root} outside ${module.nodeCount} nodes`,
     );
   }
+}
+
+function validateTrailingMetadata(module: EncodedModule, nodes: readonly CoreNode[]): void {
+  if (module.argumentWords.length !== module.argumentCount * ARGUMENT_WORD_LENGTH) {
+    throw new Error(
+      `functional compiled Core declares ${module.argumentCount} arguments in ${module.argumentWords.length} words`,
+    );
+  }
+  for (let argument = 0; argument < module.argumentCount; argument++) {
+    const offset = argument * ARGUMENT_WORD_LENGTH;
+    const node = module.argumentWords[offset + ArgumentWord.Node];
+    const evaluationMode = module.argumentWords[offset + ArgumentWord.EvaluationMode];
+    if (node === undefined || node >= nodes.length) {
+      throw new Error(
+        `functional compiled Core argument ${argument} references node ${node} outside ${nodes.length} nodes`,
+      );
+    }
+    if (
+      evaluationMode !== EvaluationMode.LazyCallByNeed &&
+      evaluationMode !== EvaluationMode.StrictEager
+    ) {
+      throw new Error(
+        `functional compiled Core argument ${argument} has unknown evaluation mode ${evaluationMode}`,
+      );
+    }
+  }
+  if (
+    module.caseAlternativeWords.length !==
+      module.caseAlternativeCount * CASE_ALTERNATIVE_WORD_LENGTH
+  ) {
+    throw new Error(
+      `functional compiled Core declares ${module.caseAlternativeCount} case alternatives in ${module.caseAlternativeWords.length} words`,
+    );
+  }
+  for (let alternative = 0; alternative < module.caseAlternativeCount; alternative++) {
+    const offset = alternative * CASE_ALTERNATIVE_WORD_LENGTH;
+    const constructor = module.caseAlternativeWords[offset + CaseAlternativeWord.Constructor];
+    const firstBinder = module.caseAlternativeWords[offset + CaseAlternativeWord.FirstBinder];
+    const binderCount = module.caseAlternativeWords[offset + CaseAlternativeWord.BinderCount];
+    const body = module.caseAlternativeWords[offset + CaseAlternativeWord.Body];
+    if (constructor === undefined || constructor >= module.constructorCount) {
+      throw new Error(
+        `functional compiled Core case alternative ${alternative} references constructor ${constructor} outside ${module.constructorCount} constructors`,
+      );
+    }
+    if (body === undefined || body >= nodes.length) {
+      throw new Error(
+        `functional compiled Core case alternative ${alternative} references body ${body} outside ${nodes.length} nodes`,
+      );
+    }
+    validateRange(
+      `functional compiled Core case alternative ${alternative} binders`,
+      firstBinder ?? NO_INDEX,
+      binderCount ?? NO_INDEX,
+      module.caseBinderWords.length,
+    );
+  }
+}
+
+function validateRange(
+  description: string,
+  start: number,
+  count: number,
+  length: number,
+): void {
+  if (start <= length && count <= length - start) return;
+  throw new Error(`${description} ${start}..${start + count} exceed ${length}`);
 }
 
 function childReferences(
@@ -122,16 +233,19 @@ function childReferences(
     case CoreTag.StoreLength:
     case CoreTag.PatternBind:
       return [["child0", node.child0]];
-    case CoreTag.Apply:
     case CoreTag.Let:
     case CoreTag.LetRec:
     case CoreTag.Binary:
     case CoreTag.BufferAppend:
     case CoreTag.StoreNew:
     case CoreTag.StoreRead:
-    case CoreTag.Case:
     case CoreTag.CaseArm:
       return [["child0", node.child0], ["child1", node.child1]];
+    case CoreTag.Apply:
+    case CoreTag.Case:
+      return [["child0", node.child0]];
+    case CoreTag.Prim:
+      return [];
     case CoreTag.If:
     case CoreTag.StoreWrite:
     case CoreTag.StoreGrow:
@@ -158,19 +272,8 @@ function isCoreTag(tag: number): boolean {
     case CoreTag.Let:
     case CoreTag.LetRec:
     case CoreTag.If:
-    case CoreTag.Unary:
-    case CoreTag.Binary:
-    case CoreTag.BufferAppend:
-    case CoreTag.StoreEmpty:
-    case CoreTag.StoreNew:
-    case CoreTag.StoreLength:
-    case CoreTag.StoreRead:
-    case CoreTag.StoreWrite:
-    case CoreTag.StoreGrow:
-    case CoreTag.NumericConvert:
     case CoreTag.Case:
-    case CoreTag.CaseArm:
-    case CoreTag.PatternBind:
+    case CoreTag.Prim:
       return true;
     default:
       return false;

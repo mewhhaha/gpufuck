@@ -1,5 +1,6 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
 import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import { primopDeclaration, PrimopFamily } from "../semantic/primops.ts";
 import { type EffectSet, effectSetFrom } from "./effect_set.ts";
 import { type HostFieldDeclaration, INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
 
@@ -20,14 +21,14 @@ interface FlowState {
 
 interface ApplicationConstraint {
   readonly callee: number;
-  readonly argument: number;
+  readonly arguments: readonly number[];
   readonly result: number;
   readonly connectedLambdaNodes: Set<number>;
 }
 
 interface ParentEdge {
   readonly parent: number;
-  readonly child: 0 | 1 | 2;
+  readonly child: number;
 }
 
 interface ConstructorApplication {
@@ -43,12 +44,15 @@ interface ConstructorApplication {
 export class LambdaSetAnalysis {
   readonly #module: GpuModule;
   readonly #nodes: readonly CoreNode[];
+  readonly #representation: "core" | "wasm";
   readonly #states: FlowState[];
   readonly #edges: (Set<number> | undefined)[];
   readonly #applicationsByCallee: (ApplicationConstraint[] | undefined)[];
   readonly #lambdaBodies = new Map<number, number>();
   readonly #constructorFieldOffsets: readonly number[];
   readonly #binderBase: number;
+  readonly #parameterBinderBase: number;
+  readonly #caseBinderBase: number;
   readonly #definitionBase: number;
   readonly #constructorFieldBase: number;
   readonly #externalValue: number;
@@ -56,11 +60,26 @@ export class LambdaSetAnalysis {
   readonly #queued: boolean[];
   readonly #lambdaSets: (LambdaSet | undefined)[];
 
-  constructor(module: GpuModule, nodes: readonly CoreNode[]) {
+  static forCore(module: GpuModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
+    return new LambdaSetAnalysis(module, nodes, "core");
+  }
+
+  static forWasm(module: GpuModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
+    return new LambdaSetAnalysis(module, nodes, "wasm");
+  }
+
+  private constructor(
+    module: GpuModule,
+    nodes: readonly CoreNode[],
+    representation: "core" | "wasm",
+  ) {
     this.#module = module;
     this.#nodes = nodes;
+    this.#representation = representation;
     this.#binderBase = nodes.length;
-    this.#definitionBase = this.#binderBase + nodes.length;
+    this.#parameterBinderBase = this.#binderBase + nodes.length;
+    this.#caseBinderBase = this.#parameterBinderBase + module.parameterCount;
+    this.#definitionBase = this.#caseBinderBase + module.caseBinderCount;
     this.#constructorFieldBase = this.#definitionBase + module.definitionCount;
 
     const constructorFieldOffsets = [0];
@@ -143,7 +162,7 @@ export class LambdaSetAnalysis {
 
     const entryApplication: ApplicationConstraint = {
       callee: this.#definitionVariable(module.entryDefinition),
-      argument: this.#externalValue,
+      arguments: [this.#externalValue],
       result: this.#externalValue,
       connectedLambdaNodes: new Set<number>(),
     };
@@ -207,16 +226,38 @@ export class LambdaSetAnalysis {
       case CoreTag.Lambda: {
         this.#addLambda(this.#nodeVariable(nodeIndex), nodeIndex);
         this.#lambdaBodies.set(nodeIndex, node.child0);
-        environment.push(this.#binderVariable(nodeIndex));
+        if (this.#representation === "wasm") {
+          environment.push(this.#binderVariable(nodeIndex));
+        } else {
+          for (let parameter = 0; parameter < node.child1; parameter++) {
+            environment.push(this.#parameterBinder(node.payload + parameter));
+          }
+        }
         this.#visitExpression(node.child0, environment);
-        environment.pop();
+        environment.length -= this.#representation === "wasm" ? 1 : node.child1;
         return;
       }
-      case CoreTag.Apply:
+      case CoreTag.Apply: {
         this.#visitExpression(node.child0, environment);
-        this.#visitExpression(node.child1, environment);
+        const arguments_ = this.#applicationArguments(node);
+        for (const argument of arguments_) this.#visitExpression(argument, environment);
         this.#visitApplication(nodeIndex);
         return;
+      }
+      case CoreTag.Prim: {
+        if (this.#representation === "wasm") {
+          throw new Error(
+            `functional lambda-set analysis found unlowered primop at expression node ${nodeIndex}`,
+          );
+        }
+        for (let operand = node.child0; operand < node.child0 + node.child1; operand++) {
+          this.#visitExpression(this.#module.arguments[operand]!.node, environment);
+        }
+        if (primopDeclaration(node.payload)?.family === PrimopFamily.StoreRead) {
+          this.#markIncomplete(this.#nodeVariable(nodeIndex));
+        }
+        return;
+      }
       case CoreTag.Let:
         this.#visitExpression(node.child0, environment);
         this.#addEdge(this.#nodeVariable(node.child0), this.#binderVariable(nodeIndex));
@@ -264,12 +305,21 @@ export class LambdaSetAnalysis {
         return;
       case CoreTag.Case:
         this.#visitExpression(node.child0, environment);
-        this.#visitCaseArms(node.child1, environment, nodeIndex);
+        if (this.#representation === "wasm") {
+          this.#visitCaseArms(node.child1, environment, nodeIndex);
+        } else {
+          this.#visitCaseAlternatives(node.payload, node.child1, environment, nodeIndex);
+        }
         return;
       case CoreTag.CaseArm:
       case CoreTag.PatternBind:
+        if (this.#representation === "wasm") {
+          throw new Error(
+            `functional lambda-set analysis found structural core tag ${node.tag} at expression node ${nodeIndex}`,
+          );
+        }
         throw new Error(
-          `functional lambda-set analysis found structural core tag ${node.tag} at expression node ${nodeIndex}`,
+          `functional lambda-set analysis found legacy core tag ${node.tag} at expression node ${nodeIndex}`,
         );
     }
   }
@@ -294,7 +344,7 @@ export class LambdaSetAnalysis {
     const node = this.#node(nodeIndex);
     const application: ApplicationConstraint = {
       callee: this.#nodeVariable(node.child0),
-      argument: this.#nodeVariable(node.child1),
+      arguments: this.#applicationArguments(node).map((argument) => this.#nodeVariable(argument)),
       result: this.#nodeVariable(nodeIndex),
       connectedLambdaNodes: new Set<number>(),
     };
@@ -350,6 +400,41 @@ export class LambdaSetAnalysis {
     }
   }
 
+  #visitCaseAlternatives(
+    firstAlternative: number,
+    alternativeCount: number,
+    environment: number[],
+    caseNode: number,
+  ): void {
+    for (let offset = 0; offset < alternativeCount; offset++) {
+      const alternativeIndex = firstAlternative + offset;
+      const alternative = this.#module.caseAlternatives[alternativeIndex];
+      if (alternative === undefined) {
+        throw new Error(
+          `functional lambda-set case ${caseNode} references missing alternative ${alternativeIndex}`,
+        );
+      }
+      const arity = this.#module.constructorArities[alternative.constructor];
+      if (arity === undefined) {
+        throw new Error(
+          `functional lambda-set case alternative ${alternativeIndex} refers to missing constructor ${alternative.constructor}`,
+        );
+      }
+
+      const outerEnvironmentDepth = environment.length;
+      for (let bindingIndex = arity - 1; bindingIndex >= 0; bindingIndex--) {
+        this.#addEdge(
+          this.#constructorField(alternative.constructor, bindingIndex),
+          this.#caseBinder(alternative.firstBinder + bindingIndex),
+        );
+        environment.push(this.#caseBinder(alternative.firstBinder + bindingIndex));
+      }
+      this.#visitExpression(alternative.body, environment);
+      environment.length = outerEnvironmentDepth;
+      this.#addEdge(this.#nodeVariable(alternative.body), this.#nodeVariable(caseNode));
+    }
+  }
+
   #solve(): void {
     let nextVariable = 0;
     while (nextVariable < this.#workQueue.length) {
@@ -375,7 +460,18 @@ export class LambdaSetAnalysis {
           `functional lambda-set application reached lambda node ${lambdaNode} without a body`,
         );
       }
-      this.#addEdge(application.argument, this.#binderVariable(lambdaNode));
+      if (this.#representation === "wasm") {
+        this.#addEdge(application.arguments[0]!, this.#binderVariable(lambdaNode));
+      } else {
+        const lambda = this.#node(lambdaNode);
+        if (application.arguments.length !== lambda.child1) {
+          this.#markIncomplete(application.result);
+          continue;
+        }
+        for (const [parameter, argument] of application.arguments.entries()) {
+          this.#addEdge(argument, this.#parameterBinder(lambda.payload + parameter));
+        }
+      }
       this.#addEdge(this.#nodeVariable(body), application.result);
     }
   }
@@ -465,13 +561,14 @@ export class LambdaSetAnalysis {
   #markEscapingConstructorFieldsIncomplete(): void {
     const parents: ParentEdge[][] = Array.from({ length: this.#nodes.length }, () => []);
     for (const [parentIndex, node] of this.#nodes.entries()) {
-      for (
-        const [childPosition, childIndex] of [node.child0, node.child1, node.child2].entries()
-      ) {
+      const childReferences = node.tag === CoreTag.Apply
+        ? [node.child0, ...this.#applicationArguments(node)]
+        : [node.child0, node.child1, node.child2];
+      for (const [childPosition, childIndex] of childReferences.entries()) {
         if (childIndex === NO_INDEX || childIndex >= this.#nodes.length) continue;
         parents[childIndex]!.push({
           parent: parentIndex,
-          child: childPosition as 0 | 1 | 2,
+          child: childPosition,
         });
       }
     }
@@ -488,7 +585,7 @@ export class LambdaSetAnalysis {
         const use = uses[0]!;
         const parent = this.#node(use.parent);
         if (use.child !== 0 || parent.tag !== CoreTag.Apply) break;
-        appliedArguments += 1;
+        appliedArguments += this.#representation === "wasm" ? 1 : parent.child1;
         current = use.parent;
       }
       if (appliedArguments === arity) continue;
@@ -502,7 +599,7 @@ export class LambdaSetAnalysis {
     const reverseArguments: number[] = [];
     let callee = this.#node(nodeIndex);
     while (callee.tag === CoreTag.Apply) {
-      reverseArguments.push(callee.child1);
+      reverseArguments.push(...this.#applicationArguments(callee).reverse());
       callee = this.#node(callee.child0);
     }
     if (callee.tag !== CoreTag.Constructor) return undefined;
@@ -524,6 +621,32 @@ export class LambdaSetAnalysis {
   #binderVariable(nodeIndex: number): number {
     this.#node(nodeIndex);
     return this.#binderBase + nodeIndex;
+  }
+
+  #parameterBinder(parameter: number): number {
+    if (parameter < 0 || parameter >= this.#module.parameterCount) {
+      throw new Error(
+        `functional lambda-set parameter ${parameter} is outside ${this.#module.parameterCount} parameters`,
+      );
+    }
+    return this.#parameterBinderBase + parameter;
+  }
+
+  #caseBinder(binder: number): number {
+    if (binder < 0 || binder >= this.#module.caseBinderCount) {
+      throw new Error(
+        `functional lambda-set case binder ${binder} is outside ${this.#module.caseBinderCount} binders`,
+      );
+    }
+    return this.#caseBinderBase + binder;
+  }
+
+  #applicationArguments(node: CoreNode): number[] {
+    if (this.#representation === "wasm") return [node.child1];
+    return Array.from(
+      { length: node.child1 },
+      (_, offset) => this.#module.arguments[node.payload + offset]!.node,
+    );
   }
 
   #definitionVariable(definition: number): number {

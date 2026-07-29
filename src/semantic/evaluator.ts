@@ -15,7 +15,7 @@ const STACK_FRAME_BYTE_LENGTH = 32;
 const INPUT_NODE_BYTE_LENGTH = 16;
 const RESULT_NODE_BYTE_LENGTH = 16;
 const CASE_DISPATCH_WORD_LENGTH = 4;
-const EVALUATION_STATE_WORD_LENGTH = 53;
+const EVALUATION_STATE_WORD_LENGTH = 58;
 const EVALUATION_STATE_BYTE_LENGTH = EVALUATION_STATE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT;
 
 const HARD_MAXIMUM_STEPS = 1_000_000;
@@ -108,6 +108,11 @@ const EvaluationStateWord = {
   ReifyRemaining: 50,
   CaseDispatchBase: 51,
   CaseDispatchCapacity: 52,
+  ArgumentBase: 53,
+  ArgumentCount: 54,
+  CaseAlternativeBase: 55,
+  CaseAlternativeCount: 56,
+  CaseAlternativeEnd: 57,
 } as const;
 
 export interface SemanticEvaluationOptions {
@@ -336,6 +341,8 @@ interface EvaluationBufferBases {
   readonly input: number;
   readonly result: number;
   readonly caseDispatch: number;
+  readonly argument: number;
+  readonly caseAlternative: number;
 }
 
 interface BatchEvaluationLane extends EvaluationBufferBases {
@@ -347,6 +354,34 @@ interface BatchEvaluationLane extends EvaluationBufferBases {
   readonly inputValue: SemanticInputValue | undefined;
   readonly outputType: Type;
   readonly caseDispatchWords: Uint32Array<ArrayBuffer>;
+  readonly argumentWords: Uint32Array<ArrayBuffer>;
+  readonly caseAlternativeWords: Uint32Array<ArrayBuffer>;
+}
+
+function evaluationArgumentWords(module: GpuSemanticModule): Uint32Array<ArrayBuffer> {
+  const words = new Uint32Array(module.arguments.length * 4);
+  words.fill(NO_INDEX);
+  for (const [argumentIndex, argument] of module.arguments.entries()) {
+    const offset = argumentIndex * 4;
+    words[offset] = argument.node;
+    words[offset + 1] = argument.evaluationMode;
+  }
+  return words;
+}
+
+function evaluationCaseAlternativeWords(module: GpuSemanticModule): Uint32Array<ArrayBuffer> {
+  const words = new Uint32Array(module.caseAlternatives.length * 8);
+  words.fill(NO_INDEX);
+  for (const [alternativeIndex, alternative] of module.caseAlternatives.entries()) {
+    const offset = alternativeIndex * 8;
+    words[offset] = alternative.constructor;
+    words[offset + 1] = alternative.firstBinder;
+    words[offset + 2] = alternative.binderCount;
+    words[offset + 3] = alternative.body;
+    words[offset + 4] = alternative.sourceByteOffset;
+    words[offset + 5] = alternative.sourceEndByte;
+  }
+  return words;
 }
 
 type NumericEvaluationOption =
@@ -1178,30 +1213,35 @@ async function createCaseDispatchIndex(
 ): Promise<Uint32Array<ArrayBuffer>> {
   const nodes = await module.readCoreNodes();
   const entries: {
-    readonly firstArm: number;
+    readonly firstAlternative: number;
     readonly constructor: number;
-    readonly arm: number;
+    readonly alternative: number;
   }[] = [];
   for (const node of nodes) {
-    if (node.tag !== CoreTag.Case || node.child1 === NO_INDEX) continue;
-    const firstArm = node.child1;
-    let arm = firstArm;
-    let traversed = 0;
-    while (arm !== NO_INDEX) {
-      if (arm >= nodes.length || traversed >= nodes.length) return createEmptyCaseDispatch();
-      const armNode = nodes[arm];
-      if (armNode === undefined || armNode.tag !== CoreTag.CaseArm) {
-        return createEmptyCaseDispatch();
-      }
-      entries.push({ firstArm, constructor: armNode.payload, arm });
-      arm = armNode.child1;
-      traversed++;
+    if (node.tag !== CoreTag.Case || node.child1 === 0) continue;
+    const firstAlternative = node.payload;
+    const alternativeEnd = firstAlternative + node.child1;
+    if (
+      firstAlternative === NO_INDEX ||
+      alternativeEnd > module.caseAlternatives.length
+    ) {
+      return createEmptyCaseDispatch();
+    }
+    for (let alternative = firstAlternative; alternative < alternativeEnd; alternative++) {
+      const caseAlternative = module.caseAlternatives[alternative];
+      if (caseAlternative === undefined) return createEmptyCaseDispatch();
+      entries.push({
+        firstAlternative,
+        constructor: caseAlternative.constructor,
+        alternative,
+      });
     }
   }
   if (entries.length === 0) return createEmptyCaseDispatch();
 
   entries.sort((left, right) =>
-    left.firstArm - right.firstArm || left.constructor - right.constructor
+    left.firstAlternative - right.firstAlternative ||
+    left.constructor - right.constructor
   );
   const words = new Uint32Array(entries.length * CASE_DISPATCH_WORD_LENGTH);
   words.fill(NO_INDEX);
@@ -1209,14 +1249,15 @@ async function createCaseDispatchIndex(
     const entry = entries[index]!;
     const previous = entries[index - 1];
     if (
-      previous?.firstArm === entry.firstArm && previous.constructor === entry.constructor
+      previous?.firstAlternative === entry.firstAlternative &&
+      previous.constructor === entry.constructor
     ) {
       return createEmptyCaseDispatch();
     }
     const base = index * CASE_DISPATCH_WORD_LENGTH;
-    words[base] = entry.firstArm;
+    words[base] = entry.firstAlternative;
     words[base + 1] = entry.constructor;
-    words[base + 2] = entry.arm;
+    words[base + 2] = entry.alternative;
   }
   return words;
 }
@@ -1271,6 +1312,16 @@ function createInitialEvaluationState(
     (encodedInput?.nodeCount ?? 0) + limits.resultNodes,
   );
   setInitialStateWord(EvaluationStateWord.CaseDispatchCapacity, caseDispatchCapacity);
+  const argumentBase = (encodedInput?.nodeCount ?? 0) + limits.resultNodes +
+    caseDispatchCapacity;
+  setInitialStateWord(EvaluationStateWord.ArgumentBase, argumentBase);
+  setInitialStateWord(EvaluationStateWord.ArgumentCount, module.arguments.length);
+  const caseAlternativeBase = argumentBase + module.arguments.length;
+  setInitialStateWord(EvaluationStateWord.CaseAlternativeBase, caseAlternativeBase);
+  setInitialStateWord(
+    EvaluationStateWord.CaseAlternativeCount,
+    module.caseAlternatives.length,
+  );
   if (bases !== undefined) {
     setInitialStateWord(EvaluationStateWord.NodeBase, bases.node);
     setInitialStateWord(EvaluationStateWord.DefinitionBase, bases.definition);
@@ -1281,6 +1332,8 @@ function createInitialEvaluationState(
     setInitialStateWord(EvaluationStateWord.InputBase, bases.input);
     setInitialStateWord(EvaluationStateWord.ResultBase, bases.result);
     setInitialStateWord(EvaluationStateWord.CaseDispatchBase, bases.caseDispatch);
+    setInitialStateWord(EvaluationStateWord.ArgumentBase, bases.argument);
+    setInitialStateWord(EvaluationStateWord.CaseAlternativeBase, bases.caseAlternative);
   }
   return initialState;
 }
@@ -2062,14 +2115,17 @@ export class GpuSemanticEvaluator {
     const limits = this.#evaluationLimits(module, options);
     const caseDispatchWords = await this.#caseDispatchIndex(module);
     const caseDispatchCapacity = caseDispatchWords.length / CASE_DISPATCH_WORD_LENGTH;
+    const argumentWords = evaluationArgumentWords(module);
+    const caseAlternativeWords = evaluationCaseAlternativeWords(module);
     const maximumModuleBindingSize = this.#device.limits.maxStorageBufferBindingSize;
 
     const heapBufferByteLength = limits.heapSlots * HEAP_SLOT_BYTE_LENGTH;
     const stackBufferByteLength = limits.stackFrames * STACK_FRAME_BYTE_LENGTH;
     const globalBufferByteLength = module.definitionCount * Uint32Array.BYTES_PER_ELEMENT;
     const inputNodeCount = inputEncoding?.nodeCount ?? 0;
-    const inputBufferByteLength = (inputNodeCount + limits.resultNodes + caseDispatchCapacity) *
-      INPUT_NODE_BYTE_LENGTH;
+    const valueNodeCount = inputNodeCount + limits.resultNodes + caseDispatchCapacity +
+      module.arguments.length + module.caseAlternatives.length * 2;
+    const inputBufferByteLength = valueNodeCount * INPUT_NODE_BYTE_LENGTH;
     const resultBufferByteLength = limits.resultNodes * RESULT_NODE_BYTE_LENGTH;
     if (
       globalBufferByteLength > maximumModuleBindingSize ||
@@ -2084,7 +2140,7 @@ export class GpuSemanticEvaluator {
       inputBufferByteLength > this.#device.limits.maxBufferSize
     ) {
       throw new RangeError(
-        `evaluation values require ${inputBufferByteLength} bytes for ${inputNodeCount} input nodes, ${limits.resultNodes} result nodes, and ${caseDispatchCapacity} case dispatch entries, beyond maxBufferSize=${this.#device.limits.maxBufferSize} or maxStorageBufferBindingSize=${maximumModuleBindingSize}`,
+        `evaluation values require ${inputBufferByteLength} bytes for ${inputNodeCount} input nodes, ${limits.resultNodes} result nodes, ${caseDispatchCapacity} case dispatch entries, ${module.arguments.length} arguments, and ${module.caseAlternatives.length} case alternatives, beyond maxBufferSize=${this.#device.limits.maxBufferSize} or maxStorageBufferBindingSize=${maximumModuleBindingSize}`,
       );
     }
 
@@ -2150,6 +2206,22 @@ export class GpuSemanticEvaluator {
           (inputNodeCount + limits.resultNodes) * INPUT_NODE_BYTE_LENGTH,
           caseDispatchWords,
         );
+        if (argumentWords.byteLength > 0) {
+          this.#device.queue.writeBuffer(
+            inputBuffer,
+            (inputNodeCount + limits.resultNodes + caseDispatchCapacity) *
+              INPUT_NODE_BYTE_LENGTH,
+            argumentWords,
+          );
+        }
+        if (caseAlternativeWords.byteLength > 0) {
+          this.#device.queue.writeBuffer(
+            inputBuffer,
+            (inputNodeCount + limits.resultNodes + caseDispatchCapacity +
+              module.arguments.length) * INPUT_NODE_BYTE_LENGTH,
+            caseAlternativeWords,
+          );
+        }
         if (inputEncoding !== undefined) {
           this.#device.queue.writeBuffer(inputBuffer, 0, inputEncoding.words);
         }
@@ -2498,8 +2570,12 @@ export class GpuSemanticEvaluator {
     let totalInputs = 0;
     let totalResultNodes = 0;
     let totalCaseDispatchEntries = 0;
+    let totalArguments = 0;
+    let totalCaseAlternativeNodes = 0;
     const lanes: BatchEvaluationLane[] = preparedLanes.map((lane, laneIndex) => {
       const caseDispatchWords = caseDispatchIndexes[laneIndex]!;
+      const argumentWords = evaluationArgumentWords(lane.module);
+      const caseAlternativeWords = evaluationCaseAlternativeWords(lane.module);
       const batchLane: BatchEvaluationLane = {
         ...lane,
         node: totalNodes,
@@ -2511,7 +2587,11 @@ export class GpuSemanticEvaluator {
         input: totalInputs,
         result: totalResultNodes,
         caseDispatch: totalCaseDispatchEntries,
+        argument: totalArguments,
+        caseAlternative: totalCaseAlternativeNodes,
         caseDispatchWords,
+        argumentWords,
+        caseAlternativeWords,
       };
       totalNodes = checkedAggregateCount(
         "node",
@@ -2565,6 +2645,18 @@ export class GpuSemanticEvaluator {
         "case dispatch entry",
         totalCaseDispatchEntries,
         caseDispatchWords.length / CASE_DISPATCH_WORD_LENGTH,
+        lane.resultIndex,
+      );
+      totalArguments = checkedAggregateCount(
+        "argument",
+        totalArguments,
+        lane.module.arguments.length,
+        lane.resultIndex,
+      );
+      totalCaseAlternativeNodes = checkedAggregateCount(
+        "case alternative metadata node",
+        totalCaseAlternativeNodes,
+        lane.module.caseAlternatives.length * 2,
         lane.resultIndex,
       );
       return batchLane;
@@ -2637,8 +2729,9 @@ export class GpuSemanticEvaluator {
       maximumBindingByteLength,
     );
     const valueByteLength = checkedAggregateByteLength(
-      "input, result, and case dispatch nodes",
-      totalInputs + totalResultNodes + totalCaseDispatchEntries,
+      "input, result, case dispatch, argument, and case alternative nodes",
+      totalInputs + totalResultNodes + totalCaseDispatchEntries + totalArguments +
+        totalCaseAlternativeNodes,
       INPUT_NODE_BYTE_LENGTH,
       INPUT_NODE_BYTE_LENGTH,
       maximumBufferByteLength,
@@ -2656,6 +2749,15 @@ export class GpuSemanticEvaluator {
         lane.caseDispatchWords,
         (totalInputs + totalResultNodes + lane.caseDispatch) * CASE_DISPATCH_WORD_LENGTH,
       );
+      aggregateInputWords.set(
+        lane.argumentWords,
+        (totalInputs + totalResultNodes + totalCaseDispatchEntries + lane.argument) * 4,
+      );
+      aggregateInputWords.set(
+        lane.caseAlternativeWords,
+        (totalInputs + totalResultNodes + totalCaseDispatchEntries + totalArguments +
+          lane.caseAlternative) * 4,
+      );
     }
 
     const initialStates = new Uint8Array(stateByteLength);
@@ -2671,6 +2773,10 @@ export class GpuSemanticEvaluator {
               ...lane,
               result: totalInputs + lane.result,
               caseDispatch: totalInputs + totalResultNodes + lane.caseDispatch,
+              argument: totalInputs + totalResultNodes + totalCaseDispatchEntries +
+                lane.argument,
+              caseAlternative: totalInputs + totalResultNodes + totalCaseDispatchEntries +
+                totalArguments + lane.caseAlternative,
             },
           ),
         ),

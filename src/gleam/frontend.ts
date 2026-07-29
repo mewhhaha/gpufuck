@@ -131,7 +131,7 @@ export function lowerGleamSources(
           body: {
             kind: "apply",
             callee: { kind: "name", name: "sourceEntry" },
-            argument: { kind: "name", name: UNIT_CONSTRUCTOR_NAME },
+            arguments: [{ kind: "name", name: UNIT_CONSTRUCTOR_NAME }],
           },
         }],
         typeDeclarations: [],

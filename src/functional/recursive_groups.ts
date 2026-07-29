@@ -84,7 +84,7 @@ function elaborateExpression(
     case "lambda":
       return {
         ...expression,
-        body: elaborate(expression.body, withName(lexicalNames, expression.parameter)),
+        body: elaborate(expression.body, withNames(lexicalNames, expression.parameters)),
       };
     case "let":
       return {
@@ -118,7 +118,7 @@ function elaborateExpression(
       return {
         ...expression,
         callee: elaborate(expression.callee),
-        argument: elaborate(expression.argument),
+        arguments: expression.arguments.map((argument) => elaborate(argument)),
       };
     case "unary":
     case "numeric-convert":
@@ -284,7 +284,7 @@ function rewriteNames(
         ...expression,
         body: rewrite(
           expression.body,
-          withReplacementNames(boundNames, [expression.parameter], replacements),
+          withReplacementNames(boundNames, expression.parameters, replacements),
         ),
       };
     case "let":
@@ -337,7 +337,7 @@ function rewriteNames(
       return {
         ...expression,
         callee: rewrite(expression.callee),
-        argument: rewrite(expression.argument),
+        arguments: expression.arguments.map((argument) => rewrite(argument)),
       };
     case "unary":
     case "numeric-convert":
@@ -420,7 +420,7 @@ function freeNames(
         if (!scope.has(nested.name)) names.add(nested.name);
         return;
       case "lambda":
-        visit(nested.body, withName(scope, nested.parameter));
+        visit(nested.body, withNames(scope, nested.parameters));
         return;
       case "let":
         visit(nested.value, scope);
@@ -447,7 +447,7 @@ function freeNames(
         return;
       case "apply":
         visit(nested.callee, scope);
-        visit(nested.argument, scope);
+        for (const argument of nested.arguments) visit(argument, scope);
         return;
       case "unary":
       case "numeric-convert":
@@ -499,11 +499,12 @@ function freeNames(
 }
 
 function applyNames(name: string, arguments_: readonly string[]): SurfaceExpression {
-  let expression: SurfaceExpression = { kind: "name", name };
-  for (const argument of arguments_) {
-    expression = { kind: "apply", callee: expression, argument: { kind: "name", name: argument } };
-  }
-  return expression;
+  if (arguments_.length === 0) return { kind: "name", name };
+  return {
+    kind: "apply",
+    callee: { kind: "name", name },
+    arguments: arguments_.map((argument) => ({ kind: "name", name: argument })),
+  };
 }
 
 function withName(names: ReadonlySet<string>, name: string): Set<string> {

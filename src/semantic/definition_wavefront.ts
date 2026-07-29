@@ -648,6 +648,7 @@ function coreChildren(node: CoreNode): readonly number[] {
     case CoreTag.Local:
     case CoreTag.Global:
     case CoreTag.Constructor:
+    case CoreTag.Prim:
       return [];
     case CoreTag.Lambda:
     case CoreTag.Unary:

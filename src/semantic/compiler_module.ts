@@ -1,4 +1,8 @@
 import {
+  ARGUMENT_WORD_LENGTH,
+  ArgumentWord,
+  CASE_ALTERNATIVE_WORD_LENGTH,
+  CaseAlternativeWord,
   CONSTRUCTOR_WORD_LENGTH,
   ConstructorWord,
   CoreTag,
@@ -22,6 +26,20 @@ export interface CoreNode {
   readonly evaluationMode: EvaluationMode;
 }
 
+export interface CoreArgument {
+  readonly node: number;
+  readonly evaluationMode: EvaluationMode;
+}
+
+export interface CoreCaseAlternative {
+  readonly constructor: number;
+  readonly firstBinder: number;
+  readonly binderCount: number;
+  readonly body: number;
+  readonly sourceByteOffset: number;
+  readonly sourceEndByte: number;
+}
+
 export interface GpuSemanticModule {
   readonly nodeBuffer: GPUBuffer;
   readonly definitionBuffer: GPUBuffer;
@@ -30,6 +48,10 @@ export interface GpuSemanticModule {
   readonly definitionCount: number;
   readonly constructorCount: number;
   readonly typeCount: number;
+  readonly parameterCount: number;
+  readonly arguments: readonly CoreArgument[];
+  readonly caseAlternatives: readonly CoreCaseAlternative[];
+  readonly caseBinderCount: number;
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly entryDefinition: number;
@@ -60,6 +82,10 @@ export class CompiledGpuSemanticModule implements GpuSemanticModule {
   readonly definitionCount: number;
   readonly constructorCount: number;
   readonly typeCount: number;
+  readonly parameterCount: number;
+  readonly arguments: readonly CoreArgument[];
+  readonly caseAlternatives: readonly CoreCaseAlternative[];
+  readonly caseBinderCount: number;
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly entryDefinition: number;
@@ -90,6 +116,10 @@ export class CompiledGpuSemanticModule implements GpuSemanticModule {
     this.definitionCount = surface.definitionCount;
     this.constructorCount = surface.constructorCount;
     this.typeCount = surface.typeCount;
+    this.parameterCount = surface.parameterWords.length;
+    this.arguments = decodeArguments(surface);
+    this.caseAlternatives = decodeCaseAlternatives(surface);
+    this.caseBinderCount = surface.caseBinderWords.length;
     this.constructorNames = Object.freeze(constructorNames(surface));
     this.constructorArities = Object.freeze(constructorArities(surface));
     this.entryDefinition = entryDefinition;
@@ -171,6 +201,47 @@ export class CompiledGpuSemanticModule implements GpuSemanticModule {
   }
 }
 
+function decodeArguments(surface: EncodedSemanticSurface): readonly CoreArgument[] {
+  return Object.freeze(Array.from({ length: surface.argumentCount }, (_, argument) => {
+    const offset = argument * ARGUMENT_WORD_LENGTH;
+    const node = surface.argumentWords[offset + ArgumentWord.Node];
+    const evaluationMode = surface.argumentWords[offset + ArgumentWord.EvaluationMode];
+    if (node === undefined || evaluationMode === undefined) {
+      throw new Error(`frontend omitted argument metadata ${argument}`);
+    }
+    return Object.freeze({
+      node,
+      evaluationMode: decodeEvaluationMode(evaluationMode, argument),
+    });
+  }));
+}
+
+function decodeCaseAlternatives(
+  surface: EncodedSemanticSurface,
+): readonly CoreCaseAlternative[] {
+  return Object.freeze(Array.from(
+    { length: surface.caseAlternativeCount },
+    (_, alternative) => {
+      const offset = alternative * CASE_ALTERNATIVE_WORD_LENGTH;
+      const word = (index: number): number => {
+        const value = surface.caseAlternativeWords[offset + index];
+        if (value === undefined) {
+          throw new Error(`frontend omitted case alternative ${alternative} word ${index}`);
+        }
+        return value;
+      };
+      return Object.freeze({
+        constructor: word(CaseAlternativeWord.Constructor),
+        firstBinder: word(CaseAlternativeWord.FirstBinder),
+        binderCount: word(CaseAlternativeWord.BinderCount),
+        body: word(CaseAlternativeWord.Body),
+        sourceByteOffset: word(CaseAlternativeWord.StartByte),
+        sourceEndByte: word(CaseAlternativeWord.EndByte),
+      });
+    },
+  ));
+}
+
 function decodeCoreNodes(words: DataView, nodeCount: number): readonly CoreNode[] {
   const expectedByteLength = nodeCount * NODE_BYTE_LENGTH;
   if (words.byteLength !== expectedByteLength) {
@@ -241,6 +312,7 @@ function decodeCoreTag(tag: number, nodeIndex: number): KnownCoreTag {
     case CoreTag.Local:
     case CoreTag.Global:
     case CoreTag.Constructor:
+    case CoreTag.Prim:
       return tag;
     default:
       throw new Error(`GPU module contains unknown core tag ${tag} at node ${nodeIndex}`);

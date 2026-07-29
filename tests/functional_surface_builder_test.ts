@@ -1,8 +1,7 @@
 /**
  * Every surface node kind carries an optional span, but no builder emitted one, so a frontend that
  * tracks source locations had to abandon the builder and hand-write node literals. `at()` covers
- * that, and it has to reach the interior of a fold: stamping only the outermost node loses one span
- * per curried lambda parameter and per extra application argument.
+ * that. Exact-arity lambdas and applications carry one span for the whole source construct.
  */
 import { equal, ok } from "node:assert/strict";
 
@@ -26,8 +25,8 @@ Deno.test("the default builder emits no span, so existing output is unchanged", 
     JSON.stringify(surface.lambda(["x", "y"], surface.name("y"))),
     JSON.stringify({
       kind: "lambda",
-      parameter: "x",
-      body: { kind: "lambda", parameter: "y", body: { kind: "name", name: "y" } },
+      parameters: ["x", "y"],
+      body: { kind: "name", name: "y" },
     }),
   );
 });
@@ -43,16 +42,17 @@ Deno.test("at() stamps the node each helper produces", () => {
   );
 });
 
-Deno.test("every node of a folded spine carries the span, not just the outermost", () => {
+Deno.test("exact-arity functions and calls carry one span", () => {
   const applied = surface.at(SPAN).apply(surface.name("f"), surface.integer(1), surface.integer(2));
   equal(spanOf(applied), SPAN);
-  equal(spanOf((applied as { readonly callee: unknown }).callee), SPAN);
+  equal(
+    (applied as { readonly arguments: readonly unknown[] }).arguments.length,
+    2,
+  );
 
-  const curried = surface.at(SPAN).lambda(["x", "y", "z"], surface.name("z"));
-  equal(spanOf(curried), SPAN);
-  const second = (curried as { readonly body: unknown }).body;
-  equal(spanOf(second), SPAN);
-  equal(spanOf((second as { readonly body: unknown }).body), SPAN);
+  const lambda = surface.at(SPAN).lambda(["x", "y", "z"], surface.name("z"));
+  equal(spanOf(lambda), SPAN);
+  equal((lambda as { readonly parameters: readonly string[] }).parameters.length, 3);
 });
 
 Deno.test("desugarings attribute the span to the nodes they synthesize", () => {
@@ -67,17 +67,27 @@ Deno.test("desugarings attribute the span to the nodes they synthesize", () => {
   equal(spanOf(arms[0]!.body), SPAN);
 });
 
-Deno.test("applying no arguments returns the callee rather than claiming its span", () => {
+Deno.test("applying no arguments produces a genuine zero-arity call", () => {
   equal(
     JSON.stringify(surface.at(SPAN).apply(surface.name("f"))),
-    JSON.stringify({ kind: "name", name: "f" }),
+    JSON.stringify({
+      kind: "apply",
+      callee: { kind: "name", name: "f" },
+      arguments: [],
+      span: SPAN,
+    }),
   );
 });
 
-Deno.test("binding no parameters returns the body rather than claiming its span", () => {
+Deno.test("binding no parameters produces a genuine zero-arity function", () => {
   equal(
     JSON.stringify(surface.at(SPAN).lambda([], surface.name("f"))),
-    JSON.stringify({ kind: "name", name: "f" }),
+    JSON.stringify({
+      kind: "lambda",
+      parameters: [],
+      body: { kind: "name", name: "f" },
+      span: SPAN,
+    }),
   );
 });
 

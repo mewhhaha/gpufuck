@@ -1,19 +1,19 @@
 {
   "or-patterns": {
     "counters": {
-      "arms1": 63,
-      "arms2": 113,
-      "arms3": 163,
-      "arms4": 213
+      "arms1": 45,
+      "arms2": 83,
+      "arms3": 121,
+      "arms4": 159
     },
     "timings": {}
   },
   "single-module": {
     "counters": {
-      "nodes": 1174,
+      "nodes": 1036,
       "definitions": 39,
-      "inferenceTransitions": 17939,
-      "semanticSteps": 4835,
+      "inferenceTransitions": 17328,
+      "semanticSteps": 2214,
       "wasmBytes": 40005
     },
     "timings": {
@@ -23,8 +23,8 @@
   "batch-64": {
     "counters": {
       "modules": 64,
-      "nodes": 75136,
-      "parallelFrontendNodes": 75136,
+      "nodes": 66304,
+      "parallelFrontendNodes": 66304,
       "sourceBytes": 371208
     },
     "timings": {
@@ -37,8 +37,8 @@
   "batch-256": {
     "counters": {
       "modules": 256,
-      "nodes": 300544,
-      "parallelFrontendNodes": 300544,
+      "nodes": 265216,
+      "parallelFrontendNodes": 265216,
       "sourceBytes": 1498968
     },
     "timings": {
@@ -51,7 +51,7 @@
   "linked-51-modules": {
     "counters": {
       "modules": 51,
-      "nodes": 60031
+      "nodes": 52993
     },
     "timings": {
       "gpuMilliseconds": 683.3

@@ -17,6 +17,8 @@ export class WasmCaptureAnalysis {
     const node = this.#node(nodeIndex);
     let depths: readonly number[];
     switch (node.tag) {
+      case CoreTag.Prim:
+        throw new Error("functional Wasm capture analysis received an unlowered primop");
       case CoreTag.Integer:
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
@@ -93,6 +95,8 @@ export class WasmCaptureAnalysis {
       return node.payload === localDepth ? 1 : 0;
     }
     switch (node.tag) {
+      case CoreTag.Prim:
+        throw new Error("functional Wasm capture analysis received an unlowered primop");
       case CoreTag.Integer:
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
@@ -186,6 +190,8 @@ export class WasmCaptureAnalysis {
 
     const node = this.#node(nodeIndex);
     switch (node.tag) {
+      case CoreTag.Prim:
+        throw new Error("functional Wasm capture analysis received an unlowered primop");
       case CoreTag.Integer:
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:

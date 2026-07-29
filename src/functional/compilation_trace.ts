@@ -19,6 +19,7 @@ import {
 import { effectNames } from "./effect_set.ts";
 import type { CoreNode, GpuModule } from "./compiler.ts";
 import type { EvaluationResult } from "./evaluator.ts";
+import { primopDeclaration } from "../semantic/primops.ts";
 import type {
   SurfaceDefinition,
   SurfaceExpression,
@@ -157,7 +158,7 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
     case "name":
       return `${indent}${expression.name}`;
     case "lambda":
-      return `${indent}(lambda ${expression.parameter}\n${nested(expression.body)})`;
+      return `${indent}(lambda (${expression.parameters.join(" ")})\n${nested(expression.body)})`;
     case "let":
       return `${indent}(let ${expression.name}\n${nested(expression.value)}\n${
         nested(expression.body)
@@ -178,8 +179,14 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
       return `${indent}(if\n${nested(expression.condition)}\n${nested(expression.consequent)}\n${
         nested(expression.alternate)
       })`;
-    case "apply":
-      return `${indent}(apply\n${nested(expression.callee)}\n${nested(expression.argument)})`;
+    case "apply": {
+      const arguments_ = expression.arguments.map((argument) =>
+        formatExpression(argument, depth + 1)
+      );
+      return `${indent}(apply\n${nested(expression.callee)}${
+        arguments_.length === 0 ? "" : `\n${arguments_.join("\n")}`
+      })`;
+    }
     case "unary":
       return `${indent}(${unaryOperatorName(expression.operator)}\n${nested(expression.value)})`;
     case "binary":
@@ -353,7 +360,7 @@ function formatCoreModule(
   for (const [index, node] of nodes.entries()) {
     lines.push(
       `  n${index} ${coreTagName(node.tag)} ${corePayload(module, encoded, node)} ` +
-        `children=${formatEdges([node.child0, node.child1, node.child2], "n")} ` +
+        `children=${formatEdges(coreChildren(node), "n")} ` +
         `sourceByte=${node.sourceByteOffset}`,
     );
   }
@@ -370,7 +377,6 @@ function surfacePayload(module: EncodedModule, tag: number, payload: number): st
     case ExpressionTag.Let:
     case ExpressionTag.StrictLet:
     case ExpressionTag.LetRec:
-    case ExpressionTag.Lambda:
     case ExpressionTag.CaseArm:
     case ExpressionTag.PatternBind:
       return `symbol=${symbol(module, payload)}`;
@@ -400,6 +406,7 @@ function corePayload(
     case CoreTag.Constructor:
       return `constructor=c${node.payload}:${module.constructorNames[node.payload] ?? "?"}`;
     case CoreTag.Lambda:
+      return `parameters=p${node.payload}..p${node.payload + node.child1}`;
     case CoreTag.LetRec:
     case CoreTag.PatternBind:
       return `symbol=${symbol(encoded, node.payload)}`;
@@ -412,10 +419,22 @@ function corePayload(
     case CoreTag.Binary:
       return `operator=${binaryOperatorName(node.payload)}`;
     case CoreTag.Apply:
-      return `evaluation=${evaluationName(node.evaluationMode)}`;
+      return `arguments=a${node.payload}..a${node.payload + node.child1}`;
+    case CoreTag.Case:
+      return `alternatives=k${node.payload}..k${node.payload + node.child1}`;
+    case CoreTag.Prim:
+      return `opcode=${
+        primopDeclaration(node.payload)?.name ?? node.payload
+      } operands=a${node.child0}..a${node.child0 + node.child1}`;
     default:
       return node.payload === 0 ? "" : `payload=${node.payload}`;
   }
+}
+
+function coreChildren(node: CoreNode): readonly number[] {
+  if (node.tag === CoreTag.Apply || node.tag === CoreTag.Case) return [node.child0];
+  if (node.tag === CoreTag.Prim) return [];
+  return [node.child0, node.child1, node.child2];
 }
 
 function evaluationName(mode: number): string {

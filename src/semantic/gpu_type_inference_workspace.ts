@@ -300,6 +300,14 @@ export function createInitialState(
   );
   set(InferenceStateWord.ConstructorResultBase, metadata.constructorResultBase);
   set(InferenceStateWord.IndexedMetadataFooterBase, metadata.indexedMetadataFooterBase);
+  set(InferenceStateWord.ParameterBase, metadata.parameterBase);
+  set(InferenceStateWord.ParameterCount, metadata.parameterCount);
+  set(InferenceStateWord.ArgumentBase, metadata.argumentBase);
+  set(InferenceStateWord.ArgumentCount, metadata.argumentCount);
+  set(InferenceStateWord.CaseAlternativeBase, metadata.caseAlternativeBase);
+  set(InferenceStateWord.CaseAlternativeCount, metadata.caseAlternativeCount);
+  set(InferenceStateWord.CaseBinderBase, metadata.caseBinderBase);
+  set(InferenceStateWord.CaseBinderCount, metadata.caseBinderCount);
   set(InferenceStateWord.UntouchableTypeCutoff, NO_INDEX);
   set(InferenceStateWord.IndexedEliminationAllowed, 1);
   set(InferenceStateWord.IndexedEliminationRestrictionSymbol, NO_INDEX);

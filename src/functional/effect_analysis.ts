@@ -21,7 +21,7 @@ export function analyzeModuleEffects(
       `functional effect analysis received ${nodes.length} Core nodes; module declares ${module.nodeCount}`,
     );
   }
-  const lambdaSets = new LambdaSetAnalysis(module, nodes);
+  const lambdaSets = LambdaSetAnalysis.forCore(module, nodes);
   const effectNamesByNode = Array.from(
     { length: nodes.length },
     () => new Set<string>(),
@@ -92,7 +92,13 @@ export function analyzeModuleEffects(
       }
       case CoreTag.Apply: {
         dependOn(nodeIndex, node.child0);
-        dependOn(nodeIndex, node.child1);
+        for (
+          let argument = node.payload;
+          argument < node.payload + node.child1;
+          argument++
+        ) {
+          dependOn(nodeIndex, module.arguments[argument]!.node);
+        }
         const callee = lambdaSets.lambdaSet(node.child0);
         for (const effect of callee.effects) effectNamesByNode[nodeIndex]!.add(effect);
         for (const lambdaNode of callee.lambdaNodes) {
@@ -106,10 +112,14 @@ export function analyzeModuleEffects(
         }
         break;
       }
+      case CoreTag.Prim:
+        for (let operand = node.child0; operand < node.child0 + node.child1; operand++) {
+          dependOn(nodeIndex, module.arguments[operand]!.node);
+        }
+        break;
       case CoreTag.Unary:
       case CoreTag.NumericConvert:
       case CoreTag.StoreLength:
-      case CoreTag.PatternBind:
         dependOn(nodeIndex, node.child0);
         break;
       case CoreTag.Binary:
@@ -118,10 +128,18 @@ export function analyzeModuleEffects(
       case CoreTag.StoreRead:
       case CoreTag.Let:
       case CoreTag.LetRec:
-      case CoreTag.Case:
-      case CoreTag.CaseArm:
         dependOn(nodeIndex, node.child0);
         dependOn(nodeIndex, node.child1);
+        break;
+      case CoreTag.Case:
+        dependOn(nodeIndex, node.child0);
+        for (
+          let alternative = node.payload;
+          alternative < node.payload + node.child1;
+          alternative++
+        ) {
+          dependOn(nodeIndex, module.caseAlternatives[alternative]!.body);
+        }
         break;
       case CoreTag.If:
       case CoreTag.StoreWrite:

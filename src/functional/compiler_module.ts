@@ -10,7 +10,7 @@ export interface WasmExport {
 }
 
 /** Declared once in the semantic layer; the two used to be field-identical twins. */
-export type { CoreNode } from "../semantic/compiler_module.ts";
+export type { CoreArgument, CoreCaseAlternative, CoreNode } from "../semantic/compiler_module.ts";
 import type { CoreNode } from "../semantic/compiler_module.ts";
 
 export interface GpuModule {
@@ -21,6 +21,11 @@ export interface GpuModule {
   readonly definitionCount: number;
   readonly constructorCount: number;
   readonly typeCount: number;
+  readonly parameterCount: number;
+  readonly arguments: readonly import("../semantic/compiler_module.ts").CoreArgument[];
+  readonly caseAlternatives:
+    readonly import("../semantic/compiler_module.ts").CoreCaseAlternative[];
+  readonly caseBinderCount: number;
   readonly constructorNames: readonly string[];
   readonly constructorArities: readonly number[];
   readonly definitionNames: readonly string[];

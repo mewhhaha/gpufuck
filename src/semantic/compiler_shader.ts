@@ -228,6 +228,7 @@ const SURFACE_STORE_READ: u32 = ${CoreTag.StoreRead}u;
 const SURFACE_STORE_WRITE: u32 = ${CoreTag.StoreWrite}u;
 const SURFACE_STORE_GROW: u32 = ${CoreTag.StoreGrow}u;
 const SURFACE_STORE_EMPTY: u32 = ${CoreTag.StoreEmpty}u;
+const SURFACE_PRIM: u32 = ${CoreTag.Prim}u;
 
 const CORE_LOCAL: u32 = 13u;
 const CORE_GLOBAL: u32 = 14u;
@@ -323,6 +324,9 @@ fn parent_is_valid(node_index: u32, parent_index: u32) -> bool {
   }
 
   let parent = surface_nodes[state.surface_node_base + parent_index];
+  if parent.tag == SURFACE_APPLY || parent.tag == SURFACE_CASE || parent.tag == SURFACE_PRIM {
+    return true;
+  }
   return parent.child0 == node_index || parent.child1 == node_index || parent.child2 == node_index;
 }
 
@@ -395,12 +399,13 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         required_child_is_valid(node_index, node.child2);
     }
     case SURFACE_LAMBDA: {
-      return node.payload < state.symbol_count && required_child_is_valid(node_index, node.child0) &&
-        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
+      return required_child_is_valid(node_index, node.child0) && node.child2 == NO_INDEX;
     }
     case SURFACE_APPLY, SURFACE_STRICT_APPLY: {
-      return required_child_is_valid(node_index, node.child0) &&
-        required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
+      return required_child_is_valid(node_index, node.child0) && node.child2 == NO_INDEX;
+    }
+    case SURFACE_PRIM: {
+      return node.child2 == NO_INDEX || node.child2 < state.type_count;
     }
     case SURFACE_UNARY: {
       let whole_number = node.payload == 6u;
@@ -444,18 +449,7 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
         required_child_is_valid(node_index, node.child2);
     }
     case SURFACE_CASE: {
-      return required_child_is_valid(node_index, node.child0) &&
-        optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
-    }
-    case SURFACE_CASE_ARM: {
-      return node.payload < state.symbol_count && case_arm_parent_is_valid(node_index, node.parent) &&
-        required_child_is_valid(node_index, node.child0) &&
-        optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
-    }
-    case SURFACE_PATTERN_BIND: {
-      return node.payload < state.symbol_count && pattern_bind_parent_is_valid(node_index, node.parent) &&
-        required_child_is_valid(node_index, node.child0) && node.child1 == NO_INDEX &&
-        node.child2 == NO_INDEX;
+      return required_child_is_valid(node_index, node.child0) && node.child2 == NO_INDEX;
     }
     default: {
       return false;

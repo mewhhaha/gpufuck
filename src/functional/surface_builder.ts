@@ -1,8 +1,13 @@
 import {
+  ARGUMENT_WORD_LENGTH,
+  ArgumentWord,
   BinaryOperator,
+  CASE_ALTERNATIVE_WORD_LENGTH,
+  CaseAlternativeWord,
   CONSTRUCTOR_WORD_LENGTH,
   CORE_V1_PRIMITIVE_CAPABILITIES,
   type EncodedModule,
+  EvaluationMode,
   EvaluationProfile,
   ExpressionTag,
   MAXIMUM_EXPRESSION_NODES,
@@ -21,6 +26,18 @@ import {
   UnaryOperator,
   UNIT_CONSTRUCTOR_NAME,
 } from "./abi.ts";
+import {
+  binaryPrimop,
+  BufferAppendPrimop,
+  numericConversionPrimop,
+  StoreEmptyPrimop,
+  StoreGrowPrimop,
+  StoreLengthPrimop,
+  StoreNewPrimop,
+  StoreReadPrimop,
+  StoreWritePrimop,
+  unaryPrimop,
+} from "../semantic/primops.ts";
 import {
   ARRAY_TYPE_NAME,
   BYTES_TYPE_NAME,
@@ -238,7 +255,33 @@ export function buildSurfaceModule(
   const typeIndices = new Map(
     encodedTypeDeclarations.map((declaration, index) => [declaration.name, index]),
   );
-  const encoder = new SurfaceExpressionEncoder(symbols, typeIndices, evaluationProfile);
+  const constructorIndices = new Map<string, number>();
+  const callableArities = new Map<string, number>();
+  let nextConstructorIndex = 0;
+  for (const declaration of encodedTypeDeclarations) {
+    for (const constructor of declaration.constructors) {
+      constructorIndices.set(constructor.name, nextConstructorIndex);
+      if (constructor.fields.length > 0) {
+        callableArities.set(constructor.name, constructor.fields.length);
+      }
+      nextConstructorIndex += 1;
+    }
+  }
+  for (const definition of elaboratedDefinitions) {
+    const arity = definition.parameters.length > 0
+      ? definition.parameters.length
+      : definition.body.kind === "lambda"
+      ? definition.body.parameters.length
+      : undefined;
+    if (arity !== undefined) callableArities.set(definition.name, arity);
+  }
+  const encoder = new SurfaceExpressionEncoder(
+    symbols,
+    typeIndices,
+    constructorIndices,
+    callableArities,
+    evaluationProfile,
+  );
   const definitionWords: number[] = [];
   for (const definition of elaboratedDefinitions) {
     const rootNode = encoder.emitDefinitionBody(
@@ -289,10 +332,17 @@ export function buildSurfaceModule(
     declaredDefinitionEffects,
     wasmExports,
     nodeWords: Uint32Array.from(encoder.words),
+    parameterWords: Uint32Array.from(encoder.parameterWords),
+    argumentWords: Uint32Array.from(encoder.argumentWords),
+    caseAlternativeWords: Uint32Array.from(encoder.caseAlternativeWords),
+    caseBinderWords: Uint32Array.from(encoder.caseBinderWords),
     definitionWords: Uint32Array.from(definitionWords),
     typeWords: Uint32Array.from(typeWords),
     constructorWords: Uint32Array.from(constructorWords),
     nodeCount: encoder.nodeCount,
+    argumentCount: encoder.argumentWords.length / ARGUMENT_WORD_LENGTH,
+    caseAlternativeCount: encoder.caseAlternativeWords.length /
+      CASE_ALTERNATIVE_WORD_LENGTH,
     definitionCount: elaboratedDefinitions.length,
     typeCount: encodedTypeDeclarations.length,
     constructorCount: constructorWords.length / CONSTRUCTOR_WORD_LENGTH,
@@ -687,7 +737,7 @@ function collectBoundaryTypeNames(
         return;
       case "apply":
         visitExpression(expression.callee);
-        visitExpression(expression.argument);
+        for (const argument of expression.arguments) visitExpression(argument);
         return;
       case "binary":
         visitExpression(expression.left);
@@ -797,7 +847,7 @@ function expressionFeatureMask(expression: SurfaceExpression): number {
         visit(nested.condition);
         break;
       case "apply":
-        visit(nested.argument);
+        for (const argument of nested.arguments) visit(argument);
         visit(nested.callee);
         break;
       case "binary":
@@ -935,10 +985,17 @@ function primitiveTypeDeclarations(
 
 class SurfaceExpressionEncoder {
   readonly words: number[] = [];
+  readonly parameterWords: number[] = [];
+  readonly argumentWords: number[] = [];
+  readonly caseAlternativeWords: number[] = [];
+  readonly caseBinderWords: number[] = [];
+  private etaExpansion = 0;
 
   constructor(
     private readonly symbols: SurfaceSymbolTable,
     private readonly typeIndices: ReadonlyMap<string, number>,
+    private readonly constructorIndices: ReadonlyMap<string, number>,
+    private readonly callableArities: ReadonlyMap<string, number>,
     private readonly defaultEvaluation: EvaluationProfile,
   ) {}
 
@@ -951,41 +1008,11 @@ class SurfaceExpressionEncoder {
     body: SurfaceExpression,
     span: Span | undefined,
   ): number {
-    return this.emitParameters(parameters, 0, body, NO_INDEX, span);
-  }
-
-  private emitParameters(
-    parameters: readonly string[],
-    parameterIndex: number,
-    body: SurfaceExpression,
-    parent: number,
-    span: Span | undefined,
-  ): number {
-    let firstParameter = NO_INDEX;
-    let previousParameter = NO_INDEX;
-    let parameterParent = parent;
-    for (let index = parameterIndex; index < parameters.length; index += 1) {
-      const parameter = parameters[index];
-      if (parameter === undefined) {
-        throw new Error(`functional surface definition omitted parameter ${index}`);
-      }
-      const node = this.reserveNode(
-        ExpressionTag.Lambda,
-        this.symbols.intern(parameter),
-        parameterParent,
-        span,
-      );
-      if (firstParameter === NO_INDEX) firstParameter = node;
-      if (previousParameter !== NO_INDEX) {
-        this.setChildren(previousParameter, [node]);
-      }
-      previousParameter = node;
-      parameterParent = node;
-    }
-    const bodyNode = this.emit(body, parameterParent);
-    if (previousParameter === NO_INDEX) return bodyNode;
-    this.setChildren(previousParameter, [bodyNode]);
-    return firstParameter;
+    if (parameters.length === 0) return this.emit(body, NO_INDEX);
+    return this.emit(
+      { kind: "lambda", parameters, body, ...(span === undefined ? {} : { span }) },
+      NO_INDEX,
+    );
   }
 
   private emit(expression: SurfaceExpression, parent: number): number {
@@ -1106,14 +1133,25 @@ class SurfaceExpressionEncoder {
           expression.span,
         );
       case "lambda": {
+        const firstParameter = this.parameterWords.length;
+        for (const [parameterIndex, parameter] of expression.parameters.entries()) {
+          if (typeof parameter !== "string") {
+            throw new TypeError(
+              `functional lambda parameter ${parameterIndex} must be a string; received ${
+                JSON.stringify(parameter)
+              }`,
+            );
+          }
+          this.parameterWords.push(this.symbols.intern(parameter));
+        }
         const node = this.reserveNode(
           ExpressionTag.Lambda,
-          this.symbols.intern(expression.parameter),
+          firstParameter,
           parent,
           expression.span,
         );
         const body = this.emit(expression.body, node);
-        this.setChildren(node, [body]);
+        this.setChildren(node, [body, expression.parameters.length]);
         return node;
       }
       case "let": {
@@ -1158,222 +1196,182 @@ class SurfaceExpressionEncoder {
         return node;
       }
       case "apply": {
-        const argumentEvaluation = expression.argumentEvaluation ?? this.defaultEvaluation;
-        requireEvaluationProfile(argumentEvaluation, "functional application argument");
-        const node = this.reserveNode(
-          argumentEvaluation === EvaluationProfile.StrictEager
-            ? ExpressionTag.StrictApply
-            : ExpressionTag.Apply,
-          0,
+        const applicationSegments: {
+          readonly arguments: readonly SurfaceExpression[];
+          readonly evaluations: readonly EvaluationProfile[] | undefined;
+        }[] = [{
+          arguments: expression.arguments,
+          evaluations: expression.argumentEvaluations,
+        }];
+        let callee = expression.callee;
+        while (callee.kind === "apply") {
+          applicationSegments.push({
+            arguments: callee.arguments,
+            evaluations: callee.argumentEvaluations,
+          });
+          callee = callee.callee;
+        }
+        applicationSegments.reverse();
+        const arguments_ = applicationSegments.flatMap((segment) => segment.arguments);
+        const evaluations = applicationSegments.flatMap((segment) =>
+          segment.arguments.map((_, index) =>
+            segment.evaluations?.[index] ?? this.defaultEvaluation
+          )
+        );
+        return this.emitApplication(
+          callee,
+          arguments_,
+          evaluations,
           parent,
           expression.span,
         );
-        const callee = this.emit(expression.callee, node);
-        const argument = this.emit(expression.argument, node);
-        this.setChildren(node, [callee, argument]);
-        return node;
       }
       case "unary": {
-        const node = this.reserveNode(
-          ExpressionTag.Unary,
-          expression.operator,
+        return this.emitPrim(
+          unaryPrimop(expression.operator),
+          [expression.value],
           parent,
           expression.span,
+          expression.operator === UnaryOperator.NegateWholeNumberF64
+            ? this.requiredTypeIndex(WHOLE_NUMBER_F64_TYPE_NAME)
+            : NO_INDEX,
         );
-        const value = this.emit(expression.value, node);
-        this.setChildren(node, [value]);
-        if (expression.operator === UnaryOperator.NegateWholeNumberF64) {
-          this.words[node * NODE_WORD_LENGTH + NodeWord.Child1] = this
-            .requiredTypeIndex(WHOLE_NUMBER_F64_TYPE_NAME);
-        }
-        return node;
       }
       case "binary": {
-        const node = this.reserveNode(
-          ExpressionTag.Binary,
-          expression.operator,
+        const auxiliaryType = (
+            expression.operator >= BinaryOperator.EqualWholeNumberF64 &&
+            expression.operator <= BinaryOperator.RemainderWholeNumberF64
+          )
+          ? this.requiredTypeIndex(WHOLE_NUMBER_F64_TYPE_NAME)
+          : NO_INDEX;
+        return this.emitPrim(
+          binaryPrimop(expression.operator),
+          [expression.left, expression.right],
           parent,
           expression.span,
+          auxiliaryType,
         );
-        const left = this.emit(expression.left, node);
-        const right = this.emit(expression.right, node);
-        this.setChildren(node, [left, right]);
-        if (
-          expression.operator >= BinaryOperator.EqualWholeNumberF64 &&
-          expression.operator <= BinaryOperator.RemainderWholeNumberF64
-        ) {
-          this.words[node * NODE_WORD_LENGTH + NodeWord.Child2] = this
-            .requiredTypeIndex(WHOLE_NUMBER_F64_TYPE_NAME);
-        }
-        return node;
       }
       case "text-append":
       case "bytes-append": {
-        const node = this.reserveNode(
-          ExpressionTag.BufferAppend,
-          0,
+        return this.emitPrim(
+          BufferAppendPrimop,
+          [expression.left, expression.right],
           parent,
           expression.span,
-        );
-        const left = this.emit(expression.left, node);
-        const right = this.emit(expression.right, node);
-        this.setChildren(node, [left, right]);
-        this.words[node * NODE_WORD_LENGTH + NodeWord.Child2] = this
-          .requiredTypeIndex(
+          this.requiredTypeIndex(
             expression.kind === "text-append" ? TEXT_TYPE_NAME : BYTES_TYPE_NAME,
-          );
-        return node;
+          ),
+        );
       }
       case "store-new": {
-        const node = this.reserveNode(
-          ExpressionTag.StoreNew,
-          this.requiredTypeIndex(STORE_TYPE_NAME),
+        return this.emitPrim(
+          StoreNewPrimop,
+          [expression.length, expression.initial],
           parent,
           expression.span,
+          this.requiredTypeIndex(STORE_TYPE_NAME),
         );
-        this.setChildren(node, [
-          this.emit(expression.length, node),
-          this.emit(expression.initial, node),
-        ]);
-        return node;
       }
       case "store-empty":
-        return this.reserveNode(
-          ExpressionTag.StoreEmpty,
-          this.requiredTypeIndex(STORE_TYPE_NAME),
+        return this.emitPrim(
+          StoreEmptyPrimop,
+          [],
           parent,
           expression.span,
+          this.requiredTypeIndex(STORE_TYPE_NAME),
         );
       case "store-length": {
-        const node = this.reserveNode(
-          ExpressionTag.StoreLength,
-          this.requiredTypeIndex(STORE_TYPE_NAME),
+        return this.emitPrim(
+          StoreLengthPrimop,
+          [expression.store],
           parent,
           expression.span,
+          this.requiredTypeIndex(STORE_TYPE_NAME),
         );
-        this.setChildren(node, [this.emit(expression.store, node)]);
-        return node;
       }
       case "store-read": {
-        const node = this.reserveNode(
-          ExpressionTag.StoreRead,
-          this.requiredTypeIndex(STORE_TYPE_NAME),
+        return this.emitPrim(
+          StoreReadPrimop,
+          [expression.store, expression.index],
           parent,
           expression.span,
+          this.requiredTypeIndex(STORE_TYPE_NAME),
         );
-        this.setChildren(node, [
-          this.emit(expression.store, node),
-          this.emit(expression.index, node),
-        ]);
-        return node;
       }
       case "store-write": {
-        const node = this.reserveNode(
-          ExpressionTag.StoreWrite,
-          this.requiredTypeIndex(STORE_TYPE_NAME),
+        return this.emitPrim(
+          StoreWritePrimop,
+          [expression.store, expression.index, expression.value],
           parent,
           expression.span,
+          this.requiredTypeIndex(STORE_TYPE_NAME),
         );
-        this.setChildren(node, [
-          this.emit(expression.store, node),
-          this.emit(expression.index, node),
-          this.emit(expression.value, node),
-        ]);
-        return node;
       }
       case "store-grow": {
-        const node = this.reserveNode(
-          ExpressionTag.StoreGrow,
-          this.requiredTypeIndex(STORE_TYPE_NAME),
+        return this.emitPrim(
+          StoreGrowPrimop,
+          [expression.store, expression.length, expression.initial],
           parent,
           expression.span,
+          this.requiredTypeIndex(STORE_TYPE_NAME),
         );
-        this.setChildren(node, [
-          this.emit(expression.store, node),
-          this.emit(expression.length, node),
-          this.emit(expression.initial, node),
-        ]);
-        return node;
       }
       case "numeric-convert": {
-        const node = this.reserveNode(
-          ExpressionTag.NumericConvert,
-          expression.conversion,
+        return this.emitPrim(
+          numericConversionPrimop(expression.conversion),
+          [expression.value],
           parent,
           expression.span,
         );
-        const value = this.emit(expression.value, node);
-        this.setChildren(node, [value]);
-        return node;
       }
       case "case": {
-        const node = this.reserveNode(ExpressionTag.Case, 0, parent, expression.span);
+        const firstAlternative = this.caseAlternativeWords.length /
+          CASE_ALTERNATIVE_WORD_LENGTH;
+        const node = this.reserveNode(
+          ExpressionTag.Case,
+          firstAlternative,
+          parent,
+          expression.span,
+        );
+        for (let armIndex = 0; armIndex < expression.arms.length; armIndex++) {
+          for (let word = 0; word < CASE_ALTERNATIVE_WORD_LENGTH; word++) {
+            this.caseAlternativeWords.push(NO_INDEX);
+          }
+        }
         const value = this.emit(expression.value, node);
-        const firstArm = this.emitCaseArms(expression.arms, 0, node);
-        this.setChildren(node, [value, firstArm]);
+        for (const [armIndex, arm] of expression.arms.entries()) {
+          const constructor = this.constructorIndices.get(arm.constructor);
+          if (constructor === undefined) {
+            throw new Error(
+              `functional case alternative ${armIndex} references unknown constructor ${
+                JSON.stringify(arm.constructor)
+              }`,
+            );
+          }
+          const firstBinder = this.caseBinderWords.length;
+          for (const binder of arm.binders) {
+            this.caseBinderWords.push(this.symbols.intern(binder));
+          }
+          const body = this.emit(arm.body, node);
+          const alternativeOffset = (firstAlternative + armIndex) *
+            CASE_ALTERNATIVE_WORD_LENGTH;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.Constructor] =
+            constructor;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.FirstBinder] =
+            firstBinder;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.BinderCount] =
+            arm.binders.length;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.Body] = body;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.StartByte] =
+            arm.span?.startByte ?? expression.span?.startByte ?? 0;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.EndByte] =
+            arm.span?.endByte ?? expression.span?.endByte ?? 0;
+        }
+        this.setChildren(node, [value, expression.arms.length]);
         return node;
       }
     }
-  }
-
-  private emitCaseArms(
-    arms: readonly SurfaceCaseArm[],
-    armIndex: number,
-    parent: number,
-  ): number {
-    let firstArm = NO_INDEX;
-    let previousArm = NO_INDEX;
-    let previousBody = NO_INDEX;
-    let armParent = parent;
-    for (let index = armIndex; index < arms.length; index += 1) {
-      const arm = arms[index];
-      if (arm === undefined) throw new Error(`functional surface case omitted arm ${index}`);
-      const node = this.reserveNode(
-        ExpressionTag.CaseArm,
-        this.symbols.intern(arm.constructor),
-        armParent,
-        arm.span,
-      );
-      if (firstArm === NO_INDEX) firstArm = node;
-      if (previousArm !== NO_INDEX) {
-        this.setChildren(previousArm, [previousBody, node]);
-      }
-      previousArm = node;
-      previousBody = this.emitPatternBindings(arm.binders, arm.body, node);
-      armParent = node;
-    }
-    if (previousArm !== NO_INDEX) {
-      this.setChildren(previousArm, [previousBody, NO_INDEX]);
-    }
-    return firstArm;
-  }
-
-  private emitPatternBindings(
-    binders: readonly string[],
-    body: SurfaceExpression,
-    parent: number,
-  ): number {
-    let bindingParent = parent;
-    let firstBinding = NO_INDEX;
-    for (let binderIndex = binders.length - 1; binderIndex >= 0; binderIndex--) {
-      const binder = binders[binderIndex];
-      if (binder === undefined) {
-        throw new Error(`functional surface case arm omitted binder ${binderIndex}`);
-      }
-      const binding = this.reserveNode(
-        ExpressionTag.PatternBind,
-        this.symbols.intern(binder),
-        bindingParent,
-        parentSpan(this.words, parent),
-      );
-      if (firstBinding === NO_INDEX) firstBinding = binding;
-      else this.setChildren(bindingParent, [binding]);
-      bindingParent = binding;
-    }
-    const bodyNode = this.emit(body, bindingParent);
-    if (firstBinding === NO_INDEX) return bodyNode;
-    this.setChildren(bindingParent, [bodyNode]);
-    return firstBinding;
   }
 
   private emitNode(
@@ -1394,6 +1392,116 @@ class SurfaceExpressionEncoder {
       throw new Error(`functional surface omitted expression type ${JSON.stringify(name)}`);
     }
     return typeIndex;
+  }
+
+  private emitPrim(
+    opcode: number,
+    operands: readonly SurfaceExpression[],
+    parent: number,
+    span: Span | undefined,
+    auxiliaryType = NO_INDEX,
+  ): number {
+    const firstOperand = this.argumentWords.length / ARGUMENT_WORD_LENGTH;
+    for (let operand = 0; operand < operands.length; operand++) {
+      this.argumentWords.push(NO_INDEX, EvaluationMode.StrictEager);
+    }
+    const node = this.reserveNode(ExpressionTag.Prim, opcode, parent, span);
+    for (const [operandOffset, operand] of operands.entries()) {
+      const operandNode = this.emit(operand, node);
+      const recordOffset = (firstOperand + operandOffset) * ARGUMENT_WORD_LENGTH;
+      this.argumentWords[recordOffset + ArgumentWord.Node] = operandNode;
+    }
+    this.setChildren(node, [firstOperand, operands.length, auxiliaryType]);
+    return node;
+  }
+
+  private emitApplication(
+    callee: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
+    evaluations: readonly EvaluationProfile[],
+    parent: number,
+    span: Span | undefined,
+  ): number {
+    if (evaluations.length !== arguments_.length) {
+      throw new Error(
+        `functional application has ${arguments_.length} arguments but ${evaluations.length} evaluation profiles`,
+      );
+    }
+    const arity = callee.kind === "name" ? this.callableArities.get(callee.name) : undefined;
+    if (arity !== undefined && arguments_.length < arity) {
+      const parameters = Array.from(
+        { length: arity - arguments_.length },
+        () => `$eta${this.etaExpansion++}`,
+      );
+      return this.emit({
+        kind: "lambda",
+        parameters,
+        body: {
+          kind: "apply",
+          callee,
+          arguments: [
+            ...arguments_,
+            ...parameters.map((name) => ({
+              kind: "name" as const,
+              name,
+              ...(span ? { span } : {}),
+            })),
+          ],
+          argumentEvaluations: [
+            ...evaluations,
+            ...parameters.map(() => this.defaultEvaluation),
+          ],
+          ...(span === undefined ? {} : { span }),
+        },
+        ...(span === undefined ? {} : { span }),
+      }, parent);
+    }
+    if (arity !== undefined && arguments_.length > arity) {
+      const exactApplication: SurfaceExpression = {
+        kind: "apply",
+        callee,
+        arguments: arguments_.slice(0, arity),
+        argumentEvaluations: evaluations.slice(0, arity),
+        ...(span === undefined ? {} : { span }),
+      };
+      return this.emitPackedApplication(
+        exactApplication,
+        arguments_.slice(arity),
+        evaluations.slice(arity),
+        parent,
+        span,
+      );
+    }
+    return this.emitPackedApplication(callee, arguments_, evaluations, parent, span);
+  }
+
+  private emitPackedApplication(
+    callee: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
+    evaluations: readonly EvaluationProfile[],
+    parent: number,
+    span: Span | undefined,
+  ): number {
+    const firstArgument = this.argumentWords.length / ARGUMENT_WORD_LENGTH;
+    for (let argument = 0; argument < arguments_.length; argument++) {
+      this.argumentWords.push(NO_INDEX, NO_INDEX);
+    }
+    const node = this.reserveNode(ExpressionTag.Apply, firstArgument, parent, span);
+    const calleeNode = this.emit(callee, node);
+    for (const [argumentIndex, argument] of arguments_.entries()) {
+      const evaluation = evaluations[argumentIndex];
+      if (evaluation === undefined) {
+        throw new Error(`functional application omitted evaluation ${argumentIndex}`);
+      }
+      requireEvaluationProfile(evaluation, `functional application argument ${argumentIndex}`);
+      const argumentOffset = (firstArgument + argumentIndex) * ARGUMENT_WORD_LENGTH;
+      this.argumentWords[argumentOffset + ArgumentWord.Node] = this.emit(argument, node);
+      this.argumentWords[argumentOffset + ArgumentWord.EvaluationMode] = evaluationModeForProfile(
+        evaluation,
+      );
+    }
+    this.setChildren(node, [calleeNode, arguments_.length]);
+    return node;
   }
 
   private reserveNode(
@@ -1443,6 +1551,13 @@ function requireEvaluationProfile(
   throw new Error(
     `${location} has unsupported evaluation profile ${JSON.stringify(profile)}`,
   );
+}
+
+function evaluationModeForProfile(profile: EvaluationProfile): EvaluationMode {
+  requireEvaluationProfile(profile, "functional expression");
+  return profile === EvaluationProfile.StrictEager
+    ? EvaluationMode.StrictEager
+    : EvaluationMode.LazyCallByNeed;
 }
 
 class SurfaceSymbolTable {
@@ -1514,15 +1629,6 @@ function sourceType(
   }
 }
 
-function parentSpan(words: readonly number[], parent: number): Span | undefined {
-  if (parent === NO_INDEX) return undefined;
-  const offset = parent * NODE_WORD_LENGTH;
-  const startByte = words[offset + NodeWord.StartByte];
-  const endByte = words[offset + NodeWord.EndByte];
-  if (startByte === undefined || endByte === undefined) return undefined;
-  return { startByte, endByte };
-}
-
 export type SurfaceBuilder = Readonly<{
   /**
    * Returns a builder that stamps `span` on *every* node each helper produces, including the
@@ -1542,18 +1648,12 @@ export type SurfaceBuilder = Readonly<{
   bytes(value: Uint8Array): SurfaceExpression;
   runtimeFault(message: string): SurfaceExpression;
   name(name: string): SurfaceExpression;
-  /**
-   * Definitions and recursive bindings already take a parameter list, and `apply` already folds a
-   * spine, so accepting one here keeps the builder consistent instead of making every frontend
-   * curry by hand. Under `at` every curried lambda carries the span, not just the outermost one.
-   */
   lambda(
     parameters: string | readonly string[],
     body: SurfaceExpression,
   ): SurfaceExpression;
   delay(value: SurfaceExpression): SurfaceExpression;
   force(value: SurfaceExpression): SurfaceExpression;
-  /** Folds a left-associated application spine; under `at` every node in it carries the span. */
   apply(
     callee: SurfaceExpression,
     ...arguments_: readonly SurfaceExpression[]
@@ -1674,18 +1774,14 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       body: SurfaceExpression,
     ): SurfaceExpression {
       const names = typeof parameters === "string" ? [parameters] : parameters;
-      let expression = body;
-      for (let index = names.length - 1; index >= 0; index--) {
-        expression = { kind: "lambda", parameter: names[index]!, body: expression, ...spanned };
-      }
-      return expression;
+      return { kind: "lambda", parameters: [...names], body, ...spanned };
     },
     delay(value: SurfaceExpression): SurfaceExpression {
       return {
         kind: "apply",
         callee: { kind: "name", name: THUNK_CONSTRUCTOR_NAME, ...spanned },
-        argument: value,
-        argumentEvaluation: EvaluationProfile.LazyCallByNeed,
+        arguments: [value],
+        argumentEvaluations: [EvaluationProfile.LazyCallByNeed],
         ...spanned,
       };
     },
@@ -1707,11 +1803,7 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       callee: SurfaceExpression,
       ...arguments_: readonly SurfaceExpression[]
     ): SurfaceExpression {
-      let expression = callee;
-      for (const argument of arguments_) {
-        expression = { kind: "apply", callee: expression, argument, ...spanned };
-      }
-      return expression;
+      return { kind: "apply", callee, arguments: arguments_, ...spanned };
     },
     let(
       name: string,

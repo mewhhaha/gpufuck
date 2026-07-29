@@ -2385,11 +2385,12 @@ function call(
   arguments_: readonly SurfaceExpression[],
   span: { readonly startByte: number; readonly endByte: number },
 ): SurfaceExpression {
-  let expression = reference(calleeName, span);
-  for (const argument of arguments_) {
-    expression = { kind: "apply", callee: expression, argument, span };
-  }
-  return expression;
+  return {
+    kind: "apply",
+    callee: reference(calleeName, span),
+    arguments: arguments_,
+    span,
+  };
 }
 
 function binary(

@@ -52,7 +52,7 @@ export function analyzeSurfaceReachability(
           expressions.push(expression.store, expression.length, expression.initial);
           break;
         case "apply":
-          expressions.push(expression.callee, expression.argument);
+          expressions.push(expression.callee, ...expression.arguments);
           break;
         case "lambda":
           expressions.push(expression.body);

@@ -1,6 +1,10 @@
 import {
   AlgebraicTypeWord,
+  ARGUMENT_WORD_LENGTH,
+  ArgumentWord,
   BinaryOperator,
+  CASE_ALTERNATIVE_WORD_LENGTH,
+  CaseAlternativeWord,
   CONSTRUCTOR_WORD_LENGTH,
   ConstructorWord,
   DEFINITION_WORD_LENGTH,
@@ -18,6 +22,7 @@ import {
   type TypeSchema,
   UnaryOperator,
 } from "./abi.ts";
+import { primopDeclaration, PrimopFamily } from "./primops.ts";
 
 export interface TypeInferenceSuccess {
   readonly ok: true;
@@ -659,18 +664,37 @@ class InferenceContext {
           visit(this.requiredChild(nodeIndex, NodeWord.Child1), recursiveScope);
           return;
         }
-        case ExpressionTag.Lambda:
-          visit(
-            this.requiredChild(nodeIndex, NodeWord.Child0),
-            this.withBoundSymbol(boundSymbols, payload),
-          );
+        case ExpressionTag.Lambda: {
+          let bodyScope = boundSymbols;
+          for (
+            let parameter = 0;
+            parameter < this.nodeWord(nodeIndex, NodeWord.Child1);
+            parameter++
+          ) {
+            bodyScope = this.withBoundSymbol(
+              bodyScope,
+              this.parameterSymbol(payload + parameter),
+            );
+          }
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), bodyScope);
           return;
+        }
         case ExpressionTag.If:
           visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
           visit(this.requiredChild(nodeIndex, NodeWord.Child1), boundSymbols);
           visit(this.requiredChild(nodeIndex, NodeWord.Child2), boundSymbols);
           return;
         case ExpressionTag.Apply:
+          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
+          for (const argument of this.applicationArguments(nodeIndex)) {
+            visit(argument, boundSymbols);
+          }
+          return;
+        case ExpressionTag.Prim:
+          for (const operand of this.primopOperands(nodeIndex)) {
+            visit(operand, boundSymbols);
+          }
+          return;
         case ExpressionTag.StrictApply:
         case ExpressionTag.Binary:
         case ExpressionTag.BufferAppend:
@@ -692,15 +716,12 @@ class InferenceContext {
           return;
         case ExpressionTag.Case: {
           visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
-          let armIndex = this.nodeWord(nodeIndex, NodeWord.Child1);
-          while (armIndex !== NO_INDEX) {
-            const arm = this.caseArmBody(armIndex);
+          for (const arm of this.caseAlternatives(nodeIndex)) {
             let armScope = boundSymbols;
             for (const binder of arm.binders) {
               armScope = this.withBoundSymbol(armScope, binder.symbol);
             }
             visit(arm.body, armScope);
-            armIndex = this.nodeWord(armIndex, NodeWord.Child1);
           }
           return;
         }
@@ -858,27 +879,65 @@ class InferenceContext {
         return result;
       }
       case ExpressionTag.Lambda: {
-        let expectedFunction = expected === null ? null : this.prune(expected);
-        if (expectedFunction?.kind === "variable") {
-          const parameter = this.inferenceVariable();
-          const result = this.inferenceVariable();
-          const functionType: FunctionType = { kind: "function", parameter, result };
-          this.unify(expectedFunction, functionType, span);
-          expectedFunction = functionType;
-        }
-        const parameter = expectedFunction?.kind === "function"
-          ? expectedFunction.parameter
-          : this.inferenceVariable();
         const bodyEnvironment = new Map(environment);
-        bodyEnvironment.set(payload, { parameters: [], type: parameter });
+        const parameters: InferenceType[] = [];
+        let expectedResult = expected;
+        const parameterCount = this.nodeWord(nodeIndex, NodeWord.Child1);
+        const effectiveParameterCount = Math.max(1, parameterCount);
+        for (let parameterIndex = 0; parameterIndex < effectiveParameterCount; parameterIndex++) {
+          let expectedFunction = expectedResult === null ? null : this.prune(expectedResult);
+          if (expectedFunction?.kind === "variable") {
+            const parameter = this.inferenceVariable();
+            const result = this.inferenceVariable();
+            const functionType: FunctionType = { kind: "function", parameter, result };
+            this.unify(expectedFunction, functionType, span);
+            expectedFunction = functionType;
+          }
+          const parameter = expectedFunction?.kind === "function"
+            ? expectedFunction.parameter
+            : parameterCount === 0
+            ? UNIT
+            : this.inferenceVariable();
+          parameters.push(parameter);
+          if (parameterCount > 0) {
+            bodyEnvironment.set(this.parameterSymbol(payload + parameterIndex), {
+              parameters: [],
+              type: parameter,
+            });
+          }
+          expectedResult = expectedFunction?.kind === "function" ? expectedFunction.result : null;
+        }
         const body = this.inferNode(
           this.requiredChild(nodeIndex, NodeWord.Child0),
           bodyEnvironment,
-          expectedFunction?.kind === "function" ? expectedFunction.result : null,
+          expectedResult,
         );
-        return { kind: "function", parameter, result: body };
+        return parameters.reduceRight<InferenceType>(
+          (result, parameter) => ({ kind: "function", parameter, result }),
+          body,
+        );
       }
-      case ExpressionTag.Apply:
+      case ExpressionTag.Apply: {
+        let callee = this.inferNode(
+          this.requiredChild(nodeIndex, NodeWord.Child0),
+          environment,
+        );
+        const arguments_ = this.applicationArguments(nodeIndex);
+        if (arguments_.length === 0) {
+          const result = expected ?? this.inferenceVariable();
+          this.unify(callee, { kind: "function", parameter: UNIT, result }, span);
+          return result;
+        }
+        for (const [argumentIndex, argumentNode] of arguments_.entries()) {
+          const argument = this.inferNode(argumentNode, environment);
+          const result = argumentIndex === arguments_.length - 1 && expected !== null
+            ? expected
+            : this.inferenceVariable();
+          this.unify(callee, { kind: "function", parameter: argument, result }, span);
+          callee = result;
+        }
+        return callee;
+      }
       case ExpressionTag.StrictApply: {
         const callee = this.inferNode(
           this.requiredChild(nodeIndex, NodeWord.Child0),
@@ -1054,6 +1113,8 @@ class InferenceContext {
         this.unify(source, value, span);
         return result;
       }
+      case ExpressionTag.Prim:
+        return this.inferPrim(nodeIndex, payload, environment, span);
       case ExpressionTag.Case:
         return this.inferCase(nodeIndex, environment, expected);
       default:
@@ -1061,12 +1122,99 @@ class InferenceContext {
     }
   }
 
+  private inferPrim(
+    nodeIndex: number,
+    opcode: number,
+    environment: TypeEnvironment,
+    span: SemanticDiagnostic["span"],
+  ): InferenceType {
+    const declaration = primopDeclaration(opcode);
+    if (declaration === undefined) {
+      throw this.invalidTypeMetadata(`expression references unknown primop ${opcode}`, span);
+    }
+    const operands = this.primopOperands(nodeIndex);
+    const inferOperand = (
+      operandIndex: number,
+      expected: InferenceType | null = null,
+    ): InferenceType => {
+      const operand = operands[operandIndex];
+      if (operand === undefined) {
+        throw new Error(`primop ${declaration.name} omitted operand ${operandIndex}.`);
+      }
+      return this.inferNode(operand, environment, expected);
+    };
+    const auxiliaryType = (): InferenceType =>
+      this.namedTypeAt(this.nodeWord(nodeIndex, NodeWord.Child2), span);
+
+    if (declaration.family === PrimopFamily.Unary) {
+      const operandType = declaration.operation === UnaryOperator.NegateWholeNumberF64
+        ? auxiliaryType()
+        : numericTypeForUnaryOperator(declaration.operation);
+      this.unify(operandType, inferOperand(0, operandType), span);
+      return operandType;
+    }
+    if (declaration.family === PrimopFamily.Binary) {
+      if (
+        declaration.operation === BinaryOperator.StructuralEqual ||
+        declaration.operation === BinaryOperator.StructuralNotEqual
+      ) {
+        const left = inferOperand(0);
+        this.unify(left, inferOperand(1, left), span);
+        return BOOLEAN;
+      }
+      const operandType = declaration.operation >= BinaryOperator.EqualWholeNumberF64 &&
+          declaration.operation <= BinaryOperator.RemainderWholeNumberF64
+        ? auxiliaryType()
+        : numericTypeForBinaryOperator(declaration.operation);
+      this.unify(operandType, inferOperand(0, operandType), span);
+      this.unify(operandType, inferOperand(1, operandType), span);
+      return binaryOperatorIsComparison(declaration.operation) ? BOOLEAN : operandType;
+    }
+    if (declaration.family === PrimopFamily.NumericConversion) {
+      const [source, result] = numericConversionTypes(declaration.operation);
+      this.unify(source, inferOperand(0, source), span);
+      return result;
+    }
+    if (declaration.family === PrimopFamily.BufferAppend) {
+      const operandType = auxiliaryType();
+      this.unify(operandType, inferOperand(0, operandType), span);
+      this.unify(operandType, inferOperand(1, operandType), span);
+      return operandType;
+    }
+
+    const element = this.inferenceVariable();
+    const storeType = this.storeTypeAt(
+      this.nodeWord(nodeIndex, NodeWord.Child2),
+      element,
+      span,
+    );
+    if (declaration.family === PrimopFamily.StoreEmpty) return storeType;
+    if (declaration.family === PrimopFamily.StoreNew) {
+      this.unify(INTEGER, inferOperand(0, INTEGER), span);
+      const initial = inferOperand(1);
+      return this.storeTypeAt(this.nodeWord(nodeIndex, NodeWord.Child2), initial, span);
+    }
+    this.unify(storeType, inferOperand(0, storeType), span);
+    if (declaration.family === PrimopFamily.StoreLength) return INTEGER;
+    this.unify(INTEGER, inferOperand(1, INTEGER), span);
+    if (declaration.family === PrimopFamily.StoreRead) return element;
+    this.unify(element, inferOperand(2, element), span);
+    return storeType;
+  }
+
   private namedNodeType(
     nodeIndex: number,
     word: 4 | 5 | 6,
     span: SemanticDiagnostic["span"],
   ): InferenceType {
-    const declaration = this.#surface.typeDeclarations[this.nodeWord(nodeIndex, word)];
+    return this.namedTypeAt(this.nodeWord(nodeIndex, word), span);
+  }
+
+  private namedTypeAt(
+    typeIndex: number,
+    span: SemanticDiagnostic["span"],
+  ): InferenceType {
+    const declaration = this.#surface.typeDeclarations[typeIndex];
     if (declaration === undefined) {
       throw this.invalidTypeMetadata("expression references unknown named type", span);
     }
@@ -1078,9 +1226,15 @@ class InferenceContext {
     element: InferenceType,
     span: SemanticDiagnostic["span"],
   ): InferenceType {
-    const declaration = this.#surface.typeDeclarations[
-      this.nodeWord(nodeIndex, NodeWord.Payload)
-    ];
+    return this.storeTypeAt(this.nodeWord(nodeIndex, NodeWord.Payload), element, span);
+  }
+
+  private storeTypeAt(
+    typeIndex: number,
+    element: InferenceType,
+    span: SemanticDiagnostic["span"],
+  ): InferenceType {
+    const declaration = this.#surface.typeDeclarations[typeIndex];
     if (declaration === undefined || declaration.parameters.length !== 1) {
       throw this.invalidTypeMetadata("store expression references an invalid Store type", span);
     }
@@ -1113,8 +1267,8 @@ class InferenceContext {
     const result = this.inferenceVariable();
     const matchedConstructors = new Set<number>();
     let matchedTypeIndex: number | null = null;
-    let armIndex = this.nodeWord(nodeIndex, NodeWord.Child1);
-    if (armIndex === NO_INDEX) {
+    const alternatives = this.caseAlternatives(nodeIndex);
+    if (alternatives.length === 0) {
       const scrutineeType = this.prune(scrutinee);
       const shape = scrutineeType.kind === "named"
         ? this.#typeByName.get(scrutineeType.name)
@@ -1136,24 +1290,23 @@ class InferenceContext {
         span,
       );
     }
-    while (armIndex !== NO_INDEX) {
-      const constructorSymbol = this.nodeWord(armIndex, NodeWord.Payload);
+    for (const arm of alternatives) {
+      const constructorSymbol = arm.constructorSymbol;
       const constructor = this.#constructorBySymbol.get(constructorSymbol);
       if (constructor === undefined) {
         throw this.invalidTypeMetadata(
           `cannot infer unknown case constructor ${this.symbolName(constructorSymbol)}`,
-          this.nodeSpan(armIndex),
+          arm.span,
         );
       }
       const instantiated = this.instantiateConstructor(constructor);
-      this.unify(scrutinee, instantiated.result, this.nodeSpan(armIndex));
-      const arm = this.caseArmBody(armIndex);
+      this.unify(scrutinee, instantiated.result, arm.span);
       if (arm.binders.length !== instantiated.fields.length) {
         throw this.invalidTypeMetadata(
           `constructor ${
             JSON.stringify(constructor.name)
           } has ${instantiated.fields.length} fields but the arm binds ${arm.binders.length}`,
-          this.nodeSpan(armIndex),
+          arm.span,
         );
       }
       const armEnvironment = new Map(environment);
@@ -1161,15 +1314,14 @@ class InferenceContext {
         const binder = arm.binders[binderIndex];
         const field = instantiated.fields[binderIndex];
         if (binder === undefined || field === undefined) {
-          throw new Error(`case arm ${armIndex} omitted binder ${binderIndex}.`);
+          throw new Error(`case alternative ${arm.index} omitted binder ${binderIndex}.`);
         }
         armEnvironment.set(binder.symbol, { parameters: [], type: field });
       }
       const body = this.inferNode(arm.body, armEnvironment);
-      this.unify(result, body, this.nodeSpan(armIndex));
+      this.unify(result, body, arm.span);
       matchedConstructors.add(constructorSymbol);
       matchedTypeIndex ??= constructor.typeIndex;
-      armIndex = this.nodeWord(armIndex, NodeWord.Child1);
     }
 
     if (matchedTypeIndex !== null) {
@@ -1202,17 +1354,13 @@ class InferenceContext {
       const shape = this.#typeByName.get(scrutineeType.name);
       if (shape?.indexed === true) return shape;
     }
-    let armIndex = this.nodeWord(nodeIndex, NodeWord.Child1);
-    while (armIndex !== NO_INDEX) {
-      const constructor = this.#constructorBySymbol.get(
-        this.nodeWord(armIndex, NodeWord.Payload),
-      );
+    for (const alternative of this.caseAlternatives(nodeIndex)) {
+      const constructor = this.#constructorBySymbol.get(alternative.constructorSymbol);
       const declaration = constructor === undefined
         ? undefined
         : this.#surface.typeDeclarations[constructor.typeIndex];
       const shape = declaration === undefined ? undefined : this.#typeByName.get(declaration.name);
       if (shape?.indexed === true) return shape;
-      armIndex = this.nodeWord(armIndex, NodeWord.Child1);
     }
     return null;
   }
@@ -1269,14 +1417,13 @@ class InferenceContext {
     }
 
     const matchedConstructors = new Set<number>();
-    let armIndex = this.nodeWord(nodeIndex, NodeWord.Child1);
-    while (armIndex !== NO_INDEX) {
-      const constructorSymbol = this.nodeWord(armIndex, NodeWord.Payload);
+    for (const arm of this.caseAlternatives(nodeIndex)) {
+      const constructorSymbol = arm.constructorSymbol;
       const constructor = this.#constructorBySymbol.get(constructorSymbol);
       if (constructor === undefined) {
         throw this.invalidTypeMetadata(
           `cannot infer unknown case constructor ${this.symbolName(constructorSymbol)}`,
-          this.nodeSpan(armIndex),
+          arm.span,
         );
       }
       const checkpoint = this.#refinementTrail.length;
@@ -1298,16 +1445,15 @@ class InferenceContext {
             `constructor ${
               JSON.stringify(constructor.name)
             } is inaccessible: result ${constructorResult} is incompatible with scrutinee ${scrutineeDescription}`,
-            this.nodeSpan(armIndex),
+            arm.span,
           );
         }
-        const arm = this.caseArmBody(armIndex);
         if (arm.binders.length !== instantiated.fields.length) {
           throw this.invalidTypeMetadata(
             `constructor ${
               JSON.stringify(constructor.name)
             } has ${instantiated.fields.length} fields but the arm binds ${arm.binders.length}`,
-            this.nodeSpan(armIndex),
+            arm.span,
           );
         }
         const armEnvironment = new Map(environment);
@@ -1315,7 +1461,7 @@ class InferenceContext {
           const binder = arm.binders[binderIndex];
           const field = instantiated.fields[binderIndex];
           if (binder === undefined || field === undefined) {
-            throw new Error(`case arm ${armIndex} omitted binder ${binderIndex}.`);
+            throw new Error(`case alternative ${arm.index} omitted binder ${binderIndex}.`);
           }
           armEnvironment.set(binder.symbol, { parameters: [], type: field });
         }
@@ -1337,7 +1483,7 @@ class InferenceContext {
           }
           inferredResult = matchesDeferred ? deferredExpected : body;
         } else {
-          this.unify(inferredResult, body, this.nodeSpan(armIndex));
+          this.unify(inferredResult, body, arm.span);
         }
         matchedConstructors.add(constructorSymbol);
       } finally {
@@ -1346,10 +1492,9 @@ class InferenceContext {
         this.#untouchableTypeVariableCutoff = previousCutoff;
       }
       if (deferredExpected !== null && inferredResult !== null) {
-        this.unify(deferredExpected, inferredResult, this.nodeSpan(armIndex));
+        this.unify(deferredExpected, inferredResult, arm.span);
         deferredExpected = null;
       }
-      armIndex = this.nodeWord(armIndex, NodeWord.Child1);
     }
 
     for (const constructorIndex of shape.constructors) {
@@ -2088,22 +2233,138 @@ class InferenceContext {
     return `'${letter}${suffix}`;
   }
 
-  private caseArmBody(armIndex: number): {
-    readonly binders: readonly { readonly symbol: number; readonly nodeIndex: number }[];
-    readonly body: number;
-  } {
-    const binders: { symbol: number; nodeIndex: number }[] = [];
-    let body = this.requiredChild(armIndex, NodeWord.Child0);
-    while (this.nodeWord(body, NodeWord.Tag) === ExpressionTag.PatternBind) {
-      binders.push({
-        symbol: this.nodeWord(body, NodeWord.Payload),
-        nodeIndex: body,
-      });
-      body = this.requiredChild(body, NodeWord.Child0);
+  private parameterSymbol(parameterIndex: number): number {
+    const symbol = this.#surface.parameterWords[parameterIndex];
+    if (symbol === undefined) {
+      throw new Error(`lambda references missing parameter ${parameterIndex}.`);
     }
-    // Surface encoding nests pattern binders right-to-left; field schemas stay source-ordered.
-    binders.reverse();
-    return { binders, body };
+    return symbol;
+  }
+
+  private applicationArguments(nodeIndex: number): readonly number[] {
+    const firstArgument = this.nodeWord(nodeIndex, NodeWord.Payload);
+    const argumentCount = this.nodeWord(nodeIndex, NodeWord.Child1);
+    if (argumentCount === 0) return [];
+    if (
+      firstArgument === NO_INDEX ||
+      firstArgument + argumentCount > this.#surface.argumentCount
+    ) {
+      throw new Error(
+        `application ${nodeIndex} references arguments ${firstArgument}..${
+          firstArgument + argumentCount
+        } outside ${this.#surface.argumentCount}.`,
+      );
+    }
+    return Array.from({ length: argumentCount }, (_, offset) => {
+      const argumentIndex = firstArgument + offset;
+      const argument = this.#surface.argumentWords[
+        argumentIndex * ARGUMENT_WORD_LENGTH + ArgumentWord.Node
+      ];
+      if (argument === undefined) {
+        throw new Error(`application ${nodeIndex} omitted argument ${argumentIndex}.`);
+      }
+      return argument;
+    });
+  }
+
+  private primopOperands(nodeIndex: number): readonly number[] {
+    const firstOperand = this.nodeWord(nodeIndex, NodeWord.Child0);
+    const operandCount = this.nodeWord(nodeIndex, NodeWord.Child1);
+    const opcode = this.nodeWord(nodeIndex, NodeWord.Payload);
+    const declaration = primopDeclaration(opcode);
+    if (declaration === undefined || declaration.arity !== operandCount) {
+      throw new Error(
+        `primop ${opcode} at node ${nodeIndex} declares ${operandCount} operands`,
+      );
+    }
+    if (
+      firstOperand > this.#surface.argumentCount ||
+      operandCount > this.#surface.argumentCount - firstOperand
+    ) {
+      throw new Error(
+        `primop ${opcode} at node ${nodeIndex} references operands ${firstOperand}..${
+          firstOperand + operandCount
+        } outside ${this.#surface.argumentCount}.`,
+      );
+    }
+    return Array.from({ length: operandCount }, (_, offset) => {
+      const operandIndex = firstOperand + offset;
+      const operand = this.#surface.argumentWords[
+        operandIndex * ARGUMENT_WORD_LENGTH + ArgumentWord.Node
+      ];
+      if (operand === undefined) {
+        throw new Error(`primop ${opcode} omitted operand ${operandIndex}.`);
+      }
+      return operand;
+    });
+  }
+
+  private caseAlternatives(nodeIndex: number): readonly {
+    readonly index: number;
+    readonly constructorSymbol: number;
+    readonly binders: readonly { readonly symbol: number }[];
+    readonly body: number;
+    readonly span: SemanticDiagnostic["span"];
+  }[] {
+    const firstAlternative = this.nodeWord(nodeIndex, NodeWord.Payload);
+    const alternativeCount = this.nodeWord(nodeIndex, NodeWord.Child1);
+    if (alternativeCount === 0) return [];
+    if (
+      firstAlternative === NO_INDEX ||
+      firstAlternative + alternativeCount > this.#surface.caseAlternativeCount
+    ) {
+      throw new Error(
+        `case ${nodeIndex} references alternatives ${firstAlternative}..${
+          firstAlternative + alternativeCount
+        } outside ${this.#surface.caseAlternativeCount}.`,
+      );
+    }
+    return Array.from({ length: alternativeCount }, (_, offset) => {
+      const index = firstAlternative + offset;
+      const wordOffset = index * CASE_ALTERNATIVE_WORD_LENGTH;
+      const word = (wordIndex: number): number => {
+        const value = this.#surface.caseAlternativeWords[wordOffset + wordIndex];
+        if (value === undefined) {
+          throw new Error(`case ${nodeIndex} omitted alternative ${index} word ${wordIndex}.`);
+        }
+        return value;
+      };
+      const constructorIndex = word(CaseAlternativeWord.Constructor);
+      const constructorSymbol = this.constructorWord(
+        constructorIndex,
+        ConstructorWord.Symbol,
+      );
+      const firstBinder = word(CaseAlternativeWord.FirstBinder);
+      const binderCount = word(CaseAlternativeWord.BinderCount);
+      if (
+        binderCount > 0 &&
+        (firstBinder === NO_INDEX ||
+          firstBinder + binderCount > this.#surface.caseBinderWords.length)
+      ) {
+        throw new Error(
+          `case alternative ${index} references binders ${firstBinder}..${
+            firstBinder + binderCount
+          } outside ${this.#surface.caseBinderWords.length}.`,
+        );
+      }
+      const binders = Array.from({ length: binderCount }, (_, binderOffset) => {
+        const symbol = this.#surface.caseBinderWords[firstBinder + binderOffset];
+        if (symbol === undefined) {
+          throw new Error(`case alternative ${index} omitted binder ${binderOffset}.`);
+        }
+        return { symbol };
+      });
+      return {
+        index,
+        constructorSymbol,
+        binders,
+        body: word(CaseAlternativeWord.Body),
+        span: {
+          startByte: word(CaseAlternativeWord.StartByte),
+          endByte: word(CaseAlternativeWord.EndByte),
+        },
+      };
+    });
   }
 
   private requiredChild(nodeIndex: number, word: 4 | 5 | 6): number {

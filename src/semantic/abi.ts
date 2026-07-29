@@ -1,5 +1,6 @@
-export const MODULE_ABI_VERSION = 6;
+export const MODULE_ABI_VERSION = 7;
 export const NO_INDEX = 0xffffffff;
+export const UNKNOWN_CONSTRUCTOR_FLAG = 0x80000000;
 export const MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
 export const MAXIMUM_EXPRESSION_NODES = 65_536;
 export const MAXIMUM_PARSE_DEPTH = 512;
@@ -15,6 +16,8 @@ export const TYPE_BYTE_LENGTH = TYPE_WORD_LENGTH * Uint32Array.BYTES_PER_ELEMENT
 export const CONSTRUCTOR_WORD_LENGTH = 5;
 export const CONSTRUCTOR_BYTE_LENGTH = CONSTRUCTOR_WORD_LENGTH *
   Uint32Array.BYTES_PER_ELEMENT;
+export const ARGUMENT_WORD_LENGTH = 2;
+export const CASE_ALTERNATIVE_WORD_LENGTH = 6;
 
 export const NodeWord = {
   Tag: 0,
@@ -50,6 +53,20 @@ export const ConstructorWord = {
   EndByte: 4,
 } as const;
 
+export const ArgumentWord = {
+  Node: 0,
+  EvaluationMode: 1,
+} as const;
+
+export const CaseAlternativeWord = {
+  Constructor: 0,
+  FirstBinder: 1,
+  BinderCount: 2,
+  Body: 3,
+  StartByte: 4,
+  EndByte: 5,
+} as const;
+
 export const ExpressionTag = {
   Integer: 1,
   Boolean: 2,
@@ -81,6 +98,7 @@ export const ExpressionTag = {
   StoreWrite: 31,
   StoreGrow: 32,
   StoreEmpty: 33,
+  Prim: 34,
 } as const;
 
 export type ExpressionTag = (typeof ExpressionTag)[keyof typeof ExpressionTag];
@@ -116,6 +134,7 @@ export const CoreTag = {
   StoreWrite: ExpressionTag.StoreWrite,
   StoreGrow: ExpressionTag.StoreGrow,
   StoreEmpty: ExpressionTag.StoreEmpty,
+  Prim: ExpressionTag.Prim,
 } as const;
 
 export type CoreTag = (typeof CoreTag)[keyof typeof CoreTag];
@@ -344,10 +363,16 @@ export interface SemanticDiagnostic {
 
 export interface EncodedSemanticSurface {
   readonly nodeWords: Uint32Array;
+  readonly parameterWords: Uint32Array;
+  readonly argumentWords: Uint32Array;
+  readonly caseAlternativeWords: Uint32Array;
+  readonly caseBinderWords: Uint32Array;
   readonly definitionWords: Uint32Array;
   readonly typeWords: Uint32Array;
   readonly constructorWords: Uint32Array;
   readonly nodeCount: number;
+  readonly argumentCount: number;
+  readonly caseAlternativeCount: number;
   readonly definitionCount: number;
   readonly typeCount: number;
   readonly constructorCount: number;

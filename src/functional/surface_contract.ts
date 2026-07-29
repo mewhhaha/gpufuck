@@ -59,7 +59,7 @@ export type SurfaceExpression =
   | { readonly kind: "name"; readonly name: string; readonly span?: Span }
   | {
     readonly kind: "lambda";
-    readonly parameter: string;
+    readonly parameters: readonly string[];
     readonly body: SurfaceExpression;
     readonly span?: Span;
   }
@@ -89,8 +89,8 @@ export type SurfaceExpression =
   | {
     readonly kind: "apply";
     readonly callee: SurfaceExpression;
-    readonly argument: SurfaceExpression;
-    readonly argumentEvaluation?: EvaluationProfile;
+    readonly arguments: readonly SurfaceExpression[];
+    readonly argumentEvaluations?: readonly EvaluationProfile[];
     readonly span?: Span;
   }
   | {

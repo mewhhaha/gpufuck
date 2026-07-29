@@ -7,6 +7,7 @@ import {
 } from "../semantic/evaluator.ts";
 import type { GpuModule } from "./compiler_module.ts";
 import { BinaryOperator, CoreTag, NumericConversion, UnaryOperator } from "./abi.ts";
+import { primopDeclaration, PrimopFamily } from "../semantic/primops.ts";
 import { runBoundedWasmModule, type WasmExecution } from "./wasm_execution.ts";
 import { WasmRuntimeError } from "./wasm_host_boundary.ts";
 import type { WasmValue } from "./wasm_value_codec.ts";
@@ -320,6 +321,30 @@ async function inspectModuleNumericRequirements(
         node.payload === NumericConversion.Float64ToFloat32
       ) boundedWasm = true;
     }
+    if (node.tag === CoreTag.Prim) {
+      const declaration = primopDeclaration(node.payload);
+      if (declaration === undefined || !declaration.backends.gpu) boundedWasm = true;
+      const operation = declaration?.operation;
+      if (declaration?.family === PrimopFamily.Unary) {
+        if (operation === UnaryOperator.NegateSignedInteger64) signedInteger64 = true;
+      }
+      if (declaration?.family === PrimopFamily.Binary) {
+        if (
+          operation !== undefined &&
+          ((operation >= BinaryOperator.EqualSignedInteger64 &&
+            operation <= BinaryOperator.DivideSignedInteger64) ||
+            operation >= BinaryOperator.RemainderSignedInteger64)
+        ) signedInteger64 = true;
+      }
+      if (declaration?.family === PrimopFamily.NumericConversion) {
+        if (
+          operation === NumericConversion.SignedInteger32ToSignedInteger64 ||
+          operation === NumericConversion.SignedInteger64ToSignedInteger32 ||
+          operation === NumericConversion.SignedInteger64ToFloat32 ||
+          operation === NumericConversion.Float32ToSignedInteger64
+        ) signedInteger64 = true;
+      }
+    }
   }
   return { signedInteger64, boundedWasm };
 }
@@ -521,6 +546,10 @@ function semanticRuntimeModule(module: GpuModule): GpuSemanticModule {
     definitionCount: module.definitionCount,
     constructorCount: module.constructorCount,
     typeCount: module.typeCount,
+    parameterCount: module.parameterCount,
+    arguments: module.arguments,
+    caseAlternatives: module.caseAlternatives,
+    caseBinderCount: module.caseBinderCount,
     constructorNames: module.constructorNames,
     constructorArities: module.constructorArities,
     entryDefinition: module.entryDefinition,

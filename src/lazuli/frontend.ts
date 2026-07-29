@@ -1,10 +1,15 @@
 import {
   AlgebraicTypeWord,
+  ARGUMENT_WORD_LENGTH,
+  ArgumentWord,
   BinaryOperator,
+  CASE_ALTERNATIVE_WORD_LENGTH,
+  CaseAlternativeWord,
   CONSTRUCTOR_WORD_LENGTH,
   ConstructorWord,
   DefinitionWord,
   type EncodedSemanticSurface,
+  EvaluationMode,
   ExpressionTag,
   type FrontendResult,
   MAXIMUM_CONSTRUCTOR_ARITY,
@@ -20,12 +25,14 @@ import {
   TYPE_WORD_LENGTH,
   type TypeSchema,
   UnaryOperator,
+  UNKNOWN_CONSTRUCTOR_FLAG,
 } from "../semantic/abi.ts";
 import { createParser, createParserAsync } from "@mewhhaha/baba/runtime/generated-wasm";
 import type { decodeGpuFrontendPlan, GpuFrontendResult } from "@mewhhaha/baba/runtime/webgpu";
 
 import type { BabaRuleCursor } from "../baba_frontend.ts";
 import { compactLazuliProgramCursor } from "./baba_gpu_frontend.ts";
+import { binaryPrimop, unaryPrimop } from "../semantic/primops.ts";
 
 type ParseResult = ReturnType<ReturnType<typeof createParser>["parse"]>;
 type AnyRuleCursor = BabaRuleCursor;
@@ -2230,9 +2237,10 @@ function summarizeDefinitions(
   const pending: Array<{ expression: Expression; depth: number }> = [];
 
   for (const definition of definitions) {
-    nodeCount += definition.parameters.length;
-    pending.push({ expression: definition.body, depth: definition.parameters.length + 1 });
-    maximumDepth = Math.max(maximumDepth, definition.parameters.length + 1);
+    const bodyDepth = definition.parameters.length === 0 ? 1 : 2;
+    if (definition.parameters.length > 0) nodeCount++;
+    pending.push({ expression: definition.body, depth: bodyDepth });
+    maximumDepth = Math.max(maximumDepth, bodyDepth);
   }
 
   while (pending.length > 0) {
@@ -2276,9 +2284,12 @@ function summarizeDefinitions(
         pending.push({ expression: expression.consequent, depth: depth + 1 });
         pending.push({ expression: expression.condition, depth: depth + 1 });
         break;
-      case "lambda":
-        pending.push({ expression: expression.body, depth: depth + 1 });
+      case "lambda": {
+        let body = expression.body;
+        while (body.kind === "lambda") body = body.body;
+        pending.push({ expression: body, depth: depth + 1 });
         break;
+      }
       case "apply":
         pending.push({ expression: expression.argument, depth: depth + 1 });
         pending.push({ expression: expression.callee, depth: depth + 1 });
@@ -2295,10 +2306,9 @@ function summarizeDefinitions(
         for (let index = 0; index < expression.arms.length; index++) {
           const arm = expression.arms[index];
           if (!arm) throw new Error("Case expression unexpectedly omitted an arm.");
-          const armDepth = depth + 1 + index;
-          nodeCount += 1 + arm.binders.length;
+          const armDepth = depth + 1;
           maximumDepth = Math.max(maximumDepth, armDepth);
-          pending.push({ expression: arm.body, depth: armDepth + 1 + arm.binders.length });
+          pending.push({ expression: arm.body, depth: armDepth });
         }
         break;
     }
@@ -2313,7 +2323,14 @@ function encodeSurface(
   symbols: SymbolInterner,
   byteOffsets: Utf8ByteOffsets,
 ): EncodedSemanticSurface {
-  const encoder = new SurfaceEncoder(symbols, byteOffsets);
+  const constructorIndices = new Map<string, number>();
+  let nextConstructor = 0;
+  for (const declaration of dataDeclarations) {
+    for (const constructor of declaration.constructors) {
+      constructorIndices.set(constructor.name.spelling, nextConstructor++);
+    }
+  }
+  const encoder = new SurfaceEncoder(symbols, byteOffsets, constructorIndices);
   const definitionWords: number[] = [];
   for (const definition of definitions) {
     let root: Expression = definition.body;
@@ -2363,10 +2380,17 @@ function encodeSurface(
   }
   return {
     nodeWords: Uint32Array.from(encoder.words),
+    parameterWords: Uint32Array.from(encoder.parameterWords),
+    argumentWords: Uint32Array.from(encoder.argumentWords),
+    caseAlternativeWords: Uint32Array.from(encoder.caseAlternativeWords),
+    caseBinderWords: Uint32Array.from(encoder.caseBinderWords),
     definitionWords: Uint32Array.from(definitionWords),
     typeWords: Uint32Array.from(typeWords),
     constructorWords: Uint32Array.from(constructorWords),
     nodeCount: encoder.nodeCount,
+    argumentCount: encoder.argumentWords.length / ARGUMENT_WORD_LENGTH,
+    caseAlternativeCount: encoder.caseAlternativeWords.length /
+      CASE_ALTERNATIVE_WORD_LENGTH,
     definitionCount: definitions.length,
     typeCount: dataDeclarations.length,
     constructorCount: constructorWords.length / CONSTRUCTOR_WORD_LENGTH,
@@ -2449,10 +2473,15 @@ function encodeTypeSchema(
 
 class SurfaceEncoder {
   readonly words: number[] = [];
+  readonly parameterWords: number[] = [];
+  readonly argumentWords: number[] = [];
+  readonly caseAlternativeWords: number[] = [];
+  readonly caseBinderWords: number[] = [];
 
   constructor(
     private readonly symbols: SymbolInterner,
     private readonly byteOffsets: Utf8ByteOffsets,
+    private readonly constructorIndices: ReadonlyMap<string, number>,
   ) {}
 
   get nodeCount(): number {
@@ -2502,14 +2531,16 @@ class SurfaceEncoder {
           this.symbols.id(expression.name.spelling),
           parent,
         );
+        const firstParameter = this.parameterWords.length;
+        this.parameterWords.push(this.symbols.id(expression.parameter.spelling));
         const lambda = this.reserveNode(
           ExpressionTag.Lambda,
           { start: expression.name.span.start, end: expression.value.span.end },
-          this.symbols.id(expression.parameter.spelling),
+          firstParameter,
           node,
         );
         const value = this.emitExpression(expression.value, lambda);
-        this.setChildren(lambda, [value]);
+        this.setChildren(lambda, [value, 1]);
         const body = this.emitExpression(expression.body, node);
         this.setChildren(node, [lambda, body]);
         return node;
@@ -2523,94 +2554,99 @@ class SurfaceEncoder {
         return node;
       }
       case "lambda": {
+        const parameters: Identifier[] = [];
+        let body: Expression = expression;
+        while (body.kind === "lambda") {
+          parameters.push(body.parameter);
+          body = body.body;
+        }
+        const firstParameter = this.parameterWords.length;
+        for (const parameter of parameters) {
+          this.parameterWords.push(this.symbols.id(parameter.spelling));
+        }
         const node = this.reserveNode(
           ExpressionTag.Lambda,
           expression.span,
-          this.symbols.id(expression.parameter.spelling),
+          firstParameter,
           parent,
         );
-        const body = this.emitExpression(expression.body, node);
-        this.setChildren(node, [body]);
+        const bodyNode = this.emitExpression(body, node);
+        this.setChildren(node, [bodyNode, parameters.length]);
         return node;
       }
       case "apply": {
-        const node = this.reserveNode(ExpressionTag.Apply, expression.span, 0, parent);
+        const firstArgument = this.argumentWords.length / ARGUMENT_WORD_LENGTH;
+        this.argumentWords.push(NO_INDEX, EvaluationMode.LazyCallByNeed);
+        const node = this.reserveNode(
+          ExpressionTag.Apply,
+          expression.span,
+          firstArgument,
+          parent,
+        );
         const callee = this.emitExpression(expression.callee, node);
-        const argument = this.emitExpression(expression.argument, node);
-        this.setChildren(node, [callee, argument]);
+        this.argumentWords[firstArgument * ARGUMENT_WORD_LENGTH + ArgumentWord.Node] = this
+          .emitExpression(expression.argument, node);
+        this.setChildren(node, [callee, 1]);
         return node;
       }
       case "unary": {
-        const node = this.reserveNode(
-          ExpressionTag.Unary,
+        return this.emitPrim(
+          unaryPrimop(expression.operator),
+          [expression.body],
           expression.span,
-          expression.operator,
           parent,
         );
-        this.setChildren(node, [this.emitExpression(expression.body, node)]);
-        return node;
       }
       case "binary": {
-        const node = this.reserveNode(
-          ExpressionTag.Binary,
+        return this.emitPrim(
+          binaryPrimop(expression.operator),
+          [expression.left, expression.right],
           expression.span,
-          expression.operator,
           parent,
         );
-        const left = this.emitExpression(expression.left, node);
-        const right = this.emitExpression(expression.right, node);
-        this.setChildren(node, [left, right]);
-        return node;
       }
       case "case": {
-        const node = this.reserveNode(ExpressionTag.Case, expression.span, 0, parent);
+        const firstAlternative = this.caseAlternativeWords.length /
+          CASE_ALTERNATIVE_WORD_LENGTH;
+        const node = this.reserveNode(
+          ExpressionTag.Case,
+          expression.span,
+          firstAlternative,
+          parent,
+        );
+        for (const _arm of expression.arms) {
+          for (let word = 0; word < CASE_ALTERNATIVE_WORD_LENGTH; word++) {
+            this.caseAlternativeWords.push(NO_INDEX);
+          }
+        }
         const scrutinee = this.emitExpression(expression.scrutinee, node);
-        const firstArm = this.emitCaseArms(expression.arms, 0, node);
-        this.setChildren(node, [scrutinee, firstArm]);
+        for (const [armIndex, arm] of expression.arms.entries()) {
+          const constructor = this.constructorIndices.get(arm.constructor.spelling) ??
+            (UNKNOWN_CONSTRUCTOR_FLAG | this.symbols.id(arm.constructor.spelling));
+          const firstBinder = this.caseBinderWords.length;
+          for (const binder of arm.binders) {
+            this.caseBinderWords.push(this.symbols.id(binder.spelling));
+          }
+          const body = this.emitExpression(arm.body, node);
+          const alternativeOffset = (firstAlternative + armIndex) *
+            CASE_ALTERNATIVE_WORD_LENGTH;
+          const armSpan = this.byteOffsets.span(arm.span);
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.Constructor] =
+            constructor;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.FirstBinder] =
+            firstBinder;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.BinderCount] =
+            arm.binders.length;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.Body] = body;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.StartByte] =
+            armSpan.startByte;
+          this.caseAlternativeWords[alternativeOffset + CaseAlternativeWord.EndByte] =
+            armSpan.endByte;
+        }
+        this.setChildren(node, [scrutinee, expression.arms.length]);
         return node;
       }
     }
-  }
-
-  private emitCaseArms(arms: readonly CaseArm[], index: number, parent: number): number {
-    const arm = arms[index];
-    if (!arm) return NO_INDEX;
-    const node = this.reserveNode(
-      ExpressionTag.CaseArm,
-      arm.span,
-      this.symbols.id(arm.constructor.spelling),
-      parent,
-    );
-    const body = this.emitPatternBindings(arm.binders, arm.body, node);
-    const nextArm = this.emitCaseArms(arms, index + 1, node);
-    this.setChildren(node, [body, nextArm]);
-    return node;
-  }
-
-  private emitPatternBindings(
-    binders: readonly Identifier[],
-    body: Expression,
-    parent: number,
-  ): number {
-    let bindingParent = parent;
-    let firstBinding = NO_INDEX;
-    for (let index = binders.length - 1; index >= 0; index--) {
-      const binder = binders[index];
-      if (!binder) throw new Error("Pattern binders unexpectedly omitted a binder.");
-      const binding = this.reserveNode(
-        ExpressionTag.PatternBind,
-        binder.span,
-        this.symbols.id(binder.spelling),
-        bindingParent,
-      );
-      if (firstBinding === NO_INDEX) firstBinding = binding;
-      else this.setChildren(bindingParent, [binding]);
-      bindingParent = binding;
-    }
-    const bodyNode = this.emitExpression(body, bindingParent);
-    if (firstBinding === NO_INDEX) return bodyNode;
-    this.setChildren(bindingParent, [bodyNode]);
-    return firstBinding;
   }
 
   private emitName(identifier: Identifier, parent: number): number {
@@ -2621,6 +2657,27 @@ class SurfaceEncoder {
       [],
       parent,
     );
+  }
+
+  private emitPrim(
+    opcode: number,
+    operands: readonly Expression[],
+    span: Utf16Span,
+    parent: number,
+  ): number {
+    const firstOperand = this.argumentWords.length / ARGUMENT_WORD_LENGTH;
+    for (let operand = 0; operand < operands.length; operand++) {
+      this.argumentWords.push(NO_INDEX, EvaluationMode.StrictEager);
+    }
+    const node = this.reserveNode(ExpressionTag.Prim, span, opcode, parent);
+    for (const [operandOffset, operand] of operands.entries()) {
+      const operandNode = this.emitExpression(operand, node);
+      this.argumentWords[
+        (firstOperand + operandOffset) * ARGUMENT_WORD_LENGTH + ArgumentWord.Node
+      ] = operandNode;
+    }
+    this.setChildren(node, [firstOperand, operands.length, NO_INDEX]);
+    return node;
   }
 
   private emitNode(

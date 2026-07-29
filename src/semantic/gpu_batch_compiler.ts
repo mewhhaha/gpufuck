@@ -718,6 +718,10 @@ function createBatchInferenceState(lane: BatchLane): Uint8Array {
     InferenceStateWord.IndexedMetadataFooterBase,
     lane.metadata.indexedMetadataFooterBase,
   );
+  relocate(InferenceStateWord.ParameterBase, lane.metadata.parameterBase);
+  relocate(InferenceStateWord.ArgumentBase, lane.metadata.argumentBase);
+  relocate(InferenceStateWord.CaseAlternativeBase, lane.metadata.caseAlternativeBase);
+  relocate(InferenceStateWord.CaseBinderBase, lane.metadata.caseBinderBase);
   return state;
 }
 

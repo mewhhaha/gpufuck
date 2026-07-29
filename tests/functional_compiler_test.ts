@@ -3,6 +3,8 @@ import { deepStrictEqual, equal, match, ok, rejects, throws } from "node:assert/
 import {
   BinaryOperator,
   buildSurfaceModule,
+  CASE_ALTERNATIVE_WORD_LENGTH,
+  CaseAlternativeWord,
   CORE_V1_PRIMITIVE_CAPABILITIES,
   CoreTag,
   createModuleArtifact,
@@ -51,6 +53,42 @@ Deno.test.beforeAll(async () => {
 Deno.test.afterAll(() => {
   runtime?.device.destroy();
   runtime = undefined;
+});
+
+Deno.test("nested case scrutinees keep contiguous alternative metadata", () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.case(
+        surface.case(surface.name("A"), [{
+          constructor: "A",
+          binders: [],
+          body: surface.name("B"),
+        }]),
+        [{ constructor: "B", binders: [], body: surface.integer(42) }],
+      ),
+    }],
+    [{
+      name: "Choice",
+      parameters: [],
+      constructors: [
+        { name: "A", fields: [] },
+        { name: "B", fields: [] },
+      ],
+    }],
+    "main",
+    0,
+  );
+
+  equal(module.caseAlternativeCount, 2);
+  for (let alternative = 0; alternative < module.caseAlternativeCount; alternative++) {
+    const constructor = module.caseAlternativeWords[
+      alternative * CASE_ALTERNATIVE_WORD_LENGTH + CaseAlternativeWord.Constructor
+    ];
+    ok(constructor !== NO_INDEX);
+  }
 });
 
 Deno.test("surface type schemas reject structural cycles before encoding", () => {
@@ -821,7 +859,8 @@ Deno.test("surface encoding handles wide parameter lists without host recursion"
     0,
   );
 
-  equal(module.nodeCount, parameterCount + 1);
+  equal(module.nodeCount, 2);
+  equal(module.parameterWords.length, parameterCount);
 });
 
 Deno.test("surface encoding handles wide case lists without host recursion", () => {
@@ -841,12 +880,20 @@ Deno.test("surface encoding handles wide case lists without host recursion", () 
         })),
       },
     }],
-    [],
+    [{
+      name: "Many",
+      parameters: [],
+      constructors: Array.from({ length: armCount }, (_, index) => ({
+        name: `Constructor${index}`,
+        fields: [],
+      })),
+    }],
     "main",
     0,
   );
 
-  equal(module.nodeCount, 2 + armCount * 2);
+  equal(module.nodeCount, 2 + armCount);
+  equal(module.caseAlternativeCount, armCount);
 });
 
 Deno.test("surface validation bounds application chains created by recursive-group lifting", () => {
@@ -933,10 +980,16 @@ function integerModule(value: number, entryName = "entry"): EncodedModule {
       NO_INDEX,
       NO_INDEX,
     ),
+    parameterWords: new Uint32Array(),
+    argumentWords: new Uint32Array(),
+    caseAlternativeWords: new Uint32Array(),
+    caseBinderWords: new Uint32Array(),
     definitionWords: Uint32Array.of(0, 0, 0, 2),
     typeWords: new Uint32Array(),
     constructorWords: new Uint32Array(),
     nodeCount: 1,
+    argumentCount: 0,
+    caseAlternativeCount: 0,
     definitionCount: 1,
     typeCount: 0,
     constructorCount: 0,
@@ -1301,7 +1354,7 @@ Deno.test("rejects unsupported functional module envelopes before GPU work", asy
 
   await rejects(
     () => compiler.compileModule({ ...valid, abiVersion: MODULE_ABI_VERSION + 1 }),
-    /ABI version 7 is unsupported; expected 6/,
+    /ABI version 8 is unsupported; expected 7/,
   );
   await rejects(
     () =>

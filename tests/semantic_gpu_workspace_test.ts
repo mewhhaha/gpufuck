@@ -143,16 +143,16 @@ function typeNodeCount(type: Type): number {
   return count;
 }
 
-Deno.test("GPU inference keeps its ABI-v6 state prefix ahead of the scheduler envelope", () => {
-  equal(INFERENCE_STATE_WORD_LENGTH, 73);
-  equal(InferenceSchedulerWord.PreviousSemanticSteps, 73);
-  equal(InferenceSchedulerWord.SemanticState, 74);
+Deno.test("GPU inference keeps its ABI-v7 state prefix ahead of the scheduler envelope", () => {
+  equal(INFERENCE_STATE_WORD_LENGTH, 81);
+  equal(InferenceSchedulerWord.PreviousSemanticSteps, 81);
+  equal(InferenceSchedulerWord.SemanticState, 82);
   // The profile histogram goes last precisely so it cannot shift the scheduler envelope above it;
   // both kernel variants carry it, so there is one state stride rather than two.
-  equal(InferenceSchedulerWord.Profile, 98);
+  equal(InferenceSchedulerWord.Profile, 106);
   equal(INFERENCE_PROFILE_BUCKET_COUNT, 38);
   equal(INFERENCE_PROFILE_BUCKET_NAMES.length, INFERENCE_PROFILE_BUCKET_COUNT);
-  equal(INFERENCE_INTERNAL_STATE_WORD_LENGTH, 136);
+  equal(INFERENCE_INTERNAL_STATE_WORD_LENGTH, 144);
 });
 
 Deno.test("semantic symbol lookup scales linearly and preserves its exact fuel boundary", async () => {
@@ -471,7 +471,10 @@ Deno.test("pathological type and case shapes stay within proportional compiler w
 
     const narrowRepeatedType = await compile(repeatedTupleParameter(64));
     const wideRepeatedType = await compile(repeatedTupleParameter(128));
-    ok(wideRepeatedType.inferenceTransitions <= narrowRepeatedType.inferenceTransitions * 2.2);
+    ok(
+      wideRepeatedType.inferenceTransitions <= narrowRepeatedType.inferenceTransitions * 2.2,
+      `wide repeated type used ${wideRepeatedType.inferenceTransitions} transitions; narrow used ${narrowRepeatedType.inferenceTransitions}`,
+    );
 
     const fewWideUses = await compile(repeatedWideScheme(32));
     const manyWideUses = await compile(repeatedWideScheme(64));

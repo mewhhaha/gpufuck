@@ -121,6 +121,8 @@ export class WasmUniqueReuseAnalysis {
         : EMPTY_CONSUMPTION;
     }
     switch (node.tag) {
+      case CoreTag.Prim:
+        throw new Error("WebAssembly unique-reuse analysis received an unlowered primop");
       case CoreTag.Integer:
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:

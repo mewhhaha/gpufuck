@@ -1,9 +1,63 @@
-# Primitive simplification research
+# Primitive simplification and ABI 7 implementation
 
 Date: 2026-07-29. Gpufuck baseline: `86e112b`, package 0.6.0, Functional ABI 6. Duck baseline:
 `d302fa5`. Blot baseline: `aacf778`.
 
-## Decision
+## Implementation outcome
+
+The accepted structural design and the generated primop design are implemented together on
+`research/primitive-abi7-production` as Functional ABI 7. The package version remains 0.6.0, and
+there is no ABI-6 compatibility decoder.
+
+- `Lambda(firstParameter, parameterCount, body)` and `Apply(callee, firstArgument, argumentCount)`
+  use trailing parameter and argument tables. Empty lists are genuine zero-arity functions and
+  calls.
+- `Case(scrutinee, firstAlternative, alternativeCount)` uses packed alternative and binder tables.
+  `CaseArm` and `PatternBind` are not emitted as Core expressions. Linear Wasm and WasmGC expand
+  them only into a private backend representation.
+- `Prim(opcode, firstOperand, operandCount, auxiliaryType)` replaces emitted unary, binary,
+  conversion, buffer, and persistent-Store operation nodes. One declaration table owns opcode,
+  arity, type rule, fault class, effects, and backend availability and generates the WGSL lookup.
+- Lazuli remains a unary source language and emits one-element parameter and argument lists.
+  Grouping its curried constructor spines caused 43,399 transitions for the 128-level repeated-tuple
+  stress case versus 13,575 for 64 levels, breaching the proportional-work guardrail. Keeping those
+  calls unary restores the existing bound while retaining the list ABI. Gleam, Sweep, JavaScript,
+  and the public Functional Surface emit their natural exact arities.
+
+The integrated gpufuck suite passes 376 tests, including GPU evaluation, packed compilation,
+linear-memory Wasm, WasmGC, rank-3 and indexed inference, lazy sharing and blackholes, genuine
+zero-arity calls, polymorphic Store values, effects, and malformed-input rejection.
+
+The final suite includes the nested-scrutinee metadata regression found by Blot. The benchmark
+counters compare as follows:
+
+| Workload                          |              ABI 6 |              ABI 7 |    Change |
+| --------------------------------- | -----------------: | -----------------: | --------: |
+| Four-arm or-pattern               |          213 nodes |          159 nodes |    -25.4% |
+| Generated Gleam module            |        1,174 nodes |        1,036 nodes |    -11.8% |
+| Generated Gleam inference         | 17,939 transitions | 17,328 transitions |     -3.4% |
+| Generated Gleam semantic lowering |        4,835 steps |        2,214 steps |    -54.2% |
+| 64-module batch                   |       75,136 nodes |       66,304 nodes |    -11.8% |
+| 256-module batch                  |      300,544 nodes |      265,216 nodes |    -11.8% |
+| Linked 51-module project          |       60,031 nodes |       52,993 nodes |    -11.7% |
+| Generated Gleam Wasm              |       40,005 bytes |       40,005 bytes | unchanged |
+
+Same-machine timing runs were noisy: ABI 7 was faster for the 64- and 256-module batches, while the
+single module and linked project were slower by more than 5% in the sampled medians. The benchmark
+task deliberately treats timings as advisory, so the branch remains an unmerged implementation
+candidate rather than evidence for a production merge. A controlled interleaved timing run is still
+required before accepting the compiler-time guardrail.
+
+Blot passes 143 tests and its complete `just wasm` corpus; the interpreter, GPU evaluator, and
+emitted Wasm agree, including polymorphic collections and effects. Its existing formatter gate
+reports five unrelated unformatted files. Duck's isolated synthesis worktree has the ABI-7 lambda
+adapter and passes its first 35 compiler tests; the larger Codex-derived cases retain the synthesis
+baseline's existing failures, so Duck is not represented as fully green.
+
+## Research checkpoint decision
+
+The checkpoint decision below predates the executable implementation and is retained as the evidence
+that led to ABI 7.
 
 Keep ABI 6 and the production Core unchanged at this checkpoint.
 

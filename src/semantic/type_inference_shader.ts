@@ -1,6 +1,8 @@
 import {
   AlgebraicTypeWord,
+  ARGUMENT_WORD_LENGTH,
   BinaryOperator,
+  CASE_ALTERNATIVE_WORD_LENGTH,
   CONSTRUCTOR_WORD_LENGTH,
   ConstructorWord,
   CoreTag,
@@ -21,6 +23,7 @@ import {
   TypeSchemaMetadataWord,
   TypeSchemaWord,
 } from "./type_schema_abi.ts";
+import { PrimopFamily, primopWgslLookup } from "./primops.ts";
 
 /** Canonical linked-preorder source-type node supplied in binding 4. */
 export const INFERENCE_SCHEMA_WORD_LENGTH = TYPE_SCHEMA_WORD_LENGTH;
@@ -225,7 +228,7 @@ export const InferenceMetadataFailure = {
  * - F2104: `ErrorDetail` is the main symbol and `ErrorOperand0` is its inferred
  *   type root, or `NO_INDEX` when main has no definition.
  */
-export const INFERENCE_STATE_WORD_LENGTH = 73;
+export const INFERENCE_STATE_WORD_LENGTH = 81;
 export const INFERENCE_SCHEDULER_WORD_LENGTH = 1 +
   COMPILATION_STATE_WORD_LENGTH;
 
@@ -366,6 +369,14 @@ export const InferenceStateWord = {
   IndexedEliminationRestrictionKind: 70,
   IndexedEliminationRestrictionSymbol: 71,
   IndexedMetadataFooterBase: 72,
+  ParameterBase: 73,
+  ParameterCount: 74,
+  ArgumentBase: 75,
+  ArgumentCount: 76,
+  CaseAlternativeBase: 77,
+  CaseAlternativeCount: 78,
+  CaseBinderBase: 79,
+  CaseBinderCount: 80,
 } as const;
 
 export interface InferenceShaderMetadata {
@@ -385,6 +396,14 @@ export interface InferenceShaderMetadata {
   readonly constructorFieldOffsetsBase: number;
   readonly constructorResultBase: number;
   readonly indexedMetadataFooterBase: number;
+  readonly parameterBase: number;
+  readonly parameterCount: number;
+  readonly argumentBase: number;
+  readonly argumentCount: number;
+  readonly caseAlternativeBase: number;
+  readonly caseAlternativeCount: number;
+  readonly caseBinderBase: number;
+  readonly caseBinderCount: number;
 }
 
 const INDEXED_METADATA_MAGIC = 0x4c5a4958;
@@ -761,8 +780,18 @@ export function prepareInferenceShaderMetadata(
   }
   const offset = (word: number): number => header[word] ?? 0;
   const indexed = prepareIndexedInferenceMetadata(surface, flattened);
+  const parameterBase = indexed.words.length;
+  const argumentBase = parameterBase + surface.parameterWords.length;
+  const caseAlternativeBase = argumentBase + surface.argumentWords.length;
+  const caseBinderBase = caseAlternativeBase + surface.caseAlternativeWords.length;
+  const words = new Uint32Array(caseBinderBase + surface.caseBinderWords.length);
+  words.set(indexed.words);
+  words.set(surface.parameterWords, parameterBase);
+  words.set(surface.argumentWords, argumentBase);
+  words.set(surface.caseAlternativeWords, caseAlternativeBase);
+  words.set(surface.caseBinderWords, caseBinderBase);
   return Object.freeze({
-    words: indexed.words,
+    words,
     identifierNames: flattened.identifierNames,
     parameterNames,
     schemaNodeCount: schemaCount,
@@ -780,12 +809,20 @@ export function prepareInferenceShaderMetadata(
     ),
     constructorResultBase: offset(TypeSchemaMetadataWord.ConstructorResultRootsOffset),
     indexedMetadataFooterBase: indexed.footerBase,
+    parameterBase,
+    parameterCount: surface.parameterWords.length,
+    argumentBase,
+    argumentCount: surface.argumentCount,
+    caseAlternativeBase,
+    caseAlternativeCount: surface.caseAlternativeCount,
+    caseBinderBase,
+    caseBinderCount: surface.caseBinderWords.length,
   });
 }
 
 /**
  * Persistent, bounded Hindley-Milner and predicative rank-N inference for resolved core
- * nodes and flattened ABI-v6 type metadata. The eight bindings stay within WebGPU's portable
+ * nodes and flattened ABI-v7 type metadata. The eight bindings stay within WebGPU's portable
  * per-stage storage-buffer minimum. A dispatch performs at most
  * `maximum_transitions_per_dispatch` state-machine transitions; all durable
  * cursors, Tarjan stacks, expression frames, and arenas live in GPU buffers.
@@ -967,6 +1004,14 @@ struct InferenceState {
   indexed_elimination_restriction_kind: u32,
   indexed_elimination_restriction_symbol: u32,
   indexed_metadata_footer_base: u32,
+  parameter_base: u32,
+  parameter_count: u32,
+  argument_base: u32,
+  argument_count: u32,
+  case_alternative_base: u32,
+  case_alternative_count: u32,
+  case_binder_base: u32,
+  case_binder_count: u32,
   previous_semantic_steps: u32,
   semantic: SemanticCompilationState,
   profile: array<u32, ${INFERENCE_PROFILE_BUCKET_COUNT}>,
@@ -1027,6 +1072,56 @@ fn algebraic_type_record(index: u32) -> AlgebraicType {
 
 fn constructor_record(index: u32) -> Constructor {
   return constructors[state.semantic.tertiary_cursor + index];
+}
+
+fn argument_node(index: u32) -> u32 {
+  return schema_words[state.argument_base + index * ${ARGUMENT_WORD_LENGTH}u];
+}
+
+fn expression_operand(node: CoreNode, operand: u32) -> u32 {
+  if node.tag == TAG_PRIM {
+    return argument_node(node.child0 + operand);
+  }
+  if operand == 0u { return node.child0; }
+  if operand == 1u { return node.child1; }
+  return node.child2;
+}
+
+fn expression_operation(node: CoreNode) -> u32 {
+  return select(node.payload, primop_lookup(node.payload).y, node.tag == TAG_PRIM);
+}
+
+fn expression_family(node: CoreNode) -> u32 {
+  return select(0u, primop_lookup(node.payload).x, node.tag == TAG_PRIM);
+}
+
+fn expression_auxiliary_type(node: CoreNode) -> u32 {
+  return select(node.child2, node.child1, node.tag == TAG_UNARY);
+}
+
+fn alternative_word(index: u32, word: u32) -> u32 {
+  return schema_words[
+    state.case_alternative_base + index * ${CASE_ALTERNATIVE_WORD_LENGTH}u + word];
+}
+
+fn alternative_constructor(index: u32) -> u32 {
+  return alternative_word(index, 0u);
+}
+
+fn alternative_binder_count(index: u32) -> u32 {
+  return alternative_word(index, 2u);
+}
+
+fn alternative_body(index: u32) -> u32 {
+  return alternative_word(index, 3u);
+}
+
+fn alternative_start_byte(index: u32) -> u32 {
+  return alternative_word(index, 4u);
+}
+
+fn alternative_end_byte(index: u32) -> u32 {
+  return alternative_word(index, 5u);
 }
 
 fn output_address(index: u32) -> u32 {
@@ -1196,6 +1291,20 @@ const TAG_STORE_READ: u32 = ${CoreTag.StoreRead}u;
 const TAG_STORE_WRITE: u32 = ${CoreTag.StoreWrite}u;
 const TAG_STORE_GROW: u32 = ${CoreTag.StoreGrow}u;
 const TAG_STORE_EMPTY: u32 = ${CoreTag.StoreEmpty}u;
+const TAG_PRIM: u32 = ${CoreTag.Prim}u;
+
+${primopWgslLookup("primop_lookup")}
+
+const PRIM_UNARY: u32 = ${PrimopFamily.Unary}u;
+const PRIM_BINARY: u32 = ${PrimopFamily.Binary}u;
+const PRIM_NUMERIC_CONVERSION: u32 = ${PrimopFamily.NumericConversion}u;
+const PRIM_BUFFER_APPEND: u32 = ${PrimopFamily.BufferAppend}u;
+const PRIM_STORE_EMPTY: u32 = ${PrimopFamily.StoreEmpty}u;
+const PRIM_STORE_NEW: u32 = ${PrimopFamily.StoreNew}u;
+const PRIM_STORE_LENGTH: u32 = ${PrimopFamily.StoreLength}u;
+const PRIM_STORE_READ: u32 = ${PrimopFamily.StoreRead}u;
+const PRIM_STORE_WRITE: u32 = ${PrimopFamily.StoreWrite}u;
+const PRIM_STORE_GROW: u32 = ${PrimopFamily.StoreGrow}u;
 
 const OUTPUT_INTEGER: u32 = 1u;
 const OUTPUT_BOOLEAN: u32 = 2u;
@@ -3191,32 +3300,24 @@ fn push_expression(node: u32, environment: u32) -> bool {
   return true;
 }
 
-fn start_case_bind(arm_index: u32, constructor_index: u32, environment: u32) -> bool {
+fn start_case_bind(alternative: u32, constructor_index: u32, environment: u32) -> bool {
   let frame = push_work_frame(FRAME_CASE_BIND);
   if frame == NO_INDEX { return false; }
-  frame_set(frame, 0u, arm_index); frame_set(frame, 1u, 0u);
+  frame_set(frame, 0u, alternative); frame_set(frame, 1u, 0u);
   frame_set(frame, 2u, constructor_index); frame_set(frame, 3u, environment);
-  frame_set(frame, 4u, core_node(arm_index).child0); frame_set(frame, 5u, 0u);
+  frame_set(frame, 4u, alternative_body(alternative));
+  frame_set(frame, 5u, alternative_binder_count(alternative));
   return true;
 }
 
 fn case_bind_transition(frame: u32) {
   if frame_get(frame, 1u) == 0u {
-    let body = frame_get(frame, 4u);
-    if core_node(body).tag == TAG_PATTERN_BIND {
-      let count = frame_get(frame, 5u);
-      if count >= MAXIMUM_CONSTRUCTOR_ARITY {
-        invalid_input(ERROR_INVALID_SURFACE, frame_get(frame, 0u)); return;
-      }
-      frame_set(frame, 4u, core_node(body).child0);
-      frame_set(frame, 5u, count + 1u);
-      return;
-    }
     let field_count = constructor_metadata(frame_get(frame, 2u), 1u);
     if frame_get(frame, 5u) != field_count {
-      let arm = core_node(frame_get(frame, 0u));
       report_metadata_diagnostic(
-        METADATA_CASE_FIELD_COUNT_MISMATCH, arm.start_byte, arm.end_byte,
+        METADATA_CASE_FIELD_COUNT_MISMATCH,
+        alternative_start_byte(frame_get(frame, 0u)),
+        alternative_end_byte(frame_get(frame, 0u)),
         constructor_record(frame_get(frame, 2u)).symbol, field_count, frame_get(frame, 5u));
       return;
     }
@@ -3237,12 +3338,14 @@ fn case_bind_transition(frame: u32) {
   frame_set(frame, 5u, next_field);
 }
 
-fn start_case_coverage(type_index: u32, first_arm: u32) -> bool {
+fn start_case_coverage(type_index: u32, first_alternative: u32, alternative_count: u32) -> bool {
   let frame = push_work_frame(FRAME_CASE_COVERAGE);
   if frame == NO_INDEX { return false; }
   frame_set(frame, 0u, type_index); frame_set(frame, 1u, 0u);
-  frame_set(frame, 2u, first_arm); frame_set(frame, 3u, first_arm);
+  frame_set(frame, 2u, first_alternative);
+  frame_set(frame, 3u, first_alternative);
   frame_set(frame, 4u, 0u);
+  frame_set(frame, 5u, first_alternative + alternative_count);
   return true;
 }
 
@@ -3262,18 +3365,18 @@ fn case_coverage_transition(frame: u32) {
     return;
   }
   if stage == 1u {
-    let arm = frame_get(frame, 3u);
-    if arm == NO_INDEX {
+    let alternative = frame_get(frame, 3u);
+    if alternative >= frame_get(frame, 5u) {
       frame_set(frame, 1u, 0u);
       frame_set(frame, 4u, 2u);
       return;
     }
-    let constructor_index = core_node(arm).payload;
+    let constructor_index = alternative_constructor(alternative);
     if constructor_index >= declared.first_constructor &&
       constructor_index - declared.first_constructor < declared.constructor_count {
       workspace[temporary_base() + constructor_index - declared.first_constructor] = 1u;
     }
-    frame_set(frame, 3u, core_node(arm).child1);
+    frame_set(frame, 3u, alternative + 1u);
     return;
   }
   if cursor >= declared.constructor_count {
@@ -3449,11 +3552,17 @@ fn expression_transition() {
       complete_expression(fresh_variable());
       return;
     }
-    if node.tag == TAG_STORE_EMPTY {
+    if node.tag == TAG_STORE_EMPTY ||
+      (node.tag == TAG_PRIM && expression_family(node) == PRIM_STORE_EMPTY) {
       if !require_type_slots(3u) { return; }
       let element = fresh_variable();
       let arguments = allocate_type(TYPE_LIST, element, NO_INDEX, NO_INDEX);
-      complete_expression(allocate_type(TYPE_NAMED, node.payload, arguments, NO_INDEX));
+      complete_expression(allocate_type(
+        TYPE_NAMED,
+        select(node.payload, expression_auxiliary_type(node), node.tag == TAG_PRIM),
+        arguments,
+        NO_INDEX,
+      ));
       return;
     }
     if node.tag == TAG_LOCAL {
@@ -3561,99 +3670,143 @@ fn expression_transition() {
       return;
     }
     if node.tag == TAG_LAMBDA {
+      let parameter_count = max(node.child1, 1u);
+      if !require_type_slots(parameter_count * 2u + 1u) ||
+        !require_environment_slots(parameter_count) ||
+        !require_frame_slots(1u) { return; }
+      let result = fresh_variable();
+      var function_type = result;
+      for (var remaining = parameter_count; remaining > 0u; remaining -= 1u) {
+        let parameter = select(fresh_variable(), 2u, node.child1 == 0u);
+        function_type = allocate_type(TYPE_FUNCTION, NO_INDEX, parameter, function_type);
+      }
+      var body_environment = environment;
+      var cursor_type = function_type;
+      for (var parameter = 0u; parameter < parameter_count; parameter += 1u) {
+        body_environment = allocate_environment(type_get(cursor_type, 2u), body_environment);
+        cursor_type = type_get(cursor_type, 3u);
+      }
+      frame_set(frame, 3u, function_type);
+      frame_set(frame, 4u, result);
+      frame_set(frame, 5u, body_environment);
       let expected = frame_get(frame, 11u);
       if expected != NO_INDEX {
-        if start_prune(expected) { frame_set(frame, 1u, 31u); }
+        if start_unify(expected, function_type, node.start_byte, node.end_byte) {
+          frame_set(frame, 1u, 31u);
+        }
         return;
       }
-      if !require_type_slots(1u) || !require_environment_slots(1u) ||
-        !require_frame_slots(1u) { return; }
-      let parameter = fresh_variable();
-      if state.status != STATUS_PENDING { return; }
-      let body_environment = allocate_environment(parameter, environment);
-      if state.status != STATUS_PENDING { return; }
-      frame_set(frame, 3u, parameter);
-      frame_set(frame, 6u, NO_INDEX);
       frame_set(frame, 1u, 30u);
-      push_expression(node.child0, body_environment);
+      if push_expression(node.child0, body_environment) {
+        frame_set(state.frame_top - 1u, 11u, result);
+      }
       return;
     }
     if node.tag == TAG_APPLY {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 40u);
       frame_set(frame, 5u, state.type_top);
+      frame_set(frame, 9u, 0u);
       push_expression(node.child0, environment);
       return;
     }
-    if node.tag == TAG_UNARY {
-      let whole_number = node.payload == ${UnaryOperator.NegateWholeNumberF64}u;
+    if node.tag == TAG_UNARY ||
+      (node.tag == TAG_PRIM && expression_family(node) == PRIM_UNARY) {
+      let operation = expression_operation(node);
+      let whole_number = operation == ${UnaryOperator.NegateWholeNumberF64}u;
       if !require_frame_slots(1u) || (whole_number && !require_type_slots(1u)) { return; }
       frame_set(frame, 1u, 50u);
-      var operand_type = numeric_type_index_for_unary(node.payload);
+      var operand_type = numeric_type_index_for_unary(operation);
       if whole_number {
-        operand_type = allocate_type(TYPE_NAMED, node.child1, NO_INDEX, NO_INDEX);
+        operand_type = allocate_type(
+          TYPE_NAMED,
+          expression_auxiliary_type(node),
+          NO_INDEX,
+          NO_INDEX,
+        );
       }
       frame_set(frame, 3u, operand_type);
-      if push_expression(node.child0, environment) {
+      if push_expression(expression_operand(node, 0u), environment) {
         frame_set(state.frame_top - 1u, 11u, operand_type);
       }
       return;
     }
-    if node.tag == TAG_BINARY {
-      let structural = operator_is_structural_equality(node.payload);
-      let whole_number = node.payload >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
-        node.payload <= BINARY_REMAINDER_WHOLE_NUMBER_F64;
+    if node.tag == TAG_BINARY ||
+      (node.tag == TAG_PRIM && expression_family(node) == PRIM_BINARY) {
+      let operation = expression_operation(node);
+      let structural = operator_is_structural_equality(operation);
+      let whole_number = operation >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
+        operation <= BINARY_REMAINDER_WHOLE_NUMBER_F64;
       if !require_frame_slots(1u) || ((structural || whole_number) && !require_type_slots(1u)) {
         return;
       }
-      var operand_type = numeric_type_index_for_operator(node.payload);
+      var operand_type = numeric_type_index_for_operator(operation);
       if structural { operand_type = fresh_variable(); }
       if whole_number {
-        operand_type = allocate_type(TYPE_NAMED, node.child2, NO_INDEX, NO_INDEX);
+        operand_type = allocate_type(
+          TYPE_NAMED,
+          expression_auxiliary_type(node),
+          NO_INDEX,
+          NO_INDEX,
+        );
       }
       if state.status != STATUS_PENDING { return; }
       frame_set(frame, 3u, operand_type);
       frame_set(frame, 1u, 60u);
-      if push_expression(node.child0, environment) {
+      if push_expression(expression_operand(node, 0u), environment) {
         frame_set(state.frame_top - 1u, 11u, operand_type);
       }
       return;
     }
-    if node.tag == TAG_BUFFER_APPEND {
+    if node.tag == TAG_BUFFER_APPEND ||
+      (node.tag == TAG_PRIM && expression_family(node) == PRIM_BUFFER_APPEND) {
       if !require_frame_slots(1u) || !require_type_slots(1u) { return; }
-      let operand_type = allocate_type(TYPE_NAMED, node.child2, NO_INDEX, NO_INDEX);
+      let operand_type = allocate_type(
+        TYPE_NAMED,
+        expression_auxiliary_type(node),
+        NO_INDEX,
+        NO_INDEX,
+      );
       frame_set(frame, 3u, operand_type);
       frame_set(frame, 1u, 60u);
-      if push_expression(node.child0, environment) {
+      if push_expression(expression_operand(node, 0u), environment) {
         frame_set(state.frame_top - 1u, 11u, operand_type);
       }
       return;
     }
-    if node.tag == TAG_STORE_NEW {
+    if node.tag == TAG_STORE_NEW ||
+      (node.tag == TAG_PRIM && expression_family(node) == PRIM_STORE_NEW) {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 130u);
-      if push_expression(node.child0, environment) {
+      if push_expression(expression_operand(node, 0u), environment) {
         frame_set(state.frame_top - 1u, 11u, 0u);
       }
       return;
     }
     if node.tag == TAG_STORE_LENGTH || node.tag == TAG_STORE_READ ||
-      node.tag == TAG_STORE_WRITE || node.tag == TAG_STORE_GROW {
+      node.tag == TAG_STORE_WRITE || node.tag == TAG_STORE_GROW ||
+      (node.tag == TAG_PRIM && expression_family(node) >= PRIM_STORE_LENGTH &&
+        expression_family(node) <= PRIM_STORE_GROW) {
       frame_set(frame, 1u, 140u);
       return;
     }
-    if node.tag == TAG_NUMERIC_CONVERT {
+    if node.tag == TAG_NUMERIC_CONVERT ||
+      (node.tag == TAG_PRIM && expression_family(node) == PRIM_NUMERIC_CONVERSION) {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 64u);
-      if push_expression(node.child0, environment) {
-        frame_set(state.frame_top - 1u, 11u, numeric_conversion_source(node.payload));
+      if push_expression(expression_operand(node, 0u), environment) {
+        frame_set(
+          state.frame_top - 1u,
+          11u,
+          numeric_conversion_source(expression_operation(node)),
+        );
       }
       return;
     }
     if node.tag == TAG_CASE {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 70u);
-      frame_set(frame, 8u, node.child1);
+      frame_set(frame, 8u, node.payload);
       push_expression(node.child0, environment);
       return;
     }
@@ -3789,98 +3942,53 @@ fn expression_transition() {
   }
 
   if stage == 30u {
-    if frame_get(frame, 6u) != NO_INDEX {
-      if start_unify(
-        type_get(frame_get(frame, 6u), 3u), state.returned_type,
-        node.start_byte, node.end_byte) {
-        frame_set(frame, 1u, 35u);
-      }
-      return;
+    if start_unify(frame_get(frame, 4u), state.returned_type, node.start_byte, node.end_byte) {
+      frame_set(frame, 1u, 35u);
     }
-    if !require_type_slots(1u) { return; }
-    let function_type = allocate_type(TYPE_FUNCTION, NO_INDEX, frame_get(frame, 3u), state.returned_type);
-    if state.status == STATUS_PENDING { complete_expression(function_type); }
     return;
   }
-  if stage == 35u { complete_expression(frame_get(frame, 6u)); return; }
+  if stage == 35u { complete_expression(frame_get(frame, 3u)); return; }
   if stage == 31u {
-    let expected = state.returned_type;
-    let expected_is_function = type_get(expected, 0u) == TYPE_FUNCTION;
-    if type_get(expected, 0u) == TYPE_VARIABLE {
-      if !require_type_slots(1u) { return; }
-      frame_set(frame, 4u, expected);
-      frame_set(frame, 3u, fresh_variable());
-      frame_set(frame, 1u, 32u);
-      return;
-    }
-    let required_types = select(1u, 0u, expected_is_function);
-    if !require_type_slots(required_types) || !require_environment_slots(1u) ||
-      !require_frame_slots(1u) { return; }
-    var parameter = NO_INDEX;
-    var expected_body = NO_INDEX;
-    if expected_is_function {
-      parameter = type_get(expected, 2u);
-      expected_body = type_get(expected, 3u);
-      frame_set(frame, 6u, expected);
-    } else {
-      parameter = fresh_variable();
-      if state.status != STATUS_PENDING { return; }
-      frame_set(frame, 6u, NO_INDEX);
-    }
-    let body_environment = allocate_environment(parameter, environment);
-    if state.status != STATUS_PENDING { return; }
-    if !push_expression(node.child0, body_environment) { return; }
-    frame_set(frame, 3u, parameter);
     frame_set(frame, 1u, 30u);
-    frame_set(state.frame_top - 1u, 11u, expected_body);
-    return;
-  }
-  if stage == 32u {
-    if !require_type_slots(1u) { return; }
-    frame_set(frame, 5u, fresh_variable());
-    frame_set(frame, 1u, 33u);
-    return;
-  }
-  if stage == 33u {
-    if !require_type_slots(1u) { return; }
-    let function_type = allocate_type(
-      TYPE_FUNCTION, NO_INDEX, frame_get(frame, 3u), frame_get(frame, 5u));
-    frame_set(frame, 6u, function_type);
-    if start_unify(frame_get(frame, 4u), function_type, node.start_byte, node.end_byte) {
-      frame_set(frame, 1u, 34u);
-    }
-    return;
-  }
-  if stage == 34u {
-    if !require_environment_slots(1u) || !require_frame_slots(1u) { return; }
-    let body_environment = allocate_environment(frame_get(frame, 3u), environment);
-    if state.status != STATUS_PENDING { return; }
-    frame_set(frame, 1u, 30u);
-    if push_expression(node.child0, body_environment) {
-      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 5u));
+    if push_expression(node.child0, frame_get(frame, 5u)) {
+      frame_set(state.frame_top - 1u, 11u, frame_get(frame, 4u));
     }
     return;
   }
 
   if stage == 40u {
-    if !require_frame_slots(1u) { return; }
+    if !require_frame_slots(1u) || !require_type_slots(2u) { return; }
     frame_set(frame, 3u, state.returned_type);
+    if node.child1 == 0u {
+      let result = select(fresh_variable(), frame_get(frame, 11u), frame_get(frame, 11u) != NO_INDEX);
+      frame_set(frame, 4u, result);
+      let function_type = allocate_type(TYPE_FUNCTION, NO_INDEX, 2u, result);
+      if start_application_unify(
+        state.returned_type, function_type, result,
+        frame_get(frame, 5u), state.type_top,
+        node.start_byte, node.end_byte) {
+        frame_set(frame, 1u, 49u);
+      }
+      return;
+    }
     frame_set(frame, 7u, state.type_top);
     frame_set(frame, 1u, 41u);
-    push_expression(node.child1, environment);
+    push_expression(argument_node(node.payload), environment);
     return;
   }
   if stage == 41u {
     frame_set(frame, 8u, state.returned_type);
     let callee_node = core_node(node.child0);
-    if frame_get(frame, 11u) == NO_INDEX && callee_node.tag == TAG_GLOBAL {
+    let final_argument = frame_get(frame, 9u) + 1u == node.child1;
+    if final_argument && frame_get(frame, 11u) == NO_INDEX &&
+      callee_node.tag == TAG_GLOBAL {
       let cached_result = cached_application_result(callee_node.payload, state.returned_type);
       if cached_result != NO_INDEX {
         complete_expression(cached_result);
         return;
       }
     }
-    if frame_get(frame, 11u) != NO_INDEX {
+    if final_argument && frame_get(frame, 11u) != NO_INDEX {
       frame_set(frame, 4u, frame_get(frame, 11u));
     } else {
       if !require_type_slots(1u) { return; }
@@ -3928,7 +4036,8 @@ fn expression_transition() {
       frame_set(frame, 1u, 42u);
       return;
     }
-    let argument = core_node(node.child1);
+    let argument_index = argument_node(node.payload + frame_get(frame, 9u));
+    let argument = core_node(argument_index);
     if argument.tag == TAG_GLOBAL {
       let scheme = scratch_get(0u, argument.payload);
       if scheme == NO_INDEX { invalid_input(ERROR_INVALID_SURFACE, node.child1); return; }
@@ -3938,7 +4047,7 @@ fn expression_transition() {
       return;
     }
     if argument.tag == TAG_LOCAL {
-      if start_local_scheme_lookup(argument.payload, environment, node.child1) {
+      if start_local_scheme_lookup(argument.payload, environment, argument_index) {
         frame_set(frame, 1u, 45u);
       }
       return;
@@ -3950,7 +4059,7 @@ fn expression_transition() {
     return;
   }
   if stage == 45u {
-    let argument = core_node(node.child1);
+    let argument = core_node(argument_node(node.payload + frame_get(frame, 9u)));
     if start_subsume(
       state.returned_type, frame_get(frame, 6u), argument.start_byte, argument.end_byte) {
       frame_set(frame, 1u, 46u);
@@ -3974,6 +4083,17 @@ fn expression_transition() {
     return;
   }
   if stage == 43u {
+    let next_argument = frame_get(frame, 9u) + 1u;
+    if next_argument < node.child1 {
+      if !require_frame_slots(1u) { return; }
+      frame_set(frame, 3u, frame_get(frame, 4u));
+      frame_set(frame, 5u, state.type_top);
+      frame_set(frame, 7u, state.type_top);
+      frame_set(frame, 9u, next_argument);
+      frame_set(frame, 1u, 41u);
+      push_expression(argument_node(node.payload + next_argument), environment);
+      return;
+    }
     let callee_node = core_node(node.child0);
     if frame_get(frame, 11u) == NO_INDEX && callee_node.tag == TAG_GLOBAL &&
       scratch_get(9u, callee_node.payload) != frame_get(frame, 8u) {
@@ -4011,6 +4131,10 @@ fn expression_transition() {
     complete_expression(frame_get(frame, 4u));
     return;
   }
+  if stage == 49u {
+    complete_expression(frame_get(frame, 4u));
+    return;
+  }
 
   if stage == 50u {
     let operand_type = frame_get(frame, 3u);
@@ -4033,7 +4157,7 @@ fn expression_transition() {
     if operand_type == state.returned_type {
       if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 61u);
-      if push_expression(node.child1, environment) {
+      if push_expression(expression_operand(node, 1u), environment) {
         frame_set(state.frame_top - 1u, 11u, operand_type);
       }
       return;
@@ -4046,7 +4170,7 @@ fn expression_transition() {
   if stage == 62u {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 61u);
-    if push_expression(node.child1, environment) {
+    if push_expression(expression_operand(node, 1u), environment) {
       frame_set(state.frame_top - 1u, 11u, frame_get(frame, 3u));
     }
     return;
@@ -4056,9 +4180,10 @@ fn expression_transition() {
     if operand_type == state.returned_type {
       complete_expression(select(
         operand_type, 1u,
-        node.tag == TAG_BINARY &&
-          (numeric_operator_is_comparison(node.payload) ||
-            operator_is_structural_equality(node.payload))));
+        (node.tag == TAG_BINARY ||
+          (node.tag == TAG_PRIM && expression_family(node) == PRIM_BINARY)) &&
+          (numeric_operator_is_comparison(expression_operation(node)) ||
+            operator_is_structural_equality(expression_operation(node)))));
       return;
     }
     if start_unify(operand_type, state.returned_type, node.start_byte, node.end_byte) {
@@ -4069,21 +4194,22 @@ fn expression_transition() {
   if stage == 63u {
     complete_expression(select(
       frame_get(frame, 3u), 1u,
-      node.tag == TAG_BINARY &&
-        (numeric_operator_is_comparison(node.payload) ||
-          operator_is_structural_equality(node.payload))));
+      (node.tag == TAG_BINARY ||
+        (node.tag == TAG_PRIM && expression_family(node) == PRIM_BINARY)) &&
+        (numeric_operator_is_comparison(expression_operation(node)) ||
+          operator_is_structural_equality(expression_operation(node)))));
     return;
   }
   if stage == 64u {
     if start_unify(
-      numeric_conversion_source(node.payload), state.returned_type,
+      numeric_conversion_source(expression_operation(node)), state.returned_type,
       node.start_byte, node.end_byte) {
       frame_set(frame, 1u, 65u);
     }
     return;
   }
   if stage == 65u {
-    complete_expression(numeric_conversion_result(node.payload));
+    complete_expression(numeric_conversion_result(expression_operation(node)));
     return;
   }
 
@@ -4096,7 +4222,7 @@ fn expression_transition() {
   if stage == 131u {
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 132u);
-    push_expression(node.child1, environment);
+    push_expression(expression_operand(node, 1u), environment);
     return;
   }
   if stage == 132u {
@@ -4107,7 +4233,12 @@ fn expression_transition() {
   }
   if stage == 133u {
     if !require_type_slots(1u) { return; }
-    let store_type = allocate_type(TYPE_NAMED, node.payload, frame_get(frame, 3u), NO_INDEX);
+    let store_type = allocate_type(
+      TYPE_NAMED,
+      select(node.payload, expression_auxiliary_type(node), node.tag == TAG_PRIM),
+      frame_get(frame, 3u),
+      NO_INDEX,
+    );
     complete_expression(store_type);
     return;
   }
@@ -4127,10 +4258,15 @@ fn expression_transition() {
   }
   if stage == 142u {
     if !require_type_slots(1u) || !require_frame_slots(1u) { return; }
-    let store_type = allocate_type(TYPE_NAMED, node.payload, frame_get(frame, 4u), NO_INDEX);
+    let store_type = allocate_type(
+      TYPE_NAMED,
+      select(node.payload, expression_auxiliary_type(node), node.tag == TAG_PRIM),
+      frame_get(frame, 4u),
+      NO_INDEX,
+    );
     frame_set(frame, 5u, store_type);
     frame_set(frame, 1u, 143u);
-    if push_expression(node.child0, environment) {
+    if push_expression(expression_operand(node, 0u), environment) {
       frame_set(state.frame_top - 1u, 11u, store_type);
     }
     return;
@@ -4143,13 +4279,14 @@ fn expression_transition() {
     return;
   }
   if stage == 144u {
-    if node.tag == TAG_STORE_LENGTH {
+    if node.tag == TAG_STORE_LENGTH ||
+      (node.tag == TAG_PRIM && expression_family(node) == PRIM_STORE_LENGTH) {
       complete_expression(0u);
       return;
     }
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 145u);
-    if push_expression(node.child1, environment) {
+    if push_expression(expression_operand(node, 1u), environment) {
       frame_set(state.frame_top - 1u, 11u, 0u);
     }
     return;
@@ -4161,13 +4298,14 @@ fn expression_transition() {
     return;
   }
   if stage == 146u {
-    if node.tag == TAG_STORE_READ {
+    if node.tag == TAG_STORE_READ ||
+      (node.tag == TAG_PRIM && expression_family(node) == PRIM_STORE_READ) {
       complete_expression(frame_get(frame, 3u));
       return;
     }
     if !require_frame_slots(1u) { return; }
     frame_set(frame, 1u, 147u);
-    if push_expression(node.child2, environment) {
+    if push_expression(expression_operand(node, 2u), environment) {
       frame_set(state.frame_top - 1u, 11u, frame_get(frame, 3u));
     }
     return;
@@ -4186,7 +4324,7 @@ fn expression_transition() {
 
   if stage == 70u {
     frame_set(frame, 3u, state.returned_type);
-    frame_set(frame, 5u, node.child1);
+    frame_set(frame, 5u, node.payload);
     if start_prune(state.returned_type) { frame_set(frame, 1u, 79u); }
     return;
   }
@@ -4223,17 +4361,17 @@ fn expression_transition() {
   }
   if stage == 81u {
     let arm_index = frame_get(frame, 5u);
-    if arm_index == NO_INDEX {
+    if arm_index >= node.payload + node.child1 {
       if !require_type_slots(1u) { return; }
       frame_set(frame, 4u, fresh_variable());
-      frame_set(frame, 5u, node.child1);
+      frame_set(frame, 5u, node.payload);
       frame_set(frame, 6u, NO_INDEX);
-      frame_set(frame, 8u, node.child1);
-      frame_set(frame, 1u, select(71u, 78u, node.child1 == NO_INDEX));
+      frame_set(frame, 8u, node.payload);
+      frame_set(frame, 1u, select(71u, 78u, node.child1 == 0u));
       return;
     }
-    let constructor_index = core_node(arm_index).payload;
-    frame_set(frame, 5u, core_node(arm_index).child1);
+    let constructor_index = alternative_constructor(arm_index);
+    frame_set(frame, 5u, arm_index + 1u);
     let type_index = constructor_record(constructor_index).type_index;
     frame_set(frame, 6u, type_index);
     if indexed_metadata_is_available() {
@@ -4312,7 +4450,7 @@ fn expression_transition() {
       return;
     }
     frame_set(frame, 3u, scrutinee_type);
-    frame_set(frame, 5u, node.child1);
+    frame_set(frame, 5u, node.payload);
     frame_set(frame, 7u, 0u);
     frame_set(frame, 1u, 100u);
     return;
@@ -4340,18 +4478,18 @@ fn expression_transition() {
   }
   if stage == 71u {
     let arm_index = frame_get(frame, 5u);
-    if arm_index == NO_INDEX {
+    if arm_index >= node.payload + node.child1 {
       let matched_type = frame_get(frame, 6u);
       if matched_type == NO_INDEX {
         complete_expression(frame_get(frame, 4u));
         return;
       }
-      if start_case_coverage(matched_type, frame_get(frame, 8u)) {
+      if start_case_coverage(matched_type, frame_get(frame, 8u), node.child1) {
         frame_set(frame, 1u, 76u);
       }
       return;
     }
-    let constructor_index = core_node(arm_index).payload;
+    let constructor_index = alternative_constructor(arm_index);
     if !start_constructor(constructor_index, 0u, 0u) { return; }
     frame_set(frame, 7u, constructor_index);
     frame_set(frame, 1u, 75u);
@@ -4360,7 +4498,7 @@ fn expression_transition() {
   if stage == 75u {
     let arm_index = frame_get(frame, 5u);
     if !start_unify(frame_get(frame, 3u), state.returned_type,
-      core_node(arm_index).start_byte, core_node(arm_index).end_byte) { return; }
+      alternative_start_byte(arm_index), alternative_end_byte(arm_index)) { return; }
     frame_set(frame, 1u, 73u);
     return;
   }
@@ -4377,7 +4515,7 @@ fn expression_transition() {
   if stage == 77u {
     if !require_frame_slots(1u) { return; }
     let arm_index = frame_get(frame, 5u);
-    frame_set(frame, 7u, core_node(arm_index).child1);
+    frame_set(frame, 7u, arm_index + 1u);
     frame_set(frame, 1u, 72u);
     push_expression(state.current_arm, state.returned_type);
     return;
@@ -4394,8 +4532,8 @@ fn expression_transition() {
   }
   if stage == 72u {
     if !start_unify(frame_get(frame, 4u), state.returned_type,
-      core_node(frame_get(frame, 5u)).start_byte,
-      core_node(frame_get(frame, 5u)).end_byte) { return; }
+      alternative_start_byte(frame_get(frame, 5u)),
+      alternative_end_byte(frame_get(frame, 5u))) { return; }
     frame_set(frame, 1u, 74u);
     return;
   }
@@ -4407,12 +4545,12 @@ fn expression_transition() {
 
   if stage == 100u {
     let arm_index = frame_get(frame, 5u);
-    if arm_index == NO_INDEX {
+    if arm_index >= node.payload + node.child1 {
       frame_set(frame, 7u, 0u);
       frame_set(frame, 1u, 110u);
       return;
     }
-    let constructor_index = core_node(arm_index).payload;
+    let constructor_index = alternative_constructor(arm_index);
     let previous_cutoff = state.untouchable_type_cutoff;
     let arm_cutoff = state.type_top;
     if !start_constructor(constructor_index, 0u, 1u) { return; }
@@ -4462,8 +4600,12 @@ fn expression_transition() {
     return;
   }
   if stage == 104u {
-    let arm = core_node(frame_get(frame, 5u));
-    if start_unify(frame_get(frame, 11u), state.returned_type, arm.start_byte, arm.end_byte) {
+    let alternative = frame_get(frame, 5u);
+    if start_unify(
+      frame_get(frame, 11u),
+      state.returned_type,
+      alternative_start_byte(alternative),
+      alternative_end_byte(alternative)) {
       frame_set(frame, 1u, 105u);
     }
     return;
@@ -4474,16 +4616,18 @@ fn expression_transition() {
   }
   if stage == 106u {
     state.untouchable_type_cutoff = frame_get(frame, 4u);
-    frame_set(frame, 5u, core_node(frame_get(frame, 5u)).child1);
+    frame_set(frame, 5u, frame_get(frame, 5u) + 1u);
     frame_set(frame, 1u, 100u);
     return;
   }
   if stage == 108u {
     state.untouchable_type_cutoff = frame_get(frame, 4u);
-    let arm = core_node(frame_get(frame, 5u));
+    let alternative = frame_get(frame, 5u);
     state.error_context = TYPE_MISMATCH_INACCESSIBLE_CONSTRUCTOR;
     report_diagnostic_with_operands(
-      ERROR_TYPE_MISMATCH, arm.start_byte, arm.end_byte,
+      ERROR_TYPE_MISMATCH,
+      alternative_start_byte(alternative),
+      alternative_end_byte(alternative),
       frame_get(frame, 7u), frame_get(frame, 8u), frame_get(frame, 3u));
     return;
   }
@@ -4524,18 +4668,22 @@ fn expression_transition() {
     state.untouchable_type_cutoff = frame_get(frame, 4u);
     if frame_get(frame, 11u) == NO_INDEX {
       frame_set(frame, 11u, frame_get(frame, 7u));
-      frame_set(frame, 5u, core_node(frame_get(frame, 5u)).child1);
+      frame_set(frame, 5u, frame_get(frame, 5u) + 1u);
       frame_set(frame, 1u, 100u);
       return;
     }
-    let arm = core_node(frame_get(frame, 5u));
-    if start_unify(frame_get(frame, 11u), frame_get(frame, 7u), arm.start_byte, arm.end_byte) {
+    let alternative = frame_get(frame, 5u);
+    if start_unify(
+      frame_get(frame, 11u),
+      frame_get(frame, 7u),
+      alternative_start_byte(alternative),
+      alternative_end_byte(alternative)) {
       frame_set(frame, 1u, 118u);
     }
     return;
   }
   if stage == 118u {
-    frame_set(frame, 5u, core_node(frame_get(frame, 5u)).child1);
+    frame_set(frame, 5u, frame_get(frame, 5u) + 1u);
     frame_set(frame, 1u, 100u);
     return;
   }
@@ -4570,24 +4718,24 @@ fn expression_transition() {
       frame_set(frame, 1u, 110u);
       return;
     }
-    frame_set(frame, 5u, node.child1);
+    frame_set(frame, 5u, node.payload);
     frame_set(frame, 1u, 114u);
     return;
   }
   if stage == 114u {
     let arm_index = frame_get(frame, 5u);
-    if arm_index == NO_INDEX {
+    if arm_index >= node.payload + node.child1 {
       report_diagnostic_with_operands(
         ERROR_NON_EXHAUSTIVE_CASE, node.start_byte, node.end_byte,
         constructor_record(frame_get(frame, 8u)).symbol, NO_INDEX, NO_INDEX);
       return;
     }
-    if core_node(arm_index).payload == frame_get(frame, 8u) {
+    if alternative_constructor(arm_index) == frame_get(frame, 8u) {
       frame_set(frame, 7u, frame_get(frame, 7u) + 1u);
       frame_set(frame, 1u, 110u);
       return;
     }
-    frame_set(frame, 5u, core_node(arm_index).child1);
+    frame_set(frame, 5u, arm_index + 1u);
     return;
   }
 }
@@ -4649,7 +4797,7 @@ fn node_shape_is_valid(node_index: u32) -> bool {
       required_child_is_valid(node_index, node.child1) &&
       required_child_is_valid(node_index, node.child2) && node.evaluation_mode == 0u;
   }
-  if node.tag == TAG_LET || node.tag == TAG_LET_REC || node.tag == TAG_APPLY ||
+  if node.tag == TAG_LET || node.tag == TAG_LET_REC ||
     node.tag == TAG_BINARY || node.tag == TAG_BUFFER_APPEND {
     let whole_number = node.tag == TAG_BINARY &&
       node.payload >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
@@ -4661,7 +4809,7 @@ fn node_shape_is_valid(node_index: u32) -> bool {
         node.child2 < state.type_count,
         whole_number || node.tag == TAG_BUFFER_APPEND,
       ) &&
-      (node.evaluation_mode == 0u || node.tag == TAG_LET || node.tag == TAG_APPLY) &&
+      (node.evaluation_mode == 0u || node.tag == TAG_LET) &&
       (node.tag != TAG_BUFFER_APPEND || node.payload == 0u) &&
       (node.tag != TAG_LET_REC || core_node(node.child0).tag == TAG_LAMBDA) &&
       (node.tag != TAG_BINARY ||
@@ -4672,8 +4820,66 @@ fn node_shape_is_valid(node_index: u32) -> bool {
       required_child_is_valid(node_index, node.child1) &&
       required_child_is_valid(node_index, node.child2) && node.evaluation_mode == 0u;
   }
-  if node.tag == TAG_LAMBDA || node.tag == TAG_UNARY ||
-    node.tag == TAG_NUMERIC_CONVERT || node.tag == TAG_PATTERN_BIND {
+  if node.tag == TAG_LAMBDA {
+    return node.payload <= state.parameter_count &&
+      node.child1 <= state.parameter_count - node.payload &&
+      required_child_is_valid(node_index, node.child0) &&
+      node.child2 == NO_INDEX && node.evaluation_mode == 0u;
+  }
+  if node.tag == TAG_APPLY {
+    if node.payload > state.argument_count ||
+      node.child1 > state.argument_count - node.payload ||
+      !required_child_is_valid(node_index, node.child0) ||
+      node.child2 != NO_INDEX || node.evaluation_mode != 0u {
+      return false;
+    }
+    for (var offset = 0u; offset < node.child1; offset += 1u) {
+      let argument = argument_node(node.payload + offset);
+      let evaluation_mode = schema_words[
+        state.argument_base + (node.payload + offset) * ${ARGUMENT_WORD_LENGTH}u + 1u];
+      if !required_child_is_valid(node_index, argument) || evaluation_mode > 1u {
+        return false;
+      }
+    }
+    return true;
+  }
+  if node.tag == TAG_PRIM {
+    let declaration = primop_lookup(node.payload);
+    let family = declaration.x;
+    let operation = declaration.y;
+    let arity = declaration.z;
+    if family == 0u || arity == NO_INDEX || node.child1 != arity ||
+      node.child0 > state.argument_count ||
+      arity > state.argument_count - node.child0 ||
+      node.evaluation_mode != 0u {
+      return false;
+    }
+    let whole_number = (family == PRIM_UNARY &&
+        operation == ${UnaryOperator.NegateWholeNumberF64}u) ||
+      (family == PRIM_BINARY &&
+        operation >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
+        operation <= BINARY_REMAINDER_WHOLE_NUMBER_F64);
+    let nominal = whole_number || family == PRIM_BUFFER_APPEND ||
+      (family >= PRIM_STORE_EMPTY && family <= PRIM_STORE_GROW);
+    if select(node.child2 != NO_INDEX, node.child2 >= state.type_count, nominal) {
+      return false;
+    }
+    if family >= PRIM_STORE_EMPTY && family <= PRIM_STORE_GROW &&
+      type_metadata(node.child2, 1u) != 1u {
+      return false;
+    }
+    for (var offset = 0u; offset < arity; offset += 1u) {
+      let operand_index = node.child0 + offset;
+      let operand = argument_node(operand_index);
+      let evaluation_mode = schema_words[
+        state.argument_base + operand_index * ${ARGUMENT_WORD_LENGTH}u + 1u];
+      if !required_child_is_valid(node_index, operand) || evaluation_mode != 1u {
+        return false;
+      }
+    }
+    return true;
+  }
+  if node.tag == TAG_UNARY || node.tag == TAG_NUMERIC_CONVERT {
     let whole_number = node.tag == TAG_UNARY &&
       node.payload == ${UnaryOperator.NegateWholeNumberF64}u;
     return required_child_is_valid(node_index, node.child0) &&
@@ -4683,14 +4889,24 @@ fn node_shape_is_valid(node_index: u32) -> bool {
       (node.tag != TAG_NUMERIC_CONVERT || (node.payload >= 1u && node.payload <= 14u));
   }
   if node.tag == TAG_CASE {
-    return required_child_is_valid(node_index, node.child0) &&
-      optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
-      node.evaluation_mode == 0u;
-  }
-  if node.tag == TAG_CASE_ARM {
-    return required_child_is_valid(node_index, node.child0) &&
-      optional_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX &&
-      node.payload < state.constructor_count && node.evaluation_mode == 0u;
+    if node.payload > state.case_alternative_count ||
+      node.child1 > state.case_alternative_count - node.payload ||
+      !required_child_is_valid(node_index, node.child0) ||
+      node.child2 != NO_INDEX || node.evaluation_mode != 0u {
+      return false;
+    }
+    for (var offset = 0u; offset < node.child1; offset += 1u) {
+      let alternative = node.payload + offset;
+      let first_binder = alternative_word(alternative, 1u);
+      if alternative_constructor(alternative) >= state.constructor_count ||
+        first_binder > state.case_binder_count ||
+        alternative_binder_count(alternative) > state.case_binder_count - first_binder ||
+        !required_child_is_valid(node_index, alternative_body(alternative)) ||
+        alternative_start_byte(alternative) > alternative_end_byte(alternative) {
+        return false;
+      }
+    }
+    return true;
   }
   return false;
 }

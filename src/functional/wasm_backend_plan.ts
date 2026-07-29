@@ -10,9 +10,10 @@ import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import { WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { WasmFunctionAnalysis } from "./wasm_function_analysis.ts";
 import type { StoragePlan } from "./storage_contract.ts";
-import { createStoragePlan } from "./storage_plan.ts";
+import { createLoweredCoreStoragePlan } from "./storage_plan.ts";
 import { requireFirstOrderWasmType } from "./wasm_value_codec.ts";
 import { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
+import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 
 export interface WasmBackendPlan {
   readonly module: GpuModule;
@@ -35,17 +36,18 @@ export function createWasmBackendPlan(
   options: WasmCompilationOptions,
 ): WasmBackendPlan {
   validateWasmSimdMode(options.simd);
-  const captureAnalysis = new WasmCaptureAnalysis(nodes);
-  const constantAnalysis = new WasmConstantAnalysis(nodes);
-  const storage = createStoragePlan(module, nodes, captureAnalysis, {
+  const loweredNodes = lowerCoreForWasm(module, nodes);
+  const captureAnalysis = new WasmCaptureAnalysis(loweredNodes);
+  const constantAnalysis = new WasmConstantAnalysis(loweredNodes);
+  const storage = createLoweredCoreStoragePlan(module, loweredNodes, captureAnalysis, {
     ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
   });
   const entry = functionalWasmEntry(module);
-  validateOwnedTypeExports(module, nodes, options);
+  validateOwnedTypeExports(module, loweredNodes, options);
   const scalarResult = functionalHostScalarType(entry.result);
   const compactScalarEligible = module.evaluationProfile ===
       EvaluationProfile.StrictEager &&
-    !nodes.some((node) =>
+    !loweredNodes.some((node) =>
       node.tag === CoreTag.StoreEmpty ||
       node.tag === CoreTag.StoreNew ||
       node.tag === CoreTag.StoreLength ||
@@ -63,15 +65,15 @@ export function createWasmBackendPlan(
     (options.ownedTypeExports?.length ?? 0) === 0;
   return Object.freeze({
     module,
-    nodes,
+    nodes: loweredNodes,
     captureAnalysis,
     constantAnalysis,
     functionAnalysis: new WasmFunctionAnalysis(
-      nodes,
+      loweredNodes,
       module.definitionRoots,
       constantAnalysis,
     ),
-    uniqueReuseAnalysis: new WasmUniqueReuseAnalysis(module, nodes),
+    uniqueReuseAnalysis: new WasmUniqueReuseAnalysis(module, loweredNodes),
     storage,
     entry,
     compactScalarEligible,
