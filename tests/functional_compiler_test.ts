@@ -380,13 +380,18 @@ Deno.test("definition and export effects include fully applied curried bodies", 
             result: integer,
           },
         },
+        effects: effectSet("Combine"),
         body: surface.apply(surface.name("tick"), surface.name("right")),
       },
       {
         name: "main",
         parameters: [],
         annotation: integer,
-        body: surface.integer(42),
+        body: surface.let(
+          "partial",
+          surface.apply(surface.name("combine"), surface.integer(1)),
+          surface.integer(42),
+        ),
       },
     ],
     [],
@@ -400,8 +405,15 @@ Deno.test("definition and export effects include fully applied curried bodies", 
   if (!compilation.ok) return;
   try {
     const combine = compilation.module.definitionNames.indexOf("combine");
-    deepStrictEqual([...compilation.module.definitionEffects[combine]!], ["Clock.Tick"]);
-    deepStrictEqual([...compilation.module.wasmExports[0]!.effects], ["Clock.Tick"]);
+    deepStrictEqual([...compilation.module.entryEffects], []);
+    deepStrictEqual([...compilation.module.definitionEffects[combine]!], [
+      "Clock.Tick",
+      "Combine",
+    ]);
+    deepStrictEqual([...compilation.module.wasmExports[0]!.effects], [
+      "Clock.Tick",
+      "Combine",
+    ]);
   } finally {
     compilation.module.destroy();
   }

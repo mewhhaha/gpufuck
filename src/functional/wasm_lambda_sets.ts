@@ -127,8 +127,16 @@ export class LambdaSetAnalysis {
       }
       this.#visitExpression(root, []);
       this.#addEdge(this.#nodeVariable(root), this.#definitionVariable(definition));
+      let effectVariable = this.#definitionVariable(definition);
+      let functionNode = root;
+      while (true) {
+        const node = this.#node(functionNode);
+        if (node.tag !== CoreTag.Lambda) break;
+        effectVariable = this.#nodeVariable(functionNode);
+        functionNode = node.child0;
+      }
       this.#addEffects(
-        this.#definitionVariable(definition),
+        effectVariable,
         module.declaredDefinitionEffects[definition]!,
       );
     }
