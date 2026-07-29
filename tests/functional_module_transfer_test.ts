@@ -1,10 +1,12 @@
 import { deepStrictEqual, throws } from "node:assert/strict";
 
-import { buildSurfaceModule, effectSet, surface } from "../functional.ts";
 import {
+  buildSurfaceModule,
   decodeTransferredModule,
+  effectSet,
   encodeModuleForTransfer,
-} from "../src/functional/module_transfer.ts";
+  surface,
+} from "../functional.ts";
 
 Deno.test("worker transfer preserves source and host effect sets", () => {
   const module = buildSurfaceModule(

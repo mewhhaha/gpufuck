@@ -23,6 +23,7 @@ export * from "./src/functional/surface_contract.ts";
 export * from "./src/functional/surface_reachability.ts";
 export * from "./src/functional/recursive_groups.ts";
 export * from "./src/functional/module_linker.ts";
+export * from "./src/functional/module_transfer.ts";
 
 // Compiling it: admission, dispatch, and the resolved Core that comes back.
 export * from "./src/functional/compiler.ts";

@@ -218,6 +218,9 @@ whose operation bindings they replace. Compilation exposes the original declarat
 `GpuModule.declaredDefinitionEffects` and the inferred fixed point through `definitionEffects`,
 `entryEffects`, and each WebAssembly export's `effects`.
 
+Immutable effect sets are not structured-cloneable. Send an encoded module through a Worker with
+`encodeModuleForTransfer()`, then restore it with `decodeTransferredModule()` before compilation.
+
 This evidence-passing path handles ordinary operation replacement. It does not provide a delimited
 continuation or `resume`, so aborting, multi-shot, generator, and async handlers still require a
 future Core control construct rather than pretending a closed function is equivalent.
