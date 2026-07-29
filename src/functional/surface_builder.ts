@@ -178,6 +178,7 @@ export function buildSurfaceModule(
   );
   const hostDefinitions = normalizeHostDefinitions(
     elaboratedDefinitions,
+    declaredDefinitionEffects,
     hostCapabilities,
     options.hostDefinitions,
   );
@@ -432,6 +433,7 @@ function requireSurfaceTypeSchema(
 
 function normalizeHostDefinitions(
   definitions: readonly SurfaceDefinition[],
+  declaredDefinitionEffects: readonly EffectSet[],
   capabilities: ReturnType<typeof normalizeHostCapabilities>,
   bindings: SurfaceModuleOptions["hostDefinitions"],
 ): NonNullable<SurfaceModuleOptions["hostDefinitions"]> {
@@ -439,7 +441,10 @@ function normalizeHostDefinitions(
   if (!Array.isArray(bindings)) {
     throw new TypeError("functional host definition bindings must be an array");
   }
-  const definitionsByName = new Map(definitions.map((definition) => [definition.name, definition]));
+  const definitionsByName = new Map(definitions.map((definition, definitionIndex) => [
+    definition.name,
+    { definition, effects: declaredDefinitionEffects[definitionIndex]! },
+  ]));
   const boundDefinitions = new Set<string>();
   return Object.freeze(bindings.map((binding, index) => {
     if (binding === null || typeof binding !== "object") {
@@ -449,8 +454,8 @@ function normalizeHostDefinitions(
         }`,
       );
     }
-    const definition = definitionsByName.get(binding.definition);
-    if (definition === undefined) {
+    const resolvedDefinition = definitionsByName.get(binding.definition);
+    if (resolvedDefinition === undefined) {
       throw new Error(
         `functional host definition binding ${index} references missing definition ${
           JSON.stringify(binding.definition)
@@ -477,28 +482,28 @@ function normalizeHostDefinitions(
       ? field.type
       : { kind: "function", parameter: field.parameter, result: field.result };
     if (
-      definition.annotation === null ||
-      JSON.stringify(definition.annotation) !== JSON.stringify(expectedType)
+      resolvedDefinition.definition.annotation === null ||
+      JSON.stringify(resolvedDefinition.definition.annotation) !== JSON.stringify(expectedType)
     ) {
       throw new Error(
         `functional host definition ${JSON.stringify(binding.definition)} annotation ${
-          JSON.stringify(definition.annotation)
+          JSON.stringify(resolvedDefinition.definition.annotation)
         } does not match field ${JSON.stringify(`${binding.capability}.${binding.field}`)} type ${
           JSON.stringify(expectedType)
         }`,
       );
     }
     if (
-      definition.effects !== undefined && definition.effects.size !== 0 &&
+      resolvedDefinition.effects.size !== 0 &&
       (
         field.kind !== "operation" ||
-        definition.effects.size !== field.effects.size ||
-        ![...definition.effects].every((effect) => field.effects.has(effect))
+        resolvedDefinition.effects.size !== field.effects.size ||
+        ![...resolvedDefinition.effects].every((effect) => field.effects.has(effect))
       )
     ) {
       throw new Error(
         `functional host definition ${JSON.stringify(binding.definition)} declares effects ${
-          JSON.stringify([...definition.effects])
+          JSON.stringify([...resolvedDefinition.effects])
         }; field ${JSON.stringify(`${binding.capability}.${binding.field}`)} declares ${
           JSON.stringify(field.kind === "operation" ? [...field.effects] : [])
         }`,

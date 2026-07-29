@@ -273,13 +273,17 @@ Deno.test("host-bound definitions reject conflicting source effect declarations"
     () =>
       buildSurfaceModule(
         [
-          defineEffectOperation({
+          {
             name: "emit",
-            parameter: { name: "value", type: integer },
-            result: integer,
-            effects: effectSet("Telemetry"),
+            parameters: ["value"],
+            annotation: {
+              kind: "function",
+              parameter: integer,
+              result: integer,
+            },
+            effects: new Set(["Telemetry", "Audit"]) as never,
             body: surface.name("value"),
-          }),
+          },
           {
             name: "main",
             parameters: [],
@@ -308,7 +312,7 @@ Deno.test("host-bound definitions reject conflicting source effect declarations"
           }],
         },
       ),
-    /host definition "emit" declares effects \["Telemetry"\]; field "Console\.emit" declares \["Console\.Write"\]/,
+    /host definition "emit" declares effects \["Audit","Telemetry"\]; field "Console\.emit" declares \["Console\.Write"\]/,
   );
 });
 
