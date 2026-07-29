@@ -357,6 +357,56 @@ Deno.test("source effects flow through higher-order calls and pure handlers disc
   }
 });
 
+Deno.test("definition and export effects include fully applied curried bodies", async () => {
+  const integer = { kind: "integer" as const };
+  const module = buildSurfaceModule(
+    [
+      defineEffectOperation({
+        name: "tick",
+        parameter: { name: "value", type: integer },
+        result: integer,
+        effects: effectSet("Clock.Tick"),
+        body: surface.name("value"),
+      }),
+      {
+        name: "combine",
+        parameters: ["left", "right"],
+        annotation: {
+          kind: "function",
+          parameter: integer,
+          result: {
+            kind: "function",
+            parameter: integer,
+            result: integer,
+          },
+        },
+        body: surface.apply(surface.name("tick"), surface.name("right")),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.integer(42),
+      },
+    ],
+    [],
+    "main",
+    0,
+    { wasmExports: [{ name: "combine", definition: "combine" }] },
+  );
+  const compilation = await functionalRuntime().compiler.compileModule(module);
+
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    const combine = compilation.module.definitionNames.indexOf("combine");
+    deepStrictEqual([...compilation.module.definitionEffects[combine]!], ["Clock.Tick"]);
+    deepStrictEqual([...compilation.module.wasmExports[0]!.effects], ["Clock.Tick"]);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("nested source handlers discharge only the effects they replace", async () => {
   const integer = { kind: "integer" as const };
   const identity = surface.lambda("value", surface.name("value"));

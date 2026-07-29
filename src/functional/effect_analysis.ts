@@ -158,7 +158,10 @@ export function analyzeModuleEffects(
         `functional effect analysis definition d${definition} root ${root} is missing`,
       );
     }
-    const effectNode = rootNode.tag === CoreTag.Lambda ? rootNode.child0 : root;
+    let effectNode = root;
+    while (nodes[effectNode]?.tag === CoreTag.Lambda) {
+      effectNode = nodes[effectNode]!.child0;
+    }
     return effectSetFrom([
       ...module.declaredDefinitionEffects[definition]!,
       ...effectNamesByNode[effectNode]!,
