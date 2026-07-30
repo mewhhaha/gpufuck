@@ -338,6 +338,8 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     event.stage === "wasm.emit.literal-update"
   );
   equal(wasmEmissionUpdate?.annotations.changedImmediates, 2);
+  const wasmEncoding = changedTrace.snapshot().find((event) => event.stage === "wasm.encode");
+  ok(Number(wasmEncoding?.annotations.reusedFunctionBodies) > 0);
   equal(
     changedTrace.snapshot().some((event) => event.stage === "wasm.emit.closures"),
     false,

@@ -44,6 +44,35 @@ export interface WasmFunctionType {
   readonly results: readonly number[];
 }
 
+export interface WasmModuleEncoding {
+  readonly imports: readonly WasmFunctionImport[];
+  readonly functions: readonly WasmFunctionBody[];
+  readonly indirectFunctionIndices: readonly number[];
+  readonly entryFunctionIndex: number;
+  readonly heapStart: number;
+  readonly additionalFunctionTypes: readonly WasmFunctionType[];
+  readonly valueForceFunctionIndex?: number;
+  readonly initializeFunctionIndex?: number;
+  readonly allocateFunctionIndex?: number;
+  readonly freeFunctionIndex?: number;
+  readonly functionExports?: readonly {
+    readonly name: string;
+    readonly functionIndex: number;
+  }[];
+  readonly instrumentedFuel?: boolean;
+}
+
+export interface CachedWasmFunctionBody {
+  readonly body: WasmFunctionBody;
+  readonly encoded: readonly number[];
+}
+
+export interface EncodedWasmModule {
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly functionBodies: readonly CachedWasmFunctionBody[];
+  readonly reusedFunctionBodies: number;
+}
+
 export const WASM_BASE_FUNCTION_TYPES: readonly WasmFunctionType[] = Object.freeze([
   { parameters: [WasmValueType.I32], results: [WasmValueType.I32] },
   { parameters: [], results: [WasmValueType.I64] },
@@ -329,20 +358,31 @@ function appendSignedInteger64(bytes: number[], value: bigint): void {
 }
 
 export function encodeWasmModule(
-  imports: readonly WasmFunctionImport[],
-  functions: readonly WasmFunctionBody[],
-  indirectFunctionIndices: readonly number[],
-  entryFunctionIndex: number,
-  heapStart: number,
-  additionalFunctionTypes: readonly WasmFunctionType[],
-  valueForceFunctionIndex?: number,
-  initializeFunctionIndex?: number,
-  allocateFunctionIndex?: number,
-  freeFunctionIndex?: number,
-  functionExports: readonly { readonly name: string; readonly functionIndex: number }[] = [],
-  instrumentedFuel = false,
-): Uint8Array<ArrayBuffer> {
+  encoding: WasmModuleEncoding,
+  cachedFunctionBodies: readonly CachedWasmFunctionBody[] = [],
+): EncodedWasmModule {
+  const {
+    imports,
+    functions,
+    indirectFunctionIndices,
+    entryFunctionIndex,
+    heapStart,
+    additionalFunctionTypes,
+    valueForceFunctionIndex,
+    initializeFunctionIndex,
+    allocateFunctionIndex,
+    freeFunctionIndex,
+    functionExports = [],
+    instrumentedFuel = false,
+  } = encoding;
   const types = wasmFunctionTypes(additionalFunctionTypes);
+  let reusedFunctionBodies = 0;
+  const functionBodies = functions.map((body, index) => {
+    const cached = cachedFunctionBodies[index];
+    if (cached?.body !== body) return { body, encoded: encodeFunctionBody(body) };
+    reusedFunctionBodies += 1;
+    return cached;
+  });
   const sections = [
     section(1, vector(types)),
     ...(imports.length === 0 ? [] : [section(
@@ -423,18 +463,22 @@ export function encodeWasmModule(
         ],
       ]),
     ),
-    section(10, vector(functions.map(encodeFunctionBody))),
+    section(10, vector(functionBodies.map((body) => body.encoded))),
   ];
-  return new Uint8Array(concatenateBytes([[
-    0x00,
-    0x61,
-    0x73,
-    0x6d,
-    0x01,
-    0x00,
-    0x00,
-    0x00,
-  ], ...sections]));
+  return {
+    bytes: new Uint8Array(concatenateBytes([[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+    ], ...sections])),
+    functionBodies,
+    reusedFunctionBodies,
+  };
 }
 
 export function encodeCompactScalarWasmModule(

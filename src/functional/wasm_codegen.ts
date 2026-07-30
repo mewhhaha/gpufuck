@@ -20,7 +20,9 @@ import {
   WasmIntrinsic,
 } from "./host_contract.ts";
 import {
+  type CachedWasmFunctionBody,
   encodeCompactScalarWasmModule,
+  type EncodedWasmModule,
   encodeSignedWasmInteger64,
   encodeWasmModule,
   WASM_BASE_FUNCTION_TYPE_COUNT,
@@ -30,6 +32,7 @@ import {
   type WasmFunctionType,
   WasmFunctionTypeIndex,
   WasmInstructions,
+  type WasmModuleEncoding,
   type WasmSignedInteger64Literal,
   WasmValueType,
 } from "./wasm_binary.ts";
@@ -250,25 +253,12 @@ export interface WasmArtifact {
 
 const backendPlansByArtifact = new WeakMap<WasmArtifact, WasmBackendPlan>();
 
-interface LinearWasmEmission {
-  readonly imports: readonly WasmFunctionImport[];
-  readonly functions: readonly WasmFunctionBody[];
-  readonly indirectFunctionIndices: readonly number[];
-  readonly entryFunctionIndex: number;
-  readonly heapStart: number;
-  readonly additionalFunctionTypes: readonly WasmFunctionType[];
-  readonly valueForceFunctionIndex: number;
-  readonly initializeFunctionIndex: number;
-  readonly allocateFunctionIndex: number;
-  readonly freeFunctionIndex: number;
-  readonly functionExports: readonly {
-    readonly name: string;
-    readonly functionIndex: number;
-  }[];
-  readonly instrumentedFuel: boolean;
+interface CachedLinearWasmEmission {
+  readonly encoding: WasmModuleEncoding;
+  readonly functionBodies: readonly CachedWasmFunctionBody[];
 }
 
-const linearEmissionsByArtifact = new WeakMap<WasmArtifact, LinearWasmEmission>();
+const linearEmissionsByArtifact = new WeakMap<WasmArtifact, CachedLinearWasmEmission>();
 
 function wasmEncodingAnnotations(
   functions: readonly WasmFunctionBody[],
@@ -368,14 +358,14 @@ export function compileWasmArtifactWithSignedLiteralUpdate(
 function emitWasmSignedLiteralUpdate(
   plan: WasmBackendPlan,
   referenceArtifact: WasmArtifact,
-  referenceEmission: LinearWasmEmission,
+  referenceEmission: CachedLinearWasmEmission,
   changedNodes: readonly number[],
   trace?: CompilerPerformanceTrace,
 ): WasmArtifact {
   const emitSpan = trace?.start("wasm.emit");
   try {
     const updateAnnotations = {
-      functions: referenceEmission.functions.length,
+      functions: referenceEmission.encoding.functions.length,
       changedNodes: changedNodes.length,
       changedImmediates: 0,
     };
@@ -391,7 +381,7 @@ function emitWasmSignedLiteralUpdate(
     }
     const functions = trace === undefined
       ? updateSignedInteger64Literals(
-        referenceEmission.functions,
+        referenceEmission.encoding.functions,
         changedValues,
         updateAnnotations,
       )
@@ -400,29 +390,38 @@ function emitWasmSignedLiteralUpdate(
         updateAnnotations,
         () =>
           updateSignedInteger64Literals(
-            referenceEmission.functions,
+            referenceEmission.encoding.functions,
             changedValues,
             updateAnnotations,
           ),
       );
-    const emission = Object.freeze({ ...referenceEmission, functions });
+    const encoding = Object.freeze({ ...referenceEmission.encoding, functions });
     const encodeSpan = trace?.start("wasm.encode");
-    const bytes = encodeLinearWasmEmission(emission);
-    encodeSpan?.finish(wasmEncodingAnnotations(
-      functions,
-      emission.imports.length,
-      emission.indirectFunctionIndices.length,
-    ));
+    const encoded = encodeLinearWasmEmission(
+      encoding,
+      referenceEmission.functionBodies,
+    );
+    encodeSpan?.finish({
+      ...wasmEncodingAnnotations(
+        functions,
+        encoding.imports.length,
+        encoding.indirectFunctionIndices.length,
+      ),
+      reusedFunctionBodies: encoded.reusedFunctionBodies,
+    });
     const artifact = {
-      bytes,
+      bytes: encoded.bytes,
       specializedCallSites: referenceArtifact.specializedCallSites,
       automaticArenaReset: referenceArtifact.automaticArenaReset,
     };
     backendPlansByArtifact.set(artifact, plan);
-    linearEmissionsByArtifact.set(artifact, emission);
+    linearEmissionsByArtifact.set(artifact, {
+      encoding,
+      functionBodies: encoded.functionBodies,
+    });
     emitSpan?.finish({
       nodes: plan.nodes.length,
-      bytes: bytes.byteLength,
+      bytes: encoded.bytes.byteLength,
       specializedCallSites: artifact.specializedCallSites,
       incremental: true,
     });
@@ -496,21 +495,11 @@ function appendInstructionRange(
   for (let offset = start; offset < end; offset++) target.push(source[offset]!);
 }
 
-function encodeLinearWasmEmission(emission: LinearWasmEmission): Uint8Array<ArrayBuffer> {
-  return encodeWasmModule(
-    emission.imports,
-    emission.functions,
-    emission.indirectFunctionIndices,
-    emission.entryFunctionIndex,
-    emission.heapStart,
-    emission.additionalFunctionTypes,
-    emission.valueForceFunctionIndex,
-    emission.initializeFunctionIndex,
-    emission.allocateFunctionIndex,
-    emission.freeFunctionIndex,
-    emission.functionExports,
-    emission.instrumentedFuel,
-  );
+function encodeLinearWasmEmission(
+  encoding: WasmModuleEncoding,
+  functionBodies: readonly CachedWasmFunctionBody[] = [],
+): EncodedWasmModule {
+  return encodeWasmModule(encoding, functionBodies);
 }
 
 function emitWasmArtifact(
@@ -593,7 +582,7 @@ class WasmCompiler {
   readonly #ownedRuntimeEnabled: boolean;
   readonly #hostEmitter: WasmHostEmitter;
   readonly #trace: CompilerPerformanceTrace | undefined;
-  #linearEmission: LinearWasmEmission | undefined;
+  #linearEmission: CachedLinearWasmEmission | undefined;
   #lambdaSetAnalysis: LambdaSetAnalysis | undefined;
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
@@ -1058,7 +1047,7 @@ class WasmCompiler {
           functionIndex: releaseOwnedFunctionIndex + 2 + index * 2,
         }])),
     ];
-    const emission = Object.freeze({
+    const encoding = Object.freeze({
       imports: this.#functionImports,
       functions,
       indirectFunctionIndices,
@@ -1073,15 +1062,21 @@ class WasmCompiler {
       functionExports,
       instrumentedFuel: this.#instrumentedFuel,
     });
-    this.#linearEmission = emission;
     const encodeSpan = this.#trace?.start("wasm.encode");
-    const bytes = encodeLinearWasmEmission(emission);
-    encodeSpan?.finish(wasmEncodingAnnotations(
-      functions,
-      this.#functionImports.length,
-      indirectFunctions.length,
-    ));
-    return bytes;
+    const encoded = encodeLinearWasmEmission(encoding);
+    this.#linearEmission = {
+      encoding,
+      functionBodies: encoded.functionBodies,
+    };
+    encodeSpan?.finish({
+      ...wasmEncodingAnnotations(
+        functions,
+        this.#functionImports.length,
+        indirectFunctions.length,
+      ),
+      reusedFunctionBodies: encoded.reusedFunctionBodies,
+    });
+    return encoded.bytes;
   }
 
   wasmExportSignature(exported: WasmExport): {
