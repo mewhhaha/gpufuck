@@ -5,12 +5,13 @@ import {
   type SemanticEvaluationResult,
   type SemanticRuntimeFault,
 } from "../semantic/evaluator.ts";
-import type { GpuModule } from "./compiler_module.ts";
-import { BinaryOperator, CoreTag, NumericConversion, UnaryOperator } from "./abi.ts";
+import type { CompiledModule, GpuModule } from "./compiler_module.ts";
+import { BinaryOperator, CoreTag, NumericConversion, type Type, UnaryOperator } from "./abi.ts";
 import { primopDeclaration, PrimopFamily } from "../semantic/primops.ts";
 import { runBoundedWasmModule, type WasmExecution } from "./wasm_execution.ts";
 import { WasmRuntimeError } from "./wasm_host_boundary.ts";
 import type { WasmValue } from "./wasm_value_codec.ts";
+import type { WasmInit } from "./wasm_contract.ts";
 
 export interface EvaluationOptions {
   readonly maximumSteps?: number;
@@ -22,6 +23,8 @@ export interface EvaluationOptions {
   readonly resultForm?: "weak-head" | "deep";
   readonly maximumResultNodes?: number;
   readonly maximumResultBytes?: number;
+  /** Host implementations used when evaluation selects the bounded-Wasm path. */
+  readonly wasmInit?: WasmInit;
 }
 
 export interface DeepEvaluationOptions extends EvaluationOptions {
@@ -74,7 +77,16 @@ export type DeepValue =
   | { readonly kind: "boolean"; readonly value: boolean }
   | { readonly kind: "closure" }
   | { readonly kind: "text"; readonly value: string }
+  | { readonly kind: "bytes"; readonly value: Uint8Array }
   | { readonly kind: "unit" }
+  | { readonly kind: "array"; readonly values: readonly DeepValue[] }
+  | { readonly kind: "slice"; readonly values: readonly DeepValue[] }
+  | { readonly kind: "resource"; readonly id: number }
+  | {
+    readonly kind: "erased";
+    readonly type: Type;
+    readonly value: DeepValue;
+  }
   | {
     readonly kind: "tuple";
     readonly fieldCount: 2;
@@ -179,14 +191,19 @@ export class GpuEvaluator {
       // know in advance whether the GPU-only controls apply. Drop them here rather than failing on
       // a choice this method made. Calling `evaluateModuleWithBoundedWasm` directly still rejects
       // them, because that caller picked the path.
-      const { maximumStepsPerDispatch: _dispatch, heapSlots: _heap, stackFrames: _stack, ...rest } =
-        options;
+      const {
+        maximumStepsPerDispatch: _dispatch,
+        heapSlots: _heap,
+        stackFrames: _stack,
+        ...rest
+      } = options;
       return await evaluateModuleWithBoundedWasm(module, rest);
     }
+    const { wasmInit: _wasmInit, ...semanticOptions } = options;
     const result = await this.#evaluator.evaluate(
       semanticRuntimeModule(module),
       {
-        ...options,
+        ...semanticOptions,
         ...(numerics.signedInteger64 && options.resultForm !== "deep"
           ? { resultForm: "deep" as const }
           : {}),
@@ -224,9 +241,10 @@ export class GpuEvaluator {
         } as EvaluationOptions)
       ));
     }
+    const { wasmInit: _wasmInit, ...semanticOptions } = options;
     const results = await this.#evaluator.evaluateBatch(
       modules.map(semanticRuntimeModule),
-      options as Parameters<GpuSemanticEvaluator["evaluateBatch"]>[1],
+      semanticOptions as Parameters<GpuSemanticEvaluator["evaluateBatch"]>[1],
     );
     return results.map(functionalResult);
   }
@@ -366,19 +384,27 @@ function shallowValue(
       return { kind: "tuple", fieldCount: 2 };
     case "constructor":
       return { kind: "constructor", name: value.name, fieldCount: value.fieldCount };
+    case "bytes":
+    case "array":
+    case "slice":
+    case "resource":
+    case "erased":
+      throw new TypeError(
+        `functional evaluator cannot expose a shallow ${value.kind} boundary value`,
+      );
   }
 }
 
 export function evaluateModuleWithBoundedWasm(
-  module: GpuModule,
+  module: CompiledModule,
   options: DeepEvaluationOptions,
 ): Promise<DeepEvaluationResult>;
 export function evaluateModuleWithBoundedWasm(
-  module: GpuModule,
+  module: CompiledModule,
   options: EvaluationOptions,
 ): Promise<EvaluationResult>;
 export async function evaluateModuleWithBoundedWasm(
-  module: GpuModule,
+  module: CompiledModule,
   options: EvaluationOptions,
 ): Promise<AnyEvaluationResult> {
   options.signal?.throwIfAborted();
@@ -390,15 +416,16 @@ export async function evaluateModuleWithBoundedWasm(
       "bounded WebAssembly evaluation does not accept GPU dispatch, heap, or stack controls",
     );
   }
-  if (module.hostCapabilities.length !== 0) {
+  if (module.hostCapabilities.length !== 0 && options.wasmInit === undefined) {
     throw new TypeError(
-      "bounded IEEE evaluation with host capabilities requires a WASM runner init",
+      "bounded WebAssembly evaluation with host capabilities requires a WASM runner init",
     );
   }
   const maximumSteps = options.maximumSteps ?? 1_000_000;
   let execution;
   try {
     execution = await runBoundedWasmModule(module, maximumSteps, {
+      ...(options.wasmInit === undefined ? {} : { init: options.wasmInit }),
       ...(options.input === undefined ? {} : { argument: wasmInputValue(options.input) }),
       ...(options.maximumResultNodes === undefined
         ? {}
@@ -423,15 +450,23 @@ export async function evaluateModuleWithBoundedWasm(
     };
   }
   options.signal?.throwIfAborted();
+  const stats = {
+    steps: execution.semanticSteps,
+    allocations: Math.ceil(execution.stats.allocatedBytes / 8),
+    peakStack: 0,
+    thunkEvaluations: execution.stats.thunkEvaluations,
+  };
+  const value = functionalValueFromWasm(
+    execution,
+    options.resultForm === "deep",
+  );
+  if (options.resultForm === "deep") {
+    return { ok: true, value: value as DeepValue, stats };
+  }
   return {
     ok: true,
-    value: functionalValueFromWasm(execution, options.resultForm === "deep"),
-    stats: {
-      steps: execution.semanticSteps,
-      allocations: Math.ceil(execution.stats.allocatedBytes / 8),
-      peakStack: 0,
-      thunkEvaluations: execution.stats.thunkEvaluations,
-    },
+    value: value as Value,
+    stats,
   };
 }
 
@@ -527,11 +562,35 @@ function functionalValueFromWasm(
       case "text":
         return value;
       case "bytes":
+      case "resource":
+        if (!deep) {
+          throw new TypeError(
+            `functional evaluator cannot expose a shallow ${value.kind} boundary value`,
+          );
+        }
+        return value;
       case "array":
       case "slice":
-      case "resource":
+        if (!deep) {
+          throw new TypeError(
+            `functional evaluator cannot expose a shallow ${value.kind} boundary value`,
+          );
+        }
+        return {
+          kind: value.kind,
+          values: value.values.map((element) => convert(element) as DeepValue),
+        };
       case "erased":
-        throw new TypeError(`functional evaluator cannot expose ${value.kind} boundary values`);
+        if (!deep) {
+          throw new TypeError(
+            "functional evaluator cannot expose a shallow erased boundary value",
+          );
+        }
+        return {
+          kind: "erased",
+          type: value.type,
+          value: convert(value.value) as DeepValue,
+        };
     }
   };
   return convert(execution.value);

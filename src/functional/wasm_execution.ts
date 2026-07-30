@@ -1,4 +1,4 @@
-import type { GpuModule } from "./compiler_module.ts";
+import type { CompiledModule } from "./compiler_module.ts";
 import type { WasmAsyncInit, WasmHostValue, WasmInit, WasmInitBinding } from "./wasm_contract.ts";
 import {
   cachedExecutableWasm,
@@ -59,43 +59,106 @@ export interface WasmRunOptions {
   readonly signal?: AbortSignal;
 }
 
+export interface WasmExportRunOptions
+  extends Omit<WasmRunOptions, "argument" | "argumentOwnership"> {
+  readonly arguments?: readonly WasmValue[];
+}
+
 export interface WasmAsyncRunOptions extends Omit<WasmRunOptions, "init"> {
   readonly init: WasmAsyncInit;
   readonly maximumSuspensions?: number;
 }
 
 export async function runWasmModule(
-  module: GpuModule,
+  module: CompiledModule,
   options: WasmRunOptions = {},
 ): Promise<WasmExecution> {
   return await runWasmAttempt(module, options, false);
 }
 
+export async function runWasmExport(
+  module: CompiledModule,
+  name: string,
+  options: WasmExportRunOptions = {},
+): Promise<WasmExecution> {
+  const exported = module.wasmExports.find((candidate) => candidate.name === name);
+  if (exported === undefined) {
+    throw new WasmBoundaryError({
+      code: "F4101",
+      kind: "invalid-argument",
+      path: "name",
+      message: `functional WASM module has no named export ${JSON.stringify(name)}`,
+    });
+  }
+  const parameters = [];
+  let result = exported.type;
+  while (result.kind === "function") {
+    parameters.push(result.parameter);
+    result = result.result;
+  }
+  const arguments_ = options.arguments ?? [];
+  if (arguments_.length !== parameters.length) {
+    throw new WasmBoundaryError({
+      code: "F4101",
+      kind: "invalid-argument",
+      path: "arguments",
+      message: `functional WASM export ${
+        JSON.stringify(name)
+      } requires ${parameters.length} arguments; received ${arguments_.length}`,
+    });
+  }
+  return await runWasmAttempt(
+    module,
+    {
+      ...options,
+      argumentOwnership: "ownership-transfer",
+    },
+    false,
+    undefined,
+    {
+      exportName: name,
+      definitionIndex: exported.definitionIndex,
+      entryName: name,
+      parameters,
+      result,
+      arguments: arguments_,
+    },
+  );
+}
+
 export async function runBoundedWasmModule(
-  module: GpuModule,
+  module: CompiledModule,
   maximumSteps: number,
   options: WasmRunOptions = {},
 ): Promise<BoundedWasmExecution> {
-  if (!Number.isSafeInteger(maximumSteps) || maximumSteps < 1 || maximumSteps > 1_000_000) {
+  if (
+    !Number.isSafeInteger(maximumSteps) || maximumSteps < 1 ||
+    maximumSteps > 1_000_000
+  ) {
     throw new RangeError(
       `bounded functional WASM maximumSteps must be within [1, 1000000]; received ${maximumSteps}`,
     );
   }
   const execution = await runWasmAttempt(module, options, false, maximumSteps);
   if (execution.semanticSteps === undefined) {
-    throw new Error("bounded functional WASM execution omitted its semantic step count");
+    throw new Error(
+      "bounded functional WASM execution omitted its semantic step count",
+    );
   }
   return execution as BoundedWasmExecution;
 }
 
 async function runWasmAttempt(
-  module: GpuModule,
+  module: CompiledModule,
   options: WasmRunOptions,
   allowSuspendingHostOperations: boolean,
   maximumSteps?: number,
+  selectedTarget?: WasmInvocationTarget,
 ): Promise<WasmExecution & { readonly semanticSteps?: number }> {
   options.signal?.throwIfAborted();
-  const { maximumResultNodes, maximumResultBytes } = validateWasmRunControls(options);
+  const { maximumResultNodes, maximumResultBytes } = validateWasmRunControls(
+    options,
+  );
   if (!allowSuspendingHostOperations) {
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
@@ -113,30 +176,15 @@ async function runWasmAttempt(
     }
   }
   const nodes = await module.readCoreNodes();
-  const entry = functionalWasmEntry(module);
-  if (entry.parameter !== undefined && options.argument === undefined) {
-    throw new WasmBoundaryError({
-      code: "F4101",
-      kind: "invalid-argument",
-      path: "argument",
-      message: `functional WASM entry requires ${
-        describeType(entry.parameter)
-      } argument; received undefined`,
-    });
-  }
-  if (entry.parameter === undefined && options.argument !== undefined) {
-    throw new WasmBoundaryError({
-      code: "F4101",
-      kind: "invalid-argument",
-      path: "argument",
-      message: "functional WASM entry does not accept an argument",
-    });
-  }
+  const target = selectedTarget ?? moduleInvocationTarget(module, options);
   const instrumented = maximumSteps === undefined
     ? undefined
     : await fuelInstrumentedWasm(module, nodes);
   const [artifact, executable] = instrumented === undefined
-    ? await Promise.all([cachedWasmArtifact(module), cachedExecutableWasm(module)])
+    ? await Promise.all([
+      cachedWasmArtifact(module),
+      cachedExecutableWasm(module),
+    ])
     : [instrumented, instrumented.executable] as const;
   options.signal?.throwIfAborted();
   const { bytes } = artifact;
@@ -150,15 +198,19 @@ async function runWasmAttempt(
       !(comptimeFuel instanceof WebAssembly.Global) ||
       !(comptimeSteps instanceof WebAssembly.Global)
     ) {
-      throw new Error("fuel-instrumented functional WASM omitted its counter globals");
+      throw new Error(
+        "fuel-instrumented functional WASM omitted its counter globals",
+      );
     }
     comptimeFuel.value = maximumSteps;
     comptimeSteps.value = 0;
   }
-  const exportedMain = instance.exports.main;
-  if (typeof exportedMain !== "function") {
+  const exportedFunction = instance.exports[target.exportName];
+  if (typeof exportedFunction !== "function") {
     throw new Error(
-      `functional WASM entry d${module.entryDefinition} did not export a callable main function`,
+      `functional WASM entry d${target.definitionIndex} did not export callable ${
+        JSON.stringify(target.exportName)
+      }`,
     );
   }
   const heapTop = instance.exports.heapTop;
@@ -187,16 +239,17 @@ async function runWasmAttempt(
       artifact.automaticArenaReset
     ? beginWasmArena(instance)
     : undefined;
-  let argument: bigint | undefined;
+  const encodedArguments: bigint[] = [];
   try {
-    if (entry.parameter !== undefined) {
+    for (let index = 0; index < target.parameters.length; index += 1) {
+      const parameter = target.parameters[index]!;
       try {
-        argument = encodeWasmValue(
+        encodedArguments.push(encodeWasmValue(
           instance,
           module,
-          entry.parameter,
-          options.argument!,
-        );
+          parameter,
+          target.arguments[index]!,
+        ));
       } catch (cause) {
         if (cause instanceof WebAssembly.RuntimeError) {
           throwWasmTrap(module, nodes, instance, cause);
@@ -204,14 +257,14 @@ async function runWasmAttempt(
         throw new WasmBoundaryError({
           code: "F4101",
           kind: "invalid-argument",
-          path: "argument",
+          path: `arguments[${index}]`,
           message: cause instanceof Error
             ? cause.message
             : `functional WASM argument encoding failed with ${String(cause)}`,
         }, cause);
       }
     }
-    const heapBase = entry.parameter === undefined
+    const heapBase = target.parameters.length === 0
       ? heapTopBeforeInitialization
       : heapTop instanceof WebAssembly.Global
       ? Number(heapTop.value) >>> 0
@@ -219,9 +272,7 @@ async function runWasmAttempt(
     let result: number | bigint;
     try {
       options.signal?.throwIfAborted();
-      result = (argument === undefined ? exportedMain() : exportedMain(argument)) as
-        | number
-        | bigint;
+      result = exportedFunction(...encodedArguments) as number | bigint;
     } catch (cause) {
       throwWasmTrap(module, nodes, instance, cause);
     }
@@ -230,7 +281,7 @@ async function runWasmAttempt(
       value = decodeWasmValue(
         instance,
         module,
-        entry.result,
+        target.result,
         result,
         maximumResultNodes,
         maximumResultBytes,
@@ -240,8 +291,8 @@ async function runWasmAttempt(
         throw new WasmRuntimeError({
           code: cause.kind === "result-too-large" ? "F3010" : "F3011",
           kind: cause.kind,
-          entryDefinition: module.entryDefinition,
-          entryName: functionalEntryName(module),
+          entryDefinition: target.definitionIndex,
+          entryName: target.entryName,
           message: cause.message,
         }, cause);
       }
@@ -279,8 +330,13 @@ async function runWasmAttempt(
     };
   } finally {
     try {
-      if (argument !== undefined && invocationArena === undefined) {
-        releaseEncodedWasmValue(instance, argument);
+      if (
+        invocationArena === undefined &&
+        options.argumentOwnership !== "ownership-transfer"
+      ) {
+        for (const argument of encodedArguments) {
+          releaseEncodedWasmValue(instance, argument);
+        }
       }
     } finally {
       invocationArena?.reset();
@@ -288,12 +344,59 @@ async function runWasmAttempt(
   }
 }
 
+interface WasmInvocationTarget {
+  readonly exportName: string;
+  readonly definitionIndex: number;
+  readonly entryName: string;
+  readonly parameters: readonly import("./schema_contract.ts").Type[];
+  readonly result: import("./schema_contract.ts").Type;
+  readonly arguments: readonly WasmValue[];
+}
+
+function moduleInvocationTarget(
+  module: CompiledModule,
+  options: WasmRunOptions,
+): WasmInvocationTarget {
+  const entry = functionalWasmEntry(module);
+  if (entry.parameter !== undefined && options.argument === undefined) {
+    throw new WasmBoundaryError({
+      code: "F4101",
+      kind: "invalid-argument",
+      path: "argument",
+      message: `functional WASM entry requires ${
+        describeType(entry.parameter)
+      } argument; received undefined`,
+    });
+  }
+  if (entry.parameter === undefined && options.argument !== undefined) {
+    throw new WasmBoundaryError({
+      code: "F4101",
+      kind: "invalid-argument",
+      path: "argument",
+      message: "functional WASM entry does not accept an argument",
+    });
+  }
+  const parameters = entry.parameter === undefined ? [] : [entry.parameter];
+  const arguments_ = options.argument === undefined ? [] : [options.argument];
+  return {
+    exportName: "main",
+    definitionIndex: module.entryDefinition,
+    entryName: functionalEntryName(module),
+    parameters,
+    result: entry.result,
+    arguments: arguments_,
+  };
+}
+
 function validateWasmRunControls(
   options: Pick<
     WasmRunOptions,
     "argumentOwnership" | "maximumResultBytes" | "maximumResultNodes"
   >,
-): { readonly maximumResultNodes: number; readonly maximumResultBytes: number } {
+): {
+  readonly maximumResultNodes: number;
+  readonly maximumResultBytes: number;
+} {
   const argumentOwnership = options.argumentOwnership ?? "bounded-borrow";
   if (
     argumentOwnership !== "bounded-borrow" &&
@@ -331,7 +434,7 @@ interface WasmReplayRecord {
 }
 
 export async function runWasmModuleAsync(
-  module: GpuModule,
+  module: CompiledModule,
   options: WasmAsyncRunOptions,
 ): Promise<WasmExecution> {
   const maximumSuspensions = options.maximumSuspensions ?? 1_024;
@@ -589,7 +692,9 @@ function copyWasmHostValue(
       readonly kind: "aggregate";
       readonly value: Extract<
         WasmHostValue,
-        { readonly kind: "tuple" | "array" | "slice" | "constructor" | "erased" }
+        {
+          readonly kind: "tuple" | "array" | "slice" | "constructor" | "erased";
+        }
       >;
       readonly childCount: number;
     };
@@ -611,7 +716,9 @@ function copyWasmHostValue(
         const first = children[0];
         const second = children[1];
         if (first === undefined || second === undefined) {
-          throw new Error("functional WASM async snapshot omitted a tuple field");
+          throw new Error(
+            "functional WASM async snapshot omitted a tuple field",
+          );
         }
         copiedValues.push({ kind: "tuple", values: [first, second] });
       } else if (frame.value.kind === "constructor") {
@@ -638,14 +745,17 @@ function copyWasmHostValue(
       continue;
     }
     if (
-      current.kind !== "tuple" && current.kind !== "array" && current.kind !== "slice" &&
+      current.kind !== "tuple" && current.kind !== "array" &&
+      current.kind !== "slice" &&
       current.kind !== "constructor" && current.kind !== "erased"
     ) {
       copiedValues.push({ ...current });
       continue;
     }
     if (activeValues.has(current)) {
-      throw new TypeError(`functional WASM async snapshot contains a cyclic ${current.kind} value`);
+      throw new TypeError(
+        `functional WASM async snapshot contains a cyclic ${current.kind} value`,
+      );
     }
     activeValues.add(current);
     const children = current.kind === "constructor"
