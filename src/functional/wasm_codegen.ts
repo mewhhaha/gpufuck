@@ -662,8 +662,8 @@ class WasmCompiler {
       const rootNode = this.#module.definitionRoots[definitionIndex];
       if (rootNode === undefined || this.expressionIsWhnf(rootNode)) continue;
       this.#globalThunkSlots[definitionIndex] = this.reserveIndirectFunction();
-    this.#automaticArenaReset = !this.#globalThunkSlots.some((slot) => slot !== undefined);
     }
+    this.#automaticArenaReset = !this.#globalThunkSlots.some((slot) => slot !== undefined);
     this.compileHostOperationClosures();
     this.compileGlobalThunks();
     closureSpan?.finish({
@@ -6237,7 +6237,6 @@ class WasmCompiler {
   indirectFunctionOffset(): number {
     return this.#functionImports.length + (this.#compactScalar ? 0 : 4);
   }
-
 
   node(index: number): CoreNode {
     const node = this.#nodes[index];
