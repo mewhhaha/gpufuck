@@ -470,22 +470,34 @@ export function encodeWasmModule(
       ),
     ];
   }
-  const codeSection = section(10, vector(functionBodies.map((body) => body.encoded)));
+  const functionCount = encodeUnsigned(functionBodies.length);
+  const codeContentsLength = functionCount.length +
+    functionBodies.reduce((total, body) => total + body.encoded.length, 0);
+  const encodedCodeContentsLength = encodeUnsigned(codeContentsLength);
+  const sectionsLength = sectionsBeforeCode.reduce(
+    (total, encodedSection) => total + encodedSection.length,
+    0,
+  );
+  const bytes = new Uint8Array(
+    8 + sectionsLength + 1 + encodedCodeContentsLength.length + codeContentsLength,
+  );
+  bytes.set([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+  let offset = 8;
+  for (const encodedSection of sectionsBeforeCode) {
+    bytes.set(encodedSection, offset);
+    offset += encodedSection.length;
+  }
+  bytes[offset++] = 10;
+  bytes.set(encodedCodeContentsLength, offset);
+  offset += encodedCodeContentsLength.length;
+  bytes.set(functionCount, offset);
+  offset += functionCount.length;
+  for (const body of functionBodies) {
+    bytes.set(body.encoded, offset);
+    offset += body.encoded.length;
+  }
   return {
-    bytes: new Uint8Array(concatenateBytes([
-      [
-        0x00,
-        0x61,
-        0x73,
-        0x6d,
-        0x01,
-        0x00,
-        0x00,
-        0x00,
-      ],
-      ...sectionsBeforeCode,
-      codeSection,
-    ])),
+    bytes,
     functionBodies,
     sectionsBeforeCode,
     reusedFunctionBodies,
