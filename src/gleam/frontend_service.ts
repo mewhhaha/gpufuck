@@ -141,8 +141,9 @@ export class GleamFrontendService {
 
     const sourceByModule = new Map(sources.map((source) => [source.name, source.source]));
     if (reusesProjectSemantics && cached?.result.ok) {
+      const previousProject = cached.result.lowered;
       const previousModules = new Map(
-        cached.result.lowered.modules.map((lowered) => [lowered.source.name, lowered]),
+        previousProject.modules.map((lowered) => [lowered.source.name, lowered]),
       );
       const loweredModules = modules.map((module): LoweredGleamModule => {
         const previous = previousModules.get(module.name);
@@ -155,10 +156,11 @@ export class GleamFrontendService {
           throw new Error(`Gleam frontend service omitted source for module ${module.name}`);
         }
         if (cachedLowering.source === source) return previous;
+        const sourceGeometryUnchanged = previous.artifact.sourceByteLength === module.span.endByte;
         const lowered = {
           ...previous,
           source: module,
-          artifact: createOwnedModuleArtifact({
+          artifact: sourceGeometryUnchanged ? previous.artifact : createOwnedModuleArtifact({
             ...previous.artifact,
             sourceByteLength: module.span.endByte,
           }),
@@ -170,10 +172,36 @@ export class GleamFrontendService {
         });
         return lowered;
       });
+      const sourceGeometryUnchanged = loweredModules.every((lowered, index) =>
+        lowered.artifact.sourceByteLength ===
+          previousProject.modules[index]?.artifact.sourceByteLength
+      );
+      if (sourceGeometryUnchanged) {
+        const linked = measureCompilerStage(
+          options.trace,
+          "frontend.link",
+          {
+            modules: previousProject.linked.sources.length,
+            nodes: previousProject.module.nodeCount,
+            definitions: previousProject.module.definitionCount,
+            types: previousProject.module.typeCount,
+            cacheHit: true,
+          },
+          () => previousProject.linked,
+        );
+        return this.#rememberProject(sources, entry, {
+          ok: true,
+          lowered: {
+            modules: loweredModules,
+            linked,
+            module: linked.module,
+          },
+        });
+      }
       const result = linkLoweredGleamModules(modules, loweredModules, entry, options.trace);
       if (result.ok) {
         registerEquivalentModuleFingerprint(
-          cached.result.lowered.module,
+          previousProject.module,
           result.lowered.module,
         );
       }

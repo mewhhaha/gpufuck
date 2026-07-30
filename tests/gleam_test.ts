@@ -88,6 +88,29 @@ Deno.test("Gleam frontend service reuses an unchanged project", () => {
   frontend.clear();
 });
 
+Deno.test("Gleam frontend service reuses linked source geometry", () => {
+  const frontend = new GleamFrontendService();
+  const entry = { module: "main", exportName: "main" };
+  const source = "pub fn main() -> Int { 42 }\n";
+  const first = frontend.lower(
+    [{ name: "main", source: `${source}// source one\n` }],
+    entry,
+  );
+  const trace = new CompilerPerformanceTrace();
+  const second = frontend.lower(
+    [{ name: "main", source: `${source}// source two\n` }],
+    entry,
+    { trace },
+  );
+  ok(first.ok);
+  ok(second.ok);
+  if (!first.ok || !second.ok) return;
+  strictEqual(second.lowered.module, first.lowered.module);
+  const link = trace.snapshot().find((event) => event.stage === "frontend.link");
+  equal(link?.annotations.cacheHit, true);
+  frontend.clear();
+});
+
 Deno.test("trailing trivia reuse distinguishes comment markers inside strings", () => {
   const frontend = new GleamFrontendService();
   const first = frontend.lower(
