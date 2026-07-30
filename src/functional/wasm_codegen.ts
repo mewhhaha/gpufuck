@@ -120,7 +120,7 @@ const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByte
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
-const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
+const MAXIMUM_SPECIALIZED_INLINE_SITES = 128;
 
 type ValueSource =
   | { readonly kind: "i64-local"; readonly index: number }
