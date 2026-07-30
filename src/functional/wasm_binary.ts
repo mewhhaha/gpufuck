@@ -22,8 +22,15 @@ export interface WasmFunctionBody {
   readonly typeIndex: number;
   readonly localTypes: readonly number[];
   readonly instructions: readonly number[];
+  readonly signedInteger64Literals: readonly WasmSignedInteger64Literal[];
   readonly usesMemory: boolean;
   readonly usesIndirectCalls: boolean;
+}
+
+export interface WasmSignedInteger64Literal {
+  readonly nodeIndex: number;
+  readonly immediateOffset: number;
+  readonly immediateLength: number;
 }
 
 export interface WasmFunctionImport {
@@ -50,6 +57,7 @@ export const WASM_BASE_FUNCTION_TYPE_COUNT = WASM_BASE_FUNCTION_TYPES.length;
 export class WasmInstructions {
   readonly bytes: number[] = [];
   readonly localTypes: number[] = [];
+  readonly signedInteger64Literals: WasmSignedInteger64Literal[] = [];
   usesMemory = false;
   usesIndirectCalls = false;
 
@@ -127,16 +135,7 @@ export class WasmInstructions {
   }
 
   signed64(value: bigint): void {
-    while (true) {
-      const byte = Number(value & 0x7fn);
-      value >>= 7n;
-      const signBit = (byte & 0x40) !== 0;
-      if ((value === 0n && !signBit) || (value === -1n && signBit)) {
-        this.bytes.push(byte);
-        return;
-      }
-      this.bytes.push(byte | 0x80);
-    }
+    appendSignedInteger64(this.bytes, value);
   }
 
   localGet(index: number): void {
@@ -194,6 +193,17 @@ export class WasmInstructions {
   i64Const(value: bigint): void {
     this.emit(0x42);
     this.signed64(value);
+  }
+
+  signedInteger64Literal(nodeIndex: number, value: bigint): void {
+    this.emit(0x42);
+    const immediateOffset = this.bytes.length;
+    this.signed64(value);
+    this.signedInteger64Literals.push({
+      nodeIndex,
+      immediateOffset,
+      immediateLength: this.bytes.length - immediateOffset,
+    });
   }
 
   f32Const(value: number): void {
@@ -296,6 +306,25 @@ export class WasmInstructions {
     this.emit(0x39);
     this.unsigned(alignment);
     this.unsigned(offset);
+  }
+}
+
+export function encodeSignedWasmInteger64(value: bigint): readonly number[] {
+  const bytes: number[] = [];
+  appendSignedInteger64(bytes, value);
+  return bytes;
+}
+
+function appendSignedInteger64(bytes: number[], value: bigint): void {
+  while (true) {
+    const byte = Number(value & 0x7fn);
+    value >>= 7n;
+    const signBit = (byte & 0x40) !== 0;
+    if ((value === 0n && !signBit) || (value === -1n && signBit)) {
+      bytes.push(byte);
+      return;
+    }
+    bytes.push(byte | 0x80);
   }
 }
 

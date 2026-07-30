@@ -293,6 +293,8 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
   const first = await compile(63);
   const changedTrace = new CompilerPerformanceTrace();
   const second = await compile(64, changedTrace);
+  const chainedTrace = new CompilerPerformanceTrace();
+  const third = await compile(65, chainedTrace);
   const trace = new CompilerPerformanceTrace();
   const recovered = await compile(63, trace);
 
@@ -320,12 +322,29 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     event.stage === "wasm.plan.literal-update"
   );
   equal(wasmPlanUpdate?.annotations.changedNodes, 1);
+  const wasmEmissionUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "wasm.emit.literal-update"
+  );
+  equal(wasmEmissionUpdate?.annotations.changedImmediates, 2);
+  equal(
+    changedTrace.snapshot().some((event) => event.stage === "wasm.emit.closures"),
+    false,
+  );
   notDeepStrictEqual(second.wasm, first.wasm);
   const fullArtifact = compileWasmArtifact(
     second.module,
     await second.module.readCoreNodes(),
   );
   deepStrictEqual(second.wasm, fullArtifact.bytes);
+  const chainedFullArtifact = compileWasmArtifact(
+    third.module,
+    await third.module.readCoreNodes(),
+  );
+  deepStrictEqual(third.wasm, chainedFullArtifact.bytes);
+  equal(
+    chainedTrace.snapshot().some((event) => event.stage === "wasm.emit.literal-update"),
+    true,
+  );
   const execution = await runWasmModule(second.module);
   equal(execution.value.kind, "signed-integer-64");
   equal(execution.value.kind === "signed-integer-64" ? execution.value.value : undefined, 64n);
@@ -341,6 +360,7 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
 
   first.module.destroy();
   second.module.destroy();
+  third.module.destroy();
   recovered.module.destroy();
   frontend.clear();
   await compiler.destroy();

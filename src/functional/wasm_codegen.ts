@@ -21,6 +21,7 @@ import {
 } from "./host_contract.ts";
 import {
   encodeCompactScalarWasmModule,
+  encodeSignedWasmInteger64,
   encodeWasmModule,
   WASM_BASE_FUNCTION_TYPE_COUNT,
   WASM_BASE_FUNCTION_TYPES,
@@ -29,6 +30,7 @@ import {
   type WasmFunctionType,
   WasmFunctionTypeIndex,
   WasmInstructions,
+  type WasmSignedInteger64Literal,
   WasmValueType,
 } from "./wasm_binary.ts";
 import { WasmValueAbi } from "./wasm_abi.ts";
@@ -248,6 +250,26 @@ export interface WasmArtifact {
 
 const backendPlansByArtifact = new WeakMap<WasmArtifact, WasmBackendPlan>();
 
+interface LinearWasmEmission {
+  readonly imports: readonly WasmFunctionImport[];
+  readonly functions: readonly WasmFunctionBody[];
+  readonly indirectFunctionIndices: readonly number[];
+  readonly entryFunctionIndex: number;
+  readonly heapStart: number;
+  readonly additionalFunctionTypes: readonly WasmFunctionType[];
+  readonly valueForceFunctionIndex: number;
+  readonly initializeFunctionIndex: number;
+  readonly allocateFunctionIndex: number;
+  readonly freeFunctionIndex: number;
+  readonly functionExports: readonly {
+    readonly name: string;
+    readonly functionIndex: number;
+  }[];
+  readonly instrumentedFuel: boolean;
+}
+
+const linearEmissionsByArtifact = new WeakMap<WasmArtifact, LinearWasmEmission>();
+
 function wasmEncodingAnnotations(
   functions: readonly WasmFunctionBody[],
   imports: number,
@@ -330,7 +352,165 @@ export function compileWasmArtifactWithSignedLiteralUpdate(
     constructors: module.constructorCount,
     incremental: true,
   });
+  const referenceEmission = linearEmissionsByArtifact.get(referenceArtifact);
+  if (referenceEmission !== undefined) {
+    return emitWasmSignedLiteralUpdate(
+      plan,
+      referenceArtifact,
+      referenceEmission,
+      changedNodes,
+      trace,
+    );
+  }
   return emitWasmArtifact(plan, trace);
+}
+
+function emitWasmSignedLiteralUpdate(
+  plan: WasmBackendPlan,
+  referenceArtifact: WasmArtifact,
+  referenceEmission: LinearWasmEmission,
+  changedNodes: readonly number[],
+  trace?: CompilerPerformanceTrace,
+): WasmArtifact {
+  const emitSpan = trace?.start("wasm.emit");
+  try {
+    const updateAnnotations = {
+      functions: referenceEmission.functions.length,
+      changedNodes: changedNodes.length,
+      changedImmediates: 0,
+    };
+    const changedValues = new Map<number, bigint>();
+    for (const nodeIndex of changedNodes) {
+      const node = plan.nodes[nodeIndex];
+      if (node?.tag !== CoreTag.SignedInteger64) {
+        throw new Error(
+          `incremental WebAssembly emission received non-literal Core node ${nodeIndex}`,
+        );
+      }
+      changedValues.set(nodeIndex, wideLiteralBits(node));
+    }
+    const functions = trace === undefined
+      ? updateSignedInteger64Literals(
+        referenceEmission.functions,
+        changedValues,
+        updateAnnotations,
+      )
+      : trace.measure(
+        "wasm.emit.literal-update",
+        updateAnnotations,
+        () =>
+          updateSignedInteger64Literals(
+            referenceEmission.functions,
+            changedValues,
+            updateAnnotations,
+          ),
+      );
+    const emission = Object.freeze({ ...referenceEmission, functions });
+    const encodeSpan = trace?.start("wasm.encode");
+    const bytes = encodeLinearWasmEmission(emission);
+    encodeSpan?.finish(wasmEncodingAnnotations(
+      functions,
+      emission.imports.length,
+      emission.indirectFunctionIndices.length,
+    ));
+    const artifact = {
+      bytes,
+      specializedCallSites: referenceArtifact.specializedCallSites,
+      automaticArenaReset: referenceArtifact.automaticArenaReset,
+    };
+    backendPlansByArtifact.set(artifact, plan);
+    linearEmissionsByArtifact.set(artifact, emission);
+    emitSpan?.finish({
+      nodes: plan.nodes.length,
+      bytes: bytes.byteLength,
+      specializedCallSites: artifact.specializedCallSites,
+      incremental: true,
+    });
+    return artifact;
+  } catch (error) {
+    emitSpan?.finish({ failed: true, nodes: plan.nodes.length, incremental: true });
+    throw error;
+  }
+}
+
+function updateSignedInteger64Literals(
+  functions: readonly WasmFunctionBody[],
+  changedValues: ReadonlyMap<number, bigint>,
+  annotations: { changedImmediates: number },
+): readonly WasmFunctionBody[] {
+  return functions.map((body) => {
+    if (
+      !body.signedInteger64Literals.some((literal) => changedValues.has(literal.nodeIndex))
+    ) return body;
+    const instructions: number[] = [];
+    const literals: WasmSignedInteger64Literal[] = [];
+    let previousOffset = 0;
+    for (const literal of body.signedInteger64Literals) {
+      appendInstructionRange(
+        instructions,
+        body.instructions,
+        previousOffset,
+        literal.immediateOffset,
+      );
+      const value = changedValues.get(literal.nodeIndex);
+      const immediate = value === undefined ? undefined : encodeSignedWasmInteger64(value);
+      const immediateOffset = instructions.length;
+      if (immediate === undefined) {
+        appendInstructionRange(
+          instructions,
+          body.instructions,
+          literal.immediateOffset,
+          literal.immediateOffset + literal.immediateLength,
+        );
+      } else {
+        for (const byte of immediate) instructions.push(byte);
+      }
+      literals.push({
+        nodeIndex: literal.nodeIndex,
+        immediateOffset,
+        immediateLength: instructions.length - immediateOffset,
+      });
+      if (value !== undefined) annotations.changedImmediates += 1;
+      previousOffset = literal.immediateOffset + literal.immediateLength;
+    }
+    appendInstructionRange(
+      instructions,
+      body.instructions,
+      previousOffset,
+      body.instructions.length,
+    );
+    return {
+      ...body,
+      instructions,
+      signedInteger64Literals: literals,
+    };
+  });
+}
+
+function appendInstructionRange(
+  target: number[],
+  source: readonly number[],
+  start: number,
+  end: number,
+): void {
+  for (let offset = start; offset < end; offset++) target.push(source[offset]!);
+}
+
+function encodeLinearWasmEmission(emission: LinearWasmEmission): Uint8Array<ArrayBuffer> {
+  return encodeWasmModule(
+    emission.imports,
+    emission.functions,
+    emission.indirectFunctionIndices,
+    emission.entryFunctionIndex,
+    emission.heapStart,
+    emission.additionalFunctionTypes,
+    emission.valueForceFunctionIndex,
+    emission.initializeFunctionIndex,
+    emission.allocateFunctionIndex,
+    emission.freeFunctionIndex,
+    emission.functionExports,
+    emission.instrumentedFuel,
+  );
 }
 
 function emitWasmArtifact(
@@ -413,6 +593,7 @@ class WasmCompiler {
   readonly #ownedRuntimeEnabled: boolean;
   readonly #hostEmitter: WasmHostEmitter;
   readonly #trace: CompilerPerformanceTrace | undefined;
+  #linearEmission: LinearWasmEmission | undefined;
   #lambdaSetAnalysis: LambdaSetAnalysis | undefined;
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
@@ -589,11 +770,15 @@ class WasmCompiler {
   }
 
   artifact(bytes: Uint8Array<ArrayBuffer>): WasmArtifact {
-    return {
+    const artifact = {
       bytes,
       specializedCallSites: this.#specializedCallSiteCount,
       automaticArenaReset: this.#automaticArenaReset,
     };
+    if (this.#linearEmission !== undefined) {
+      linearEmissionsByArtifact.set(artifact, this.#linearEmission);
+    }
+    return artifact;
   }
 
   scalarSpecializationEnabled(): boolean {
@@ -858,35 +1043,39 @@ class WasmCompiler {
     );
     const entryFunctionIndex = this.#functionImports.length + 5 +
       indirectFunctions.length;
-    const encodeSpan = this.#trace?.start("wasm.encode");
-    const bytes = encodeWasmModule(
-      this.#functionImports,
+    const functionExports = [
+      ...this.#module.wasmExports.map((exported, index) => ({
+        name: exported.name,
+        functionIndex: entryFunctionIndex + 1 + index,
+      })),
+      ...(releaseOwnedFunctionIndex === undefined
+        ? []
+        : ownedTypeExports.flatMap((owned, index) => [{
+          name: `retain_${owned.name}`,
+          functionIndex: releaseOwnedFunctionIndex + 1 + index * 2,
+        }, {
+          name: `drop_${owned.name}`,
+          functionIndex: releaseOwnedFunctionIndex + 2 + index * 2,
+        }])),
+    ];
+    const emission = Object.freeze({
+      imports: this.#functionImports,
       functions,
       indirectFunctionIndices,
       entryFunctionIndex,
-      this.heapStart(),
-      this.#additionalFunctionTypes,
-      this.#functionImports.length + 3,
-      this.#functionImports.length + 4 + indirectFunctions.length,
-      this.#functionImports.length,
-      this.#functionImports.length + 2,
-      [
-        ...this.#module.wasmExports.map((exported, index) => ({
-          name: exported.name,
-          functionIndex: entryFunctionIndex + 1 + index,
-        })),
-        ...(releaseOwnedFunctionIndex === undefined
-          ? []
-          : ownedTypeExports.flatMap((owned, index) => [{
-            name: `retain_${owned.name}`,
-            functionIndex: releaseOwnedFunctionIndex + 1 + index * 2,
-          }, {
-            name: `drop_${owned.name}`,
-            functionIndex: releaseOwnedFunctionIndex + 2 + index * 2,
-          }])),
-      ],
-      this.#instrumentedFuel,
-    );
+      heapStart: this.heapStart(),
+      additionalFunctionTypes: this.#additionalFunctionTypes,
+      valueForceFunctionIndex: this.#functionImports.length + 3,
+      initializeFunctionIndex: this.#functionImports.length + 4 +
+        indirectFunctions.length,
+      allocateFunctionIndex: this.#functionImports.length,
+      freeFunctionIndex: this.#functionImports.length + 2,
+      functionExports,
+      instrumentedFuel: this.#instrumentedFuel,
+    });
+    this.#linearEmission = emission;
+    const encodeSpan = this.#trace?.start("wasm.encode");
+    const bytes = encodeLinearWasmEmission(emission);
     encodeSpan?.finish(wasmEncodingAnnotations(
       functions,
       this.#functionImports.length,
@@ -3456,7 +3645,7 @@ class WasmCompiler {
     const node = this.node(nodeIndex);
     switch (node.tag) {
       case CoreTag.SignedInteger64:
-        instructions.i64Const(wideLiteralBits(node));
+        instructions.signedInteger64Literal(nodeIndex, wideLiteralBits(node));
         return;
       case CoreTag.Unary:
         if (node.payload !== UnaryOperator.NegateSignedInteger64) {

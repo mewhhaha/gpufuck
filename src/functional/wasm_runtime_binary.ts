@@ -442,6 +442,7 @@ export function functionBody(
     typeIndex,
     localTypes: instructions.localTypes,
     instructions: instructions.bytes,
+    signedInteger64Literals: instructions.signedInteger64Literals,
     usesMemory: instructions.usesMemory,
     usesIndirectCalls: instructions.usesIndirectCalls,
   };
