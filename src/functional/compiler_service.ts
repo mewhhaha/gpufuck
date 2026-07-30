@@ -1,4 +1,5 @@
 import { requestWebGpuDevice } from "../webgpu.ts";
+import { measureCompilerStage, measureCompilerStageAsync } from "../compiler_performance_trace.ts";
 import { rebindCompiledModuleSource } from "./compiled_module_rebinding.ts";
 import { CpuCompiler, GpuCompiler } from "./compiler.ts";
 import type { CompilationOptions, CpuCompileResult } from "./compiler_module.ts";
@@ -94,6 +95,7 @@ export class FunctionalCompilerService {
         ? {}
         : { maximumStepsPerDispatch: options.maximumStepsPerDispatch }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.trace === undefined ? {} : { trace: options.trace }),
     };
     if (backend === "cpu") {
       if (
@@ -126,17 +128,37 @@ export class FunctionalCompilerService {
     options: CompilationOptions,
   ): Promise<CpuCompileResult> {
     const cached = this.#cpuCompilations.get(module);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      options.trace?.start("semantic.service-cache").finish({
+        cacheHit: true,
+        cacheLevel: "module",
+      });
+      return cached;
+    }
 
-    const semanticFingerprint = semanticModuleFingerprint(module);
+    const semanticFingerprint = measureCompilerStage(
+      options.trace,
+      "semantic.fingerprint",
+      { nodes: module.nodeCount, sourceBytes: module.sourceByteLength },
+      () => semanticModuleFingerprint(module),
+    );
     const semanticCompilation = this.#cpuCompilationsBySemantics.get(semanticFingerprint);
+    options.trace?.start("semantic.service-cache").finish({
+      cacheHit: semanticCompilation !== undefined,
+      cacheLevel: semanticCompilation === undefined ? "none" : "semantics",
+    });
     const pending = semanticCompilation === undefined
       ? this.#compileAndRememberSemantics(module, options, semanticFingerprint)
       : semanticCompilation.then(async (result): Promise<CpuCompileResult> => {
         if (!result.ok) return result;
         return {
           ok: true,
-          module: await rebindCompiledModuleSource(result.module, module),
+          module: await measureCompilerStageAsync(
+            options.trace,
+            "semantic.rebind-source",
+            { nodes: module.nodeCount, sourceBytes: module.sourceByteLength },
+            () => rebindCompiledModuleSource(result.module, module),
+          ),
         };
       });
     this.#cpuCompilations.set(module, pending);

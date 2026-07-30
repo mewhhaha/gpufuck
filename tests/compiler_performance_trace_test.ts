@@ -4,6 +4,7 @@ import {
   compileModuleToWasm,
   CompilerPerformanceTrace,
   CpuCompiler,
+  FunctionalCompilerService,
   renderCompilerPerformanceTrace,
   summarizeCompilerPerformance,
 } from "../functional.ts";
@@ -129,6 +130,8 @@ Deno.test("performance tracing preserves Gleam Core and Wasm output", async () =
       "semantic.inference.solve",
       "semantic.effects",
       "wasm.plan.storage",
+      "wasm.total",
+      "wasm.artifact.module",
       "wasm.emit",
       "wasm.encode",
     ]
@@ -155,4 +158,106 @@ Deno.test("performance tracing preserves Gleam Core and Wasm output", async () =
 
   tracedCompilation.module.destroy();
   plainCompilation.module.destroy();
+});
+
+Deno.test("performance tracing reports compiler and Wasm cache hits", async () => {
+  const frontend = lowerGleamSources(
+    [{
+      name: "cache_trace",
+      source: "pub fn main() -> Int { 1_234_567 }\n",
+    }],
+    { module: "cache_trace", exportName: "main" },
+  );
+  ok(frontend.ok);
+  if (!frontend.ok) return;
+
+  const service = new FunctionalCompilerService({ backend: "cpu" });
+  const coldSemanticTrace = new CompilerPerformanceTrace();
+  const coldCompilation = await service.compileModule(frontend.lowered.module, {
+    trace: coldSemanticTrace,
+  });
+  ok(coldCompilation.ok);
+  if (!coldCompilation.ok) return;
+  const coldCache = coldSemanticTrace.snapshot().find((event) =>
+    event.stage === "semantic.service-cache"
+  );
+  equal(coldCache?.annotations.cacheHit, false);
+  equal(coldCache?.annotations.cacheLevel, "none");
+  ok(
+    coldSemanticTrace.snapshot().some((event) => event.stage === "semantic.inference.solve"),
+  );
+
+  const warmSemanticTrace = new CompilerPerformanceTrace();
+  const warmCompilation = await service.compileModule(frontend.lowered.module, {
+    trace: warmSemanticTrace,
+  });
+  ok(warmCompilation.ok);
+  if (!warmCompilation.ok) return;
+  const warmCache = warmSemanticTrace.snapshot().find((event) =>
+    event.stage === "semantic.service-cache"
+  );
+  equal(warmCache?.annotations.cacheHit, true);
+  equal(warmCache?.annotations.cacheLevel, "module");
+  equal(
+    warmSemanticTrace.snapshot().some((event) => event.stage === "semantic.inference.solve"),
+    false,
+  );
+
+  await compileModuleToWasm(coldCompilation.module, {
+    trace: new CompilerPerformanceTrace(),
+  });
+  const editedFrontend = lowerGleamSources(
+    [{
+      name: "cache_trace",
+      source: "pub fn main() -> Int { 1_234_567 }\n// source location changed\n",
+    }],
+    { module: "cache_trace", exportName: "main" },
+  );
+  ok(editedFrontend.ok);
+  if (!editedFrontend.ok) return;
+  const reboundSemanticTrace = new CompilerPerformanceTrace();
+  const reboundCompilation = await service.compileModule(editedFrontend.lowered.module, {
+    trace: reboundSemanticTrace,
+  });
+  ok(reboundCompilation.ok);
+  if (!reboundCompilation.ok) return;
+  const reboundCache = reboundSemanticTrace.snapshot().find((event) =>
+    event.stage === "semantic.service-cache"
+  );
+  equal(reboundCache?.annotations.cacheHit, true);
+  equal(reboundCache?.annotations.cacheLevel, "semantics");
+  ok(
+    reboundSemanticTrace.snapshot().some((event) => event.stage === "semantic.rebind-source"),
+  );
+
+  const reboundWasmTrace = new CompilerPerformanceTrace();
+  await compileModuleToWasm(reboundCompilation.module, { trace: reboundWasmTrace });
+  const reboundModuleCache = reboundWasmTrace.snapshot().find((event) =>
+    event.stage === "wasm.artifact.module"
+  );
+  equal(reboundModuleCache?.annotations.cacheHit, false);
+  const reboundCoreCache = reboundWasmTrace.snapshot().find((event) =>
+    event.stage === "wasm.artifact.resolved-core"
+  );
+  equal(reboundCoreCache?.annotations.cacheHit, true);
+  equal(
+    reboundWasmTrace.snapshot().some((event) => event.stage === "wasm.emit"),
+    false,
+  );
+
+  const warmWasmTrace = new CompilerPerformanceTrace();
+  await compileModuleToWasm(coldCompilation.module, { trace: warmWasmTrace });
+  const warmWasmCache = warmWasmTrace.snapshot().find((event) =>
+    event.stage === "wasm.artifact.module"
+  );
+  equal(warmWasmCache?.annotations.cacheHit, true);
+  equal(
+    warmWasmTrace.snapshot().some((event) => event.stage === "wasm.emit"),
+    false,
+  );
+  const wasmTotal = warmWasmTrace.snapshot().find((event) => event.stage === "wasm.total");
+  equal(wasmTotal?.annotations.cacheEligible, true);
+
+  coldCompilation.module.destroy();
+  await service.destroy();
 });

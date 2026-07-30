@@ -1,5 +1,10 @@
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
-import { measureCompilerStage, measureCompilerStageAsync } from "../compiler_performance_trace.ts";
+import {
+  type CompilerPerformanceAnnotation,
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+  measureCompilerStageAsync,
+} from "../compiler_performance_trace.ts";
 import { compileWasmArtifact, type WasmArtifact } from "./wasm_codegen.ts";
 import { resolvedCoreStructuralFingerprint } from "./semantic_fingerprint.ts";
 import { validateWasmSimdMode } from "./wasm_backend_plan.ts";
@@ -57,71 +62,77 @@ export async function compileModuleToWasm(
       }`,
     );
   }
-  if (backend === "wasm-gc") {
-    if (
-      options.storageCore !== undefined || options.ownedTypeExports !== undefined ||
-      options.simd !== undefined
-    ) {
-      throw new TypeError(
-        "functional WasmGC compilation does not accept linear-memory storage or SIMD options",
-      );
-    }
-    if (options.trace === undefined) return (await cachedWasmGcArtifact(module)).bytes.slice();
-    const nodes = await measureCompilerStageAsync(
-      options.trace,
-      "wasm.read-core",
-      { nodes: module.nodeCount },
-      () => module.readCoreNodes(),
-    );
-    const gcAnnotations = { nodes: nodes.length, bytes: 0 };
-    return measureCompilerStage(
-      options.trace,
-      "wasm.gc.emit",
-      gcAnnotations,
-      () => compileWasmGc(module, nodes),
-      (bytes) => gcAnnotations.bytes = bytes.byteLength,
-    ).slice();
-  }
-  if (options.trace !== undefined) {
-    const nodes = await measureCompilerStageAsync(
-      options.trace,
-      "wasm.read-core",
-      { nodes: module.nodeCount },
-      () => module.readCoreNodes(),
-    );
-    return compileWasmArtifact(module, nodes, false, options, options.trace).bytes.slice();
-  }
   const customStorage = options.storageCore !== undefined ||
     options.ownedTypeExports !== undefined;
-  if (options.simd === "wasm-simd" && !customStorage) {
-    return (await cachedSimdWasmArtifact(module)).bytes.slice();
-  }
-  if (customStorage) {
-    return compileWasmArtifact(
-      module,
-      await module.readCoreNodes(),
-      false,
-      options,
-    ).bytes.slice();
-  }
-  return (await cachedWasmArtifact(module)).bytes.slice();
+  const totalAnnotations = {
+    backend,
+    cacheEligible: backend === "wasm-gc" || !customStorage,
+    bytes: 0,
+  };
+  return await measureCompilerStageAsync(
+    options.trace,
+    "wasm.total",
+    totalAnnotations,
+    async () => {
+      if (backend === "wasm-gc") {
+        if (
+          options.storageCore !== undefined || options.ownedTypeExports !== undefined ||
+          options.simd !== undefined
+        ) {
+          throw new TypeError(
+            "functional WasmGC compilation does not accept linear-memory storage or SIMD options",
+          );
+        }
+        return (await cachedWasmGcArtifact(module, options.trace)).bytes.slice();
+      }
+      if (options.simd === "wasm-simd" && !customStorage) {
+        return (await cachedSimdWasmArtifact(module, options.trace)).bytes.slice();
+      }
+      if (customStorage) {
+        const nodes = await measureCompilerStageAsync(
+          options.trace,
+          "wasm.read-core",
+          { nodes: module.nodeCount },
+          () => module.readCoreNodes(),
+        );
+        return compileWasmArtifact(module, nodes, false, options, options.trace).bytes.slice();
+      }
+      return (await cachedWasmArtifact(module, options.trace)).bytes.slice();
+    },
+    (bytes) => totalAnnotations.bytes = bytes.byteLength,
+  );
 }
 
 async function cachedSimdWasmArtifact(
   module: CompiledModule,
+  trace?: CompilerPerformanceTrace,
 ): Promise<WasmArtifact> {
   return await cachedModuleValue(
     simdWasmArtifactsByModule,
     module,
     () =>
-      module.readCoreNodes().then((nodes) =>
-        compileWasmArtifact(module, nodes, false, { simd: "wasm-simd" })
+      measureCompilerStageAsync(
+        trace,
+        "wasm.read-core",
+        { nodes: module.nodeCount },
+        () => module.readCoreNodes(),
+      ).then((nodes) =>
+        compileWasmArtifact(module, nodes, false, {
+          simd: "wasm-simd",
+          ...(trace === undefined ? {} : { trace }),
+        })
       ),
+    trace === undefined ? undefined : {
+      trace,
+      stage: "wasm.artifact.module",
+      annotations: { backend: "linear-memory", simd: true },
+    },
   );
 }
 
 export async function cachedWasmGcArtifact(
   module: CompiledModule,
+  trace?: CompilerPerformanceTrace,
 ): Promise<{
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly nodes: readonly CoreNode[];
@@ -130,45 +141,159 @@ export async function cachedWasmGcArtifact(
     wasmGcArtifactsByModule,
     module,
     () =>
-      module.readCoreNodes().then((nodes) => ({
-        bytes: compileWasmGc(module, nodes),
-        nodes,
-      })),
+      measureCompilerStageAsync(
+        trace,
+        "wasm.read-core",
+        { nodes: module.nodeCount },
+        () => module.readCoreNodes(),
+      ).then((nodes) => {
+        const annotations = { nodes: nodes.length, bytes: 0 };
+        const bytes = measureCompilerStage(
+          trace,
+          "wasm.gc.emit",
+          annotations,
+          () => compileWasmGc(module, nodes),
+          (emitted) => annotations.bytes = emitted.byteLength,
+        );
+        return { bytes, nodes };
+      }),
+    trace === undefined ? undefined : {
+      trace,
+      stage: "wasm.artifact.module",
+      annotations: { backend: "wasm-gc" },
+    },
   );
 }
 
 export async function cachedWasmArtifact(
   module: CompiledModule,
+  trace?: CompilerPerformanceTrace,
 ): Promise<WasmArtifact> {
   return await cachedModuleValue(
     wasmArtifactsByModule,
     module,
-    () => module.readCoreNodes().then((nodes) => sharedWasmArtifact(module, nodes)),
+    () =>
+      measureCompilerStageAsync(
+        trace,
+        "wasm.read-core",
+        { nodes: module.nodeCount },
+        () => module.readCoreNodes(),
+      ).then((nodes) => sharedWasmArtifact(module, nodes, trace)),
+    trace === undefined ? undefined : {
+      trace,
+      stage: "wasm.artifact.module",
+      annotations: { backend: "linear-memory", simd: false },
+    },
   );
 }
 
 async function sharedWasmArtifact(
   module: CompiledModule,
   nodes: readonly CoreNode[],
+  trace?: CompilerPerformanceTrace,
 ): Promise<WasmArtifact> {
-  const fingerprint = await fingerprintResolvedCore(module, nodes);
-  const cached = wasmArtifactsByResolvedCore.get(fingerprint);
-  if (cached !== undefined) {
-    wasmArtifactsByResolvedCore.delete(fingerprint);
-    wasmArtifactsByResolvedCore.set(fingerprint, cached);
-    return await cached;
+  const annotations = { backend: "linear-memory", cacheHit: false };
+  return await measureCompilerStageAsync(
+    trace,
+    "wasm.artifact.resolved-core",
+    annotations,
+    async () => {
+      const fingerprint = await fingerprintResolvedCore(module, nodes, trace);
+      const cached = wasmArtifactsByResolvedCore.get(fingerprint);
+      if (cached !== undefined) {
+        annotations.cacheHit = true;
+        wasmArtifactsByResolvedCore.delete(fingerprint);
+        wasmArtifactsByResolvedCore.set(fingerprint, cached);
+        return await cached;
+      }
+      const compilation = Promise.resolve().then(() =>
+        compileWasmArtifact(module, nodes, false, {}, trace)
+      );
+      wasmArtifactsByResolvedCore.set(fingerprint, compilation);
+      evictOldestResolvedCoreArtifacts(wasmArtifactsByResolvedCore);
+      try {
+        return await compilation;
+      } catch (error) {
+        if (wasmArtifactsByResolvedCore.get(fingerprint) === compilation) {
+          wasmArtifactsByResolvedCore.delete(fingerprint);
+        }
+        throw error;
+      }
+    },
+  );
+}
+
+interface CachedModuleValueMeasurement {
+  readonly trace: CompilerPerformanceTrace;
+  readonly stage: string;
+  readonly annotations: Readonly<Record<string, CompilerPerformanceAnnotation>>;
+}
+
+async function measuredCachedModuleValue<Value>(
+  cache: WeakMap<CompiledModule, Promise<Value>>,
+  module: CompiledModule,
+  create: () => Promise<Value>,
+  measurement: CachedModuleValueMeasurement,
+): Promise<Value> {
+  const annotations = { ...measurement.annotations, cacheHit: false };
+  return await measureCompilerStageAsync(
+    measurement.trace,
+    measurement.stage,
+    annotations,
+    async () => {
+      const cached = cache.get(module);
+      if (cached !== undefined) {
+        annotations.cacheHit = true;
+        return await cached;
+      }
+      const pending = create();
+      cache.set(module, pending);
+      try {
+        return await pending;
+      } catch (error) {
+        if (cache.get(module) === pending) cache.delete(module);
+        throw error;
+      }
+    },
+  );
+}
+
+async function cachedModuleValue<Value>(
+  cache: WeakMap<CompiledModule, Promise<Value>>,
+  module: CompiledModule,
+  create: () => Promise<Value>,
+  measurement?: CachedModuleValueMeasurement,
+): Promise<Value> {
+  if (measurement !== undefined) {
+    return await measuredCachedModuleValue(cache, module, create, measurement);
   }
-  const compilation = Promise.resolve().then(() => compileWasmArtifact(module, nodes));
-  wasmArtifactsByResolvedCore.set(fingerprint, compilation);
-  evictOldestResolvedCoreArtifacts(wasmArtifactsByResolvedCore);
+  const cached = cache.get(module);
+  if (cached !== undefined) return await cached;
+  const pending = create();
+  cache.set(module, pending);
   try {
-    return await compilation;
+    return await pending;
   } catch (error) {
-    if (wasmArtifactsByResolvedCore.get(fingerprint) === compilation) {
-      wasmArtifactsByResolvedCore.delete(fingerprint);
-    }
+    if (cache.get(module) === pending) cache.delete(module);
     throw error;
   }
+}
+
+async function fingerprintResolvedCore(
+  module: CompiledModule,
+  nodes: readonly CoreNode[],
+  trace?: CompilerPerformanceTrace,
+): Promise<string> {
+  return await cachedModuleValue(
+    resolvedCoreFingerprintByModule,
+    module,
+    () => Promise.resolve(resolvedCoreStructuralFingerprint(module, nodes)),
+    trace === undefined ? undefined : {
+      trace,
+      stage: "wasm.fingerprint.module",
+      annotations: { nodes: nodes.length },
+    },
+  );
 }
 
 export async function cachedExecutableWasm(
@@ -229,36 +354,8 @@ function evictOldestResolvedCoreArtifacts<Value>(
   }
 }
 
-async function fingerprintResolvedCore(
-  module: CompiledModule,
-  nodes: readonly CoreNode[],
-): Promise<string> {
-  return await cachedModuleValue(
-    resolvedCoreFingerprintByModule,
-    module,
-    () => Promise.resolve(resolvedCoreStructuralFingerprint(module, nodes)),
-  );
-}
-
 export async function resolvedCoreFingerprint(
   module: CompiledModule,
 ): Promise<string> {
   return await fingerprintResolvedCore(module, await module.readCoreNodes());
-}
-
-async function cachedModuleValue<Value>(
-  cache: WeakMap<CompiledModule, Promise<Value>>,
-  module: CompiledModule,
-  create: () => Promise<Value>,
-): Promise<Value> {
-  const cached = cache.get(module);
-  if (cached !== undefined) return await cached;
-  const pending = create();
-  cache.set(module, pending);
-  try {
-    return await pending;
-  } catch (error) {
-    if (cache.get(module) === pending) cache.delete(module);
-    throw error;
-  }
 }
