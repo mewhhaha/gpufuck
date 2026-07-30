@@ -10,6 +10,7 @@ import {
   completeTypeDeclarations,
   registerCompleteTypeDeclarations,
 } from "./compiler_module.ts";
+import type { LiteralModuleUpdate } from "./incremental_module.ts";
 import { registerEquivalentResolvedCoreFingerprint } from "./semantic_fingerprint.ts";
 
 export async function rebindCompiledModuleSource(
@@ -54,4 +55,38 @@ export async function rebindCompiledModuleSource(
   registerCompleteTypeDeclarations(rebound, completeTypeDeclarations(compiled));
   registerEquivalentResolvedCoreFingerprint(compiled, rebound);
   return rebound;
+}
+
+export async function applyCompiledLiteralUpdate(
+  compiled: CompiledModule,
+  source: EncodedModule,
+  update: LiteralModuleUpdate,
+): Promise<CompiledModule> {
+  if (compiled.nodeCount !== source.nodeCount) {
+    throw new Error(
+      `cannot apply ${update.changedNodes.length} literal updates to ${compiled.nodeCount} Core nodes from source with ${source.nodeCount} nodes`,
+    );
+  }
+  const changedNodes = new Set(update.changedNodes);
+  const previousNodes = await compiled.readCoreNodes();
+  const nodes = Object.freeze(previousNodes.map((node, nodeIndex) => {
+    if (!changedNodes.has(nodeIndex)) return node;
+    const payload = source.nodeWords[nodeIndex * NODE_WORD_LENGTH + NodeWord.Payload];
+    if (payload === undefined) {
+      throw new Error(`literal update omitted payload for Core node ${nodeIndex}`);
+    }
+    const child0 = source.nodeWords[nodeIndex * NODE_WORD_LENGTH + NodeWord.Child0];
+    if (child0 === undefined) {
+      throw new Error(`literal update omitted child0 for Core node ${nodeIndex}`);
+    }
+    return Object.freeze({ ...node, payload, child0 });
+  }));
+  const updated: CompiledModule = Object.freeze({
+    ...compiled,
+    sources: Object.freeze([...(source.sources ?? [])]),
+    readCoreNodes: () => Promise.resolve(nodes),
+    destroy: () => {},
+  });
+  registerCompleteTypeDeclarations(updated, completeTypeDeclarations(compiled));
+  return updated;
 }

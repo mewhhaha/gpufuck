@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, ok, throws } from "node:assert/strict";
+import { deepStrictEqual, equal, notDeepStrictEqual, ok, throws } from "node:assert/strict";
 
 import {
   compileModuleToWasm,
@@ -6,6 +6,7 @@ import {
   CpuCompiler,
   FunctionalCompilerService,
   renderCompilerPerformanceTrace,
+  runWasmModule,
   summarizeCompilerPerformance,
 } from "../functional.ts";
 import { GleamFrontendService, lowerGleamSources } from "../gleam.ts";
@@ -281,17 +282,31 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
       trace === undefined ? {} : { trace },
     );
     if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
-    await compileModuleToWasm(
+    const wasm = await compileModuleToWasm(
       compilation.module,
       trace === undefined ? {} : { trace },
     );
-    return compilation.module;
+    return { module: compilation.module, wasm };
   };
 
   const first = await compile(41);
-  const second = await compile(42);
+  const changedTrace = new CompilerPerformanceTrace();
+  const second = await compile(42, changedTrace);
   const trace = new CompilerPerformanceTrace();
   const recovered = await compile(41, trace);
+
+  const changedSemanticCache = changedTrace.snapshot().find((event) =>
+    event.stage === "semantic.service-cache"
+  );
+  equal(changedSemanticCache?.annotations.cacheLevel, "literal-update");
+  equal(
+    changedTrace.snapshot().some((event) => event.stage === "semantic.inference.solve"),
+    false,
+  );
+  notDeepStrictEqual(second.wasm, first.wasm);
+  const execution = await runWasmModule(second.module);
+  equal(execution.value.kind, "signed-integer-64");
+  equal(execution.value.kind === "signed-integer-64" ? execution.value.value : undefined, 42n);
 
   const semanticCache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
   equal(semanticCache?.annotations.cacheHit, true);
@@ -300,10 +315,42 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
   equal(coreCache?.annotations.cacheHit, true);
   equal(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"), false);
   equal(trace.snapshot().some((event) => event.stage === "wasm.emit"), false);
+  deepStrictEqual(recovered.wasm, first.wasm);
 
-  first.destroy();
-  second.destroy();
-  recovered.destroy();
+  first.module.destroy();
+  second.module.destroy();
+  recovered.module.destroy();
+  frontend.clear();
+  await compiler.destroy();
+});
+
+Deno.test("incremental semantic reuse rejects structural expression edits", async () => {
+  const frontend = new GleamFrontendService();
+  const compiler = new FunctionalCompilerService({ backend: "cpu" });
+  const entry = { module: "main", exportName: "main" };
+  const first = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 41 + 1 }\n" }],
+    entry,
+  );
+  if (!first.ok) throw new Error(first.diagnostics[0].message);
+  const firstCompilation = await compiler.compileModule(first.lowered.module);
+  if (!firstCompilation.ok) throw new Error(firstCompilation.diagnostics[0].message);
+
+  const trace = new CompilerPerformanceTrace();
+  const second = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 41 - 1 }\n" }],
+    entry,
+  );
+  if (!second.ok) throw new Error(second.diagnostics[0].message);
+  const secondCompilation = await compiler.compileModule(second.lowered.module, { trace });
+  if (!secondCompilation.ok) throw new Error(secondCompilation.diagnostics[0].message);
+
+  const semanticCache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
+  equal(semanticCache?.annotations.cacheLevel, "none");
+  ok(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"));
+
+  firstCompilation.module.destroy();
+  secondCompilation.module.destroy();
   frontend.clear();
   await compiler.destroy();
 });

@@ -9,6 +9,7 @@ import {
   registerModuleFingerprint,
   structuralFingerprint,
 } from "../functional/semantic_fingerprint.ts";
+import { tryRegisterLiteralModuleUpdate } from "../functional/incremental_module.ts";
 import { type GleamDiagnostic, GleamSyntaxError } from "./diagnostic.ts";
 import type { GleamFrontendResult, GleamSourceModule } from "./frontend.ts";
 import { linkLoweredGleamModules, lowerGleamSources, lowerParsedGleamModules } from "./frontend.ts";
@@ -284,6 +285,12 @@ export class GleamFrontendService {
           })
         }`,
       );
+      if (cached?.result.ok) {
+        tryRegisterLiteralModuleUpdate(
+          cached.result.lowered.module,
+          result.lowered.module,
+        );
+      }
     }
     return this.#rememberProject(sources, entry, result);
   }

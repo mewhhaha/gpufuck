@@ -1,9 +1,13 @@
 import { requestWebGpuDevice } from "../webgpu.ts";
 import { measureCompilerStage, measureCompilerStageAsync } from "../compiler_performance_trace.ts";
-import { rebindCompiledModuleSource } from "./compiled_module_rebinding.ts";
+import {
+  applyCompiledLiteralUpdate,
+  rebindCompiledModuleSource,
+} from "./compiled_module_rebinding.ts";
 import { CpuCompiler, GpuCompiler } from "./compiler.ts";
 import type { CompilationOptions, CpuCompileResult } from "./compiler_module.ts";
 import { type EncodedModule, TypecheckingProfile } from "./abi.ts";
+import { literalModuleUpdate } from "./incremental_module.ts";
 import {
   registerResolvedCoreFingerprint,
   semanticModuleFingerprint,
@@ -146,13 +150,22 @@ export class FunctionalCompilerService {
       () => semanticModuleFingerprint(module),
     );
     const semanticCompilation = this.#cpuCompilationsBySemantics.get(semanticFingerprint);
+    const literalUpdate = literalModuleUpdate(module);
+    const literalCompilation = literalUpdate === undefined
+      ? undefined
+      : this.#cpuCompilations.get(literalUpdate.reference);
+    const cacheLevel = semanticCompilation !== undefined
+      ? "semantics"
+      : literalCompilation !== undefined
+      ? "literal-update"
+      : "none";
     options.trace?.start("semantic.service-cache").finish({
-      cacheHit: semanticCompilation !== undefined,
-      cacheLevel: semanticCompilation === undefined ? "none" : "semantics",
+      cacheHit: cacheLevel !== "none",
+      cacheLevel,
     });
-    const pending = semanticCompilation === undefined
-      ? this.#compileAndRememberSemantics(module, options, semanticFingerprint)
-      : semanticCompilation.then(async (result): Promise<CpuCompileResult> => {
+    let pending: Promise<CpuCompileResult>;
+    if (semanticCompilation !== undefined) {
+      pending = semanticCompilation.then(async (result): Promise<CpuCompileResult> => {
         if (!result.ok) return result;
         return {
           ok: true,
@@ -164,34 +177,46 @@ export class FunctionalCompilerService {
           ),
         };
       });
+    } else if (literalCompilation !== undefined && literalUpdate !== undefined) {
+      pending = literalCompilation.then(async (result): Promise<CpuCompileResult> => {
+        if (!result.ok) return result;
+        return {
+          ok: true,
+          module: await measureCompilerStageAsync(
+            options.trace,
+            "semantic.apply-literal-update",
+            {
+              nodes: module.nodeCount,
+              changedNodes: literalUpdate.changedNodes.length,
+            },
+            () => applyCompiledLiteralUpdate(result.module, module, literalUpdate),
+          ),
+        };
+      });
+    } else {
+      pending = this.#cpuCompiler.compileModule(module, options);
+    }
+    if (semanticCompilation === undefined) {
+      pending.then(
+        (result) => {
+          if (!result.ok) return;
+          registerResolvedCoreFingerprint(result.module, `surface:${semanticFingerprint}`);
+          this.#cpuCompilationsBySemantics.set(semanticFingerprint, Promise.resolve(result));
+          while (this.#cpuCompilationsBySemantics.size > 64) {
+            const oldest = this.#cpuCompilationsBySemantics.keys().next().value;
+            if (oldest === undefined) break;
+            this.#cpuCompilationsBySemantics.delete(oldest);
+          }
+        },
+        () => {},
+      );
+    }
     this.#cpuCompilations.set(module, pending);
     pending.catch(() => {
       if (this.#cpuCompilations.get(module) === pending) {
         this.#cpuCompilations.delete(module);
       }
     });
-    return pending;
-  }
-
-  #compileAndRememberSemantics(
-    module: EncodedModule,
-    options: CompilationOptions,
-    semanticFingerprint: string,
-  ): Promise<CpuCompileResult> {
-    const pending = this.#cpuCompiler.compileModule(module, options);
-    pending.then(
-      (result) => {
-        if (!result.ok) return;
-        registerResolvedCoreFingerprint(result.module, `surface:${semanticFingerprint}`);
-        this.#cpuCompilationsBySemantics.set(semanticFingerprint, Promise.resolve(result));
-        while (this.#cpuCompilationsBySemantics.size > 64) {
-          const oldest = this.#cpuCompilationsBySemantics.keys().next().value;
-          if (oldest === undefined) break;
-          this.#cpuCompilationsBySemantics.delete(oldest);
-        }
-      },
-      () => {},
-    );
     return pending;
   }
 

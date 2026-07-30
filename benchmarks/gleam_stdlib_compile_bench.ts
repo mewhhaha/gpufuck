@@ -692,6 +692,7 @@ function pipelineBreakdown(
     "semantic.fingerprint",
     "semantic.service-cache",
     "semantic.rebind-source",
+    "semantic.apply-literal-update",
     "semantic.validate-envelope",
     "semantic.validate-declarations",
     "semantic.symbol-index",
