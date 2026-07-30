@@ -22,11 +22,29 @@ export * from "./src/functional/surface_builder.ts";
 export * from "./src/functional/surface_contract.ts";
 export * from "./src/functional/surface_reachability.ts";
 export * from "./src/functional/recursive_groups.ts";
-export * from "./src/functional/module_linker.ts";
+export {
+  createModuleArtifact,
+  type LinkDiagnosticCode,
+  type LinkedModule,
+  type LinkedSource,
+  LinkError,
+  type LinkErrorDetails,
+  type LinkFaultKind,
+  linkModules,
+  type ModuleArtifact,
+  type ModuleConstructorExport,
+  type ModuleConstructorImport,
+  type ModuleExport,
+  type ModuleImport,
+  type ModuleTypeExport,
+  type ModuleTypeImport,
+} from "./src/functional/module_linker.ts";
 export * from "./src/functional/module_transfer.ts";
 
 // Compiling it: admission, dispatch, and the resolved Core that comes back.
 export * from "./src/functional/compiler.ts";
+export * from "./src/functional/compiler_service.ts";
+export * from "./src/functional/parallel_compiler_service.ts";
 export * from "./src/functional/compilation_admission.ts";
 export * from "./src/functional/compiler_module.ts";
 export * from "./src/functional/core_artifact.ts";
@@ -42,6 +60,7 @@ export * from "./src/functional/fixed_vector.ts";
 
 // Running it as WebAssembly: code generation, the binary, and the host engine.
 export * from "./src/functional/wasm_artifacts.ts";
+export * from "./src/functional/wasm_batch.ts";
 export * from "./src/functional/wasm_contract.ts";
 export * from "./src/functional/wasm_execution.ts";
 export * from "./src/functional/wasm_arena.ts";

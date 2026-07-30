@@ -5,9 +5,9 @@ Date: 2026-07-29. Gpufuck baseline: `86e112b`, package 0.6.0, Functional ABI 6. 
 
 ## Implementation outcome
 
-The accepted structural design and the generated primop design are implemented together on
-`research/primitive-abi7-production` as Functional ABI 7. The package version remains 0.6.0, and
-there is no ABI-6 compatibility decoder.
+The accepted structural design and the generated primop design were implemented together on
+`research/primitive-abi7-production`, then promoted to `main` in `5015f28` as Functional ABI 7.
+Package 0.7.0 was recorded in `45cc6d4`; there is no ABI-6 compatibility decoder.
 
 - `Lambda(firstParameter, parameterCount, body)` and `Apply(callee, firstArgument, argumentCount)`
   use trailing parameter and argument tables. Empty lists are genuine zero-arity functions and
@@ -24,7 +24,7 @@ there is no ABI-6 compatibility decoder.
   calls unary restores the existing bound while retaining the list ABI. Gleam, Sweep, JavaScript,
   and the public Functional Surface emit their natural exact arities.
 
-The integrated gpufuck suite passes 376 tests, including GPU evaluation, packed compilation,
+The current integrated gpufuck suite passes 392 tests, including GPU evaluation, packed compilation,
 linear-memory Wasm, WasmGC, rank-3 and indexed inference, lazy sharing and blackholes, genuine
 zero-arity calls, polymorphic Store values, effects, and malformed-input rejection.
 
@@ -42,11 +42,10 @@ counters compare as follows:
 | Linked 51-module project          |       60,031 nodes |       52,993 nodes |    -11.7% |
 | Generated Gleam Wasm              |       40,005 bytes |       40,005 bytes | unchanged |
 
-Same-machine timing runs were noisy: ABI 7 was faster for the 64- and 256-module batches, while the
-single module and linked project were slower by more than 5% in the sampled medians. The benchmark
-task deliberately treats timings as advisory, so the branch remains an unmerged implementation
-candidate rather than evidence for a production merge. A controlled interleaved timing run is still
-required before accepting the compiler-time guardrail.
+The original same-machine timing runs were noisy: ABI 7 was faster for the 64- and 256-module
+batches, while the single module and linked project were slower by more than 5% in the sampled
+medians. The benchmark task deliberately treats timings as advisory. Production promotion was a
+subsequent explicit decision, not evidence that those samples met the research guardrail.
 
 Blot passes 143 tests and its complete `just wasm` corpus; the interpreter, GPU evaluator, and
 emitted Wasm agree, including polymorphic collections and effects. Its existing formatter gate

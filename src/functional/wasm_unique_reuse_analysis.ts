@@ -1,5 +1,5 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 
 const MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH = 256;
 
@@ -16,11 +16,11 @@ const EMPTY_CONSUMPTION: LocalConsumption = Object.freeze({
 });
 
 export class WasmUniqueReuseAnalysis {
-  readonly #module: GpuModule;
+  readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
   readonly #resultFieldCounts: (number | null | undefined)[];
 
-  constructor(module: GpuModule, nodes: readonly CoreNode[]) {
+  constructor(module: CompiledModule, nodes: readonly CoreNode[]) {
     this.#module = module;
     this.#nodes = nodes;
     this.#resultFieldCounts = Array.from({ length: nodes.length }, () => undefined);

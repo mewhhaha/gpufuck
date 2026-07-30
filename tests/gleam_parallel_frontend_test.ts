@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, ok } from "node:assert/strict";
+import { deepStrictEqual, equal, ok, strictEqual } from "node:assert/strict";
 import { lowerGleamSource, ParallelGleamFrontend } from "../gleam.ts";
 
 const program = (index: number) =>
@@ -65,6 +65,21 @@ Deno.test("parallel Gleam frontend falls back inline for small batches", async (
     const results = await pool.lower([{ name: "p", source: program(0) }]);
     equal(results.length, 1);
     ok(results[0]!.ok);
+  } finally {
+    pool.terminate();
+  }
+});
+
+Deno.test("parallel Gleam frontend reuses unchanged units", async () => {
+  const pool = ParallelGleamFrontend.create(2);
+  try {
+    const units = [{ name: "p", source: program(0) }];
+    const first = await pool.lower(units);
+    const second = await pool.lower(units);
+    ok(first[0]?.ok);
+    ok(second[0]?.ok);
+    if (!first[0]?.ok || !second[0]?.ok) return;
+    strictEqual(second[0].module, first[0].module);
   } finally {
     pool.terminate();
   }

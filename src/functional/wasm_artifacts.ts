@@ -1,4 +1,4 @@
-import { completeTypeDeclarations, type CoreNode, type GpuModule } from "./compiler_module.ts";
+import { type CompiledModule, completeTypeDeclarations, type CoreNode } from "./compiler_module.ts";
 import { compileWasmArtifact, type WasmArtifact } from "./wasm_codegen.ts";
 import { validateWasmSimdMode } from "./wasm_backend_plan.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
@@ -7,29 +7,29 @@ import { compileWasmGc } from "./wasm_gc_codegen.ts";
 const MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS = 64;
 
 const wasmArtifactsByModule = new WeakMap<
-  GpuModule,
+  CompiledModule,
   Promise<WasmArtifact>
 >();
 const simdWasmArtifactsByModule = new WeakMap<
-  GpuModule,
+  CompiledModule,
   Promise<WasmArtifact>
 >();
 const executableWasmByModule = new WeakMap<
-  GpuModule,
+  CompiledModule,
   Promise<WebAssembly.Module>
 >();
 const wasmGcArtifactsByModule = new WeakMap<
-  GpuModule,
+  CompiledModule,
   Promise<{
     readonly bytes: Uint8Array<ArrayBuffer>;
     readonly nodes: readonly CoreNode[];
   }>
 >();
 const instrumentedWasmByModule = new WeakMap<
-  GpuModule,
+  CompiledModule,
   Promise<WasmArtifact & { readonly executable: WebAssembly.Module }>
 >();
-const resolvedCoreFingerprintByModule = new WeakMap<GpuModule, Promise<string>>();
+const resolvedCoreFingerprintByModule = new WeakMap<CompiledModule, Promise<string>>();
 const instrumentedWasmByResolvedCore = new Map<
   string,
   Promise<WasmArtifact & { readonly executable: WebAssembly.Module }>
@@ -40,7 +40,7 @@ const wasmArtifactsByResolvedCore = new Map<
 >();
 
 export async function compileModuleToWasm(
-  module: GpuModule,
+  module: CompiledModule,
   options: WasmCompilationOptions = {},
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
@@ -83,7 +83,7 @@ export async function compileModuleToWasm(
 }
 
 async function cachedSimdWasmArtifact(
-  module: GpuModule,
+  module: CompiledModule,
 ): Promise<WasmArtifact> {
   return await cachedModuleValue(
     simdWasmArtifactsByModule,
@@ -96,7 +96,7 @@ async function cachedSimdWasmArtifact(
 }
 
 export async function cachedWasmGcArtifact(
-  module: GpuModule,
+  module: CompiledModule,
 ): Promise<{
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly nodes: readonly CoreNode[];
@@ -113,7 +113,7 @@ export async function cachedWasmGcArtifact(
 }
 
 export async function cachedWasmArtifact(
-  module: GpuModule,
+  module: CompiledModule,
 ): Promise<WasmArtifact> {
   return await cachedModuleValue(
     wasmArtifactsByModule,
@@ -123,7 +123,7 @@ export async function cachedWasmArtifact(
 }
 
 async function sharedWasmArtifact(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
 ): Promise<WasmArtifact> {
   const fingerprint = await fingerprintResolvedCore(module, nodes);
@@ -147,7 +147,7 @@ async function sharedWasmArtifact(
 }
 
 export async function cachedExecutableWasm(
-  module: GpuModule,
+  module: CompiledModule,
 ): Promise<WebAssembly.Module> {
   return await cachedModuleValue(
     executableWasmByModule,
@@ -157,7 +157,7 @@ export async function cachedExecutableWasm(
 }
 
 export async function fuelInstrumentedWasm(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
 ): Promise<WasmArtifact & { readonly executable: WebAssembly.Module }> {
   return await cachedModuleValue(
@@ -168,7 +168,7 @@ export async function fuelInstrumentedWasm(
 }
 
 async function sharedFuelInstrumentedWasm(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
 ): Promise<WasmArtifact & { readonly executable: WebAssembly.Module }> {
   const fingerprint = await fingerprintResolvedCore(module, nodes);
@@ -205,7 +205,7 @@ function evictOldestResolvedCoreArtifacts<Value>(
 }
 
 async function fingerprintResolvedCore(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
 ): Promise<string> {
   return await cachedModuleValue(
@@ -214,7 +214,16 @@ async function fingerprintResolvedCore(
     () =>
       sha256(JSON.stringify({
         format: 1,
-        nodes,
+        // Source locations are interpreted against the current module after execution; they do
+        // not change emitted instructions and must not invalidate an otherwise identical artifact.
+        nodes: nodes.map((node) => ({
+          tag: node.tag,
+          payload: node.payload,
+          child0: node.child0,
+          child1: node.child1,
+          child2: node.child2,
+          evaluationMode: node.evaluationMode,
+        })),
         definitionNames: module.definitionNames,
         definitionRoots: module.definitionRoots,
         constructorNames: module.constructorNames,
@@ -236,14 +245,13 @@ async function fingerprintResolvedCore(
           ...exported,
           effects: [...exported.effects],
         })),
-        sources: module.sources,
         evaluationProfile: module.evaluationProfile,
       })),
   );
 }
 
 export async function resolvedCoreFingerprint(
-  module: GpuModule,
+  module: CompiledModule,
 ): Promise<string> {
   return await fingerprintResolvedCore(module, await module.readCoreNodes());
 }
@@ -255,8 +263,8 @@ async function sha256(value: string): Promise<string> {
 }
 
 async function cachedModuleValue<Value>(
-  cache: WeakMap<GpuModule, Promise<Value>>,
-  module: GpuModule,
+  cache: WeakMap<CompiledModule, Promise<Value>>,
+  module: CompiledModule,
   create: () => Promise<Value>,
 ): Promise<Value> {
   const cached = cache.get(module);

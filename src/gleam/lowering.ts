@@ -6,7 +6,7 @@ import {
   type TypeSchema,
   UNIT_CONSTRUCTOR_NAME,
 } from "../functional/abi.ts";
-import { createModuleArtifact, type ModuleArtifact } from "../functional/module_linker.ts";
+import { createOwnedModuleArtifact, type ModuleArtifact } from "../functional/module_linker.ts";
 import { effectSet } from "../functional/effect_set.ts";
 import {
   BYTES_TYPE_NAME,
@@ -246,8 +246,10 @@ export function lowerGleamModule(
   return new GleamLowering(module, availableExports).lower();
 }
 
+let cachedPreludeArtifact: ModuleArtifact | undefined;
+
 export function gleamPreludeArtifact(): ModuleArtifact {
-  return createModuleArtifact({
+  cachedPreludeArtifact ??= createOwnedModuleArtifact({
     name: GLEAM_FUNCTIONAL_PRELUDE_MODULE,
     definitions: [],
     typeDeclarations: [
@@ -278,6 +280,7 @@ export function gleamPreludeArtifact(): ModuleArtifact {
     sourceByteLength: 0,
     options: { evaluationProfile: EvaluationProfile.StrictEager },
   });
+  return cachedPreludeArtifact;
 }
 
 class GleamLowering {
@@ -342,7 +345,7 @@ class GleamLowering {
         ...(type === null ? {} : { type }),
       }];
     });
-    const artifact = createModuleArtifact({
+    const artifact = createOwnedModuleArtifact({
       name: this.module.name,
       definitions,
       typeDeclarations,

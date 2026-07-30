@@ -1,5 +1,5 @@
 import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
   PersistentSharing,
   StorageCoreError,
@@ -31,7 +31,7 @@ export {
 } from "./storage_contract.ts";
 
 export async function planModuleStorage(
-  module: GpuModule,
+  module: CompiledModule,
   options: StoragePlanningOptions = {},
 ): Promise<StoragePlan> {
   const nodes = await module.readCoreNodes();
@@ -39,7 +39,7 @@ export async function planModuleStorage(
 }
 
 export function createStoragePlan(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
   options: StoragePlanningOptions = {},
 ): StoragePlan {
@@ -53,7 +53,7 @@ export function createStoragePlan(
 }
 
 export function createLoweredCoreStoragePlan(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
   captureAnalysis: WasmCaptureAnalysis,
   options: StoragePlanningOptions = {},
@@ -373,7 +373,7 @@ function storageCore(
 }
 
 function boundaryStorageDecisions(
-  module: GpuModule,
+  module: CompiledModule,
 ): readonly BoundaryStorageDecision[] {
   const boundaries: BoundaryStorageDecision[] = [];
   for (const capability of module.hostCapabilities) {

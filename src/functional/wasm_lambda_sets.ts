@@ -1,5 +1,5 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import { primopDeclaration, PrimopFamily } from "../semantic/primops.ts";
 import { type EffectSet, effectSetFrom } from "./effect_set.ts";
 import { type HostFieldDeclaration, INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
@@ -42,7 +42,7 @@ interface ConstructorApplication {
  * code generation retain the ordinary closure call.
  */
 export class LambdaSetAnalysis {
-  readonly #module: GpuModule;
+  readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
   readonly #representation: "core" | "wasm";
   readonly #states: FlowState[];
@@ -60,16 +60,16 @@ export class LambdaSetAnalysis {
   readonly #queued: boolean[];
   readonly #lambdaSets: (LambdaSet | undefined)[];
 
-  static forCore(module: GpuModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
+  static forCore(module: CompiledModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
     return new LambdaSetAnalysis(module, nodes, "core");
   }
 
-  static forWasm(module: GpuModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
+  static forWasm(module: CompiledModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
     return new LambdaSetAnalysis(module, nodes, "wasm");
   }
 
   private constructor(
-    module: GpuModule,
+    module: CompiledModule,
     nodes: readonly CoreNode[],
     representation: "core" | "wasm",
   ) {
@@ -183,6 +183,16 @@ export class LambdaSetAnalysis {
     });
     this.#lambdaSets[nodeIndex] = lambdaSet;
     return lambdaSet;
+  }
+
+  forEachLambdaSetMember(
+    nodeIndex: number,
+    visitLambda: (lambdaNode: number) => void,
+    visitEffect: (effect: string) => void,
+  ): void {
+    const state = this.#state(this.#nodeVariable(nodeIndex));
+    for (const lambdaNode of state.lambdaNodes ?? []) visitLambda(lambdaNode);
+    for (const effect of state.effectNames ?? []) visitEffect(effect);
   }
 
   #visitExpression(nodeIndex: number, environment: number[]): void {

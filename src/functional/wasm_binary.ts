@@ -344,7 +344,7 @@ export function encodeWasmModule(
     ),
     section(10, vector(functions.map(encodeFunctionBody))),
   ];
-  const encoded = [
+  return new Uint8Array(concatenateBytes([[
     0x00,
     0x61,
     0x73,
@@ -353,11 +353,7 @@ export function encodeWasmModule(
     0x00,
     0x00,
     0x00,
-  ];
-  for (const wasmSection of sections) {
-    appendBytes(encoded, wasmSection);
-  }
-  return new Uint8Array(encoded);
+  ], ...sections]));
 }
 
 export function encodeCompactScalarWasmModule(
@@ -461,7 +457,7 @@ export function encodeCompactScalarWasmModule(
     ),
     section(10, vector(functions.map(encodeFunctionBody))),
   ];
-  return new Uint8Array([
+  return new Uint8Array(concatenateBytes([[
     0x00,
     0x61,
     0x73,
@@ -470,8 +466,7 @@ export function encodeCompactScalarWasmModule(
     0x00,
     0x00,
     0x00,
-    ...sections.flat(),
-  ]);
+  ], ...sections]));
 }
 
 function wasmFunctionTypes(additionalFunctionTypes: readonly WasmFunctionType[]): number[][] {
@@ -501,30 +496,34 @@ function encodeFunctionBody(body: WasmFunctionBody): number[] {
   const locals = vector(
     localGroups.map(([count, type]) => [...encodeUnsigned(count!), type!]),
   );
-  const encoded: number[] = [];
-  appendBytes(encoded, locals);
-  appendBytes(encoded, body.instructions);
-  encoded.push(0x0b);
-  const sized = encodeUnsigned(encoded.length);
-  appendBytes(sized, encoded);
-  return sized;
+  const contentLength = locals.length + body.instructions.length + 1;
+  return concatenateBytes([
+    encodeUnsigned(contentLength),
+    locals,
+    body.instructions,
+    [0x0b],
+  ]);
 }
 
 function section(id: number, contents: readonly number[]): number[] {
-  const encoded = [id];
-  appendBytes(encoded, encodeUnsigned(contents.length));
-  appendBytes(encoded, contents);
-  return encoded;
+  return concatenateBytes([[id], encodeUnsigned(contents.length), contents]);
 }
 
 function vector(values: readonly (readonly number[])[]): number[] {
-  const encoded: number[] = [...encodeUnsigned(values.length)];
-  for (const value of values) appendBytes(encoded, value);
-  return encoded;
+  return concatenateBytes([encodeUnsigned(values.length), ...values]);
 }
 
-function appendBytes(target: number[], source: readonly number[]): void {
-  for (const byte of source) target.push(byte);
+function concatenateBytes(parts: readonly (readonly number[])[]): number[] {
+  const length = parts.reduce((total, part) => total + part.length, 0);
+  const bytes = new Array<number>(length);
+  let offset = 0;
+  for (const part of parts) {
+    for (let index = 0; index < part.length; index++) {
+      bytes[offset + index] = part[index]!;
+    }
+    offset += part.length;
+  }
+  return bytes;
 }
 
 function name(value: string): number[] {

@@ -40,10 +40,7 @@ export interface CoreCaseAlternative {
   readonly sourceEndByte: number;
 }
 
-export interface GpuSemanticModule {
-  readonly nodeBuffer: GPUBuffer;
-  readonly definitionBuffer: GPUBuffer;
-  readonly constructorBuffer: GPUBuffer;
+export interface SemanticModule {
   readonly nodeCount: number;
   readonly definitionCount: number;
   readonly constructorCount: number;
@@ -59,6 +56,12 @@ export interface GpuSemanticModule {
   readonly typeDeclarations: readonly TypeDeclaration[];
   readCoreNodes(): Promise<readonly CoreNode[]>;
   destroy(): void;
+}
+
+export interface GpuSemanticModule extends SemanticModule {
+  readonly nodeBuffer: GPUBuffer;
+  readonly definitionBuffer: GPUBuffer;
+  readonly constructorBuffer: GPUBuffer;
 }
 
 export interface SemanticCompilationOptions {
@@ -199,6 +202,52 @@ export class CompiledGpuSemanticModule implements GpuSemanticModule {
     this.definitionBuffer.destroy();
     this.constructorBuffer.destroy();
   }
+}
+
+export class CompiledHostSemanticModule implements SemanticModule {
+  readonly nodeCount: number;
+  readonly definitionCount: number;
+  readonly constructorCount: number;
+  readonly typeCount: number;
+  readonly parameterCount: number;
+  readonly arguments: readonly CoreArgument[];
+  readonly caseAlternatives: readonly CoreCaseAlternative[];
+  readonly caseBinderCount: number;
+  readonly constructorNames: readonly string[];
+  readonly constructorArities: readonly number[];
+  readonly entryDefinition: number;
+  readonly mainType: Type;
+  readonly typeDeclarations: readonly TypeDeclaration[];
+  readonly #nodes: readonly CoreNode[];
+
+  constructor(
+    surface: EncodedSemanticSurface,
+    entryDefinition: number,
+    mainType: Type,
+    typeDeclarations: readonly TypeDeclaration[],
+    nodes: readonly CoreNode[],
+  ) {
+    this.nodeCount = surface.nodeCount;
+    this.definitionCount = surface.definitionCount;
+    this.constructorCount = surface.constructorCount;
+    this.typeCount = surface.typeCount;
+    this.parameterCount = surface.parameterWords.length;
+    this.arguments = decodeArguments(surface);
+    this.caseAlternatives = decodeCaseAlternatives(surface);
+    this.caseBinderCount = surface.caseBinderWords.length;
+    this.constructorNames = Object.freeze(constructorNames(surface));
+    this.constructorArities = Object.freeze(constructorArities(surface));
+    this.entryDefinition = entryDefinition;
+    this.mainType = deepFreeze(mainType);
+    this.typeDeclarations = deepFreeze([...typeDeclarations]);
+    this.#nodes = deepFreeze([...nodes]);
+  }
+
+  readCoreNodes(): Promise<readonly CoreNode[]> {
+    return Promise.resolve(this.#nodes);
+  }
+
+  destroy(): void {}
 }
 
 function decodeArguments(surface: EncodedSemanticSurface): readonly CoreArgument[] {

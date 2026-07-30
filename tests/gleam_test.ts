@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, match, ok, rejects } from "node:assert/strict";
+import { deepStrictEqual, equal, match, ok, rejects, strictEqual } from "node:assert/strict";
 
 import {
   type EvaluationOptions,
@@ -8,6 +8,7 @@ import {
   runWasmModule,
 } from "../functional.ts";
 import {
+  GleamFrontendService,
   type GleamSourceModule,
   type LoweredGleamProgram,
   lowerGleamSource,
@@ -29,6 +30,43 @@ let runtime: GleamRuntime | undefined;
  * heap of 256 slots. It completes within 512; this leaves headroom.
  */
 const KERNEL_HEAP_SLOTS = 1024;
+
+Deno.test("Gleam frontend service reuses an unchanged project", () => {
+  const frontend = new GleamFrontendService();
+  const sources = [
+    {
+      name: "library",
+      source: "pub fn answer() -> Int { 42 }\n",
+    },
+    {
+      name: "main",
+      source: "import library\npub fn main() -> Int { library.answer() }\n",
+    },
+  ];
+  const entry = { module: "main", exportName: "main" };
+
+  const first = frontend.lower(sources, entry);
+  const second = frontend.lower(
+    sources.map(({ name, source }) => ({ name, source })),
+    { ...entry },
+  );
+  ok(first.ok);
+  ok(second.ok);
+  if (!first.ok || !second.ok) return;
+  strictEqual(second.lowered.module, first.lowered.module);
+
+  const changed = frontend.lower([
+    sources[0]!,
+    {
+      name: "main",
+      source: "import library\npub fn main() -> Int { library.answer() + 1 }\n",
+    },
+  ], entry);
+  ok(changed.ok);
+  if (!changed.ok) return;
+  equal(changed.lowered.module === first.lowered.module, false);
+  strictEqual(changed.lowered.modules[0], first.lowered.modules[0]);
+});
 
 Deno.test.beforeAll(async () => {
   const device = await requestWebGpuDevice();

@@ -1,5 +1,5 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import type { StorageDecision, StorageReference } from "./storage_contract.ts";
 import type { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 
@@ -23,7 +23,7 @@ interface StorageTraversal {
 }
 
 export function analyzeStorageReferences(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
   decisions: readonly StorageDecision[],
   captureAnalysis: WasmCaptureAnalysis,

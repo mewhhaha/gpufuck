@@ -1,5 +1,5 @@
 import { BinaryOperator, CoreTag, EvaluationMode, NO_INDEX, UnaryOperator } from "./abi.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
   float32FromBits,
   float64FromBits,
@@ -46,7 +46,7 @@ interface StoreUpdate {
 }
 
 export function compileWasmGc(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
 ): Uint8Array<ArrayBuffer> {
   if (module.entryEffects.size !== 0) {
@@ -93,7 +93,7 @@ export function compileWasmGc(
 }
 
 class GcCoreEmitter {
-  readonly #module: GpuModule;
+  readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
   #instructions = new GcInstructions();
   readonly #activeNodes = new Set<number>();
@@ -108,7 +108,7 @@ class GcCoreEmitter {
   >();
   readonly #workers: (GcFunctionBody | undefined)[] = [];
 
-  constructor(module: GpuModule, nodes: readonly CoreNode[]) {
+  constructor(module: CompiledModule, nodes: readonly CoreNode[]) {
     this.#module = module;
     this.#nodes = nodes;
   }

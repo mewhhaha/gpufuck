@@ -121,6 +121,70 @@ export interface LinkedModule {
 export function createModuleArtifact(
   artifact: ModuleArtifact,
 ): ModuleArtifact {
+  validateModuleArtifact(artifact);
+  let snapshot: ModuleArtifact;
+  try {
+    const cloneableArtifact = {
+      ...artifact,
+      definitions: artifact.definitions.map((definition) =>
+        definition.effects === undefined
+          ? definition
+          : { ...definition, effects: [...definition.effects] }
+      ),
+      options: {
+        ...artifact.options,
+        ...(artifact.options.hostCapabilities === undefined ? {} : {
+          hostCapabilities: artifact.options.hostCapabilities.map((capability) => ({
+            ...capability,
+            fields: capability.fields.map((field) =>
+              field.kind === "operation" ? { ...field, effects: [...field.effects] } : field
+            ),
+          })),
+        }),
+      },
+    };
+    snapshot = structuredClone(cloneableArtifact) as ModuleArtifact;
+  } catch (cause) {
+    throw new LinkError({
+      code: "F4001",
+      kind: "invalid-artifact",
+      module: artifact.name,
+      message: `functional module ${
+        JSON.stringify(artifact.name)
+      } contains metadata that cannot be snapshotted: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    }, cause);
+  }
+  for (const definition of snapshot.definitions) {
+    if (definition.effects === undefined) continue;
+    Object.defineProperty(definition, "effects", {
+      value: effectSetFrom(definition.effects),
+    });
+  }
+  for (const capability of snapshot.options.hostCapabilities ?? []) {
+    for (const field of capability.fields) {
+      if (field.kind !== "operation") continue;
+      Object.defineProperty(field, "effects", {
+        value: effectSetFrom(field.effects),
+      });
+    }
+  }
+  return freezeModuleArtifact(snapshot);
+}
+
+/**
+ * Accepts ownership of a freshly built artifact, avoiding the defensive copy required at the
+ * public linker boundary.
+ */
+export function createOwnedModuleArtifact(
+  artifact: ModuleArtifact,
+): ModuleArtifact {
+  validateModuleArtifact(artifact);
+  return freezeModuleArtifact(artifact);
+}
+
+function validateModuleArtifact(artifact: ModuleArtifact): void {
   requireModuleName(artifact.name, "module name");
   if (!Number.isSafeInteger(artifact.sourceByteLength) || artifact.sourceByteLength < 0) {
     throw invalidArtifact(
@@ -207,55 +271,10 @@ export function createModuleArtifact(
     constructorNames,
     (exported) => exported.constructor,
   );
-  let snapshot: ModuleArtifact;
-  try {
-    const cloneableArtifact = {
-      ...artifact,
-      definitions: artifact.definitions.map((definition) =>
-        definition.effects === undefined
-          ? definition
-          : { ...definition, effects: [...definition.effects] }
-      ),
-      options: {
-        ...artifact.options,
-        ...(artifact.options.hostCapabilities === undefined ? {} : {
-          hostCapabilities: artifact.options.hostCapabilities.map((capability) => ({
-            ...capability,
-            fields: capability.fields.map((field) =>
-              field.kind === "operation" ? { ...field, effects: [...field.effects] } : field
-            ),
-          })),
-        }),
-      },
-    };
-    snapshot = structuredClone(cloneableArtifact) as ModuleArtifact;
-  } catch (cause) {
-    throw new LinkError({
-      code: "F4001",
-      kind: "invalid-artifact",
-      module: artifact.name,
-      message: `functional module ${
-        JSON.stringify(artifact.name)
-      } contains metadata that cannot be snapshotted: ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
-    }, cause);
-  }
-  for (const definition of snapshot.definitions) {
-    if (definition.effects === undefined) continue;
-    Object.defineProperty(definition, "effects", {
-      value: effectSetFrom(definition.effects),
-    });
-  }
-  for (const capability of snapshot.options.hostCapabilities ?? []) {
-    for (const field of capability.fields) {
-      if (field.kind !== "operation") continue;
-      Object.defineProperty(field, "effects", {
-        value: effectSetFrom(field.effects),
-      });
-    }
-  }
-  const pendingObjects: object[] = [snapshot];
+}
+
+function freezeModuleArtifact(artifact: ModuleArtifact): ModuleArtifact {
+  const pendingObjects: object[] = [artifact];
   const frozenObjects = new Set<object>();
   while (pendingObjects.length > 0) {
     const current = pendingObjects.pop()!;
@@ -266,8 +285,8 @@ export function createModuleArtifact(
     }
     if (!ArrayBuffer.isView(current)) Object.freeze(current);
   }
-  snapshottedModules.add(snapshot);
-  return snapshot;
+  snapshottedModules.add(artifact);
+  return artifact;
 }
 
 export function linkModules(

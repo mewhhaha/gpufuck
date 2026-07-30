@@ -1,27 +1,26 @@
 /**
- * The throughput case, which is the one batching is for and the one a GPU can win.
+ * Same-process compiler throughput on identical independent Gleam modules.
  *
- * `gleam_stdlib_compile_bench.ts` measures latency: one large program, compiled once. That is the
- * case gpufuck loses badly (33x). This measures the opposite: N independent programs compiled
- * together, which is what a playground, a package registry, a CI corpus, or a test262-style sweep
- * actually asks for. `gleam build` has no cross-package batching, so its per-package cost is a
- * floor no matter how small the package is.
- *
- * The reference is 11 ms: `gleam build --target javascript` on a minimal package containing the
- * identical program, measured cold five times on the same machine. That number includes Gleam's
- * process start and project load, which is a real property of the tool rather than an artifact --
- * there is no batch mode to compare against.
- *
- * Wasm emission is included because Gleam writes JavaScript to disk; leaving it out would flatter
- * this side. The one-time WebGPU setup (~250 ms) is excluded, since at batch 1024 it amortizes to
- * well under a microsecond per module.
+ * Both compilers receive N modules in one resident process and emit executable output. This avoids
+ * charging Gleam one process and package startup per module, which measured service orchestration
+ * rather than compiler throughput.
  *
  * Usage: deno task bench:gleam-batch
  */
-import { compileModuleToWasm, GpuCompiler, requestWebGpuDevice } from "../functional.ts";
-import { lowerGleamSource, ParallelGleamFrontend } from "../gleam.ts";
+import {
+  compileModulesToWasm,
+  compileModuleToWasm,
+  CpuCompiler,
+  GpuCompiler,
+  ParallelFunctionalCompilerService,
+  requestWebGpuDevice,
+} from "../functional.ts";
+import { ParallelGleamCompiler, ParallelGleamFrontend } from "../gleam.ts";
 
-const program = (i: number) =>
+const SIZES = [1, 32, 128, 512, 1024] as const;
+const REPETITIONS = 5;
+
+const program = (index: number, generation = 0) =>
   `pub type Option(a) {
   None
   Some(a)
@@ -34,11 +33,11 @@ fn map(option, transform) {
   }
 }
 
-fn twice(f, x) { f(f(x)) }
+fn twice(function, value) { function(function(value)) }
 
 pub fn main() -> Int {
-  let doubled = map(Some(${i % 50 + 1}), fn(value) { value * 2 })
-  let bumped = twice(fn(v) { v + ${i % 7 + 1} }, ${i % 11})
+  let doubled = map(Some(${generation * 10_000 + index % 50 + 1}), fn(value) { value * 2 })
+  let bumped = twice(fn(value) { value + ${index % 7 + 1} }, ${index % 11})
   case doubled {
     None -> bumped
     Some(value) -> value + bumped
@@ -46,64 +45,187 @@ pub fn main() -> Int {
 }
 `;
 
-const device = await requestWebGpuDevice();
-const compiler = await GpuCompiler.create(device);
-// Created once and reused, as a real caller would, and warmed so worker startup is not charged to
-// any single batch.
-const pool = ParallelGleamFrontend.create();
-await pool.lower(Array.from({ length: 32 }, (_, i) => ({ name: "p", source: program(i) })));
-// Gleam emits JavaScript to disk, so emit Wasm here or the comparison flatters us.
-console.log("batch  serialLower  parLower  gpuMs  wasmMs  usPerModule  vsGleam(11ms)");
-for (const size of [1, 8, 32, 128, 512, 1024]) {
-  const units = Array.from({ length: size }, (_, i) => ({ name: "p", source: program(i) }));
-  let ls = performance.now();
-  for (const unit of units) {
-    const f = lowerGleamSource(unit.name, unit.source);
-    if (!f.ok) {
-      console.log(`lower failed: ${f.diagnostics[0].message.slice(0, 80)}`);
-      Deno.exit(1);
-    }
-  }
-  const serialLowerMs = performance.now() - ls;
-  ls = performance.now();
-  const lowered = await pool.lower(units);
-  const lowerMs = performance.now() - ls;
-  const mods = lowered.map((result) => {
-    if (!result.ok) {
-      console.log(`lower failed: ${result.diagnostic.slice(0, 80)}`);
-      Deno.exit(1);
-    }
-    return result.module;
-  });
-  const times: number[] = [];
-  let wasmMs = 0;
-  for (let r = 0; r < 3; r++) {
-    const s = performance.now();
-    const results = await compiler.compileBatch(mods, { maximumSteps: 10_000_000 });
-    const g = performance.now() - s;
-    const w = performance.now();
-    for (const x of results) {
-      if (!x.ok) {
-        console.log(
-          `compile failed ${x.diagnostics[0].code} ${x.diagnostics[0].message.slice(0, 60)}`,
-        );
-        Deno.exit(1);
-      }
-      await compileModuleToWasm(x.module);
-    }
-    if (r === 2) wasmMs = performance.now() - w;
-    times.push(g);
-    for (const x of results) if (x.ok) x.module.destroy();
-  }
-  times.sort((a, b) => a - b);
-  const perModule = ((times[1]! + lowerMs + wasmMs) * 1000) / size;
-  console.log(
-    `${String(size).padStart(5)} ${serialLowerMs.toFixed(0).padStart(12)} ${
-      lowerMs.toFixed(0).padStart(9)
-    } ${times[1]!.toFixed(0).padStart(6)} ${wasmMs.toFixed(0).padStart(7)} ${
-      perModule.toFixed(0).padStart(12)
-    } ${(11000 / perModule).toFixed(1).padStart(14)}x`,
-  );
+function median(samples: readonly number[]): number {
+  return [...samples].sort((left, right) => left - right)[Math.floor(samples.length / 2)]!;
 }
-pool.terminate();
-device.destroy();
+
+async function measureGleam(units: readonly { readonly source: string }[]): Promise<number> {
+  const root = await Deno.makeTempDir({ dir: "/tmp", prefix: "gpufuck-gleam-throughput-" });
+  try {
+    await Deno.mkdir(`${root}/src`);
+    await Deno.writeTextFile(
+      `${root}/gleam.toml`,
+      'name = "gpufuck_throughput"\nversion = "1.0.0"\ntarget = "javascript"\n\n[dependencies]\n',
+    );
+    for (const [index, unit] of units.entries()) {
+      await Deno.writeTextFile(`${root}/src/module_${index}.gleam`, unit.source);
+    }
+
+    const samples: number[] = [];
+    for (let repetition = 0; repetition < REPETITIONS; repetition++) {
+      await runGleam(root, ["clean"]);
+      samples.push(
+        await runGleam(root, ["build", "--target", "javascript", "--no-print-progress"]),
+      );
+    }
+    return median(samples);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+async function runGleam(cwd: string, args: readonly string[]): Promise<number> {
+  const started = performance.now();
+  const result = await new Deno.Command("gleam", {
+    cwd,
+    args: [...args],
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+  if (!result.success) {
+    throw new Error(
+      `gleam ${args.join(" ")} failed in ${cwd}: ${new TextDecoder().decode(result.stderr)}`,
+    );
+  }
+  return performance.now() - started;
+}
+
+const setupStarted = performance.now();
+const device = await requestWebGpuDevice();
+const gpuCompiler = await GpuCompiler.create(device);
+const gpuSetupMilliseconds = performance.now() - setupStarted;
+const cpuCompiler = new CpuCompiler();
+const parallelCompiler = ParallelFunctionalCompilerService.create(8);
+const fusedCompiler = ParallelGleamCompiler.create(8);
+const pool = ParallelGleamFrontend.create();
+const warm = await pool.lower(
+  Array.from({ length: 32 }, (_, index) => ({
+    name: `warm_${index}`,
+    source: program(index, 99),
+  })),
+);
+const warmModules = warm.map((result) => {
+  if (!result.ok) throw new Error(`parallel frontend warmup failed: ${result.diagnostic}`);
+  return result.module;
+});
+await parallelCompiler.compileBatchToWasm(warmModules);
+await fusedCompiler.compile(
+  Array.from({ length: 32 }, (_, index) => ({
+    name: `fused_warm_${index}`,
+    source: program(index, 100),
+  })),
+);
+
+console.log(`resident GPU setup: ${gpuSetupMilliseconds.toFixed(1)} ms`);
+console.log(
+  "batch  gleamMs  cpuCoreMs  sharedWasmMs  sharedKiB  cpuTotalMs  parallelPipelineMs  parallelTotalMs  parallel/Gleam  fusedTotalMs  fused/Gleam  gpuCoreMs  separateWasmMs  separateKiB  gpuTotalMs  cpu/Gleam  gpu/Gleam",
+);
+try {
+  for (const size of SIZES) {
+    const units = Array.from({ length: size }, (_, index) => ({
+      name: `module_${index}`,
+      source: program(index, size),
+    }));
+    const lowerStarted = performance.now();
+    const lowered = await pool.lower(units);
+    const lowerMilliseconds = performance.now() - lowerStarted;
+    const modules = lowered.map((result) => {
+      if (!result.ok) throw new Error(`parallel frontend failed: ${result.diagnostic}`);
+      return result.module;
+    });
+
+    const cpuSamples: number[] = [];
+    let cpuModules: Awaited<ReturnType<CpuCompiler["compileBatch"]>> = [];
+    for (let repetition = 0; repetition < REPETITIONS; repetition++) {
+      const started = performance.now();
+      const results = await cpuCompiler.compileBatch(modules);
+      cpuSamples.push(performance.now() - started);
+      for (const result of results) {
+        if (!result.ok) throw new Error(result.diagnostics[0].message);
+      }
+      if (repetition === REPETITIONS - 1) {
+        cpuModules = results;
+      } else {
+        for (const result of results) if (result.ok) result.module.destroy();
+      }
+    }
+    const successfulCpuModules = cpuModules.map((result) => {
+      if (!result.ok) throw new Error(result.diagnostics[0].message);
+      return result.module;
+    });
+    const sharedWasmStarted = performance.now();
+    const sharedArtifact = await compileModulesToWasm(successfulCpuModules);
+    const sharedWasmMilliseconds = performance.now() - sharedWasmStarted;
+
+    const parallelStarted = performance.now();
+    const parallelArtifacts = await parallelCompiler.compileBatchToWasm(modules);
+    const parallelPipelineMilliseconds = performance.now() - parallelStarted;
+    for (const result of parallelArtifacts) {
+      if (!result.ok) throw new Error(result.diagnostics[0].message);
+    }
+
+    const fusedStarted = performance.now();
+    const fusedArtifacts = await fusedCompiler.compile(units);
+    const fusedMilliseconds = performance.now() - fusedStarted;
+    for (const result of fusedArtifacts) {
+      if (!result.ok) throw new Error(result.diagnostics[0]?.message);
+    }
+
+    const gpuSamples: number[] = [];
+    let gpuModules: Awaited<ReturnType<GpuCompiler["compileBatch"]>> = [];
+    for (let repetition = 0; repetition < REPETITIONS; repetition++) {
+      const started = performance.now();
+      const results = await gpuCompiler.compileBatch(modules, { maximumSteps: 10_000_000 });
+      gpuSamples.push(performance.now() - started);
+      for (const result of results) {
+        if (!result.ok) throw new Error(result.diagnostics[0].message);
+      }
+      if (repetition === REPETITIONS - 1) {
+        gpuModules = results;
+      } else {
+        for (const result of results) if (result.ok) result.module.destroy();
+      }
+    }
+    const separateWasmStarted = performance.now();
+    let separateWasmByteLength = 0;
+    for (const result of gpuModules) {
+      if (!result.ok) throw new Error(result.diagnostics[0].message);
+      separateWasmByteLength += (await compileModuleToWasm(result.module)).byteLength;
+    }
+    const separateWasmMilliseconds = performance.now() - separateWasmStarted;
+    const gleamMilliseconds = await measureGleam(units);
+
+    const cpuCoreMilliseconds = median(cpuSamples);
+    const gpuCoreMilliseconds = median(gpuSamples);
+    const cpuTotal = lowerMilliseconds + cpuCoreMilliseconds + sharedWasmMilliseconds;
+    const parallelTotal = lowerMilliseconds + parallelPipelineMilliseconds;
+    const gpuTotal = lowerMilliseconds + gpuCoreMilliseconds + separateWasmMilliseconds;
+    console.log(
+      `${String(size).padStart(5)} ${gleamMilliseconds.toFixed(1).padStart(8)} ${
+        cpuCoreMilliseconds.toFixed(1).padStart(10)
+      } ${sharedWasmMilliseconds.toFixed(1).padStart(13)} ${
+        (sharedArtifact.bytes.byteLength / 1024).toFixed(1).padStart(10)
+      } ${cpuTotal.toFixed(1).padStart(11)} ${
+        parallelPipelineMilliseconds.toFixed(1).padStart(18)
+      } ${parallelTotal.toFixed(1).padStart(15)} ${
+        (parallelTotal / gleamMilliseconds).toFixed(2).padStart(14)
+      } ${fusedMilliseconds.toFixed(1).padStart(13)} ${
+        (fusedMilliseconds / gleamMilliseconds).toFixed(2).padStart(11)
+      } ${gpuCoreMilliseconds.toFixed(1).padStart(10)} ${
+        separateWasmMilliseconds.toFixed(1).padStart(14)
+      } ${(separateWasmByteLength / 1024).toFixed(1).padStart(12)} ${
+        gpuTotal.toFixed(1).padStart(10)
+      } ${(cpuTotal / gleamMilliseconds).toFixed(2).padStart(10)} ${
+        (gpuTotal / gleamMilliseconds).toFixed(2).padStart(10)
+      }`,
+    );
+
+    for (const module of successfulCpuModules) module.destroy();
+    for (const result of gpuModules) if (result.ok) result.module.destroy();
+  }
+} finally {
+  pool.terminate();
+  parallelCompiler.terminate();
+  fusedCompiler.terminate();
+  device.destroy();
+}

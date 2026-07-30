@@ -8,7 +8,7 @@ import {
   UnaryOperator,
   UNIT_CONSTRUCTOR_NAME,
 } from "./abi.ts";
-import type { CoreNode, GpuModule, WasmExport } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode, WasmExport } from "./compiler_module.ts";
 import {
   BYTES_TYPE_NAME,
   type HostFieldDeclaration,
@@ -243,7 +243,7 @@ export interface WasmArtifact {
 }
 
 export function compileWasmArtifact(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
   instrumentedFuel = false,
   options: WasmCompilationOptions = {},
@@ -266,7 +266,7 @@ export function compileWasmArtifact(
 }
 
 class WasmCompiler {
-  readonly #module: GpuModule;
+  readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
   readonly #captureAnalysis: WasmCaptureAnalysis;
   readonly #constantAnalysis: WasmConstantAnalysis;

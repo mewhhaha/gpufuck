@@ -61,3 +61,23 @@ export function decodeTransferredModule(module: TransferEncodedModule): EncodedM
     }),
   };
 }
+
+export function encodedModuleTransferables(
+  module: TransferEncodedModule,
+): readonly ArrayBuffer[] {
+  const buffers = [
+    module.nodeWords.buffer,
+    module.parameterWords.buffer,
+    module.argumentWords.buffer,
+    module.caseAlternativeWords.buffer,
+    module.caseBinderWords.buffer,
+    module.definitionWords.buffer,
+    module.typeWords.buffer,
+    module.constructorWords.buffer,
+  ];
+  const transferable = new Set<ArrayBuffer>();
+  for (const buffer of buffers) {
+    if (buffer instanceof ArrayBuffer) transferable.add(buffer);
+  }
+  return [...transferable];
+}

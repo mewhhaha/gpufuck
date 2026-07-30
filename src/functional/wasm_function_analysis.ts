@@ -7,7 +7,11 @@ import {
   UnaryOperator,
 } from "./abi.ts";
 import type { CoreNode } from "./compiler_module.ts";
-import type { ScalarConstant, WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
+import {
+  type ConstantEnvironment,
+  extendConstantEnvironment,
+  type WasmConstantAnalysis,
+} from "./wasm_constant_analysis.ts";
 
 type NumericFoldOperator =
   | typeof BinaryOperator.Add
@@ -103,7 +107,7 @@ export class WasmFunctionAnalysis {
       definitions.add(definition);
       const pendingNodes: {
         readonly nodeIndex: number;
-        readonly environment: readonly (ScalarConstant | undefined)[];
+        readonly environment: ConstantEnvironment;
       }[] = [{ nodeIndex: rootNode, environment: [] }];
       while (pendingNodes.length > 0) {
         const pending = pendingNodes.pop();
@@ -141,12 +145,12 @@ export class WasmFunctionAnalysis {
             : undefined;
           pendingNodes.push({
             nodeIndex: node.child1,
-            environment: [value, ...environment],
+            environment: extendConstantEnvironment(value, environment),
           });
           continue;
         }
         if (node.tag === CoreTag.LetRec) {
-          const recursiveEnvironment = [undefined, ...environment];
+          const recursiveEnvironment = extendConstantEnvironment(undefined, environment);
           pendingNodes.push({ nodeIndex: node.child0, environment: recursiveEnvironment });
           pendingNodes.push({ nodeIndex: node.child1, environment: recursiveEnvironment });
           continue;
@@ -154,7 +158,7 @@ export class WasmFunctionAnalysis {
         if (node.tag === CoreTag.Lambda || node.tag === CoreTag.PatternBind) {
           pendingNodes.push({
             nodeIndex: node.child0,
-            environment: [undefined, ...environment],
+            environment: extendConstantEnvironment(undefined, environment),
           });
           continue;
         }

@@ -1,5 +1,9 @@
 import type { SemanticDiagnostic } from "../semantic/abi.ts";
-import { CompiledGpuSemanticModule, type GpuSemanticModule } from "../semantic/compiler_module.ts";
+import {
+  CompiledGpuSemanticModule,
+  type GpuSemanticModule,
+  type SemanticModule,
+} from "../semantic/compiler_module.ts";
 import {
   constructorLimitDiagnostic,
   definitionLimitDiagnostic,
@@ -11,6 +15,7 @@ import {
   type SemanticCompilationLimits,
 } from "../semantic/gpu_semantic_compiler.ts";
 import { publicTypeMetadata } from "../semantic/gpu_type_inference_results.ts";
+import { compileSemanticOnHost } from "../semantic/host_semantic_compiler.ts";
 import {
   CONSTRUCTOR_BYTE_LENGTH,
   CONSTRUCTOR_WORD_LENGTH,
@@ -39,11 +44,24 @@ import { analyzeModuleEffects } from "./effect_analysis.ts";
 import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
 import { type HostDefinitionBinding, normalizeHostCapabilities } from "./host_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
-import type { CompilationOptions, CompileResult, GpuModule } from "./compiler_module.ts";
+import type {
+  CompilationOptions,
+  CompiledModule,
+  CompileResult,
+  CpuCompileResult,
+  GpuModule,
+} from "./compiler_module.ts";
 import { registerCompleteTypeDeclarations } from "./compiler_module.ts";
 import { concreteType } from "./schema_contract.ts";
 
-export type { CompilationOptions, CompileResult, CoreNode, GpuModule } from "./compiler_module.ts";
+export type {
+  CompilationOptions,
+  CompiledModule,
+  CompileResult,
+  CoreNode,
+  CpuCompileResult,
+  GpuModule,
+} from "./compiler_module.ts";
 
 const DEFAULT_MAXIMUM_COMPILATION_STEPS = 1_000_000;
 const HARD_MAXIMUM_COMPILATION_STEPS = 10_000_000;
@@ -54,6 +72,53 @@ const HARD_MAXIMUM_COMPILATION_STEPS_PER_DISPATCH = 524_288;
 // semantic storage, inference metadata/workspace/output/readback, and one workspace growth.
 const COMPILATION_TRANSIENT_BYTES_PER_INPUT = 6_144;
 const COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH = 16_384;
+
+export class CpuCompiler {
+  async compileModule(
+    module: EncodedModule,
+    options: CompilationOptions = {},
+  ): Promise<CpuCompileResult> {
+    const results = await this.compileBatch([module], options);
+    const result = results[0];
+    if (result === undefined) {
+      throw new Error("functional CPU compiler omitted its only result");
+    }
+    return result;
+  }
+
+  async compileBatch(
+    modules: readonly EncodedModule[],
+    options: CompilationOptions = {},
+  ): Promise<readonly CpuCompileResult[]> {
+    validateCompilationOptions(options);
+    options.signal?.throwIfAborted();
+    return await Promise.all(modules.map(async (module) => {
+      validateEncodedModule(module);
+      options.signal?.throwIfAborted();
+      if (module.sourceByteLength > MAXIMUM_SOURCE_BYTE_LENGTH) {
+        return failedLimit(
+          `module spans ${module.sourceByteLength} UTF-8 source bytes; this compiler accepts at most ${MAXIMUM_SOURCE_BYTE_LENGTH}`,
+          MAXIMUM_SOURCE_BYTE_LENGTH,
+          module.sourceByteLength,
+        );
+      }
+      const compilation = compileSemanticOnHost(module, module.sourceByteLength);
+      if (!compilation.ok) {
+        return {
+          ok: false,
+          diagnostics: compilation.diagnostics.map(functionalDiagnostic) as [
+            Diagnostic,
+            ...Diagnostic[],
+          ],
+        };
+      }
+      return {
+        ok: true,
+        module: await publicModule(compilation.module, module),
+      };
+    }));
+  }
+}
 
 export class GpuCompiler {
   readonly #device: GPUDevice;
@@ -379,7 +444,15 @@ function completedBatchResults(
 async function publicModule(
   module: GpuSemanticModule,
   encodedModule: EncodedModule,
-): Promise<GpuModule> {
+): Promise<GpuModule>;
+async function publicModule(
+  module: SemanticModule,
+  encodedModule: EncodedModule,
+): Promise<CompiledModule>;
+async function publicModule(
+  module: SemanticModule,
+  encodedModule: EncodedModule,
+): Promise<CompiledModule> {
   const definitionRoots = Array.from(
     { length: encodedModule.definitionCount },
     (_, definitionIndex) =>
@@ -435,7 +508,7 @@ async function publicModule(
     hostCapabilities,
     declaredDefinitionEffects,
   );
-  const functional: GpuModule = {
+  const functional: CompiledModule = {
     ...module,
     symbolNames: Object.freeze([...encodedModule.symbolNames]),
     definitionNames: Object.freeze(definitionNames),

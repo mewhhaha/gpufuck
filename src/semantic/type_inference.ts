@@ -142,7 +142,10 @@ interface RigidRefinement {
   readonly previous: InferenceType | null;
 }
 
-type TypeEnvironment = ReadonlyMap<number, TypeScheme>;
+interface TypeEnvironment {
+  readonly globals: ReadonlyMap<number, TypeScheme>;
+  readonly locals: ReadonlyMap<number, TypeScheme>;
+}
 
 const INTEGER: IntegerType = Object.freeze({ kind: "integer" });
 const BOOLEAN: BooleanType = Object.freeze({ kind: "boolean" });
@@ -232,6 +235,8 @@ class InferenceContext {
   readonly #constructorBySymbol = new Map<number, ConstructorTyping>();
   readonly #typeByName = new Map<string, TypeDeclarationShape>();
   readonly #definitionSchemes = new Map<number, TypeScheme>();
+  readonly #globalSchemes = new Map<number, TypeScheme>();
+  readonly #freeSchemeParameters = new WeakMap<TypeScheme, ReadonlySet<TypeParameter>>();
   readonly #constructorFieldTypes: TypeSchema[][] = [];
   readonly #publicTypeDeclarations: TypeDeclaration[] = [];
   readonly #refinementTrail: RigidRefinement[] = [];
@@ -248,6 +253,12 @@ class InferenceContext {
     this.indexDefinitions();
     this.indexTypeDeclarationShapes();
     this.buildConstructorTypes();
+    for (const constructor of this.#constructorBySymbol.values()) {
+      this.#globalSchemes.set(constructor.symbol, {
+        parameters: constructor.parameters,
+        type: this.constructorFunctionType(constructor.fields, constructor.result),
+      });
+    }
 
     const components = this.definitionComponents();
     for (const component of components) this.inferDefinitionComponent(component);
@@ -734,15 +745,22 @@ class InferenceContext {
   }
 
   private inferDefinitionComponent(component: readonly number[]): void {
-    const outerEnvironment = this.globalEnvironment();
-    const componentEnvironment = new Map(outerEnvironment);
+    const outerEnvironment: TypeEnvironment = {
+      globals: this.#globalSchemes,
+      locals: new Map(),
+    };
+    const componentBindings = new Map<number, TypeScheme>();
+    const componentEnvironment: TypeEnvironment = {
+      globals: this.#globalSchemes,
+      locals: componentBindings,
+    };
     const placeholders = new Map<number, InferenceVariable>();
 
     for (const definitionIndex of component) {
       const symbol = this.definitionWord(definitionIndex, DefinitionWord.Symbol);
       const placeholder = this.inferenceVariable();
       placeholders.set(definitionIndex, placeholder);
-      componentEnvironment.set(symbol, { parameters: [], type: placeholder });
+      componentBindings.set(symbol, { parameters: [], type: placeholder });
     }
 
     for (const definitionIndex of component) {
@@ -776,6 +794,7 @@ class InferenceContext {
         outerEnvironment,
       );
       this.#definitionSchemes.set(symbol, scheme);
+      this.#globalSchemes.set(symbol, scheme);
     }
   }
 
@@ -815,7 +834,7 @@ class InferenceContext {
       case ExpressionTag.Boolean:
         return BOOLEAN;
       case ExpressionTag.Name: {
-        const scheme = environment.get(payload);
+        const scheme = environment.locals.get(payload) ?? environment.globals.get(payload);
         if (scheme === undefined) {
           throw this.invalidTypeMetadata(
             `cannot infer unknown name ${this.symbolName(payload)}`,
@@ -831,8 +850,7 @@ class InferenceContext {
           environment,
         );
         const scheme = this.generalize(value, environment);
-        const bodyEnvironment = new Map(environment);
-        bodyEnvironment.set(payload, scheme);
+        const bodyEnvironment = this.extendEnvironment(environment, [[payload, scheme]]);
         return this.inferNode(
           this.requiredChild(nodeIndex, NodeWord.Child1),
           bodyEnvironment,
@@ -841,16 +859,20 @@ class InferenceContext {
       }
       case ExpressionTag.LetRec: {
         const recursiveType = this.inferenceVariable();
-        const recursiveEnvironment = new Map(environment);
-        recursiveEnvironment.set(payload, { parameters: [], type: recursiveType });
+        const recursiveEnvironment = this.extendEnvironment(environment, [[
+          payload,
+          { parameters: [], type: recursiveType },
+        ]]);
         const value = this.inferNode(
           this.requiredChild(nodeIndex, NodeWord.Child0),
           recursiveEnvironment,
           recursiveType,
         );
         this.unify(recursiveType, value, span);
-        const bodyEnvironment = new Map(environment);
-        bodyEnvironment.set(payload, this.generalize(recursiveType, environment));
+        const bodyEnvironment = this.extendEnvironment(environment, [[
+          payload,
+          this.generalize(recursiveType, environment),
+        ]]);
         return this.inferNode(
           this.requiredChild(nodeIndex, NodeWord.Child1),
           bodyEnvironment,
@@ -879,7 +901,11 @@ class InferenceContext {
         return result;
       }
       case ExpressionTag.Lambda: {
-        const bodyEnvironment = new Map(environment);
+        const bodyBindings = new Map(environment.locals);
+        const bodyEnvironment: TypeEnvironment = {
+          globals: environment.globals,
+          locals: bodyBindings,
+        };
         const parameters: InferenceType[] = [];
         let expectedResult = expected;
         const parameterCount = this.nodeWord(nodeIndex, NodeWord.Child1);
@@ -900,7 +926,7 @@ class InferenceContext {
             : this.inferenceVariable();
           parameters.push(parameter);
           if (parameterCount > 0) {
-            bodyEnvironment.set(this.parameterSymbol(payload + parameterIndex), {
+            bodyBindings.set(this.parameterSymbol(payload + parameterIndex), {
               parameters: [],
               type: parameter,
             });
@@ -1309,14 +1335,18 @@ class InferenceContext {
           arm.span,
         );
       }
-      const armEnvironment = new Map(environment);
+      const armBindings = new Map(environment.locals);
+      const armEnvironment: TypeEnvironment = {
+        globals: environment.globals,
+        locals: armBindings,
+      };
       for (let binderIndex = 0; binderIndex < arm.binders.length; binderIndex++) {
         const binder = arm.binders[binderIndex];
         const field = instantiated.fields[binderIndex];
         if (binder === undefined || field === undefined) {
           throw new Error(`case alternative ${arm.index} omitted binder ${binderIndex}.`);
         }
-        armEnvironment.set(binder.symbol, { parameters: [], type: field });
+        armBindings.set(binder.symbol, { parameters: [], type: field });
       }
       const body = this.inferNode(arm.body, armEnvironment);
       this.unify(result, body, arm.span);
@@ -1456,14 +1486,18 @@ class InferenceContext {
             arm.span,
           );
         }
-        const armEnvironment = new Map(environment);
+        const armBindings = new Map(environment.locals);
+        const armEnvironment: TypeEnvironment = {
+          globals: environment.globals,
+          locals: armBindings,
+        };
         for (let binderIndex = 0; binderIndex < arm.binders.length; binderIndex++) {
           const binder = arm.binders[binderIndex];
           const field = instantiated.fields[binderIndex];
           if (binder === undefined || field === undefined) {
             throw new Error(`case alternative ${arm.index} omitted binder ${binderIndex}.`);
           }
-          armEnvironment.set(binder.symbol, { parameters: [], type: field });
+          armBindings.set(binder.symbol, { parameters: [], type: field });
         }
         const body = this.inferNode(
           arm.body,
@@ -1578,17 +1612,6 @@ class InferenceContext {
     return true;
   }
 
-  private globalEnvironment(): Map<number, TypeScheme> {
-    const environment = new Map(this.#definitionSchemes);
-    for (const constructor of this.#constructorBySymbol.values()) {
-      environment.set(constructor.symbol, {
-        parameters: constructor.parameters,
-        type: this.constructorFunctionType(constructor.fields, constructor.result),
-      });
-    }
-    return environment;
-  }
-
   private constructorFunctionType(
     fields: readonly InferenceType[],
     result: InferenceType,
@@ -1690,13 +1713,32 @@ class InferenceContext {
 
   private freeEnvironmentParameters(environment: TypeEnvironment): Set<TypeParameter> {
     const result = new Set<TypeParameter>();
-    for (const scheme of environment.values()) {
-      const quantified = new Set(scheme.parameters);
-      for (const parameter of this.freeTypeParameters(scheme.type)) {
-        if (!quantified.has(parameter)) result.add(parameter);
+    for (const scheme of environment.locals.values()) {
+      let free = this.#freeSchemeParameters.get(scheme);
+      if (free === undefined) {
+        const quantified = new Set(scheme.parameters);
+        const typeParameters = this.freeTypeParameters(scheme.type);
+        free = new Set(
+          [...typeParameters].filter((parameter) => !quantified.has(parameter)),
+        );
+        if ([...typeParameters].every((parameter) => quantified.has(parameter))) {
+          this.#freeSchemeParameters.set(scheme, free);
+        }
+      }
+      for (const parameter of free) {
+        result.add(parameter);
       }
     }
     return result;
+  }
+
+  private extendEnvironment(
+    environment: TypeEnvironment,
+    entries: readonly (readonly [number, TypeScheme])[],
+  ): TypeEnvironment {
+    const locals = new Map(environment.locals);
+    for (const [symbol, scheme] of entries) locals.set(symbol, scheme);
+    return { globals: environment.globals, locals };
   }
 
   private freeTypeParameters(
@@ -1933,11 +1975,13 @@ class InferenceContext {
     if (pruned === variable) return true;
     switch (pruned.kind) {
       case "tuple":
-        return this.occurs(variable, pruned.values[0]) || this.occurs(variable, pruned.values[1]);
+        return this.occurs(variable, pruned.values[0]) ||
+          this.occurs(variable, pruned.values[1]);
       case "named":
         return pruned.arguments.some((argument) => this.occurs(variable, argument));
       case "function":
-        return this.occurs(variable, pruned.parameter) || this.occurs(variable, pruned.result);
+        return this.occurs(variable, pruned.parameter) ||
+          this.occurs(variable, pruned.result);
       case "variable":
       case "rigid":
       case "integer":
@@ -1951,7 +1995,10 @@ class InferenceContext {
   }
 
   private prune(type: InferenceType): InferenceType {
-    if (type.kind === "variable" && type.instance !== null) return this.prune(type.instance);
+    if (type.kind === "variable" && type.instance !== null) {
+      type.instance = this.prune(type.instance);
+      return type.instance;
+    }
     if (type.kind === "rigid" && type.refinement !== null) return this.prune(type.refinement);
     return type;
   }

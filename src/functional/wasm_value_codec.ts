@@ -1,5 +1,5 @@
 import { PAIR_CONSTRUCTOR_NAME, type Type, type TypeSchema, UNIT_CONSTRUCTOR_NAME } from "./abi.ts";
-import { completeTypeDeclarations, type GpuModule } from "./compiler_module.ts";
+import { type CompiledModule, completeTypeDeclarations } from "./compiler_module.ts";
 import { instantiateSchema } from "./schema_contract.ts";
 import type { WasmHostValue } from "./wasm_contract.ts";
 import {
@@ -10,6 +10,7 @@ import {
   TEXT_TYPE_NAME,
   WHOLE_NUMBER_F64_TYPE_NAME,
 } from "./host_contract.ts";
+import { STORE_TYPE_NAME } from "./store_contract.ts";
 import { WasmValueAbi } from "./wasm_abi.ts";
 import { WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH } from "./wasm_runtime_layout.ts";
 
@@ -20,6 +21,7 @@ const BYTES_OBJECT_KIND = WasmValueAbi.objectKinds.bytes;
 const ARRAY_OBJECT_KIND = WasmValueAbi.objectKinds.array;
 const SLICE_OBJECT_KIND = WasmValueAbi.objectKinds.slice;
 const RESOURCE_OBJECT_KIND = WasmValueAbi.objectKinds.resource;
+const STORE_OBJECT_KIND = WasmValueAbi.objectKinds.store;
 const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
 const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
 const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
@@ -182,7 +184,7 @@ export function describeType(type: Type): string {
 
 export function encodeWasmValue(
   instance: WebAssembly.Instance,
-  module: GpuModule,
+  module: CompiledModule,
   type: Type,
   value: WasmValue,
 ): bigint {
@@ -460,9 +462,17 @@ export function encodeWasmValue(
       if (
         currentType.kind === "named" &&
         (currentType.name === ARRAY_TYPE_NAME ||
-          currentType.name === SLICE_TYPE_NAME)
+          currentType.name === SLICE_TYPE_NAME ||
+          currentType.name === STORE_TYPE_NAME)
       ) {
-        const valueKind = currentType.name === ARRAY_TYPE_NAME ? "array" : "slice";
+        let valueKind: "array" | "slice" = "array";
+        let objectKind = ARRAY_OBJECT_KIND;
+        if (currentType.name === SLICE_TYPE_NAME) {
+          valueKind = "slice";
+          objectKind = SLICE_OBJECT_KIND;
+        } else if (currentType.name === STORE_TYPE_NAME) {
+          objectKind = STORE_OBJECT_KIND;
+        }
         if (currentValue.kind !== valueKind) {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
@@ -481,7 +491,7 @@ export function encodeWasmValue(
         enterStructuredValue(currentValue, valueKind);
         pending.push({
           kind: "object",
-          objectKind: valueKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
+          objectKind,
           payload: 0,
           fieldCount: values.length,
           source: currentValue,
@@ -657,7 +667,7 @@ export function releaseEncodedWasmValue(
 
 export function decodeWasmValue(
   instance: WebAssembly.Instance,
-  module: GpuModule,
+  module: CompiledModule,
   type: Type,
   rawResult: number | bigint,
   maximumResultNodes: number,
@@ -676,7 +686,7 @@ export function decodeWasmValue(
 
 export function decodeWasmBoxedValue(
   instance: WebAssembly.Instance,
-  module: GpuModule,
+  module: CompiledModule,
   type: Type,
   rawResult: number | bigint,
   maximumResultNodes: number,
@@ -695,7 +705,7 @@ export function decodeWasmBoxedValue(
 
 function decodeWasmValueWithScalarRepresentation(
   instance: WebAssembly.Instance,
-  module: GpuModule,
+  module: CompiledModule,
   type: Type,
   rawResult: number | bigint,
   maximumResultNodes: number,
@@ -962,13 +972,21 @@ function decodeWasmValueWithScalarRepresentation(
     if (
       expected.kind === "named" &&
       (expected.name === ARRAY_TYPE_NAME ||
-        expected.name === SLICE_TYPE_NAME)
+        expected.name === SLICE_TYPE_NAME ||
+        expected.name === STORE_TYPE_NAME)
     ) {
-      const valueKind = expected.name === ARRAY_TYPE_NAME ? "array" : "slice";
+      let valueKind: "array" | "slice" = "array";
+      let expectedObjectKind = ARRAY_OBJECT_KIND;
+      if (expected.name === SLICE_TYPE_NAME) {
+        valueKind = "slice";
+        expectedObjectKind = SLICE_OBJECT_KIND;
+      } else if (expected.name === STORE_TYPE_NAME) {
+        expectedObjectKind = STORE_OBJECT_KIND;
+      }
       requireObjectKind(
         pointer,
         objectKind,
-        valueKind === "array" ? ARRAY_OBJECT_KIND : SLICE_OBJECT_KIND,
+        expectedObjectKind,
         valueKind,
       );
       const elementType = expected.arguments[0];
@@ -1032,7 +1050,7 @@ function decodeWasmValueWithScalarRepresentation(
 }
 
 export function requireFirstOrderWasmType(
-  module: GpuModule,
+  module: CompiledModule,
   type: Type,
   location: string,
 ): void {
@@ -1064,6 +1082,7 @@ export function requireFirstOrderWasmType(
           current.name === WHOLE_NUMBER_F64_TYPE_NAME ||
           current.name === ARRAY_TYPE_NAME ||
           current.name === SLICE_TYPE_NAME ||
+          current.name === STORE_TYPE_NAME ||
           current.name.startsWith(RESOURCE_TYPE_PREFIX)
         ) return;
         const key = JSON.stringify(current);
@@ -1217,7 +1236,7 @@ function boundedBytes(
 }
 
 export function functionalStructuredFieldTypes(
-  module: GpuModule,
+  module: CompiledModule,
   type: Extract<Type, { readonly kind: "tuple" | "named" }>,
   constructorName: string,
 ): readonly Type[] {

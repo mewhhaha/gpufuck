@@ -12,9 +12,15 @@ export type ConstantResolver = (
   localDepth: number,
 ) => ScalarConstant | undefined;
 
+export interface ConstantEnvironmentBinding {
+  readonly value: ScalarConstant | undefined;
+  readonly parent: ConstantEnvironment;
+}
+
 export type ConstantEnvironment =
   | readonly (ScalarConstant | undefined)[]
-  | ConstantResolver;
+  | ConstantResolver
+  | ConstantEnvironmentBinding;
 
 export class WasmConstantAnalysis {
   readonly #nodes: readonly CoreNode[];
@@ -238,12 +244,21 @@ function constantAt(
   environment: ConstantEnvironment,
   localDepth: number,
 ): ScalarConstant | undefined {
-  return typeof environment === "function" ? environment(localDepth) : environment[localDepth];
+  if (typeof environment === "function") return environment(localDepth);
+  if (Array.isArray(environment)) return environment[localDepth];
+  let binding = environment as ConstantEnvironmentBinding;
+  for (let depth = localDepth; depth > 0; depth--) {
+    const parent = binding.parent;
+    if (typeof parent === "function") return parent(depth - 1);
+    if (Array.isArray(parent)) return parent[depth - 1];
+    binding = parent as ConstantEnvironmentBinding;
+  }
+  return binding.value;
 }
 
-function extendConstantEnvironment(
-  value: ScalarConstant,
+export function extendConstantEnvironment(
+  value: ScalarConstant | undefined,
   environment: ConstantEnvironment,
-): ConstantResolver {
-  return (localDepth) => localDepth === 0 ? value : constantAt(environment, localDepth - 1);
+): ConstantEnvironmentBinding {
+  return { value, parent: environment };
 }

@@ -1,5 +1,5 @@
 import { CoreTag, EvaluationMode, EvaluationProfile } from "./abi.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
   functionalHostScalarType,
   functionalWasmEntry,
@@ -16,7 +16,7 @@ import { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
 import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 
 export interface WasmBackendPlan {
-  readonly module: GpuModule;
+  readonly module: CompiledModule;
   readonly nodes: readonly CoreNode[];
   readonly captureAnalysis: WasmCaptureAnalysis;
   readonly constantAnalysis: WasmConstantAnalysis;
@@ -30,7 +30,7 @@ export interface WasmBackendPlan {
 }
 
 export function createWasmBackendPlan(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
   instrumentedFuel: boolean,
   options: WasmCompilationOptions,
@@ -98,7 +98,7 @@ export function validateWasmSimdMode(
 }
 
 function validateOwnedTypeExports(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
   options: WasmCompilationOptions,
 ): void {

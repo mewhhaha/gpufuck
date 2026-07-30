@@ -75,13 +75,18 @@ try {
   // Parsing and lowering are pure functions of a source string, so they parallelise across units with
   // nothing shared. The pool is warmed before timing so worker startup and per-worker baba
   // instantiation stay out of the measurement.
-  const units = corpus.modules.map((module) => ({
-    name: module.name.replaceAll("/", "_"),
-    source: module.source,
-  }));
-  await pool.lower(units);
+  await pool.lower(
+    corpus.modules.slice(0, 32).map((module, index) => ({
+      name: `warm_${index}`,
+      source: module.source,
+    })),
+  );
   const parallelParseSamples: number[] = [];
   for (let repetition = 0; repetition < REPETITIONS; repetition++) {
+    const units = corpus.modules.map((module, index) => ({
+      name: `measured_${repetition}_${index}`,
+      source: module.source,
+    }));
     const started = performance.now();
     for (const result of await pool.lower(units)) {
       if (!result.ok) throw new Error(`parallel frontend failed: ${result.diagnostic}`);

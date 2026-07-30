@@ -96,43 +96,56 @@ try {
 
 Three rules that will save you time:
 
-- **Reuse one `GpuCompiler` per device.** Creating it builds shaders and pipelines, which is slow.
-- **`destroy()` a successful module in `finally`.** It owns GPU buffers.
-- **Use `compileBatch()` if you have more than one module.** This is where gpufuck is actually good
-  — see below.
+- **Use `FunctionalCompilerService` for ordinary compilation.** It uses the CPU for HM modules and
+  initializes one resident GPU compiler only when a GPU-only typechecking profile requires it. It
+  also reuses an unchanged encoded module.
+- **Use `GleamFrontendService` for a long-lived Gleam project.** It reuses unchanged parses and
+  lowerings; an identical project returns the same packed module.
+- **Use `ParallelGleamProjectFrontend` for a cold project with at least four modules.** It parses,
+  collects public signatures, and lowers modules in resident workers before linking them in source
+  order.
+- **Use `ParallelGleamCompiler` for independent Gleam entries.** It keeps parsing, lowering,
+  semantic compilation, and Wasm emission in the same worker and returns results in input order.
+- **Use `ParallelFunctionalCompilerService` for independent packed modules.** It can compile Core,
+  emit separate Wasm artifacts concurrently, or assemble one deterministic shared-runtime artifact.
+- **`destroy()` a successful module in `finally`.** CPU modules make this a no-op; GPU modules
+  release their buffers.
+- **Use `compileModulesToWasm()` for independent entries that should share one artifact.**
 
 ## Is it fast?
 
-Two answers, both measured against the real Gleam compiler (1.17.0) on the same input, on a Ryzen 7
-7800X3D with an RTX 4080 SUPER:
+No. Against Gleam 1.17.0 on the same source, on a Ryzen 7 7800X3D with an RTX 4080 SUPER:
 
-| Your workload                          | Reproduce                      |          Result |
-| -------------------------------------- | ------------------------------ | --------------: |
-| **One large module**, compiled once    | `deno task bench:gleam-stdlib` |  **33× slower** |
-| **1,024 independent modules**, batched | `deno task bench:gleam-batch`  | **~17× faster** |
+| Workload                                     | Reproduce                      | Result           |
+| -------------------------------------------- | ------------------------------ | ---------------- |
+| **One large module**, compiled once          | `deno task bench:gleam-stdlib` | **5.75× slower** |
+| **One source-only edit**                     | `deno task bench:gleam-stdlib` | **~6.0× slower** |
+| **Unchanged large module**                   | `deno task bench:gleam-stdlib` | **~143× faster** |
+| **1,024 modules**, shared Wasm artifact      | `deno task bench:gleam-batch`  | **~1.7× slower** |
+| **1,024 independent modules**, fused workers | `deno task bench:gleam-batch`  | **~1.5× faster** |
 
-Batching is the case a GPU can win. `gleam build` has no cross-package batching, so its 11 ms
-per-package cost is a floor; gpufuck amortizes to roughly 630 µs per module. If you are building one
-project, use a normal compiler. If you are compiling a thousand user programs — a playground, a
-package registry, a CI corpus — this is the interesting shape.
+The earlier batch claim charged Gleam one process and package startup for every module while gpufuck
+used one resident process. The benchmark now gives both compilers all modules in one process and
+includes executable output on both sides. `CpuCompiler` and the default compiler service avoid
+WebGPU startup, but frontend work and Wasm emission still leave the full compiler behind.
 
-**That 17× holds at that corpus's module size and not in general.** On modules of about 1,200 nodes
-— `deno task bench:gleam-corpus 256`, 1.46 MB of Gleam — the GPU resolves and infers 300,544 nodes
-in **87.9 ms**, which is 0.29 µs per node and genuinely fast. But baba then takes 2,152.8 ms to
-parse and lower the same input, so the frontend is **96% of the compile** and the end-to-end win
-drops to 1.26×. The GPU compiles quickly; the compiler does not, and the parser is why.
+On the standard-library corpus, the median of three benchmark medians is 118.5 ms to parse and
+lower, 43.6 ms for host resolution, inference, and effects, and 107.7 ms for uncached Wasm emission.
+The resulting 276.2 ms is 5.75× Gleam's 48.0 ms cold build. The raw HM phase is 14.0 ms; sharing
+closed global environments removed its former quadratic top-level copying.
 
-Single-module latency is the weak case, and it improved 8.9× on 2026-07-26 — the Gleam standard
-library went from 3,956 ms to 442.1 ms, or 27× off `gleam build` to **3.0×**. None of that came from
-making the GPU wider. Two defects accounted for all of it: a union-find that walked variable chains
-without ever writing back, and a pattern compiler that copied the rest of the match into every
-constructor arm, which alone made 64% of that corpus duplicated nodes.
+Independent compilation now breaks even between 512 and 1,024 modules. Across three complete
+benchmark processes, the 1,024-module median was 264.6 ms for the fused source-to-Wasm worker path
+and 407.0 ms for Gleam: gpufuck was 1.54× faster. Keeping the shared runtime changes the tradeoff:
+the 1,024-module artifact is 2.03 MiB instead of 3.07 MiB, but monolithic Wasm emission remains
+serial and the complete shared-artifact path is about 1.7× slower than Gleam.
 
-What remains is the thing the project was always about. GPU inference is 322.7 ms of that 442.1, and
-it still runs **one lane** of a serial state machine. Parse and lower together are 119.4 ms, already
-under Gleam's entire 146 ms build, so a free GPU phase would win outright — the bar is 12× on one
-kernel. [BASELINE.md](BASELINE.md) records what has been measured and ruled out;
-[TASKS.md](TASKS.md) ranks what is left.
+The warm result has two distinct meanings. An unchanged project takes about 0.075 ms because all
+three stages reuse immutable results, versus Gleam's 10.7 ms no-change build. A source-only edit
+takes 71.1 ms versus Gleam's 11.7 ms because gpufuck still relinks and recompiles the complete Core.
+Incremental semantic compilation and function-granular Wasm reuse, not HM inference, are now the
+remaining edited-build bottlenecks. [BASELINE.md](BASELINE.md) records the raw measurements and
+superseded claims; [TASKS.md](TASKS.md) ranks what is left.
 
 **Does it produce correct code?** 547 of Gleam's own 1,521 standard-library tests compile to
 WebAssembly and pass upstream's assertions — 97% of those needing no JavaScript FFI adapter. Run it

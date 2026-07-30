@@ -32,7 +32,7 @@ Deno.test("missing WebGPU API explains both ways to enable it", async () => {
   });
 });
 
-Deno.test("missing WebGPU adapter explains the driver requirement and absent CPU fallback", async () => {
+Deno.test("missing WebGPU adapter explains the driver requirement and CPU route", async () => {
   const gpu = {
     requestAdapter: () => Promise.resolve(null),
   } as unknown as GPU;
@@ -40,7 +40,8 @@ Deno.test("missing WebGPU adapter explains the driver requirement and absent CPU
   await withNavigatorGpu(gpu, async () => {
     await rejects(requestWebGpuDevice, (error: Error) => {
       match(error.message, /graphics driver/);
-      match(error.message, /no CPU fallback/);
+      match(error.message, /CpuCompiler/);
+      match(error.message, /FunctionalCompilerService/);
       return true;
     });
   });

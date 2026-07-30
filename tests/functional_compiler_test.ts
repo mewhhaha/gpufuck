@@ -7,6 +7,7 @@ import {
   CaseAlternativeWord,
   CORE_V1_PRIMITIVE_CAPABILITIES,
   CoreTag,
+  CpuCompiler,
   createModuleArtifact,
   defineEffectOperation,
   effectSet,
@@ -53,6 +54,45 @@ Deno.test.beforeAll(async () => {
 Deno.test.afterAll(() => {
   runtime?.device.destroy();
   runtime = undefined;
+});
+
+Deno.test("CPU and GPU compilation produce identical resolved Core", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.apply(
+        surface.lambda(
+          ["left", "right"],
+          surface.binary(
+            BinaryOperator.Add,
+            surface.name("left"),
+            surface.name("right"),
+          ),
+        ),
+        surface.integer(20),
+        surface.integer(22),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const [cpu, gpu] = await Promise.all([
+    new CpuCompiler().compileModule(module),
+    functionalRuntime().compiler.compileModule(module),
+  ]);
+  ok(cpu.ok, cpu.ok ? undefined : cpu.diagnostics[0].message);
+  ok(gpu.ok, gpu.ok ? undefined : gpu.diagnostics[0].message);
+  if (!cpu.ok || !gpu.ok) return;
+  try {
+    deepStrictEqual(await cpu.module.readCoreNodes(), await gpu.module.readCoreNodes());
+    deepStrictEqual(cpu.module.entryType, gpu.module.entryType);
+  } finally {
+    cpu.module.destroy();
+    gpu.module.destroy();
+  }
 });
 
 Deno.test("nested case scrutinees keep contiguous alternative metadata", () => {
@@ -1050,10 +1090,15 @@ Deno.test("rejects structural equality between different operand types", async (
     "main",
     0,
   );
-  const compilation = await functionalRuntime().compiler.compileModule(module);
-  ok(!compilation.ok);
-  if (compilation.ok) return;
-  match(compilation.diagnostics[0].message, /expected Int, received Bool/);
+  const compilations = await Promise.all([
+    new CpuCompiler().compileModule(module),
+    functionalRuntime().compiler.compileModule(module),
+  ]);
+  for (const compilation of compilations) {
+    ok(!compilation.ok);
+    if (compilation.ok) continue;
+    match(compilation.diagnostics[0].message, /expected Int, received Bool/);
+  }
 });
 
 Deno.test("GPU functional evaluation accepts i64 and f32 inputs", async () => {
@@ -1526,16 +1571,22 @@ Deno.test("preserves Lazuli compatibility across the functional module boundary"
 Deno.test("reports functional diagnostic codes without frontend-specific prefixes", async () => {
   const { compiler } = functionalRuntime();
   const invalid = integerModule(42);
-  const compilation = await compiler.compileModule({
+  const module = {
     ...invalid,
     definitionWords: Uint32Array.of(1, 0, 0, 2),
     symbolNames: ["entry", "missing_entry"],
-  });
+  };
+  const compilations = await Promise.all([
+    new CpuCompiler().compileModule(module),
+    compiler.compileModule(module),
+  ]);
 
-  equal(compilation.ok, false);
-  if (compilation.ok) return;
-  equal(compilation.diagnostics[0].code, "F2003");
-  match(compilation.diagnostics[0].message, /missing required entry definition/);
+  for (const compilation of compilations) {
+    equal(compilation.ok, false);
+    if (compilation.ok) continue;
+    equal(compilation.diagnostics[0].code, "F2003");
+    match(compilation.diagnostics[0].message, /missing required entry definition/);
+  }
 });
 
 Deno.test("duplicate declarations report the original source span", async () => {
@@ -1560,15 +1611,20 @@ Deno.test("duplicate declarations report the original source span", async () => 
     "answer",
     21,
   );
-  const compilation = await functionalRuntime().compiler.compileModule(module);
-  equal(compilation.ok, false);
-  if (compilation.ok) return;
-  equal(compilation.diagnostics[0].code, "F2002");
-  deepStrictEqual(compilation.diagnostics[0].span, { startByte: 11, endByte: 21 });
-  deepStrictEqual(compilation.diagnostics[0].related, [{
-    message: "first declaration",
-    span: { startByte: 0, endByte: 10 },
-  }]);
+  const compilations = await Promise.all([
+    new CpuCompiler().compileModule(module),
+    functionalRuntime().compiler.compileModule(module),
+  ]);
+  for (const compilation of compilations) {
+    equal(compilation.ok, false);
+    if (compilation.ok) continue;
+    equal(compilation.diagnostics[0].code, "F2002");
+    deepStrictEqual(compilation.diagnostics[0].span, { startByte: 11, endByte: 21 });
+    deepStrictEqual(compilation.diagnostics[0].related, [{
+      message: "first declaration",
+      span: { startByte: 0, endByte: 10 },
+    }]);
+  }
 });
 
 Deno.test("linked diagnostics map primary and related spans back to frontend modules", () => {

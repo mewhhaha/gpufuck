@@ -1527,6 +1527,170 @@ could be lowered from directly, the intermediate Gleam AST at 57% comes into ran
 first version of this idea with a plausible path past 1.01x, and it is unmeasured because we cannot
 run it.
 
+## 2026-07-29 — same-process comparison and CPU compilation correct the headline again
+
+The old batch comparison was not symmetric: gpufuck compiled every module in one resident process,
+while Gleam paid process and package startup once per module. The replacement benchmark gives both
+compilers all inputs in one resident process and includes executable output. This supersedes the 17x
+batch win and every extrapolation based on Gleam's per-package floor.
+
+`deno task bench:gleam-batch`, Gleam 1.17.0:
+
+| Modules | Gleam JS | CPU Core | Shared Wasm | CPU total | GPU Core | Separate Wasm | GPU total | CPU/Gleam |
+| ------: | -------: | -------: | ----------: | --------: | -------: | ------------: | --------: | --------: |
+|       1 |   2.8 ms |   0.7 ms |     10.5 ms |   43.6 ms |  13.6 ms |        2.2 ms |   48.1 ms |    15.60x |
+|      32 |  13.2 ms |   9.6 ms |     34.6 ms |   53.1 ms |  21.1 ms |       25.8 ms |   55.9 ms |     4.02x |
+|     128 |  44.7 ms |  28.0 ms |     87.1 ms |  193.3 ms |  39.5 ms |       55.0 ms |  172.6 ms |     4.33x |
+|     512 | 179.2 ms | 168.8 ms |    388.1 ms |  653.8 ms | 119.5 ms |      290.6 ms |  507.0 ms |     3.65x |
+|   1,024 | 358.6 ms | 210.0 ms |    493.2 ms |  869.2 ms | 255.5 ms |      524.4 ms |  945.9 ms |     2.42x |
+
+There is **no compiler break-even through 1,024 modules**. The ratio is still improving at the
+largest point, but extrapolating a crossing would be dishonest because frontend, Core, and Wasm
+curves have different shapes.
+
+The shared-runtime artifact does have two measured wins. Its emission time crosses the
+separate-artifact path between 512 and 1,024 modules in this run. At 1,024 entries it is 2,079.0 KiB
+against 3,141.0 KiB separately, a **33.8% size reduction**. At 128 and 512 entries its whole-program
+analyses cost more than compiling isolated artifacts, so sharing is not a blanket compile-time win.
+
+### The cold single-program result is 11.4x, not 3.2x
+
+The stdlib benchmark had another cache bias. Fresh compiled-module objects still shared a global
+resolved-Core fingerprint cache, so samples two through nine measured a Wasm cache hit. It now calls
+raw code generation for every sample and gives Gleam the same generated entry module that gpufuck
+needs to keep the whole library reachable.
+
+`deno task bench:gleam-stdlib <checkout>`, medians of nine:
+
+| Phase                         |         Time |
+| ----------------------------- | -----------: |
+| Parse and lower               |     126.1 ms |
+| CPU resolve and infer         |     199.0 ms |
+| GPU resolve and infer         |     396.0 ms |
+| Uncached Wasm emission        |     193.1 ms |
+| **CPU end to end**            | **518.2 ms** |
+| GPU end to end                |     715.2 ms |
+| **Gleam build to JavaScript** |  **45.5 ms** |
+
+The default CPU route is therefore **11.39x slower** than Gleam; the GPU route is 15.72x slower.
+This comparison is stricter than the old one in both directions: gpufuck emits Wasm in memory while
+Gleam emits JavaScript to disk, and both compile exactly the accepted nineteen stdlib modules plus
+the generated root.
+
+### What the five changes bought
+
+- `CpuCompiler` produces the same resolved Core and diagnostics without WebGPU. The default
+  `FunctionalCompilerService` selects it for HM modules and lazily retains one GPU compiler for
+  higher-rank modules.
+- Closed type schemes cache their free-parameter sets during one inference run. On this corpus the
+  inference-only host oracle is 124.4 ms; the previously recorded host median was 380.8 ms, a 3.1x
+  reduction in that phase.
+- `compileModulesToWasm` emits independent named entries in one linear-memory artifact and shares
+  the runtime. Constructors, case metadata, binders, literals, definitions, and source spans are
+  relocated when modules are packed.
+- The benchmark now exposes the actual break-even question instead of substituting process startup.
+
+WasmGC remains available for single modules. Its existing emitter only permits one callable entry,
+so the multi-entry artifact currently uses the linear-memory backend; requesting a multi-entry
+WasmGC artifact fails explicitly instead of silently dropping exports.
+
+## 2026-07-29 — the CPU, cache, and binary pass closes half the cold gap
+
+The follow-up used the same stdlib checkout, generated entry, nine-sample phase medians, and Gleam
+1.17.0. Three complete benchmark processes were run because garbage collection moves the summed
+phase result by tens of milliseconds. The table reports the median of those three medians:
+
+| Phase                            |      gpufuck |       Gleam |
+| -------------------------------- | -----------: | ----------: |
+| Parse                            |      84.5 ms |           — |
+| Parse and lower                  |     118.5 ms |           — |
+| Raw host HM inference            |      14.0 ms |           — |
+| CPU resolve, infer, and effects  |      43.6 ms |           — |
+| Uncached Wasm emission           |     107.7 ms |           — |
+| **Cold complete**                | **276.2 ms** | **48.0 ms** |
+| **Unchanged complete**           | **0.075 ms** | **10.7 ms** |
+| **Source-only single-file edit** |  **71.1 ms** | **11.7 ms** |
+
+Cold compilation is now **5.75× Gleam**, down from 11.39×. An exact unchanged project is a cache
+lookup and is about 143× faster than Gleam's no-change build. That number does not describe an
+edited project: appending a comment to one source still costs about 6× Gleam because linking and
+semantic compilation remain whole-project operations.
+
+The changes and the measured reasons for them:
+
+- `InferenceContext` shares closed global schemes and copies only lexical bindings. This removes the
+  `new Map(globalEnvironment)` operation per SCC; raw inference fell from 102.4 ms to 14.0 ms.
+  Ordinary inference variables also use path compression.
+- Pure modules bypass lambda-set effect analysis. Effect sets created by this package retain their
+  immutable identity, empty sets are shared, and the effectful path consumes lambda-set members
+  without allocating a public set for every application.
+- Wasm reachability uses persistent constant environments instead of copying one array per lexical
+  edge. The binary encoder sizes vectors and sections once before filling them.
+- `GleamFrontendService` caches parsed and lowered modules. `FunctionalCompilerService` caches
+  successful CPU compilation by immutable encoded-module identity. Wasm already caches by resolved
+  Core, and source-only locations no longer invalidate instruction-identical bytes.
+- Gleam lowering transfers ownership of fresh artifacts to the linker, retaining validation and
+  freezing while avoiding a redundant `structuredClone`.
+
+The same-process batch benchmark was also repeated three times. At 1,024 entries the median run was
+383.1 ms for Gleam and 643.6 ms for gpufuck CPU plus a shared Wasm artifact: **1.82× slower**, down
+from 2.42×. The 2,079.0 KiB shared artifact remains 33.8% smaller than 3,141.0 KiB of separate
+artifacts. There is still no measured cold break-even.
+
+The remaining cold floor is no longer inference: frontend work is about 43% of the total and Wasm
+emission about 39%. The parser-to-Gleam-AST-to-Surface path still builds two trees, while an edited
+project still recompiles one linked Core and one monolithic Wasm body set. Those are architectural
+changes, not another map or allocation fix.
+
+## 2026-07-30 — fused workers produce the first honest batch break-even
+
+The earlier batch path crossed worker boundaries twice: frontend workers returned packed Surface,
+then semantic workers copied that Surface and returned compiled Core before Wasm emission. The
+copies erased most of the semantic parallelism. `ParallelGleamCompiler` instead sends source once,
+keeps parsing, lowering, host semantic compilation, and Wasm emission in one resident worker, and
+returns only the final bytes. Results retain input order and one failing unit does not discard its
+neighbours.
+
+`deno task bench:gleam-batch` was run in three fresh processes. Gleam still receives all sources in
+one package and resident process. Each gpufuck batch uses distinct executable literals so the
+resolved-Core cache cannot turn later sizes into warm Wasm measurements. Medians of the three
+process results:
+
+| Modules | Gleam JS | Fused source-to-Wasm | Fused/Gleam |
+| ------: | -------: | -------------------: | ----------: |
+|       1 |   2.8 ms |               2.7 ms |       0.96× |
+|      32 |  12.8 ms |              23.4 ms |       1.83× |
+|     128 |  48.3 ms |              75.5 ms |       1.56× |
+|     512 | 185.4 ms |             190.8 ms |       1.03× |
+|   1,024 | 407.0 ms |             264.6 ms |   **0.65×** |
+
+The useful break-even is therefore between 512 and 1,024 independent modules. At 1,024 gpufuck is
+1.54× faster than Gleam. The one-module row is not a replacement for the standard-library latency
+benchmark: this synthetic entry is small enough for compact-scalar Wasm and says nothing about one
+large linked project.
+
+There are two different output contracts:
+
+- Fused workers emit one self-contained artifact per entry. They parallelise Wasm body generation
+  but repeat the runtime, totalling about 3.07 MiB at 1,024 modules.
+- `compileBatchToSharedWasm` compiles independent Core concurrently and then assembles exports in
+  input order into one artifact. It emits about 2.03 MiB, 33.8% less, but the existing shared
+  emitter performs whole-bundle analysis and body generation serially. Its median complete path is
+  still about 1.7× slower than Gleam.
+
+Returning compiled Core to the caller was not itself a throughput win. On the synthetic compiler
+benchmark, worker semantic compilation at 1,024 modules was roughly tied with the serial host
+because structured-cloning Core consumed the saved compute. Keeping Core resident and returning only
+Wasm produced a 2.1–2.7× pipeline speedup. That boundary, rather than worker count alone, is what
+created the crossover.
+
+Linked projects retain whole-project inference because unannotated public functions can be inferred
+across imports. `ParallelGleamProjectFrontend` safely parallelises parse, signature extraction, and
+lowering, then links in source order. The measured 1,024-module synthetic chain improved only
+1.1–1.3×; making semantic SCCs independently compilable requires typed module interfaces and
+relocatable compiled imports. Running current whole-project inference once per SCC would duplicate
+work and change diagnostics, so it was not presented as parallelism.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

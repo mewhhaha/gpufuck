@@ -163,15 +163,24 @@ try {
     const parseOnlyMilliseconds = await timed(() => {
       for (const module of slice) parseGleamModule(module.name, module.source);
     });
-    // The worker pool is warmed first, so worker startup and per-worker baba instantiation are not
-    // inside the measurement. It is reused across cases for the same reason.
-    const units = slice.map((module) => ({
-      name: module.name.replaceAll("/", "_"),
-      source: module.source,
-    }));
-    await pool.lower(units);
+    // Warm the workers with different module identities. The frontend service caches exact inputs,
+    // while this timing is intended to retain parsing and lowering work.
+    await pool.lower(
+      slice.slice(0, 32).map((module, index) => ({
+        name: `warm_${count}_${index}`,
+        source: module.source,
+      })),
+    );
+    let parallelRun = 0;
+    let parallelResults: Awaited<ReturnType<ParallelGleamFrontend["lower"]>> = [];
     const parallelFrontendMilliseconds = await timed(async () => {
-      for (const result of await pool.lower(units)) {
+      const units = slice.map((module, index) => ({
+        name: `measured_${count}_${parallelRun}_${index}`,
+        source: module.source,
+      }));
+      parallelRun++;
+      parallelResults = await pool.lower(units);
+      for (const result of parallelResults) {
         if (!result.ok) throw new Error(`parallel frontend failed: ${result.diagnostic}`);
       }
     });
@@ -184,7 +193,7 @@ try {
     });
     // Node count is asserted equal across both frontend paths: the parallel one is only useful if it
     // produces the same work, and a silent divergence would be worse than it being slow.
-    const parallelNodes = (await pool.lower(units)).reduce(
+    const parallelNodes = parallelResults.reduce(
       (total, result) => total + (result.ok ? result.module.nodeCount : 0),
       0,
     );

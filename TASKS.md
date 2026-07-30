@@ -37,12 +37,13 @@ Numbers stay stable so prose elsewhere still resolves; the measurements live in
 
 ## Now
 
-### 14. The frontend is the bottleneck, and 57% of it is our own code
+### 14. Fuse the parser cursor into Surface lowering
 
-**Re-measured 2026-07-26 and it has inverted.** On a 256-module corpus of realistic Gleam — 1.46 MB,
-300,544 surface nodes — the GPU resolves and infers everything in **87.9 ms**, 0.29 µs per node,
-while the serial frontend takes **1,865 ms**. The frontend is 96% of the compile and the GPU is
-3.9%.
+**Re-measured 2026-07-29 after CPU and Wasm work.** On the stdlib corpus the frontend takes 118.5 ms
+of a 276.2 ms cold compile. The existing cursor-to-AST and AST-to-Surface walks remain the largest
+single cold phase. On the earlier 256-module corpus of realistic Gleam — 1.46 MB, 300,544 surface
+nodes — the GPU resolves and infers everything in **87.9 ms**, 0.29 µs per node, while the serial
+frontend takes **1,865 ms**. The frontend is 96% of the compile and the GPU is 3.9%.
 
 Split three ways, because the first two versions of this item were both wrong — the first blamed the
 parser for lowering, the second blamed baba for our AST construction:
@@ -241,6 +242,14 @@ and the gap is believed to be worker message copying plus per-worker JIT warmup 
 contention. Worth a profile before assuming which, and worth remembering that a `postMessage` of an
 `EncodedModule` copies every packed array.
 
+The copy diagnosis is now measured. Standalone frontend workers transfer packed buffers instead of
+copying them and use size-balanced batches. `ParallelGleamProjectFrontend` adds project-aware
+parallel parse, signature collection, and lowering. More importantly, `ParallelGleamCompiler`
+removes both intermediate worker boundaries for independent entries and returns only Wasm. At 1,024
+modules it is 1.54× faster than the fair same-process Gleam comparison. The remaining linked-project
+work is typed module interfaces plus relocatable Core; without those, semantic SCC workers would
+either repeat dependencies or change inference for unannotated exports.
+
 ## Next
 
 ### 8. The Gleam FFI adapter
@@ -254,20 +263,12 @@ actually runs".
 
 ## Later
 
-### 9. The CPU inference oracle is O(n^1.30)
+### 9. ~~The CPU inference oracle is O(n^1.30)~~ — done
 
-`inferTypes` in `src/semantic/type_inference.ts` has three separate Θ(n·|E|) terms: `generalize`
-walks every type in the whole environment on every `let`, six sites copy the entire environment to
-add one binding, and `globalEnvironment()` is rebuilt per SCC component. There are no Rémy levels,
-no path compression in `prune`, and no visited-set memoization in `occurs`/`replaceParameters`.
-
-**This is not on the compile path.** `inferTypes` appears only in `tests/`, `benchmarks/`, and its
-own file — it is the differential oracle. Fixing it speeds up the test suite and the benchmark's CPU
-column and does nothing for compilation. Worth doing when the suite gets slow, not before.
-
-Note the shader does _not_ share this algorithm: it has Rémy levels, epoch-marked traversal, a
-persistent skip-list environment, and lazy instantiation. The two are differentially tested on
-results, not asymptotics.
+`CpuCompiler` made this the default HM compile path, so its old priority argument became false.
+Global closed schemes now stay in one shared map while lexical environments copy only local
+bindings; ordinary inference variables use path compression. Raw stdlib inference fell from 102.4 ms
+to 14.0 ms, and the indexed/GADT host-GPU differential corpus remains green.
 
 ### 10. ~~Nine exports never lost the prefix~~ — done
 
@@ -311,12 +312,9 @@ with them.
 
 ## Not planned
 
-**Beating Gleam by 2× on single-module compilation.** The arithmetic rules it out. CPU-side work
-alone — parse 71 ms, lower 58 ms, emit 23 ms — is 152 ms, already more than Gleam's entire 146 ms
-cold build including JavaScript codegen. An infinitely fast GPU still loses. Stacking every
-plausible win lands around 124 ms warm against Gleam's 23 ms warm.
-
-Throughput is the reachable goal and is already met: ~17× faster at batch 1,024.
+**Beating Gleam by 2× on cold single-module compilation.** The current measured floor is 118.5 ms
+frontend plus 107.7 ms Wasm emission, before semantic compilation, against Gleam's 48.0 ms complete
+build. Exact no-change builds are already cache lookups, but edited builds remain about 6× slower.
 
 **A shared Wasm runtime module.** The theory was that re-emitting the allocator per module was the
 fixed cost. Measured: the three runtime body builders cost 22 µs of ~540. Not the problem.

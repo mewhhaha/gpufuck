@@ -1,9 +1,9 @@
 import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import { primopDeclaration, PrimopFamily } from "../semantic/primops.ts";
 
 export function lowerCoreForWasm(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
 ): readonly CoreNode[] {
   const lowered = nodes.map((node) => ({ ...node }));
@@ -53,7 +53,7 @@ export function lowerCoreForWasm(
 }
 
 function lowerPrimop(
-  module: GpuModule,
+  module: CompiledModule,
   nodeIndex: number,
   primop: CoreNode,
 ): CoreNode {
@@ -141,7 +141,7 @@ function lowerLambda(nodes: CoreNode[], lambda: CoreNode): CoreNode {
 }
 
 function lowerApplication(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: CoreNode[],
   nodeIndex: number,
   application: CoreNode,
@@ -191,7 +191,7 @@ function lowerApplication(
 }
 
 function lowerCase(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: CoreNode[],
   nodeIndex: number,
   expression: CoreNode,

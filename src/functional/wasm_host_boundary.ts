@@ -4,7 +4,7 @@ import {
   type HostType,
   INIT_TYPE_NAME,
 } from "./host_contract.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import type { Type } from "./abi.ts";
 import type {
   WasmBoundaryErrorDetails,
@@ -127,7 +127,7 @@ export function wasmValueType(type: HostType): number {
   }
 }
 
-export function functionalWasmEntry(module: GpuModule): WasmEntry {
+export function functionalWasmEntry(module: CompiledModule): WasmEntry {
   const requiresInit = module.hostCapabilities.some((capability) =>
     capability.fields.some((field) =>
       !module.hostDefinitions.some((binding) =>
@@ -184,13 +184,13 @@ export function functionalWasmEntry(module: GpuModule): WasmEntry {
   return { takesInit: false, parameter, result: module.entryType.result };
 }
 
-export function functionalEntryName(module: GpuModule): string {
+export function functionalEntryName(module: CompiledModule): string {
   return module.definitionNames[module.entryDefinition] ??
     `d${module.entryDefinition}`;
 }
 
 function functionalWasmRuntimeErrorDetails(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
   faultCode: number,
   coreNode: number,
@@ -285,7 +285,7 @@ function functionalWasmRuntimeErrorDetails(
 }
 
 export function throwWasmTrap(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
   instance: WebAssembly.Instance,
   cause: unknown,
@@ -323,7 +323,7 @@ export function throwWasmTrap(
 }
 
 function unsupportedWasmEntryType(
-  module: GpuModule,
+  module: CompiledModule,
   type: Type,
 ): TypeError {
   return new TypeError(
@@ -346,7 +346,7 @@ export function functionalHostScalarType(
 }
 
 export function functionalWasmImports(
-  module: GpuModule,
+  module: CompiledModule,
   init: WasmInit | undefined,
 ): {
   readonly imports: Record<string, Record<string, CallableFunction>>;
@@ -491,7 +491,7 @@ export function functionalWasmImports(
 
 function decodeHostValue(
   instance: WebAssembly.Instance,
-  module: GpuModule,
+  module: CompiledModule,
   semanticType: HostType,
   representation: HostType,
   value: number | bigint,
@@ -517,7 +517,7 @@ function decodeHostValue(
 
 function encodeHostValue(
   instance: WebAssembly.Instance,
-  module: GpuModule,
+  module: CompiledModule,
   semanticType: HostType,
   representation: HostType,
   value: WasmHostValue,
@@ -691,7 +691,7 @@ export function invalidWasmInit(
 }
 
 export function functionalHostOperationError(
-  module: GpuModule,
+  module: CompiledModule,
   capability: string,
   operation: string,
   cause: unknown,

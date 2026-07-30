@@ -16,6 +16,7 @@ import type { EncodedModule } from "../../functional.ts";
 import { decodeTransferredModule } from "../functional/module_transfer.ts";
 import { lowerGleamSource } from "./frontend.ts";
 import type { LowerResponse } from "./parallel_frontend_worker.ts";
+import { sizeBalancedBatches } from "./worker_batches.ts";
 
 export interface ParallelGleamUnit {
   readonly name: string;
@@ -31,6 +32,10 @@ const MINIMUM_PARALLEL_UNITS = 16;
 
 export class ParallelGleamFrontend {
   readonly #workers: Worker[] = [];
+  readonly #cache = new Map<
+    string,
+    { readonly source: string; readonly result: ParallelGleamResult }
+  >();
   readonly #workerCount: number;
   #terminated = false;
 
@@ -60,30 +65,50 @@ export class ParallelGleamFrontend {
 
   async lower(units: readonly ParallelGleamUnit[]): Promise<readonly ParallelGleamResult[]> {
     if (units.length === 0) return [];
-    if (units.length < MINIMUM_PARALLEL_UNITS) {
-      return units.map((unit) => {
+    if (this.#terminated) throw new Error("parallel Gleam frontend was already terminated");
+
+    const results = new Array<ParallelGleamResult | undefined>(units.length);
+    const missing: { readonly index: number; readonly unit: ParallelGleamUnit }[] = [];
+    for (const [index, unit] of units.entries()) {
+      const cached = this.#cache.get(unit.name);
+      if (cached?.source === unit.source) {
+        results[index] = cached.result;
+      } else {
+        missing.push({ index, unit });
+      }
+    }
+    if (missing.length === 0) return results as ParallelGleamResult[];
+
+    if (missing.length < MINIMUM_PARALLEL_UNITS) {
+      for (const { index, unit } of missing) {
         const lowered = lowerGleamSource(unit.name, unit.source);
-        return lowered.ok ? { ok: true as const, module: lowered.lowered.module } : {
+        results[index] = lowered.ok ? { ok: true, module: lowered.lowered.module } : {
           ok: false as const,
           diagnostic: lowered.diagnostics[0]?.message ?? "lowering failed",
         };
-      });
+      }
+      return this.#completeResults(units, results);
     }
 
     const workers = this.#ensureWorkers();
-    // Contiguous slices rather than round-robin: adjacent units in a batch tend to be similar in
-    // size, so slicing keeps each worker's share comparable without a scheduler.
-    const perWorker = Math.ceil(units.length / workers.length);
-    const results = new Array<ParallelGleamResult | undefined>(units.length);
+    const batches = sizeBalancedBatches(
+      missing,
+      workers.length,
+      ({ unit }) => unit.source.length,
+    );
 
     await Promise.all(workers.map((worker, workerIndex) => {
-      const start = workerIndex * perWorker;
-      const slice = units.slice(start, start + perWorker);
-      if (slice.length === 0) return Promise.resolve();
+      const batch = batches[workerIndex] ?? [];
+      if (batch.length === 0) return Promise.resolve();
       return new Promise<void>((resolve, reject) => {
         worker.onmessage = (event: MessageEvent<readonly LowerResponse[]>) => {
           for (const response of event.data) {
-            results[response.id] = response.module === undefined
+            const target = missing[response.id];
+            if (target === undefined) {
+              reject(new Error(`Gleam frontend worker returned unknown unit ${response.id}`));
+              return;
+            }
+            results[target.index] = response.module === undefined
               ? { ok: false, diagnostic: response.diagnostic ?? "lowering failed" }
               : { ok: true, module: decodeTransferredModule(response.module) };
           }
@@ -92,8 +117,8 @@ export class ParallelGleamFrontend {
         worker.onerror = (event) =>
           reject(new Error(`Gleam frontend worker failed: ${event.message}`));
         worker.postMessage(
-          slice.map((unit, offset) => ({
-            id: start + offset,
+          batch.map(({ index: missingIndex, value: { unit } }) => ({
+            id: missingIndex,
             name: unit.name,
             source: unit.source,
           })),
@@ -101,10 +126,19 @@ export class ParallelGleamFrontend {
       });
     }));
 
+    return this.#completeResults(units, results);
+  }
+
+  #completeResults(
+    units: readonly ParallelGleamUnit[],
+    results: readonly (ParallelGleamResult | undefined)[],
+  ): readonly ParallelGleamResult[] {
     return results.map((result, index) => {
       if (result === undefined) {
         throw new Error(`parallel Gleam frontend dropped unit ${index}`);
       }
+      const unit = units[index]!;
+      this.#cache.set(unit.name, { source: unit.source, result });
       return result;
     });
   }
@@ -112,6 +146,7 @@ export class ParallelGleamFrontend {
   terminate(): void {
     for (const worker of this.#workers) worker.terminate();
     this.#workers.length = 0;
+    this.#cache.clear();
     this.#terminated = true;
   }
 }

@@ -13,10 +13,7 @@ export interface WasmExport {
 export type { CoreArgument, CoreCaseAlternative, CoreNode } from "../semantic/compiler_module.ts";
 import type { CoreNode } from "../semantic/compiler_module.ts";
 
-export interface GpuModule {
-  readonly nodeBuffer: GPUBuffer;
-  readonly definitionBuffer: GPUBuffer;
-  readonly constructorBuffer: GPUBuffer;
+export interface CompiledModule {
   readonly nodeCount: number;
   readonly definitionCount: number;
   readonly constructorCount: number;
@@ -47,13 +44,19 @@ export interface GpuModule {
   destroy(): void;
 }
 
+export interface GpuModule extends CompiledModule {
+  readonly nodeBuffer: GPUBuffer;
+  readonly definitionBuffer: GPUBuffer;
+  readonly constructorBuffer: GPUBuffer;
+}
+
 const completedTypeDeclarationCache = new WeakMap<
-  GpuModule,
+  CompiledModule,
   readonly TypeDeclaration[]
 >();
 
 export function registerCompleteTypeDeclarations(
-  module: GpuModule,
+  module: CompiledModule,
   declarations: readonly TypeDeclaration[],
 ): void {
   if (completedTypeDeclarationCache.has(module)) {
@@ -63,7 +66,7 @@ export function registerCompleteTypeDeclarations(
 }
 
 export function completeTypeDeclarations(
-  module: GpuModule,
+  module: CompiledModule,
 ): readonly TypeDeclaration[] {
   return completedTypeDeclarationCache.get(module) ?? module.typeDeclarations;
 }
@@ -76,6 +79,13 @@ export interface CompilationOptions {
 
 export type CompileResult =
   | { readonly ok: true; readonly module: GpuModule }
+  | {
+    readonly ok: false;
+    readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
+  };
+
+export type CpuCompileResult =
+  | { readonly ok: true; readonly module: CompiledModule }
   | {
     readonly ok: false;
     readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];

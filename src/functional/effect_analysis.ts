@@ -1,5 +1,5 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
-import type { CoreNode, GpuModule } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
 import { LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 
@@ -13,13 +13,26 @@ export interface ModuleEffectAnalysis {
  * an effect-free backend must remain valid for every execution path.
  */
 export function analyzeModuleEffects(
-  module: GpuModule,
+  module: CompiledModule,
   nodes: readonly CoreNode[],
 ): ModuleEffectAnalysis {
   if (nodes.length !== module.nodeCount) {
     throw new Error(
       `functional effect analysis received ${nodes.length} Core nodes; module declares ${module.nodeCount}`,
     );
+  }
+  const moduleIsPure = module.declaredDefinitionEffects.every((effects) => effects.size === 0) &&
+    module.hostCapabilities.every((capability) =>
+      capability.fields.every((field) => field.kind === "value" || field.effects.size === 0)
+    );
+  if (moduleIsPure) {
+    const empty = effectSet();
+    return Object.freeze({
+      definitionEffects: Object.freeze(
+        Array.from({ length: module.definitionCount }, () => empty),
+      ),
+      entryEffects: empty,
+    });
   }
   const lambdaSets = LambdaSetAnalysis.forCore(module, nodes);
   const effectNamesByNode = Array.from(
@@ -99,17 +112,19 @@ export function analyzeModuleEffects(
         ) {
           dependOn(nodeIndex, module.arguments[argument]!.node);
         }
-        const callee = lambdaSets.lambdaSet(node.child0);
-        for (const effect of callee.effects) effectNamesByNode[nodeIndex]!.add(effect);
-        for (const lambdaNode of callee.lambdaNodes) {
-          const lambda = nodes[lambdaNode];
-          if (lambda?.tag !== CoreTag.Lambda) {
-            throw new Error(
-              `functional effect analysis callable node ${lambdaNode} is not a lambda`,
-            );
-          }
-          dependOn(nodeIndex, lambda.child0);
-        }
+        lambdaSets.forEachLambdaSetMember(
+          node.child0,
+          (lambdaNode) => {
+            const lambda = nodes[lambdaNode];
+            if (lambda?.tag !== CoreTag.Lambda) {
+              throw new Error(
+                `functional effect analysis callable node ${lambdaNode} is not a lambda`,
+              );
+            }
+            dependOn(nodeIndex, lambda.child0);
+          },
+          (effect) => effectNamesByNode[nodeIndex]!.add(effect),
+        );
         break;
       }
       case CoreTag.Prim:

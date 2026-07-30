@@ -9,11 +9,20 @@ export interface EffectSet extends ReadonlySet<string> {
   symmetricDifference<U>(other: ReadonlySetLike<U>): Set<string | U>;
 }
 
+let emptyEffectSet: EffectSet | undefined;
+const immutableEffectSets = new WeakSet<object>();
+
 export function effectSet(...effects: readonly string[]): EffectSet {
   return effectSetFrom(effects);
 }
 
 export function effectSetFrom(effects: Iterable<string>): EffectSet {
+  if (
+    typeof effects === "object" && effects !== null &&
+    immutableEffectSets.has(effects)
+  ) {
+    return effects as EffectSet;
+  }
   const names = new Set<string>();
   for (const effect of effects) {
     if (typeof effect !== "string" || effect.length === 0) {
@@ -23,6 +32,7 @@ export function effectSetFrom(effects: Iterable<string>): EffectSet {
     }
     names.add(effect);
   }
+  if (names.size === 0 && emptyEffectSet !== undefined) return emptyEffectSet;
   const immutable = new Set([...names].sort());
   const rejectMutation = (): never => {
     throw new TypeError("functional effect sets are immutable");
@@ -49,13 +59,16 @@ export function effectSetFrom(effects: Iterable<string>): EffectSet {
     },
   });
   Object.freeze(immutable);
-  return new Proxy(immutable, {
+  const result = new Proxy(immutable, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property, target);
       if (Object.prototype.hasOwnProperty.call(target, property)) return value;
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as EffectSet;
+  immutableEffectSets.add(result);
+  if (names.size === 0) emptyEffectSet = result;
+  return result;
 }
 
 export function effectNames(effects: EffectSet): readonly string[] {

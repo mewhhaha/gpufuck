@@ -1,21 +1,27 @@
 /**
  * gpufuck against the Gleam compiler on the same input.
  *
- * The corpus is gleam-lang/stdlib's nineteen source modules, which both compilers accept. Phases
- * are reported separately because the two do not do the same work and a single wall-clock number
- * would imply they do:
+ * The corpus is the nineteen gleam-lang/stdlib source modules this frontend accepts plus the
+ * generated entry that keeps every public function reachable. Both compilers receive those same
+ * twenty sources in a fresh package and emit executable output:
  *
  *   - Gleam parses, typechecks, and emits JavaScript to disk.
- *   - gpufuck parses, lowers to the portable surface, then resolves names and runs Hindley-Milner
- *     on the GPU. Emitting WebAssembly is a separate phase, reported separately.
+ *   - gpufuck parses, lowers, resolves names, typechecks, and emits WebAssembly in memory.
  *
- * So `parse + lower + GPU` is the honest comparison against `gleam build`, and it still flatters
- * gpufuck: it writes nothing to disk and its Gleam frontend covers a subset of the language.
+ * Phases remain separate so CPU and GPU semantic compilation and uncached WebAssembly emission can
+ * be compared without hiding work in process-wide artifact caches.
  *
  * Usage: deno task bench:gleam-stdlib <stdlib-checkout>
  */
-import { compileModuleToWasm, GpuCompiler, requestWebGpuDevice } from "../functional.ts";
-import { type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
+import {
+  compileModuleToWasm,
+  CpuCompiler,
+  FunctionalCompilerService,
+  GpuCompiler,
+  requestWebGpuDevice,
+} from "../functional.ts";
+import { GleamFrontendService, type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
+import { compileWasmArtifact } from "../src/functional/wasm_codegen.ts";
 import { parseGleamModule } from "../src/gleam/parser.ts";
 // The CPU oracle the shader is differentially tested against: same Hindley-Milner, same input, so
 // the ratio isolates the GPU rather than comparing two different algorithms.
@@ -77,6 +83,104 @@ const sourceBytes = all.reduce(
   0,
 );
 
+async function measureGleam(): Promise<{
+  readonly cold: number;
+  readonly warm: number;
+  readonly sourceOnlyEdit: number;
+}> {
+  const root = await Deno.makeTempDir({ dir: "/tmp", prefix: "gpufuck-gleam-stdlib-" });
+  try {
+    await Deno.mkdir(`${root}/src/gleam/dynamic`, { recursive: true });
+    await Deno.writeTextFile(
+      `${root}/gleam.toml`,
+      'name = "gleam_stdlib_benchmark"\nversion = "1.0.0"\ntarget = "javascript"\n',
+    );
+    for (const module of all) {
+      await Deno.writeTextFile(`${root}/src/${module.name}.gleam`, module.source);
+    }
+    for (const foreignModule of ["gleam_stdlib.mjs", "gleam_stdlib.erl", "dict.mjs"]) {
+      await Deno.copyFile(`${checkout}/src/${foreignModule}`, `${root}/src/${foreignModule}`);
+    }
+
+    const samples: number[] = [];
+    for (let index = 0; index < REPETITIONS; index++) {
+      await new Deno.Command("gleam", {
+        cwd: root,
+        args: ["clean"],
+        stdout: "null",
+        stderr: "null",
+      }).output();
+      const started = performance.now();
+      const result = await new Deno.Command("gleam", {
+        cwd: root,
+        args: ["build", "--target", "javascript", "--no-print-progress"],
+        stdout: "null",
+        stderr: "piped",
+      }).output();
+      if (!result.success) {
+        throw new Error(
+          `gleam build failed in ${root}: ${new TextDecoder().decode(result.stderr)}`,
+        );
+      }
+      samples.push(performance.now() - started);
+    }
+    samples.sort((left, right) => left - right);
+
+    const warmSamples: number[] = [];
+    for (let index = 0; index < REPETITIONS; index++) {
+      const started = performance.now();
+      const result = await new Deno.Command("gleam", {
+        cwd: root,
+        args: ["build", "--target", "javascript", "--no-print-progress"],
+        stdout: "null",
+        stderr: "piped",
+      }).output();
+      if (!result.success) {
+        throw new Error(
+          `warm Gleam build failed in ${root}: ${new TextDecoder().decode(result.stderr)}`,
+        );
+      }
+      warmSamples.push(performance.now() - started);
+    }
+    warmSamples.sort((left, right) => left - right);
+
+    const editedSamples: number[] = [];
+    for (let index = 0; index < REPETITIONS; index++) {
+      await Deno.writeTextFile(
+        `${root}/src/${entry.name}.gleam`,
+        `${entry.source}\n// benchmark edit ${index}\n`,
+      );
+      editedSamples.push(
+        await runGleamBuild(root, `edited Gleam build ${index}`),
+      );
+    }
+    editedSamples.sort((left, right) => left - right);
+    return {
+      cold: samples[Math.floor(samples.length / 2)]!,
+      warm: warmSamples[Math.floor(warmSamples.length / 2)]!,
+      sourceOnlyEdit: editedSamples[Math.floor(editedSamples.length / 2)]!,
+    };
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+async function runGleamBuild(root: string, description: string): Promise<number> {
+  const started = performance.now();
+  const result = await new Deno.Command("gleam", {
+    cwd: root,
+    args: ["build", "--target", "javascript", "--no-print-progress"],
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+  if (!result.success) {
+    throw new Error(
+      `${description} failed in ${root}: ${new TextDecoder().decode(result.stderr)}`,
+    );
+  }
+  return performance.now() - started;
+}
+
 async function median(run: () => Promise<void> | void): Promise<number> {
   const samples: number[] = [];
   for (let index = 0; index < REPETITIONS; index++) {
@@ -90,6 +194,7 @@ async function median(run: () => Promise<void> | void): Promise<number> {
 
 const device = await requestWebGpuDevice();
 const compiler = await GpuCompiler.create(device);
+const cpuCompiler = new CpuCompiler();
 
 try {
   // Parsing alone, to separate the frontend from everything downstream of it.
@@ -106,6 +211,14 @@ try {
   const frontend = lowerGleamSources(all, { module: entry.name, exportName: "main" });
   if (!frontend.ok) throw new Error(`lowering failed: ${frontend.diagnostics[0]?.message}`);
 
+  const cpuMilliseconds = await median(async () => {
+    const compilation = await cpuCompiler.compileModule(frontend.lowered.module);
+    if (!compilation.ok) {
+      throw new Error(`CPU compilation failed: ${compilation.diagnostics[0]?.code}`);
+    }
+    compilation.module.destroy();
+  });
+
   const gpuMilliseconds = await median(async () => {
     const compilation = await compiler.compileModule(frontend.lowered.module, {
       maximumSteps: 10_000_000,
@@ -116,9 +229,8 @@ try {
     compilation.module.destroy();
   });
 
-  // `compileModuleToWasm` memoizes per module, so a median over repeats would time a cache hit --
-  // an earlier version of this benchmark reported 0.8 ms for what actually costs ~500 ms. Each
-  // sample therefore gets a freshly compiled module.
+  // The public emitter memoizes by Core fingerprint across module objects. Call raw code generation
+  // so every sample includes emission rather than measuring the process-wide cache after sample one.
   let wasmBytes = 0;
   const wasmSamples: number[] = [];
   for (let index = 0; index < REPETITIONS; index++) {
@@ -126,8 +238,9 @@ try {
       maximumSteps: 10_000_000,
     });
     if (!fresh.ok) throw new Error("GPU compilation failed");
+    const nodes = await fresh.module.readCoreNodes();
     const started = performance.now();
-    wasmBytes = (await compileModuleToWasm(fresh.module)).byteLength;
+    wasmBytes = compileWasmArtifact(fresh.module, nodes).bytes.byteLength;
     wasmSamples.push(performance.now() - started);
     fresh.module.destroy();
   }
@@ -142,7 +255,51 @@ try {
   });
 
   const frontendTotal = lowerMilliseconds;
-  const comparable = frontendTotal + gpuMilliseconds;
+  const gleamMilliseconds = await measureGleam();
+  const cpuCompleteWithWasm = frontendTotal + cpuMilliseconds + wasmMilliseconds;
+  const gpuCompleteWithWasm = frontendTotal + gpuMilliseconds + wasmMilliseconds;
+  const frontendService = new GleamFrontendService();
+  const compilerService = new FunctionalCompilerService({ backend: "cpu" });
+  const compileWarmProject = async (): Promise<void> => {
+    const warmFrontend = frontendService.lower(all, {
+      module: entry.name,
+      exportName: "main",
+    });
+    if (!warmFrontend.ok) {
+      throw new Error(`warm lowering failed: ${warmFrontend.diagnostics[0]?.message}`);
+    }
+    const warmCompilation = await compilerService.compileModule(warmFrontend.lowered.module);
+    if (!warmCompilation.ok) {
+      throw new Error(`warm compilation failed: ${warmCompilation.diagnostics[0]?.code}`);
+    }
+    await compileModuleToWasm(warmCompilation.module);
+  };
+  await compileWarmProject();
+  const warmCompleteWithWasm = await median(compileWarmProject);
+  let editIndex = 0;
+  const compileSourceOnlyEdit = async (): Promise<void> => {
+    const editedSources = all.map((source, index) =>
+      index === all.length - 1
+        ? { ...source, source: `${source.source}\n// benchmark edit ${editIndex++}\n` }
+        : source
+    );
+    const editedFrontend = frontendService.lower(editedSources, {
+      module: entry.name,
+      exportName: "main",
+    });
+    if (!editedFrontend.ok) {
+      throw new Error(`edited lowering failed: ${editedFrontend.diagnostics[0]?.message}`);
+    }
+    const editedCompilation = await compilerService.compileModule(
+      editedFrontend.lowered.module,
+    );
+    if (!editedCompilation.ok) {
+      throw new Error(`edited compilation failed: ${editedCompilation.diagnostics[0]?.code}`);
+    }
+    await compileModuleToWasm(editedCompilation.module);
+  };
+  const editedCompleteWithWasm = await median(compileSourceOnlyEdit);
+  await compilerService.destroy();
 
   console.log(JSON.stringify(
     {
@@ -153,14 +310,31 @@ try {
       medianMilliseconds: {
         parse: Number(parseMilliseconds.toFixed(1)),
         parseAndLower: Number(lowerMilliseconds.toFixed(1)),
+        cpuResolveAndInfer: Number(cpuMilliseconds.toFixed(1)),
         gpuResolveAndInfer: Number(gpuMilliseconds.toFixed(1)),
         cpuHindleyMilnerOracle: Number(cpuInferenceMilliseconds.toFixed(1)),
-        comparableToGleamBuild: Number(comparable.toFixed(1)),
         emitWasm: Number(wasmMilliseconds.toFixed(1)),
+        cpuCompleteWithWasm: Number(cpuCompleteWithWasm.toFixed(1)),
+        gpuCompleteWithWasm: Number(gpuCompleteWithWasm.toFixed(1)),
+        warmCompleteWithWasm: Number(warmCompleteWithWasm.toFixed(3)),
+        sourceOnlyEditCompleteWithWasm: Number(editedCompleteWithWasm.toFixed(1)),
+        gleamBuild: Number(gleamMilliseconds.cold.toFixed(1)),
+        gleamWarmBuild: Number(gleamMilliseconds.warm.toFixed(1)),
+        gleamSourceOnlyEditBuild: Number(gleamMilliseconds.sourceOnlyEdit.toFixed(1)),
       },
       wasmKilobytes: Number((wasmBytes / 1024).toFixed(1)),
       gpuSlowerThanCpuOracle: Number((gpuMilliseconds / cpuInferenceMilliseconds).toFixed(1)),
-      microsecondsPerSourceByte: Number(((comparable * 1000) / sourceBytes).toFixed(3)),
+      cpuSlowerThanGleam: Number((cpuCompleteWithWasm / gleamMilliseconds.cold).toFixed(2)),
+      gpuSlowerThanGleam: Number((gpuCompleteWithWasm / gleamMilliseconds.cold).toFixed(2)),
+      warmFasterThanGleam: Number(
+        (gleamMilliseconds.warm / warmCompleteWithWasm).toFixed(1),
+      ),
+      sourceOnlyEditSlowerThanGleam: Number(
+        (editedCompleteWithWasm / gleamMilliseconds.sourceOnlyEdit).toFixed(2),
+      ),
+      cpuMicrosecondsPerSourceByte: Number(
+        ((cpuCompleteWithWasm * 1000) / sourceBytes).toFixed(3),
+      ),
     },
     null,
     2,

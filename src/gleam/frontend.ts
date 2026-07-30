@@ -1,6 +1,6 @@
 import { type EncodedModule, UNIT_CONSTRUCTOR_NAME } from "../functional/abi.ts";
 import {
-  createModuleArtifact,
+  createOwnedModuleArtifact,
   type LinkedModule,
   LinkError,
   linkModules,
@@ -86,7 +86,17 @@ export function lowerGleamSources(
       throw error;
     }
   }
+  return lowerParsedGleamModules(modules, entry);
+}
 
+export function lowerParsedGleamModules(
+  modules: readonly GleamModule[],
+  entry: { readonly module: string; readonly exportName: string },
+  lowerModule: (
+    module: GleamModule,
+    signatures: readonly GleamExportSignature[],
+  ) => LoweredGleamModule = lowerGleamModule,
+): GleamFrontendResult {
   const signatures: GleamExportSignature[] = [];
   for (const module of modules) {
     signatures.push(...gleamNominalExportSignatures(module));
@@ -105,7 +115,7 @@ export function lowerGleamSources(
   const loweredModules: LoweredGleamModule[] = [];
   for (const module of modules) {
     try {
-      loweredModules.push(lowerGleamModule(module, signatures));
+      loweredModules.push(lowerModule(module, signatures));
     } catch (error) {
       if (error instanceof GleamLoweringError) {
         return { ok: false, diagnostics: [lowerDiagnostic(module.name, error)] };
@@ -114,6 +124,14 @@ export function lowerGleamSources(
     }
   }
 
+  return linkLoweredGleamModules(modules, loweredModules, entry);
+}
+
+export function linkLoweredGleamModules(
+  modules: readonly GleamModule[],
+  loweredModules: readonly LoweredGleamModule[],
+  entry: { readonly module: string; readonly exportName: string },
+): GleamFrontendResult {
   try {
     const entryModule = modules.find((module) => module.name === entry.module);
     const entryDeclaration = entryModule?.declarations.find((declaration) =>
@@ -122,7 +140,7 @@ export function lowerGleamSources(
     const invokesZeroArgumentFunction = entryDeclaration?.kind === "function" &&
       entryDeclaration.parameters.length === 0;
     const entryArtifact = invokesZeroArgumentFunction
-      ? createModuleArtifact({
+      ? createOwnedModuleArtifact({
         name: "$gleam/entry",
         definitions: [{
           name: "main",

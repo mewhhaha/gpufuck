@@ -32,7 +32,8 @@ export async function requestWebGpuDevice(): Promise<GPUDevice> {
   if (adapter === null) {
     throw new Error(
       "WebGPU found no compatible hardware or software adapter; install a WebGPU-capable " +
-        "graphics driver or compile on another machine (there is no CPU fallback)",
+        'graphics driver, compile with CpuCompiler, or select backend "cpu" on ' +
+        "FunctionalCompilerService",
     );
   }
 

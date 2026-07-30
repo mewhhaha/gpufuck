@@ -35,13 +35,14 @@
     "singleQuote": false
   },
   "tasks": {
-    "bench:gleam-batch": "deno run --unstable-webgpu --allow-read benchmarks/gleam_batch_throughput_bench.ts",
+    "bench:gleam-batch": "deno run --unstable-webgpu --allow-read --allow-write=/tmp --allow-run=gleam benchmarks/gleam_batch_throughput_bench.ts",
+    "bench:parallel": "deno run --allow-read benchmarks/parallel_compilation_bench.ts",
     "bench": "deno run --unstable-webgpu --allow-read --allow-write=benchmarks/baseline.json benchmarks/suite.ts",
     "bench:save": "deno run --unstable-webgpu --allow-read --allow-write=benchmarks/baseline.json benchmarks/suite.ts --save",
     "bench:gpu-lexer": "deno run --unstable-webgpu --allow-read benchmarks/gpu_lexer_bench.ts",
     "bench:gleam-corpus": "deno run --unstable-webgpu --allow-read benchmarks/gleam_corpus_bench.ts",
     "generate:corpus": "deno run --allow-read --allow-write tools/generate_gleam_corpus.ts",
-    "bench:gleam-stdlib": "deno run --unstable-webgpu --allow-read benchmarks/gleam_stdlib_compile_bench.ts",
+    "bench:gleam-stdlib": "deno run --unstable-webgpu --allow-read --allow-write=/tmp --allow-run=gleam benchmarks/gleam_stdlib_compile_bench.ts",
     "bench:lazuli-baba": "deno bench --unstable-webgpu --allow-read=language/lazuli/generated benchmarks/lazuli_baba_pipeline_bench.ts",
     "bench:lazuli": "deno bench --allow-read=language/lazuli/generated benchmarks/lazuli_compiler_bench.ts",
     "bench:semantic-wavefront": "deno bench benchmarks/semantic_wavefront_bench.ts",
