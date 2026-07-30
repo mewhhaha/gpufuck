@@ -690,7 +690,7 @@ class WasmCompiler {
     this.emitGlobalInitialization(initializeInstructions);
     initializeInstructions.i32Const(0);
     const initializeFunctionIndex = this.indirectFunctionOffset() +
-      this.#indirectFunctions.length + 1;
+      this.#indirectFunctions.length;
     const callableFunctions = this.#module.wasmExports.map((exported, index) => {
       const direct = directCallableFunctions[index];
       if (direct !== undefined) return direct;
@@ -741,12 +741,12 @@ class WasmCompiler {
       allocateFunction(this.heapStart()),
       forceThunkFunction(),
       freeFunction(freeType, this.heapStart()),
-      ...indirectFunctions,
       functionBody(
         forceValueType,
         forceValueInstructions,
         "public value force",
       ),
+      ...indirectFunctions,
       functionBody(
         initializeType,
         initializeInstructions,
@@ -820,7 +820,7 @@ class WasmCompiler {
       entryFunctionIndex,
       this.heapStart(),
       this.#additionalFunctionTypes,
-      this.#functionImports.length + 3 + indirectFunctions.length,
+      this.#functionImports.length + 3,
       this.#functionImports.length + 4 + indirectFunctions.length,
       this.#functionImports.length,
       this.#functionImports.length + 2,
@@ -4924,6 +4924,10 @@ class WasmCompiler {
     instructions: WasmInstructions,
     sourceLocal?: number,
   ): void {
+    if (!this.#compactScalar && sourceLocal === undefined) {
+      instructions.call(this.#functionImports.length + 3);
+      return;
+    }
     const value = sourceLocal ?? instructions.addLocal(WasmValueType.I64);
     const pointer = instructions.addLocal(WasmValueType.I32);
     if (sourceLocal === undefined) instructions.localSet(value);
@@ -6248,7 +6252,7 @@ class WasmCompiler {
   }
 
   indirectFunctionOffset(): number {
-    return this.#functionImports.length + (this.#compactScalar ? 0 : 3);
+    return this.#functionImports.length + (this.#compactScalar ? 0 : 4);
   }
 
   storageDecision(

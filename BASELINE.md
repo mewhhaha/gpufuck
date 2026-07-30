@@ -1827,6 +1827,20 @@ tuning the small fixed-point loop. The shared Wasm Core index removes duplicate 
 parent indexing, but eliminating the semantic lambda-set pass requires one representation shared by
 effect analysis and code generation rather than moving its traversal into another adapter.
 
+## 2026-07-30 — one shared force routine removes another third of the Wasm artifact
+
+The general Wasm backend previously inlined the complete memoizing force state machine at every
+dynamic evaluation boundary. It now emits that state machine once and calls it directly. Compact
+scalar modules keep their inline path, and thunk evaluation still uses the same memoization,
+blackhole detection, and fault behavior.
+
+On the same stdlib corpus, three fresh processes put median Wasm emission at 78.7 ms instead of 87.1
+ms, a further 9.6% reduction. The artifact fell from 780.9 KiB to 544.1 KiB, instruction bytes from
+735,506 to 508,910, and locals from 34,666 to 26,362. A strict numeric loop was within 0.3% and a
+lazy numeric loop within 1.6% of the prior runtime. A force-heavy program performing 3,072 forces
+improved from 0.11201 ms to 0.09025 ms while its artifact fell from 455,446 to 275,136 bytes. The
+focused Wasm, export, tracing, and Gleam suites passed 68 tests.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

@@ -216,6 +216,12 @@ artifact fell from 999.2 KiB to 780.9 KiB: 141 definitions are direct-only, indi
 from 1,854 to 1,522, and instruction bytes from 950,202 to 735,506. All 438 genuinely lazy global
 thunks remain.
 
+The force state machine is now also shared across dynamic evaluation boundaries instead of copied
+into every caller. On the stdlib corpus this reduced median Wasm emission from 87.1 ms to 78.7 ms
+and the artifact from 780.9 KiB to 544.1 KiB. Strict and lazy numeric loops remained within 2%; a
+force-heavy program improved 19.4%. The next backend target is the remaining global initialization
+and storage work, not more copies of the force path.
+
 Structural lowering still expands 13,702 Core nodes to 17,719: 1,572 applications, 476 lambdas, 812
 case arms, and 1,157 pattern binders. Removing those backend-only nodes now has a measured
 4,017-node target, but it requires teaching every Wasm analysis to consume packed exact-arity
