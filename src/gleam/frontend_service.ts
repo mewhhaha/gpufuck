@@ -6,6 +6,7 @@ import {
 import { createOwnedModuleArtifact } from "../functional/module_linker.ts";
 import {
   registerEquivalentModuleFingerprint,
+  registerModuleFingerprint,
   structuralFingerprint,
 } from "../functional/semantic_fingerprint.ts";
 import { type GleamDiagnostic, GleamSyntaxError } from "./diagnostic.ts";
@@ -259,6 +260,31 @@ export class GleamFrontendService {
       },
       options.trace,
     );
+    if (result.ok) {
+      const moduleSemantics = result.lowered.modules.map((lowered) => {
+        const cachedLowering = this.#loweredModules.get(lowered.source.name);
+        if (cachedLowering === undefined) {
+          throw new Error(
+            `Gleam frontend service omitted lowered module ${lowered.source.name}`,
+          );
+        }
+        return {
+          name: lowered.source.name,
+          semantics: cachedLowering.semantics,
+        };
+      });
+      registerModuleFingerprint(
+        result.lowered.module,
+        `gleam-project-v1:${
+          structuralFingerprint({
+            entryModule: entry.module,
+            entryExport: entry.exportName,
+            signatures: signatureKey,
+            modules: moduleSemantics,
+          })
+        }`,
+      );
+    }
     return this.#rememberProject(sources, entry, result);
   }
 

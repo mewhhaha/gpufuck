@@ -4,7 +4,10 @@ import { rebindCompiledModuleSource } from "./compiled_module_rebinding.ts";
 import { CpuCompiler, GpuCompiler } from "./compiler.ts";
 import type { CompilationOptions, CpuCompileResult } from "./compiler_module.ts";
 import { type EncodedModule, TypecheckingProfile } from "./abi.ts";
-import { semanticModuleFingerprint } from "./semantic_fingerprint.ts";
+import {
+  registerResolvedCoreFingerprint,
+  semanticModuleFingerprint,
+} from "./semantic_fingerprint.ts";
 
 export type CompilerBackend = "auto" | "cpu" | "gpu";
 
@@ -179,6 +182,7 @@ export class FunctionalCompilerService {
     pending.then(
       (result) => {
         if (!result.ok) return;
+        registerResolvedCoreFingerprint(result.module, `surface:${semanticFingerprint}`);
         this.#cpuCompilationsBySemantics.set(semanticFingerprint, Promise.resolve(result));
         while (this.#cpuCompilationsBySemantics.size > 64) {
           const oldest = this.#cpuCompilationsBySemantics.keys().next().value;

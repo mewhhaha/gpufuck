@@ -8,7 +8,7 @@ import {
   renderCompilerPerformanceTrace,
   summarizeCompilerPerformance,
 } from "../functional.ts";
-import { lowerGleamSources } from "../gleam.ts";
+import { GleamFrontendService, lowerGleamSources } from "../gleam.ts";
 
 Deno.test("compiler performance trace records nested stages and work annotations", () => {
   const ticks = [100, 105, 112, 118, 125];
@@ -263,4 +263,47 @@ Deno.test("performance tracing reports compiler and Wasm cache hits", async () =
 
   coldCompilation.module.destroy();
   await service.destroy();
+});
+
+Deno.test("incremental project fingerprints recover prior compiled edits", async () => {
+  const frontend = new GleamFrontendService();
+  const compiler = new FunctionalCompilerService({ backend: "cpu" });
+  const entry = { module: "main", exportName: "main" };
+  const compile = async (value: number, trace?: CompilerPerformanceTrace) => {
+    const lowered = frontend.lower(
+      [{ name: "main", source: `pub fn main() -> Int { ${value} }\n` }],
+      entry,
+      trace === undefined ? {} : { trace },
+    );
+    if (!lowered.ok) throw new Error(lowered.diagnostics[0].message);
+    const compilation = await compiler.compileModule(
+      lowered.lowered.module,
+      trace === undefined ? {} : { trace },
+    );
+    if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+    await compileModuleToWasm(
+      compilation.module,
+      trace === undefined ? {} : { trace },
+    );
+    return compilation.module;
+  };
+
+  const first = await compile(41);
+  const second = await compile(42);
+  const trace = new CompilerPerformanceTrace();
+  const recovered = await compile(41, trace);
+
+  const semanticCache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
+  equal(semanticCache?.annotations.cacheHit, true);
+  equal(semanticCache?.annotations.cacheLevel, "semantics");
+  const coreCache = trace.snapshot().find((event) => event.stage === "wasm.artifact.resolved-core");
+  equal(coreCache?.annotations.cacheHit, true);
+  equal(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"), false);
+  equal(trace.snapshot().some((event) => event.stage === "wasm.emit"), false);
+
+  first.destroy();
+  second.destroy();
+  recovered.destroy();
+  frontend.clear();
+  await compiler.destroy();
 });
