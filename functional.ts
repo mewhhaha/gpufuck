@@ -43,6 +43,7 @@ export * from "./src/functional/module_transfer.ts";
 
 // Compiling it: admission, dispatch, and the resolved Core that comes back.
 export * from "./src/functional/compiler.ts";
+export * from "./src/compiler_performance_trace.ts";
 export * from "./src/functional/compiler_service.ts";
 export * from "./src/functional/parallel_compiler_service.ts";
 export * from "./src/functional/compilation_admission.ts";

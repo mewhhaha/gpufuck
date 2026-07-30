@@ -1,4 +1,8 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
+import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
 import { LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
@@ -15,6 +19,7 @@ export interface ModuleEffectAnalysis {
 export function analyzeModuleEffects(
   module: CompiledModule,
   nodes: readonly CoreNode[],
+  trace?: CompilerPerformanceTrace,
 ): ModuleEffectAnalysis {
   if (nodes.length !== module.nodeCount) {
     throw new Error(
@@ -34,7 +39,12 @@ export function analyzeModuleEffects(
       entryEffects: empty,
     });
   }
-  const lambdaSets = LambdaSetAnalysis.forCore(module, nodes);
+  const lambdaSets = measureCompilerStage(
+    trace,
+    "semantic.effects.lambda-sets",
+    { nodes: nodes.length, definitions: module.definitionCount },
+    () => LambdaSetAnalysis.forCore(module, nodes),
+  );
   const effectNamesByNode = Array.from(
     { length: nodes.length },
     () => new Set<string>(),
@@ -71,136 +81,156 @@ export function analyzeModuleEffects(
     dependents[dependency]!.add(nodeIndex);
   };
 
-  for (const [nodeIndex, node] of nodes.entries()) {
-    switch (node.tag) {
-      case CoreTag.SignedInteger64:
-      case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
-      case CoreTag.Integer:
-      case CoreTag.Float32:
-      case CoreTag.Boolean:
-      case CoreTag.Text:
-      case CoreTag.Bytes:
-      case CoreTag.RuntimeFault:
-      case CoreTag.StoreEmpty:
-      case CoreTag.Local:
-      case CoreTag.Constructor:
-      case CoreTag.Lambda:
-        break;
-      case CoreTag.Global: {
-        if (hostEffectsByDefinition.has(node.payload)) break;
-        const root = module.definitionRoots[node.payload];
-        if (root === undefined) {
-          throw new Error(
-            `functional effect analysis global d${node.payload} exceeds ${module.definitionCount} definitions`,
-          );
-        }
-        if (nodes[root]?.tag !== CoreTag.Lambda) {
-          for (const effect of module.declaredDefinitionEffects[node.payload]!) {
-            effectNamesByNode[nodeIndex]!.add(effect);
-          }
-          dependOn(nodeIndex, root);
-        }
-        break;
-      }
-      case CoreTag.Apply: {
-        dependOn(nodeIndex, node.child0);
-        for (
-          let argument = node.payload;
-          argument < node.payload + node.child1;
-          argument++
-        ) {
-          dependOn(nodeIndex, module.arguments[argument]!.node);
-        }
-        lambdaSets.forEachLambdaSetMember(
-          node.child0,
-          (lambdaNode) => {
-            const lambda = nodes[lambdaNode];
-            if (lambda?.tag !== CoreTag.Lambda) {
+  measureCompilerStage(
+    trace,
+    "semantic.effects.graph",
+    { nodes: nodes.length },
+    () => {
+      for (const [nodeIndex, node] of nodes.entries()) {
+        switch (node.tag) {
+          case CoreTag.SignedInteger64:
+          case CoreTag.Float64:
+          case CoreTag.WholeNumberF64:
+          case CoreTag.Integer:
+          case CoreTag.Float32:
+          case CoreTag.Boolean:
+          case CoreTag.Text:
+          case CoreTag.Bytes:
+          case CoreTag.RuntimeFault:
+          case CoreTag.StoreEmpty:
+          case CoreTag.Local:
+          case CoreTag.Constructor:
+          case CoreTag.Lambda:
+            break;
+          case CoreTag.Global: {
+            if (hostEffectsByDefinition.has(node.payload)) break;
+            const root = module.definitionRoots[node.payload];
+            if (root === undefined) {
               throw new Error(
-                `functional effect analysis callable node ${lambdaNode} is not a lambda`,
+                `functional effect analysis global d${node.payload} exceeds ${module.definitionCount} definitions`,
               );
             }
-            dependOn(nodeIndex, lambda.child0);
-          },
-          (effect) => effectNamesByNode[nodeIndex]!.add(effect),
-        );
-        break;
+            if (nodes[root]?.tag !== CoreTag.Lambda) {
+              for (const effect of module.declaredDefinitionEffects[node.payload]!) {
+                effectNamesByNode[nodeIndex]!.add(effect);
+              }
+              dependOn(nodeIndex, root);
+            }
+            break;
+          }
+          case CoreTag.Apply: {
+            dependOn(nodeIndex, node.child0);
+            for (
+              let argument = node.payload;
+              argument < node.payload + node.child1;
+              argument++
+            ) {
+              dependOn(nodeIndex, module.arguments[argument]!.node);
+            }
+            lambdaSets.forEachLambdaSetMember(
+              node.child0,
+              (lambdaNode) => {
+                const lambda = nodes[lambdaNode];
+                if (lambda?.tag !== CoreTag.Lambda) {
+                  throw new Error(
+                    `functional effect analysis callable node ${lambdaNode} is not a lambda`,
+                  );
+                }
+                dependOn(nodeIndex, lambda.child0);
+              },
+              (effect) => effectNamesByNode[nodeIndex]!.add(effect),
+            );
+            break;
+          }
+          case CoreTag.Prim:
+            for (let operand = node.child0; operand < node.child0 + node.child1; operand++) {
+              dependOn(nodeIndex, module.arguments[operand]!.node);
+            }
+            break;
+          case CoreTag.Unary:
+          case CoreTag.NumericConvert:
+          case CoreTag.StoreLength:
+            dependOn(nodeIndex, node.child0);
+            break;
+          case CoreTag.Binary:
+          case CoreTag.BufferAppend:
+          case CoreTag.StoreNew:
+          case CoreTag.StoreRead:
+          case CoreTag.Let:
+          case CoreTag.LetRec:
+            dependOn(nodeIndex, node.child0);
+            dependOn(nodeIndex, node.child1);
+            break;
+          case CoreTag.Case:
+            dependOn(nodeIndex, node.child0);
+            for (
+              let alternative = node.payload;
+              alternative < node.payload + node.child1;
+              alternative++
+            ) {
+              dependOn(nodeIndex, module.caseAlternatives[alternative]!.body);
+            }
+            break;
+          case CoreTag.If:
+          case CoreTag.StoreWrite:
+          case CoreTag.StoreGrow:
+            dependOn(nodeIndex, node.child0);
+            dependOn(nodeIndex, node.child1);
+            dependOn(nodeIndex, node.child2);
+            break;
+        }
       }
-      case CoreTag.Prim:
-        for (let operand = node.child0; operand < node.child0 + node.child1; operand++) {
-          dependOn(nodeIndex, module.arguments[operand]!.node);
-        }
-        break;
-      case CoreTag.Unary:
-      case CoreTag.NumericConvert:
-      case CoreTag.StoreLength:
-        dependOn(nodeIndex, node.child0);
-        break;
-      case CoreTag.Binary:
-      case CoreTag.BufferAppend:
-      case CoreTag.StoreNew:
-      case CoreTag.StoreRead:
-      case CoreTag.Let:
-      case CoreTag.LetRec:
-        dependOn(nodeIndex, node.child0);
-        dependOn(nodeIndex, node.child1);
-        break;
-      case CoreTag.Case:
-        dependOn(nodeIndex, node.child0);
-        for (
-          let alternative = node.payload;
-          alternative < node.payload + node.child1;
-          alternative++
-        ) {
-          dependOn(nodeIndex, module.caseAlternatives[alternative]!.body);
-        }
-        break;
-      case CoreTag.If:
-      case CoreTag.StoreWrite:
-      case CoreTag.StoreGrow:
-        dependOn(nodeIndex, node.child0);
-        dependOn(nodeIndex, node.child1);
-        dependOn(nodeIndex, node.child2);
-        break;
-    }
-  }
+    },
+  );
 
   const pending = effectNamesByNode.flatMap((effects, nodeIndex) =>
     effects.size === 0 ? [] : [nodeIndex]
   );
   const queued = new Set(pending);
-  while (pending.length > 0) {
-    const source = pending.pop()!;
-    queued.delete(source);
-    for (const dependent of dependents[source]!) {
-      const targetEffects = effectNamesByNode[dependent]!;
-      const previousSize = targetEffects.size;
-      for (const effect of effectNamesByNode[source]!) targetEffects.add(effect);
-      if (targetEffects.size === previousSize || queued.has(dependent)) continue;
-      pending.push(dependent);
-      queued.add(dependent);
-    }
-  }
+  measureCompilerStage(
+    trace,
+    "semantic.effects.propagate",
+    { initialNodes: pending.length },
+    () => {
+      while (pending.length > 0) {
+        const source = pending.pop()!;
+        queued.delete(source);
+        for (const dependent of dependents[source]!) {
+          const targetEffects = effectNamesByNode[dependent]!;
+          const previousSize = targetEffects.size;
+          for (const effect of effectNamesByNode[source]!) targetEffects.add(effect);
+          if (targetEffects.size === previousSize || queued.has(dependent)) continue;
+          pending.push(dependent);
+          queued.add(dependent);
+        }
+      }
+    },
+  );
 
-  const definitionEffects = module.definitionRoots.map((root, definition) => {
-    const hostEffects = hostEffectsByDefinition.get(definition);
-    if (hostEffects !== undefined) return hostEffects;
-    const rootNode = nodes[root];
-    if (rootNode === undefined) {
-      throw new Error(
-        `functional effect analysis definition d${definition} root ${root} is missing`,
-      );
-    }
-    let effectNode = root;
-    while (nodes[effectNode]?.tag === CoreTag.Lambda) {
-      effectNode = nodes[effectNode]!.child0;
-    }
-    return effectSetFrom([
-      ...module.declaredDefinitionEffects[definition]!,
-      ...effectNamesByNode[effectNode]!,
-    ]);
-  });
+  const definitionEffects = measureCompilerStage(
+    trace,
+    "semantic.effects.materialize",
+    { definitions: module.definitionCount },
+    () =>
+      module.definitionRoots.map((root, definition) => {
+        const hostEffects = hostEffectsByDefinition.get(definition);
+        if (hostEffects !== undefined) return hostEffects;
+        const rootNode = nodes[root];
+        if (rootNode === undefined) {
+          throw new Error(
+            `functional effect analysis definition d${definition} root ${root} is missing`,
+          );
+        }
+        let effectNode = root;
+        while (nodes[effectNode]?.tag === CoreTag.Lambda) {
+          effectNode = nodes[effectNode]!.child0;
+        }
+        return effectSetFrom([
+          ...module.declaredDefinitionEffects[definition]!,
+          ...effectNamesByNode[effectNode]!,
+        ]);
+      }),
+  );
   const entryEffects = definitionEffects[module.entryDefinition];
   if (entryEffects === undefined) {
     throw new Error(

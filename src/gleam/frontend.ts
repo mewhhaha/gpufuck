@@ -1,5 +1,9 @@
 import { type EncodedModule, UNIT_CONSTRUCTOR_NAME } from "../functional/abi.ts";
 import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
+import {
   createOwnedModuleArtifact,
   type LinkedModule,
   LinkError,
@@ -38,6 +42,7 @@ export type GleamFrontendResult =
 export function lowerGleamSources(
   sources: readonly GleamSourceModule[],
   entry: { readonly module: string; readonly exportName: string },
+  options: { readonly trace?: CompilerPerformanceTrace } = {},
 ): GleamFrontendResult {
   if (sources.length === 0) {
     return {
@@ -52,41 +57,59 @@ export function lowerGleamSources(
     };
   }
 
-  const modules: GleamModule[] = [];
-  const names = new Set<string>();
-  for (const source of sources) {
-    if (names.has(source.name)) {
-      return {
-        ok: false,
-        diagnostics: [{
-          stage: "parse",
-          code: "G1001",
-          module: source.name,
-          span: { startByte: 0, endByte: 0 },
-          message: `Gleam functional sources repeat module ${JSON.stringify(source.name)}.`,
-        }],
-      };
-    }
-    names.add(source.name);
-    try {
-      modules.push(parseGleamModule(source.name, source.source));
-    } catch (error) {
-      if (error instanceof GleamSyntaxError) {
+  const parseAnnotations = {
+    modules: sources.length,
+    sourceBytes: options.trace === undefined ? 0 : sources.reduce(
+      (total, source) => total + new TextEncoder().encode(source.source).byteLength,
+      0,
+    ),
+  };
+  const parsed = measureCompilerStage(options.trace, "frontend.parse", parseAnnotations, () => {
+    const modules: GleamModule[] = [];
+    const names = new Set<string>();
+    for (const source of sources) {
+      if (names.has(source.name)) {
         return {
           ok: false,
           diagnostics: [{
             stage: "parse",
             code: "G1001",
             module: source.name,
-            span: error.span,
-            message: error.message,
+            span: { startByte: 0, endByte: 0 },
+            message: `Gleam functional sources repeat module ${JSON.stringify(source.name)}.`,
           }],
-        };
+        } satisfies GleamFrontendResult;
       }
-      throw error;
+      names.add(source.name);
+      try {
+        const moduleAnnotations = {
+          module: source.name,
+          sourceBytes: options.trace === undefined
+            ? 0
+            : new TextEncoder().encode(source.source).byteLength,
+          declarations: 0,
+        };
+        const module = options.trace === undefined
+          ? parseGleamModule(source.name, source.source)
+          : measureCompilerStage(
+            options.trace,
+            "frontend.parse.module",
+            moduleAnnotations,
+            () => parseGleamModule(source.name, source.source, options.trace),
+            (parsedModule) => moduleAnnotations.declarations = parsedModule.declarations.length,
+          );
+        modules.push(module);
+      } catch (error) {
+        if (error instanceof GleamSyntaxError) {
+          return syntaxFailure(source.name, error);
+        }
+        throw error;
+      }
     }
-  }
-  return lowerParsedGleamModules(modules, entry);
+    return modules;
+  });
+  if (!Array.isArray(parsed)) return parsed;
+  return lowerParsedGleamModules(parsed, entry, lowerGleamModule, options.trace);
 }
 
 export function lowerParsedGleamModules(
@@ -96,41 +119,79 @@ export function lowerParsedGleamModules(
     module: GleamModule,
     signatures: readonly GleamExportSignature[],
   ) => LoweredGleamModule = lowerGleamModule,
+  trace?: CompilerPerformanceTrace,
 ): GleamFrontendResult {
   const signatures: GleamExportSignature[] = [];
-  for (const module of modules) {
-    signatures.push(...gleamNominalExportSignatures(module));
-  }
-  for (const module of modules) {
-    try {
-      signatures.push(...gleamValueExportSignatures(module, signatures));
-    } catch (error) {
-      if (error instanceof GleamLoweringError) {
-        return { ok: false, diagnostics: [lowerDiagnostic(module.name, error)] };
-      }
-      throw error;
+  const nominalAnnotations = { modules: modules.length, signatures: 0 };
+  measureCompilerStage(trace, "frontend.signatures.nominal", nominalAnnotations, () => {
+    for (const module of modules) {
+      signatures.push(...gleamNominalExportSignatures(module));
     }
-  }
+    nominalAnnotations.signatures = signatures.length;
+  });
+  const valueAnnotations = { modules: modules.length, signatures: 0 };
+  const signatureDiagnostic = measureCompilerStage(
+    trace,
+    "frontend.signatures.value",
+    valueAnnotations,
+    () => {
+      for (const module of modules) {
+        try {
+          signatures.push(...gleamValueExportSignatures(module, signatures));
+        } catch (error) {
+          if (error instanceof GleamLoweringError) {
+            return { ok: false, diagnostics: [lowerDiagnostic(module.name, error)] } as const;
+          }
+          throw error;
+        }
+      }
+      valueAnnotations.signatures = signatures.length;
+      return null;
+    },
+  );
+  if (signatureDiagnostic !== null) return signatureDiagnostic;
 
   const loweredModules: LoweredGleamModule[] = [];
-  for (const module of modules) {
-    try {
-      loweredModules.push(lowerModule(module, signatures));
-    } catch (error) {
-      if (error instanceof GleamLoweringError) {
-        return { ok: false, diagnostics: [lowerDiagnostic(module.name, error)] };
+  const lowerAnnotations = { modules: modules.length, signatures: signatures.length };
+  const loweringDiagnostic = measureCompilerStage(
+    trace,
+    "frontend.lower",
+    lowerAnnotations,
+    () => {
+      for (const module of modules) {
+        try {
+          const moduleAnnotations = {
+            module: module.name,
+            declarations: module.declarations.length,
+          };
+          loweredModules.push(
+            trace === undefined ? lowerModule(module, signatures) : measureCompilerStage(
+              trace,
+              "frontend.lower.module",
+              moduleAnnotations,
+              () => lowerModule(module, signatures),
+            ),
+          );
+        } catch (error) {
+          if (error instanceof GleamLoweringError) {
+            return { ok: false, diagnostics: [lowerDiagnostic(module.name, error)] } as const;
+          }
+          throw error;
+        }
       }
-      throw error;
-    }
-  }
+      return null;
+    },
+  );
+  if (loweringDiagnostic !== null) return loweringDiagnostic;
 
-  return linkLoweredGleamModules(modules, loweredModules, entry);
+  return linkLoweredGleamModules(modules, loweredModules, entry, trace);
 }
 
 export function linkLoweredGleamModules(
   modules: readonly GleamModule[],
   loweredModules: readonly LoweredGleamModule[],
   entry: { readonly module: string; readonly exportName: string },
+  trace?: CompilerPerformanceTrace,
 ): GleamFrontendResult {
   try {
     const entryModule = modules.find((module) => module.name === entry.module);
@@ -163,13 +224,26 @@ export function linkLoweredGleamModules(
         options: {},
       })
       : null;
-    const linked = linkModules(
-      [
-        gleamPreludeArtifact(),
-        ...loweredModules.map((lowered) => lowered.artifact),
-        ...(entryArtifact === null ? [] : [entryArtifact]),
-      ],
-      entryArtifact === null ? entry : { module: entryArtifact.name, exportName: "main" },
+    const artifacts = [
+      gleamPreludeArtifact(),
+      ...loweredModules.map((lowered) => lowered.artifact),
+      ...(entryArtifact === null ? [] : [entryArtifact]),
+    ];
+    const linkAnnotations = { modules: artifacts.length, nodes: 0, definitions: 0, types: 0 };
+    const linked = measureCompilerStage(
+      trace,
+      "frontend.link",
+      linkAnnotations,
+      () =>
+        linkModules(
+          artifacts,
+          entryArtifact === null ? entry : { module: entryArtifact.name, exportName: "main" },
+        ),
+      (result) => {
+        linkAnnotations.nodes = result.module.nodeCount;
+        linkAnnotations.definitions = result.module.definitionCount;
+        linkAnnotations.types = result.module.typeCount;
+      },
     );
     return {
       ok: true,
@@ -228,5 +302,21 @@ function lowerDiagnostic(
     module,
     span: error.span,
     message: error.message,
+  };
+}
+
+function syntaxFailure(
+  module: string,
+  error: GleamSyntaxError,
+): Extract<GleamFrontendResult, { readonly ok: false }> {
+  return {
+    ok: false,
+    diagnostics: [{
+      stage: "parse",
+      code: "G1001",
+      module,
+      span: error.span,
+      message: error.message,
+    }],
   };
 }

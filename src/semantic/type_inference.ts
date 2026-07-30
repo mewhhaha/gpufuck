@@ -1,4 +1,8 @@
 import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
+import {
   AlgebraicTypeWord,
   ARGUMENT_WORD_LENGTH,
   ArgumentWord,
@@ -231,6 +235,7 @@ class InferenceDiagnostic extends Error {
 
 class InferenceContext {
   readonly #surface: EncodedSemanticSurface;
+  readonly #trace: CompilerPerformanceTrace | undefined;
   readonly #definitionBySymbol = new Map<number, number>();
   readonly #constructorBySymbol = new Map<number, ConstructorTyping>();
   readonly #typeByName = new Map<string, TypeDeclarationShape>();
@@ -244,45 +249,85 @@ class InferenceContext {
   #rigidScope = 0;
   #untouchableTypeVariableCutoff: number | null = null;
 
-  constructor(surface: EncodedSemanticSurface) {
+  constructor(surface: EncodedSemanticSurface, trace?: CompilerPerformanceTrace) {
     this.#surface = surface;
+    this.#trace = trace;
   }
 
   infer(): TypeInferenceSuccess {
-    this.validateMetadataCounts();
-    this.indexDefinitions();
-    this.indexTypeDeclarationShapes();
-    this.buildConstructorTypes();
-    for (const constructor of this.#constructorBySymbol.values()) {
-      this.#globalSchemes.set(constructor.symbol, {
-        parameters: constructor.parameters,
-        type: this.constructorFunctionType(constructor.fields, constructor.result),
-      });
-    }
+    measureCompilerStage(
+      this.#trace,
+      "semantic.inference.metadata",
+      {
+        definitions: this.#surface.definitionCount,
+        types: this.#surface.typeCount,
+        constructors: this.#surface.constructorCount,
+      },
+      () => {
+        this.validateMetadataCounts();
+        this.indexDefinitions();
+        this.indexTypeDeclarationShapes();
+        this.buildConstructorTypes();
+        for (const constructor of this.#constructorBySymbol.values()) {
+          this.#globalSchemes.set(constructor.symbol, {
+            parameters: constructor.parameters,
+            type: this.constructorFunctionType(constructor.fields, constructor.result),
+          });
+        }
+      },
+    );
 
-    const components = this.definitionComponents();
-    for (const component of components) this.inferDefinitionComponent(component);
-
-    const mainScheme = this.#definitionSchemes.get(this.#surface.entrySymbol);
-    if (mainScheme === undefined) {
-      throw this.failure("F2104", "main has no inferred type", { startByte: 0, endByte: 0 });
-    }
-    if (this.containsTypeParameter(mainScheme.type)) {
-      throw this.failure(
-        "F2104",
-        `main must have a concrete type; inferred ${this.formatType(mainScheme.type)}`,
-        this.definitionSpan(this.#definitionBySymbol.get(this.#surface.entrySymbol)),
-      );
-    }
-
-    return Object.freeze({
-      ok: true,
-      mainType: this.toPublicType(mainScheme.type),
-      typeDeclarations: Object.freeze(this.#publicTypeDeclarations),
-      constructorFieldTypes: Object.freeze(
-        this.#constructorFieldTypes.map((fields) => Object.freeze(fields)),
-      ),
+    const graphAnnotations = {
+      definitions: this.#surface.definitionCount,
+      components: 0,
+      largest: 0,
+    };
+    const components = measureCompilerStage(
+      this.#trace,
+      "semantic.inference.graph",
+      graphAnnotations,
+      () => this.definitionComponents(),
+      (result) => {
+        graphAnnotations.components = result.length;
+        graphAnnotations.largest = result.reduce(
+          (largest, component) => Math.max(largest, component.length),
+          0,
+        );
+      },
+    );
+    const solveAnnotations = { components: components.length, typeVariables: 0 };
+    measureCompilerStage(this.#trace, "semantic.inference.solve", solveAnnotations, () => {
+      for (const component of components) this.inferDefinitionComponent(component);
+      solveAnnotations.typeVariables = this.#nextTypeVariable;
     });
+
+    return measureCompilerStage(
+      this.#trace,
+      "semantic.inference.materialize",
+      { typeVariables: this.#nextTypeVariable },
+      () => {
+        const mainScheme = this.#definitionSchemes.get(this.#surface.entrySymbol);
+        if (mainScheme === undefined) {
+          throw this.failure("F2104", "main has no inferred type", { startByte: 0, endByte: 0 });
+        }
+        if (this.containsTypeParameter(mainScheme.type)) {
+          throw this.failure(
+            "F2104",
+            `main must have a concrete type; inferred ${this.formatType(mainScheme.type)}`,
+            this.definitionSpan(this.#definitionBySymbol.get(this.#surface.entrySymbol)),
+          );
+        }
+
+        return Object.freeze({
+          ok: true,
+          mainType: this.toPublicType(mainScheme.type),
+          typeDeclarations: Object.freeze(this.#publicTypeDeclarations),
+          constructorFieldTypes: Object.freeze(
+            this.#constructorFieldTypes.map((fields) => Object.freeze(fields)),
+          ),
+        });
+      },
+    );
   }
 
   private validateMetadataCounts(): void {
@@ -2515,9 +2560,12 @@ class InferenceContext {
  * `definitionTypes` entry per definition and one `typeDeclarations` entry per encoded type;
  * constructors and their fields remain in the same order as the word-buffer ABI.
  */
-export function inferTypes(surface: EncodedSemanticSurface): TypeInferenceResult {
+export function inferTypes(
+  surface: EncodedSemanticSurface,
+  trace?: CompilerPerformanceTrace,
+): TypeInferenceResult {
   try {
-    return new InferenceContext(surface).infer();
+    return new InferenceContext(surface, trace).infer();
   } catch (error) {
     if (error instanceof InferenceDiagnostic) return { ok: false, diagnostic: error.diagnostic };
     throw error;

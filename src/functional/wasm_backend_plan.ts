@@ -1,4 +1,8 @@
 import { CoreTag, EvaluationMode, EvaluationProfile, NO_INDEX } from "./abi.ts";
+import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
   functionalHostScalarType,
@@ -36,6 +40,7 @@ export interface WasmBackendPlan {
   readonly compactScalarEligible: boolean;
   readonly instrumentedFuel: boolean;
   readonly options: WasmCompilationOptions;
+  readonly trace: CompilerPerformanceTrace | undefined;
 }
 
 export function createWasmBackendPlan(
@@ -43,17 +48,76 @@ export function createWasmBackendPlan(
   nodes: readonly CoreNode[],
   instrumentedFuel: boolean,
   options: WasmCompilationOptions,
+  trace?: CompilerPerformanceTrace,
 ): WasmBackendPlan {
-  validateWasmSimdMode(options.simd);
-  const loweredNodes = lowerCoreForWasm(module, nodes);
-  const coreIndex = indexWasmCore(module, loweredNodes);
-  const captureAnalysis = new WasmCaptureAnalysis(loweredNodes);
-  const constantAnalysis = new WasmConstantAnalysis(loweredNodes);
-  const storage = createLoweredCoreStoragePlan(module, loweredNodes, captureAnalysis, {
-    ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
-  }, coreIndex);
-  const entry = functionalWasmEntry(module);
-  validateOwnedTypeExports(module, loweredNodes, options);
+  measureCompilerStage(trace, "wasm.plan.validate", {}, () => validateWasmSimdMode(options.simd));
+  const loweringAnnotations = {
+    inputNodes: nodes.length,
+    outputNodes: 0,
+    addedApplications: 0,
+    addedLambdas: 0,
+    addedCaseArms: 0,
+    addedPatternBinders: 0,
+  };
+  const loweredNodes = measureCompilerStage(
+    trace,
+    "wasm.plan.lower-core",
+    loweringAnnotations,
+    () => lowerCoreForWasm(module, nodes),
+    (result) => {
+      loweringAnnotations.outputNodes = result.length;
+      for (let nodeIndex = nodes.length; nodeIndex < result.length; nodeIndex++) {
+        const tag = result[nodeIndex]!.tag;
+        if (tag === CoreTag.Apply) loweringAnnotations.addedApplications += 1;
+        else if (tag === CoreTag.Lambda) loweringAnnotations.addedLambdas += 1;
+        else if (tag === CoreTag.CaseArm) loweringAnnotations.addedCaseArms += 1;
+        else if (tag === CoreTag.PatternBind) loweringAnnotations.addedPatternBinders += 1;
+      }
+    },
+  );
+  const coreIndexAnnotations = {
+    nodes: loweredNodes.length,
+    directOnlyDefinitions: 0,
+  };
+  const coreIndex = measureCompilerStage(
+    trace,
+    "wasm.plan.index-core",
+    coreIndexAnnotations,
+    () => indexWasmCore(module, loweredNodes),
+    (result) => {
+      coreIndexAnnotations.directOnlyDefinitions = result.directOnlyDefinitions.size;
+    },
+  );
+  const analysisAnnotations = { nodes: loweredNodes.length, definitions: module.definitionCount };
+  const [captureAnalysis, constantAnalysis] = measureCompilerStage(
+    trace,
+    "wasm.plan.static-analysis",
+    analysisAnnotations,
+    () =>
+      [
+        new WasmCaptureAnalysis(loweredNodes),
+        new WasmConstantAnalysis(loweredNodes),
+      ] as const,
+  );
+  const storageAnnotations = { nodes: loweredNodes.length, values: 0, references: 0 };
+  const storage = measureCompilerStage(
+    trace,
+    "wasm.plan.storage",
+    storageAnnotations,
+    () =>
+      createLoweredCoreStoragePlan(module, loweredNodes, captureAnalysis, {
+        ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
+      }, coreIndex),
+    (result) => {
+      storageAnnotations.values = result.values.length;
+      storageAnnotations.references = result.references.length;
+    },
+  );
+  const entry = measureCompilerStage(trace, "wasm.plan.boundary", {}, () => {
+    const result = functionalWasmEntry(module);
+    validateOwnedTypeExports(module, loweredNodes, options);
+    return result;
+  });
   const scalarResult = functionalHostScalarType(entry.result);
   const compactScalarEligible = module.evaluationProfile ===
       EvaluationProfile.StrictEager &&
@@ -70,24 +134,38 @@ export function createWasmBackendPlan(
     (compactScalarProgramIsProvable(module, loweredNodes) ||
       options.simd === "wasm-simd" &&
         compactFixedVectorProgramIsProvable(module, loweredNodes));
+  const functionAnalysis = measureCompilerStage(
+    trace,
+    "wasm.plan.function-analysis",
+    analysisAnnotations,
+    () =>
+      new WasmFunctionAnalysis(
+        loweredNodes,
+        module.definitionRoots,
+        constantAnalysis,
+        coreIndex,
+      ),
+  );
+  const uniqueReuseAnalysis = measureCompilerStage(
+    trace,
+    "wasm.plan.unique-reuse",
+    analysisAnnotations,
+    () => new WasmUniqueReuseAnalysis(module, loweredNodes),
+  );
   return Object.freeze({
     module,
     nodes: loweredNodes,
     captureAnalysis,
     constantAnalysis,
-    functionAnalysis: new WasmFunctionAnalysis(
-      loweredNodes,
-      module.definitionRoots,
-      constantAnalysis,
-      coreIndex,
-    ),
-    uniqueReuseAnalysis: new WasmUniqueReuseAnalysis(module, loweredNodes),
+    functionAnalysis,
+    uniqueReuseAnalysis,
     coreIndex,
     storage,
     entry,
     compactScalarEligible,
     instrumentedFuel,
     options,
+    trace,
   });
 }
 

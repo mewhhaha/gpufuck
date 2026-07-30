@@ -1,4 +1,4 @@
-import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
+import { CoreTag, EvaluationMode } from "./abi.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
   PersistentSharing,
@@ -62,20 +62,6 @@ export function createLoweredCoreStoragePlan(
   options: StoragePlanningOptions = {},
   coreIndex: WasmCoreIndex = indexWasmCore(module, nodes),
 ): StoragePlan {
-  const definitionByRoot = new Map<number, number>();
-  for (const [definition, root] of module.definitionRoots.entries()) {
-    if (root >= nodes.length) {
-      throw new Error(
-        `functional storage plan definition d${definition} root ${root} exceeds ${nodes.length} resolved nodes`,
-      );
-    }
-    definitionByRoot.set(root, definition);
-  }
-
-  for (const [nodeIndex, node] of nodes.entries()) {
-    requireCoreChildren(nodes.length, nodeIndex, node);
-  }
-
   const values: StorageDecision[] = [];
   const recorded = new Map<string, StorageDecision>();
   const record = (decision: StorageDecision): void => {
@@ -103,7 +89,7 @@ export function createLoweredCoreStoragePlan(
     if (node.tag === CoreTag.Lambda) {
       const capturedLocalCount = captureAnalysis.freeLocalDepths(node.child0)
         .filter((depth) => depth >= 1).length;
-      const definition = definitionByRoot.get(nodeIndex);
+      const definition = coreIndex.definitionByRoot.get(nodeIndex);
       if (definition !== undefined) {
         record({
           coreNode: nodeIndex,
@@ -433,62 +419,4 @@ function expressionIsWeakHeadNormalForm(
     node.tag === CoreTag.Boolean ||
     node.tag === CoreTag.Lambda ||
     node.tag === CoreTag.Constructor;
-}
-
-function requireCoreChildren(
-  nodeCount: number,
-  nodeIndex: number,
-  node: CoreNode,
-): void {
-  for (const [name, child] of coreChildren(node)) {
-    if (child === NO_INDEX) continue;
-    if (child >= nodeCount) {
-      throw new Error(
-        `functional storage plan core node ${nodeIndex} ${name} ${child} exceeds ${nodeCount} resolved nodes`,
-      );
-    }
-  }
-}
-
-function coreChildren(
-  node: CoreNode,
-): readonly (readonly ["child0" | "child1" | "child2", number])[] {
-  switch (node.tag) {
-    case CoreTag.Integer:
-    case CoreTag.SignedInteger64:
-    case CoreTag.Float32:
-    case CoreTag.Float64:
-    case CoreTag.WholeNumberF64:
-    case CoreTag.Boolean:
-    case CoreTag.Text:
-    case CoreTag.Bytes:
-    case CoreTag.RuntimeFault:
-    case CoreTag.StoreEmpty:
-    case CoreTag.Local:
-    case CoreTag.Global:
-    case CoreTag.Constructor:
-      return [];
-    case CoreTag.Prim:
-      throw new Error("functional storage planning received an unlowered primop");
-    case CoreTag.Lambda:
-    case CoreTag.Unary:
-    case CoreTag.NumericConvert:
-    case CoreTag.PatternBind:
-    case CoreTag.StoreLength:
-      return [["child0", node.child0]];
-    case CoreTag.Apply:
-    case CoreTag.Let:
-    case CoreTag.LetRec:
-    case CoreTag.Binary:
-    case CoreTag.BufferAppend:
-    case CoreTag.Case:
-    case CoreTag.CaseArm:
-    case CoreTag.StoreNew:
-    case CoreTag.StoreRead:
-      return [["child0", node.child0], ["child1", node.child1]];
-    case CoreTag.If:
-    case CoreTag.StoreWrite:
-    case CoreTag.StoreGrow:
-      return [["child0", node.child0], ["child1", node.child1], ["child2", node.child2]];
-  }
 }

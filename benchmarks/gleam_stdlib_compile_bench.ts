@@ -11,14 +11,18 @@
  * Phases remain separate so CPU and GPU semantic compilation and uncached WebAssembly emission can
  * be compared without hiding work in process-wide artifact caches.
  *
- * Usage: deno task bench:gleam-stdlib <stdlib-checkout>
+ * Usage: deno task bench:gleam-stdlib <stdlib-checkout> [entry.gleam] [--trace=trace.json]
  */
 import {
   compileModuleToWasm,
+  CompilerPerformanceTrace,
   CpuCompiler,
   FunctionalCompilerService,
   GpuCompiler,
+  measureCompilerStageAsync,
+  renderCompilerPerformanceTrace,
   requestWebGpuDevice,
+  summarizeCompilerPerformance,
 } from "../functional.ts";
 import { GleamFrontendService, type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
 import { compileWasmArtifact } from "../src/functional/wasm_codegen.ts";
@@ -55,7 +59,9 @@ const REPETITIONS = 9;
 
 const checkout = Deno.args[0];
 if (checkout === undefined) {
-  console.error("usage: gleam_stdlib_compile_bench.ts <stdlib-checkout> [entry.gleam]");
+  console.error(
+    "usage: gleam_stdlib_compile_bench.ts <stdlib-checkout> [entry.gleam] [--trace=trace.json]",
+  );
   Deno.exit(2);
 }
 
@@ -72,7 +78,12 @@ const sources: GleamSourceModule[] = await Promise.all(
 // 66 surface nodes.
 // The entry is generated rather than required, so the benchmark is reproducible from a checkout
 // alone. An explicit path still overrides it, for comparing against a hand-written entry.
-const entryPath = Deno.args[1];
+const performanceTraceArgument = Deno.args.find((argument) => argument.startsWith("--trace="));
+const performanceTracePath = performanceTraceArgument?.slice("--trace=".length);
+if (performanceTraceArgument !== undefined && performanceTracePath === "") {
+  throw new TypeError("Gleam stdlib benchmark --trace requires a non-empty output path");
+}
+const entryPath = Deno.args.slice(1).find((argument) => !argument.startsWith("--trace="));
 const entry: GleamSourceModule = entryPath === undefined
   ? allExportsEntry(sources)
   : { name: "stdlib_entry", source: await Deno.readTextFile(entryPath) };
@@ -211,6 +222,50 @@ try {
   const frontend = lowerGleamSources(all, { module: entry.name, exportName: "main" });
   if (!frontend.ok) throw new Error(`lowering failed: ${frontend.diagnostics[0]?.message}`);
 
+  const pipelineTraces: CompilerPerformanceTrace[] = [];
+  for (let index = 0; index < REPETITIONS; index++) {
+    const trace = new CompilerPerformanceTrace();
+    await trace.measureAsync(
+      "compiler.total",
+      { modules: all.length, sourceBytes },
+      async () => {
+        const tracedFrontend = lowerGleamSources(
+          all,
+          { module: entry.name, exportName: "main" },
+          { trace },
+        );
+        if (!tracedFrontend.ok) {
+          throw new Error(`traced lowering failed: ${tracedFrontend.diagnostics[0]?.message}`);
+        }
+        const compilation = await cpuCompiler.compileModule(
+          tracedFrontend.lowered.module,
+          { trace },
+        );
+        if (!compilation.ok) {
+          throw new Error(`traced CPU compilation failed: ${compilation.diagnostics[0]?.code}`);
+        }
+        const nodes = await measureCompilerStageAsync(
+          trace,
+          "wasm.read-core",
+          { nodes: compilation.module.nodeCount },
+          () => compilation.module.readCoreNodes(),
+        );
+        compileWasmArtifact(compilation.module, nodes, false, {}, trace);
+        compilation.module.destroy();
+      },
+    );
+    pipelineTraces.push(trace);
+  }
+  const tracedStageMilliseconds = medianStageMilliseconds(pipelineTraces);
+  const representativeTrace = representativePipelineTrace(pipelineTraces);
+  const tracedPipelineBreakdown = pipelineBreakdown(representativeTrace);
+  if (performanceTracePath !== undefined) {
+    await Deno.writeTextFile(
+      performanceTracePath,
+      renderCompilerPerformanceTrace(representativeTrace.snapshot()),
+    );
+  }
+
   const cpuMilliseconds = await median(async () => {
     const compilation = await cpuCompiler.compileModule(frontend.lowered.module);
     if (!compilation.ok) {
@@ -256,6 +311,13 @@ try {
 
   const frontendTotal = lowerMilliseconds;
   const gleamMilliseconds = await measureGleam();
+  const requiredToMatchGleam = tracedPipelineBreakdown.total - gleamMilliseconds.cold;
+  const withoutFrontend = tracedPipelineBreakdown.total - tracedPipelineBreakdown.frontend;
+  const withoutSemantic = tracedPipelineBreakdown.total - tracedPipelineBreakdown.semantic;
+  const withoutWasm = tracedPipelineBreakdown.total - tracedPipelineBreakdown.wasm;
+  const withFrontendAndWasmHalved = tracedPipelineBreakdown.total -
+    tracedPipelineBreakdown.frontend / 2 -
+    tracedPipelineBreakdown.wasm / 2;
   const cpuCompleteWithWasm = frontendTotal + cpuMilliseconds + wasmMilliseconds;
   const gpuCompleteWithWasm = frontendTotal + gpuMilliseconds + wasmMilliseconds;
   const frontendService = new GleamFrontendService();
@@ -322,6 +384,31 @@ try {
         gleamWarmBuild: Number(gleamMilliseconds.warm.toFixed(1)),
         gleamSourceOnlyEditBuild: Number(gleamMilliseconds.sourceOnlyEdit.toFixed(1)),
       },
+      tracedColdCpuPipelineMilliseconds: tracedStageMilliseconds,
+      tracedColdCpuPipelineBreakdown: tracedPipelineBreakdown,
+      optimizationCeilings: {
+        requiredToMatchGleamMilliseconds: Number(requiredToMatchGleam.toFixed(1)),
+        requiredToMatchGleamPercent: Number(
+          ((requiredToMatchGleam / tracedPipelineBreakdown.total) * 100).toFixed(1),
+        ),
+        eliminateFrontendMilliseconds: Number(withoutFrontend.toFixed(1)),
+        eliminateFrontendStillSlowerThanGleam: Number(
+          (withoutFrontend / gleamMilliseconds.cold).toFixed(2),
+        ),
+        eliminateSemanticMilliseconds: Number(withoutSemantic.toFixed(1)),
+        eliminateSemanticStillSlowerThanGleam: Number(
+          (withoutSemantic / gleamMilliseconds.cold).toFixed(2),
+        ),
+        eliminateWasmMilliseconds: Number(withoutWasm.toFixed(1)),
+        eliminateWasmStillSlowerThanGleam: Number(
+          (withoutWasm / gleamMilliseconds.cold).toFixed(2),
+        ),
+        halveFrontendAndWasmMilliseconds: Number(withFrontendAndWasmHalved.toFixed(1)),
+        halveFrontendAndWasmStillSlowerThanGleam: Number(
+          (withFrontendAndWasmHalved / gleamMilliseconds.cold).toFixed(2),
+        ),
+      },
+      performanceTraceFile: performanceTracePath,
       wasmKilobytes: Number((wasmBytes / 1024).toFixed(1)),
       gpuSlowerThanCpuOracle: Number((gpuMilliseconds / cpuInferenceMilliseconds).toFixed(1)),
       cpuSlowerThanGleam: Number((cpuCompleteWithWasm / gleamMilliseconds.cold).toFixed(2)),
@@ -341,4 +428,79 @@ try {
   ));
 } finally {
   device.destroy();
+}
+
+function medianStageMilliseconds(
+  traces: readonly CompilerPerformanceTrace[],
+): Readonly<Record<string, number>> {
+  const stageSamples = new Map<string, number[]>();
+  for (const trace of traces) {
+    for (const summary of summarizeCompilerPerformance(trace.snapshot())) {
+      const samples = stageSamples.get(summary.stage) ?? [];
+      samples.push(summary.totalMilliseconds);
+      stageSamples.set(summary.stage, samples);
+    }
+  }
+  return Object.freeze(Object.fromEntries([...stageSamples.entries()].map(([stage, samples]) => {
+    samples.sort((left, right) => left - right);
+    return [stage, Number(samples[Math.floor(samples.length / 2)]!.toFixed(3))];
+  })));
+}
+
+function representativePipelineTrace(
+  traces: readonly CompilerPerformanceTrace[],
+): CompilerPerformanceTrace {
+  const ranked = traces.map((trace) => {
+    const total = trace.snapshot().find((event) => event.stage === "compiler.total");
+    if (total === undefined) throw new Error("compiler performance trace omitted compiler.total");
+    return { trace, durationMilliseconds: total.durationMilliseconds };
+  }).sort((left, right) => left.durationMilliseconds - right.durationMilliseconds);
+  return ranked[Math.floor(ranked.length / 2)]!.trace;
+}
+
+function pipelineBreakdown(
+  trace: CompilerPerformanceTrace,
+): Readonly<{
+  total: number;
+  frontend: number;
+  semantic: number;
+  wasm: number;
+  orchestration: number;
+}> {
+  const stages = new Map(
+    summarizeCompilerPerformance(trace.snapshot()).map((summary) => [
+      summary.stage,
+      summary.totalMilliseconds,
+    ]),
+  );
+  const total = stages.get("compiler.total") ?? 0;
+  const frontend = [
+    "frontend.parse",
+    "frontend.signatures.nominal",
+    "frontend.signatures.value",
+    "frontend.lower",
+    "frontend.link",
+  ].reduce((sum, stage) => sum + (stages.get(stage) ?? 0), 0);
+  const semantic = [
+    "semantic.validate-envelope",
+    "semantic.validate-declarations",
+    "semantic.symbol-index",
+    "semantic.inference.metadata",
+    "semantic.inference.graph",
+    "semantic.inference.solve",
+    "semantic.inference.materialize",
+    "semantic.lower-core",
+    "semantic.publish",
+  ].reduce((sum, stage) => sum + (stages.get(stage) ?? 0), 0);
+  const wasm = ["wasm.read-core", "wasm.plan", "wasm.emit"].reduce(
+    (sum, stage) => sum + (stages.get(stage) ?? 0),
+    0,
+  );
+  return Object.freeze({
+    total: Number(total.toFixed(3)),
+    frontend: Number(frontend.toFixed(3)),
+    semantic: Number(semantic.toFixed(3)),
+    wasm: Number(wasm.toFixed(3)),
+    orchestration: Number((total - frontend - semantic - wasm).toFixed(3)),
+  });
 }

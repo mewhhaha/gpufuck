@@ -1731,6 +1731,102 @@ reuse stable fingerprints, but changing a source range still rebuilds one packed
 Eliminating that last cost requires relocatable linked fragments with explicit source provenance;
 blindly rebasing packed byte offsets would make spans at module boundaries ambiguous.
 
+## 2026-07-30 — traced cold compilation
+
+The standard-library benchmark now carries one `CompilerPerformanceTrace` through the real Gleam
+frontend, CPU semantic compiler, effect analysis, and uncached linear-memory Wasm backend. It runs
+nine complete traced compilations, reports per-stage medians, and can write a Perfetto-compatible
+timeline with `--trace=/tmp/compiler-trace.json`.
+
+Absolute time varied with unrelated compiler tests running on the host, but the conclusion did not.
+Three runs put the complete CPU path at 255–340 ms and Gleam at 47–69 ms: gpufuck remained about 5×
+slower. The representative trace from the last run was:
+
+| Group         |         Time |    Share |
+| ------------- | -----------: | -------: |
+| Frontend      |     147.2 ms |    43.3% |
+| Semantic      |      57.6 ms |    16.9% |
+| Wasm          |     129.6 ms |    38.1% |
+| Orchestration |       5.8 ms |     1.7% |
+| **Complete**  | **340.2 ms** | **100%** |
+
+The frontend is still led by `parseGleamModule`, which includes baba parsing and our cursor-to-AST
+walk: 105.4 ms. Surface lowering is 19.7 ms and linking is 19.7 ms. This agrees with the larger
+corpus profile in TASKS item 14: eliminating the intermediate Gleam AST and making baba faster are
+separate opportunities, and both matter.
+
+The Wasm trace is more revealing than the old single emission number:
+
+| Wasm phase                        |    Time | Work                                     |
+| --------------------------------- | ------: | ---------------------------------------- |
+| Storage plan                      | 21.9 ms | 3,083 values; 3,298 references           |
+| Reachability                      |  6.9 ms | 1,039 of 1,039 definitions               |
+| Closure and global-thunk emission | 19.3 ms | 1,854 indirect functions in total        |
+| Export/global initialization      | 49.9 ms | no extra public Wasm exports             |
+| Binary encoding                   | 24.3 ms | 950,202 instruction bytes; 41,734 locals |
+
+Wasm lowering grows 13,702 Core nodes to 17,719 backend nodes, a 29.3% increase, and emits a 999.2
+KiB artifact. Global initialization plus closure/thunk generation costs about 69 ms before binary
+encoding. The first backend experiment should therefore test direct strict global definitions and
+values against the existing thunk-and-initializer path. Encoding alone is a hard 7% whole-pipeline
+ceiling; shrinking generated code has to come before tuning LEB128 writes.
+
+Effect analysis is the largest semantic subphase at 27.2 ms in the loaded run. Inference solving is
+16.8 ms, its dependency graph is 6.0 ms, and all remaining semantic phases are small. Consolidating
+whole-Core traversals may help, but semantic work is not the reason for the 5× gap.
+
+The benchmark now prints the Amdahl ceilings explicitly. On the same run, deleting the entire
+frontend still leaves 193.1 ms, deleting semantics leaves 282.6 ms, and deleting Wasm leaves 210.6
+ms, all well above Gleam's 68.5 ms. Even halving both frontend and Wasm leaves 201.8 ms, 2.95×
+slower. Matching Gleam requires removing about 80% of current cold work, so no isolated
+micro-optimization can reach parity.
+
+The opt-in hooks were also A/B tested against the committed pre-trace tree with tracing disabled.
+The same 12-run source-to-Wasm loop, discarding three warmups and comparing nine-run medians, took
+281.1 ms before and 274.4 ms after. The -2.4% difference is noise in gpufuck's favour; the hooks do
+not impose the 5% regression the experiment rejects.
+
+## 2026-07-30 — strict globals remove a third of Wasm emission
+
+The first traced backend experiment was accepted. `WasmCoreIndex` now owns child validation,
+definition roots, parent edges, and direct-use classification. Storage planning reuses that index,
+and Wasm lambda-set analysis reuses its parent graph instead of rebuilding it. In a strict module, a
+top-level function whose every reference reaches its exact arity is compiled only through direct
+workers; it receives no global closure and no initializer store. Global values already in weak-head
+normal form also bypass the thunk-force sequence. Lazy and computed globals are unchanged.
+
+The comparison used detached `c0935a5` and the working tree in three fresh processes each. Every
+process ran nine samples of the same 261.5 KiB stdlib corpus:
+
+| Median of process medians |    `c0935a5` | Strict globals |     Change |
+| ------------------------- | -----------: | -------------: | ---------: |
+| Parse and lower           |     111.6 ms |       114.8 ms |      +2.9% |
+| CPU semantics             |      42.1 ms |        37.3 ms |     -11.4% |
+| Wasm emission             |     127.8 ms |        87.1 ms |     -31.8% |
+| **Cold complete**         | **281.4 ms** |   **239.4 ms** | **-14.9%** |
+| Gleam build               |      45.9 ms |        44.9 ms |      -2.2% |
+| Wasm artifact             |    999.2 KiB |      780.9 KiB |     -21.8% |
+
+The semantic movement is host noise; this change is in the Wasm backend. The stable work counts show
+why it wins: 141 of 1,039 definitions are direct-only, indirect functions fall from 1,854 to 1,522,
+generated instruction bytes from 950,202 to 735,506, and locals from 41,734 to 34,666. The 438
+computed global thunks remain, so sharing, fault timing, and blackhole behavior are preserved. Cold
+gpufuck is now 5.33× Gleam on these medians rather than 6.13×.
+
+The added trace resolution also changed the next frontend conclusion. Generated syntax parsing is
+about 45.7 ms and cursor-to-AST materialization 32.0 ms in the representative run. A cursor-backed
+experiment deferred each function body and released it immediately after Surface lowering. It
+reduced materialization but moved more work into lowering: the benchmark's parse-and-lower median
+rose from 125.2 ms to 140.2 ms, so the experiment was removed. A real cursor-to-Surface lowering
+must avoid constructing expression AST nodes altogether; merely changing their lifetime is a cold
+regression.
+
+Effect analysis is now separately attributable: lambda-set construction takes 14–24 ms, the effect
+dependency graph 2.7–4.0 ms, and propagation/materialization less than 2 ms together. This rules out
+tuning the small fixed-point loop. The shared Wasm Core index removes duplicate validation and
+parent indexing, but eliminating the semantic lambda-set pass requires one representation shared by
+effect analysis and code generation rather than moving its traversal into another adapter.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

@@ -1,3 +1,4 @@
+import type { CompilerPerformanceTrace } from "../compiler_performance_trace.ts";
 import {
   BinaryOperator,
   CoreTag,
@@ -242,30 +243,84 @@ export interface WasmArtifact {
   readonly automaticArenaReset: boolean;
 }
 
+function wasmEncodingAnnotations(
+  functions: readonly WasmFunctionBody[],
+  imports: number,
+  indirectFunctions: number,
+): Record<string, number> {
+  return {
+    functions: functions.length,
+    imports,
+    indirectFunctions,
+    instructionBytes: functions.reduce(
+      (total, body) => total + body.instructions.length,
+      0,
+    ),
+    locals: functions.reduce((total, body) => total + body.localTypes.length, 0),
+  };
+}
+
 export function compileWasmArtifact(
   module: CompiledModule,
   nodes: readonly CoreNode[],
   instrumentedFuel = false,
   options: WasmCompilationOptions = {},
+  trace?: CompilerPerformanceTrace,
 ): WasmArtifact {
-  const plan = createWasmBackendPlan(module, nodes, instrumentedFuel, options);
-  if (plan.compactScalarEligible) {
-    const compactCompiler = new WasmCompiler(
-      plan,
-      true,
-    );
-    const compactBytes = compactCompiler.compileCompactScalar();
-    if (compactBytes === undefined) {
-      throw new Error("functional compact scalar preflight accepted a runtime-dependent program");
-    }
-    return compactCompiler.artifact(compactBytes);
+  trace ??= options.trace;
+  const planSpan = trace?.start("wasm.plan");
+  let plan: WasmBackendPlan;
+  try {
+    plan = createWasmBackendPlan(module, nodes, instrumentedFuel, options, trace);
+  } catch (error) {
+    planSpan?.finish({
+      failed: true,
+      nodes: nodes.length,
+      definitions: module.definitionCount,
+      constructors: module.constructorCount,
+    });
+    throw error;
   }
+  planSpan?.finish({
+    nodes: nodes.length,
+    definitions: module.definitionCount,
+    constructors: module.constructorCount,
+  });
+  const emitSpan = trace?.start("wasm.emit");
+  try {
+    if (plan.compactScalarEligible) {
+      const compactCompiler = new WasmCompiler(
+        plan,
+        true,
+      );
+      const compactBytes = compactCompiler.compileCompactScalar();
+      if (compactBytes === undefined) {
+        throw new Error("functional compact scalar preflight accepted a runtime-dependent program");
+      }
+      const artifact = compactCompiler.artifact(compactBytes);
+      emitSpan?.finish({
+        nodes: plan.nodes.length,
+        bytes: artifact.bytes.byteLength,
+        specializedCallSites: artifact.specializedCallSites,
+      });
+      return artifact;
+    }
 
-  const compiler = new WasmCompiler(
-    plan,
-    false,
-  );
-  return compiler.artifact(compiler.compile());
+    const compiler = new WasmCompiler(
+      plan,
+      false,
+    );
+    const artifact = compiler.artifact(compiler.compile());
+    emitSpan?.finish({
+      nodes: plan.nodes.length,
+      bytes: artifact.bytes.byteLength,
+      specializedCallSites: artifact.specializedCallSites,
+    });
+    return artifact;
+  } catch (error) {
+    emitSpan?.finish({ failed: true, nodes: plan.nodes.length });
+    throw error;
+  }
 }
 
 class WasmCompiler {
@@ -275,6 +330,7 @@ class WasmCompiler {
   readonly #constantAnalysis: WasmConstantAnalysis;
   readonly #functionAnalysis: WasmFunctionAnalysis;
   readonly #uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
+  readonly #coreIndex: WasmBackendPlan["coreIndex"];
   readonly #storageDecisions: ReadonlyMap<string, StorageDecision>;
   readonly #indirectFunctions: (WasmFunctionBody | undefined)[] = [];
   readonly #lambdaSlots: (number | undefined)[];
@@ -288,6 +344,7 @@ class WasmCompiler {
   readonly #constructorClosureSlots: (number | undefined)[][];
   readonly #nullaryConstructorOffsets: readonly (number | undefined)[];
   readonly #globalThunkSlots: (number | undefined)[];
+  readonly #directOnlyDefinitions: ReadonlySet<number>;
   readonly #entry: WasmEntry;
   readonly #hostFields: readonly HostField[];
   readonly #hostDefinitionFields: ReadonlyMap<number, HostField>;
@@ -303,6 +360,7 @@ class WasmCompiler {
   readonly #compilationOptions: WasmCompilationOptions;
   readonly #ownedRuntimeEnabled: boolean;
   readonly #hostEmitter: WasmHostEmitter;
+  readonly #trace: CompilerPerformanceTrace | undefined;
   #lambdaSetAnalysis: LambdaSetAnalysis | undefined;
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
@@ -333,6 +391,7 @@ class WasmCompiler {
       instrumentedFuel: plan.instrumentedFuel,
     });
     this.#compilationOptions = plan.options;
+    this.#trace = plan.trace;
     this.#ownedRuntimeEnabled = (plan.options.ownedTypeExports?.length ?? 0) > 0;
     this.#hostEmitter = new WasmHostEmitter({
       ownedRuntimeEnabled: this.#ownedRuntimeEnabled,
@@ -361,6 +420,8 @@ class WasmCompiler {
     );
     this.#functionAnalysis = plan.functionAnalysis;
     this.#uniqueReuseAnalysis = plan.uniqueReuseAnalysis;
+    this.#coreIndex = plan.coreIndex;
+    this.#directOnlyDefinitions = plan.coreIndex.directOnlyDefinitions;
     this.#lambdaSlots = Array.from({ length: nodes.length }, () => undefined);
     for (const [lambda, owner] of plan.coreIndex.recursiveLambdaOwners) {
       this.#recursiveLambdaOwners.set(lambda, owner);
@@ -563,7 +624,8 @@ class WasmCompiler {
       emittedFunctions.some((body) => body.usesMemory || body.usesIndirectCalls);
     if (requiresRuntime) return undefined;
 
-    return encodeCompactScalarWasmModule(
+    const encodeSpan = this.#trace?.start("wasm.encode");
+    const bytes = encodeCompactScalarWasmModule(
       emittedFunctions,
       entryFunctionIndex,
       this.#additionalFunctionTypes,
@@ -575,9 +637,16 @@ class WasmCompiler {
         functionIndex: entryFunctionIndex + 1 + index,
       })),
     );
+    encodeSpan?.finish(wasmEncodingAnnotations(
+      emittedFunctions,
+      0,
+      indirectFunctions.length,
+    ));
+    return bytes;
   }
 
   compile(): Uint8Array<ArrayBuffer> {
+    const reachabilitySpan = this.#trace?.start("wasm.emit.reachability");
     const directCallableFunctions = this.#module.wasmExports.map((exported) => {
       const { parameters, result } = this.wasmExportSignature(exported);
       return this.compileDirectIntegerWasmExport(exported, parameters, result);
@@ -590,6 +659,13 @@ class WasmCompiler {
     ], {
       constantBranches: this.#instrumentedFuel ? "preserve" : "prune",
     });
+    reachabilitySpan?.finish({
+      definitions: this.#module.definitionCount,
+      reachableDefinitions: this.#runtimeDefinitionIndices.size,
+      directExports: directCallableFunctions.filter((body) => body !== undefined).length,
+    });
+
+    const closureSpan = this.#trace?.start("wasm.emit.closures");
     for (const definitionIndex of this.#runtimeDefinitionIndices) {
       if (this.#hostDefinitionFields.has(definitionIndex)) continue;
       const rootNode = this.#module.definitionRoots[definitionIndex];
@@ -598,6 +674,17 @@ class WasmCompiler {
     }
     this.compileHostOperationClosures();
     this.compileGlobalThunks();
+    closureSpan?.finish({
+      reachableDefinitions: this.#runtimeDefinitionIndices.size,
+      directOnlyDefinitions: [...this.#directOnlyDefinitions].filter((definition) =>
+        this.#runtimeDefinitionIndices.has(definition)
+      ).length,
+      globalThunks: this.#globalThunkSlots.filter((slot) =>
+        slot !== undefined
+      ).length,
+      indirectFunctions: this.#indirectFunctions.length,
+    });
+    const exportsSpan = this.#trace?.start("wasm.emit.exports-and-initialization");
     const scalarResult = functionalHostScalarType(this.#entry.result);
     const initializeInstructions = new WasmInstructions(0);
     this.emitGlobalInitialization(initializeInstructions);
@@ -615,6 +702,13 @@ class WasmCompiler {
         initializeFunctionIndex,
       );
     });
+    exportsSpan?.finish({
+      exports: this.#module.wasmExports.length,
+      functions: callableFunctions.length,
+      initializationInstructionBytes: initializeInstructions.bytes.length,
+      initializationLocals: initializeInstructions.localTypes.length,
+    });
+    const runtimeSpan = this.#trace?.start("wasm.emit.runtime-bodies");
     const indirectFunctions = this.#indirectFunctions.map((body, slot) => {
       if (body === undefined) {
         throw new Error(
@@ -668,6 +762,11 @@ class WasmCompiler {
       ),
       ...callableFunctions,
     ];
+    runtimeSpan?.finish({
+      indirectFunctions: indirectFunctions.length,
+      functions: baseFunctions.length,
+    });
+    const ownedSpan = this.#trace?.start("wasm.emit.owned-runtime");
     const ownedTypeExports = this.#compilationOptions.ownedTypeExports ?? [];
     const ownedRuntimeType = ownedTypeExports.length === 0
       ? undefined
@@ -704,12 +803,17 @@ class WasmCompiler {
         ]),
       ];
     const functions = [...baseFunctions, ...ownedRuntimeFunctions];
+    ownedSpan?.finish({
+      exports: ownedTypeExports.length,
+      functions: ownedRuntimeFunctions.length,
+    });
     const indirectFunctionIndices = indirectFunctions.map((_, slot) =>
       this.indirectFunctionOffset() + slot
     );
     const entryFunctionIndex = this.#functionImports.length + 5 +
       indirectFunctions.length;
-    return encodeWasmModule(
+    const encodeSpan = this.#trace?.start("wasm.encode");
+    const bytes = encodeWasmModule(
       this.#functionImports,
       functions,
       indirectFunctionIndices,
@@ -737,6 +841,12 @@ class WasmCompiler {
       ],
       this.#instrumentedFuel,
     );
+    encodeSpan?.finish(wasmEncodingAnnotations(
+      functions,
+      this.#functionImports.length,
+      indirectFunctions.length,
+    ));
+    return bytes;
   }
 
   wasmExportSignature(exported: WasmExport): {
@@ -1050,6 +1160,7 @@ class WasmCompiler {
         .entries()
     ) {
       if (!this.#runtimeDefinitionIndices.has(definitionIndex)) continue;
+      if (this.#directOnlyDefinitions.has(definitionIndex)) continue;
       instructions.i32Const(definitionIndex * VALUE_BYTE_LENGTH);
       const hostField = this.#hostDefinitionFields.get(definitionIndex);
       if (hostField !== undefined) {
@@ -1072,9 +1183,20 @@ class WasmCompiler {
     instructions: WasmInstructions,
     definitionIndex: number,
   ): void {
+    if (this.#directOnlyDefinitions.has(definitionIndex)) {
+      throw new Error(
+        `functional WASM direct-only definition d${definitionIndex} escaped a saturated call`,
+      );
+    }
     instructions.i32Const(definitionIndex * VALUE_BYTE_LENGTH);
     instructions.i64Load(0);
-    this.emitForceValue(instructions);
+    const root = this.#module.definitionRoots[definitionIndex]!;
+    if (
+      !this.#hostDefinitionFields.has(definitionIndex) &&
+      !this.expressionIsWhnf(root)
+    ) {
+      this.emitForceValue(instructions);
+    }
   }
 
   heapStart(): number {
@@ -1631,6 +1753,7 @@ class WasmCompiler {
     this.#lambdaSetAnalysis ??= LambdaSetAnalysis.forWasm(
       this.#module,
       this.#nodes,
+      this.#coreIndex,
     );
     return this.#lambdaSetAnalysis.lambdaSet(nodeIndex);
   }

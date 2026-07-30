@@ -202,12 +202,24 @@ within noise. Every rule needs a backend change to pay, prevents a pathology rat
 accelerating the common case, or does not touch this pipeline. Item 3 and a checking-only kernel are
 what would make it pay; the frontend is ready and waiting for them.
 
-### 4. WebAssembly emission is 63% of batch cost — premise needs re-measuring
+### 4. ~~WebAssembly emission is 38% of cold stdlib compilation~~ — direct globals done
 
-**Re-measure before starting.** That 63% was taken before the pattern-lowering fix cut the Gleam
-stdlib's node count by 2.8x and its emitted Wasm from 1,745 KB to 999 KB. On the single-module path
-emission is now 7.5 ms of 442.1 ms. The batch corpus is synthetic Lazuli with no or-patterns, so its
-split may be unchanged — but nobody has looked.
+The strict-global experiment landed. A shared Core index proves when every use of a strict top-level
+function supplies its full arity; those definitions no longer receive a global closure or
+initializer store. References to globals already known to be in weak-head normal form load the value
+directly instead of inlining the thunk-force path. Lazy and non-WHNF globals retain their existing
+memoizing thunk and blackhole behavior.
+
+Against `c0935a5`, three fresh stdlib benchmark processes put median Wasm emission at 87.1 ms
+instead of 127.8 ms, a 31.8% reduction. The complete cold path fell from 281.4 ms to 239.4 ms. The
+artifact fell from 999.2 KiB to 780.9 KiB: 141 definitions are direct-only, indirect functions fell
+from 1,854 to 1,522, and instruction bytes from 950,202 to 735,506. All 438 genuinely lazy global
+thunks remain.
+
+Structural lowering still expands 13,702 Core nodes to 17,719: 1,572 applications, 476 lambdas, 812
+case arms, and 1,157 pattern binders. Removing those backend-only nodes now has a measured
+4,017-node target, but it requires teaching every Wasm analysis to consume packed exact-arity
+applications and case metadata. It is a separate change from code-volume reduction.
 
 At batch 1,024 the split was 22% frontend, 15% GPU, **63% Wasm emission** (442 µs/module). It is
 also mostly _fixed_ per module: `40 + 2` is 8 Core nodes and still emits a 1,244-byte code section,

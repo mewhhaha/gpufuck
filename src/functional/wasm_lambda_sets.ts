@@ -1,5 +1,6 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
+import type { WasmCoreIndex } from "./wasm_core_index.ts";
 import { primopDeclaration, PrimopFamily } from "../semantic/primops.ts";
 import { type EffectSet, effectSetFrom } from "./effect_set.ts";
 import { type HostFieldDeclaration, INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
@@ -26,10 +27,7 @@ interface ApplicationConstraint {
   readonly connectedLambdaNodes: Set<number>;
 }
 
-interface ParentEdge {
-  readonly parent: number;
-  readonly child: number;
-}
+type ParentEdge = WasmCoreIndex["parents"][number][number];
 
 interface ConstructorApplication {
   readonly constructor: number;
@@ -64,14 +62,19 @@ export class LambdaSetAnalysis {
     return new LambdaSetAnalysis(module, nodes, "core");
   }
 
-  static forWasm(module: CompiledModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
-    return new LambdaSetAnalysis(module, nodes, "wasm");
+  static forWasm(
+    module: CompiledModule,
+    nodes: readonly CoreNode[],
+    coreIndex?: WasmCoreIndex,
+  ): LambdaSetAnalysis {
+    return new LambdaSetAnalysis(module, nodes, "wasm", coreIndex);
   }
 
   private constructor(
     module: CompiledModule,
     nodes: readonly CoreNode[],
     representation: "core" | "wasm",
+    coreIndex?: WasmCoreIndex,
   ) {
     this.#module = module;
     this.#nodes = nodes;
@@ -100,7 +103,7 @@ export class LambdaSetAnalysis {
     this.#lambdaSets = Array.from({ length: nodes.length }, () => undefined);
 
     this.#markIncomplete(this.#externalValue);
-    this.#markEscapingConstructorFieldsIncomplete();
+    this.#markEscapingConstructorFieldsIncomplete(coreIndex);
     for (const [constructor, name] of module.constructorNames.entries()) {
       if (name !== INIT_CONSTRUCTOR_NAME) continue;
       const arity = module.constructorArities[constructor]!;
@@ -568,20 +571,8 @@ export class LambdaSetAnalysis {
     this.#workQueue.push(variable);
   }
 
-  #markEscapingConstructorFieldsIncomplete(): void {
-    const parents: ParentEdge[][] = Array.from({ length: this.#nodes.length }, () => []);
-    for (const [parentIndex, node] of this.#nodes.entries()) {
-      const childReferences = node.tag === CoreTag.Apply
-        ? [node.child0, ...this.#applicationArguments(node)]
-        : [node.child0, node.child1, node.child2];
-      for (const [childPosition, childIndex] of childReferences.entries()) {
-        if (childIndex === NO_INDEX || childIndex >= this.#nodes.length) continue;
-        parents[childIndex]!.push({
-          parent: parentIndex,
-          child: childPosition,
-        });
-      }
-    }
+  #markEscapingConstructorFieldsIncomplete(coreIndex?: WasmCoreIndex): void {
+    const parents = coreIndex?.parents ?? this.#indexParents();
 
     for (const [nodeIndex, node] of this.#nodes.entries()) {
       if (node.tag !== CoreTag.Constructor) continue;
@@ -603,6 +594,23 @@ export class LambdaSetAnalysis {
         this.#markIncomplete(this.#constructorField(node.payload, field));
       }
     }
+  }
+
+  #indexParents(): readonly (readonly ParentEdge[])[] {
+    const parents: ParentEdge[][] = Array.from({ length: this.#nodes.length }, () => []);
+    for (const [parentIndex, node] of this.#nodes.entries()) {
+      const childReferences = node.tag === CoreTag.Apply
+        ? [node.child0, ...this.#applicationArguments(node)]
+        : [node.child0, node.child1, node.child2];
+      for (const [childPosition, childIndex] of childReferences.entries()) {
+        if (childIndex === NO_INDEX || childIndex >= this.#nodes.length) continue;
+        parents[childIndex]!.push({
+          parent: parentIndex,
+          child: childPosition,
+        });
+      }
+    }
+    return parents;
   }
 
   #constructorApplication(nodeIndex: number): ConstructorApplication | undefined {

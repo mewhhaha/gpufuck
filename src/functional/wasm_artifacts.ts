@@ -1,4 +1,5 @@
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
+import { measureCompilerStage, measureCompilerStageAsync } from "../compiler_performance_trace.ts";
 import { compileWasmArtifact, type WasmArtifact } from "./wasm_codegen.ts";
 import { resolvedCoreStructuralFingerprint } from "./semantic_fingerprint.ts";
 import { validateWasmSimdMode } from "./wasm_backend_plan.ts";
@@ -65,7 +66,30 @@ export async function compileModuleToWasm(
         "functional WasmGC compilation does not accept linear-memory storage or SIMD options",
       );
     }
-    return (await cachedWasmGcArtifact(module)).bytes.slice();
+    if (options.trace === undefined) return (await cachedWasmGcArtifact(module)).bytes.slice();
+    const nodes = await measureCompilerStageAsync(
+      options.trace,
+      "wasm.read-core",
+      { nodes: module.nodeCount },
+      () => module.readCoreNodes(),
+    );
+    const gcAnnotations = { nodes: nodes.length, bytes: 0 };
+    return measureCompilerStage(
+      options.trace,
+      "wasm.gc.emit",
+      gcAnnotations,
+      () => compileWasmGc(module, nodes),
+      (bytes) => gcAnnotations.bytes = bytes.byteLength,
+    ).slice();
+  }
+  if (options.trace !== undefined) {
+    const nodes = await measureCompilerStageAsync(
+      options.trace,
+      "wasm.read-core",
+      { nodes: module.nodeCount },
+      () => module.readCoreNodes(),
+    );
+    return compileWasmArtifact(module, nodes, false, options, options.trace).bytes.slice();
   }
   const customStorage = options.storageCore !== undefined ||
     options.ownedTypeExports !== undefined;

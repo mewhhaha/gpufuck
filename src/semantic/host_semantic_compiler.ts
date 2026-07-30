@@ -1,4 +1,8 @@
 import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
+import {
   AlgebraicTypeWord,
   CONSTRUCTOR_WORD_LENGTH,
   ConstructorWord,
@@ -41,11 +45,26 @@ export type HostSemanticCompileResult =
 export function compileSemanticOnHost(
   surface: EncodedSemanticSurface,
   sourceByteLength: number,
+  trace?: CompilerPerformanceTrace,
 ): HostSemanticCompileResult {
-  const validation = validateTopLevelDeclarations(surface, sourceByteLength);
+  const validation = measureCompilerStage(
+    trace,
+    "semantic.validate-declarations",
+    {
+      definitions: surface.definitionCount,
+      types: surface.typeCount,
+      constructors: surface.constructorCount,
+    },
+    () => validateTopLevelDeclarations(surface, sourceByteLength),
+  );
   if (validation !== undefined) return { ok: false, diagnostics: [validation] };
 
-  const symbolLookup = createSymbolLookup(surface);
+  const symbolLookup = measureCompilerStage(
+    trace,
+    "semantic.symbol-index",
+    { nodes: surface.nodeCount, symbols: surface.symbolNames.length },
+    () => createSymbolLookup(surface),
+  );
   const header = surface.symbolNames.length * SYMBOL_LOOKUP_WORD_LENGTH;
   if (symbolLookup[header + SymbolLookupWord.Definition] !== INDEXED_LOCAL_RESOLUTION_MAGIC) {
     throw new Error(
@@ -75,33 +94,39 @@ export function compileSemanticOnHost(
     return { ok: false, diagnostics: [diagnostic] };
   }
 
-  const inference = inferTypes(surface);
+  const inference = inferTypes(surface, trace);
   if (!inference.ok) return { ok: false, diagnostics: [inference.diagnostic] };
 
   const entryDefinition = findEntryDefinition(surface);
-  const nodes = Object.freeze(Array.from({ length: surface.nodeCount }, (_, nodeIndex) => {
-    const source = nodeIndex * NODE_WORD_LENGTH;
-    const lowering = (surface.symbolNames.length + 1 + nodeIndex) * SYMBOL_LOOKUP_WORD_LENGTH;
-    const surfaceTag = surface.nodeWords[source + NodeWord.Tag];
-    const tag = symbolLookup[lowering + SymbolLookupWord.Definition];
-    const payload = symbolLookup[lowering + SymbolLookupWord.Type];
-    if (surfaceTag === undefined || tag === undefined || payload === undefined) {
-      throw new Error(`host semantic lowering omitted node ${nodeIndex}`);
-    }
-    return Object.freeze<CoreNode>({
-      tag: tag as CoreNode["tag"],
-      payload,
-      child0: surface.nodeWords[source + NodeWord.Child0] ?? NO_INDEX,
-      child1: surface.nodeWords[source + NodeWord.Child1] ?? NO_INDEX,
-      child2: surface.nodeWords[source + NodeWord.Child2] ?? NO_INDEX,
-      sourceByteOffset: surface.nodeWords[source + NodeWord.StartByte] ?? 0,
-      sourceEndByte: surface.nodeWords[source + NodeWord.EndByte] ?? 0,
-      evaluationMode:
-        surfaceTag === ExpressionTag.StrictLet || surfaceTag === ExpressionTag.StrictApply
-          ? EvaluationMode.StrictEager
-          : EvaluationMode.LazyCallByNeed,
-    });
-  }));
+  const nodes = measureCompilerStage(
+    trace,
+    "semantic.lower-core",
+    { nodes: surface.nodeCount },
+    () =>
+      Object.freeze(Array.from({ length: surface.nodeCount }, (_, nodeIndex) => {
+        const source = nodeIndex * NODE_WORD_LENGTH;
+        const lowering = (surface.symbolNames.length + 1 + nodeIndex) * SYMBOL_LOOKUP_WORD_LENGTH;
+        const surfaceTag = surface.nodeWords[source + NodeWord.Tag];
+        const tag = symbolLookup[lowering + SymbolLookupWord.Definition];
+        const payload = symbolLookup[lowering + SymbolLookupWord.Type];
+        if (surfaceTag === undefined || tag === undefined || payload === undefined) {
+          throw new Error(`host semantic lowering omitted node ${nodeIndex}`);
+        }
+        return Object.freeze<CoreNode>({
+          tag: tag as CoreNode["tag"],
+          payload,
+          child0: surface.nodeWords[source + NodeWord.Child0] ?? NO_INDEX,
+          child1: surface.nodeWords[source + NodeWord.Child1] ?? NO_INDEX,
+          child2: surface.nodeWords[source + NodeWord.Child2] ?? NO_INDEX,
+          sourceByteOffset: surface.nodeWords[source + NodeWord.StartByte] ?? 0,
+          sourceEndByte: surface.nodeWords[source + NodeWord.EndByte] ?? 0,
+          evaluationMode:
+            surfaceTag === ExpressionTag.StrictLet || surfaceTag === ExpressionTag.StrictApply
+              ? EvaluationMode.StrictEager
+              : EvaluationMode.LazyCallByNeed,
+        });
+      })),
+  );
   return {
     ok: true,
     module: new CompiledHostSemanticModule(

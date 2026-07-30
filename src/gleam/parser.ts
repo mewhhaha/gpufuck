@@ -1,5 +1,9 @@
 import { createParser, createParserAsync } from "@mewhhaha/baba/runtime/generated-wasm";
 import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
+import {
   babaChildRule,
   babaOptionalRuleField,
   babaOptionalTokenField,
@@ -39,13 +43,25 @@ let gleamParserInitialization: Promise<GleamParser> | undefined;
 export function parseGleamModule(
   name: string,
   source: string,
+  trace?: CompilerPerformanceTrace,
 ): GleamModule {
   if (name.length === 0) throw new Error("Gleam module name must be nonempty");
-  const byteOffsets = new BabaUtf8ByteOffsets(source);
-  const parsed = getGleamParser().parse(normalizeGleamParserSource(source), {
-    preserveTrivia: false,
-  });
+  const syntaxAnnotations = { module: name, sourceCharacters: source.length };
+  const parsed = trace === undefined
+    ? getGleamParser().parse(normalizeGleamParserSource(source), {
+      preserveTrivia: false,
+    })
+    : measureCompilerStage(
+      trace,
+      "frontend.parse.syntax",
+      syntaxAnnotations,
+      () =>
+        getGleamParser().parse(normalizeGleamParserSource(source), {
+          preserveTrivia: false,
+        }),
+    );
   if (!parsed.ok) {
+    const byteOffsets = new BabaUtf8ByteOffsets(source);
     const diagnostic = parsed.diagnostics[0];
     if (diagnostic === undefined) {
       throw new Error(
@@ -57,15 +73,38 @@ export function parseGleamModule(
       `Gleam module ${JSON.stringify(name)}: ${diagnostic.code}: ${diagnostic.message}`,
     );
   }
-  const declarations = babaRuleFieldArray(parsed.cursor, "declarations");
+  const materializeAnnotations = { module: name, declarations: 0 };
+  if (trace === undefined) {
+    return materializeGleamModule(name, source, parsed.cursor);
+  }
+  return measureCompilerStage(
+    trace,
+    "frontend.parse.materialize",
+    materializeAnnotations,
+    () => {
+      const module = materializeGleamModule(name, source, parsed.cursor);
+      materializeAnnotations.declarations = module.declarations.length;
+      return module;
+    },
+  );
+}
+
+function materializeGleamModule(
+  name: string,
+  source: string,
+  cursor: BabaRuleCursor,
+): GleamModule {
+  const byteOffsets = new BabaUtf8ByteOffsets(source);
+  const declarations = babaRuleFieldArray(cursor, "declarations");
   const imports: GleamImport[] = [];
   const values: GleamDeclaration[] = [];
   for (const declaration of declarations) {
     const child = babaChildRule(declaration);
     const topLevel = child.name === "top_level_declaration" ? babaChildRule(child) : child;
     if (declarationTarget(source, topLevel.span.start) === "erlang") continue;
-    if (topLevel.name === "import_declaration") imports.push(parseImport(topLevel, byteOffsets));
-    else values.push(parseDeclaration(topLevel, byteOffsets));
+    if (topLevel.name === "import_declaration") {
+      imports.push(parseImport(topLevel, byteOffsets));
+    } else values.push(parseDeclaration(topLevel, byteOffsets));
   }
   return {
     name,

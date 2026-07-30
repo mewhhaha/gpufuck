@@ -63,6 +63,44 @@ deno task test
 git diff --check
 ```
 
+## Compiler performance traces
+
+`CompilerPerformanceTrace` records the production compiler path rather than a second profiling
+implementation. Pass one trace through the frontend, semantic compiler, and Wasm emitter:
+
+```ts
+const trace = new CompilerPerformanceTrace();
+const frontend = lowerGleamSources(sources, entry, { trace });
+if (!frontend.ok) throw new Error(frontend.diagnostics[0].message);
+const compilation = await new CpuCompiler().compileModule(frontend.lowered.module, { trace });
+if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+await compileModuleToWasm(compilation.module, { trace });
+
+await Deno.writeTextFile(
+  "/tmp/compiler-trace.json",
+  renderCompilerPerformanceTrace(trace.snapshot()),
+);
+```
+
+The JSON opens directly in Perfetto or Chrome's trace viewer. Events carry work counts alongside
+time: source bytes, Core nodes, inference components and type variables, storage decisions,
+reachable definitions, direct-only globals, emitted functions, instruction bytes, and artifact
+bytes. `frontend.parse.syntax` separates generated-parser time from `frontend.parse.materialize`;
+`semantic.effects.lambda-sets`, `.graph`, `.propagate`, and `.materialize` split effect analysis.
+Wasm Core lowering reports each class of structural node it adds. A failed phase is recorded with
+`failed: true` before its error is rethrown.
+
+Supplying a Wasm trace bypasses the artifact caches so `wasm.plan`, `wasm.emit`, and `wasm.encode`
+measure actual cold work. Do not compare a traced cold emission to an untraced cache hit. Trace
+overhead is also included in wall time; use repeated medians for comparisons and use the timeline
+for attribution.
+
+The standard-library comparison reports nine-run stage medians and optimization ceilings:
+
+```sh
+deno task bench:gleam-stdlib <checkout> --trace=/tmp/compiler-trace.json
+```
+
 The pinned upstream compatibility checks are separate because they fetch or invoke external
 repositories:
 

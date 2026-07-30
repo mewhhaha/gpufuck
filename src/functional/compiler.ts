@@ -1,4 +1,5 @@
 import type { SemanticDiagnostic } from "../semantic/abi.ts";
+import { measureCompilerStage, measureCompilerStageAsync } from "../compiler_performance_trace.ts";
 import {
   CompiledGpuSemanticModule,
   type GpuSemanticModule,
@@ -93,7 +94,19 @@ export class CpuCompiler {
     validateCompilationOptions(options);
     options.signal?.throwIfAborted();
     return await Promise.all(modules.map(async (module) => {
-      validateEncodedModule(module);
+      measureCompilerStage(
+        options.trace,
+        "semantic.validate-envelope",
+        {
+          backend: "cpu",
+          sourceBytes: module.sourceByteLength,
+          nodes: module.nodeCount,
+          definitions: module.definitionCount,
+          types: module.typeCount,
+          constructors: module.constructorCount,
+        },
+        () => validateEncodedModule(module),
+      );
       options.signal?.throwIfAborted();
       if (module.sourceByteLength > MAXIMUM_SOURCE_BYTE_LENGTH) {
         return failedLimit(
@@ -102,7 +115,11 @@ export class CpuCompiler {
           module.sourceByteLength,
         );
       }
-      const compilation = compileSemanticOnHost(module, module.sourceByteLength);
+      const compilation = compileSemanticOnHost(
+        module,
+        module.sourceByteLength,
+        options.trace,
+      );
       if (!compilation.ok) {
         return {
           ok: false,
@@ -114,7 +131,12 @@ export class CpuCompiler {
       }
       return {
         ok: true,
-        module: await publicModule(compilation.module, module),
+        module: await measureCompilerStageAsync(
+          options.trace,
+          "semantic.publish",
+          { definitions: module.definitionCount },
+          () => publicModule(compilation.module, module, options.trace),
+        ),
       };
     }));
   }
@@ -220,7 +242,19 @@ export class GpuCompiler {
     const accepted: { readonly resultIndex: number; readonly module: EncodedModule }[] = [];
     let estimatedTransientByteLength = 0;
     for (const [resultIndex, module] of modules.entries()) {
-      validateEncodedModule(module);
+      measureCompilerStage(
+        options.trace,
+        "semantic.validate-envelope",
+        {
+          backend: "gpu",
+          sourceBytes: module.sourceByteLength,
+          nodes: module.nodeCount,
+          definitions: module.definitionCount,
+          types: module.typeCount,
+          constructors: module.constructorCount,
+        },
+        () => validateEncodedModule(module),
+      );
       if (module.sourceByteLength > MAXIMUM_SOURCE_BYTE_LENGTH) {
         results[resultIndex] = failedLimit(
           `module spans ${module.sourceByteLength} UTF-8 source bytes; this compiler accepts at most ${MAXIMUM_SOURCE_BYTE_LENGTH}`,
@@ -261,20 +295,32 @@ export class GpuCompiler {
     }
     if (accepted.length === 0) return completedBatchResults(results);
 
-    const compiled = await this.#compilationAdmission.admit(
-      async () => {
-        options.signal?.throwIfAborted();
-        return await this.#semanticCompiler.compileBatch(
-          accepted.map(({ module }) => ({
-            surface: module,
-            sourceByteLength: module.sourceByteLength,
-            ...limits,
-          })),
-          options.signal,
-        );
+    const compiled = await measureCompilerStageAsync(
+      options.trace,
+      "semantic.gpu.admit-and-dispatch",
+      {
+        modules: accepted.length,
+        transientBytes: estimatedTransientByteLength,
+        nodes: options.trace === undefined
+          ? 0
+          : accepted.reduce((total, entry) => total + entry.module.nodeCount, 0),
       },
-      estimatedTransientByteLength,
-      options.signal,
+      () =>
+        this.#compilationAdmission.admit(
+          async () => {
+            options.signal?.throwIfAborted();
+            return await this.#semanticCompiler.compileBatch(
+              accepted.map(({ module }) => ({
+                surface: module,
+                sourceByteLength: module.sourceByteLength,
+                ...limits,
+              })),
+              options.signal,
+            );
+          },
+          estimatedTransientByteLength,
+          options.signal,
+        ),
     );
     try {
       options.signal?.throwIfAborted();
@@ -295,7 +341,15 @@ export class GpuCompiler {
           throw new Error(`functional batch compiler omitted accepted module ${acceptedIndex}`);
         }
         results[entry.resultIndex] = result.ok
-          ? { ok: true, module: await publicModule(result.module, entry.module) }
+          ? {
+            ok: true,
+            module: await measureCompilerStageAsync(
+              options.trace,
+              "semantic.publish",
+              { backend: "gpu", definitions: entry.module.definitionCount },
+              () => publicModule(result.module, entry.module, options.trace),
+            ),
+          }
           : {
             ok: false,
             diagnostics: result.diagnostics.map(functionalDiagnostic) as [
@@ -444,14 +498,17 @@ function completedBatchResults(
 async function publicModule(
   module: GpuSemanticModule,
   encodedModule: EncodedModule,
+  trace?: CompilationOptions["trace"],
 ): Promise<GpuModule>;
 async function publicModule(
   module: SemanticModule,
   encodedModule: EncodedModule,
+  trace?: CompilationOptions["trace"],
 ): Promise<CompiledModule>;
 async function publicModule(
   module: SemanticModule,
   encodedModule: EncodedModule,
+  trace?: CompilationOptions["trace"],
 ): Promise<CompiledModule> {
   const definitionRoots = Array.from(
     { length: encodedModule.definitionCount },
@@ -528,7 +585,18 @@ async function publicModule(
     readCoreNodes: async () => await module.readCoreNodes(),
     destroy: () => module.destroy(),
   };
-  const effects = analyzeModuleEffects(functional, await module.readCoreNodes());
+  const coreNodes = await measureCompilerStageAsync(
+    trace,
+    "semantic.read-core",
+    { nodes: module.nodeCount },
+    () => module.readCoreNodes(),
+  );
+  const effects = measureCompilerStage(
+    trace,
+    "semantic.effects",
+    { nodes: module.nodeCount, definitions: module.definitionCount },
+    () => analyzeModuleEffects(functional, coreNodes, trace),
+  );
   const completed = {
     ...functional,
     entryEffects: effects.entryEffects,

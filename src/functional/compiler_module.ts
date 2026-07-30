@@ -1,4 +1,5 @@
 import type { Diagnostic, EvaluationProfile, SourceRange, Type, TypeDeclaration } from "./abi.ts";
+import type { CompilerPerformanceTrace } from "../compiler_performance_trace.ts";
 import type { EffectSet } from "./effect_set.ts";
 import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
 
@@ -75,6 +76,7 @@ export interface CompilationOptions {
   readonly maximumSteps?: number;
   readonly maximumStepsPerDispatch?: number;
   readonly signal?: AbortSignal;
+  readonly trace?: CompilerPerformanceTrace;
 }
 
 export type CompileResult =
