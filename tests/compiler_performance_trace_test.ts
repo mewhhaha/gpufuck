@@ -287,7 +287,7 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
       compilation.module,
       trace === undefined ? {} : { trace },
     );
-    return { module: compilation.module, wasm };
+    return { surface: lowered.lowered.module, module: compilation.module, wasm };
   };
 
   const first = await compile(63);
@@ -306,6 +306,10 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     changedTrace.snapshot().some((event) => event.stage === "semantic.inference.solve"),
     false,
   );
+  const loweredUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.lower.literal-update"
+  );
+  equal(loweredUpdate?.annotations.changedLiterals, 1);
   const linkedUpdate = changedTrace.snapshot().find((event) =>
     event.stage === "frontend.link.literal-update"
   );
@@ -331,6 +335,12 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     false,
   );
   notDeepStrictEqual(second.wasm, first.wasm);
+  const fullyLowered = lowerGleamSources(
+    [{ name: "main", source: "pub fn main() -> Int { 64 }\n" }],
+    entry,
+  );
+  if (!fullyLowered.ok) throw new Error(fullyLowered.diagnostics[0].message);
+  deepStrictEqual(second.surface, fullyLowered.lowered.module);
   const fullArtifact = compileWasmArtifact(
     second.module,
     await second.module.readCoreNodes(),
@@ -393,6 +403,10 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
   const linkedUpdate = trace.snapshot().find((event) =>
     event.stage === "frontend.link.literal-update"
   );
+  const loweredUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.lower.literal-update"
+  );
+  equal(loweredUpdate?.annotations.changedLiterals, 0);
   equal(linkedUpdate?.annotations.changedNodes, 0);
   ok(trace.snapshot().some((event) => event.stage === "frontend.link"));
   ok(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"));
@@ -401,4 +415,36 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
   secondCompilation.module.destroy();
   frontend.clear();
   await compiler.destroy();
+});
+
+Deno.test("incremental integer patterns match fresh lowering", () => {
+  const frontend = new GleamFrontendService();
+  const entry = { module: "main", exportName: "main" };
+  const source = (subject: number, pattern: number) => `
+pub fn main() -> Int {
+  case ${subject} {
+    ${pattern} -> 10
+    _ -> 20
+  }
+}
+`;
+  const first = frontend.lower([{ name: "main", source: source(2, 1) }], entry);
+  if (!first.ok) throw new Error(first.diagnostics[0].message);
+  const trace = new CompilerPerformanceTrace();
+  const updated = frontend.lower(
+    [{ name: "main", source: source(3, 3) }],
+    entry,
+    { trace },
+  );
+  if (!updated.ok) throw new Error(updated.diagnostics[0].message);
+  const fresh = lowerGleamSources([{ name: "main", source: source(3, 3) }], entry);
+  if (!fresh.ok) throw new Error(fresh.diagnostics[0].message);
+
+  deepStrictEqual(updated.lowered.module, fresh.lowered.module);
+  const loweredUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.lower.literal-update"
+  );
+  equal(loweredUpdate?.annotations.changedLiterals, 2);
+
+  frontend.clear();
 });

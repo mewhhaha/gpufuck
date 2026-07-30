@@ -16,6 +16,7 @@ import {
 import { type GleamDiagnostic, GleamSyntaxError } from "./diagnostic.ts";
 import type { GleamFrontendResult, GleamSourceModule } from "./frontend.ts";
 import { linkLoweredGleamModules, lowerGleamSources, lowerParsedGleamModules } from "./frontend.ts";
+import { tryUpdateLoweredSignedIntegerLiterals } from "./incremental_lowering.ts";
 import {
   type GleamExportSignature,
   type LoweredGleamModule,
@@ -234,26 +235,45 @@ export class GleamFrontendService {
         ) {
           return cachedLowering.lowered;
         }
+        const literalUpdateAnnotations = { changedLiterals: 0 };
+        const literalUpdate = cachedLowering?.signatures === signatureKey
+          ? measureCompilerStage(
+            options.trace,
+            "frontend.lower.literal-update",
+            literalUpdateAnnotations,
+            () =>
+              tryUpdateLoweredSignedIntegerLiterals(
+                cachedLowering.lowered,
+                module,
+              ),
+            (updated) => {
+              literalUpdateAnnotations.changedLiterals = updated?.changedLiterals ?? 0;
+            },
+          )
+          : undefined;
         const semantics = structuralFingerprint({
           imports: module.imports,
           declarations: module.declarations,
         });
-        const locations = structuralFingerprint({
-          imports: module.imports,
-          declarations: module.declarations,
-        }, { includeSourceLocations: true });
-        const lowered = cachedLowering?.signatures === signatureKey &&
-            cachedLowering.semantics === semantics &&
-            cachedLowering.locations === locations
-          ? {
-            ...cachedLowering.lowered,
-            source: module,
-            artifact: createOwnedModuleArtifact({
-              ...cachedLowering.lowered.artifact,
-              sourceByteLength: module.span.endByte,
-            }),
-          }
-          : lowerGleamModule(module, signatures);
+        const locations = literalUpdate === undefined || cachedLowering === undefined
+          ? structuralFingerprint({
+            imports: module.imports,
+            declarations: module.declarations,
+          }, { includeSourceLocations: true })
+          : cachedLowering.locations;
+        const lowered = literalUpdate?.lowered ??
+          (cachedLowering?.signatures === signatureKey &&
+              cachedLowering.semantics === semantics &&
+              cachedLowering.locations === locations
+            ? {
+              ...cachedLowering.lowered,
+              source: module,
+              artifact: createOwnedModuleArtifact({
+                ...cachedLowering.lowered.artifact,
+                sourceByteLength: module.span.endByte,
+              }),
+            }
+            : lowerGleamModule(module, signatures));
         this.#loweredModules.set(module.name, {
           source,
           signatures: signatureKey,
