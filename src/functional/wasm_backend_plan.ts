@@ -185,6 +185,59 @@ export function createWasmBackendPlan(
   });
 }
 
+export function updateWasmBackendPlanSignedLiterals(
+  reference: WasmBackendPlan,
+  module: CompiledModule,
+  nodes: readonly CoreNode[],
+  changedNodes: readonly number[],
+  trace?: CompilerPerformanceTrace,
+): WasmBackendPlan {
+  const annotations = {
+    nodes: reference.nodes.length,
+    changedNodes: changedNodes.length,
+  };
+  return measureCompilerStage(
+    trace,
+    "wasm.plan.literal-update",
+    annotations,
+    () => {
+      if (nodes.length > reference.nodes.length) {
+        throw new Error(
+          `incremental WebAssembly plan has ${reference.nodes.length} lowered nodes for ${nodes.length} Core nodes`,
+        );
+      }
+      // Signed literals are leaves, and every cached analysis depends only on their tag and edges.
+      // Replacing their payloads therefore preserves indexing, captures, reachability, and reuse.
+      const loweredNodes = [...reference.nodes];
+      for (const nodeIndex of changedNodes) {
+        const previous = reference.nodes[nodeIndex];
+        const updated = nodes[nodeIndex];
+        if (
+          previous === undefined || updated === undefined ||
+          previous.tag !== CoreTag.SignedInteger64 ||
+          updated.tag !== CoreTag.SignedInteger64 ||
+          previous.child1 !== updated.child1 ||
+          previous.child2 !== updated.child2 ||
+          previous.sourceByteOffset !== updated.sourceByteOffset ||
+          previous.sourceEndByte !== updated.sourceEndByte ||
+          previous.evaluationMode !== updated.evaluationMode
+        ) {
+          throw new Error(
+            `incremental WebAssembly plan received a non-literal change at Core node ${nodeIndex}`,
+          );
+        }
+        loweredNodes[nodeIndex] = updated;
+      }
+      return Object.freeze({
+        ...reference,
+        module,
+        nodes: Object.freeze(loweredNodes),
+        trace,
+      });
+    },
+  );
+}
+
 function compactFixedVectorProgramIsProvable(
   module: CompiledModule,
   nodes: readonly CoreNode[],

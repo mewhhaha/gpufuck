@@ -13,6 +13,17 @@ import {
 import type { LiteralModuleUpdate } from "./incremental_module.ts";
 import { registerEquivalentResolvedCoreFingerprint } from "./semantic_fingerprint.ts";
 
+export interface CompiledLiteralUpdate {
+  readonly reference: CompiledModule;
+  readonly changedNodes: readonly number[];
+}
+
+const compiledLiteralUpdates = new WeakMap<CompiledModule, CompiledLiteralUpdate>();
+
+export function compiledLiteralUpdate(module: CompiledModule): CompiledLiteralUpdate | undefined {
+  return compiledLiteralUpdates.get(module);
+}
+
 export async function rebindCompiledModuleSource(
   compiled: CompiledModule,
   source: EncodedModule,
@@ -88,5 +99,9 @@ export async function applyCompiledLiteralUpdate(
     destroy: () => {},
   });
   registerCompleteTypeDeclarations(updated, completeTypeDeclarations(compiled));
+  compiledLiteralUpdates.set(updated, {
+    reference: compiled,
+    changedNodes: update.changedNodes,
+  });
   return updated;
 }

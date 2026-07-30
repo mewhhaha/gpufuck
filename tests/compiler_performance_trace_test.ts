@@ -9,6 +9,7 @@ import {
   runWasmModule,
   summarizeCompilerPerformance,
 } from "../functional.ts";
+import { compileWasmArtifact } from "../src/functional/wasm_codegen.ts";
 import { GleamFrontendService, lowerGleamSources } from "../gleam.ts";
 
 Deno.test("compiler performance trace records nested stages and work annotations", () => {
@@ -289,11 +290,11 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     return { module: compilation.module, wasm };
   };
 
-  const first = await compile(41);
+  const first = await compile(63);
   const changedTrace = new CompilerPerformanceTrace();
-  const second = await compile(42, changedTrace);
+  const second = await compile(64, changedTrace);
   const trace = new CompilerPerformanceTrace();
-  const recovered = await compile(41, trace);
+  const recovered = await compile(63, trace);
 
   const changedSemanticCache = changedTrace.snapshot().find((event) =>
     event.stage === "semantic.service-cache"
@@ -307,10 +308,27 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     event.stage === "frontend.link.literal-update"
   );
   equal(linkedUpdate?.annotations.changedNodes, 1);
+  const incrementalArtifact = changedTrace.snapshot().find((event) =>
+    event.stage === "wasm.artifact.resolved-core"
+  );
+  equal(incrementalArtifact?.annotations.incremental, true);
+  equal(
+    changedTrace.snapshot().some((event) => event.stage === "wasm.plan.index-core"),
+    false,
+  );
+  const wasmPlanUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "wasm.plan.literal-update"
+  );
+  equal(wasmPlanUpdate?.annotations.changedNodes, 1);
   notDeepStrictEqual(second.wasm, first.wasm);
+  const fullArtifact = compileWasmArtifact(
+    second.module,
+    await second.module.readCoreNodes(),
+  );
+  deepStrictEqual(second.wasm, fullArtifact.bytes);
   const execution = await runWasmModule(second.module);
   equal(execution.value.kind, "signed-integer-64");
-  equal(execution.value.kind === "signed-integer-64" ? execution.value.value : undefined, 42n);
+  equal(execution.value.kind === "signed-integer-64" ? execution.value.value : undefined, 64n);
 
   const semanticCache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
   equal(semanticCache?.annotations.cacheHit, true);

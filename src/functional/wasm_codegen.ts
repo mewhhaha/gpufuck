@@ -90,7 +90,11 @@ import {
   F32x4Definition,
   MASK32X4_CONSTRUCTOR_NAME,
 } from "./fixed_vector_contract.ts";
-import { createWasmBackendPlan, type WasmBackendPlan } from "./wasm_backend_plan.ts";
+import {
+  createWasmBackendPlan,
+  updateWasmBackendPlanSignedLiterals,
+  type WasmBackendPlan,
+} from "./wasm_backend_plan.ts";
 import {
   f32x4ExtractedLane,
   f32x4ReplacementLane,
@@ -242,6 +246,8 @@ export interface WasmArtifact {
   readonly automaticArenaReset: boolean;
 }
 
+const backendPlansByArtifact = new WeakMap<WasmArtifact, WasmBackendPlan>();
+
 function wasmEncodingAnnotations(
   functions: readonly WasmFunctionBody[],
   imports: number,
@@ -285,6 +291,52 @@ export function compileWasmArtifact(
     definitions: module.definitionCount,
     constructors: module.constructorCount,
   });
+  return emitWasmArtifact(plan, trace);
+}
+
+export function compileWasmArtifactWithSignedLiteralUpdate(
+  module: CompiledModule,
+  nodes: readonly CoreNode[],
+  referenceArtifact: WasmArtifact,
+  changedNodes: readonly number[],
+  trace?: CompilerPerformanceTrace,
+): WasmArtifact {
+  const referencePlan = backendPlansByArtifact.get(referenceArtifact);
+  if (referencePlan === undefined) {
+    return compileWasmArtifact(module, nodes, false, {}, trace);
+  }
+  const planSpan = trace?.start("wasm.plan");
+  let plan: WasmBackendPlan;
+  try {
+    plan = updateWasmBackendPlanSignedLiterals(
+      referencePlan,
+      module,
+      nodes,
+      changedNodes,
+      trace,
+    );
+  } catch (error) {
+    planSpan?.finish({
+      failed: true,
+      nodes: nodes.length,
+      definitions: module.definitionCount,
+      constructors: module.constructorCount,
+    });
+    throw error;
+  }
+  planSpan?.finish({
+    nodes: nodes.length,
+    definitions: module.definitionCount,
+    constructors: module.constructorCount,
+    incremental: true,
+  });
+  return emitWasmArtifact(plan, trace);
+}
+
+function emitWasmArtifact(
+  plan: WasmBackendPlan,
+  trace?: CompilerPerformanceTrace,
+): WasmArtifact {
   const emitSpan = trace?.start("wasm.emit");
   try {
     if (plan.compactScalarEligible) {
@@ -302,6 +354,7 @@ export function compileWasmArtifact(
         bytes: artifact.bytes.byteLength,
         specializedCallSites: artifact.specializedCallSites,
       });
+      backendPlansByArtifact.set(artifact, plan);
       return artifact;
     }
 
@@ -315,6 +368,7 @@ export function compileWasmArtifact(
       bytes: artifact.bytes.byteLength,
       specializedCallSites: artifact.specializedCallSites,
     });
+    backendPlansByArtifact.set(artifact, plan);
     return artifact;
   } catch (error) {
     emitSpan?.finish({ failed: true, nodes: plan.nodes.length });
