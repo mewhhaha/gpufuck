@@ -310,6 +310,10 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     event.stage === "frontend.lower.literal-update"
   );
   equal(loweredUpdate?.annotations.changedLiterals, 1);
+  const semanticFingerprint = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.lower.semantic-fingerprint"
+  );
+  equal(semanticFingerprint?.annotations.incremental, true);
   const linkedUpdate = changedTrace.snapshot().find((event) =>
     event.stage === "frontend.link.literal-update"
   );
@@ -407,6 +411,10 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
     event.stage === "frontend.lower.literal-update"
   );
   equal(loweredUpdate?.annotations.changedLiterals, 0);
+  const semanticFingerprint = trace.snapshot().find((event) =>
+    event.stage === "frontend.lower.semantic-fingerprint"
+  );
+  equal(semanticFingerprint?.annotations.incremental, false);
   equal(linkedUpdate?.annotations.changedNodes, 0);
   ok(trace.snapshot().some((event) => event.stage === "frontend.link"));
   ok(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"));

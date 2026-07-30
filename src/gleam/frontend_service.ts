@@ -16,7 +16,10 @@ import {
 import { type GleamDiagnostic, GleamSyntaxError } from "./diagnostic.ts";
 import type { GleamFrontendResult, GleamSourceModule } from "./frontend.ts";
 import { linkLoweredGleamModules, lowerGleamSources, lowerParsedGleamModules } from "./frontend.ts";
-import { tryUpdateLoweredSignedIntegerLiterals } from "./incremental_lowering.ts";
+import {
+  type SignedIntegerChange,
+  tryUpdateLoweredSignedIntegerLiterals,
+} from "./incremental_lowering.ts";
 import {
   type GleamExportSignature,
   type LoweredGleamModule,
@@ -29,6 +32,13 @@ interface CachedGleamProject {
   readonly entryModule: string;
   readonly entryExport: string;
   readonly result: GleamFrontendResult;
+}
+
+interface LiteralSemanticLineage {
+  // Keeping the base key lets a reverted edit recover the exact original compiler cache entry.
+  readonly baseSemantics: string;
+  readonly baseValues: ReadonlyMap<string, bigint>;
+  readonly currentValues: ReadonlyMap<string, bigint>;
 }
 
 export interface GleamFrontendServiceLowerOptions {
@@ -49,6 +59,7 @@ export class GleamFrontendService {
       readonly semantics: string;
       readonly locations: string;
       readonly lowered: LoweredGleamModule;
+      readonly literalLineage?: LiteralSemanticLineage;
     }
   >();
   #cachedProject: CachedGleamProject | undefined;
@@ -251,10 +262,29 @@ export class GleamFrontendService {
             },
           )
           : undefined;
-        const semantics = structuralFingerprint({
-          imports: module.imports,
-          declarations: module.declarations,
-        });
+        const literalLineage = literalUpdate === undefined || cachedLowering === undefined
+          ? undefined
+          : updateLiteralSemanticLineage(
+            cachedLowering.literalLineage,
+            cachedLowering.semantics,
+            literalUpdate.literalChanges,
+          );
+        const fingerprintAnnotations = {
+          incremental: literalLineage !== undefined,
+          changedLiterals: literalUpdate?.changedLiterals ?? 0,
+        };
+        const semantics = measureCompilerStage(
+          options.trace,
+          "frontend.lower.semantic-fingerprint",
+          fingerprintAnnotations,
+          () =>
+            literalLineage === undefined
+              ? structuralFingerprint({
+                imports: module.imports,
+                declarations: module.declarations,
+              })
+              : literalSemanticFingerprint(literalLineage),
+        );
         const locations = literalUpdate === undefined || cachedLowering === undefined
           ? structuralFingerprint({
             imports: module.imports,
@@ -280,6 +310,7 @@ export class GleamFrontendService {
           semantics,
           locations,
           lowered,
+          ...(literalLineage === undefined ? {} : { literalLineage }),
         });
         return lowered;
       },
@@ -372,6 +403,39 @@ export class GleamFrontendService {
     this.#loweredModules.clear();
     this.#cachedProject = undefined;
   }
+}
+
+function updateLiteralSemanticLineage(
+  previous: LiteralSemanticLineage | undefined,
+  previousSemantics: string,
+  changes: readonly SignedIntegerChange[],
+): LiteralSemanticLineage {
+  const baseSemantics = previous?.baseSemantics ?? previousSemantics;
+  const baseValues = new Map(previous?.baseValues ?? []);
+  const currentValues = new Map(previous?.currentValues ?? []);
+  for (const change of changes) {
+    const key = `${change.startByte}:${change.endByte}`;
+    const baseValue = baseValues.get(key);
+    const currentValue = currentValues.get(key) ?? baseValue ?? change.previousValue;
+    if (currentValue !== change.previousValue) {
+      throw new Error(
+        `Gleam literal fingerprint expected ${currentValue} at bytes ${key}; received ${change.previousValue}`,
+      );
+    }
+    if (baseValue === undefined) baseValues.set(key, change.previousValue);
+    currentValues.set(key, change.updatedValue);
+  }
+  return { baseSemantics, baseValues, currentValues };
+}
+
+function literalSemanticFingerprint(lineage: LiteralSemanticLineage): string {
+  const deviations = [...lineage.currentValues]
+    .filter(([key, value]) => value !== lineage.baseValues.get(key))
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([key, value]) => `${key}:${value}`);
+  return deviations.length === 0
+    ? lineage.baseSemantics
+    : `gleam-literal-v1:${lineage.baseSemantics}:${structuralFingerprint(deviations)}`;
 }
 
 function sourcesDifferOnlyInTrailingTrivia(previous: string, current: string): boolean {

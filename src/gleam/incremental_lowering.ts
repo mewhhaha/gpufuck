@@ -5,9 +5,10 @@ import type { LoweredGleamModule } from "./lowering.ts";
 export interface IncrementalGleamLowering {
   readonly lowered: LoweredGleamModule;
   readonly changedLiterals: number;
+  readonly literalChanges: readonly SignedIntegerChange[];
 }
 
-interface SignedIntegerChange {
+export interface SignedIntegerChange {
   readonly startByte: number;
   readonly endByte: number;
   readonly previousValue: bigint;
@@ -38,6 +39,7 @@ export function tryUpdateLoweredSignedIntegerLiterals(
       artifact: ownedArtifact,
     },
     changedLiterals: changes.length,
+    literalChanges: Object.freeze(changes),
   };
 }
 
