@@ -273,7 +273,7 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
   const entry = { module: "main", exportName: "main" };
   const compile = async (value: number, trace?: CompilerPerformanceTrace) => {
     const lowered = frontend.lower(
-      [{ name: "main", source: `pub fn main() -> Int { ${value} }\n` }],
+      [{ name: "main", source: `pub fn main() -> Int { "λ" ${value} }\n` }],
       entry,
       trace === undefined ? {} : { trace },
     );
@@ -310,6 +310,10 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     event.stage === "frontend.lower.literal-update"
   );
   equal(loweredUpdate?.annotations.changedLiterals, 1);
+  const parsedUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.parse.materialize"
+  );
+  equal(parsedUpdate?.annotations.cacheHit, true);
   const semanticFingerprint = changedTrace.snapshot().find((event) =>
     event.stage === "frontend.lower.semantic-fingerprint"
   );
@@ -340,7 +344,7 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
   );
   notDeepStrictEqual(second.wasm, first.wasm);
   const fullyLowered = lowerGleamSources(
-    [{ name: "main", source: "pub fn main() -> Int { 64 }\n" }],
+    [{ name: "main", source: 'pub fn main() -> Int { "λ" 64 }\n' }],
     entry,
   );
   if (!fullyLowered.ok) throw new Error(fullyLowered.diagnostics[0].message);
@@ -411,6 +415,10 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
     event.stage === "frontend.lower.literal-update"
   );
   equal(loweredUpdate?.annotations.changedLiterals, 0);
+  const parsedUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.parse.materialize"
+  );
+  equal(parsedUpdate?.annotations.cacheHit, false);
   const semanticFingerprint = trace.snapshot().find((event) =>
     event.stage === "frontend.lower.semantic-fingerprint"
   );

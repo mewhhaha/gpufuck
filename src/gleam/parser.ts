@@ -74,6 +74,8 @@ export class IncrementalGleamModuleParser {
   readonly #document: IncrementalParseDocument;
   #normalizedSource: string;
   #source: string;
+  #parsedModule: GleamModule | undefined;
+  #parsedSource: string | undefined;
   #disposed = false;
 
   constructor(name: string, source: string) {
@@ -136,7 +138,33 @@ export class IncrementalGleamModuleParser {
       syntaxAnnotations,
       () => this.#document.parse(),
     );
-    return materializeGleamParse(this.#name, this.#source, parsed, trace);
+    if (parsed.ok && this.#parsedModule !== undefined && this.#parsedSource !== undefined) {
+      const updatedModule = tryUpdateParsedIntegerLiteral(
+        this.#parsedModule,
+        this.#parsedSource,
+        this.#source,
+      );
+      if (updatedModule !== undefined) {
+        const materializeAnnotations = {
+          module: this.#name,
+          declarations: updatedModule.declarations.length,
+          cacheHit: true,
+        };
+        const module = measureCompilerStage(
+          trace,
+          "frontend.parse.materialize",
+          materializeAnnotations,
+          () => updatedModule,
+        );
+        this.#parsedModule = module;
+        this.#parsedSource = this.#source;
+        return module;
+      }
+    }
+    const module = materializeGleamParse(this.#name, this.#source, parsed, trace);
+    this.#parsedModule = module;
+    this.#parsedSource = this.#source;
+    return module;
   }
 
   dispose(): void {
@@ -182,7 +210,7 @@ function materializeGleamParse(
       `Gleam module ${JSON.stringify(name)}: ${diagnostic.code}: ${diagnostic.message}`,
     );
   }
-  const materializeAnnotations = { module: name, declarations: 0 };
+  const materializeAnnotations = { module: name, declarations: 0, cacheHit: false };
   if (trace === undefined) {
     return materializeGleamModule(name, source, parsed.cursor);
   }
@@ -220,6 +248,111 @@ function replacementEdit(previous: string, current: string): TextEdit | undefine
     oldEnd: previousEnd,
     newText: current.slice(start, currentEnd),
   };
+}
+
+function tryUpdateParsedIntegerLiteral(
+  previousModule: GleamModule,
+  previousSource: string,
+  updatedSource: string,
+): GleamModule | undefined {
+  if (previousSource.length !== updatedSource.length) return undefined;
+  const edit = replacementEdit(previousSource, updatedSource);
+  if (edit === undefined) return previousModule;
+  const previousOffsets = new BabaUtf8ByteOffsets(previousSource);
+  const updatedOffsets = new BabaUtf8ByteOffsets(updatedSource);
+  if (previousOffsets.byteLength !== updatedOffsets.byteLength) return undefined;
+  const previousEdit = previousOffsets.span({ start: edit.start, end: edit.oldEnd });
+  const updatedEdit = updatedOffsets.span({
+    start: edit.start,
+    end: edit.start + edit.newText.length,
+  });
+  if (
+    previousEdit.startByte !== updatedEdit.startByte ||
+    previousEdit.endByte !== updatedEdit.endByte
+  ) return undefined;
+
+  let updatedLiterals = 0;
+  const update = (value: unknown): unknown => {
+    if (isParsedInteger(value)) {
+      if (
+        previousEdit.startByte < value.span.startByte ||
+        previousEdit.endByte > value.span.endByte
+      ) return value;
+      let expressionStart: number | undefined;
+      let expressionEnd: number | undefined;
+      let byteOffset = 0;
+      for (let index = 0; index <= previousSource.length; index++) {
+        if (byteOffset === value.span.startByte) expressionStart = index;
+        if (byteOffset === value.span.endByte) {
+          expressionEnd = index;
+          break;
+        }
+        const codePoint = previousSource.codePointAt(index);
+        if (codePoint === undefined) break;
+        byteOffset += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+        if (codePoint > 0xffff) index += 1;
+      }
+      if (expressionStart === undefined || expressionEnd === undefined) return value;
+      const expression = previousSource.slice(expressionStart, expressionEnd);
+      let updatedValue: number | undefined;
+      for (const match of expression.matchAll(/-?[0-9][0-9_]*/g)) {
+        if (match.index === undefined) continue;
+        const tokenStart = expressionStart + match.index;
+        const tokenEnd = tokenStart + match[0].length;
+        const tokenSpan = previousOffsets.span({ start: tokenStart, end: tokenEnd });
+        if (
+          tokenSpan.startByte > previousEdit.startByte ||
+          tokenSpan.endByte < previousEdit.endByte ||
+          parseIntegerToken(match[0]) !== value.value
+        ) continue;
+        const updatedToken = updatedSource.slice(tokenStart, tokenEnd);
+        if (!/^-?[0-9][0-9_]*$/.test(updatedToken)) return value;
+        if (updatedValue !== undefined) return value;
+        updatedValue = parseIntegerToken(updatedToken);
+      }
+      if (updatedValue === undefined) return value;
+      updatedLiterals += 1;
+      return { ...value, value: updatedValue };
+    }
+    if (Array.isArray(value)) {
+      let changed = false;
+      const members = value.map((member) => {
+        const updated = update(member);
+        if (updated !== member) changed = true;
+        return updated;
+      });
+      return changed ? members : value;
+    }
+    if (value === null || typeof value !== "object") return value;
+    const record = value as Readonly<Record<string, unknown>>;
+    let changed = false;
+    const updated: Record<string, unknown> = {};
+    for (const [key, member] of Object.entries(record)) {
+      const updatedMember = update(member);
+      if (updatedMember !== member) changed = true;
+      updated[key] = updatedMember;
+    }
+    return changed ? updated : value;
+  };
+  const updatedModule = update(previousModule);
+  return updatedLiterals === 1 ? updatedModule as GleamModule : undefined;
+}
+
+function isParsedInteger(
+  value: unknown,
+): value is {
+  readonly kind: "integer";
+  readonly value: number;
+  readonly span: { readonly startByte: number; readonly endByte: number };
+} {
+  return value !== null && typeof value === "object" &&
+    (value as { readonly kind?: unknown }).kind === "integer" &&
+    typeof (value as { readonly value?: unknown }).value === "number" &&
+    (value as { readonly span?: unknown }).span !== null &&
+    typeof (value as { readonly span?: unknown }).span === "object" &&
+    typeof (value as { readonly span?: { readonly startByte?: unknown } }).span?.startByte ===
+      "number" &&
+    typeof (value as { readonly span?: { readonly endByte?: unknown } }).span?.endByte === "number";
 }
 
 function annotateIncrementalParse(
