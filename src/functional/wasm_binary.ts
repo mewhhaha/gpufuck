@@ -65,26 +65,78 @@ export class WasmInstructions {
     return index;
   }
 
-  emit(...bytes: number[]): void {
-    this.bytes.push(...bytes);
+  // Rest parameters allocate at every opcode site; fixed slots keep this hot path allocation-free.
+  emit(
+    first: number,
+    second?: number,
+    third?: number,
+    fourth?: number,
+    fifth?: number,
+    sixth?: number,
+    seventh?: number,
+    eighth?: number,
+    ninth?: number,
+  ): void {
+    this.bytes.push(first);
+    if (second === undefined) return;
+    this.bytes.push(second);
+    if (third === undefined) return;
+    this.bytes.push(third);
+    if (fourth === undefined) return;
+    this.bytes.push(fourth);
+    if (fifth === undefined) return;
+    this.bytes.push(fifth);
+    if (sixth === undefined) return;
+    this.bytes.push(sixth);
+    if (seventh === undefined) return;
+    this.bytes.push(seventh);
+    if (eighth === undefined) return;
+    this.bytes.push(eighth);
+    if (ninth !== undefined) this.bytes.push(ninth);
   }
 
   simd(opcode: number, ...immediateBytes: number[]): void {
     this.emit(0xfd);
     this.unsigned(opcode);
-    this.emit(...immediateBytes);
+    for (const byte of immediateBytes) this.bytes.push(byte);
   }
 
   unsigned(value: number): void {
-    this.bytes.push(...encodeUnsigned(value));
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`WebAssembly unsigned integer must be non-negative; received ${value}`);
+    }
+    do {
+      const byte = value & 0x7f;
+      value = Math.floor(value / 128);
+      this.bytes.push(value === 0 ? byte : byte | 0x80);
+    } while (value !== 0);
   }
 
   signed32(value: number): void {
-    this.bytes.push(...encodeSigned(BigInt(value | 0)));
+    value |= 0;
+    while (true) {
+      const byte = value & 0x7f;
+      value >>= 7;
+      const signBit = (byte & 0x40) !== 0;
+      if ((value === 0 && !signBit) || (value === -1 && signBit)) {
+        this.bytes.push(byte);
+        return;
+      }
+      this.bytes.push(byte | 0x80);
+    }
   }
 
   signed64(value: bigint): void {
-    this.bytes.push(...encodeSigned(value));
+    while (true) {
+      const byte = Number(value & 0x7fn);
+      value >>= 7n;
+      const signBit = (byte & 0x40) !== 0;
+      if ((value === 0n && !signBit) || (value === -1n && signBit)) {
+        this.bytes.push(byte);
+        return;
+      }
+      this.bytes.push(byte | 0x80);
+    }
   }
 
   localGet(index: number): void {
