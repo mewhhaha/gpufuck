@@ -1691,6 +1691,46 @@ lowering, then links in source order. The measured 1,024-module synthetic chain 
 relocatable compiled imports. Running current whole-project inference once per SCC would duplicate
 work and change diagnostics, so it was not presented as parallelism.
 
+## 2026-07-30 — discarded-work audit
+
+The pipeline was measured for work whose result was immediately discarded. Four repeated costs were
+removed: unreachable definitions were rewritten before pruning, every strict module attempted
+compact Wasm before falling back, source-only wrappers re-hashed unchanged semantics, and worker
+boundaries cloned object-shaped Core plus owned Wasm bytes.
+
+`deno task bench:parallel 4` was run in three fresh processes before and after the change, from the
+same `fa34632` base. Medians at 1,024 modules:
+
+| Path                     |   Before |    After | Change |
+| ------------------------ | -------: | -------: | -----: |
+| Parallel Core            |  91.7 ms |  79.5 ms |   -13% |
+| Separate serial Wasm     | 289.4 ms | 209.1 ms |   -28% |
+| Separate parallel Wasm   | 175.7 ms | 119.5 ms |   -32% |
+| Fused source-to-Wasm     | 176.2 ms | 148.5 ms |   -16% |
+| Shared-artifact emission | 245.5 ms | 191.4 ms |   -22% |
+
+The fair Gleam batch benchmark was then repeated in three fresh processes. At 1,024 entries, the
+median fused path is 202.2 ms against Gleam's 361.6 ms, or **1.79× faster**. The complete
+CPU-plus-shared-artifact path is 534.0 ms, or **1.48× slower**, because shared body generation
+remains serial.
+
+On the 261.5 KiB standard-library corpus, medians across three fresh benchmark processes are:
+
+| Phase                           |      gpufuck |       Gleam |
+| ------------------------------- | -----------: | ----------: |
+| Parse and lower                 |     107.3 ms |           — |
+| CPU resolve, infer, and effects |      38.6 ms |           — |
+| Uncached Wasm emission          |      89.1 ms |           — |
+| **Cold complete**               | **236.6 ms** | **42.2 ms** |
+| **Unchanged complete**          | **0.068 ms** | **10.4 ms** |
+| **Source-only comment edit**    |  **14.4 ms** | **11.6 ms** |
+
+The source-only path was 71.1 ms before this audit and is now within 24% of Gleam. The residual is
+the linker: the frontend can reuse parsing and module lowering, and the semantic and Wasm layers
+reuse stable fingerprints, but changing a source range still rebuilds one packed linked module.
+Eliminating that last cost requires relocatable linked fragments with explicit source provenance;
+blindly rebasing packed byte offsets would make spans at module boundaries ambiguous.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:

@@ -2,6 +2,7 @@ import type { Diagnostic, EncodedModule } from "./abi.ts";
 import { CpuCompiler } from "./compiler.ts";
 import type { CompiledModule, CpuCompileResult } from "./compiler_module.ts";
 import {
+  compiledModuleTransferables,
   decodeTransferredCompiledModule,
   encodeCompiledModuleForTransfer,
 } from "./compiled_module_transfer.ts";
@@ -244,7 +245,10 @@ export class ParallelFunctionalCompilerService {
       worker.onmessage = (event: MessageEvent<ParallelCompileResponse>) => resolve(event.data);
       worker.onerror = (event) =>
         reject(new Error(`parallel functional compiler worker failed: ${event.message}`));
-      worker.postMessage(request);
+      const transferables = request.mode === "compiled-wasm"
+        ? request.modules.flatMap(({ module }) => compiledModuleTransferables(module))
+        : [];
+      worker.postMessage(request, { transfer: transferables });
     });
   }
 }

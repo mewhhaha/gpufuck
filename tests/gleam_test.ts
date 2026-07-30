@@ -55,6 +55,24 @@ Deno.test("Gleam frontend service reuses an unchanged project", () => {
   if (!first.ok || !second.ok) return;
   strictEqual(second.lowered.module, first.lowered.module);
 
+  const commentOnly = frontend.lower([
+    sources[0]!,
+    {
+      name: "main",
+      source: `${sources[1]!.source}// comment-only edit\n`,
+    },
+  ], entry);
+  ok(commentOnly.ok);
+  if (!commentOnly.ok) return;
+  strictEqual(
+    commentOnly.lowered.modules[1]?.definitions,
+    first.lowered.modules[1]?.definitions,
+  );
+  equal(
+    commentOnly.lowered.modules[1]?.artifact.sourceByteLength,
+    new TextEncoder().encode(`${sources[1]!.source}// comment-only edit\n`).byteLength,
+  );
+
   const changed = frontend.lower([
     sources[0]!,
     {
@@ -66,6 +84,22 @@ Deno.test("Gleam frontend service reuses an unchanged project", () => {
   if (!changed.ok) return;
   equal(changed.lowered.module === first.lowered.module, false);
   strictEqual(changed.lowered.modules[0], first.lowered.modules[0]);
+});
+
+Deno.test("trailing trivia reuse distinguishes comment markers inside strings", () => {
+  const frontend = new GleamFrontendService();
+  const first = frontend.lower(
+    [{ name: "main", source: 'pub fn main() -> String { "https://one.example" }\n' }],
+    { module: "main", exportName: "main" },
+  );
+  const second = frontend.lower(
+    [{ name: "main", source: 'pub fn main() -> String { "https://two.example" }\n' }],
+    { module: "main", exportName: "main" },
+  );
+  ok(first.ok);
+  ok(second.ok);
+  if (!first.ok || !second.ok) return;
+  equal(second.lowered.modules[0]?.definitions === first.lowered.modules[0]?.definitions, false);
 });
 
 Deno.test.beforeAll(async () => {

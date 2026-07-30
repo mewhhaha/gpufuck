@@ -12,6 +12,7 @@ import {
   extendConstantEnvironment,
   type WasmConstantAnalysis,
 } from "./wasm_constant_analysis.ts";
+import type { WasmCoreIndex } from "./wasm_core_index.ts";
 
 type NumericFoldOperator =
   | typeof BinaryOperator.Add
@@ -59,13 +60,20 @@ export class WasmFunctionAnalysis {
     nodes: readonly CoreNode[],
     definitionRoots: readonly number[],
     constantAnalysis: WasmConstantAnalysis,
+    coreIndex?: WasmCoreIndex,
   ) {
     this.#nodes = nodes;
     this.#definitionRoots = definitionRoots;
     this.#constantAnalysis = constantAnalysis;
-    for (const node of nodes) {
-      if (node.tag !== CoreTag.LetRec) continue;
-      this.#recursiveFunctions.set(node.child0, { local: true, definition: undefined });
+    if (coreIndex === undefined) {
+      for (const node of nodes) {
+        if (node.tag !== CoreTag.LetRec) continue;
+        this.#recursiveFunctions.set(node.child0, { local: true, definition: undefined });
+      }
+    } else {
+      for (const lambda of coreIndex.recursiveLambdas) {
+        this.#recursiveFunctions.set(lambda, { local: true, definition: undefined });
+      }
     }
     for (const [definition, rootNode] of definitionRoots.entries()) {
       if (this.#node(rootNode).tag !== CoreTag.Lambda) continue;

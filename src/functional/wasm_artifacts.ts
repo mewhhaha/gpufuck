@@ -1,5 +1,6 @@
-import { type CompiledModule, completeTypeDeclarations, type CoreNode } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import { compileWasmArtifact, type WasmArtifact } from "./wasm_codegen.ts";
+import { resolvedCoreStructuralFingerprint } from "./semantic_fingerprint.ts";
 import { validateWasmSimdMode } from "./wasm_backend_plan.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import { compileWasmGc } from "./wasm_gc_codegen.ts";
@@ -211,42 +212,7 @@ async function fingerprintResolvedCore(
   return await cachedModuleValue(
     resolvedCoreFingerprintByModule,
     module,
-    () =>
-      sha256(JSON.stringify({
-        format: 1,
-        // Source locations are interpreted against the current module after execution; they do
-        // not change emitted instructions and must not invalidate an otherwise identical artifact.
-        nodes: nodes.map((node) => ({
-          tag: node.tag,
-          payload: node.payload,
-          child0: node.child0,
-          child1: node.child1,
-          child2: node.child2,
-          evaluationMode: node.evaluationMode,
-        })),
-        definitionNames: module.definitionNames,
-        definitionRoots: module.definitionRoots,
-        constructorNames: module.constructorNames,
-        constructorArities: module.constructorArities,
-        entryDefinition: module.entryDefinition,
-        entryType: module.entryType,
-        entryEffects: [...module.entryEffects],
-        declaredDefinitionEffects: module.declaredDefinitionEffects.map((effects) => [...effects]),
-        definitionEffects: module.definitionEffects.map((effects) => [...effects]),
-        typeDeclarations: completeTypeDeclarations(module),
-        hostCapabilities: module.hostCapabilities.map((capability) => ({
-          ...capability,
-          fields: capability.fields.map((field) =>
-            field.kind === "operation" ? { ...field, effects: [...field.effects] } : field
-          ),
-        })),
-        hostDefinitions: module.hostDefinitions,
-        wasmExports: module.wasmExports.map((exported) => ({
-          ...exported,
-          effects: [...exported.effects],
-        })),
-        evaluationProfile: module.evaluationProfile,
-      })),
+    () => Promise.resolve(resolvedCoreStructuralFingerprint(module, nodes)),
   );
 }
 
@@ -254,12 +220,6 @@ export async function resolvedCoreFingerprint(
   module: CompiledModule,
 ): Promise<string> {
   return await fingerprintResolvedCore(module, await module.readCoreNodes());
-}
-
-async function sha256(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function cachedModuleValue<Value>(

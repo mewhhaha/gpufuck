@@ -2,13 +2,14 @@
 
 import { CpuCompiler } from "./compiler.ts";
 import {
+  compiledModuleTransferables,
   decodeTransferredCompiledModule,
   encodeCompiledModuleForTransfer,
   type TransferCompiledModule,
 } from "./compiled_module_transfer.ts";
 import type { Diagnostic } from "./abi.ts";
 import { decodeTransferredModule, type TransferEncodedModule } from "./module_transfer.ts";
-import { compileModuleToWasm } from "./wasm_artifacts.ts";
+import { compileWasmArtifact } from "./wasm_codegen.ts";
 
 export interface ParallelSourceCompileRequest {
   readonly mode: "core" | "wasm";
@@ -60,7 +61,7 @@ self.onmessage = async (event: MessageEvent<ParallelCompileRequest>) => {
     const transferables: ArrayBuffer[] = [];
     for (const { index, module: transferred } of request.modules) {
       const module = decodeTransferredCompiledModule(transferred);
-      const wasm = await compileModuleToWasm(module);
+      const wasm = compileWasmArtifact(module, await module.readCoreNodes()).bytes;
       results.push({ index, ok: true, wasm });
       transferables.push(wasm.buffer);
     }
@@ -84,13 +85,18 @@ self.onmessage = async (event: MessageEvent<ParallelCompileRequest>) => {
       continue;
     }
     if (request.mode === "core") {
+      const module = await encodeCompiledModuleForTransfer(compilation.module);
       results.push({
         index,
         ok: true,
-        module: await encodeCompiledModuleForTransfer(compilation.module),
+        module,
       });
+      transferables.push(...compiledModuleTransferables(module));
     } else {
-      const wasm = await compileModuleToWasm(compilation.module);
+      const wasm = compileWasmArtifact(
+        compilation.module,
+        await compilation.module.readCoreNodes(),
+      ).bytes;
       results.push({ index, ok: true, wasm });
       transferables.push(wasm.buffer);
     }

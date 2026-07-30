@@ -216,13 +216,11 @@ section is 91–98% of every artifact.
 
 Two shapes of fix, and they are independent:
 
-**4a. Stop inlining through the entry's direct call during the speculative compact-scalar attempt.**
-This is the only remaining variant of an idea whose other two variants were tried and failed. The
-compact path is attempted for 100% of Gleam modules and succeeds for 0%, costing ~105 µs each; the
-ceiling is 347–357 ms against a 419 ms baseline, so roughly **16% of emission**. Bailing at the
-boundary does not work — the entry is a direct call, so emission inlines the whole program before
-reaching a memory instruction, and adding the check made it slower. The abort has to happen inside
-the expression compiler. Full diagnosis in BASELINE.md.
+**4a. ~~Stop abandoned compact-scalar attempts.~~ Done.** A conservative Core preflight now selects
+compact emission only when the complete reachable program is supported. Acceptance followed by an
+internal compact rejection is an invariant failure, not permission to discard emitted instructions
+and retry. At 1,024 modules, serial Wasm emission fell 28%, parallel emission 32%, and
+shared-artifact emission 22% against the same `fa34632` base.
 
 **4b. Emit function bodies on the GPU.** The Core is already in GPU buffers, readback measures 1 µs,
 emission is a local per-node mapping, and bodies are independent across functions _and_ across
@@ -243,12 +241,13 @@ contention. Worth a profile before assuming which, and worth remembering that a 
 `EncodedModule` copies every packed array.
 
 The copy diagnosis is now measured. Standalone frontend workers transfer packed buffers instead of
-copying them and use size-balanced batches. `ParallelGleamProjectFrontend` adds project-aware
-parallel parse, signature collection, and lowering. More importantly, `ParallelGleamCompiler`
-removes both intermediate worker boundaries for independent entries and returns only Wasm. At 1,024
-modules it is 1.54× faster than the fair same-process Gleam comparison. The remaining linked-project
-work is typed module interfaces plus relocatable Core; without those, semantic SCC workers would
-either repeat dependencies or change inference for unannotated exports.
+copying them and use size-balanced batches; compiled Core now crosses its remaining worker boundary
+as one packed transferable buffer. `ParallelGleamProjectFrontend` adds project-aware parallel parse,
+signature collection, and lowering. More importantly, `ParallelGleamCompiler` removes both
+intermediate worker boundaries for independent entries and returns only Wasm. At 1,024 modules it is
+1.79× faster than the fair same-process Gleam comparison. The remaining linked-project work is typed
+module interfaces plus relocatable Core; without those, semantic SCC workers would either repeat
+dependencies or change inference for unannotated exports.
 
 ## Next
 

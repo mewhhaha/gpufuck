@@ -2,7 +2,7 @@
 
 import { CpuCompiler } from "../functional/compiler.ts";
 import type { Diagnostic } from "../functional/abi.ts";
-import { compileModuleToWasm } from "../functional/wasm_artifacts.ts";
+import { compileWasmArtifact } from "../functional/wasm_codegen.ts";
 import type { GleamDiagnostic } from "./diagnostic.ts";
 import { lowerGleamSource } from "./frontend.ts";
 
@@ -47,7 +47,10 @@ self.onmessage = async (event: MessageEvent<ParallelGleamCompileRequest>) => {
       continue;
     }
     try {
-      const bytes = await compileModuleToWasm(compilation.module);
+      const bytes = compileWasmArtifact(
+        compilation.module,
+        await compilation.module.readCoreNodes(),
+      ).bytes;
       results.push({ index: unit.index, ok: true, bytes });
       transferables.push(bytes.buffer);
     } finally {

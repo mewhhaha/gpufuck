@@ -6,7 +6,8 @@ import {
   type WasmExport,
 } from "./compiler_module.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
-import { compileModuleToWasm } from "./wasm_artifacts.ts";
+import { compileWasmArtifact } from "./wasm_codegen.ts";
+import { compileWasmGc } from "./wasm_gc_codegen.ts";
 
 export interface WasmBatchCompilationOptions extends WasmCompilationOptions {
   readonly exportNames?: readonly string[];
@@ -27,6 +28,26 @@ export async function compileModulesToWasm(
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("functional Wasm batch options must be an object");
   }
+  if (
+    options.backend !== undefined &&
+    options.backend !== "linear-memory" &&
+    options.backend !== "wasm-gc"
+  ) {
+    throw new TypeError(
+      `functional WASM backend must be linear-memory or wasm-gc; received ${
+        JSON.stringify(options.backend)
+      }`,
+    );
+  }
+  if (
+    options.backend === "wasm-gc" &&
+    (options.storageCore !== undefined || options.ownedTypeExports !== undefined ||
+      options.simd !== undefined)
+  ) {
+    throw new TypeError(
+      "functional WasmGC compilation does not accept linear-memory storage or SIMD options",
+    );
+  }
   if (modules.length === 0) {
     throw new RangeError("functional Wasm batch compilation requires at least one module");
   }
@@ -40,8 +61,12 @@ export async function compileModulesToWasm(
       : { ownedTypeExports: options.ownedTypeExports }),
     ...(options.simd === undefined ? {} : { simd: options.simd }),
   };
+  const nodes = await bundle.readCoreNodes();
+  const bytes = wasmOptions.backend === "wasm-gc"
+    ? compileWasmGc(bundle, nodes)
+    : compileWasmArtifact(bundle, nodes, false, wasmOptions).bytes;
   return {
-    bytes: await compileModuleToWasm(bundle, wasmOptions),
+    bytes,
     exports: exportNames,
   };
 }
@@ -65,6 +90,9 @@ async function bundleCompiledModules(
       );
     }
   }
+  const coreNodesByModule = await Promise.all(
+    modules.map((module) => module.readCoreNodes()),
+  );
 
   const nodes: CoreNode[] = [];
   const arguments_: CompiledModule["arguments"][number][] = [];
@@ -99,7 +127,7 @@ async function bundleCompiledModules(
     const binderOffset = caseBinderCount;
     const symbolOffset = symbolNames.length;
     const typeOffset = typeNames.length;
-    const moduleNodes = await module.readCoreNodes();
+    const moduleNodes = coreNodesByModule[moduleIndex]!;
 
     for (const node of moduleNodes) {
       nodes.push(offsetCoreNode(node, {

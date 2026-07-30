@@ -118,34 +118,34 @@ No. Against Gleam 1.17.0 on the same source, on a Ryzen 7 7800X3D with an RTX 40
 
 | Workload                                     | Reproduce                      | Result           |
 | -------------------------------------------- | ------------------------------ | ---------------- |
-| **One large module**, compiled once          | `deno task bench:gleam-stdlib` | **5.75× slower** |
-| **One source-only edit**                     | `deno task bench:gleam-stdlib` | **~6.0× slower** |
-| **Unchanged large module**                   | `deno task bench:gleam-stdlib` | **~143× faster** |
-| **1,024 modules**, shared Wasm artifact      | `deno task bench:gleam-batch`  | **~1.7× slower** |
-| **1,024 independent modules**, fused workers | `deno task bench:gleam-batch`  | **~1.5× faster** |
+| **One large module**, compiled once          | `deno task bench:gleam-stdlib` | **5.61× slower** |
+| **One source-only edit**                     | `deno task bench:gleam-stdlib` | **1.24× slower** |
+| **Unchanged large module**                   | `deno task bench:gleam-stdlib` | **~153× faster** |
+| **1,024 modules**, shared Wasm artifact      | `deno task bench:gleam-batch`  | **~1.5× slower** |
+| **1,024 independent modules**, fused workers | `deno task bench:gleam-batch`  | **~1.8× faster** |
 
 The earlier batch claim charged Gleam one process and package startup for every module while gpufuck
 used one resident process. The benchmark now gives both compilers all modules in one process and
 includes executable output on both sides. `CpuCompiler` and the default compiler service avoid
 WebGPU startup, but frontend work and Wasm emission still leave the full compiler behind.
 
-On the standard-library corpus, the median of three benchmark medians is 118.5 ms to parse and
-lower, 43.6 ms for host resolution, inference, and effects, and 107.7 ms for uncached Wasm emission.
-The resulting 276.2 ms is 5.75× Gleam's 48.0 ms cold build. The raw HM phase is 14.0 ms; sharing
+On the standard-library corpus, the median of three benchmark medians is 107.3 ms to parse and
+lower, 38.6 ms for host resolution, inference, and effects, and 89.1 ms for uncached Wasm emission.
+The resulting 236.6 ms is 5.61× Gleam's 42.2 ms cold build. The raw HM phase is 12.8 ms; sharing
 closed global environments removed its former quadratic top-level copying.
 
 Independent compilation now breaks even between 512 and 1,024 modules. Across three complete
-benchmark processes, the 1,024-module median was 264.6 ms for the fused source-to-Wasm worker path
-and 407.0 ms for Gleam: gpufuck was 1.54× faster. Keeping the shared runtime changes the tradeoff:
+benchmark processes, the 1,024-module median was 202.2 ms for the fused source-to-Wasm worker path
+and 361.6 ms for Gleam: gpufuck was 1.79× faster. Keeping the shared runtime changes the tradeoff:
 the 1,024-module artifact is 2.03 MiB instead of 3.07 MiB, but monolithic Wasm emission remains
-serial and the complete shared-artifact path is about 1.7× slower than Gleam.
+serial and the complete shared-artifact path is about 1.5× slower than Gleam.
 
-The warm result has two distinct meanings. An unchanged project takes about 0.075 ms because all
-three stages reuse immutable results, versus Gleam's 10.7 ms no-change build. A source-only edit
-takes 71.1 ms versus Gleam's 11.7 ms because gpufuck still relinks and recompiles the complete Core.
-Incremental semantic compilation and function-granular Wasm reuse, not HM inference, are now the
-remaining edited-build bottlenecks. [BASELINE.md](BASELINE.md) records the raw measurements and
-superseded claims; [TASKS.md](TASKS.md) ranks what is left.
+The warm result has two distinct meanings. An unchanged project takes about 0.068 ms because all
+three stages reuse immutable results, versus Gleam's 10.4 ms no-change build. A source-only comment
+edit takes 14.4 ms versus Gleam's 11.6 ms: parsing, lowering, semantic compilation, and Wasm all
+reuse their unchanged semantics, leaving whole-project relinking as the remaining edited-build
+bottleneck. [BASELINE.md](BASELINE.md) records the raw measurements and superseded claims;
+[TASKS.md](TASKS.md) ranks what is left.
 
 **Does it produce correct code?** 547 of Gleam's own 1,521 standard-library tests compile to
 WebAssembly and pass upstream's assertions — 97% of those needing no JavaScript FFI adapter. Run it

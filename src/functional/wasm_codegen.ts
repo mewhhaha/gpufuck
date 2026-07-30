@@ -255,7 +255,10 @@ export function compileWasmArtifact(
       true,
     );
     const compactBytes = compactCompiler.compileCompactScalar();
-    if (compactBytes !== undefined) return compactCompiler.artifact(compactBytes);
+    if (compactBytes === undefined) {
+      throw new Error("functional compact scalar preflight accepted a runtime-dependent program");
+    }
+    return compactCompiler.artifact(compactBytes);
   }
 
   const compiler = new WasmCompiler(
@@ -344,11 +347,7 @@ class WasmCompiler {
         this.#runtimeEmitter.emitFault(instructions, fault, -1),
     });
     this.#automaticArenaReset = plan.storage.summary.automaticArenaReset;
-    this.#hasLazyEvaluationBoundary = nodes.some((node) =>
-      (node.tag === CoreTag.Apply ||
-        node.tag === CoreTag.Let) &&
-      node.evaluationMode === EvaluationMode.LazyCallByNeed
-    );
+    this.#hasLazyEvaluationBoundary = plan.coreIndex.hasLazyEvaluationBoundary;
     this.#simdEnabled = !plan.instrumentedFuel && plan.options.simd === "wasm-simd" &&
       module.evaluationProfile === EvaluationProfile.StrictEager &&
       !this.#hasLazyEvaluationBoundary;
@@ -363,10 +362,8 @@ class WasmCompiler {
     this.#functionAnalysis = plan.functionAnalysis;
     this.#uniqueReuseAnalysis = plan.uniqueReuseAnalysis;
     this.#lambdaSlots = Array.from({ length: nodes.length }, () => undefined);
-    for (const [nodeIndex, node] of nodes.entries()) {
-      if (node.tag === CoreTag.LetRec) {
-        this.#recursiveLambdaOwners.set(node.child0, nodeIndex);
-      }
+    for (const [lambda, owner] of plan.coreIndex.recursiveLambdaOwners) {
+      this.#recursiveLambdaOwners.set(lambda, owner);
     }
     this.#entry = plan.entry;
     const hostFields: HostField[] = [];
@@ -454,15 +451,9 @@ class WasmCompiler {
     this.#constructorClosureSlots = module.constructorArities.map((arity) =>
       Array.from({ length: arity }, () => undefined)
     );
-    const referencedNullaryConstructors = new Set<number>();
-    for (const node of nodes) {
-      if (
-        node.tag === CoreTag.Constructor &&
-        module.constructorArities[node.payload] === 0
-      ) {
-        referencedNullaryConstructors.add(node.payload);
-      }
-    }
+    const referencedNullaryConstructors = new Set(
+      plan.coreIndex.referencedNullaryConstructors,
+    );
     if (
       hostFields.some((field) =>
         field.declaration.kind === "value"

@@ -3,7 +3,7 @@
  * gpufuck change reaches it with no version pin. Nothing else in this suite emits WebAssembly;
  * without these tests the code generator can be deleted or broken and the suite stays green.
  */
-import { equal, ok, rejects, strictEqual } from "node:assert/strict";
+import { equal, notStrictEqual, ok, rejects, strictEqual } from "node:assert/strict";
 
 import {
   BinaryOperator,
@@ -127,6 +127,52 @@ Deno.test("compiler service reuses an unchanged CPU compilation", async () => {
     await rejects(
       () => service.compileModule(encoded, { maximumSteps: 0 }),
       /maximumSteps/,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("compiler service reuses semantics while rebinding changed source spans", async () => {
+  const service = new FunctionalCompilerService({ backend: "cpu" });
+  const firstEncoded = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.at({ startByte: 0, endByte: 2 }).integer(42),
+    }],
+    [],
+    "main",
+    2,
+  );
+  const secondEncoded = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.at({ startByte: 5, endByte: 7 }).integer(42),
+    }],
+    [],
+    "main",
+    7,
+  );
+  try {
+    const first = await service.compileModule(firstEncoded);
+    const second = await service.compileModule(secondEncoded);
+    ok(first.ok);
+    ok(second.ok);
+    if (!first.ok || !second.ok) return;
+    notStrictEqual(second.module, first.module);
+    strictEqual(second.module.wasmExports, first.module.wasmExports);
+    const secondEntry = (await second.module.readCoreNodes())[
+      second.module.definitionRoots[second.module.entryDefinition]!
+    ];
+    equal(secondEntry?.sourceByteOffset, 5);
+    equal(secondEntry?.sourceEndByte, 7);
+    equal(
+      await compileModuleToWasm(first.module).then((bytes) => bytes.byteLength),
+      await compileModuleToWasm(second.module).then((bytes) => bytes.byteLength),
     );
   } finally {
     await service.destroy();

@@ -6,7 +6,7 @@ export function lowerCoreForWasm(
   module: CompiledModule,
   nodes: readonly CoreNode[],
 ): readonly CoreNode[] {
-  const lowered = nodes.map((node) => ({ ...node }));
+  const lowered = [...nodes];
   for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++) {
     const node = nodes[nodeIndex];
     if (node === undefined) {
@@ -49,7 +49,10 @@ export function lowerCoreForWasm(
       lowered[nodeIndex] = lowerCase(module, lowered, nodeIndex, node);
     }
   }
-  return Object.freeze(lowered.map((node) => Object.freeze(node)));
+  for (const node of lowered) {
+    if (!Object.isFrozen(node)) Object.freeze(node);
+  }
+  return Object.freeze(lowered);
 }
 
 function lowerPrimop(

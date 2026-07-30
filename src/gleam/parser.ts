@@ -76,17 +76,23 @@ export function parseGleamModule(
 }
 
 function declarationTarget(source: string, declarationStart: number): string | null {
-  const match = /@target\(([^)]+)\)\s*$/.exec(source.slice(0, declarationStart));
-  return match?.[1] ?? null;
+  let end = declarationStart - 1;
+  while (end >= 0 && /\s/.test(source[end] ?? "")) end--;
+  if (source[end] !== ")") return null;
+  const start = source.lastIndexOf("@target(", end);
+  if (start < 0) return null;
+  if (source.indexOf(")", start + "@target(".length) !== end) return null;
+  const target = source.slice(start + "@target(".length, end).trim();
+  return target.length === 0 ? null : target;
 }
 
 function normalizeGleamParserSource(source: string): string {
-  const normalized = source.split("");
+  let normalized: string[] | undefined;
   let inString = false;
   let escaped = false;
   let inComment = false;
-  for (let index = 0; index < normalized.length; index++) {
-    const character = normalized[index]!;
+  for (let index = 0; index < source.length; index++) {
+    const character = source[index]!;
     if (inComment) {
       if (character === "\n" || character === "\r") inComment = false;
       continue;
@@ -101,12 +107,13 @@ function normalizeGleamParserSource(source: string): string {
       inString = true;
       continue;
     }
-    if (character === "/" && normalized[index + 1] === "/") {
+    if (character === "/" && source[index + 1] === "/") {
       inComment = true;
       index++;
       continue;
     }
     if (character === "a" && isAssertModifier(source, index)) {
+      normalized ??= source.split("");
       for (let keywordIndex = index; keywordIndex < index + "assert".length; keywordIndex++) {
         normalized[keywordIndex] = " ";
       }
@@ -115,13 +122,16 @@ function normalizeGleamParserSource(source: string): string {
     }
     if (character !== ",") continue;
     let next = index + 1;
-    while (/\s/.test(normalized[next] ?? "")) next++;
+    while (/\s/.test(source[next] ?? "")) next++;
     if (
-      normalized[next] === ")" || normalized[next] === "]" || normalized[next] === "}" ||
-      normalized[next] === ">" && normalized[next + 1] === ">"
-    ) normalized[index] = " ";
+      source[next] === ")" || source[next] === "]" || source[next] === "}" ||
+      source[next] === ">" && source[next + 1] === ">"
+    ) {
+      normalized ??= source.split("");
+      normalized[index] = " ";
+    }
   }
-  return normalized.join("");
+  return normalized?.join("") ?? source;
 }
 
 function isAssertModifier(source: string, start: number): boolean {

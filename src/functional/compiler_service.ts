@@ -1,7 +1,9 @@
 import { requestWebGpuDevice } from "../webgpu.ts";
+import { rebindCompiledModuleSource } from "./compiled_module_rebinding.ts";
 import { CpuCompiler, GpuCompiler } from "./compiler.ts";
 import type { CompilationOptions, CpuCompileResult } from "./compiler_module.ts";
 import { type EncodedModule, TypecheckingProfile } from "./abi.ts";
+import { semanticModuleFingerprint } from "./semantic_fingerprint.ts";
 
 export type CompilerBackend = "auto" | "cpu" | "gpu";
 
@@ -25,6 +27,7 @@ interface ResidentGpuCompiler {
 export class FunctionalCompilerService {
   readonly #cpuCompiler = new CpuCompiler();
   readonly #cpuCompilations = new WeakMap<EncodedModule, Promise<CpuCompileResult>>();
+  readonly #cpuCompilationsBySemantics = new Map<string, Promise<CpuCompileResult>>();
   readonly #defaultBackend: CompilerBackend;
   readonly #providedDevice: GPUDevice | undefined;
   #residentGpuCompiler: Promise<ResidentGpuCompiler> | undefined;
@@ -125,13 +128,44 @@ export class FunctionalCompilerService {
     const cached = this.#cpuCompilations.get(module);
     if (cached !== undefined) return cached;
 
-    const pending = this.#cpuCompiler.compileModule(module, options);
+    const semanticFingerprint = semanticModuleFingerprint(module);
+    const semanticCompilation = this.#cpuCompilationsBySemantics.get(semanticFingerprint);
+    const pending = semanticCompilation === undefined
+      ? this.#compileAndRememberSemantics(module, options, semanticFingerprint)
+      : semanticCompilation.then(async (result): Promise<CpuCompileResult> => {
+        if (!result.ok) return result;
+        return {
+          ok: true,
+          module: await rebindCompiledModuleSource(result.module, module),
+        };
+      });
     this.#cpuCompilations.set(module, pending);
     pending.catch(() => {
       if (this.#cpuCompilations.get(module) === pending) {
         this.#cpuCompilations.delete(module);
       }
     });
+    return pending;
+  }
+
+  #compileAndRememberSemantics(
+    module: EncodedModule,
+    options: CompilationOptions,
+    semanticFingerprint: string,
+  ): Promise<CpuCompileResult> {
+    const pending = this.#cpuCompiler.compileModule(module, options);
+    pending.then(
+      (result) => {
+        if (!result.ok) return;
+        this.#cpuCompilationsBySemantics.set(semanticFingerprint, Promise.resolve(result));
+        while (this.#cpuCompilationsBySemantics.size > 64) {
+          const oldest = this.#cpuCompilationsBySemantics.keys().next().value;
+          if (oldest === undefined) break;
+          this.#cpuCompilationsBySemantics.delete(oldest);
+        }
+      },
+      () => {},
+    );
     return pending;
   }
 

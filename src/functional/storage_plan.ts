@@ -19,6 +19,7 @@ import {
 import { analyzeStorageReferences } from "./storage_reference_analysis.ts";
 import { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
+import { indexWasmCore, type WasmCoreIndex } from "./wasm_core_index.ts";
 
 export {
   type BoundaryStorageDecision,
@@ -44,11 +45,13 @@ export function createStoragePlan(
   options: StoragePlanningOptions = {},
 ): StoragePlan {
   const loweredNodes = lowerCoreForWasm(module, nodes);
+  const coreIndex = indexWasmCore(module, loweredNodes);
   return createLoweredCoreStoragePlan(
     module,
     loweredNodes,
     new WasmCaptureAnalysis(loweredNodes),
     options,
+    coreIndex,
   );
 }
 
@@ -57,6 +60,7 @@ export function createLoweredCoreStoragePlan(
   nodes: readonly CoreNode[],
   captureAnalysis: WasmCaptureAnalysis,
   options: StoragePlanningOptions = {},
+  coreIndex: WasmCoreIndex = indexWasmCore(module, nodes),
 ): StoragePlan {
   const definitionByRoot = new Map<number, number>();
   for (const [definition, root] of module.definitionRoots.entries()) {
@@ -68,11 +72,7 @@ export function createLoweredCoreStoragePlan(
     definitionByRoot.set(root, definition);
   }
 
-  const directCallees = new Set<number>();
-  const recursiveLambdas = new Set<number>();
   for (const [nodeIndex, node] of nodes.entries()) {
-    if (node.tag === CoreTag.Apply) directCallees.add(node.child0);
-    if (node.tag === CoreTag.LetRec) recursiveLambdas.add(node.child0);
     requireCoreChildren(nodes.length, nodeIndex, node);
   }
 
@@ -112,7 +112,7 @@ export function createLoweredCoreStoragePlan(
           capturedLocalCount,
           reason: `definition d${definition} has module lifetime`,
         });
-      } else if (recursiveLambdas.has(nodeIndex)) {
+      } else if (coreIndex.recursiveLambdas.has(nodeIndex)) {
         record({
           coreNode: nodeIndex,
           valueKind: "closure",
@@ -127,7 +127,7 @@ export function createLoweredCoreStoragePlan(
           storage: StorageClass.ScalarLocal,
           escapeStorage: StorageClass.InvocationArena,
           capturedLocalCount,
-          reason: directCallees.has(nodeIndex)
+          reason: coreIndex.directCallees.has(nodeIndex)
             ? "the lambda is directly applied and can remain virtual"
             : "the lambda remains virtual until a first-class use requires an environment",
         });

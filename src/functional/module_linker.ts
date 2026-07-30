@@ -8,7 +8,6 @@ import {
 import type { HostCapabilityDeclaration, SurfaceModuleOptions } from "./host_contract.ts";
 import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
 import { effectSetFrom } from "./effect_set.ts";
-import { analyzeSurfaceReachability } from "./surface_reachability.ts";
 import {
   buildSurfaceModule,
   type SurfaceCaseArm,
@@ -338,6 +337,11 @@ export function linkModules(
       );
     }
   }
+  const artifactReachability = artifactDefinitionReachability(
+    modules,
+    exportedDefinitions,
+    entry,
+  );
   const linkedDefinitions: SurfaceDefinition[] = [];
   const linkedTypes: SurfaceTypeDeclaration[] = [];
   const sources: LinkedSource[] = [];
@@ -465,12 +469,14 @@ export function linkModules(
       }
       const alias = qualified(artifact.name, `$import$${imported.name}`);
       importNames.set(imported.name, alias);
+      const annotation = imported.type === undefined
+        ? null
+        : rewriteSchema(imported.type, availableTypeNames);
+      if (!artifactReachability.definitionNames.has(alias)) continue;
       linkedDefinitions.push({
         name: alias,
         parameters: [],
-        annotation: imported.type === undefined
-          ? null
-          : rewriteSchema(imported.type, availableTypeNames),
+        annotation,
         body: { kind: "name", name: target, span: offsetSpan(undefined, sourceBase) },
         span: offsetSpan(undefined, sourceBase),
       });
@@ -481,13 +487,16 @@ export function linkModules(
       ),
     );
     for (const definition of artifact.definitions) {
+      const annotation = rewriteSchema(
+        exportTypes.get(definition.name) ?? definition.annotation,
+        availableTypeNames,
+      );
+      const name = definitionNames.get(definition.name)!;
+      if (!artifactReachability.definitionNames.has(name)) continue;
       linkedDefinitions.push({
         ...definition,
-        name: definitionNames.get(definition.name)!,
-        annotation: rewriteSchema(
-          exportTypes.get(definition.name) ?? definition.annotation,
-          availableTypeNames,
-        ),
+        name,
+        annotation,
         body: rewriteExpression(
           definition.body,
           new Map(definition.parameters.map((parameter) => [parameter, 1])),
@@ -592,15 +601,8 @@ export function linkModules(
       }`,
     });
   }
-  const reachability = analyzeSurfaceReachability(linkedDefinitions, [
-    entryDefinition,
-    ...linkedWasmExports.map((exported) => exported.definition),
-  ]);
-  const reachableDefinitions = linkedDefinitions.filter((definition) =>
-    reachability.definitionNames.has(definition.name)
-  );
   const reachableHostDefinitions = linkedHostDefinitions.filter((binding) =>
-    reachability.definitionNames.has(binding.definition)
+    artifactReachability.definitionNames.has(binding.definition)
   );
   const reachableHostFields = new Map<string, Set<string>>();
   for (const binding of reachableHostDefinitions) {
@@ -608,7 +610,7 @@ export function linkModules(
     fields.add(binding.field);
     reachableHostFields.set(binding.capability, fields);
   }
-  const reachableCapabilities = reachability.referencedSymbols.has(INIT_CONSTRUCTOR_NAME)
+  const reachableCapabilities = artifactReachability.referencedSymbols.has(INIT_CONSTRUCTOR_NAME)
     ? capabilities
     : capabilities.flatMap((capability) => {
       const fields = reachableHostFields.get(capability.name);
@@ -619,7 +621,7 @@ export function linkModules(
       }];
     });
   const module = buildSurfaceModule(
-    reachableDefinitions,
+    linkedDefinitions,
     linkedTypes,
     entryDefinition,
     sourceBase,
@@ -634,6 +636,195 @@ export function linkModules(
     module: { ...module, sources: Object.freeze(sources) },
     sources: Object.freeze(sources),
   };
+}
+
+function artifactDefinitionReachability(
+  modules: ReadonlyMap<string, ModuleArtifact>,
+  exportedDefinitions: ReadonlyMap<string, string>,
+  entry: { readonly module: string; readonly exportName: string },
+): {
+  readonly definitionNames: ReadonlySet<string>;
+  readonly referencedSymbols: ReadonlySet<string>;
+} {
+  const dependencies = new Map<string, Set<string>>();
+  const symbolsByDefinition = new Map<string, Set<string>>();
+  const roots: string[] = [];
+  const entryDefinition = exportedDefinitions.get(exportKey(entry.module, entry.exportName));
+  if (entryDefinition !== undefined) roots.push(entryDefinition);
+
+  for (const artifact of modules.values()) {
+    const localDefinitions = new Map(
+      artifact.definitions.map((definition) => [
+        definition.name,
+        qualified(artifact.name, definition.name),
+      ]),
+    );
+    const importedDefinitions = new Map<string, string>();
+    for (const imported of artifact.imports) {
+      const alias = qualified(artifact.name, `$import$${imported.name}`);
+      const target = exportedDefinitions.get(
+        exportKey(imported.fromModule, imported.exportName),
+      );
+      importedDefinitions.set(imported.name, alias);
+      dependencies.set(alias, new Set(target === undefined ? [] : [target]));
+      symbolsByDefinition.set(alias, new Set(target === undefined ? [] : [target]));
+    }
+    for (const definition of artifact.definitions) {
+      const name = localDefinitions.get(definition.name)!;
+      const referenced = new Set<string>();
+      const symbols = new Set<string>();
+      collectReferencedDefinitions(
+        definition.body,
+        new Map(definition.parameters.map((parameter) => [parameter, 1])),
+        (reference) => {
+          symbols.add(reference);
+          const target = importedDefinitions.get(reference) ??
+            localDefinitions.get(reference);
+          if (target !== undefined) referenced.add(target);
+        },
+        (constructor) => symbols.add(constructor),
+      );
+      dependencies.set(name, referenced);
+      symbolsByDefinition.set(name, symbols);
+    }
+    for (const exported of artifact.options.wasmExports ?? []) {
+      const root = localDefinitions.get(exported.definition);
+      if (root !== undefined) roots.push(root);
+    }
+  }
+
+  const reachable = new Set<string>();
+  const referencedSymbols = new Set<string>();
+  const pending = [...roots];
+  while (pending.length > 0) {
+    const definition = pending.pop()!;
+    if (reachable.has(definition)) continue;
+    reachable.add(definition);
+    for (const symbol of symbolsByDefinition.get(definition) ?? []) {
+      referencedSymbols.add(symbol);
+    }
+    for (const dependency of dependencies.get(definition) ?? []) {
+      if (!reachable.has(dependency)) pending.push(dependency);
+    }
+  }
+  return { definitionNames: reachable, referencedSymbols };
+}
+
+function collectReferencedDefinitions(
+  expression: SurfaceExpression,
+  boundNames: Map<string, number>,
+  reference: (name: string) => void,
+  constructorReference: (name: string) => void,
+): void {
+  const collect = (value: SurfaceExpression): void =>
+    collectReferencedDefinitions(value, boundNames, reference, constructorReference);
+  switch (expression.kind) {
+    case "name":
+      if (!boundNames.has(expression.name)) reference(expression.name);
+      return;
+    case "lambda":
+      addBoundNames(boundNames, expression.parameters);
+      collect(expression.body);
+      removeBoundNames(boundNames, expression.parameters);
+      return;
+    case "let":
+      collect(expression.value);
+      addBoundNames(boundNames, [expression.name]);
+      collect(expression.body);
+      removeBoundNames(boundNames, [expression.name]);
+      return;
+    case "let-rec":
+      addBoundNames(boundNames, [expression.name]);
+      collect(expression.value);
+      collect(expression.body);
+      removeBoundNames(boundNames, [expression.name]);
+      return;
+    case "let-rec-group": {
+      const bindingNames = expression.bindings.map((binding) => binding.name);
+      addBoundNames(boundNames, bindingNames);
+      for (const binding of expression.bindings) {
+        addBoundNames(boundNames, binding.parameters);
+        collect(binding.body);
+        removeBoundNames(boundNames, binding.parameters);
+      }
+      collect(expression.body);
+      removeBoundNames(boundNames, bindingNames);
+      return;
+    }
+    case "text-append":
+    case "bytes-append":
+    case "binary":
+      collect(expression.left);
+      collect(expression.right);
+      return;
+    case "store-new":
+      collect(expression.length);
+      collect(expression.initial);
+      return;
+    case "store-length":
+      collect(expression.store);
+      return;
+    case "store-read":
+      collect(expression.store);
+      collect(expression.index);
+      return;
+    case "store-write":
+      collect(expression.store);
+      collect(expression.index);
+      collect(expression.value);
+      return;
+    case "store-grow":
+      collect(expression.store);
+      collect(expression.length);
+      collect(expression.initial);
+      return;
+    case "apply":
+      collect(expression.callee);
+      for (const argument of expression.arguments) collect(argument);
+      return;
+    case "if":
+      collect(expression.condition);
+      collect(expression.consequent);
+      collect(expression.alternate);
+      return;
+    case "unary":
+    case "numeric-convert":
+      collect(expression.value);
+      return;
+    case "case":
+      collect(expression.value);
+      for (const arm of expression.arms) {
+        constructorReference(arm.constructor);
+        addBoundNames(boundNames, arm.binders);
+        collect(arm.body);
+        removeBoundNames(boundNames, arm.binders);
+      }
+      if (expression.otherwise !== undefined) {
+        const binders = expression.otherwise.binder === undefined
+          ? []
+          : [expression.otherwise.binder];
+        addBoundNames(boundNames, binders);
+        collect(expression.otherwise.body);
+        removeBoundNames(boundNames, binders);
+      }
+      return;
+    case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+    case "whole-number-f64":
+    case "boolean":
+    case "text":
+    case "bytes":
+    case "runtime-fault":
+    case "store-empty":
+      return;
+  }
+  throw new TypeError(
+    `functional module contains unsupported surface expression ${
+      JSON.stringify((expression as { readonly kind: unknown }).kind)
+    }`,
+  );
 }
 
 function sameHostField(
