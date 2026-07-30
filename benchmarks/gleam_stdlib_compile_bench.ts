@@ -326,7 +326,26 @@ try {
   wasmSamples.sort((left, right) => left - right);
   const wasmMilliseconds = wasmSamples[Math.floor(wasmSamples.length / 2)]!;
 
-  const runtimeCompilation = await cpuCompiler.compileModule(frontend.lowered.module);
+  const emptyRuntimeResult = "\n  Nil\n}\n";
+  if (!entry.source.endsWith(emptyRuntimeResult)) {
+    throw new Error("generated stdlib entry does not end in its expected Nil result");
+  }
+  const runtimeEntry = {
+    ...entry,
+    source: `${
+      entry.source.slice(0, -emptyRuntimeResult.length)
+    }\n  gleam_list.fold(\n    gleam_list.map(gleam_list.repeat(1, 10_000), fn(value) { value + 1 }),\n    0,\n    fn(value, total) { value + total },\n  )\n}\n`,
+  };
+  const runtimeFrontend = lowerGleamSources(
+    [...sources, runtimeEntry],
+    { module: runtimeEntry.name, exportName: "main" },
+  );
+  if (!runtimeFrontend.ok) {
+    throw new Error(
+      `runtime lowering failed: ${runtimeFrontend.diagnostics[0]?.message}`,
+    );
+  }
+  const runtimeCompilation = await cpuCompiler.compileModule(runtimeFrontend.lowered.module);
   if (!runtimeCompilation.ok) {
     throw new Error(
       `runtime CPU compilation failed: ${runtimeCompilation.diagnostics[0]?.code}`,
@@ -357,9 +376,15 @@ try {
   );
   const wasmRuntimeMilliseconds = await median(async () => {
     const execution = await runWasmModule(runtimeCompilation.module, { init: benchmarkInit });
-    if (execution.value.kind !== "unit") {
+    if (
+      execution.value.kind !== "signed-integer-64" ||
+      execution.value.value !== 20_000n
+    ) {
       throw new Error(
-        `stdlib benchmark entry expected Unit; received ${JSON.stringify(execution.value)}`,
+        `stdlib benchmark entry expected 20000; received ${
+          JSON.stringify(execution.value, (_key, value) =>
+            typeof value === "bigint" ? value.toString() : value)
+        }`,
       );
     }
   });
