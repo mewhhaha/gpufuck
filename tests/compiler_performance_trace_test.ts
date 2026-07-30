@@ -314,6 +314,10 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     event.stage === "frontend.parse.materialize"
   );
   equal(parsedUpdate?.annotations.cacheHit, true);
+  const signatureUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.signatures.value"
+  );
+  equal(signatureUpdate?.annotations.cacheHit, true);
   const semanticFingerprint = changedTrace.snapshot().find((event) =>
     event.stage === "frontend.lower.semantic-fingerprint"
   );
@@ -421,6 +425,10 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
     event.stage === "frontend.parse.materialize"
   );
   equal(parsedUpdate?.annotations.cacheHit, false);
+  const signatureUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.signatures.value"
+  );
+  equal(signatureUpdate?.annotations.cacheHit, false);
   const semanticFingerprint = trace.snapshot().find((event) =>
     event.stage === "frontend.lower.semantic-fingerprint"
   );

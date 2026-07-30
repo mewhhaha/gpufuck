@@ -41,6 +41,8 @@ export type GleamFrontendResult =
 
 interface LowerParsedGleamModuleOptions {
   readonly trace?: CompilerPerformanceTrace;
+  readonly signatures?: readonly GleamExportSignature[];
+  readonly captureSignatures?: (signatures: readonly GleamExportSignature[]) => void;
   readonly link?: (
     modules: readonly GleamModule[],
     loweredModules: readonly LoweredGleamModule[],
@@ -134,20 +136,31 @@ export function lowerParsedGleamModules(
   options: LowerParsedGleamModuleOptions = {},
 ): GleamFrontendResult {
   const trace = options.trace;
-  const signatures: GleamExportSignature[] = [];
-  const nominalAnnotations = { modules: modules.length, signatures: 0 };
+  const signatures: GleamExportSignature[] = [...(options.signatures ?? [])];
+  const signaturesCached = options.signatures !== undefined;
+  const nominalAnnotations = {
+    modules: modules.length,
+    signatures: signaturesCached ? signatures.length : 0,
+    cacheHit: signaturesCached,
+  };
   measureCompilerStage(trace, "frontend.signatures.nominal", nominalAnnotations, () => {
+    if (signaturesCached) return;
     for (const module of modules) {
       signatures.push(...gleamNominalExportSignatures(module));
     }
     nominalAnnotations.signatures = signatures.length;
   });
-  const valueAnnotations = { modules: modules.length, signatures: 0 };
+  const valueAnnotations = {
+    modules: modules.length,
+    signatures: signaturesCached ? signatures.length : 0,
+    cacheHit: signaturesCached,
+  };
   const signatureDiagnostic = measureCompilerStage(
     trace,
     "frontend.signatures.value",
     valueAnnotations,
     () => {
+      if (signaturesCached) return null;
       for (const module of modules) {
         try {
           signatures.push(...gleamValueExportSignatures(module, signatures));
@@ -163,6 +176,7 @@ export function lowerParsedGleamModules(
     },
   );
   if (signatureDiagnostic !== null) return signatureDiagnostic;
+  options.captureSignatures?.(Object.freeze([...signatures]));
 
   const loweredModules: LoweredGleamModule[] = [];
   const lowerAnnotations = { modules: modules.length, signatures: signatures.length };

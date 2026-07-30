@@ -25,7 +25,7 @@ import {
   type LoweredGleamModule,
   lowerGleamModule,
 } from "./lowering.ts";
-import { IncrementalGleamModuleParser } from "./parser.ts";
+import { IncrementalGleamModuleParser, parsedIntegerUpdate } from "./parser.ts";
 
 interface CachedGleamProject {
   readonly sources: readonly GleamSourceModule[];
@@ -39,6 +39,12 @@ interface LiteralSemanticLineage {
   readonly baseSemantics: string;
   readonly baseValues: ReadonlyMap<string, bigint>;
   readonly currentValues: ReadonlyMap<string, bigint>;
+}
+
+interface CachedProjectSignatures {
+  readonly modules: readonly GleamModule[];
+  readonly signatures: readonly GleamExportSignature[];
+  readonly key: string;
 }
 
 export interface GleamFrontendServiceLowerOptions {
@@ -63,6 +69,7 @@ export class GleamFrontendService {
     }
   >();
   #cachedProject: CachedGleamProject | undefined;
+  #cachedSignatures: CachedProjectSignatures | undefined;
 
   lower(
     sources: readonly GleamSourceModule[],
@@ -193,6 +200,12 @@ export class GleamFrontendService {
         lowered.artifact.sourceByteLength ===
           previousProject.modules[index]?.artifact.sourceByteLength
       );
+      if (this.#cachedSignatures !== undefined) {
+        this.#cachedSignatures = {
+          ...this.#cachedSignatures,
+          modules: Object.freeze([...modules]),
+        };
+      }
       if (sourceGeometryUnchanged) {
         const linked = measureCompilerStage(
           options.trace,
@@ -225,7 +238,17 @@ export class GleamFrontendService {
       return this.#rememberProject(sources, entry, result);
     }
 
-    let signatureKey: string | undefined;
+    const cachedSignatures = this.#cachedSignatures;
+    const reusableSignatures = cachedSignatures !== undefined &&
+        cachedSignatures.modules.length === modules.length &&
+        modules.every((module, index) => {
+          const previous = cachedSignatures.modules[index];
+          return module === previous || parsedIntegerUpdate(module) === previous;
+        })
+      ? cachedSignatures
+      : undefined;
+    let signatureKey: string | undefined = reusableSignatures?.key;
+    let projectSignatures: readonly GleamExportSignature[] | undefined;
     const previousLinkedProject = cached?.result.ok ? cached.result.lowered : undefined;
     const result = lowerParsedGleamModules(
       modules,
@@ -316,6 +339,8 @@ export class GleamFrontendService {
       },
       {
         ...(options.trace === undefined ? {} : { trace: options.trace }),
+        ...(reusableSignatures === undefined ? {} : { signatures: reusableSignatures.signatures }),
+        captureSignatures: (signatures) => projectSignatures = signatures,
         link: (parsedModules, loweredModules, projectEntry, trace) => {
           if (previousLinkedProject !== undefined) {
             const updateAnnotations = { modules: loweredModules.length, changedNodes: 0 };
@@ -349,6 +374,14 @@ export class GleamFrontendService {
       },
     );
     if (result.ok) {
+      if (signatureKey === undefined || projectSignatures === undefined) {
+        throw new Error("Gleam frontend service omitted project signatures after lowering");
+      }
+      this.#cachedSignatures = {
+        modules: Object.freeze([...modules]),
+        signatures: projectSignatures,
+        key: signatureKey,
+      };
       const moduleSemantics = result.lowered.modules.map((lowered) => {
         const cachedLowering = this.#loweredModules.get(lowered.source.name);
         if (cachedLowering === undefined) {
@@ -387,6 +420,7 @@ export class GleamFrontendService {
     entry: { readonly module: string; readonly exportName: string },
     result: GleamFrontendResult,
   ): GleamFrontendResult {
+    if (!result.ok) this.#cachedSignatures = undefined;
     this.#cachedProject = {
       sources: sources.map(({ name, source }) => ({ name, source })),
       entryModule: entry.module,
@@ -402,6 +436,7 @@ export class GleamFrontendService {
     this.#parsedModules.clear();
     this.#loweredModules.clear();
     this.#cachedProject = undefined;
+    this.#cachedSignatures = undefined;
   }
 }
 

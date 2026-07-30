@@ -45,6 +45,11 @@ interface SynchronousFileReader {
 
 let gleamParser: GleamParser | undefined;
 let gleamParserInitialization: Promise<GleamParser> | undefined;
+const parsedIntegerUpdates = new WeakMap<GleamModule, GleamModule>();
+
+export function parsedIntegerUpdate(module: GleamModule): GleamModule | undefined {
+  return parsedIntegerUpdates.get(module);
+}
 
 export function parseGleamModule(
   name: string,
@@ -156,8 +161,10 @@ export class IncrementalGleamModuleParser {
           materializeAnnotations,
           () => updatedModule,
         );
+        const previousModule = this.#parsedModule;
         this.#parsedModule = module;
         this.#parsedSource = this.#source;
+        parsedIntegerUpdates.set(module, previousModule);
         return module;
       }
     }
