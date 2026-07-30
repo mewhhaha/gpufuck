@@ -99,8 +99,9 @@ Three rules that will save you time:
 - **Use `FunctionalCompilerService` for ordinary compilation.** It uses the CPU for HM modules and
   initializes one resident GPU compiler only when a GPU-only typechecking profile requires it. It
   also reuses an unchanged encoded module.
-- **Use `GleamFrontendService` for a long-lived Gleam project.** It reuses unchanged parses and
-  lowerings; an identical project returns the same packed module.
+- **Use `GleamFrontendService` for a long-lived Gleam project.** It applies internal source edits
+  through Baba's incremental parser, reuses unchanged lowerings, and returns the same packed module
+  for an identical project. Call `clear()` to release its retained parser documents and caches.
 - **Use `ParallelGleamProjectFrontend` for a cold project with at least four modules.** It parses,
   collects public signatures, and lowers modules in resident workers before linking them in source
   order.
@@ -118,21 +119,24 @@ No. Against Gleam 1.17.0 on the same source, on a Ryzen 7 7800X3D with an RTX 40
 
 | Workload                                     | Reproduce                      | Result           |
 | -------------------------------------------- | ------------------------------ | ---------------- |
-| **One large module**, compiled once          | `deno task bench:gleam-stdlib` | **5.61× slower** |
-| **One source-only edit**                     | `deno task bench:gleam-stdlib` | **1.24× slower** |
-| **Unchanged large module**                   | `deno task bench:gleam-stdlib` | **~153× faster** |
+| **One large module**, compiled once          | `deno task bench:gleam-stdlib` | **4.84× slower** |
+| **One internal code edit**                   | `deno task bench:gleam-stdlib` | **12.3× slower** |
+| **One source-only edit**                     | `deno task bench:gleam-stdlib` | **1.14× slower** |
+| **Unchanged large module**                   | `deno task bench:gleam-stdlib` | **~271× faster** |
 | **1,024 modules**, shared Wasm artifact      | `deno task bench:gleam-batch`  | **~1.5× slower** |
 | **1,024 independent modules**, fused workers | `deno task bench:gleam-batch`  | **~1.8× faster** |
 
 The earlier batch claim charged Gleam one process and package startup for every module while gpufuck
 used one resident process. The benchmark now gives both compilers all modules in one process and
 includes executable output on both sides. `CpuCompiler` and the default compiler service avoid
-WebGPU startup, but frontend work and Wasm emission still leave the full compiler behind.
+WebGPU startup, but frontend work and Wasm emission still leave the full compiler behind. The cold
+stdlib row runs uncached gpufuck compiler work in a warm Deno process and launches a fresh Gleam
+process after `gleam clean`; it is not a process-startup comparison.
 
-On the standard-library corpus, the median of three benchmark medians is 107.3 ms to parse and
-lower, 38.6 ms for host resolution, inference, and effects, and 89.1 ms for uncached Wasm emission.
-The resulting 236.6 ms is 5.61× Gleam's 42.2 ms cold build. The raw HM phase is 12.8 ms; sharing
-closed global environments removed its former quadratic top-level copying.
+On the standard-library corpus, the median of three benchmark medians is 111.8 ms to parse and
+lower, 36.6 ms for host resolution, inference, and effects, and 64.9 ms for uncached Wasm emission.
+The separately timed complete pipeline is 217.4 ms, 4.84× Gleam's 44.9 ms cold build. The raw HM
+phase is 13.0 ms; sharing closed global environments removed its former quadratic top-level copying.
 
 Independent compilation now breaks even between 512 and 1,024 modules. Across three complete
 benchmark processes, the 1,024-module median was 202.2 ms for the fused source-to-Wasm worker path

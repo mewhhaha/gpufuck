@@ -354,6 +354,115 @@ faults, dedicated `if`, Store semantics, or existing backend specialization.
    deletes the 301 references' duplicated rules and passes the 5% guardrail.
 9. Remeasure the combined executable compiler. Do not infer results from the representation model.
 
+## Post-production discarded-work checkpoint
+
+The 2026-07-30 follow-up traced Storage Core decisions from derivation through Wasm emission. A
+Gleam stdlib compilation derived 3,083 value decisions and 3,298 references. Emission consulted
+1,895 decisions—733 closures and 1,162 constructors—and discarded the result after asserting that
+the already-selected representation agreed. The remaining 1,188 decisions, or 38.5%, were not
+consulted at all. No consulted decision selected an emitted representation.
+
+Ordinary Wasm compilation therefore no longer derives, verifies, or retains a Storage Core plan. The
+existing Core index owns the shared weak-head-normal-form classification, and code generation
+derives arena reset eligibility from the global thunks it actually emits. A caller-supplied Storage
+Core still takes the complete derivation and verification path because it is an external contract.
+The trace keeps `wasm.plan.storage`, annotated as skipped, so the absence of work remains
+observable.
+
+Three fresh processes measured the same pinned Gleam stdlib checkout before and after removing the
+discarded plan:
+
+| Measurement                     | Raw baseline (ms)      | Raw simplified (ms)    | Process median change |
+| ------------------------------- | ---------------------- | ---------------------- | --------------------: |
+| Direct Wasm emission            | 74.8, 79.2, 80.0       | 72.4, 61.6, 67.2       |                -15.2% |
+| Complete cold CPU compilation   | 220.8, 238.9, 234.1    | 234.0, 203.8, 219.2    |                 -6.4% |
+| Traced Wasm compilation         | 90.324, 90.947, 89.345 | 76.482, 76.410, 83.762 |                -15.3% |
+| `wasm.plan.storage` trace stage | 14.9–17.9              | approximately 0.001    |               -100.0% |
+
+The representative Wasm artifact remained 1,939 bytes with identical SHA-256
+`a336a6591bb4d6381a3f5203d440ed5ba17493bf8c50e77e8d8a584894bfe372`. This change passes both
+performance guardrails and the semantic-output check.
+
+The Baba source-position boundary also stopped allocating and filling a UTF-16-to-UTF-8 table for
+ASCII source. Seventeen of the nineteen stdlib modules are ASCII. Repeated construction and span
+lookup over that corpus measured 40.5 ms versus 64.5 ms for the previous implementation, a 37.1%
+reduction. Non-ASCII input retains the complete offset table and has explicit multibyte and
+surrogate-pair coverage.
+
+A direct Baba cursor-to-Surface lowering was rejected at this checkpoint. Baba 7.6 exposes cursor
+operations but keeps its flat rule, child, field, and value tapes private, while gpufuck's complete
+Gleam semantics live in the 1,280-line AST parser and 2,815-line AST-to-Surface lowering. Recreating
+those rules over cursor calls would duplicate the frontend instead of deleting work. The earlier
+function-body deferral spike merely postponed AST materialization and regressed parse plus lowering
+from 125.2 ms to 140.2 ms, or 12.0%. A credible direct path requires Baba to execute a Gleam
+lowering recipe or expose a stable tape API; gpufuck should not add a second semantic frontend in
+the meantime.
+
+The subsequent Baba 7.9 update regenerated all three checked-in parsers with runtime ABI 12. Parser
+plan sizes stayed unchanged; the shared runtime Wasm grew from 16,216 to 17,487 bytes and added
+incremental lexing, validation, and parsing. It does not improve gpufuck's current full-parse path.
+On the same generated 72,669-character Gleam module, three process medians were 11.10 ms with Baba
+7.6 and 12.30 ms with Baba 7.9, a 10.8% regression. The stdlib benchmark's repeated parse medians
+were 110.4 ms and 106.9 ms respectively, within the 5% noise guardrail, while its single traced
+frontend parse moved from 84.77 ms to 91.76 ms.
+
+`GleamFrontendService` now retains one Baba incremental document per active module. It sends a
+single UTF-16 replacement edit computed from the shared prefix and suffix, retains the document
+through syntax errors so the next correction remains incremental, and disposes documents when
+modules leave the project or `clear()` is called. Its trace records changed ranges, scanned code
+units, token creation and reuse, parser actions, reuse checks, and checkpoint creation and reuse.
+Trailing-trivia-only edits retain the existing faster path that skips parsing entirely.
+
+Three fresh processes edited the generated 20,526-character stdlib entry. Full parse plus Gleam AST
+materialization measured 7.92 ms; incremental update, parse, and materialization measured 5.95 ms, a
+24.9% reduction. Baba scanned five UTF-16 code units, created two tokens, reused 3,734 tokens and
+3,732 checkpoints, and performed 150 parser actions. The cursor parse after `applyEdits` was
+effectively free; the representative frontend costs were 4.57 ms for applying the incremental edit,
+2.08 ms for AST materialization, 6.53 ms for lowering, and 14.44 ms for linking.
+
+The benchmark now distinguishes an appended-comment edit from a real internal code edit. Complete
+internal edit compilation and Wasm emission measured 161.0 ms versus Gleam's 12.2 ms. Incremental
+parsing therefore removes about two milliseconds from this case but cannot meet the whole-compiler
+5% guardrail while semantic compilation and Wasm emission still redo the linked program. Retain the
+service optimization and its work counters, but do not credit it as an end-to-end compilation win;
+the next edit-path work must make semantic and Wasm caches module-granular.
+
+### Performance measurement audit
+
+The next checkpoint found that edit tracing did not describe the code path being benchmarked.
+`FunctionalCompilerService` discarded the trace option, while a traced `compileModuleToWasm` call
+bypassed both its module artifact cache and its resolved-Core cache. The internal-edit trace
+therefore stopped after frontend linking, and forwarding it without changing Wasm behavior would
+have measured an uncached path that production did not run.
+
+Tracing now follows the production cache path and records the cache level separately. Semantic
+compilation reports exact-module hits, semantic-fingerprint hits with source rebinding, and misses.
+Wasm reports exact-module and resolved-Core artifact hits, and `wasm.total` covers cache lookup,
+Core readback, planning, and emission. The benchmark wraps every internal edit in `compiler.total`
+and rejects a phase breakdown that double-counts more than one percent of that wall time.
+
+On the 20-module, 261.5 KiB stdlib corpus, a representative internal edit reconciled 148.842 ms as
+29.202 ms frontend, 45.528 ms semantic work, 72.781 ms Wasm work, and 1.332 ms unattributed
+orchestration. The trace therefore attributes 99.1% of the measured wall time. It also exposed two
+previously invisible whole-program hashes: the Surface semantic fingerprint took 11.150 ms and the
+resolved-Core Wasm fingerprint took 8.751 ms. Together they consume 13.4% of internal-edit latency
+when the edit changes program semantics.
+
+A source-only edit takes a different path. The frontend registers semantic equivalence before the
+compiler service runs, so both fingerprints and resolved-Core Wasm lookup are effectively free. Its
+traced median was 13.390 ms: frontend relinking took 11.293 ms, source rebinding took 0.850 ms, and
+the cached Wasm request took 0.070 ms. That trace attributes 93.3% of its total, making relinking
+the next source-only target rather than hashing.
+
+Cold comparisons now time the complete untraced gpufuck path directly instead of adding independent
+frontend, semantic, and Wasm medians. Across three benchmark processes, the median complete path was
+217.4 ms untraced and the median traced total was 234.4 ms. The traced number is for attribution,
+not headline speed comparisons: its 7.8% difference includes instrumentation and cross-sample
+machine noise. “Cold” also means different process boundaries for the two tools. Gpufuck runs
+uncached compiler work inside an already-warm Deno process; each Gleam sample launches a new
+compiler process after `gleam clean`, while operating system file pages may remain cached. The
+benchmark reports those scopes explicitly.
+
 ## Verification
 
 Gpufuck synthesis passes:
