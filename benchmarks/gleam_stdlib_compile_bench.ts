@@ -22,6 +22,7 @@ import {
   measureCompilerStageAsync,
   renderCompilerPerformanceTrace,
   requestWebGpuDevice,
+  runWasmModule,
   summarizeCompilerPerformance,
 } from "../functional.ts";
 import { GleamFrontendService, type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
@@ -325,6 +326,45 @@ try {
   wasmSamples.sort((left, right) => left - right);
   const wasmMilliseconds = wasmSamples[Math.floor(wasmSamples.length / 2)]!;
 
+  const runtimeCompilation = await cpuCompiler.compileModule(frontend.lowered.module);
+  if (!runtimeCompilation.ok) {
+    throw new Error(
+      `runtime CPU compilation failed: ${runtimeCompilation.diagnostics[0]?.code}`,
+    );
+  }
+  const benchmarkInit: Record<string, Record<string, () => never>> = Object.fromEntries(
+    runtimeCompilation.module.hostCapabilities.map((capability) => [
+      capability.name,
+      Object.fromEntries(capability.fields.flatMap((field) => {
+        if (field.kind === "value") {
+          if (field.wasmLiteral !== undefined) return [];
+          throw new Error(
+            `stdlib runtime benchmark cannot stub host value ${
+              JSON.stringify(`${capability.name}.${field.name}`)
+            }`,
+          );
+        }
+        if (field.wasmIntrinsic !== undefined) return [];
+        return [[field.name, () => {
+          throw new Error(
+            `stdlib runtime benchmark unexpectedly called ${
+              JSON.stringify(`${capability.name}.${field.name}`)
+            }`,
+          );
+        }]];
+      })),
+    ]),
+  );
+  const wasmRuntimeMilliseconds = await median(async () => {
+    const execution = await runWasmModule(runtimeCompilation.module, { init: benchmarkInit });
+    if (execution.value.kind !== "unit") {
+      throw new Error(
+        `stdlib benchmark entry expected Unit; received ${JSON.stringify(execution.value)}`,
+      );
+    }
+  });
+  runtimeCompilation.module.destroy();
+
   const cpuInferenceMilliseconds = await median(() => {
     const inferred = inferTypes(frontend.lowered.module);
     if (!inferred.ok) {
@@ -554,6 +594,7 @@ try {
         gpuResolveAndInfer: Number(gpuMilliseconds.toFixed(1)),
         cpuHindleyMilnerOracle: Number(cpuInferenceMilliseconds.toFixed(1)),
         emitWasm: Number(wasmMilliseconds.toFixed(1)),
+        runWasm: Number(wasmRuntimeMilliseconds.toFixed(1)),
         cpuCompleteWithWasm: Number(cpuCompleteWithWasm.toFixed(1)),
         gpuCompleteWithWasm: Number(gpuCompleteWithWasm.toFixed(1)),
         warmCompleteWithWasm: Number(warmCompleteWithWasm.toFixed(3)),
