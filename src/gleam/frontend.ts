@@ -39,6 +39,16 @@ export type GleamFrontendResult =
     readonly diagnostics: readonly [GleamDiagnostic, ...GleamDiagnostic[]];
   };
 
+interface LowerParsedGleamModuleOptions {
+  readonly trace?: CompilerPerformanceTrace;
+  readonly link?: (
+    modules: readonly GleamModule[],
+    loweredModules: readonly LoweredGleamModule[],
+    entry: { readonly module: string; readonly exportName: string },
+    trace?: CompilerPerformanceTrace,
+  ) => GleamFrontendResult;
+}
+
 export function lowerGleamSources(
   sources: readonly GleamSourceModule[],
   entry: { readonly module: string; readonly exportName: string },
@@ -109,7 +119,9 @@ export function lowerGleamSources(
     return modules;
   });
   if (!Array.isArray(parsed)) return parsed;
-  return lowerParsedGleamModules(parsed, entry, lowerGleamModule, options.trace);
+  return lowerParsedGleamModules(parsed, entry, lowerGleamModule, {
+    ...(options.trace === undefined ? {} : { trace: options.trace }),
+  });
 }
 
 export function lowerParsedGleamModules(
@@ -119,8 +131,9 @@ export function lowerParsedGleamModules(
     module: GleamModule,
     signatures: readonly GleamExportSignature[],
   ) => LoweredGleamModule = lowerGleamModule,
-  trace?: CompilerPerformanceTrace,
+  options: LowerParsedGleamModuleOptions = {},
 ): GleamFrontendResult {
+  const trace = options.trace;
   const signatures: GleamExportSignature[] = [];
   const nominalAnnotations = { modules: modules.length, signatures: 0 };
   measureCompilerStage(trace, "frontend.signatures.nominal", nominalAnnotations, () => {
@@ -184,7 +197,7 @@ export function lowerParsedGleamModules(
   );
   if (loweringDiagnostic !== null) return loweringDiagnostic;
 
-  return linkLoweredGleamModules(modules, loweredModules, entry, trace);
+  return (options.link ?? linkLoweredGleamModules)(modules, loweredModules, entry, trace);
 }
 
 export function linkLoweredGleamModules(

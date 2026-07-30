@@ -687,6 +687,7 @@ function pipelineBreakdown(
     "frontend.signatures.value",
     "frontend.lower",
     "frontend.link",
+    "frontend.link.literal-update",
   ].reduce((sum, stage) => sum + (stages.get(stage) ?? 0), 0);
   const semantic = [
     "semantic.fingerprint",

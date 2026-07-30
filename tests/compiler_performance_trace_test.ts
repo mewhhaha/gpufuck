@@ -303,6 +303,10 @@ Deno.test("incremental project fingerprints recover prior compiled edits", async
     changedTrace.snapshot().some((event) => event.stage === "semantic.inference.solve"),
     false,
   );
+  const linkedUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.link.literal-update"
+  );
+  equal(linkedUpdate?.annotations.changedNodes, 1);
   notDeepStrictEqual(second.wasm, first.wasm);
   const execution = await runWasmModule(second.module);
   equal(execution.value.kind, "signed-integer-64");
@@ -340,6 +344,7 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
   const second = frontend.lower(
     [{ name: "main", source: "pub fn main() -> Int { 41 - 1 }\n" }],
     entry,
+    { trace },
   );
   if (!second.ok) throw new Error(second.diagnostics[0].message);
   const secondCompilation = await compiler.compileModule(second.lowered.module, { trace });
@@ -347,6 +352,11 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
 
   const semanticCache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
   equal(semanticCache?.annotations.cacheLevel, "none");
+  const linkedUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.link.literal-update"
+  );
+  equal(linkedUpdate?.annotations.changedNodes, 0);
+  ok(trace.snapshot().some((event) => event.stage === "frontend.link"));
   ok(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"));
 
   firstCompilation.module.destroy();

@@ -9,7 +9,10 @@ import {
   registerModuleFingerprint,
   structuralFingerprint,
 } from "../functional/semantic_fingerprint.ts";
-import { tryRegisterLiteralModuleUpdate } from "../functional/incremental_module.ts";
+import {
+  tryApplyLinkedLiteralUpdates,
+  tryRegisterLiteralModuleUpdate,
+} from "../functional/incremental_module.ts";
 import { type GleamDiagnostic, GleamSyntaxError } from "./diagnostic.ts";
 import type { GleamFrontendResult, GleamSourceModule } from "./frontend.ts";
 import { linkLoweredGleamModules, lowerGleamSources, lowerParsedGleamModules } from "./frontend.ts";
@@ -211,6 +214,7 @@ export class GleamFrontendService {
     }
 
     let signatureKey: string | undefined;
+    const previousLinkedProject = cached?.result.ok ? cached.result.lowered : undefined;
     const result = lowerParsedGleamModules(
       modules,
       entry,
@@ -259,7 +263,39 @@ export class GleamFrontendService {
         });
         return lowered;
       },
-      options.trace,
+      {
+        ...(options.trace === undefined ? {} : { trace: options.trace }),
+        link: (parsedModules, loweredModules, projectEntry, trace) => {
+          if (previousLinkedProject !== undefined) {
+            const updateAnnotations = { modules: loweredModules.length, changedNodes: 0 };
+            const update = measureCompilerStage(
+              trace,
+              "frontend.link.literal-update",
+              updateAnnotations,
+              () =>
+                tryApplyLinkedLiteralUpdates(
+                  previousLinkedProject.linked,
+                  previousLinkedProject.modules.map((lowered) => lowered.artifact),
+                  loweredModules.map((lowered) => lowered.artifact),
+                ),
+              (literalUpdate) => {
+                updateAnnotations.changedNodes = literalUpdate?.changedNodes ?? 0;
+              },
+            );
+            if (update !== undefined) {
+              return {
+                ok: true,
+                lowered: {
+                  modules: loweredModules,
+                  linked: update.linked,
+                  module: update.linked.module,
+                },
+              };
+            }
+          }
+          return linkLoweredGleamModules(parsedModules, loweredModules, projectEntry, trace);
+        },
+      },
     );
     if (result.ok) {
       const moduleSemantics = result.lowered.modules.map((lowered) => {
