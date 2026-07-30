@@ -20,7 +20,6 @@ import { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import { WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { WasmFunctionAnalysis } from "./wasm_function_analysis.ts";
-import type { StoragePlan } from "./storage_contract.ts";
 import { createLoweredCoreStoragePlan } from "./storage_plan.ts";
 import { requireFirstOrderWasmType } from "./wasm_value_codec.ts";
 import { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
@@ -35,7 +34,6 @@ export interface WasmBackendPlan {
   readonly functionAnalysis: WasmFunctionAnalysis;
   readonly uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
   readonly coreIndex: WasmCoreIndex;
-  readonly storage: StoragePlan;
   readonly entry: WasmEntry;
   readonly compactScalarEligible: boolean;
   readonly instrumentedFuel: boolean;
@@ -99,18 +97,37 @@ export function createWasmBackendPlan(
         new WasmConstantAnalysis(loweredNodes),
       ] as const,
   );
-  const storageAnnotations = { nodes: loweredNodes.length, values: 0, references: 0 };
-  const storage = measureCompilerStage(
+  const storageAnnotations = {
+    nodes: loweredNodes.length,
+    values: 0,
+    closureValues: 0,
+    constructorValues: 0,
+    thunkValues: 0,
+    references: 0,
+    boundaries: 0,
+    skipped: options.storageCore === undefined,
+  };
+  measureCompilerStage(
     trace,
     "wasm.plan.storage",
     storageAnnotations,
     () =>
-      createLoweredCoreStoragePlan(module, loweredNodes, captureAnalysis, {
-        ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
-      }, coreIndex),
+      options.storageCore === undefined
+        ? undefined
+        : createLoweredCoreStoragePlan(module, loweredNodes, captureAnalysis, {
+          storageCore: options.storageCore,
+        }, coreIndex),
     (result) => {
+      if (result === undefined) return;
       storageAnnotations.values = result.values.length;
+      storageAnnotations.closureValues =
+        result.values.filter((value) => value.valueKind === "closure").length;
+      storageAnnotations.constructorValues =
+        result.values.filter((value) => value.valueKind === "constructor").length;
+      storageAnnotations.thunkValues =
+        result.values.filter((value) => value.valueKind === "thunk").length;
       storageAnnotations.references = result.references.length;
+      storageAnnotations.boundaries = result.boundaries.length;
     },
   );
   const entry = measureCompilerStage(trace, "wasm.plan.boundary", {}, () => {
@@ -160,7 +177,6 @@ export function createWasmBackendPlan(
     functionAnalysis,
     uniqueReuseAnalysis,
     coreIndex,
-    storage,
     entry,
     compactScalarEligible,
     instrumentedFuel,

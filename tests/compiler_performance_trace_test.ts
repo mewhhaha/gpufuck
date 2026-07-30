@@ -144,6 +144,9 @@ Deno.test("performance tracing preserves Gleam Core and Wasm output", async () =
   equal(emitted?.annotations.bytes, tracedWasm.byteLength);
   const coreIndex = trace.snapshot().find((event) => event.stage === "wasm.plan.index-core");
   equal(coreIndex?.annotations.directOnlyDefinitions, 1);
+  const storage = trace.snapshot().find((event) => event.stage === "wasm.plan.storage");
+  equal(storage?.annotations.skipped, true);
+  equal(storage?.annotations.values, 0);
 
   const gcTrace = new CompilerPerformanceTrace();
   const tracedWasmGc = await compileModuleToWasm(tracedCompilation.module, {

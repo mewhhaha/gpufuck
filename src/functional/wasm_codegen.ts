@@ -80,7 +80,6 @@ import {
   retainOwnedValueFunction,
 } from "./wasm_owned_runtime.ts";
 import { MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
-import { StorageClass, type StorageDecision } from "./storage_contract.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import type { ConstantResolver, WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
@@ -331,7 +330,6 @@ class WasmCompiler {
   readonly #functionAnalysis: WasmFunctionAnalysis;
   readonly #uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
   readonly #coreIndex: WasmBackendPlan["coreIndex"];
-  readonly #storageDecisions: ReadonlyMap<string, StorageDecision>;
   readonly #indirectFunctions: (WasmFunctionBody | undefined)[] = [];
   readonly #lambdaSlots: (number | undefined)[];
   readonly #recursiveLambdaOwners = new Map<number, number>();
@@ -356,7 +354,7 @@ class WasmCompiler {
   readonly #instrumentedFuel: boolean;
   readonly #simdEnabled: boolean;
   readonly #runtimeEmitter: WasmRuntimeEmitter;
-  readonly #automaticArenaReset: boolean;
+  #automaticArenaReset = true;
   readonly #compilationOptions: WasmCompilationOptions;
   readonly #ownedRuntimeEnabled: boolean;
   readonly #hostEmitter: WasmHostEmitter;
@@ -405,19 +403,12 @@ class WasmCompiler {
       emitRuntimeFault: (instructions, fault) =>
         this.#runtimeEmitter.emitFault(instructions, fault, -1),
     });
-    this.#automaticArenaReset = plan.storage.summary.automaticArenaReset;
     this.#hasLazyEvaluationBoundary = plan.coreIndex.hasLazyEvaluationBoundary;
     this.#simdEnabled = !plan.instrumentedFuel && plan.options.simd === "wasm-simd" &&
       module.evaluationProfile === EvaluationProfile.StrictEager &&
       !this.#hasLazyEvaluationBoundary;
     this.#captureAnalysis = plan.captureAnalysis;
     this.#constantAnalysis = plan.constantAnalysis;
-    this.#storageDecisions = new Map(
-      plan.storage.values.map((decision) => [
-        `${decision.valueKind}:${decision.coreNode}`,
-        decision,
-      ]),
-    );
     this.#functionAnalysis = plan.functionAnalysis;
     this.#uniqueReuseAnalysis = plan.uniqueReuseAnalysis;
     this.#coreIndex = plan.coreIndex;
@@ -671,6 +662,7 @@ class WasmCompiler {
       const rootNode = this.#module.definitionRoots[definitionIndex];
       if (rootNode === undefined || this.expressionIsWhnf(rootNode)) continue;
       this.#globalThunkSlots[definitionIndex] = this.reserveIndirectFunction();
+    this.#automaticArenaReset = !this.#globalThunkSlots.some((slot) => slot !== undefined);
     }
     this.compileHostOperationClosures();
     this.compileGlobalThunks();
@@ -1393,7 +1385,6 @@ class WasmCompiler {
     constructorIndex: number,
     nodeIndex: number,
   ): void {
-    this.storageDecision(nodeIndex, "constructor");
     const arity = this.#module.constructorArities[constructorIndex];
     if (arity === undefined) {
       throw new Error(
@@ -1461,7 +1452,6 @@ class WasmCompiler {
     lambdaNode: number,
     environment: Environment,
   ): void {
-    this.storageDecision(lambdaNode, "closure");
     const lambda = this.node(lambdaNode);
     if (lambda.tag !== CoreTag.Lambda) {
       throw new Error(
@@ -1505,11 +1495,6 @@ class WasmCompiler {
 
     const constructorApplication = this.constructorApplication(nodeIndex);
     if (constructorApplication !== undefined) {
-      this.storageDecision(
-        constructorApplication.constructorNode,
-        "constructor",
-        [StorageClass.InvocationArena],
-      );
       const fields: ValueSource[] = [];
       for (const argument of constructorApplication.arguments) {
         const constantField = this.#instrumentedFuel
@@ -4623,7 +4608,6 @@ class WasmCompiler {
     expressionNode: number,
     environment: Environment,
   ): void {
-    this.storageDecision(expressionNode, "thunk");
     const slot = this.reserveIndirectFunction();
     const captured = this.prunedCaptures(
       expressionNode,
@@ -5606,7 +5590,6 @@ class WasmCompiler {
   }
 
   lambdaSlot(lambdaNode: number): number {
-    this.storageDecision(lambdaNode, "closure");
     const existing = this.#lambdaSlots[lambdaNode];
     if (existing !== undefined) return existing;
     const lambda = this.node(lambdaNode);
@@ -6255,26 +6238,6 @@ class WasmCompiler {
     return this.#functionImports.length + (this.#compactScalar ? 0 : 4);
   }
 
-  storageDecision(
-    coreNode: number,
-    valueKind: "closure" | "constructor" | "thunk",
-    allowedStorage?: readonly StorageClass[],
-  ): StorageDecision {
-    const decision = this.#storageDecisions.get(`${valueKind}:${coreNode}`);
-    if (decision === undefined) {
-      throw new Error(
-        `functional WASM ${valueKind} at core node ${coreNode} omitted its storage decision`,
-      );
-    }
-    if (allowedStorage !== undefined && !allowedStorage.includes(decision.storage)) {
-      throw new Error(
-        `functional WASM ${valueKind} at core node ${coreNode} uses ${decision.storage} storage; expected ${
-          allowedStorage.join(" or ")
-        }`,
-      );
-    }
-    return decision;
-  }
 
   node(index: number): CoreNode {
     const node = this.#nodes[index];
