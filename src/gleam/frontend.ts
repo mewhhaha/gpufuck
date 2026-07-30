@@ -238,6 +238,7 @@ export function linkLoweredGleamModules(
         linkModules(
           artifacts,
           entryArtifact === null ? entry : { module: entryArtifact.name, exportName: "main" },
+          trace === undefined ? {} : { trace },
         ),
       (result) => {
         linkAnnotations.nodes = result.module.nodeCount;

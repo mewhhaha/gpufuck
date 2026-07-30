@@ -16,6 +16,10 @@ import {
   type SurfaceExpression,
   type SurfaceTypeDeclaration,
 } from "./surface_builder.ts";
+import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
 
 export type LinkDiagnosticCode =
   | "F4001"
@@ -115,6 +119,10 @@ export type LinkedSource = SourceRange;
 export interface LinkedModule {
   readonly module: EncodedModule;
   readonly sources: readonly LinkedSource[];
+}
+
+export interface ModuleLinkOptions {
+  readonly trace?: CompilerPerformanceTrace;
 }
 
 export function createModuleArtifact(
@@ -291,6 +299,7 @@ function freezeModuleArtifact(artifact: ModuleArtifact): ModuleArtifact {
 export function linkModules(
   artifacts: readonly ModuleArtifact[],
   entry: { readonly module: string; readonly exportName: string },
+  options: ModuleLinkOptions = {},
 ): LinkedModule {
   if (artifacts.length === 0) {
     throw new LinkError({
@@ -299,6 +308,8 @@ export function linkModules(
       message: "functional module linker requires at least one module",
     });
   }
+  const indexAnnotations = { modules: artifacts.length, exports: 0 };
+  const indexSpan = options.trace?.start("frontend.link.index");
   const modules = new Map<string, ModuleArtifact>();
   for (const candidate of artifacts) {
     const artifact = snapshottedModules.has(candidate)
@@ -337,10 +348,23 @@ export function linkModules(
       );
     }
   }
-  const artifactReachability = artifactDefinitionReachability(
-    modules,
-    exportedDefinitions,
-    entry,
+  indexAnnotations.exports = exportedDefinitions.size + exportedTypes.size +
+    exportedConstructors.size;
+  indexSpan?.finish(indexAnnotations);
+  const reachabilityAnnotations = { modules: modules.size, definitions: 0 };
+  const artifactReachability = measureCompilerStage(
+    options.trace,
+    "frontend.link.reachability",
+    reachabilityAnnotations,
+    () =>
+      artifactDefinitionReachability(
+        modules,
+        exportedDefinitions,
+        entry,
+      ),
+    (reachability) => {
+      reachabilityAnnotations.definitions = reachability.definitionNames.size;
+    },
   );
   const linkedDefinitions: SurfaceDefinition[] = [];
   const linkedTypes: SurfaceTypeDeclaration[] = [];
@@ -356,6 +380,7 @@ export function linkModules(
   let sourceBase = 0;
   let evaluationProfile: EvaluationProfile | undefined;
 
+  const rewriteSpan = options.trace?.start("frontend.link.rewrite");
   for (const artifact of modules.values()) {
     const profile = artifact.options.evaluationProfile ?? EvaluationProfile.StrictEager;
     if (evaluationProfile !== undefined && evaluationProfile !== profile) {
@@ -589,6 +614,7 @@ export function linkModules(
     }
     sourceBase += artifact.sourceByteLength;
   }
+  rewriteSpan?.finish({ modules: modules.size });
   const entryDefinition = exportedDefinitions.get(exportKey(entry.module, entry.exportName));
   if (entryDefinition === undefined) {
     throw new LinkError({
@@ -620,17 +646,27 @@ export function linkModules(
         fields: capability.fields.filter((field) => fields.has(field.name)),
       }];
     });
-  const module = buildSurfaceModule(
-    linkedDefinitions,
-    linkedTypes,
-    entryDefinition,
-    sourceBase,
+  const module = measureCompilerStage(
+    options.trace,
+    "frontend.link.pack",
     {
-      hostCapabilities: reachableCapabilities,
-      hostDefinitions: reachableHostDefinitions,
-      evaluationProfile: evaluationProfile ?? EvaluationProfile.StrictEager,
-      wasmExports: linkedWasmExports,
+      definitions: linkedDefinitions.length,
+      types: linkedTypes.length,
+      sourceBytes: sourceBase,
     },
+    () =>
+      buildSurfaceModule(
+        linkedDefinitions,
+        linkedTypes,
+        entryDefinition,
+        sourceBase,
+        {
+          hostCapabilities: reachableCapabilities,
+          hostDefinitions: reachableHostDefinitions,
+          evaluationProfile: evaluationProfile ?? EvaluationProfile.StrictEager,
+          wasmExports: linkedWasmExports,
+        },
+      ),
   );
   return {
     module: { ...module, sources: Object.freeze(sources) },
