@@ -1,4 +1,8 @@
 import type { GleamModule } from "./ast.ts";
+import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
 import { createOwnedModuleArtifact } from "../functional/module_linker.ts";
 import {
   registerEquivalentModuleFingerprint,
@@ -12,7 +16,7 @@ import {
   type LoweredGleamModule,
   lowerGleamModule,
 } from "./lowering.ts";
-import { parseGleamModule } from "./parser.ts";
+import { IncrementalGleamModuleParser } from "./parser.ts";
 
 interface CachedGleamProject {
   readonly sources: readonly GleamSourceModule[];
@@ -21,7 +25,12 @@ interface CachedGleamProject {
   readonly result: GleamFrontendResult;
 }
 
+export interface GleamFrontendServiceLowerOptions {
+  readonly trace?: CompilerPerformanceTrace;
+}
+
 export class GleamFrontendService {
+  readonly #moduleParsers = new Map<string, IncrementalGleamModuleParser>();
   readonly #parsedModules = new Map<
     string,
     { readonly source: string; readonly module: GleamModule }
@@ -41,6 +50,7 @@ export class GleamFrontendService {
   lower(
     sources: readonly GleamSourceModule[],
     entry: { readonly module: string; readonly exportName: string },
+    options: GleamFrontendServiceLowerOptions = {},
   ): GleamFrontendResult {
     const cached = this.#cachedProject;
     if (
@@ -56,8 +66,21 @@ export class GleamFrontendService {
       cached.entryExport === entry.exportName &&
       sameSourcesIgnoringTrailingTrivia(cached.sources, sources);
 
+    const activeModules = new Set(sources.map((source) => source.name));
+    for (const [name, parser] of this.#moduleParsers) {
+      if (activeModules.has(name)) continue;
+      parser.dispose();
+      this.#moduleParsers.delete(name);
+      this.#parsedModules.delete(name);
+      this.#loweredModules.delete(name);
+    }
+
     if (sources.length === 0 || repeatedModuleName(sources) !== undefined) {
-      return this.#rememberProject(sources, entry, lowerGleamSources(sources, entry));
+      return this.#rememberProject(
+        sources,
+        entry,
+        lowerGleamSources(sources, entry, options),
+      );
     }
 
     const modules: GleamModule[] = [];
@@ -83,7 +106,28 @@ export class GleamFrontendService {
         continue;
       }
       try {
-        const module = parseGleamModule(source.name, source.source);
+        const moduleAnnotations = {
+          module: source.name,
+          sourceCharacters: source.source.length,
+          declarations: 0,
+          incremental: this.#moduleParsers.has(source.name),
+        };
+        const module = measureCompilerStage(
+          options.trace,
+          "frontend.parse.module",
+          moduleAnnotations,
+          () => {
+            let parser = this.#moduleParsers.get(source.name);
+            if (parser === undefined) {
+              parser = new IncrementalGleamModuleParser(source.name, source.source);
+              this.#moduleParsers.set(source.name, parser);
+            } else {
+              parser.update(source.source, options.trace);
+            }
+            return parser.parse(options.trace);
+          },
+          (parsed) => moduleAnnotations.declarations = parsed.declarations.length,
+        );
         this.#parsedModules.set(source.name, { source: source.source, module });
         modules.push(module);
       } catch (error) {
@@ -126,7 +170,7 @@ export class GleamFrontendService {
         });
         return lowered;
       });
-      const result = linkLoweredGleamModules(modules, loweredModules, entry);
+      const result = linkLoweredGleamModules(modules, loweredModules, entry, options.trace);
       if (result.ok) {
         registerEquivalentModuleFingerprint(
           cached.result.lowered.module,
@@ -185,6 +229,7 @@ export class GleamFrontendService {
         });
         return lowered;
       },
+      options.trace,
     );
     return this.#rememberProject(sources, entry, result);
   }
@@ -204,6 +249,8 @@ export class GleamFrontendService {
   }
 
   clear(): void {
+    for (const parser of this.#moduleParsers.values()) parser.dispose();
+    this.#moduleParsers.clear();
     this.#parsedModules.clear();
     this.#loweredModules.clear();
     this.#cachedProject = undefined;

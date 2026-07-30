@@ -19,28 +19,55 @@ export interface BabaTokenCursor {
 }
 
 export class BabaUtf8ByteOffsets {
-  readonly #offsets: Uint32Array;
+  readonly #source: string;
+  readonly #offsets: Uint32Array | undefined = undefined;
+  readonly #byteLength: number;
 
-  constructor(private readonly source: string) {
-    this.#offsets = new Uint32Array(source.length + 1);
-    let byteOffset = 0;
-    for (let index = 0; index < source.length; index++) {
-      this.#offsets[index] = byteOffset;
+  constructor(source: string) {
+    this.#source = source;
+    let firstNonAscii = 0;
+    while (
+      firstNonAscii < source.length &&
+      source.charCodeAt(firstNonAscii) <= 0x7f
+    ) firstNonAscii++;
+    if (firstNonAscii === source.length) {
+      this.#byteLength = source.length;
+      return;
+    }
+
+    const offsets = new Uint32Array(source.length + 1);
+    for (let index = 0; index <= firstNonAscii; index++) offsets[index] = index;
+    let byteOffset = firstNonAscii;
+    for (let index = firstNonAscii; index < source.length; index++) {
+      offsets[index] = byteOffset;
       const codePoint = source.codePointAt(index)!;
       byteOffset += utf8Width(codePoint);
       if (codePoint > 0xffff) {
         index++;
-        this.#offsets[index] = byteOffset;
+        offsets[index] = byteOffset;
       }
     }
-    this.#offsets[source.length] = byteOffset;
+    offsets[source.length] = byteOffset;
+    this.#offsets = offsets;
+    this.#byteLength = byteOffset;
   }
 
   get byteLength(): number {
-    return this.#offsets[this.#offsets.length - 1]!;
+    return this.#byteLength;
   }
 
   span(span: BabaUtf16Span): { readonly startByte: number; readonly endByte: number } {
+    if (this.#offsets === undefined) {
+      return {
+        startByte: Number.isInteger(span.start) && span.start >= 0 &&
+            span.start <= this.#source.length
+          ? span.start
+          : this.byteLength,
+        endByte: Number.isInteger(span.end) && span.end >= 0 && span.end <= this.#source.length
+          ? span.end
+          : this.byteLength,
+      };
+    }
     return {
       startByte: this.#offsets[span.start] ?? this.byteLength,
       endByte: this.#offsets[span.end] ?? this.byteLength,
@@ -48,7 +75,7 @@ export class BabaUtf8ByteOffsets {
   }
 
   text(span: BabaUtf16Span): string {
-    return this.source.slice(span.start, span.end);
+    return this.#source.slice(span.start, span.end);
   }
 }
 

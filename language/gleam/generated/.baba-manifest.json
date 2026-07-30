@@ -15,37 +15,37 @@
       "kind": "query"
     },
     "wasm/abi.json": {
-      "hash": "d9d81e38fed75d06ab0503ac114692e5ba1275b75427dd5fc428595bab7de062",
+      "hash": "a96bc42fdea3e6f63a2ded5e6633b5bb3969656bee3ab4236799ddb809a7c44b",
       "ownership": "generated",
       "encoding": "utf-8",
       "kind": "config"
     },
     "wasm/manifest.json": {
-      "hash": "a792a5f4f7067f6450484afe90241d35773899e1edfa7d5b5a8a192b5f5d6735",
+      "hash": "d616d8bc54a7bb0962f8385854b9e84e95e0da3b62333d24b25264ddfd4cb210",
       "ownership": "generated",
       "encoding": "utf-8",
       "kind": "config"
     },
     "wasm/mod.ts": {
-      "hash": "60b66c631d7ede48bce077009f9c13a854f6800ff3a7bb5798a00cdb181ae359",
+      "hash": "d5c7eee60d7538d0095cdaf8275344ce453988a53b087c0aece59448624f68b0",
       "ownership": "generated",
       "encoding": "utf-8",
       "kind": "source"
     },
     "wasm/parser.plan": {
-      "hash": "2327ad1db1ce9b947a3f0b5f5ef5d9bb944d07971c8617ec362b85a799deb0a4",
+      "hash": "8f436f42fa0c9e3fd46677b16e5ee8c7ada210c76f77095d9195782d7aa993e7",
       "ownership": "generated",
       "encoding": "binary",
       "kind": "binary"
     },
     "wasm/parser.wasm": {
-      "hash": "9815fe2fd0cfd6e88b87067c176940a983eaa597dcc1e0b9e2d1622416e19fb1",
+      "hash": "1c0c2f9f51c0e73cbda1f16815247eac7e28db94ff7cf3adcb96c2d31043e808",
       "ownership": "generated",
       "encoding": "binary",
       "kind": "binary"
     },
     "wasm/syntax.ts": {
-      "hash": "30624a35a7ccdb7d48ca0111ed9bfa9a6dc25b489177d6688248db57d14f55cc",
+      "hash": "0320af361c3d0cabe7765765b8736b0e5b8943c81d7d7b99945384d6251129db",
       "ownership": "generated",
       "encoding": "utf-8",
       "kind": "source"

@@ -23,7 +23,10 @@ export {
   lowerGleamSource,
   lowerGleamSources,
 } from "./src/gleam/frontend.ts";
-export { GleamFrontendService } from "./src/gleam/frontend_service.ts";
+export {
+  GleamFrontendService,
+  type GleamFrontendServiceLowerOptions,
+} from "./src/gleam/frontend_service.ts";
 export type { GleamExportSignature, LoweredGleamModule } from "./src/gleam/lowering.ts";
 export {
   ParallelGleamFrontend,

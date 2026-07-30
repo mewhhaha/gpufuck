@@ -1,4 +1,10 @@
-import { createParser, createParserAsync } from "@mewhhaha/baba/runtime/generated-wasm";
+import {
+  createParser,
+  createParserAsync,
+  type IncrementalParseDocument,
+  type IncrementalParseUpdate,
+  type TextEdit,
+} from "@mewhhaha/baba/runtime/generated-wasm";
 import {
   type CompilerPerformanceTrace,
   measureCompilerStage,
@@ -60,6 +66,109 @@ export function parseGleamModule(
           preserveTrivia: false,
         }),
     );
+  return materializeGleamParse(name, source, parsed, trace);
+}
+
+export class IncrementalGleamModuleParser {
+  readonly #name: string;
+  readonly #document: IncrementalParseDocument;
+  #normalizedSource: string;
+  #source: string;
+  #disposed = false;
+
+  constructor(name: string, source: string) {
+    if (name.length === 0) throw new Error("Gleam module name must be nonempty");
+    this.#name = name;
+    this.#source = source;
+    this.#normalizedSource = normalizeGleamParserSource(source);
+    this.#document = getGleamParser().createDocument(this.#normalizedSource, {
+      goal: "parse",
+      trivia: "discard",
+    });
+  }
+
+  update(source: string, trace?: CompilerPerformanceTrace): void {
+    this.#requireActive();
+    if (source === this.#source) return;
+
+    const normalizedSource = normalizeGleamParserSource(source);
+    const edit = replacementEdit(this.#normalizedSource, normalizedSource);
+    if (edit !== undefined) {
+      const annotations = {
+        module: this.#name,
+        previousCharacters: this.#normalizedSource.length,
+        sourceCharacters: normalizedSource.length,
+        editStart: edit.start,
+        replacedCharacters: edit.oldEnd - edit.start,
+        insertedCharacters: edit.newText.length,
+        changedRanges: 0,
+        scannedCodeUnits: 0,
+        createdTokens: 0,
+        reusedTokens: 0,
+        reparsedRanges: 0,
+        parserActions: 0,
+        reuseChecks: 0,
+        reusedCheckpoints: 0,
+        createdCheckpoints: 0,
+      };
+      measureCompilerStage(
+        trace,
+        "frontend.parse.incremental",
+        annotations,
+        () => this.#document.applyEdits([edit]),
+        (update) => annotateIncrementalParse(annotations, update),
+      );
+    }
+    this.#source = source;
+    this.#normalizedSource = normalizedSource;
+  }
+
+  parse(trace?: CompilerPerformanceTrace): GleamModule {
+    this.#requireActive();
+    const syntaxAnnotations = {
+      module: this.#name,
+      sourceCharacters: this.#source.length,
+      incremental: true,
+    };
+    const parsed = measureCompilerStage(
+      trace,
+      "frontend.parse.syntax",
+      syntaxAnnotations,
+      () => this.#document.parse(),
+    );
+    return materializeGleamParse(this.#name, this.#source, parsed, trace);
+  }
+
+  dispose(): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    this.#document.dispose();
+  }
+
+  #requireActive(): void {
+    if (this.#disposed) {
+      throw new Error(
+        `incremental Gleam parser for module ${JSON.stringify(this.#name)} was disposed`,
+      );
+    }
+  }
+}
+
+function materializeGleamParse(
+  name: string,
+  source: string,
+  parsed:
+    | { readonly ok: true; readonly cursor: BabaRuleCursor }
+    | {
+      readonly ok: false;
+      readonly diagnostics: readonly {
+        readonly span: { readonly start: number; readonly end: number };
+        readonly code: string;
+        readonly message: string;
+      }[];
+    },
+  trace?: CompilerPerformanceTrace,
+): GleamModule {
   if (!parsed.ok) {
     const byteOffsets = new BabaUtf8ByteOffsets(source);
     const diagnostic = parsed.diagnostics[0];
@@ -87,6 +196,55 @@ export function parseGleamModule(
       return module;
     },
   );
+}
+
+function replacementEdit(previous: string, current: string): TextEdit | undefined {
+  if (previous === current) return undefined;
+
+  const sharedLength = Math.min(previous.length, current.length);
+  let start = 0;
+  while (start < sharedLength && previous[start] === current[start]) start++;
+
+  let previousEnd = previous.length;
+  let currentEnd = current.length;
+  while (
+    previousEnd > start &&
+    currentEnd > start &&
+    previous[previousEnd - 1] === current[currentEnd - 1]
+  ) {
+    previousEnd--;
+    currentEnd--;
+  }
+  return {
+    start,
+    oldEnd: previousEnd,
+    newText: current.slice(start, currentEnd),
+  };
+}
+
+function annotateIncrementalParse(
+  annotations: {
+    changedRanges: number;
+    scannedCodeUnits: number;
+    createdTokens: number;
+    reusedTokens: number;
+    reparsedRanges: number;
+    parserActions: number;
+    reuseChecks: number;
+    reusedCheckpoints: number;
+    createdCheckpoints: number;
+  },
+  update: IncrementalParseUpdate,
+): void {
+  annotations.changedRanges = update.changes.length;
+  annotations.scannedCodeUnits = update.lexer.scannedCodeUnits;
+  annotations.createdTokens = update.lexer.createdTokens;
+  annotations.reusedTokens = update.lexer.reusedTokens;
+  annotations.reparsedRanges = update.parser.reparsedRanges.length;
+  annotations.parserActions = update.parser.parserActions;
+  annotations.reuseChecks = update.parser.reuseChecks;
+  annotations.reusedCheckpoints = update.parser.reusedCheckpoints;
+  annotations.createdCheckpoints = update.parser.createdCheckpoints;
 }
 
 function materializeGleamModule(

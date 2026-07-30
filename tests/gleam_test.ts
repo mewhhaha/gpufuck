@@ -1,6 +1,7 @@
 import { deepStrictEqual, equal, match, ok, rejects, strictEqual } from "node:assert/strict";
 
 import {
+  CompilerPerformanceTrace,
   type EvaluationOptions,
   GpuCompiler,
   GpuEvaluator,
@@ -84,6 +85,7 @@ Deno.test("Gleam frontend service reuses an unchanged project", () => {
   if (!changed.ok) return;
   equal(changed.lowered.module === first.lowered.module, false);
   strictEqual(changed.lowered.modules[0], first.lowered.modules[0]);
+  frontend.clear();
 });
 
 Deno.test("trailing trivia reuse distinguishes comment markers inside strings", () => {
@@ -100,6 +102,104 @@ Deno.test("trailing trivia reuse distinguishes comment markers inside strings", 
   ok(second.ok);
   if (!first.ok || !second.ok) return;
   equal(second.lowered.modules[0]?.definitions === first.lowered.modules[0]?.definitions, false);
+  frontend.clear();
+});
+
+Deno.test("Gleam frontend service incrementally reparses internal edits", () => {
+  const frontend = new GleamFrontendService();
+  const declarations = Array.from(
+    { length: 64 },
+    (_, index) => `fn value_${index}() -> Int { ${index} }`,
+  ).join("\n");
+  const source = `${declarations}\npub fn main() -> Int { value_32() }\n`;
+  const entry = { module: "main", exportName: "main" };
+  const first = frontend.lower([{ name: "main", source }], entry);
+  ok(first.ok);
+
+  const trace = new CompilerPerformanceTrace();
+  const editedSource = source.replace(
+    "fn value_32() -> Int { 32 }",
+    "fn value_32() -> Int { 42 }",
+  );
+  const edited = frontend.lower(
+    [{ name: "main", source: editedSource }],
+    entry,
+    { trace },
+  );
+  ok(edited.ok);
+  if (!first.ok || !edited.ok) return;
+  equal(edited.lowered.module === first.lowered.module, false);
+
+  const incremental = trace.snapshot().find((event) =>
+    event.stage === "frontend.parse.incremental"
+  );
+  equal(incremental?.annotations.replacedCharacters, 1);
+  equal(incremental?.annotations.insertedCharacters, 1);
+  ok(
+    typeof incremental?.annotations.scannedCodeUnits === "number" &&
+      incremental.annotations.scannedCodeUnits < editedSource.length,
+  );
+  ok(
+    typeof incremental?.annotations.reusedCheckpoints === "number" &&
+      incremental.annotations.reusedCheckpoints > 0,
+  );
+  const moduleParse = trace.snapshot().find((event) => event.stage === "frontend.parse.module");
+  equal(moduleParse?.annotations.incremental, true);
+
+  const empty = frontend.lower([], entry);
+  equal(empty.ok, false);
+  const afterRemovalTrace = new CompilerPerformanceTrace();
+  const afterRemoval = frontend.lower(
+    [{ name: "main", source: editedSource }],
+    entry,
+    { trace: afterRemovalTrace },
+  );
+  ok(afterRemoval.ok);
+  equal(
+    afterRemovalTrace.snapshot().some((event) => event.stage === "frontend.parse.incremental"),
+    false,
+  );
+
+  frontend.clear();
+  const afterClearTrace = new CompilerPerformanceTrace();
+  const afterClear = frontend.lower(
+    [{ name: "main", source: editedSource }],
+    entry,
+    { trace: afterClearTrace },
+  );
+  ok(afterClear.ok);
+  equal(
+    afterClearTrace.snapshot().some((event) => event.stage === "frontend.parse.incremental"),
+    false,
+  );
+  frontend.clear();
+});
+
+Deno.test("Gleam frontend service recovers an incremental document after a syntax error", () => {
+  const frontend = new GleamFrontendService();
+  const entry = { module: "main", exportName: "main" };
+  const valid = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 41 }\n" }],
+    entry,
+  );
+  ok(valid.ok);
+
+  const invalid = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 41\n" }],
+    entry,
+  );
+  equal(invalid.ok, false);
+  if (!invalid.ok) equal(invalid.diagnostics[0]?.stage, "parse");
+
+  const trace = new CompilerPerformanceTrace();
+  const corrected = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 42 }\n" }],
+    entry,
+    { trace },
+  );
+  ok(corrected.ok);
+  ok(trace.snapshot().some((event) => event.stage === "frontend.parse.incremental"));
+  frontend.clear();
 });
 
 Deno.test.beforeAll(async () => {

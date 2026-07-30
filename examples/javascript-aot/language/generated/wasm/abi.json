@@ -5,18 +5,18 @@
   "parserPlan": {
     "format": "baba-parser-plan",
     "version": 2,
-    "runtimeMetadataVersion": 3,
+    "runtimeMetadataVersion": 4,
     "semantics": "baba-portable-v2",
     "storage": "external-binary"
   },
   "runtimeImplementation": {
     "format": "baba-runtime-implementation",
-    "version": 2,
-    "semantics": "baba-runtime-portable-v2",
-    "hash": "fnv1a64:1ecbc8f5d5c33d6d"
+    "version": 3,
+    "semantics": "baba-runtime-portable-v3",
+    "hash": "fnv1a64:9b6c0d11d9947c5a"
   },
   "core": {
-    "abiVersion": 11,
+    "abiVersion": 12,
     "memory": {
       "export": "memory",
       "pageBytes": 65536,
@@ -63,6 +63,17 @@
           "start",
           "end",
           "acceptingState"
+        ]
+      },
+      "incrementalTokenRecord": {
+        "i32Count": 5,
+        "bytes": 20,
+        "fields": [
+          "specIndex",
+          "start",
+          "end",
+          "acceptingState",
+          "dependencyEnd"
         ]
       },
       "parserSelection": {
@@ -196,6 +207,19 @@
         "result": "selectionStatusOneSelectedZeroUnexpectedTwoMultipleChoicesMinusOneInvalid"
       },
       {
+        "name": "parser_select_incremental",
+        "params": [
+          "state",
+          "acceptingState",
+          "fallbackSpecIndex",
+          "sourcePtr",
+          "sourceLength",
+          "tokenEnd",
+          "selectionPtr"
+        ],
+        "result": "selectionStatusOneSelectedZeroUnexpectedTwoTriviaMinusOneInvalid"
+      },
+      {
         "name": "validate",
         "params": [
           "sourcePtr",
@@ -286,6 +310,20 @@
         "result": "tokenRecordCountOrMinusOneTokenCapacityMinusTwoMemoRequired"
       },
       {
+        "name": "lex_incremental",
+        "params": [
+          "sourcePtr",
+          "sourceLength",
+          "start",
+          "minimumEnd",
+          "tokenPtr",
+          "tokenCapacity",
+          "memoPtr",
+          "memoCapacity"
+        ],
+        "result": "tokenRecordCountOrMinusOneTokenCapacityMinusTwoMemoRequired"
+      },
+      {
         "name": "lex_memo_i32_per_position",
         "params": [],
         "result": "memoI32CountPerSourcePosition"
@@ -350,6 +388,11 @@
       },
       {
         "name": "token_record_i32_count",
+        "params": [],
+        "result": "i32"
+      },
+      {
+        "name": "incremental_token_record_i32_count",
         "params": [],
         "result": "i32"
       },
