@@ -14,7 +14,7 @@
       "definitions": 39,
       "inferenceTransitions": 17328,
       "semanticSteps": 2214,
-      "wasmBytes": 40005
+      "wasmBytes": 14552
     },
     "timings": {
       "gpuMilliseconds": 25.4
