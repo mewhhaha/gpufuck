@@ -256,6 +256,7 @@ const backendPlansByArtifact = new WeakMap<WasmArtifact, WasmBackendPlan>();
 interface CachedLinearWasmEmission {
   readonly encoding: WasmModuleEncoding;
   readonly functionBodies: readonly CachedWasmFunctionBody[];
+  readonly sectionsBeforeCode: readonly (readonly number[])[];
 }
 
 const linearEmissionsByArtifact = new WeakMap<WasmArtifact, CachedLinearWasmEmission>();
@@ -400,6 +401,7 @@ function emitWasmSignedLiteralUpdate(
     const encoded = encodeLinearWasmEmission(
       encoding,
       referenceEmission.functionBodies,
+      referenceEmission.sectionsBeforeCode,
     );
     encodeSpan?.finish({
       ...wasmEncodingAnnotations(
@@ -408,6 +410,7 @@ function emitWasmSignedLiteralUpdate(
         encoding.indirectFunctionIndices.length,
       ),
       reusedFunctionBodies: encoded.reusedFunctionBodies,
+      reusedSectionsBeforeCode: encoded.reusedSectionsBeforeCode,
     });
     const artifact = {
       bytes: encoded.bytes,
@@ -418,6 +421,7 @@ function emitWasmSignedLiteralUpdate(
     linearEmissionsByArtifact.set(artifact, {
       encoding,
       functionBodies: encoded.functionBodies,
+      sectionsBeforeCode: encoded.sectionsBeforeCode,
     });
     emitSpan?.finish({
       nodes: plan.nodes.length,
@@ -498,8 +502,9 @@ function appendInstructionRange(
 function encodeLinearWasmEmission(
   encoding: WasmModuleEncoding,
   functionBodies: readonly CachedWasmFunctionBody[] = [],
+  sectionsBeforeCode?: readonly (readonly number[])[],
 ): EncodedWasmModule {
-  return encodeWasmModule(encoding, functionBodies);
+  return encodeWasmModule(encoding, functionBodies, sectionsBeforeCode);
 }
 
 function emitWasmArtifact(
@@ -1067,6 +1072,7 @@ class WasmCompiler {
     this.#linearEmission = {
       encoding,
       functionBodies: encoded.functionBodies,
+      sectionsBeforeCode: encoded.sectionsBeforeCode,
     };
     encodeSpan?.finish({
       ...wasmEncodingAnnotations(
@@ -1075,6 +1081,7 @@ class WasmCompiler {
         indirectFunctions.length,
       ),
       reusedFunctionBodies: encoded.reusedFunctionBodies,
+      reusedSectionsBeforeCode: encoded.reusedSectionsBeforeCode,
     });
     return encoded.bytes;
   }

@@ -70,7 +70,9 @@ export interface CachedWasmFunctionBody {
 export interface EncodedWasmModule {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly functionBodies: readonly CachedWasmFunctionBody[];
+  readonly sectionsBeforeCode: readonly (readonly number[])[];
   readonly reusedFunctionBodies: number;
+  readonly reusedSectionsBeforeCode: boolean;
 }
 
 export const WASM_BASE_FUNCTION_TYPES: readonly WasmFunctionType[] = Object.freeze([
@@ -360,6 +362,7 @@ function appendSignedInteger64(bytes: number[], value: bigint): void {
 export function encodeWasmModule(
   encoding: WasmModuleEncoding,
   cachedFunctionBodies: readonly CachedWasmFunctionBody[] = [],
+  cachedSectionsBeforeCode?: readonly (readonly number[])[],
 ): EncodedWasmModule {
   const {
     imports,
@@ -375,7 +378,6 @@ export function encodeWasmModule(
     functionExports = [],
     instrumentedFuel = false,
   } = encoding;
-  const types = wasmFunctionTypes(additionalFunctionTypes);
   let reusedFunctionBodies = 0;
   const functionBodies = functions.map((body, index) => {
     const cached = cachedFunctionBodies[index];
@@ -383,101 +385,111 @@ export function encodeWasmModule(
     reusedFunctionBodies += 1;
     return cached;
   });
-  const sections = [
-    section(1, vector(types)),
-    ...(imports.length === 0 ? [] : [section(
-      2,
-      vector(imports.map((imported) => [
-        ...name(imported.module),
-        ...name(imported.name),
-        0x00,
-        ...encodeUnsigned(imported.typeIndex),
-      ])),
-    )]),
-    section(3, vector(functions.map((body) => encodeUnsigned(body.typeIndex)))),
-    section(4, vector([[0x70, 0x00, ...encodeUnsigned(indirectFunctionIndices.length)]])),
-    section(5, vector([[0x00, 0x01]])),
-    section(
-      6,
-      vector([
-        [0x7f, 0x01, 0x41, ...encodeSigned(BigInt(heapStart)), 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        ...(instrumentedFuel
-          ? [
-            [0x7f, 0x01, 0x41, 0x00, 0x0b],
-            [0x7f, 0x01, 0x41, 0x00, 0x0b],
-          ]
-          : []),
-      ]),
-    ),
-    section(
-      7,
-      vector([
-        [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
-        ...(valueForceFunctionIndex === undefined
-          ? []
-          : [[...name("forceValue"), 0x00, ...encodeUnsigned(valueForceFunctionIndex)]]),
-        ...(initializeFunctionIndex === undefined
-          ? []
-          : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
-        ...(allocateFunctionIndex === undefined
-          ? []
-          : [[...name("allocate"), 0x00, ...encodeUnsigned(allocateFunctionIndex)]]),
-        ...(freeFunctionIndex === undefined
-          ? []
-          : [[...name("free"), 0x00, ...encodeUnsigned(freeFunctionIndex)]]),
-        ...functionExports.map((exported) => [
-          ...name(exported.name),
+  let sectionsBeforeCode = cachedSectionsBeforeCode;
+  if (sectionsBeforeCode === undefined) {
+    const types = wasmFunctionTypes(additionalFunctionTypes);
+    sectionsBeforeCode = [
+      section(1, vector(types)),
+      ...(imports.length === 0 ? [] : [section(
+        2,
+        vector(imports.map((imported) => [
+          ...name(imported.module),
+          ...name(imported.name),
           0x00,
-          ...encodeUnsigned(exported.functionIndex),
+          ...encodeUnsigned(imported.typeIndex),
+        ])),
+      )]),
+      section(3, vector(functions.map((body) => encodeUnsigned(body.typeIndex)))),
+      section(4, vector([[0x70, 0x00, ...encodeUnsigned(indirectFunctionIndices.length)]])),
+      section(5, vector([[0x00, 0x01]])),
+      section(
+        6,
+        vector([
+          [0x7f, 0x01, 0x41, ...encodeSigned(BigInt(heapStart)), 0x0b],
+          [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
+          [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
+          [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          ...(instrumentedFuel
+            ? [
+              [0x7f, 0x01, 0x41, 0x00, 0x0b],
+              [0x7f, 0x01, 0x41, 0x00, 0x0b],
+            ]
+            : []),
         ]),
-        [...name("memory"), 0x02, 0x00],
-        globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
-        globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
-        globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
-        globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
-        globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
-        globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
-        ...(instrumentedFuel
-          ? [
-            globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
-            globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
-          ]
-          : []),
-      ]),
-    ),
-    section(
-      9,
-      vector([
-        [
-          0x00,
-          0x41,
-          0x00,
-          0x0b,
-          ...vector(indirectFunctionIndices.map(encodeUnsigned)),
-        ],
-      ]),
-    ),
-    section(10, vector(functionBodies.map((body) => body.encoded))),
-  ];
+      ),
+      section(
+        7,
+        vector([
+          [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
+          ...(valueForceFunctionIndex === undefined
+            ? []
+            : [[...name("forceValue"), 0x00, ...encodeUnsigned(valueForceFunctionIndex)]]),
+          ...(initializeFunctionIndex === undefined
+            ? []
+            : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
+          ...(allocateFunctionIndex === undefined
+            ? []
+            : [[...name("allocate"), 0x00, ...encodeUnsigned(allocateFunctionIndex)]]),
+          ...(freeFunctionIndex === undefined
+            ? []
+            : [[...name("free"), 0x00, ...encodeUnsigned(freeFunctionIndex)]]),
+          ...functionExports.map((exported) => [
+            ...name(exported.name),
+            0x00,
+            ...encodeUnsigned(exported.functionIndex),
+          ]),
+          [...name("memory"), 0x02, 0x00],
+          globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
+          globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
+          globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
+          globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
+          globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
+          globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
+          ...(instrumentedFuel
+            ? [
+              globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
+              globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
+            ]
+            : []),
+        ]),
+      ),
+      section(
+        9,
+        vector([
+          [
+            0x00,
+            0x41,
+            0x00,
+            0x0b,
+            ...vector(indirectFunctionIndices.map(encodeUnsigned)),
+          ],
+        ]),
+      ),
+    ];
+  }
+  const codeSection = section(10, vector(functionBodies.map((body) => body.encoded)));
   return {
-    bytes: new Uint8Array(concatenateBytes([[
-      0x00,
-      0x61,
-      0x73,
-      0x6d,
-      0x01,
-      0x00,
-      0x00,
-      0x00,
-    ], ...sections])),
+    bytes: new Uint8Array(concatenateBytes([
+      [
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+      ],
+      ...sectionsBeforeCode,
+      codeSection,
+    ])),
     functionBodies,
+    sectionsBeforeCode,
     reusedFunctionBodies,
+    reusedSectionsBeforeCode: cachedSectionsBeforeCode !== undefined,
   };
 }
 
