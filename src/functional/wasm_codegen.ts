@@ -640,6 +640,7 @@ class WasmCompiler {
     this.#constantAnalysis = plan.constantAnalysis;
     this.#functionAnalysis = plan.functionAnalysis;
     this.#uniqueReuseAnalysis = plan.uniqueReuseAnalysis;
+    this.#lambdaSetAnalysis = plan.lambdaSetAnalysis;
     this.#coreIndex = plan.coreIndex;
     this.#directOnlyDefinitions = plan.coreIndex.directOnlyDefinitions;
     this.#lambdaSlots = Array.from({ length: nodes.length }, () => undefined);

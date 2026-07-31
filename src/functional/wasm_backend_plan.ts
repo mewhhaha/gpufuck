@@ -23,8 +23,10 @@ import { WasmFunctionAnalysis } from "./wasm_function_analysis.ts";
 import { createLoweredCoreStoragePlan } from "./storage_plan.ts";
 import { requireFirstOrderWasmType } from "./wasm_value_codec.ts";
 import { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
+import { preparedWasmLambdaAnalysis } from "./prepared_wasm_lambda_analysis.ts";
 import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 import { indexWasmCore, type WasmCoreIndex } from "./wasm_core_index.ts";
+import type { LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 
 export interface WasmBackendPlan {
   readonly module: CompiledModule;
@@ -33,6 +35,7 @@ export interface WasmBackendPlan {
   readonly constantAnalysis: WasmConstantAnalysis;
   readonly functionAnalysis: WasmFunctionAnalysis;
   readonly uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
+  readonly lambdaSetAnalysis: LambdaSetAnalysis | undefined;
   readonly coreIndex: WasmCoreIndex;
   readonly entry: WasmEntry;
   readonly compactScalarEligible: boolean;
@@ -49,17 +52,19 @@ export function createWasmBackendPlan(
   trace?: CompilerPerformanceTrace,
 ): WasmBackendPlan {
   measureCompilerStage(trace, "wasm.plan.validate", {}, () => validateWasmSimdMode(options.simd));
+  const preparedLambdaAnalysis = preparedWasmLambdaAnalysis(module);
   const loweringAnnotations = {
     inputNodes: nodes.length,
     outputNodes: 0,
     addedApplications: 0,
     addedLambdas: 0,
+    reused: preparedLambdaAnalysis !== undefined,
   };
   const loweredNodes = measureCompilerStage(
     trace,
     "wasm.plan.lower-core",
     loweringAnnotations,
-    () => lowerCoreForWasm(module, nodes),
+    () => preparedLambdaAnalysis?.nodes ?? lowerCoreForWasm(module, nodes),
     (result) => {
       loweringAnnotations.outputNodes = result.length;
       for (let nodeIndex = nodes.length; nodeIndex < result.length; nodeIndex++) {
@@ -173,6 +178,7 @@ export function createWasmBackendPlan(
     constantAnalysis,
     functionAnalysis,
     uniqueReuseAnalysis,
+    lambdaSetAnalysis: preparedLambdaAnalysis?.lambdaSets,
     coreIndex,
     entry,
     compactScalarEligible,

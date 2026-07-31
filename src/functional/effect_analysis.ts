@@ -5,11 +5,14 @@ import {
 } from "../compiler_performance_trace.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
+import type { PreparedWasmLambdaAnalysis } from "./prepared_wasm_lambda_analysis.ts";
 import { LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
+import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 
 export interface ModuleEffectAnalysis {
   readonly definitionEffects: readonly EffectSet[];
   readonly entryEffects: EffectSet;
+  readonly wasmLambdaAnalysis?: PreparedWasmLambdaAnalysis;
 }
 
 /**
@@ -39,11 +42,21 @@ export function analyzeModuleEffects(
       entryEffects: empty,
     });
   }
+  const loweringAnnotations = { inputNodes: nodes.length, outputNodes: 0 };
+  const wasmNodes = measureCompilerStage(
+    trace,
+    "semantic.effects.lower-wasm-core",
+    loweringAnnotations,
+    () => lowerCoreForWasm(module, nodes),
+    (result) => {
+      loweringAnnotations.outputNodes = result.length;
+    },
+  );
   const lambdaSets = measureCompilerStage(
     trace,
     "semantic.effects.lambda-sets",
-    { nodes: nodes.length, definitions: module.definitionCount },
-    () => LambdaSetAnalysis.forCore(module, nodes),
+    { nodes: wasmNodes.length, definitions: module.definitionCount },
+    () => LambdaSetAnalysis.forWasm(module, wasmNodes),
   );
   const effectNamesByNode: (Set<string> | undefined)[] = new Array(nodes.length);
   const dependents: (Set<number> | undefined)[] = new Array(nodes.length);
@@ -234,5 +247,6 @@ export function analyzeModuleEffects(
   return Object.freeze({
     definitionEffects: Object.freeze(definitionEffects),
     entryEffects,
+    wasmLambdaAnalysis: Object.freeze({ nodes: wasmNodes, lambdaSets }),
   });
 }

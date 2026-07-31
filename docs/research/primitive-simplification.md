@@ -56,6 +56,31 @@ measured 24 emissions per process after three warmups:
 Both variants produced SHA-256 `afb920a44162da9459b770a876c2089626b0ebb196039a7bc00ed4b34223e94a`,
 so runtime code is byte-identical. The complete 408-test suite passed after the change.
 
+The next follow-up removed a second whole-program lambda-flow solve for effectful modules. Semantic
+effect inference already needs finite lambda provenance; it now computes that provenance over the
+same lowered Core consumed by Wasm and privately retains both immutable results on the completed
+module. Linear Wasm reuses them. Pure, transferred, source-rebound, and literal-updated modules
+retain the ordinary lowering and analysis fallback, so preparation is an optimization rather than a
+new module invariant or public API.
+
+The machine was concurrently occupied by an unrelated high-priority job, so separate-process wall
+times drifted too much to compare. The accepted measurement instead loaded both revisions in one
+process, pinned that process to one CPU, alternated revision order on every repetition, discarded
+four warmups, and measured twelve adjacent pairs:
+
+| Reachable Gleam stdlib work | `7e09e27` control | Shared analysis | Change |
+| --------------------------- | ----------------: | --------------: | -----: |
+| Semantic wall time          |          83.47 ms |        87.70 ms |  +5.1% |
+| Wasm wall time              |         114.69 ms |        95.52 ms | -16.7% |
+| Complete wall time          |         192.45 ms |       180.50 ms |  -6.2% |
+| Complete process CPU time   |         191.54 ms |       178.97 ms |  -6.6% |
+
+The semantic-only cost is explicit: preparing Wasm Core adds work when an effectful module is never
+sent to Wasm. The complete path clears the 5% acceptance threshold, while pure modules do not take
+the preparation path. Both revisions emitted the same 297,776-byte artifact with SHA-256
+`afb920a44162da9459b770a876c2089626b0ebb196039a7bc00ed4b34223e94a`. The complete suite now passes
+409 tests, including higher-order and fully applied curried effect inference.
+
 The original same-machine timing runs were noisy: ABI 7 was faster for the 64- and 256-module
 batches, while the single module and linked project were slower by more than 5% in the sampled
 medians. The benchmark task deliberately treats timings as advisory. Production promotion was a

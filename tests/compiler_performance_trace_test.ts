@@ -1,13 +1,17 @@
 import { deepStrictEqual, equal, notDeepStrictEqual, ok, throws } from "node:assert/strict";
 
 import {
+  buildSurfaceModule,
   compileModuleToWasm,
   CompilerPerformanceTrace,
   CpuCompiler,
+  defineEffectOperation,
+  effectSet,
   FunctionalCompilerService,
   renderCompilerPerformanceTrace,
   runWasmModule,
   summarizeCompilerPerformance,
+  surface,
 } from "../functional.ts";
 import { compileWasmArtifact } from "../src/functional/wasm_codegen.ts";
 import { GleamFrontendService, lowerGleamSources } from "../gleam.ts";
@@ -163,6 +167,55 @@ Deno.test("performance tracing preserves Gleam Core and Wasm output", async () =
 
   tracedCompilation.module.destroy();
   plainCompilation.module.destroy();
+});
+
+Deno.test("effect analysis prepares lambda flow for Wasm compilation", async () => {
+  const integer = { kind: "integer" as const };
+  const encoded = buildSurfaceModule(
+    [
+      defineEffectOperation({
+        name: "tick",
+        parameter: { name: "value", type: integer },
+        result: integer,
+        effects: effectSet("Clock.Tick"),
+        body: surface.name("value"),
+      }),
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.apply(surface.name("tick"), surface.integer(42)),
+      },
+    ],
+    [],
+    "main",
+    0,
+  );
+  const semanticTrace = new CompilerPerformanceTrace();
+  const compilation = await new CpuCompiler().compileModule(encoded, { trace: semanticTrace });
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const semanticLowering = semanticTrace.snapshot().find((event) =>
+      event.stage === "semantic.effects.lower-wasm-core"
+    );
+    equal(semanticLowering?.annotations.inputNodes, compilation.module.nodeCount);
+    ok(Number(semanticLowering?.annotations.outputNodes) >= compilation.module.nodeCount);
+
+    const wasmTrace = new CompilerPerformanceTrace();
+    await compileModuleToWasm(compilation.module, { trace: wasmTrace });
+    const wasmLowering = wasmTrace.snapshot().find((event) =>
+      event.stage === "wasm.plan.lower-core"
+    );
+    equal(wasmLowering?.annotations.reused, true);
+    equal(
+      wasmTrace.snapshot().some((event) => event.stage === "wasm.emit.lambda-sets"),
+      false,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("performance tracing reports compiler and Wasm cache hits", async () => {
