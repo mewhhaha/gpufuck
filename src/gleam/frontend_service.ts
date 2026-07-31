@@ -25,7 +25,7 @@ import {
   type LoweredGleamModule,
   lowerGleamModule,
 } from "./lowering.ts";
-import { IncrementalGleamModuleParser, parsedIntegerUpdate } from "./parser.ts";
+import { GleamModuleParser, parsedIntegerUpdate } from "./parser.ts";
 
 interface CachedGleamProject {
   readonly sources: readonly GleamSourceModule[];
@@ -52,7 +52,7 @@ export interface GleamFrontendServiceLowerOptions {
 }
 
 export class GleamFrontendService {
-  readonly #moduleParsers = new Map<string, IncrementalGleamModuleParser>();
+  readonly #moduleParsers = new Map<string, GleamModuleParser>();
   readonly #parsedModules = new Map<
     string,
     { readonly source: string; readonly module: GleamModule }
@@ -91,9 +91,8 @@ export class GleamFrontendService {
       sameSourcesIgnoringTrailingTrivia(cached.sources, sources);
 
     const activeModules = new Set(sources.map((source) => source.name));
-    for (const [name, parser] of this.#moduleParsers) {
+    for (const name of this.#moduleParsers.keys()) {
       if (activeModules.has(name)) continue;
-      parser.dispose();
       this.#moduleParsers.delete(name);
       this.#parsedModules.delete(name);
       this.#loweredModules.delete(name);
@@ -134,7 +133,7 @@ export class GleamFrontendService {
           module: source.name,
           sourceCharacters: source.source.length,
           declarations: 0,
-          incremental: this.#moduleParsers.has(source.name),
+          reparse: this.#moduleParsers.has(source.name),
         };
         const module = measureCompilerStage(
           options.trace,
@@ -143,10 +142,10 @@ export class GleamFrontendService {
           () => {
             let parser = this.#moduleParsers.get(source.name);
             if (parser === undefined) {
-              parser = new IncrementalGleamModuleParser(source.name, source.source);
+              parser = new GleamModuleParser(source.name, source.source);
               this.#moduleParsers.set(source.name, parser);
             } else {
-              parser.update(source.source, options.trace);
+              parser.update(source.source);
             }
             return parser.parse(options.trace);
           },
@@ -455,7 +454,6 @@ export class GleamFrontendService {
   }
 
   clear(): void {
-    for (const parser of this.#moduleParsers.values()) parser.dispose();
     this.#moduleParsers.clear();
     this.#parsedModules.clear();
     this.#loweredModules.clear();

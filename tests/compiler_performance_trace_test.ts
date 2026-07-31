@@ -426,6 +426,8 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
     event.stage === "frontend.parse.materialize"
   );
   equal(parsedUpdate?.annotations.cacheHit, false);
+  const syntaxParse = trace.snapshot().find((event) => event.stage === "frontend.parse.syntax");
+  equal(syntaxParse?.annotations.reparse, true);
   const signatureUpdate = trace.snapshot().find((event) =>
     event.stage === "frontend.signatures.value"
   );

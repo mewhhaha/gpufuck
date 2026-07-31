@@ -584,20 +584,15 @@ try {
   };
   const internalCodeEditCompleteWithWasm = await median(compileInternalCodeEdit);
   const representativeInternalEditTrace = representativePipelineTrace(incrementalTraces);
-  const incrementalEvent = representativeInternalEditTrace.snapshot().find((event) =>
-    event.stage === "frontend.parse.incremental"
+  const reparseEvent = representativeInternalEditTrace.snapshot().find((event) =>
+    event.stage === "frontend.parse.syntax" && event.annotations.reparse === true
   );
-  if (incrementalEvent === undefined) {
-    throw new Error("internal-code edit trace omitted frontend.parse.incremental");
+  if (reparseEvent === undefined) {
+    throw new Error("internal-code edit trace omitted its frontend.parse.syntax reparse");
   }
-  const incrementalEditWork = {
-    scannedCodeUnits: incrementalEvent.annotations.scannedCodeUnits,
-    createdTokens: incrementalEvent.annotations.createdTokens,
-    reusedTokens: incrementalEvent.annotations.reusedTokens,
-    parserActions: incrementalEvent.annotations.parserActions,
-    reuseChecks: incrementalEvent.annotations.reuseChecks,
-    reusedCheckpoints: incrementalEvent.annotations.reusedCheckpoints,
-    createdCheckpoints: incrementalEvent.annotations.createdCheckpoints,
+  const parserEditWork = {
+    sourceCharacters: reparseEvent.annotations.sourceCharacters,
+    reparse: reparseEvent.annotations.reparse,
   };
   const tracedInternalCodeEditMilliseconds = medianStageMilliseconds(incrementalTraces);
   const tracedInternalCodeEditBreakdown = pipelineBreakdown(representativeInternalEditTrace);
@@ -632,7 +627,7 @@ try {
         gleamSourceOnlyEditBuild: Number(gleamMilliseconds.sourceOnlyEdit.toFixed(1)),
         gleamInternalCodeEditBuild: Number(gleamMilliseconds.internalCodeEdit.toFixed(1)),
       },
-      incrementalEditWork,
+      parserEditWork,
       tracedSourceOnlyEditMilliseconds,
       tracedSourceOnlyEditBreakdown,
       tracedInternalCodeEditMilliseconds,
