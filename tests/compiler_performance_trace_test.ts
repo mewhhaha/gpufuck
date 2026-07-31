@@ -1,6 +1,14 @@
-import { deepStrictEqual, equal, notDeepStrictEqual, ok, throws } from "node:assert/strict";
+import {
+  deepStrictEqual,
+  equal,
+  notDeepStrictEqual,
+  ok,
+  rejects,
+  throws,
+} from "node:assert/strict";
 
 import {
+  BinaryOperator,
   buildSurfaceModule,
   compileModuleToWasm,
   CompilerPerformanceTrace,
@@ -12,6 +20,9 @@ import {
   runWasmModule,
   summarizeCompilerPerformance,
   surface,
+  WASM_PROVEN_STORE_READS_TRACE_ANNOTATION,
+  WASM_STATIC_ANALYSIS_TRACE_STAGE,
+  WASM_STORE_READS_TRACE_ANNOTATION,
 } from "../functional.ts";
 import { compileWasmArtifact } from "../src/functional/wasm_codegen.ts";
 import { GleamFrontendService, lowerGleamSources } from "../gleam.ts";
@@ -90,6 +101,102 @@ Deno.test("compiler performance trace records a phase before rethrowing its fail
     durationMilliseconds: 1,
     annotations: { components: 4, failed: true },
   }]);
+});
+
+Deno.test("compiler performance trace counts Store reads with discharged bounds checks", async () => {
+  const store = "values";
+  const encoded = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.let(
+        store,
+        surface.storeNew(surface.integer(2), surface.integer(42)),
+        surface.if(
+          surface.binary(
+            BinaryOperator.Equal,
+            surface.storeLength(surface.name(store)),
+            surface.integer(2),
+          ),
+          surface.storeRead(surface.name(store), surface.integer(1)),
+          surface.runtimeFault("unexpected Store length"),
+        ),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await new CpuCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const trace = new CompilerPerformanceTrace();
+    await compileModuleToWasm(compilation.module, { trace });
+    const analysis = trace.snapshot().find((event) =>
+      event.stage === WASM_STATIC_ANALYSIS_TRACE_STAGE
+    );
+    equal(analysis?.annotations[WASM_STORE_READS_TRACE_ANNOTATION], 1);
+    equal(analysis?.annotations[WASM_PROVEN_STORE_READS_TRACE_ANNOTATION], 1);
+    const execution = await runWasmModule(compilation.module);
+    equal(execution.value.kind, "integer");
+    equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("Store bounds facts do not cross between stores", async () => {
+  const shortStore = "short";
+  const longStore = "long";
+  const encoded = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.let(
+        shortStore,
+        surface.storeNew(surface.integer(1), surface.integer(42)),
+        surface.let(
+          longStore,
+          surface.storeNew(surface.integer(2), surface.integer(42)),
+          surface.if(
+            surface.binary(
+              BinaryOperator.Less,
+              surface.integer(1),
+              surface.storeLength(surface.name(longStore)),
+            ),
+            surface.storeRead(surface.name(shortStore), surface.integer(1)),
+            surface.integer(0),
+          ),
+        ),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await new CpuCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const trace = new CompilerPerformanceTrace();
+    await compileModuleToWasm(compilation.module, { trace });
+    const analysis = trace.snapshot().find((event) =>
+      event.stage === WASM_STATIC_ANALYSIS_TRACE_STAGE
+    );
+    equal(analysis?.annotations[WASM_STORE_READS_TRACE_ANNOTATION], 1);
+    equal(analysis?.annotations[WASM_PROVEN_STORE_READS_TRACE_ANNOTATION], 0);
+    await rejects(
+      () => runWasmModule(compilation.module),
+      /invalid buffer or store bound/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("performance tracing preserves Gleam Core and Wasm output", async () => {

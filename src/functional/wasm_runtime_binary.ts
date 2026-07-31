@@ -1,4 +1,5 @@
 import { WasmValueAbi } from "./wasm_abi.ts";
+import { WasmRuntimeFaultCode } from "./wasm_contract.ts";
 import {
   type WasmFunctionBody,
   WasmFunctionTypeIndex,
@@ -13,13 +14,14 @@ import {
   WasmRuntimeGlobal,
 } from "./wasm_runtime_layout.ts";
 
-export const WASM_FAULT_BLACKHOLE = 1;
-export const WASM_FAULT_DIVIDE_BY_ZERO = 2;
-export const WASM_FAULT_OUT_OF_MEMORY = 3;
-export const WASM_FAULT_OUT_OF_FUEL = 4;
-export const WASM_FAULT_INVALID_NUMERIC_CONVERSION = 5;
-export const WASM_FAULT_OUT_OF_BOUNDS = 6;
-export const WASM_FAULT_EXPLICIT = 7;
+export const WASM_FAULT_BLACKHOLE = WasmRuntimeFaultCode.Blackhole;
+export const WASM_FAULT_DIVIDE_BY_ZERO = WasmRuntimeFaultCode.DivideByZero;
+export const WASM_FAULT_OUT_OF_MEMORY = WasmRuntimeFaultCode.OutOfMemory;
+export const WASM_FAULT_OUT_OF_FUEL = WasmRuntimeFaultCode.OutOfFuel;
+export const WASM_FAULT_INVALID_NUMERIC_CONVERSION = WasmRuntimeFaultCode.InvalidNumericConversion;
+export const WASM_FAULT_OUT_OF_BOUNDS = WasmRuntimeFaultCode.OutOfBounds;
+export const WASM_FAULT_EXPLICIT = WasmRuntimeFaultCode.Explicit;
+export const WASM_FAULT_UNREACHABLE = WasmRuntimeFaultCode.Unreachable;
 
 export const THUNK_UNEVALUATED = 0;
 export const THUNK_EVALUATING = 1;

@@ -12,6 +12,7 @@ import {
   NODE_BYTE_LENGTH,
   NODE_WORD_LENGTH,
   NodeWord,
+  RuntimeFaultCategory,
   type Type,
 } from "./abi.ts";
 import type { CoreNode } from "./compiler_module.ts";
@@ -160,6 +161,14 @@ export function validateCoreArtifact(
         node.child0,
         node.child1,
         module.argumentCount,
+      );
+    }
+    if (
+      node.tag === CoreTag.RuntimeFault &&
+      node.child0 > RuntimeFaultCategory.Unreachable
+    ) {
+      throw new Error(
+        `functional compiled Core node ${nodeIndex} has unknown runtime fault category ${node.child0}`,
       );
     }
     if (node.tag === CoreTag.Global && node.payload >= module.definitionCount) {

@@ -6144,5 +6144,5 @@ function runtimeFault(
   message: string,
   span: JavaScriptAotExpression["span"],
 ): SurfaceExpression {
-  return { kind: "runtime-fault", message, span };
+  return { kind: "runtime-fault", category: "explicit", message, span };
 }

@@ -1,4 +1,4 @@
-export const MODULE_ABI_VERSION = 7;
+export const MODULE_ABI_VERSION = 8;
 export const NO_INDEX = 0xffffffff;
 export const UNKNOWN_CONSTRUCTOR_FLAG = 0x80000000;
 export const MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
@@ -138,6 +138,13 @@ export const CoreTag = {
 } as const;
 
 export type CoreTag = (typeof CoreTag)[keyof typeof CoreTag];
+
+export const RuntimeFaultCategory = {
+  Explicit: 0,
+  Unreachable: 1,
+} as const;
+
+export type RuntimeFaultCategory = (typeof RuntimeFaultCategory)[keyof typeof RuntimeFaultCategory];
 
 export const EvaluationMode = {
   LazyCallByNeed: 0,

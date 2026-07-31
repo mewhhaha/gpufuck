@@ -1486,7 +1486,9 @@ Deno.test("rejects unsupported functional module envelopes before GPU work", asy
 
   await rejects(
     () => compiler.compileModule({ ...valid, abiVersion: MODULE_ABI_VERSION + 1 }),
-    /ABI version 8 is unsupported; expected 7/,
+    new RegExp(
+      `ABI version ${MODULE_ABI_VERSION + 1} is unsupported; expected ${MODULE_ABI_VERSION}`,
+    ),
   );
   await rejects(
     () =>
@@ -1609,6 +1611,22 @@ Deno.test("rejects runtime faults outside the symbol table before GPU work", asy
   await rejects(
     () => functionalRuntime().compiler.compileModule({ ...module, nodeWords }),
     /runtime fault node 0 references symbol.*expected fewer than/,
+  );
+});
+
+Deno.test("rejects unknown runtime fault categories before GPU work", async () => {
+  const module = buildSurfaceModule(
+    [{ name: "main", parameters: [], annotation: null, body: surface.runtimeFault("broken") }],
+    [],
+    "main",
+    0,
+  );
+  const nodeWords = module.nodeWords.slice();
+  nodeWords[NodeWord.Child0] = 2;
+
+  await rejects(
+    () => functionalRuntime().compiler.compileModule({ ...module, nodeWords }),
+    /runtime fault node 0 has unknown category 2/,
   );
 });
 

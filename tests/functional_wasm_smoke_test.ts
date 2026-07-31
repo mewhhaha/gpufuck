@@ -12,12 +12,16 @@ import {
   compileModuleToWasm,
   CpuCompiler,
   EvaluationProfile,
+  extendRecordType,
   FunctionalCompilerService,
   GpuCompiler,
+  hasFieldType,
   planModuleStorage,
   requestWebGpuDevice,
   runWasmModule,
+  structuralRecordTypeDeclarations,
   surface,
+  WasmRuntimeFaultCode,
 } from "../functional.ts";
 
 let device: GPUDevice | undefined;
@@ -65,6 +69,332 @@ Deno.test("emits a WebAssembly artifact that runs to the expected value", async 
     const execution = await runWasmModule(compilation.module);
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("unreachable paths retain their standard category in both WebAssembly backends", async () => {
+  const compilation = await compileEntry(
+    surface.if(
+      surface.boolean(false),
+      surface.integer(0),
+      surface.unreachable("pattern invariant"),
+    ),
+  );
+  try {
+    await rejects(
+      () => runWasmModule(compilation.module),
+      /F3014:.*unreachable path: pattern invariant/,
+    );
+
+    const wasmGc = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
+    const { instance } = await WebAssembly.instantiate(wasmGc);
+    const main = instance.exports.main as unknown as () => unknown;
+    let trapped = false;
+    try {
+      main();
+    } catch (error) {
+      ok(error instanceof WebAssembly.RuntimeError);
+      trapped = true;
+    }
+    equal(trapped, true);
+    const fault = instance.exports.runtimeFault;
+    ok(fault instanceof WebAssembly.Global);
+    equal(fault.value, WasmRuntimeFaultCode.Unreachable);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("a value-carrying join returns its argument in WebAssembly", async () => {
+  const compilation = await compileEntry(
+    {
+      kind: "let-rec-group",
+      bindings: [{
+        name: "loop",
+        parameters: ["iteration"],
+        body: surface.if(
+          surface.binary(
+            BinaryOperator.Less,
+            surface.name("iteration"),
+            surface.integer(0),
+          ),
+          surface.apply(surface.name("loop"), surface.name("iteration")),
+          surface.join(
+            "done",
+            "value",
+            surface.if(
+              surface.boolean(true),
+              surface.jump("done", surface.integer(41)),
+              surface.jump("done", surface.integer(0)),
+            ),
+            surface.binary(
+              BinaryOperator.Add,
+              surface.name("value"),
+              surface.integer(1),
+            ),
+          ),
+        ),
+      }],
+      body: surface.apply(surface.name("loop"), surface.integer(0)),
+    },
+  );
+  try {
+    const execution = await runWasmModule(compilation.module);
+    equal(execution.value.kind, "integer");
+    equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
+
+    const wasmGc = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
+    const { instance } = await WebAssembly.instantiate(wasmGc);
+    const main = instance.exports.main as unknown as () => unknown;
+    const valuePayload = instance.exports.valuePayload as unknown as (value: unknown) => number;
+    equal(valuePayload(main()), 42);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("a contified join evaluates a strict unused argument", async () => {
+  const compilation = await compileEntry({
+    kind: "let-rec-group",
+    bindings: [{
+      name: "loop",
+      parameters: ["iteration"],
+      body: surface.if(
+        surface.binary(
+          BinaryOperator.Less,
+          surface.name("iteration"),
+          surface.integer(0),
+        ),
+        surface.apply(surface.name("loop"), surface.name("iteration")),
+        surface.join(
+          "done",
+          "ignored",
+          surface.jump("done", surface.runtimeFault("strict join argument")),
+          surface.integer(42),
+        ),
+      ),
+    }],
+    body: surface.apply(surface.name("loop"), surface.integer(0)),
+  });
+  try {
+    await rejects(
+      () => runWasmModule(compilation.module),
+      /strict join argument/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("HasField evidence shares one open projection across record layouts", async () => {
+  const firstLayout = {
+    type: "FirstRecord",
+    constructor: "FirstRecord",
+    fields: ["x", "enabled"],
+  } as const;
+  const secondLayout = {
+    type: "SecondRecord",
+    constructor: "SecondRecord",
+    fields: ["name", "x"],
+  } as const;
+  const declarations = [
+    {
+      name: firstLayout.type,
+      parameters: [],
+      constructors: [{
+        name: firstLayout.constructor,
+        fields: [
+          { name: "x", type: { kind: "integer" as const } },
+          { name: "enabled", type: { kind: "boolean" as const } },
+        ],
+      }],
+    },
+    {
+      name: secondLayout.type,
+      parameters: [],
+      constructors: [{
+        name: secondLayout.constructor,
+        fields: [
+          { name: "name", type: { kind: "integer" as const } },
+          { name: "x", type: { kind: "integer" as const } },
+        ],
+      }],
+    },
+    ...structuralRecordTypeDeclarations(["x"]),
+  ];
+  const module = buildSurfaceModule(
+    [
+      {
+        name: "getX",
+        parameters: ["evidence", "record"],
+        annotation: {
+          kind: "function",
+          parameter: hasFieldType(
+            "x",
+            { kind: "parameter", name: "record" },
+            { kind: "parameter", name: "value" },
+          ),
+          result: {
+            kind: "function",
+            parameter: { kind: "parameter", name: "record" },
+            result: { kind: "parameter", name: "value" },
+          },
+        },
+        body: surface.projectField("x", surface.name("record"), surface.name("evidence")),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "integer" },
+        body: surface.binary(
+          BinaryOperator.Add,
+          surface.apply(
+            surface.name("getX"),
+            surface.hasFieldEvidence(firstLayout, "x"),
+            surface.structuralRecord(firstLayout, {
+              x: surface.integer(20),
+              enabled: surface.boolean(true),
+            }),
+          ),
+          surface.apply(
+            surface.name("getX"),
+            surface.hasFieldEvidence(secondLayout, "x"),
+            surface.structuralRecord(secondLayout, {
+              name: surface.integer(7),
+              x: surface.integer(22),
+            }),
+          ),
+        ),
+      },
+    ],
+    declarations,
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
+  if (!compilation.ok) return;
+
+  try {
+    const execution = await runWasmModule(compilation.module);
+    equal(execution.value.kind, "integer");
+    equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
+
+    const wasmGc = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
+    const { instance } = await WebAssembly.instantiate(wasmGc);
+    const main = instance.exports.main as unknown as () => unknown;
+    const valuePayload = instance.exports.valuePayload as unknown as (value: unknown) => number;
+    equal(valuePayload(main()), 42);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("ExtendRecord evidence shares one open extension across layouts", async () => {
+  const sourceLayout = {
+    type: "SourceRecord",
+    constructor: "SourceRecord",
+    fields: ["x", "y"],
+  } as const;
+  const patchLayout = {
+    type: "RecordPatch",
+    constructor: "RecordPatch",
+    fields: ["y", "z"],
+  } as const;
+  const resultLayout = {
+    type: "ExtendedRecord",
+    constructor: "ExtendedRecord",
+    fields: ["x", "y", "z"],
+  } as const;
+  const recordDeclaration = (
+    layout: typeof sourceLayout | typeof patchLayout | typeof resultLayout,
+  ) => ({
+    name: layout.type,
+    parameters: [],
+    constructors: [{
+      name: layout.constructor,
+      fields: layout.fields.map((name) => ({
+        name,
+        type: { kind: "integer" as const },
+      })),
+    }],
+  });
+  const sourceType = { kind: "parameter" as const, name: "source" };
+  const patchType = { kind: "parameter" as const, name: "patch" };
+  const resultType = { kind: "parameter" as const, name: "result" };
+  const module = buildSurfaceModule(
+    [{
+      name: "extend",
+      parameters: ["evidence", "source", "patch"],
+      annotation: {
+        kind: "function",
+        parameter: extendRecordType(sourceType, patchType, resultType),
+        result: {
+          kind: "function",
+          parameter: sourceType,
+          result: { kind: "function", parameter: patchType, result: resultType },
+        },
+      },
+      body: surface.extendRecord(
+        surface.name("source"),
+        surface.name("patch"),
+        surface.name("evidence"),
+      ),
+    }, {
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.case(
+        surface.apply(
+          surface.name("extend"),
+          surface.extendRecordEvidence(sourceLayout, patchLayout, resultLayout),
+          surface.structuralRecord(sourceLayout, {
+            x: surface.integer(10),
+            y: surface.integer(1),
+          }),
+          surface.structuralRecord(patchLayout, {
+            y: surface.integer(20),
+            z: surface.integer(12),
+          }),
+        ),
+        [{
+          constructor: resultLayout.constructor,
+          binders: ["x", "y", "z"],
+          body: surface.binary(
+            BinaryOperator.Add,
+            surface.name("x"),
+            surface.binary(BinaryOperator.Add, surface.name("y"), surface.name("z")),
+          ),
+        }],
+      ),
+    }],
+    [
+      recordDeclaration(sourceLayout),
+      recordDeclaration(patchLayout),
+      recordDeclaration(resultLayout),
+      ...structuralRecordTypeDeclarations([]),
+    ],
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
+  if (!compilation.ok) return;
+
+  try {
+    const execution = await runWasmModule(compilation.module);
+    equal(execution.value.kind, "integer");
+    equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
+
+    const wasmGc = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
+    const { instance } = await WebAssembly.instantiate(wasmGc);
+    const main = instance.exports.main as unknown as () => unknown;
+    const valuePayload = instance.exports.valuePayload as unknown as (value: unknown) => number;
+    equal(valuePayload(main()), 42);
   } finally {
     compilation.module.destroy();
   }

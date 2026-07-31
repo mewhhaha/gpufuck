@@ -1,4 +1,4 @@
-import { BinaryOperator, CoreTag, MAXIMUM_CONSTRUCTOR_ARITY } from "./abi.ts";
+import { BinaryOperator, CoreTag, MAXIMUM_CONSTRUCTOR_ARITY, RuntimeFaultCategory } from "./abi.ts";
 import {
   INDEXED_LOCAL_RESOLUTION_MAGIC,
   INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC,
@@ -220,6 +220,7 @@ const SURFACE_NUMERIC_CONVERT: u32 = 22u;
 const SURFACE_TEXT: u32 = 23u;
 const SURFACE_BYTES: u32 = 24u;
 const SURFACE_RUNTIME_FAULT: u32 = 25u;
+const RUNTIME_FAULT_UNREACHABLE: u32 = ${RuntimeFaultCategory.Unreachable}u;
 const SURFACE_WHOLE_NUMBER_F64: u32 = 26u;
 const SURFACE_BUFFER_APPEND: u32 = 27u;
 const SURFACE_STORE_NEW: u32 = ${CoreTag.StoreNew}u;
@@ -370,7 +371,8 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
       return node.child0 < state.type_count && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
     case SURFACE_RUNTIME_FAULT: {
-      return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
+      return node.child0 <= RUNTIME_FAULT_UNREACHABLE && node.child1 == NO_INDEX &&
+        node.child2 == NO_INDEX;
     }
     case SURFACE_STORE_EMPTY: {
       return node.payload < state.type_count && node.child0 == NO_INDEX &&

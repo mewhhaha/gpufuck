@@ -268,11 +268,11 @@ export class WasmFunctionAnalysis {
   /**
    * The lambda node of a `let`-bound join point, or `undefined` when this `let` is not one.
    *
-   * A join point is a `let` whose value is a one-parameter lambda that ignores its parameter and
-   * whose binder is referenced only as a saturated call in tail position. That shape compiles to a
-   * label rather than a closure: emit the body once after a wasm `block` and turn every call into a
-   * `br` to that block's end. The body then sits in the enclosing function's tail position, so a
-   * self-tail-call inside it is still a branch to the loop header rather than a stack frame.
+   * A join point is a `let` whose value is a one-parameter lambda and whose binder is referenced
+   * only as a saturated call in tail position. That shape compiles to a value-carrying label rather
+   * than a closure: emit the body once after a wasm `block` and turn every call into a `br` carrying
+   * its argument to that block's end. The body then sits in the enclosing function's tail position,
+   * so a self-tail-call inside it is still a branch to the loop header rather than a stack frame.
    *
    * This exists because {@link WasmFunctionAnalysis.prototype} stops its tail walk at `Lambda`, so
    * without it a tail call inside a `let`-bound lambda silently becomes a real call. Guarded Gleam
@@ -283,26 +283,26 @@ export class WasmFunctionAnalysis {
    * value and the body cannot call the join point. That is what makes a plain forward `block`
    * sufficient rather than a `loop` with a dispatch variable.
    *
-   * The parameter is dead, so the argument is dead too and is never emitted. That is only sound if
-   * evaluating it could not have done anything, so arguments are restricted to leaves — which have
-   * no subexpression to carry an effect — other than `RuntimeFault`, which is an effect by itself.
+   * Carrying the argument preserves ordinary application semantics for both live and dead
+   * parameters: strict arguments are evaluated before the branch and lazy arguments remain thunks.
    */
   joinPointLambda(letNode: number): number | undefined {
     const node = this.#node(letNode);
     if (node.tag !== CoreTag.Let) return undefined;
     const lambda = this.#node(node.child0);
     if (lambda.tag !== CoreTag.Lambda) return undefined;
-    if (this.#referencesLocal(lambda.child0, 0)) return undefined;
     if (!this.#joinReferencesAreTailCalls(node.child1, 0, true)) return undefined;
     // A join point nothing branches to would leave its body unreachable rather than shared.
     if (!this.#referencesLocal(node.child1, 0)) return undefined;
     return node.child0;
   }
 
-  /** A leaf carries no subexpression that could have an effect, so a dead one need not be emitted. */
-  #argumentIsDiscardable(nodeIndex: number): boolean {
-    return this.#node(nodeIndex).tag !== CoreTag.RuntimeFault &&
-      this.#children(nodeIndex).length === 0;
+  joinPointPassesArgument(lambdaNode: number): boolean {
+    const lambda = this.#node(lambdaNode);
+    if (lambda.tag !== CoreTag.Lambda) {
+      throw new Error(`WebAssembly join point ${lambdaNode} is not a lambda`);
+    }
+    return this.#referencesLocal(lambda.child0, 0);
   }
 
   #referencesLocal(nodeIndex: number, localDepth: number): boolean {
@@ -328,7 +328,7 @@ export class WasmFunctionAnalysis {
     if (node.tag === CoreTag.Apply) {
       const callee = this.#node(node.child0);
       if (callee.tag === CoreTag.Local && callee.payload === localDepth) {
-        return tail && this.#argumentIsDiscardable(node.child1);
+        return tail;
       }
     }
     if (node.tag === CoreTag.Local) return node.payload !== localDepth;

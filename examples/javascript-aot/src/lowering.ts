@@ -415,6 +415,7 @@ class JavaScriptAotLowering {
           value,
           body: {
             kind: "runtime-fault" as const,
+            category: "explicit" as const,
             message: `${description} completed with an uncaught JavaScript exception.`,
             span,
           },
@@ -1454,6 +1455,7 @@ class JavaScriptAotLowering {
         if (this.options.runtimeFaultConstructors?.has(expression.constructor)) {
           return {
             kind: "runtime-fault",
+            category: "explicit",
             message: this.options.runtimeFaultConstructors.get(expression.constructor)!,
             span: expression.span,
           };

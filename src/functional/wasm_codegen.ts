@@ -5,6 +5,7 @@ import {
   EvaluationMode,
   EvaluationProfile,
   NO_INDEX,
+  RuntimeFaultCategory,
   type Type,
   UnaryOperator,
   UNIT_CONSTRUCTOR_NAME,
@@ -80,6 +81,7 @@ import {
   WASM_FAULT_EXPLICIT,
   WASM_FAULT_INVALID_NUMERIC_CONVERSION,
   WASM_FAULT_OUT_OF_BOUNDS,
+  WASM_FAULT_UNREACHABLE,
 } from "./wasm_runtime_binary.ts";
 import { WasmRuntimeEmitter } from "./wasm_runtime_emitter.ts";
 import { structuralEqualityFunction } from "./wasm_structural_equality.ts";
@@ -197,6 +199,7 @@ interface StoreUpdate {
 interface JoinPoint {
   readonly kind: "join-point";
   readonly resultBranchDepth: number;
+  readonly passesArgument: boolean;
 }
 
 type Binding =
@@ -582,6 +585,7 @@ class WasmCompiler {
   readonly #constantAnalysis: WasmConstantAnalysis;
   readonly #functionAnalysis: WasmFunctionAnalysis;
   readonly #uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
+  readonly #provenStoreReads: ReadonlySet<number>;
   readonly #coreIndex: WasmBackendPlan["coreIndex"];
   readonly #indirectFunctions: (WasmFunctionBody | undefined)[] = [];
   readonly #lambdaSlots: (number | undefined)[];
@@ -666,6 +670,7 @@ class WasmCompiler {
     this.#constantAnalysis = plan.constantAnalysis;
     this.#functionAnalysis = plan.functionAnalysis;
     this.#uniqueReuseAnalysis = plan.uniqueReuseAnalysis;
+    this.#provenStoreReads = plan.provenStoreReads;
     this.#lambdaSetAnalysis = plan.lambdaSetAnalysis;
     this.#coreIndex = plan.coreIndex;
     this.#directOnlyDefinitions = plan.coreIndex.directOnlyDefinitions;
@@ -3183,7 +3188,13 @@ class WasmCompiler {
         return;
       }
       case CoreTag.RuntimeFault:
-        this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_EXPLICIT, nodeIndex);
+        this.#runtimeEmitter.emitFault(
+          instructions,
+          node.child0 === RuntimeFaultCategory.Unreachable
+            ? WASM_FAULT_UNREACHABLE
+            : WASM_FAULT_EXPLICIT,
+          nodeIndex,
+        );
         return;
       case CoreTag.Boolean:
         instructions.i64Const((BigInt(node.payload) << 3n) | 2n);
@@ -4643,7 +4654,9 @@ class WasmCompiler {
     this.compileIntegerExpression(instructions, node.child1, environment);
     const index = instructions.addLocal(WasmValueType.I32);
     instructions.localSet(index);
-    this.requireStoreIndex(instructions, pointer, index, nodeIndex);
+    if (!this.#provenStoreReads.has(nodeIndex)) {
+      this.requireStoreIndex(instructions, pointer, index, nodeIndex);
+    }
     this.emitStoreElementAddress(instructions, pointer, index);
     instructions.i64Load(0);
   }
@@ -7690,7 +7703,16 @@ class WasmCompiler {
       const callee = this.node(node.child0);
       const binding = callee.tag === CoreTag.Local ? environment[callee.payload] : undefined;
       if (binding?.kind === "join-point") {
-        // The argument is a nullary constructor and the parameter is dead, so the call is a jump.
+        if (binding.passesArgument) {
+          if (node.evaluationMode === EvaluationMode.StrictEager) {
+            this.compileExpression(instructions, node.child1, environment);
+          } else {
+            this.compileLazyValue(instructions, node.child1, environment);
+          }
+        } else if (node.evaluationMode === EvaluationMode.StrictEager) {
+          this.compileExpression(instructions, node.child1, environment);
+          instructions.emit(0x1a);
+        }
         instructions.branch(resultBranchDepth - binding.resultBranchDepth);
         return;
       }
@@ -7742,7 +7764,8 @@ class WasmCompiler {
     if (node.tag === CoreTag.Let) {
       const joinLambda = this.#functionAnalysis.joinPointLambda(nodeIndex);
       if (joinLambda !== undefined) {
-        // block $join (void) { <let body> } <join body>
+        const passesArgument = this.#functionAnalysis.joinPointPassesArgument(joinLambda);
+        // block $join (result argument?) { <let body> } <join body>
         //
         // Every leaf of a tail position branches, so control reaches the join body only through a
         // `br` to the block's end. That makes the body shared rather than duplicated, and leaves it
@@ -7751,11 +7774,15 @@ class WasmCompiler {
         // This has to run before `virtualLambda` below, which would otherwise win and inline the
         // body at each call site through `compileExpression` -- out of tail position, which is the
         // behaviour that lost tail recursion in the first place.
-        instructions.emit(0x02, 0x40);
+        instructions.emit(0x02, passesArgument ? WasmValueType.I64 : 0x40);
         this.compileTailPosition(
           instructions,
           node.child1,
-          [{ kind: "join-point", resultBranchDepth: resultBranchDepth + 1 }, ...environment],
+          [{
+            kind: "join-point",
+            resultBranchDepth: resultBranchDepth + 1,
+            passesArgument,
+          }, ...environment],
           loop,
           parameterLocals,
           binderDepth + 1,
@@ -7763,13 +7790,20 @@ class WasmCompiler {
           resultBranchDepth + 1,
           resultKind,
         );
+        // WebAssembly validates an `if` end from its enclosing control frame rather than proving
+        // that every arm branched away. Mark the join block's syntactic fallthrough unreachable so
+        // a value-carrying label still satisfies its result type after nested control flow.
+        instructions.emit(0x00);
         instructions.emit(0x0b);
-        // `Let` is non-recursive, so the join binder is not in scope in its own value; the lambda
-        // contributes only its dead parameter, which stays unbound.
+        const argument = passesArgument ? instructions.addLocal(WasmValueType.I64) : undefined;
+        if (argument !== undefined) instructions.localSet(argument);
         this.compileTailPosition(
           instructions,
           this.node(joinLambda).child0,
-          [undefined, ...environment],
+          [
+            argument === undefined ? undefined : { kind: "i64-local", index: argument },
+            ...environment,
+          ],
           loop,
           parameterLocals,
           binderDepth + 1,

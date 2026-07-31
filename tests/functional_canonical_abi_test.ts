@@ -11,6 +11,7 @@ import {
   storeType,
   surface,
   UNIT_CONSTRUCTOR_NAME,
+  WasmRuntimeFaultCode,
 } from "../functional.ts";
 
 const signedInteger64 = { kind: "signed-integer-64" as const };
@@ -78,6 +79,63 @@ Deno.test("canonical ABI exports use caller-facing scalar signatures", async () 
     ok(minor instanceof WebAssembly.Global);
     equal(major.value, 1);
     equal(minor.value, 0);
+    const runtimeFault = instance.exports.runtimeFault;
+    const runtimeFaultNode = instance.exports.runtimeFaultNode;
+    ok(runtimeFault instanceof WebAssembly.Global);
+    ok(runtimeFaultNode instanceof WebAssembly.Global);
+    equal(runtimeFault.value, 0);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("canonical ABI exports the standard unreachable fault category", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: signedInteger64,
+      body: surface.signedInteger64(0n),
+    }, {
+      name: "fail",
+      parameters: [],
+      annotation: signedInteger64,
+      body: surface.unreachable("impossible canonical result"),
+    }],
+    [],
+    "main",
+    0,
+    { wasmExports: [{ name: "blot:fail", definition: "fail" }] },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, {
+      canonicalAbi: {
+        version: 1,
+        imports: [],
+        exports: [{
+          name: "blot:fail",
+          function: { parameters: [], result: canonicalSignedInteger64 },
+        }],
+      },
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const fail = instance.exports["blot:fail"];
+    ok(typeof fail === "function");
+    let trapped = false;
+    try {
+      fail();
+    } catch (error) {
+      ok(error instanceof WebAssembly.RuntimeError);
+      trapped = true;
+    }
+    equal(trapped, true);
+    const runtimeFault = instance.exports.runtimeFault;
+    ok(runtimeFault instanceof WebAssembly.Global);
+    equal(runtimeFault.value, WasmRuntimeFaultCode.Unreachable);
   } finally {
     compilation.module.destroy();
   }

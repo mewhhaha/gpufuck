@@ -24,6 +24,7 @@ import {
   WASM_FAULT_OUT_OF_BOUNDS,
   WASM_FAULT_OUT_OF_FUEL,
   WASM_FAULT_OUT_OF_MEMORY,
+  WASM_FAULT_UNREACHABLE,
 } from "./wasm_runtime_binary.ts";
 import { concreteType } from "./schema_contract.ts";
 import {
@@ -270,6 +271,17 @@ function functionalWasmRuntimeErrorDetails(
       code: "F3013",
       kind: "explicit-fault",
       message: `functional WASM entry ${JSON.stringify(entryName)} raised an explicit fault${
+        detail === undefined ? "" : `: ${detail}`
+      }`,
+    };
+  }
+  if (faultCode === WASM_FAULT_UNREACHABLE) {
+    const detail = node === undefined ? undefined : module.symbolNames[node.payload];
+    return {
+      ...context,
+      code: "F3014",
+      kind: "unreachable",
+      message: `functional WASM entry ${JSON.stringify(entryName)} reached an unreachable path${
         detail === undefined ? "" : `: ${detail}`
       }`,
     };

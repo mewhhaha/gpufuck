@@ -35,6 +35,7 @@ export {
   NODE_WORD_LENGTH,
   NodeWord,
   NumericConversion,
+  RuntimeFaultCategory,
   TYPE_BYTE_LENGTH,
   TYPE_WORD_LENGTH,
   UnaryOperator,

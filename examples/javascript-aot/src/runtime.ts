@@ -2473,5 +2473,5 @@ function runtimeFault(
   message: string,
   span: { readonly startByte: number; readonly endByte: number },
 ): SurfaceExpression {
-  return { kind: "runtime-fault", message, span };
+  return { kind: "runtime-fault", category: "explicit", message, span };
 }

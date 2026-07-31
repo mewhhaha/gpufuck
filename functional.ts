@@ -22,6 +22,7 @@ export * from "./src/functional/surface_builder.ts";
 export * from "./src/functional/surface_contract.ts";
 export * from "./src/functional/surface_reachability.ts";
 export * from "./src/functional/recursive_groups.ts";
+export * from "./src/functional/structural_record.ts";
 export {
   createModuleArtifact,
   type LinkDiagnosticCode,

@@ -3,7 +3,7 @@
  * tracks source locations had to abandon the builder and hand-write node literals. `at()` covers
  * that. Exact-arity lambdas and applications carry one span for the whole source construct.
  */
-import { equal, ok } from "node:assert/strict";
+import { equal, ok, throws } from "node:assert/strict";
 
 import {
   BinaryOperator,
@@ -89,6 +89,64 @@ Deno.test("binding no parameters produces a genuine zero-arity function", () => 
       span: SPAN,
     }),
   );
+});
+
+Deno.test("structural record construction rejects fields that disagree with its layout", () => {
+  const layout = { type: "Point", constructor: "Point", fields: ["x", "y"] } as const;
+  throws(
+    () => surface.structuralRecord(layout, { x: surface.integer(1) }),
+    /structural record "Point" is missing field "y"/,
+  );
+  throws(
+    () =>
+      surface.structuralRecord(layout, {
+        x: surface.integer(1),
+        y: surface.integer(2),
+        z: surface.integer(3),
+      }),
+    /structural record "Point" has no field "z"/,
+  );
+});
+
+Deno.test("structural record desugarings carry the spanned builder through every node", () => {
+  const source = { type: "Source", constructor: "Source", fields: ["x"] } as const;
+  const patch = { type: "Patch", constructor: "Patch", fields: ["y"] } as const;
+  const result = { type: "Result", constructor: "Result", fields: ["x", "y"] } as const;
+  const spanned = surface.at(SPAN);
+  const expressions = [
+    spanned.structuralRecord(source, { x: spanned.integer(1) }),
+    spanned.hasFieldEvidence(source, "x"),
+    spanned.projectField("x", spanned.name("record"), spanned.name("evidence")),
+    spanned.extendRecordEvidence(source, patch, result),
+    spanned.extendRecord(
+      spanned.name("record"),
+      spanned.name("patch"),
+      spanned.name("evidence"),
+    ),
+  ];
+
+  const visit = (expression: SurfaceExpression): void => {
+    equal(expression.span, SPAN);
+    switch (expression.kind) {
+      case "lambda":
+        visit(expression.body);
+        return;
+      case "apply":
+        visit(expression.callee);
+        for (const argument of expression.arguments) visit(argument);
+        return;
+      case "case":
+        visit(expression.value);
+        for (const arm of expression.arms) {
+          equal(arm.span, SPAN);
+          visit(arm.body);
+        }
+        return;
+      default:
+        return;
+    }
+  };
+  for (const expression of expressions) visit(expression);
 });
 
 Deno.test("let, if, and case stamp the span the frontend would have written by hand", () => {

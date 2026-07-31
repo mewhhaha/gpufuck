@@ -17,7 +17,12 @@ export type SurfaceExpression =
   | { readonly kind: "boolean"; readonly value: boolean; readonly span?: Span }
   | { readonly kind: "text"; readonly value: string; readonly span?: Span }
   | { readonly kind: "bytes"; readonly value: Uint8Array; readonly span?: Span }
-  | { readonly kind: "runtime-fault"; readonly message: string; readonly span?: Span }
+  | {
+    readonly kind: "runtime-fault";
+    readonly category: "explicit" | "unreachable";
+    readonly message: string;
+    readonly span?: Span;
+  }
   | {
     readonly kind: "text-append" | "bytes-append";
     readonly left: SurfaceExpression;

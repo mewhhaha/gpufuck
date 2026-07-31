@@ -14,6 +14,18 @@ export interface WasmOwnedTypeExport {
 export type WasmBackend = "linear-memory" | "wasm-gc";
 export type WasmSimdMode = "portable-scalar" | "wasm-simd";
 
+/** Stable codes exported through the `runtimeFault` global in standalone WebAssembly. */
+export const WasmRuntimeFaultCode = {
+  Blackhole: 1,
+  DivideByZero: 2,
+  OutOfMemory: 3,
+  OutOfFuel: 4,
+  InvalidNumericConversion: 5,
+  OutOfBounds: 6,
+  Explicit: 7,
+  Unreachable: 8,
+} as const;
+
 export interface WasmCompilationOptions {
   readonly backend?: WasmBackend;
   readonly simd?: WasmSimdMode;
@@ -42,6 +54,7 @@ export type WasmRuntimeDiagnosticCode =
   | "F3011"
   | "F3012"
   | "F3013"
+  | "F3014"
   | "F3101"
   | "F3102"
   | "F3103"
@@ -56,6 +69,7 @@ export type WasmRuntimeFaultKind =
   | "cyclic-result"
   | "invalid-numeric-conversion"
   | "explicit-fault"
+  | "unreachable"
   | "out-of-bounds"
   | "host-operation"
   | "async-replay-diverged"

@@ -34,6 +34,7 @@ import {
   NODE_BYTE_LENGTH,
   NODE_WORD_LENGTH,
   NodeWord,
+  RuntimeFaultCategory,
   TYPE_BYTE_LENGTH,
   TYPE_WORD_LENGTH,
   TypecheckingProfile,
@@ -874,9 +875,15 @@ function validateEncodedModule(module: EncodedModule): void {
     const tag = module.nodeWords[offset + NodeWord.Tag];
     if (tag === ExpressionTag.RuntimeFault) {
       const symbol = module.nodeWords[offset + NodeWord.Payload]!;
+      const category = module.nodeWords[offset + NodeWord.Child0]!;
       if (symbol >= module.symbolNames.length) {
         throw new Error(
           `functional runtime fault node ${nodeIndex} references symbol ${symbol}; expected fewer than ${module.symbolNames.length}`,
+        );
+      }
+      if (category > RuntimeFaultCategory.Unreachable) {
+        throw new Error(
+          `functional runtime fault node ${nodeIndex} has unknown category ${category}`,
         );
       }
       continue;

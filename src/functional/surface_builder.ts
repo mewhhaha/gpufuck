@@ -17,6 +17,7 @@ import {
   NodeWord,
   type NumericConversion,
   PAIR_CONSTRUCTOR_NAME,
+  RuntimeFaultCategory,
   type SourceType,
   type Span,
   THUNK_CONSTRUCTOR_NAME,
@@ -65,6 +66,10 @@ import type {
   SurfaceTypeDeclaration,
 } from "./surface_contract.ts";
 import { STORE_TYPE_NAME } from "./store_contract.ts";
+import {
+  createStructuralRecordSurface,
+  type StructuralRecordSurface,
+} from "./structural_record.ts";
 
 export type {
   SurfaceCaseArm,
@@ -1116,14 +1121,20 @@ class SurfaceExpressionEncoder {
         this.words[node * NODE_WORD_LENGTH + NodeWord.Child0] = typeIndex;
         return node;
       }
-      case "runtime-fault":
-        return this.emitNode(
+      case "runtime-fault": {
+        const node = this.emitNode(
           ExpressionTag.RuntimeFault,
           this.symbols.intern(expression.message),
           [],
           parent,
           expression.span,
         );
+        this.words[node * NODE_WORD_LENGTH + NodeWord.Child0] =
+          expression.category === "unreachable"
+            ? RuntimeFaultCategory.Unreachable
+            : RuntimeFaultCategory.Explicit;
+        return node;
+      }
       case "name":
         return this.emitNode(
           ExpressionTag.Name,
@@ -1629,7 +1640,7 @@ function sourceType(
   }
 }
 
-export type SurfaceBuilder = Readonly<{
+type SurfaceBuilderBase = Readonly<{
   /**
    * Returns a builder that stamps `span` on *every* node each helper produces, including the
    * interior spine of a fold or desugaring. Every surface node kind already carries an optional
@@ -1647,6 +1658,7 @@ export type SurfaceBuilder = Readonly<{
   text(value: string): SurfaceExpression;
   bytes(value: Uint8Array): SurfaceExpression;
   runtimeFault(message: string): SurfaceExpression;
+  unreachable(message: string): SurfaceExpression;
   name(name: string): SurfaceExpression;
   lambda(
     parameters: string | readonly string[],
@@ -1669,6 +1681,17 @@ export type SurfaceBuilder = Readonly<{
     body: SurfaceExpression,
     valueEvaluation?: EvaluationProfile,
   ): SurfaceExpression;
+  /**
+   * Shares a forward continuation. Calls produced by `jump` are ordinary typed applications; the
+   * Wasm backend contifies them when every use is saturated and in tail position.
+   */
+  join(
+    name: string,
+    parameter: string,
+    body: SurfaceExpression,
+    continuation: SurfaceExpression,
+  ): SurfaceExpression;
+  jump(name: string, value: SurfaceExpression): SurfaceExpression;
   /**
    * Installs lexical effect evidence. Calls through `operation` use `implementation`; passing that
    * binding through higher-order code keeps the replacement in scope and can discharge the effect.
@@ -1738,13 +1761,15 @@ export type SurfaceBuilder = Readonly<{
   ): SurfaceExpression;
 }>;
 
+export type SurfaceBuilder = SurfaceBuilderBase & Readonly<StructuralRecordSurface>;
+
 function stampSpan<Value extends { readonly span?: Span }>(value: Value, span: Span): Value {
   return value.span === undefined ? { ...value, span } : value;
 }
 
 function createSurface(span: Span | undefined): SurfaceBuilder {
   const spanned = span === undefined ? {} : { span };
-  return {
+  const builder = {
     at(next: Span): SurfaceBuilder {
       return createSurface(next);
     },
@@ -1817,6 +1842,33 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
         value,
         body,
         ...(valueEvaluation === undefined ? {} : { valueEvaluation }),
+        ...spanned,
+      };
+    },
+    join(
+      name: string,
+      parameter: string,
+      body: SurfaceExpression,
+      continuation: SurfaceExpression,
+    ): SurfaceExpression {
+      return {
+        kind: "let",
+        name,
+        value: {
+          kind: "lambda",
+          parameters: [parameter],
+          body: continuation,
+          ...spanned,
+        },
+        body,
+        ...spanned,
+      };
+    },
+    jump(name: string, value: SurfaceExpression): SurfaceExpression {
+      return {
+        kind: "apply",
+        callee: { kind: "name", name, ...spanned },
+        arguments: [value],
         ...spanned,
       };
     },
@@ -1931,9 +1983,16 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       return { kind: "bytes", value: value.slice(), ...spanned };
     },
     runtimeFault(message: string): SurfaceExpression {
-      return { kind: "runtime-fault", message, ...spanned };
+      return { kind: "runtime-fault", category: "explicit", message, ...spanned };
+    },
+    unreachable(message: string): SurfaceExpression {
+      return { kind: "runtime-fault", category: "unreachable", message, ...spanned };
     },
   };
+  return Object.freeze({
+    ...builder,
+    ...createStructuralRecordSurface(builder),
+  });
 }
 
 export const surface: SurfaceBuilder = createSurface(undefined);

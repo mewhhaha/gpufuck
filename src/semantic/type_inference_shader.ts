@@ -12,6 +12,7 @@ import {
   MODULE_ABI_VERSION,
   NO_INDEX,
   NODE_WORD_LENGTH,
+  RuntimeFaultCategory,
   TYPE_WORD_LENGTH,
   UnaryOperator,
 } from "./abi.ts";
@@ -822,7 +823,7 @@ export function prepareInferenceShaderMetadata(
 
 /**
  * Persistent, bounded Hindley-Milner and predicative rank-N inference for resolved core
- * nodes and flattened ABI-v7 type metadata. The eight bindings stay within WebGPU's portable
+ * nodes and flattened ABI-v8 type metadata. The eight bindings stay within WebGPU's portable
  * per-stage storage-buffer minimum. A dispatch performs at most
  * `maximum_transitions_per_dispatch` state-machine transitions; all durable
  * cursors, Tarjan stacks, expression frames, and arenas live in GPU buffers.
@@ -1283,6 +1284,7 @@ const TAG_NUMERIC_CONVERT: u32 = ${CoreTag.NumericConvert}u;
 const TAG_TEXT: u32 = ${CoreTag.Text}u;
 const TAG_BYTES: u32 = ${CoreTag.Bytes}u;
 const TAG_RUNTIME_FAULT: u32 = ${CoreTag.RuntimeFault}u;
+const RUNTIME_FAULT_UNREACHABLE: u32 = ${RuntimeFaultCategory.Unreachable}u;
 const TAG_WHOLE_NUMBER_F64: u32 = ${CoreTag.WholeNumberF64}u;
 const TAG_BUFFER_APPEND: u32 = ${CoreTag.BufferAppend}u;
 const TAG_STORE_NEW: u32 = ${CoreTag.StoreNew}u;
@@ -4772,7 +4774,8 @@ fn node_shape_is_valid(node_index: u32) -> bool {
       node.evaluation_mode == 0u;
   }
   if node.tag == TAG_RUNTIME_FAULT {
-    return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
+    return node.child0 <= RUNTIME_FAULT_UNREACHABLE && node.child1 == NO_INDEX &&
+      node.child2 == NO_INDEX &&
       node.evaluation_mode == 0u;
   }
   if node.tag == TAG_STORE_EMPTY {

@@ -480,11 +480,11 @@ export function encodeWasmModule(
             ...encodeUnsigned(exported.functionIndex),
           ]),
           [...name("memory"), 0x02, 0x00],
+          globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
+          globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
           ...(canonicalAbiVersion === undefined
             ? [
               globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
-              globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
-              globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
               globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
               globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
               globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),

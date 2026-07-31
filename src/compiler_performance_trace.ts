@@ -1,5 +1,14 @@
 export type CompilerPerformanceAnnotation = string | number | boolean;
 
+/** Stable stage containing Store bounds-check analysis annotations. */
+export const WASM_STATIC_ANALYSIS_TRACE_STAGE = "wasm.plan.static-analysis";
+
+/** Stable annotation counting every Store read considered by the Wasm analysis. */
+export const WASM_STORE_READS_TRACE_ANNOTATION = "storeReads";
+
+/** Stable annotation counting Store reads whose bounds checks were eliminated. */
+export const WASM_PROVEN_STORE_READS_TRACE_ANNOTATION = "provenStoreReads";
+
 export interface CompilerPerformanceEvent {
   readonly stage: string;
   readonly startMilliseconds: number;

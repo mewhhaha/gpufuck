@@ -195,7 +195,7 @@ No branch changes `MODULE_ABI_VERSION`, the package version, or production behav
 | Type schemas/annotations       | Checking metadata             | HM, indexed constructors, rank-N checking                                                |
 | Join-point recognition         | Backend metadata              | Preserves Gleam tail calls without Core closures                                         |
 | Case defaults/recursive groups | Surface sugar                 | Host elaboration before packing                                                          |
-| Monomorphisation               | Frontend/backend optimization | Blot already specializes before gpufuck                                                  |
+| Monomorphisation               | Frontend/backend optimization | Blot and gpufuck keep Core definitions polymorphic                                       |
 | Inlining/direct-call fusion    | Backend optimization          | Existing Wasm codegen already performs it                                                |
 | `StrictLet`/`StrictApply` tags | Surface evaluation encoding   | Lower to ordinary Core nodes plus evaluation mode                                        |
 
@@ -409,12 +409,83 @@ faults, dedicated `if`, Store semantics, or existing backend specialization.
 4. Update Lazuli, Gleam, Sweep, and JavaScript lowering; add partial/over/zero-arity behavior tests.
 5. Update Duck in the same release. Its gpufuck-0.6 adapter also needs `purity` replaced by explicit
    effect sets, as demonstrated by `research/primitive-synthesis-duck`.
-6. Update Blot's monomorphized lowering and rerun empty-array, handler, host-effect, and
-   three-runtime agreement cases.
+6. Update Blot's polymorphic lowering and rerun empty-array, handler, host-effect, and three-runtime
+   agreement cases.
 7. Delete ABI 6 completely. Do not carry a compatibility decoder.
 8. Only then repeat the primop experiment with generated consumers. Include it in ABI 7 only if it
    deletes the 301 references' duplicated rules and passes the 5% guardrail.
 9. Remeasure the combined executable compiler. Do not infer results from the representation model.
+
+## Blot structural-mismatch follow-up
+
+The 2026-07-31 audit corrected the original adapter attribution before changing Core. Blot has 17
+`nominal(` call sites, 25 `unsupported()` call sites, and five `runtimeFault` call sites. These are
+call-site counts; line-matching counts are not a substitute. The previously reported 26% was only
+`backend/` as a share of repository lines. It did not measure time or code caused by gpufuck, and
+1,031 of those 4,382 backend lines stage the ABI, imports, and exports required by any target.
+
+Blot also does not duplicate definitions for record shapes. The change at `47fa577` records
+instantiation correspondence beside its type lattice and walks those facts only when collecting
+backend shapes. The corpus emits byte-identical Wasm. That machinery makes one concrete nominal
+recoverable; it does not make invariant Core records structurally polymorphic, and it still refuses
+two distinct layouts reaching one generalized projection.
+
+Three scoped additions were accepted without a new Core tag or ABI change:
+
+- `HasField<label, record, value>` is typed Surface evidence. A frontend constructs an accessor
+  where the complete nominal layout is known, while the shared projection consumes only the field
+  label, record, and evidence. Field labels and evidence constructors elaborate to existing typed
+  constructors, lambdas, and cases before Core inference. One annotated `getX` definition now
+  projects from both `FirstRecord{x, enabled}` and `SecondRecord{name, x}` without definition
+  cloning; GPU inference, linear Wasm, and WasmGC agree on 42. This is the constrained subset needed
+  for a staged Blot migration, not unrestricted row polymorphism or a dynamic record dictionary.
+- `join(name, parameter, body, continuation)` and `jump(name, value)` expose value-carrying forward
+  joins as ordinary Surface `let` and application. Linear Wasm contifies a one-argument binder only
+  when every reference is a saturated tail call, carries live arguments through a typed block, and
+  still evaluates strict dead arguments. Blot now lowers source-unspellable return/break outcome
+  cases to these joins while leaving user variants unchanged.
+- Linear Wasm and WasmGC run a conservative dominating-fact analysis before emission. A Store read
+  loses its runtime check only when the same index is proven below the same Store's length and is
+  nonnegative, or when an exact length proves a nonnegative constant index. No trusted frontend
+  assertion was added. The performance trace reports `provenStoreReads`, including one discharged
+  check in the regression workload. More elaborate loop induction remains future analysis rather
+  than an unchecked evidence escape hatch.
+
+The bounds pass has an explicit no-Store fast path. In 60 alternating same-process pairs on the
+1,036-node generated Gleam module, median complete Wasm emission was 1.676 ms before and 1.663 ms
+after; planning was 0.520 ms in both cases. This is within measurement noise and avoids charging
+ordinary consumers for a Store-specific proof. A 13-node one-read microcase moved from 0.119 to
+0.128 ms to compile and from 1,402 to 1,382 bytes. The 0.010 ms fixed proof cost is proportionally
+8.4% only because the entire control compiles in about a tenth of a millisecond.
+
+A repeated-call control makes the trade measurable at run time. For 100,000 reads below the same
+dominating length fact, 60 alternating calls measured 0.330 ms before and 0.281 ms after, a 14.9%
+reduction; the artifact fell from 1,509 to 1,488 bytes. Dividing the one-time 0.010 ms compile cost
+by the 0.049 ms saved per 100,000 reads gives a break-even near 20,200 executed reads. Cold or
+rarely executed reads retain a tiny absolute compile cost; hot Store loops clear the runtime
+guardrail.
+
+Against a detached `47fa577` Blot control using the same gpufuck checkout, the control-flow lowering
+changed these static totals:
+
+| Blot example            | Control nodes | Join nodes | Change | Control types | Join types | Control constructors | Join constructors |
+| ----------------------- | ------------: | ---------: | -----: | ------------: | ---------: | -------------------: | ----------------: |
+| `returning.blot`        |         1,004 |        825 | -17.8% |            31 |         17 |                   48 |                20 |
+| `breaking.blot`         |         1,100 |        936 | -14.9% |            32 |         18 |                   41 |                21 |
+| `conditional_rebinding` |           881 |        881 |     0% |            20 |         20 |                   23 |                23 |
+
+The unchanged conditional case contains no synthetic control family, which is the expected negative
+control. The optimization removes the one-field control payload wrapper as well as the synthetic
+outcome sums. A nested live-join path in `tour.blot` exposed a WebAssembly validation edge:
+structured validation does not prove that all arms branch away. Emission now terminates the
+syntactic block fallthrough with `unreachable`; the tour and the complete corpus again agree across
+the interpreter, GPU evaluator, and Wasm.
+
+The priority distinction is now explicit. Dominating bounds facts are the lowest-risk runtime win.
+`HasField` is the larger adapter-deletion opportunity, but Blot must elaborate and pass evidence at
+polymorphic call sites before deleting its shape-fact machinery. Value joins remove hand-encoded
+control data immediately. Blot's still-variable spread, in-place parameter destructuring, and
+cross-import projection cases remain Blot frontend work rather than gpufuck Core gaps.
 
 ## Post-production discarded-work checkpoint
 

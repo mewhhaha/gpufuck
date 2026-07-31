@@ -1,4 +1,11 @@
-import { BinaryOperator, CoreTag, EvaluationMode, NO_INDEX, UnaryOperator } from "./abi.ts";
+import {
+  BinaryOperator,
+  CoreTag,
+  EvaluationMode,
+  NO_INDEX,
+  RuntimeFaultCategory,
+  UnaryOperator,
+} from "./abi.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
   float32FromBits,
@@ -13,8 +20,13 @@ import {
 import { functionalWasmEntry } from "./wasm_host_boundary.ts";
 import { WASM_GC_ABI_VERSION, WasmGcValueKind } from "./wasm_gc_contract.ts";
 import { MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
-import { WASM_FAULT_OUT_OF_BOUNDS } from "./wasm_runtime_binary.ts";
+import {
+  WASM_FAULT_EXPLICIT,
+  WASM_FAULT_OUT_OF_BOUNDS,
+  WASM_FAULT_UNREACHABLE,
+} from "./wasm_runtime_binary.ts";
 import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
+import { analyzeProvenStoreReads } from "./store_bounds_analysis.ts";
 
 const VALUE_TYPE_INDEX = 0;
 const VALUE_FIELDS_TYPE_INDEX = 1;
@@ -95,6 +107,7 @@ export function compileWasmGc(
 class GcCoreEmitter {
   readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
+  readonly #provenStoreReads: ReadonlySet<number>;
   #instructions = new GcInstructions();
   readonly #activeNodes = new Set<number>();
   readonly #lambdaWorkers = new Map<
@@ -111,6 +124,7 @@ class GcCoreEmitter {
   constructor(module: CompiledModule, nodes: readonly CoreNode[]) {
     this.#module = module;
     this.#nodes = nodes;
+    this.#provenStoreReads = analyzeProvenStoreReads(module, nodes);
   }
 
   emitModule(entryRoot: number): Uint8Array<ArrayBuffer> {
@@ -270,6 +284,14 @@ class GcCoreEmitter {
       case CoreTag.StoreWrite:
       case CoreTag.StoreGrow:
         this.emitStoreUpdates(nodeIndex, environment);
+        return;
+      case CoreTag.RuntimeFault:
+        this.emitRuntimeFault(
+          nodeIndex,
+          node.child0 === RuntimeFaultCategory.Unreachable
+            ? WASM_FAULT_UNREACHABLE
+            : WASM_FAULT_EXPLICIT,
+        );
         return;
       case CoreTag.Case:
         this.emitCase(nodeIndex, node, environment);
@@ -931,7 +953,9 @@ class GcCoreEmitter {
     this.emitPayload(node.child1, environment);
     const index = this.#instructions.addI32Local();
     this.#instructions.localSet(index);
-    this.requireStoreIndex(store, index, nodeIndex);
+    if (!this.#provenStoreReads.has(nodeIndex)) {
+      this.requireStoreIndex(store, index, nodeIndex);
+    }
     this.#instructions.localGet(store);
     this.#instructions.refAsNonNull();
     this.#instructions.structGet(VALUE_FIELDS_FIELD);
@@ -1065,6 +1089,14 @@ class GcCoreEmitter {
     this.#instructions.globalSet(this.#module.definitionCount + 2);
     this.#instructions.unreachable();
     this.#instructions.end();
+  }
+
+  emitRuntimeFault(nodeIndex: number, fault: number): void {
+    this.#instructions.i32Const(fault);
+    this.#instructions.globalSet(this.#module.definitionCount + 1);
+    this.#instructions.i32Const(nodeIndex);
+    this.#instructions.globalSet(this.#module.definitionCount + 2);
+    this.#instructions.unreachable();
   }
 
   copyStoreFields(destination: number, store: number, length: number): void {

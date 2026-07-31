@@ -2,6 +2,9 @@ import { CoreTag, EvaluationMode, EvaluationProfile, NO_INDEX } from "./abi.ts";
 import {
   type CompilerPerformanceTrace,
   measureCompilerStage,
+  WASM_PROVEN_STORE_READS_TRACE_ANNOTATION,
+  WASM_STATIC_ANALYSIS_TRACE_STAGE,
+  WASM_STORE_READS_TRACE_ANNOTATION,
 } from "../compiler_performance_trace.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
@@ -27,6 +30,7 @@ import { preparedWasmLambdaAnalysis } from "./prepared_wasm_lambda_analysis.ts";
 import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 import { indexWasmCore, type WasmCoreIndex } from "./wasm_core_index.ts";
 import type { LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
+import { analyzeProvenStoreReads } from "./store_bounds_analysis.ts";
 
 export interface WasmBackendPlan {
   readonly module: CompiledModule;
@@ -35,6 +39,7 @@ export interface WasmBackendPlan {
   readonly constantAnalysis: WasmConstantAnalysis;
   readonly functionAnalysis: WasmFunctionAnalysis;
   readonly uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
+  readonly provenStoreReads: ReadonlySet<number>;
   readonly lambdaSetAnalysis: LambdaSetAnalysis | undefined;
   readonly coreIndex: WasmCoreIndex;
   readonly entry: WasmEntry;
@@ -87,16 +92,28 @@ export function createWasmBackendPlan(
       coreIndexAnnotations.directOnlyDefinitions = result.directOnlyDefinitions.size;
     },
   );
-  const analysisAnnotations = { nodes: loweredNodes.length, definitions: module.definitionCount };
-  const [captureAnalysis, constantAnalysis] = measureCompilerStage(
+  const analysisAnnotations = {
+    nodes: loweredNodes.length,
+    definitions: module.definitionCount,
+    [WASM_STORE_READS_TRACE_ANNOTATION]: loweredNodes.reduce(
+      (count, node) => count + Number(node.tag === CoreTag.StoreRead),
+      0,
+    ),
+    [WASM_PROVEN_STORE_READS_TRACE_ANNOTATION]: 0,
+  };
+  const [captureAnalysis, constantAnalysis, provenStoreReads] = measureCompilerStage(
     trace,
-    "wasm.plan.static-analysis",
+    WASM_STATIC_ANALYSIS_TRACE_STAGE,
     analysisAnnotations,
     () =>
       [
         new WasmCaptureAnalysis(module, loweredNodes),
         new WasmConstantAnalysis(loweredNodes),
+        analyzeProvenStoreReads(module, loweredNodes),
       ] as const,
+    (result) => {
+      analysisAnnotations[WASM_PROVEN_STORE_READS_TRACE_ANNOTATION] = result[2].size;
+    },
   );
   const storageAnnotations = {
     nodes: loweredNodes.length,
@@ -178,6 +195,7 @@ export function createWasmBackendPlan(
     constantAnalysis,
     functionAnalysis,
     uniqueReuseAnalysis,
+    provenStoreReads,
     lambdaSetAnalysis: preparedLambdaAnalysis?.lambdaSets,
     coreIndex,
     entry,

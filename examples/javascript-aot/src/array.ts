@@ -70,6 +70,7 @@ export function javascriptArraySurface(
         },
         consequent: {
           kind: "runtime-fault",
+          category: "explicit",
           message: "JavaScript array index is negative or fractional",
           span,
         },
@@ -81,6 +82,7 @@ export function javascriptArraySurface(
             binders: [],
             body: {
               kind: "runtime-fault",
+              category: "explicit",
               message: "JavaScript array index is outside the immutable array",
               span,
             },
