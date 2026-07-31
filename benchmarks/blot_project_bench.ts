@@ -2,6 +2,7 @@ import { CompilerPerformanceTrace, summarizeCompilerPerformance } from "../funct
 import {
   BlotCompilerSession,
   type Verified,
+  type VerifyMetrics,
   type VerifyTimings,
 } from "../playground/blot/src/backend/compile.ts";
 import { hostInit } from "../playground/blot/src/backend/host.ts";
@@ -13,7 +14,9 @@ import {
 import { resetBlotSyntaxSession, validateBlotSyntax } from "../playground/blot/gpu_frontend.ts";
 import { createBlotStressProject } from "../playground/blot/stress_project.ts";
 
-const SAMPLE_COUNT = 3;
+const RESIDENT_SAMPLE_COUNT = 3;
+const parallelColdSetup = Deno.args.includes("--parallel-setup");
+const gpuSyntax = Deno.args.includes("--gpu-syntax");
 const blot = new URL("../playground/blot/", import.meta.url);
 const prelude = await Deno.readTextFile(new URL("src/prelude/prelude.blot", blot));
 const stressProject = createBlotStressProject();
@@ -35,6 +38,13 @@ const stages: readonly [label: string, timing: keyof VerifyTimings][] = [
   ["Canonical Wasm emit", "canonicalWasmMilliseconds"],
 ];
 
+const syntaxStages: readonly [label: string, timing: keyof SyntaxTimings][] = [
+  ["Parser resources", "parserResourcesMilliseconds"],
+  ["GPU syntax setup", "gpuSetupMilliseconds"],
+  ["GPU syntax ingest", "gpuIngestMilliseconds"],
+  ["Source configuration", "sourceConfigurationMilliseconds"],
+];
+
 interface Workload {
   readonly label: string;
   readonly path: string;
@@ -45,9 +55,17 @@ interface Workload {
 
 interface Sample {
   readonly timings: VerifyTimings;
-  readonly syntaxMilliseconds: number;
+  readonly syntax: SyntaxTimings;
   readonly wallMilliseconds: number;
   readonly trace: CompilerPerformanceTrace;
+}
+
+interface SyntaxTimings {
+  readonly parserResourcesMilliseconds: number;
+  readonly gpuSetupMilliseconds: number;
+  readonly gpuIngestMilliseconds: number;
+  readonly sourceConfigurationMilliseconds: number;
+  readonly totalMilliseconds: number;
 }
 
 interface Measurement {
@@ -55,6 +73,7 @@ interface Measurement {
   readonly unchanged: readonly Sample[];
   readonly edited: readonly Sample[];
   readonly wasmBytes: number;
+  readonly metrics: VerifyMetrics;
 }
 
 const compilerHost = hostInit(() => {});
@@ -69,37 +88,59 @@ async function prepareSource(
   workloadSources: Readonly<Record<string, string>>,
   cache: "clear" | "reuse-unchanged",
   resetResources: boolean,
-): Promise<number> {
+): Promise<SyntaxTimings> {
   const entrySource = workloadSources[workload.path];
   if (entrySource === undefined) {
     throw new Error(`${workload.label} has no configured entry source at ${workload.path}`);
   }
   const start = performance.now();
+  const parserResourcesStart = start;
   if (resetResources) {
     disposeBlotParser();
     await resetBlotSyntaxSession();
   }
   await initializeBlotParser(parserWasmUrl, parserPlanUrl);
-  const syntax = await validateBlotSyntax(entrySource, parserPlanUrl);
-  if (!syntax.ok) {
-    throw new Error(
-      `${workload.label} failed GPU syntax validation: ${
-        syntax.diagnostics[0]?.message ?? "no diagnostic"
-      }`,
-    );
+  const parserResourcesMilliseconds = performance.now() - parserResourcesStart;
+  let gpuSetupMilliseconds = 0;
+  let gpuIngestMilliseconds = 0;
+  let lexerRecords: Int32Array | undefined;
+  if (gpuSyntax) {
+    const gpuSyntaxStart = performance.now();
+    const syntax = await validateBlotSyntax(entrySource, parserPlanUrl);
+    const gpuSyntaxMilliseconds = performance.now() - gpuSyntaxStart;
+    if (!syntax.ok) {
+      throw new Error(
+        `${workload.label} failed GPU syntax validation: ${
+          syntax.diagnostics[0]?.message ?? "no diagnostic"
+        }`,
+      );
+    }
+    gpuIngestMilliseconds = syntax.cacheHit ? 0 : syntax.timings.totalMs;
+    gpuSetupMilliseconds = Math.max(0, gpuSyntaxMilliseconds - gpuIngestMilliseconds);
+    lexerRecords = syntax.lexerRecords;
   }
+  const sourceConfigurationStart = performance.now();
   configureSources({
     "/blot/prelude.blot": prelude,
     ...workloadSources,
   }, { cache });
-  configureSourceLexerRecords(workload.path, entrySource, syntax.lexerRecords);
-  return performance.now() - start;
+  if (lexerRecords !== undefined) {
+    configureSourceLexerRecords(workload.path, entrySource, lexerRecords);
+  }
+  const sourceConfigurationMilliseconds = performance.now() - sourceConfigurationStart;
+  return {
+    parserResourcesMilliseconds,
+    gpuSetupMilliseconds,
+    gpuIngestMilliseconds,
+    sourceConfigurationMilliseconds,
+    totalMilliseconds: performance.now() - start,
+  };
 }
 
 async function measureVerification(
   session: BlotCompilerSession,
   workload: Workload,
-  syntaxMilliseconds: number,
+  syntax: SyntaxTimings,
 ): Promise<{ readonly sample: Sample; readonly verified: Verified }> {
   const trace = new CompilerPerformanceTrace();
   const start = performance.now();
@@ -111,7 +152,7 @@ async function measureVerification(
   return {
     sample: {
       timings: verified.timings,
-      syntaxMilliseconds,
+      syntax,
       wallMilliseconds: performance.now() - start,
       trace,
     },
@@ -129,28 +170,41 @@ function assertRuntimeExports(workload: Workload, verified: Verified): void {
 }
 
 async function measureCold(workload: Workload): Promise<readonly Sample[]> {
-  const samples: Sample[] = [];
-  for (let sampleIndex = 0; sampleIndex < SAMPLE_COUNT; sampleIndex += 1) {
-    const start = performance.now();
-    const syntaxMilliseconds = await prepareSource(
-      workload,
-      workload.sources,
-      "clear",
-      true,
-    );
-    const session = await BlotCompilerSession.create();
-    try {
-      const measured = await measureVerification(session, workload, syntaxMilliseconds);
-      assertRuntimeExports(workload, measured.verified);
-      samples.push({
-        ...measured.sample,
-        wallMilliseconds: performance.now() - start,
-      });
-    } finally {
-      session.destroy();
+  const start = performance.now();
+  const setup = prepareSource(
+    workload,
+    workload.sources,
+    "clear",
+    true,
+  );
+  let syntax: SyntaxTimings;
+  let session: BlotCompilerSession;
+  if (parallelColdSetup) {
+    const [prepared, created] = await Promise.allSettled([
+      setup,
+      BlotCompilerSession.create(),
+    ]);
+    if (prepared.status === "rejected") {
+      if (created.status === "fulfilled") created.value.destroy();
+      throw prepared.reason;
     }
+    if (created.status === "rejected") throw created.reason;
+    syntax = prepared.value;
+    session = created.value;
+  } else {
+    syntax = await setup;
+    session = await BlotCompilerSession.create();
   }
-  return samples;
+  try {
+    const measured = await measureVerification(session, workload, syntax);
+    assertRuntimeExports(workload, measured.verified);
+    return [{
+      ...measured.sample,
+      wallMilliseconds: performance.now() - start,
+    }];
+  } finally {
+    session.destroy();
+  }
 }
 
 async function measureResident(
@@ -159,6 +213,7 @@ async function measureResident(
   readonly unchanged: readonly Sample[];
   readonly edited: readonly Sample[];
   readonly wasmBytes: number;
+  readonly metrics: VerifyMetrics;
 }> {
   await prepareSource(workload, workload.sources, "clear", true);
   const session = await BlotCompilerSession.create();
@@ -170,19 +225,19 @@ async function measureResident(
     assertRuntimeExports(workload, seeded);
 
     const unchanged: Sample[] = [];
-    for (let sampleIndex = 0; sampleIndex < SAMPLE_COUNT; sampleIndex += 1) {
-      const syntaxMilliseconds = await prepareSource(
+    for (let sampleIndex = 0; sampleIndex < RESIDENT_SAMPLE_COUNT; sampleIndex += 1) {
+      const syntax = await prepareSource(
         workload,
         workload.sources,
         "reuse-unchanged",
         false,
       );
       const start = performance.now();
-      const measured = await measureVerification(session, workload, syntaxMilliseconds);
+      const measured = await measureVerification(session, workload, syntax);
       assertRuntimeExports(workload, measured.verified);
       unchanged.push({
         ...measured.sample,
-        wallMilliseconds: syntaxMilliseconds + performance.now() - start,
+        wallMilliseconds: syntax.totalMilliseconds + performance.now() - start,
       });
     }
 
@@ -192,19 +247,19 @@ async function measureResident(
       if (original === undefined) {
         throw new Error(`${workload.label} has no configured entry source at ${workload.path}`);
       }
-      for (let sampleIndex = 0; sampleIndex < SAMPLE_COUNT; sampleIndex += 1) {
+      for (let sampleIndex = 0; sampleIndex < RESIDENT_SAMPLE_COUNT; sampleIndex += 1) {
         const changedSources = {
           ...workload.sources,
           [workload.path]: workload.editSource(original, sampleIndex),
         };
-        const syntaxMilliseconds = await prepareSource(
+        const syntax = await prepareSource(
           workload,
           changedSources,
           "reuse-unchanged",
           false,
         );
         const start = performance.now();
-        const measured = await measureVerification(session, workload, syntaxMilliseconds);
+        const measured = await measureVerification(session, workload, syntax);
         assertRuntimeExports(workload, measured.verified);
         const coreCache = measured.sample.trace.snapshot().find((event) =>
           event.stage === "semantic.service-cache"
@@ -218,11 +273,11 @@ async function measureResident(
         }
         edited.push({
           ...measured.sample,
-          wallMilliseconds: syntaxMilliseconds + performance.now() - start,
+          wallMilliseconds: syntax.totalMilliseconds + performance.now() - start,
         });
       }
     }
-    return { unchanged, edited, wasmBytes: seeded.wasm.byteLength };
+    return { unchanged, edited, wasmBytes: seeded.wasm.byteLength, metrics: seeded.metrics };
   } finally {
     session.destroy();
   }
@@ -238,13 +293,13 @@ function printSamples(label: string, samples: readonly Sample[]): void {
   if (samples.length === 0) return;
   console.log(`\n  ${label}`);
   console.log(`${"Stage".padEnd(24)} ${"first".padStart(9)} ${"median".padStart(9)}`);
-  console.log(
-    `${"Parser init + GPU syntax".padEnd(24)} ${
-      (samples[0]!.syntaxMilliseconds.toFixed(1) + " ms").padStart(9)
-    } ${
-      (median(samples.map((sample) => sample.syntaxMilliseconds)).toFixed(1) + " ms").padStart(9)
-    }`,
-  );
+  for (const [stageLabel, timing] of syntaxStages) {
+    console.log(
+      `${stageLabel.padEnd(24)} ${(samples[0]!.syntax[timing].toFixed(1) + " ms").padStart(9)} ${
+        (median(samples.map((sample) => sample.syntax[timing])).toFixed(1) + " ms").padStart(9)
+      }`,
+    );
+  }
   for (const [stageLabel, timing] of stages) {
     console.log(
       `${stageLabel.padEnd(24)} ${(samples[0]!.timings[timing].toFixed(1) + " ms").padStart(9)} ${
@@ -285,6 +340,25 @@ function printSamples(label: string, samples: readonly Sample[]): void {
 
 function printMeasurement(workload: Workload, measurement: Measurement): void {
   console.log(`\n${workload.label}: ${(measurement.wasmBytes / 1024).toFixed(1)} KB Wasm`);
+  console.log(
+    `  Surface: ${measurement.metrics.surfaceNodes.toLocaleString()} nodes, ` +
+      `${measurement.metrics.surfaceDefinitions.toLocaleString()} definitions, ` +
+      `${measurement.metrics.surfaceTypes.toLocaleString()} types, ` +
+      `${measurement.metrics.surfaceConstructors.toLocaleString()} constructors, ` +
+      `${measurement.metrics.sourceSpanBytes.toLocaleString()} source-span bytes`,
+  );
+  const coldMachine = measurement.cold[0]?.trace.snapshot().find((event) =>
+    event.stage === "semantic.gpu.resolve-infer-readback"
+  );
+  if (coldMachine !== undefined) {
+    const transitions = Number(coldMachine.annotations.inferenceTransitions);
+    console.log(
+      `  Inference density: ${
+        (transitions / Math.max(1, measurement.metrics.surfaceNodes)).toFixed(1)
+      } ` +
+        "transitions per Surface node",
+    );
+  }
   printSamples("Cold page resources", measurement.cold);
   printSamples("Resident unchanged source", measurement.unchanged);
   printSamples("Resident same-shape literal edits", measurement.edited);
@@ -322,10 +396,13 @@ const workloads: readonly Workload[] = [
 ];
 
 console.log(
-  "Cold totals include fresh parser and GPU syntax resources, source configuration, a new Core " +
-    "GPU device/compiler/evaluator, compilation, concurrent GPU evaluation and Wasm work. " +
+  `Syntax uses the ${gpuSyntax ? "Baba GPU" : "Blot CPU"} path. ` +
+    `Cold syntax and Core setup are ${parallelColdSetup ? "parallel" : "serial"}. ` +
+    "Each cold workload has one sample with fresh JavaScript parser, syntax, source, and Core GPU " +
+    "resources; repeating cold samples in one process would reuse global Wasm artifacts. " +
+    "Cold totals include concurrent GPU evaluation and Wasm work. " +
     "Resident totals reuse parser, dependencies, checked modules, prepared Surface, GPU resources, " +
-    "and compiled Core.",
+    "and compiled Core. Concurrent phase rows overlap and must not be summed.",
 );
 for (const workload of workloads) {
   printMeasurement(workload, await measureWorkload(workload));

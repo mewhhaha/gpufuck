@@ -525,6 +525,144 @@ uncached compiler work inside an already-warm Deno process; each Gleam sample la
 compiler process after `gleam clean`, while operating system file pages may remain cached. The
 benchmark reports those scopes explicitly.
 
+### Blot compilation checkpoint
+
+The 2026-07-31 Blot playground work measures the pipeline that users actually see: parser and syntax
+resources, source loading, checking, staging, Surface encoding, GPU setup and Core compilation, then
+concurrent GPU evaluation, ordinary Wasm execution, and canonical-ABI Wasm emission. Phase rows may
+overlap and must not be summed. For a serial cold run the wall-time model is
+
+```text
+T_cold = T_syntax + T_blot + T_core-setup + T_core
+       + max(T_gpu-run, T_wasm-run, T_canonical-wasm) + epsilon
+
+T_core-setup = T_device + max(T_compiler-pipelines, T_evaluator-pipelines)
+```
+
+For an unchanged resident run, exact syntax, loaded/check/prepared modules, and resolved Core are
+cached:
+
+```text
+T_resident = T_source-config + T_core-restore
+           + max(T_gpu-run, T_wasm-run, T_canonical-cache) + epsilon
+```
+
+The benchmark now reports the Surface shape beside machine work. The representative cold samples on
+the local Vulkan adapter were:
+
+| Workload                 | Surface nodes | Definitions | Inference transitions | Transitions/node |
+| ------------------------ | ------------: | ----------: | --------------------: | ---------------: |
+| Compiled example         |             3 |           3 |                   170 |             56.7 |
+| Language tour            |         1,376 |          42 |                65,212 |             47.4 |
+| Storage metaprogramming  |           607 |          20 |                35,752 |             58.9 |
+| 25-module stress project |         8,152 |          74 |               161,859 |             19.9 |
+
+The stress project is large rather than pathologically expensive per node. Its 576 source functions
+lower into nested functions inside 74 top-level Core definitions; 161,859 inference transitions are
+only 19.9 per Surface node, the lowest density in the corpus. The cold Core cost remains important
+because all 8,152 nodes are new work, but a special stress-only inference rule is not justified by
+these counters.
+
+Two resident caches were accepted. An exact `(source, parser plan)` syntax cache removes a repeated
+GPU submission without weakening edit validation. A bounded canonical-Wasm cache is keyed by both
+the resolved-Core structural fingerprint and the canonical interface fingerprint, so an artifact
+cannot cross an ABI boundary. The progression was:
+
+| Resident unchanged workload |  Before | Syntax cache | Canonical cache | Total change |
+| --------------------------- | ------: | -----------: | --------------: | -----------: |
+| Compiled example            | 39.0 ms |      23.7 ms |         23.5 ms |       -39.7% |
+| Language tour               | 24.6 ms |       9.5 ms |          4.3 ms |       -82.5% |
+| Storage metaprogramming     | 21.0 ms |       4.4 ms |          2.2 ms |       -89.5% |
+| Stress project              | 46.8 ms |      30.2 ms |          9.6 ms |       -79.5% |
+
+The three-node example is now bounded by a roughly 23 ms GPU evaluation/readback round trip, not by
+compilation. The other resident cases also show why work and span must be distinguished: canonical
+emission used CPU time while running beside GPU evaluation and ordinary Wasm. Removing it reduced
+contention and shortened the critical path, but eliminating an off-critical concurrent task would
+not necessarily reduce wall time.
+
+The cache break-even condition makes the small lookup costs explicit. If a hit avoids work `E`, a
+lookup costs `C`, and the hit probability is `h`, caching wins before memory costs when
+
+```text
+h E > C, therefore h > C / E.
+```
+
+The exact syntax lookup measured about 0.1 ms against about 15.7 ms of warm GPU ingest, a break-even
+hit rate near 0.6%. The stress canonical lookup measured about 0.5 ms against about 20 ms of
+repeated emission, a break-even near 2.5%. Both are far below the page's expected repeat-run hit
+rate. Failed pending computations are evicted, and both caches retain their original malformed-input
+behavior.
+
+The GPU syntax path was then compared with Blot's required CPU cursor parse. Baba produces a useful
+flat syntax IR, but Blot cannot consume that IR as its checked AST; it can reuse only lexer records.
+GPU validation is therefore additive work. With both runtimes already initialized, five-sample
+medians from `deno task bench:blot-syntax` were:
+
+| Generated definitions | Source bytes | Blot CPU parse | Baba GPU + Blot parse |  Ratio |
+| --------------------: | -----------: | -------------: | --------------------: | -----: |
+|                    16 |          553 |        0.34 ms |              15.01 ms | 43.89x |
+|                   256 |        8,233 |        4.56 ms |              22.07 ms |  4.84x |
+|                 1,024 |       32,809 |       13.79 ms |              29.63 ms |  2.15x |
+|                 4,096 |      131,113 |       54.71 ms |              76.03 ms |  1.39x |
+|                 8,192 |      262,185 |       95.91 ms |             117.29 ms |  1.22x |
+
+There was no GPU break-even before the current Blot parser action limit. Three alternating project
+benchmark pairs confirmed the end-to-end result. CPU syntax changed median cold totals from 538.8 to
+350.7 ms for the compiled example, 501.5 to 322.9 ms for the tour, 491.9 to 271.2 ms for storage,
+and 725.1 to 531.3 ms for stress: reductions of 26.7–44.9%. The compiled literal-edit path changed
+from 44.2 to 28.1 ms. The playground therefore uses Blot CPU syntax by default and retains Baba GPU
+validation as an explicit demonstration switch. This is a boundary simplification, not a claim that
+GPU parsing is intrinsically slow: the duplicated consumer IR is the problem.
+
+Starting Baba and Core GPU setup concurrently was rejected. In three alternating process pairs,
+serial-to-parallel medians were 590.4 to 576.7 ms for compiled, 504.3 to 538.2 ms for tour, 515.4 to
+544.3 ms for storage, and 750.6 to 771.2 ms for stress. Two independent device acquisitions and
+pipeline compilations contend; three workloads regressed by 2.7–6.7%. The benchmark keeps
+`--parallel-setup` as a falsifiable experiment, while production stays serial.
+
+Brent's work/span bound explains the concurrency result. For work `W`, span `S`, and `p` processors,
+
+```text
+max(W / p, S) <= T_p <= S + (W - S) / p.
+```
+
+Parallel launch helps only when independent work exceeds the contention and fixed scheduling cost.
+The Core inference machine already completes each representative workload in one or two host
+dispatches; one dispatch does not imply constant span because dependent unification transitions
+still execute inside the persistent kernel. Frame histograms and transitions per node are therefore
+more useful than dispatch count alone.
+
+The next credible cold optimization is one shared `GPUDevice`. Baba 7.10's `WebGpuRuntime.create`
+currently acquires and owns its device and exposes no external-device constructor. WebGPU objects
+are device-specific, so gpufuck cannot safely splice its pipelines into Baba from the outside. An
+upstream API needs explicit borrowed-device ownership and disposal rules; after that exists, repeat
+the serial/parallel experiment before claiming the roughly 70 ms device-acquisition row as savings.
+
+The design follows demand-driven incremental computation rather than blanket memoization:
+
+- [Adapton](https://www.cs.umd.edu/~mwh/papers/adapton-submit.pdf) motivates demanded dependency
+  graphs and from-scratch consistency; its warning that cache overhead can lose when all output is
+  demanded is why every new cache has a measured break-even.
+- [Hybrid incremental compilers](https://programming-journal.org/2020/4/16) support explicit stage
+  dependencies and invalidation, and evaluate real edit histories rather than only unchanged runs.
+- [Pacak, Erdweg, and Szabó](https://doi.org/10.1145/3428195) show how typing relations can be made
+  finite and incrementally maintained. Gpufuck's current literal and semantic fingerprints are a
+  narrower implementation; module-granular inference remains future work.
+- [Brent's scheduling bound](https://maths-people.anu.edu.au/~brent/pub/pub022.html) supplies the
+  work/span model above.
+- The [WebGPU specification](https://www.w3.org/TR/webgpu/#dom-gpudevice-createcomputepipelineasync)
+  defines asynchronous pipeline creation and device ownership constraints. Baba's own
+  [experimental WebGPU module](https://jsr.io/@mewhhaha/baba/7.10.0/src/runtime/webgpu/mod.ts)
+  likewise warns that mapped readback and setup favor CPU processing for small, one-off sources.
+
+The next work should be module-granular Core compilation and artifact linking for semantic edits,
+not another local data-structure substitution. It must first record affected definitions and
+dependency SCCs, then compare `W_affected` with whole-module transitions while preserving
+from-scratch consistency. Retaining live `GpuModule` buffers could save the 0.4–3.4 ms Core restore
+row, but it needs bounded ownership or leases; an unbounded session cache is not accepted for that
+small gain.
+
 ## Verification
 
 Gpufuck synthesis passes:

@@ -257,6 +257,17 @@ export interface Verified extends Built {
   readonly value: unknown;
   readonly ran: unknown;
   readonly timings: VerifyTimings;
+  readonly metrics: VerifyMetrics;
+}
+
+export interface VerifyMetrics {
+  readonly sourceSpanBytes: number;
+  readonly surfaceNodes: number;
+  readonly surfaceArguments: number;
+  readonly surfaceCaseAlternatives: number;
+  readonly surfaceDefinitions: number;
+  readonly surfaceTypes: number;
+  readonly surfaceConstructors: number;
 }
 
 export interface VerifyTimings {
@@ -464,6 +475,15 @@ async function verifyWithSession(
       }),
       shapes: compiled.lowered.shapes,
       constructors: compiled.lowered.constructors,
+      metrics: {
+        sourceSpanBytes: compiled.encodedModule.sourceByteLength,
+        surfaceNodes: compiled.encodedModule.nodeCount,
+        surfaceArguments: compiled.encodedModule.argumentCount,
+        surfaceCaseAlternatives: compiled.encodedModule.caseAlternativeCount,
+        surfaceDefinitions: compiled.encodedModule.definitionCount,
+        surfaceTypes: compiled.encodedModule.typeCount,
+        surfaceConstructors: compiled.encodedModule.constructorCount,
+      },
       timings: {
         ...compiled.timings,
         gpuEvaluateMilliseconds: evaluated.milliseconds,
@@ -491,6 +511,7 @@ async function compile(
   }
   return {
     module: compilation.module,
+    encodedModule: prepared.module,
     lowered: prepared.lowered,
     exports: prepared.exports,
     timings: {
