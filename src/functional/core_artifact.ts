@@ -10,6 +10,8 @@ import {
   EvaluationMode,
   NO_INDEX,
   NODE_BYTE_LENGTH,
+  NODE_WORD_LENGTH,
+  NodeWord,
   type Type,
 } from "./abi.ts";
 import type { CoreNode } from "./compiler_module.ts";
@@ -18,6 +20,50 @@ import { primopDeclaration } from "../semantic/primops.ts";
 export interface CompiledCoreArtifact {
   readonly nodes: readonly CoreNode[];
   readonly entryType: Type;
+}
+
+export function rebindCoreArtifactSource(
+  module: EncodedModule,
+  artifact: CompiledCoreArtifact,
+): CompiledCoreArtifact {
+  if (artifact.nodes.length !== module.nodeCount) {
+    throw new Error(
+      `cannot rebind ${artifact.nodes.length} Core nodes to source with ${module.nodeCount} nodes`,
+    );
+  }
+  return {
+    entryType: artifact.entryType,
+    nodes: Object.freeze(artifact.nodes.map((node, nodeIndex) => {
+      const offset = nodeIndex * NODE_WORD_LENGTH;
+      return Object.freeze({
+        ...node,
+        sourceByteOffset: module.nodeWords[offset + NodeWord.StartByte] ?? 0,
+        sourceEndByte: module.nodeWords[offset + NodeWord.EndByte] ?? 0,
+      });
+    })),
+  };
+}
+
+export function applyCoreArtifactLiteralUpdate(
+  module: EncodedModule,
+  artifact: CompiledCoreArtifact,
+  changedNodes: readonly number[],
+): CompiledCoreArtifact {
+  const rebound = rebindCoreArtifactSource(module, artifact);
+  const changed = new Set(changedNodes);
+  return {
+    entryType: rebound.entryType,
+    nodes: Object.freeze(rebound.nodes.map((node, nodeIndex) => {
+      if (!changed.has(nodeIndex)) return node;
+      const offset = nodeIndex * NODE_WORD_LENGTH;
+      const payload = module.nodeWords[offset + NodeWord.Payload];
+      const child0 = module.nodeWords[offset + NodeWord.Child0];
+      if (payload === undefined || child0 === undefined) {
+        throw new Error(`literal update omitted Core payload for node ${nodeIndex}`);
+      }
+      return Object.freeze({ ...node, payload, child0 });
+    })),
+  };
 }
 
 export function encodeCoreArtifact(

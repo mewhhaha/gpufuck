@@ -41,7 +41,18 @@ export type ParseResult =
 
 export function parse(source: string): ParseResult {
   const instance = parser();
-  const result = instance.parse(source);
+  return lowerParseResult(instance.parse(source), source);
+}
+
+export function parseLexerRecords(source: string, records: Int32Array): ParseResult {
+  const instance = parser();
+  return lowerParseResult(instance.parseRecords(source, records), source);
+}
+
+function lowerParseResult(
+  result: ReturnType<ParserInstance["parse"]>,
+  source: string,
+): ParseResult {
   if (!result.ok) {
     return {
       ok: false,

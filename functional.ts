@@ -49,6 +49,7 @@ export * from "./src/functional/parallel_compiler_service.ts";
 export * from "./src/functional/compilation_admission.ts";
 export * from "./src/functional/compiler_module.ts";
 export * from "./src/functional/core_artifact.ts";
+export { tryRegisterLiteralModuleUpdate } from "./src/functional/incremental_module.ts";
 export * from "./src/functional/effect_set.ts";
 export * from "./src/semantic/gpu_dispatch_scheduler.ts";
 export * from "./src/functional/compilation_trace.ts";

@@ -11,7 +11,9 @@ import {
   type CanonicalAbiImport,
   type CanonicalAbiInterface,
   type CanonicalAbiType,
+  type CompilationOptions,
   compileModuleToWasm,
+  type CompilerPerformanceTrace,
   CpuCompiler,
   EvaluationProfile,
   GpuCompiler,
@@ -22,13 +24,14 @@ import {
   runWasmModule,
   STORE_TYPE_NAME,
   TEXT_TYPE_NAME,
+  tryRegisterLiteralModuleUpdate,
   type Type,
   type TypeSchema,
   type WasmInit,
   type WasmValue,
 } from "../../../../functional.ts";
 import { BlotError } from "../diagnostic.ts";
-import { load } from "../load.ts";
+import { load, type Loaded } from "../load.ts";
 import { checkFile } from "../check/mod.ts";
 import type { Imports } from "../comptime/eval.ts";
 import { bridge } from "../check/bridge.ts";
@@ -130,8 +133,10 @@ export interface Built {
 }
 
 export async function build(path: string): Promise<Built> {
-  const compiled = await compile(path);
+  const session = await BlotCompilerSession.create();
+  let compiled: Awaited<ReturnType<typeof compile>> | undefined;
   try {
+    compiled = await compile(path, session);
     const internalManifest = manifest(
       path,
       compiled.exports,
@@ -162,8 +167,8 @@ export async function build(path: string): Promise<Built> {
       constructors: compiled.lowered.constructors,
     };
   } finally {
-    compiled.module.destroy();
-    compiled.device.destroy();
+    compiled?.module.destroy();
+    session.destroy();
   }
 }
 
@@ -256,8 +261,14 @@ export interface Verified extends Built {
 
 export interface VerifyTimings {
   readonly blotFrontendMilliseconds: number;
+  readonly blotLoadMilliseconds: number;
+  readonly blotCheckMilliseconds: number;
+  readonly blotStageMilliseconds: number;
+  readonly blotLowerMilliseconds: number;
+  readonly surfaceEncodeMilliseconds: number;
   readonly gpuDeviceMilliseconds: number;
   readonly gpuCompilerMilliseconds: number;
+  readonly gpuEvaluatorMilliseconds: number;
   readonly coreCompileMilliseconds: number;
   readonly gpuEvaluateMilliseconds: number;
   readonly wasmExecuteMilliseconds: number;
@@ -267,11 +278,116 @@ export interface VerifyTimings {
 export interface VerifyOptions {
   readonly evaluatorInit?: WasmInit;
   readonly wasmInit?: WasmInit;
+  readonly trace?: CompilerPerformanceTrace;
+}
+
+interface SetupTimings {
+  readonly gpuDeviceMilliseconds: number;
+  readonly gpuCompilerMilliseconds: number;
+  readonly gpuEvaluatorMilliseconds: number;
+}
+
+export class BlotCompilerSession {
+  readonly #device: GPUDevice;
+  readonly #compiler: GpuCompiler;
+  readonly #evaluator: GpuEvaluator;
+  #setupTimings: SetupTimings;
+  #destroyed = false;
+
+  private constructor(
+    device: GPUDevice,
+    compiler: GpuCompiler,
+    evaluator: GpuEvaluator,
+    setupTimings: SetupTimings,
+  ) {
+    this.#device = device;
+    this.#compiler = compiler;
+    this.#evaluator = evaluator;
+    this.#setupTimings = setupTimings;
+  }
+
+  static async create(): Promise<BlotCompilerSession> {
+    const deviceStart = performance.now();
+    const device = await requestWebGpuDevice();
+    const gpuDeviceMilliseconds = performance.now() - deviceStart;
+    try {
+      const compilerStart = performance.now();
+      const evaluatorStart = performance.now();
+      const [compiler, evaluator] = await Promise.all([
+        GpuCompiler.create(device).then((value) => ({
+          value,
+          milliseconds: performance.now() - compilerStart,
+        })),
+        GpuEvaluator.create(device).then((value) => ({
+          value,
+          milliseconds: performance.now() - evaluatorStart,
+        })),
+      ]);
+      return new BlotCompilerSession(device, compiler.value, evaluator.value, {
+        gpuDeviceMilliseconds,
+        gpuCompilerMilliseconds: compiler.milliseconds,
+        gpuEvaluatorMilliseconds: evaluator.milliseconds,
+      });
+    } catch (error) {
+      device.destroy();
+      throw error;
+    }
+  }
+
+  async verify(path: string, options: VerifyOptions = {}): Promise<Verified> {
+    if (this.#destroyed) throw new Error("Blot compiler session was destroyed.");
+    return await verifyWithSession(this, path, options);
+  }
+
+  async compileModule(
+    module: Parameters<GpuCompiler["compileModule"]>[0],
+    options: CompilationOptions = {},
+  ) {
+    if (this.#destroyed) throw new Error("Blot compiler session was destroyed.");
+    return await this.#compiler.compileModule(module, options);
+  }
+
+  async evaluate(
+    module: Parameters<GpuEvaluator["evaluate"]>[0],
+    options: Parameters<GpuEvaluator["evaluate"]>[1],
+  ) {
+    if (this.#destroyed) throw new Error("Blot compiler session was destroyed.");
+    return await this.#evaluator.evaluate(module, options);
+  }
+
+  takeSetupTimings(): SetupTimings {
+    const timings = this.#setupTimings;
+    this.#setupTimings = {
+      gpuDeviceMilliseconds: 0,
+      gpuCompilerMilliseconds: 0,
+      gpuEvaluatorMilliseconds: 0,
+    };
+    return timings;
+  }
+
+  destroy(): void {
+    if (this.#destroyed) return;
+    this.#destroyed = true;
+    this.#device.destroy();
+  }
 }
 
 export async function verify(
   path: string,
   options: VerifyOptions = {},
+): Promise<Verified> {
+  const session = await BlotCompilerSession.create();
+  try {
+    return await session.verify(path, options);
+  } finally {
+    session.destroy();
+  }
+}
+
+async function verifyWithSession(
+  session: BlotCompilerSession,
+  path: string,
+  options: VerifyOptions,
 ): Promise<Verified> {
   let evaluatorInit: WasmInit = {};
   if (options.evaluatorInit !== undefined) {
@@ -279,44 +395,8 @@ export async function verify(
   }
   let wasmInit: WasmInit = {};
   if (options.wasmInit !== undefined) wasmInit = options.wasmInit;
-  const compiled = await compile(path);
+  const compiled = await compile(path, session, options);
   try {
-    let value: unknown = null;
-    const gpuEvaluateStart = performance.now();
-    try {
-      const evaluator = await GpuEvaluator.create(compiled.device);
-      const execution = await evaluator.evaluate(compiled.module, {
-        resultForm: "deep",
-        wasmInit: evaluatorInit,
-      });
-      if (execution.ok) {
-        value = execution.value;
-      } else {
-        value = execution.fault;
-      }
-    } catch (error) {
-      let message = String(error);
-      if (error instanceof Error) message = error.message;
-      value = {
-        unavailable: message,
-      };
-    }
-    const gpuEvaluateMilliseconds = performance.now() - gpuEvaluateStart;
-    let ran: unknown = null;
-    const wasmExecuteStart = performance.now();
-    try {
-      const execution = await runWasmModule(compiled.module, {
-        init: wasmInit,
-      });
-      ran = execution.value;
-    } catch (error) {
-      let message = String(error);
-      if (error instanceof Error) message = error.message;
-      ran = {
-        unavailable: message,
-      };
-    }
-    const wasmExecuteMilliseconds = performance.now() - wasmExecuteStart;
     const internalManifest = manifest(
       path,
       compiled.exports,
@@ -327,16 +407,51 @@ export async function verify(
     );
     const builtManifest = publicManifest(internalManifest);
     const manifestBytes = serializeManifest(builtManifest);
-    const canonicalWasmStart = performance.now();
-    const coreWasm = await compileModuleToWasm(compiled.module, {
-      canonicalAbi: canonicalInterface(internalManifest),
-    });
+    const [evaluated, executed, emitted] = await Promise.all([
+      (async () => {
+        const start = performance.now();
+        try {
+          const execution = await session.evaluate(compiled.module, {
+            resultForm: "deep",
+            wasmInit: evaluatorInit,
+          });
+          return {
+            value: execution.ok ? execution.value : execution.fault,
+            milliseconds: performance.now() - start,
+          };
+        } catch (error) {
+          return {
+            value: { unavailable: error instanceof Error ? error.message : String(error) },
+            milliseconds: performance.now() - start,
+          };
+        }
+      })(),
+      (async () => {
+        const start = performance.now();
+        try {
+          const execution = await runWasmModule(compiled.module, { init: wasmInit });
+          return { value: execution.value, milliseconds: performance.now() - start };
+        } catch (error) {
+          return {
+            value: { unavailable: error instanceof Error ? error.message : String(error) },
+            milliseconds: performance.now() - start,
+          };
+        }
+      })(),
+      (async () => {
+        const start = performance.now();
+        const bytes = await compileModuleToWasm(compiled.module, {
+          canonicalAbi: canonicalInterface(internalManifest),
+        });
+        return { bytes, milliseconds: performance.now() - start };
+      })(),
+    ]);
+    const coreWasm = emitted.bytes;
     const wasm = appendCustomSection(coreWasm, "blot:abi", manifestBytes);
-    const canonicalWasmMilliseconds = performance.now() - canonicalWasmStart;
     return {
       wasm,
-      value,
-      ran,
+      value: evaluated.value,
+      ran: executed.value,
       manifest: builtManifest,
       manifestBytes,
       capabilities: compiled.lowered.capabilities.flatMap((capability) => {
@@ -351,59 +466,82 @@ export async function verify(
       constructors: compiled.lowered.constructors,
       timings: {
         ...compiled.timings,
-        gpuEvaluateMilliseconds,
-        wasmExecuteMilliseconds,
-        canonicalWasmMilliseconds,
+        gpuEvaluateMilliseconds: evaluated.milliseconds,
+        wasmExecuteMilliseconds: executed.milliseconds,
+        canonicalWasmMilliseconds: emitted.milliseconds,
       },
     };
   } finally {
     compiled.module.destroy();
-    compiled.device.destroy();
   }
 }
 
-async function compile(path: string) {
-  const blotFrontendStart = performance.now();
+async function compile(
+  path: string,
+  session: BlotCompilerSession,
+  options: VerifyOptions = {},
+) {
   const prepared = await prepare(path);
-  const blotFrontendMilliseconds = performance.now() - blotFrontendStart;
-  const gpuDeviceStart = performance.now();
-  const device = await requestWebGpuDevice();
-  const gpuDeviceMilliseconds = performance.now() - gpuDeviceStart;
-  const gpuCompilerStart = performance.now();
-  const compiler = await GpuCompiler.create(device);
-  const gpuCompilerMilliseconds = performance.now() - gpuCompilerStart;
+  const setupTimings = session.takeSetupTimings();
   const coreCompileStart = performance.now();
-  const compilation = await compiler.compileModule(prepared.module);
+  const compilation = await session.compileModule(prepared.module, options);
   const coreCompileMilliseconds = performance.now() - coreCompileStart;
   if (!compilation.ok) {
-    device.destroy();
     throw loweringBug(compilation.diagnostics, prepared.loaded.module.span);
   }
   return {
-    device,
     module: compilation.module,
     lowered: prepared.lowered,
     exports: prepared.exports,
     timings: {
-      blotFrontendMilliseconds,
-      gpuDeviceMilliseconds,
-      gpuCompilerMilliseconds,
+      ...prepared.timings,
+      ...setupTimings,
       coreCompileMilliseconds,
     },
   };
 }
 
+interface PreparedModule {
+  readonly loaded: Loaded;
+  readonly module: ReturnType<typeof buildSurfaceModule>;
+  readonly lowered: ReturnType<typeof lowerModule>;
+  readonly exports: readonly StagedExport[];
+}
+
+const preparedModules = new WeakMap<Loaded, PreparedModule>();
+const latestPreparedModuleByPath = new Map<string, PreparedModule>();
+
 async function prepare(path: string) {
+  const frontendStart = performance.now();
+  const loadStart = performance.now();
   const loaded = await load(path);
+  const blotLoadMilliseconds = performance.now() - loadStart;
+  const cached = preparedModules.get(loaded);
+  if (cached !== undefined) {
+    return {
+      ...cached,
+      timings: {
+        blotFrontendMilliseconds: performance.now() - frontendStart,
+        blotLoadMilliseconds,
+        blotCheckMilliseconds: 0,
+        blotStageMilliseconds: 0,
+        blotLowerMilliseconds: 0,
+        surfaceEncodeMilliseconds: 0,
+      },
+    };
+  }
   // Checking first is not politeness: lowering consumes the field and
   // constructor sets inference recorded, and cannot proceed without them.
+  const checkStart = performance.now();
   const checked = await checkFile(path);
+  const blotCheckMilliseconds = performance.now() - checkStart;
   if (loaded.closure.tag !== "closure") {
     throw new Error("a module must load as a closure");
   }
   const moduleImports = loaded.closure.imports;
   let imports: Imports = new Map();
   if (moduleImports !== undefined) imports = moduleImports;
+  const stageStart = performance.now();
   const staged = stageModule(
     loaded.module,
     checked.values,
@@ -428,6 +566,8 @@ async function prepare(path: string) {
       value: exported.value,
     }];
   });
+  const blotStageMilliseconds = performance.now() - stageStart;
+  const lowerStart = performance.now();
   const lowered = lowerModule(
     staged.module,
     {
@@ -437,12 +577,28 @@ async function prepare(path: string) {
     checked.values,
     runtimeExports,
   );
+  const blotLowerMilliseconds = performance.now() - lowerStart;
 
+  const surfaceStart = performance.now();
+  const sourceEncoder = new TextEncoder();
+  let sourceByteLength = sourceEncoder.encode(loaded.source).byteLength;
+  const remainingDependencies = [...loaded.dependencies.values()];
+  const measuredDependencies = new Set<Loaded>();
+  for (let index = 0; index < remainingDependencies.length; index += 1) {
+    const dependency = remainingDependencies[index]!;
+    if (measuredDependencies.has(dependency)) continue;
+    measuredDependencies.add(dependency);
+    sourceByteLength = Math.max(
+      sourceByteLength,
+      sourceEncoder.encode(dependency.source).byteLength,
+    );
+    remainingDependencies.push(...dependency.dependencies.values());
+  }
   const module = buildSurfaceModule(
     lowered.definitions,
     lowered.types,
     lowered.entry,
-    loaded.source.length,
+    sourceByteLength,
     {
       evaluationProfile: EvaluationProfile.StrictEager,
       hostCapabilities: lowered.capabilities,
@@ -453,11 +609,29 @@ async function prepare(path: string) {
       })),
     },
   );
-  return {
+  const surfaceEncodeMilliseconds = performance.now() - surfaceStart;
+  const prepared: PreparedModule = {
     loaded,
     module,
     lowered,
     exports: staged.exports,
+  };
+  const previous = latestPreparedModuleByPath.get(path);
+  if (previous !== undefined) {
+    tryRegisterLiteralModuleUpdate(previous.module, prepared.module);
+  }
+  preparedModules.set(loaded, prepared);
+  latestPreparedModuleByPath.set(path, prepared);
+  return {
+    ...prepared,
+    timings: {
+      blotFrontendMilliseconds: performance.now() - frontendStart,
+      blotLoadMilliseconds,
+      blotCheckMilliseconds,
+      blotStageMilliseconds,
+      blotLowerMilliseconds,
+      surfaceEncodeMilliseconds,
+    },
   };
 }
 

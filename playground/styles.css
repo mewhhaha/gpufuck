@@ -232,6 +232,20 @@ a:focus-visible {
   font-size: 0.85rem;
 }
 
+.cache-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.cache-control input {
+  margin: 0;
+}
+
 .stages {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -249,6 +263,15 @@ a:focus-visible {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.stages dt:last-of-type,
+.stages dd:last-of-type {
+  margin-top: 0.2rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.3rem;
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .stages dd[data-state="skipped"] {

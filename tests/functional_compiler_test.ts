@@ -5,6 +5,7 @@ import {
   buildSurfaceModule,
   CASE_ALTERNATIVE_WORD_LENGTH,
   CaseAlternativeWord,
+  CompilerPerformanceTrace,
   CORE_V1_PRIMITIVE_CAPABILITIES,
   CoreTag,
   CpuCompiler,
@@ -28,6 +29,7 @@ import {
   requestWebGpuDevice,
   surface,
   type SurfaceExpression,
+  tryRegisterLiteralModuleUpdate,
   TypecheckingProfile,
   type TypeSchema,
   WasmIntrinsic,
@@ -92,6 +94,91 @@ Deno.test("CPU and GPU compilation produce identical resolved Core", async () =>
   } finally {
     cpu.module.destroy();
     gpu.module.destroy();
+  }
+});
+
+Deno.test("resident GPU compiler restores cached Core after source-only edits", async () => {
+  const firstModule = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.at({ startByte: 0, endByte: 2 }).integer(42),
+    }],
+    [],
+    "main",
+    2,
+  );
+  const secondModule = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.at({ startByte: 5, endByte: 7 }).integer(42),
+    }],
+    [],
+    "main",
+    7,
+  );
+  const coldTrace = new CompilerPerformanceTrace();
+  const first = await functionalRuntime().compiler.compileModule(firstModule, { trace: coldTrace });
+  ok(first.ok, first.ok ? undefined : first.diagnostics[0]?.message);
+  if (!first.ok) return;
+  const allocation = coldTrace.snapshot().find((event) =>
+    event.stage === "semantic.gpu.allocate-upload"
+  );
+  const gpuMachine = coldTrace.snapshot().find((event) =>
+    event.stage === "semantic.gpu.resolve-infer-readback"
+  );
+  ok(Number(allocation?.annotations.uploadedBytes) > 0);
+  ok(Number(gpuMachine?.annotations.dispatches) >= 1);
+  ok(Number(gpuMachine?.annotations.inferenceTransitions) >= 1);
+  first.module.destroy();
+
+  const trace = new CompilerPerformanceTrace();
+  const second = await functionalRuntime().compiler.compileModule(secondModule, { trace });
+  ok(second.ok, second.ok ? undefined : second.diagnostics[0]?.message);
+  if (!second.ok) return;
+  try {
+    const cache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
+    equal(cache?.annotations.backend, "gpu");
+    equal(cache?.annotations.cacheLevel, "semantics");
+    equal(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"), false);
+    const entry = (await second.module.readCoreNodes())[
+      second.module.definitionRoots[second.module.entryDefinition]!
+    ];
+    equal(entry?.sourceByteOffset, 5);
+    equal(entry?.sourceEndByte, 7);
+  } finally {
+    second.module.destroy();
+  }
+});
+
+Deno.test("resident GPU compiler applies same-shape literal edits without inference", async () => {
+  const firstModule = integerModule(41, "incremental_literal");
+  const secondModule = integerModule(42, "incremental_literal");
+  equal(tryRegisterLiteralModuleUpdate(firstModule, secondModule), true);
+
+  const first = await functionalRuntime().compiler.compileModule(firstModule);
+  ok(first.ok, first.ok ? undefined : first.diagnostics[0]?.message);
+  if (!first.ok) return;
+  first.module.destroy();
+
+  const trace = new CompilerPerformanceTrace();
+  const second = await functionalRuntime().compiler.compileModule(secondModule, { trace });
+  ok(second.ok, second.ok ? undefined : second.diagnostics[0]?.message);
+  if (!second.ok) return;
+  try {
+    const cache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
+    equal(cache?.annotations.cacheLevel, "literal-update");
+    equal(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"), false);
+    const evaluation = await functionalRuntime().evaluator.evaluate(second.module);
+    ok(evaluation.ok, evaluation.ok ? undefined : evaluation.fault.message);
+    if (evaluation.ok) {
+      deepStrictEqual(evaluation.value, { kind: "integer", value: 42 });
+    }
+  } finally {
+    second.module.destroy();
   }
 });
 

@@ -11,13 +11,14 @@
 import type { Expr, Module } from "./syntax/ast.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import { BlotError, render } from "./diagnostic.ts";
-import { parse } from "./syntax/parse.ts";
+import { parse, parseLexerRecords } from "./syntax/parse.ts";
 import { childEnv, type Env, type Value } from "./comptime/value.ts";
 import { moduleClosure } from "./comptime/eval.ts";
 
 export const PRELUDE = "/blot/prelude.blot";
 
 const sources = new Map<string, string>();
+const lexerRecords = new Map<string, { readonly source: string; readonly records: Int32Array }>();
 
 export class LoadError extends Error {
   constructor(
@@ -140,12 +141,69 @@ export function importExpressions(module: Module): ReadonlyMap<Expr, string> {
  */
 const modules = new Map<string, Loaded>();
 
-export function configureSources(entries: Readonly<Record<string, string>>): void {
-  sources.clear();
-  modules.clear();
-  for (const [path, source] of Object.entries(entries)) {
-    sources.set(normalizePath(path), source);
+export interface ConfigureSourcesOptions {
+  readonly cache?: "clear" | "reuse-unchanged";
+}
+
+export function configureSources(
+  entries: Readonly<Record<string, string>>,
+  options: ConfigureSourcesOptions = {},
+): void {
+  const nextSources = new Map(
+    Object.entries(entries).map(([path, source]) => [normalizePath(path), source] as const),
+  );
+  if ((options.cache ?? "clear") === "clear") {
+    sources.clear();
+    modules.clear();
+    lexerRecords.clear();
+  } else {
+    const changed = new Set<string>();
+    for (const [path, source] of nextSources) {
+      if (sources.get(path) !== source) changed.add(path);
+    }
+    for (const path of sources.keys()) {
+      if (!nextSources.has(path)) changed.add(path);
+    }
+    invalidateModules(changed);
+    for (const path of changed) lexerRecords.delete(path);
+    sources.clear();
   }
+  for (const [path, source] of nextSources) {
+    sources.set(path, source);
+  }
+}
+
+export function configureSourceLexerRecords(
+  path: string,
+  source: string,
+  records: Int32Array,
+): void {
+  const absolute = normalizePath(path);
+  const configured = sources.get(absolute);
+  if (configured !== source) {
+    throw new Error(
+      `Blot lexer records for ${absolute} describe ${source.length} source units, but the configured source has ${
+        configured?.length ?? "no"
+      } units.`,
+    );
+  }
+  lexerRecords.set(absolute, { source, records: records.slice() });
+}
+
+function invalidateModules(changedPaths: ReadonlySet<string>): void {
+  const invalid = new Set(changedPaths);
+  let foundDependent = true;
+  while (foundDependent) {
+    foundDependent = false;
+    for (const [path, loaded] of modules) {
+      if (invalid.has(path)) continue;
+      if ([...loaded.dependencies.values()].some((dependency) => invalid.has(dependency.path))) {
+        invalid.add(path);
+        foundDependent = true;
+      }
+    }
+  }
+  for (const path of invalid) modules.delete(path);
 }
 
 export async function load(
@@ -172,7 +230,10 @@ export async function load(
   if (source === undefined) {
     throw new Error(`Blot source ${absolute} is not available in this browser build.`);
   }
-  const parsed = await parse(source);
+  const configuredLexer = lexerRecords.get(absolute);
+  const parsed = configuredLexer?.source === source
+    ? parseLexerRecords(source, configuredLexer.records)
+    : parse(source);
   if (!parsed.ok) {
     throw new LoadError(absolute, source, parsed.diagnostics);
   }

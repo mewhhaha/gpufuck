@@ -95,6 +95,7 @@ const planBytes = await copy(
 );
 await copy(new URL("index.html", import.meta.url), "index.html");
 await copy(new URL("styles.css", import.meta.url), "styles.css");
+await copy(new URL("favicon.svg", import.meta.url), "favicon.svg");
 
 const bundleBytes = (await Deno.stat(new URL("main.js", out))).size;
 console.log(

@@ -40,11 +40,21 @@ import {
   type TypeSchema,
 } from "./abi.ts";
 import { CompilationAdmissionQueue } from "./compilation_admission.ts";
-import { type CompiledCoreArtifact, encodeCoreArtifact } from "./core_artifact.ts";
+import {
+  applyCoreArtifactLiteralUpdate,
+  type CompiledCoreArtifact,
+  encodeCoreArtifact,
+  rebindCoreArtifactSource,
+} from "./core_artifact.ts";
 import { analyzeModuleEffects } from "./effect_analysis.ts";
 import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
 import { type HostDefinitionBinding, normalizeHostCapabilities } from "./host_contract.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
+import { literalModuleUpdate } from "./incremental_module.ts";
+import {
+  registerResolvedCoreFingerprint,
+  semanticModuleFingerprint,
+} from "./semantic_fingerprint.ts";
 import type {
   CompilationOptions,
   CompiledModule,
@@ -151,6 +161,8 @@ export class GpuCompiler {
   readonly #maximumDefinitionCount: number;
   readonly #maximumTypeCount: number;
   readonly #maximumConstructorCount: number;
+  readonly #artifactsByModule = new WeakMap<EncodedModule, Promise<CompiledCoreArtifact>>();
+  readonly #artifactsBySemantics = new Map<string, Promise<CompiledCoreArtifact>>();
 
   private constructor(
     device: GPUDevice,
@@ -223,12 +235,101 @@ export class GpuCompiler {
     module: EncodedModule,
     options: CompilationOptions = {},
   ): Promise<CompileResult> {
+    if (
+      options.signal === undefined && options.maximumSteps === undefined &&
+      options.maximumStepsPerDispatch === undefined
+    ) {
+      return await this.#compileCachedModule(module, options);
+    }
     const results = await this.compileBatch([module], options);
     const result = results[0];
     if (result === undefined) {
       throw new Error("functional scalar compiler omitted its only result");
     }
     return result;
+  }
+
+  async #compileCachedModule(
+    module: EncodedModule,
+    options: CompilationOptions,
+  ): Promise<CompileResult> {
+    const moduleArtifact = this.#artifactsByModule.get(module);
+    const semanticFingerprint = measureCompilerStage(
+      options.trace,
+      "semantic.fingerprint",
+      { nodes: module.nodeCount, sourceBytes: module.sourceByteLength },
+      () => semanticModuleFingerprint(module),
+    );
+    const semanticArtifact = this.#artifactsBySemantics.get(semanticFingerprint);
+    const literalUpdate = literalModuleUpdate(module);
+    const literalArtifact = literalUpdate === undefined
+      ? undefined
+      : this.#artifactsByModule.get(literalUpdate.reference);
+    const cacheLevel = moduleArtifact !== undefined
+      ? "module"
+      : semanticArtifact !== undefined
+      ? "semantics"
+      : literalArtifact !== undefined
+      ? "literal-update"
+      : "none";
+    options.trace?.start("semantic.service-cache").finish({
+      backend: "gpu",
+      cacheHit: cacheLevel !== "none",
+      cacheLevel,
+    });
+
+    let cachedArtifact = moduleArtifact;
+    if (cachedArtifact === undefined && semanticArtifact !== undefined) {
+      cachedArtifact = semanticArtifact.then((artifact) =>
+        rebindCoreArtifactSource(module, artifact)
+      );
+    }
+    if (
+      cachedArtifact === undefined && literalArtifact !== undefined && literalUpdate !== undefined
+    ) {
+      cachedArtifact = literalArtifact.then((artifact) =>
+        applyCoreArtifactLiteralUpdate(module, artifact, literalUpdate.changedNodes)
+      );
+    }
+    if (cachedArtifact !== undefined) {
+      this.#rememberArtifact(module, semanticFingerprint, cachedArtifact);
+      const restored = await measureCompilerStageAsync(
+        options.trace,
+        "semantic.restore-core",
+        { nodes: module.nodeCount, cacheLevel },
+        async () => await this.restoreCompiledCore(module, await cachedArtifact),
+      );
+      registerResolvedCoreFingerprint(restored, `surface:${semanticFingerprint}`);
+      return { ok: true, module: restored };
+    }
+
+    const results = await this.compileBatch([module], options);
+    const result = results[0];
+    if (result === undefined) {
+      throw new Error("functional scalar compiler omitted its only result");
+    }
+    if (!result.ok) return result;
+    const artifact = Promise.resolve({
+      nodes: await result.module.readCoreNodes(),
+      entryType: result.module.entryType,
+    });
+    this.#rememberArtifact(module, semanticFingerprint, artifact);
+    registerResolvedCoreFingerprint(result.module, `surface:${semanticFingerprint}`);
+    return result;
+  }
+
+  #rememberArtifact(
+    module: EncodedModule,
+    semanticFingerprint: string,
+    artifact: Promise<CompiledCoreArtifact>,
+  ): void {
+    this.#artifactsByModule.set(module, artifact);
+    this.#artifactsBySemantics.set(semanticFingerprint, artifact);
+    while (this.#artifactsBySemantics.size > 64) {
+      const oldest = this.#artifactsBySemantics.keys().next().value;
+      if (oldest === undefined) break;
+      this.#artifactsBySemantics.delete(oldest);
+    }
   }
 
   async compileBatch(
@@ -317,6 +418,8 @@ export class GpuCompiler {
                 ...limits,
               })),
               options.signal,
+              undefined,
+              options.trace,
             );
           },
           estimatedTransientByteLength,

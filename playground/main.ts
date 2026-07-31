@@ -1,12 +1,12 @@
 /// <reference lib="dom" />
 /// <reference lib="dom.iterable" />
 
-import { verify } from "./blot/src/backend/compile.ts";
+import { BlotCompilerSession } from "./blot/src/backend/compile.ts";
 import { hostInit } from "./blot/src/backend/host.ts";
 import { BlotError } from "./blot/src/diagnostic.ts";
-import { configureSources, LoadError } from "./blot/src/load.ts";
-import { initializeBlotParser } from "./blot/src/syntax/parse.ts";
-import { validateBlotSyntax } from "./blot/gpu_frontend.ts";
+import { configureSourceLexerRecords, configureSources, LoadError } from "./blot/src/load.ts";
+import { dispose as disposeBlotParser, initializeBlotParser } from "./blot/src/syntax/parse.ts";
+import { resetBlotSyntaxSession, validateBlotSyntax } from "./blot/gpu_frontend.ts";
 import { renderHighlight } from "./highlight.ts";
 import { readWasmOutline, type WasmOutline } from "./wasm_outline.ts";
 
@@ -29,23 +29,35 @@ interface PlaygroundSources {
 
 type Stage =
   | "syntax"
-  | "blot"
+  | "blot-load"
+  | "blot-check"
+  | "blot-stage"
+  | "blot-lower"
+  | "surface"
   | "gpu-device"
   | "gpu-compiler"
+  | "gpu-evaluator"
   | "core"
   | "gpu-run"
   | "wasm-run"
-  | "wasm-emit";
+  | "wasm-emit"
+  | "total";
 
 const STAGE_LABELS: Readonly<Record<Stage, string>> = {
   syntax: "Lex, parse, and validate on GPU",
-  blot: "Blot parse, comptime, types, ownership, and lowering",
+  "blot-load": "Blot cursor parse and dependency load",
+  "blot-check": "Blot comptime, types, effects, and ownership",
+  "blot-stage": "Blot staging and export preparation",
+  "blot-lower": "Lower Blot into Functional Surface",
+  surface: "Encode Functional Surface",
   "gpu-device": "Request GPU device",
   "gpu-compiler": "Initialize GPU compiler",
+  "gpu-evaluator": "Initialize GPU evaluator",
   core: "Resolve and infer Functional Core on GPU",
   "gpu-run": "Initialize and run GPU evaluator",
   "wasm-run": "Emit, instantiate, and run executable Wasm",
   "wasm-emit": "Emit canonical ABI Wasm",
+  total: "Total end-to-end, including setup",
 };
 
 const STAGES = Object.keys(STAGE_LABELS) as readonly Stage[];
@@ -65,6 +77,7 @@ const stageList = element<HTMLDListElement>("stages");
 const resultPanel = element<HTMLDivElement>("result");
 const statusLine = element<HTMLParagraphElement>("status");
 const downloadLink = element<HTMLAnchorElement>("download");
+const disableCache = element<HTMLInputElement>("disable-cache");
 
 const parserWasmUrl = new URL("./parser.wasm", location.href);
 const parserPlanUrl = new URL("./parser.plan", location.href);
@@ -72,6 +85,7 @@ const playground: PlaygroundSources = await (await fetch("./examples.json")).jso
 
 let selected = playground.examples[0];
 let artifact: Uint8Array | undefined;
+let compilerSession: BlotCompilerSession | undefined;
 
 function paintHighlight(): void {
   renderHighlight(editor.value, highlightLayer);
@@ -261,12 +275,21 @@ function renderOutline(outline: WasmOutline | undefined): void {
 
 async function compileAndRun(): Promise<void> {
   if (selected === undefined) return;
+  const pipelineStart = performance.now();
+  const coldRun = disableCache.checked;
   runButton.disabled = true;
+  disableCache.disabled = true;
   downloadLink.hidden = true;
   artifact = undefined;
   const timings = new Map<Stage, number>();
   let reached: Stage | undefined;
   try {
+    if (coldRun) {
+      compilerSession?.destroy();
+      compilerSession = undefined;
+      disposeBlotParser();
+      await resetBlotSyntaxSession();
+    }
     setStatus("Loading Blot parser and GPU frontend…", "busy");
     await initializeBlotParser(parserWasmUrl, parserPlanUrl);
 
@@ -275,6 +298,7 @@ async function compileAndRun(): Promise<void> {
     const syntax = await validateBlotSyntax(editor.value, parserPlanUrl);
     timings.set("syntax", syntax.timings.totalMs);
     if (!syntax.ok) {
+      timings.set("total", performance.now() - pipelineStart);
       renderStages(timings, reached);
       renderDiagnostics(
         "GPU syntax validation failed",
@@ -289,25 +313,43 @@ async function compileAndRun(): Promise<void> {
       return;
     }
 
-    reached = "blot";
+    reached = "blot-load";
     setStatus("Building Blot's cursor AST, then checking and compiling…", "busy");
-    configureSources({
-      ...playground.sources,
-      [selected.path]: editor.value,
-    });
+    configureSources(
+      {
+        ...playground.sources,
+        [selected.path]: editor.value,
+      },
+      { cache: coldRun ? "clear" : "reuse-unchanged" },
+    );
+    configureSourceLexerRecords(selected.path, editor.value, syntax.lexerRecords);
     const evaluatorOutput: string[] = [];
     const wasmOutput: string[] = [];
-    const verified = await verify(selected.path, {
-      evaluatorInit: hostInit((line) => evaluatorOutput.push(line)),
-      wasmInit: hostInit((line) => wasmOutput.push(line)),
-    });
-    timings.set("blot", verified.timings.blotFrontendMilliseconds);
+    const activeSession = coldRun
+      ? await BlotCompilerSession.create()
+      : compilerSession ??= await BlotCompilerSession.create();
+    let verified: Awaited<ReturnType<BlotCompilerSession["verify"]>>;
+    try {
+      verified = await activeSession.verify(selected.path, {
+        evaluatorInit: hostInit((line) => evaluatorOutput.push(line)),
+        wasmInit: hostInit((line) => wasmOutput.push(line)),
+      });
+    } finally {
+      if (coldRun) activeSession.destroy();
+    }
+    timings.set("blot-load", verified.timings.blotLoadMilliseconds);
+    timings.set("blot-check", verified.timings.blotCheckMilliseconds);
+    timings.set("blot-stage", verified.timings.blotStageMilliseconds);
+    timings.set("blot-lower", verified.timings.blotLowerMilliseconds);
+    timings.set("surface", verified.timings.surfaceEncodeMilliseconds);
     timings.set("gpu-device", verified.timings.gpuDeviceMilliseconds);
     timings.set("gpu-compiler", verified.timings.gpuCompilerMilliseconds);
+    timings.set("gpu-evaluator", verified.timings.gpuEvaluatorMilliseconds);
     timings.set("core", verified.timings.coreCompileMilliseconds);
     timings.set("gpu-run", verified.timings.gpuEvaluateMilliseconds);
     timings.set("wasm-run", verified.timings.wasmExecuteMilliseconds);
     timings.set("wasm-emit", verified.timings.canonicalWasmMilliseconds);
+    timings.set("total", performance.now() - pipelineStart);
     reached = undefined;
 
     artifact = verified.wasm;
@@ -337,17 +379,18 @@ async function compileAndRun(): Promise<void> {
     }
     const evaluatorAgrees = JSON.stringify(evaluatorOutput) === JSON.stringify(wasmOutput);
     setStatus(
-      `Compiled on ${syntax.adapter}; GPU and Wasm host output ${
-        evaluatorAgrees ? "agree" : "differ"
-      }.`,
+      `${coldRun ? "Cold run" : "Resident run"} compiled on ${syntax.adapter}; ` +
+        `GPU and Wasm host output ${evaluatorAgrees ? "agree" : "differ"}.`,
       evaluatorAgrees ? "ok" : "error",
     );
   } catch (error) {
+    timings.set("total", performance.now() - pipelineStart);
     renderStages(timings, reached);
     renderFailure(error);
     setStatus("Stopped", "error");
   } finally {
     runButton.disabled = false;
+    disableCache.disabled = false;
   }
 }
 
@@ -378,6 +421,13 @@ editor.addEventListener("keydown", (event) => {
     event.preventDefault();
     void compileAndRun();
   }
+});
+
+globalThis.addEventListener("beforeunload", () => {
+  compilerSession?.destroy();
+  compilerSession = undefined;
+  disposeBlotParser();
+  void resetBlotSyntaxSession();
 });
 
 for (const [index, example] of playground.examples.entries()) {

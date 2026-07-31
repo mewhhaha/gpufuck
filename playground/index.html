@@ -8,6 +8,7 @@
       name="description"
       content="Parse Blot and compile its Functional Core on WebGPU, then emit and run canonical ABI WebAssembly in the browser."
     />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -33,6 +34,13 @@
         <div class="actions">
           <button id="run" type="button">Run</button>
           <a id="download" href="#" hidden>Download .wasm</a>
+          <label
+            class="cache-control"
+            title="Recreate parser and GPU resources, clear loaded and checked modules, and compile without resident artifacts on every run."
+          >
+            <input id="disable-cache" type="checkbox" />
+            Disable cache (cold run)
+          </label>
         </div>
       </section>
 
@@ -63,10 +71,11 @@
       </p>
       <p>
         Baba&rsquo;s strict GPU frontend performs lexing, delimiter matching, island parsing, and flat
-        syntax allocation. That result is currently the syntax gate; Blot repeats parsing with its
-        cursor-producing Wasm parser because its AST lowerer does not yet consume Baba&rsquo;s flat GPU IR.
-        Blot&rsquo;s comptime evaluator, algebraic-subtyping checker, and ownership pass remain on the CPU;
-        gpufuck independently resolves and infers the lowered Core on the GPU.
+        syntax allocation. Its lexer records feed Blot&rsquo;s cursor-producing parser, so the edited entry
+        is not lexed twice; Blot still builds its cursor AST on the CPU, and dependencies that bypass
+        the syntax gate use the CPU lexer. Blot&rsquo;s comptime evaluator, algebraic-subtyping checker, and
+        ownership pass remain on the CPU; gpufuck independently resolves and infers the lowered Core
+        on the GPU.
       </p>
       <p>
         <a href="https://github.com/mewhhaha/gpufuck">Source</a> ·

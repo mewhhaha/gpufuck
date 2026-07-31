@@ -33,6 +33,10 @@ import { runGpuSemanticCompilationInference } from "./gpu_type_inference_runner.
 import type { GpuCompilationDispatchObservation } from "./gpu_type_inference_contract.ts";
 import { TYPE_INFERENCE_PROFILE_SHADER, TYPE_INFERENCE_SHADER } from "./type_inference_shader.ts";
 import { createSymbolLookup } from "./symbol_lookup.ts";
+import {
+  type CompilerPerformanceTrace,
+  measureCompilerStageAsync,
+} from "../compiler_performance_trace.ts";
 
 export interface SemanticCompilationLimits {
   readonly maximumSteps: number;
@@ -163,6 +167,7 @@ export class GpuSemanticCompiler {
     limits: SemanticCompilationLimits,
     signal: AbortSignal | undefined,
     instrumentation?: SemanticCompilationInstrumentation,
+    trace?: CompilerPerformanceTrace,
   ): Promise<SemanticCompileResult> {
     const initialState = new ArrayBuffer(COMPILATION_INTERNAL_STATE_BYTE_LENGTH);
     const initialStateView = new DataView(initialState);
@@ -221,6 +226,8 @@ export class GpuSemanticCompiler {
     );
     const allocationEvidence =
       `surface nodes=${surfaceNodeByteLength} bytes, core nodes=${surfaceNodeByteLength} bytes, definitions=${definitionByteLength} bytes, algebraic types=${typeByteLength} bytes, constructors=${constructorByteLength} bytes, state=${COMPILATION_INTERNAL_STATE_BYTE_LENGTH} bytes`;
+    const allocationSpan = trace?.start("semantic.gpu.allocate-upload");
+    let allocationSpanFinished = false;
 
     try {
       this.#device.pushErrorScope("validation");
@@ -322,32 +329,65 @@ export class GpuSemanticCompiler {
           `WebGPU did not create semantic compiler buffers and bindings (${allocationEvidence})`,
         );
       }
+      allocationSpan?.finish({
+        nodes: surface.nodeCount,
+        definitions: surface.definitionCount,
+        uploadedBytes: surfaceNodeByteLength + definitionByteLength + typeByteLength +
+          constructorByteLength + symbolLookupByteLength + COMPILATION_INTERNAL_STATE_BYTE_LENGTH,
+      });
+      allocationSpanFinished = true;
+      const resolvedCoreNodeBuffer = coreNodeBuffer;
+      const resolvedDefinitionBuffer = definitionBuffer;
+      const resolvedTypeBuffer = typeBuffer;
+      const resolvedConstructorBuffer = constructorBuffer;
+      const resolvedStateBuffer = stateBuffer;
+      const resolvedBindGroup = bindGroup;
 
       const plannedLoweringWorkgroups = surface.nodeCount <
           PLANNED_LOWERING_WORKGROUP_SIZE
         ? 0
         : Math.ceil(surface.nodeCount / PLANNED_LOWERING_WORKGROUP_SIZE);
-      const combined = await runGpuSemanticCompilationInference({
-        device: this.#device,
-        pipeline: this.#inferencePipeline,
-        surface,
-        coreNodeBuffer,
-        definitionBuffer,
-        typeBuffer,
-        constructorBuffer,
-        maximumSteps: limits.maximumSteps,
-        maximumStepsPerDispatch: limits.maximumStepsPerDispatch,
-        sourceByteLength,
-        ...(signal === undefined ? {} : { signal }),
-        ...(instrumentation === undefined
-          ? {}
-          : { observeCompilationDispatch: instrumentation.observeDispatch }),
-      }, {
-        pipelines: this.#pipelines,
-        bindGroup,
-        stateBuffer,
+      let dispatchCount = 0;
+      const dispatchAnnotations: Record<string, number> = {
+        nodes: surface.nodeCount,
+        definitions: surface.definitionCount,
         plannedLoweringWorkgroups,
-      }, this.#dispatchScheduler);
+      };
+      const combined = await measureCompilerStageAsync(
+        trace,
+        "semantic.gpu.resolve-infer-readback",
+        dispatchAnnotations,
+        () =>
+          runGpuSemanticCompilationInference({
+            device: this.#device,
+            pipeline: this.#inferencePipeline,
+            surface,
+            coreNodeBuffer: resolvedCoreNodeBuffer,
+            definitionBuffer: resolvedDefinitionBuffer,
+            typeBuffer: resolvedTypeBuffer,
+            constructorBuffer: resolvedConstructorBuffer,
+            maximumSteps: limits.maximumSteps,
+            maximumStepsPerDispatch: limits.maximumStepsPerDispatch,
+            sourceByteLength,
+            ...(signal === undefined ? {} : { signal }),
+            ...(trace === undefined && instrumentation === undefined ? {} : {
+              observeCompilationDispatch: (observation) => {
+                dispatchCount += 1;
+                instrumentation?.observeDispatch(observation);
+              },
+            }),
+          }, {
+            pipelines: this.#pipelines,
+            bindGroup: resolvedBindGroup,
+            stateBuffer: resolvedStateBuffer,
+            plannedLoweringWorkgroups,
+          }, this.#dispatchScheduler),
+        (result) => {
+          dispatchAnnotations.dispatches = dispatchCount;
+          dispatchAnnotations.semanticSteps = result.semanticState.totalSteps;
+          dispatchAnnotations.inferenceTransitions = result.inference?.transitions ?? 0;
+        },
+      );
       const state = combined.semanticState;
 
       if (state.status === Status.Ok) {
@@ -426,6 +466,7 @@ export class GpuSemanticCompiler {
         `GPU compiler returned unknown status: ${formatSemanticState(state)}`,
       );
     } finally {
+      if (!allocationSpanFinished) allocationSpan?.finish({ failed: true });
       surfaceNodeBuffer?.destroy();
       typeBuffer?.destroy();
       stateBuffer?.destroy();
@@ -446,6 +487,7 @@ export class GpuSemanticCompiler {
     inputs: readonly BatchCompilationInput[],
     signal: AbortSignal | undefined,
     instrumentation?: BatchCompilationInstrumentation,
+    trace?: CompilerPerformanceTrace,
   ): Promise<readonly SemanticCompileResult[]> {
     return await compileSemanticBatch(
       this.#device,
@@ -459,6 +501,8 @@ export class GpuSemanticCompiler {
           input.sourceByteLength,
           input,
           signal,
+          undefined,
+          trace,
         ),
       instrumentation,
     );
