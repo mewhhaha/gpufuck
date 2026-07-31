@@ -45,14 +45,8 @@ export function analyzeModuleEffects(
     { nodes: nodes.length, definitions: module.definitionCount },
     () => LambdaSetAnalysis.forCore(module, nodes),
   );
-  const effectNamesByNode = Array.from(
-    { length: nodes.length },
-    () => new Set<string>(),
-  );
-  const dependents = Array.from(
-    { length: nodes.length },
-    () => new Set<number>(),
-  );
+  const effectNamesByNode: (Set<string> | undefined)[] = new Array(nodes.length);
+  const dependents: (Set<number> | undefined)[] = new Array(nodes.length);
   const hostEffectsByDefinition = new Map(
     module.hostDefinitions.map((binding) => {
       const definition = module.definitionNames.indexOf(binding.definition);
@@ -78,7 +72,7 @@ export function analyzeModuleEffects(
         `functional effect analysis node ${nodeIndex} depends on missing node ${dependency}`,
       );
     }
-    dependents[dependency]!.add(nodeIndex);
+    (dependents[dependency] ??= new Set()).add(nodeIndex);
   };
 
   measureCompilerStage(
@@ -112,7 +106,7 @@ export function analyzeModuleEffects(
             }
             if (nodes[root]?.tag !== CoreTag.Lambda) {
               for (const effect of module.declaredDefinitionEffects[node.payload]!) {
-                effectNamesByNode[nodeIndex]!.add(effect);
+                (effectNamesByNode[nodeIndex] ??= new Set()).add(effect);
               }
               dependOn(nodeIndex, root);
             }
@@ -138,7 +132,7 @@ export function analyzeModuleEffects(
                 }
                 dependOn(nodeIndex, lambda.child0);
               },
-              (effect) => effectNamesByNode[nodeIndex]!.add(effect),
+              (effect) => (effectNamesByNode[nodeIndex] ??= new Set()).add(effect),
             );
             break;
           }
@@ -184,7 +178,7 @@ export function analyzeModuleEffects(
   );
 
   const pending = effectNamesByNode.flatMap((effects, nodeIndex) =>
-    effects.size === 0 ? [] : [nodeIndex]
+    effects === undefined || effects.size === 0 ? [] : [nodeIndex]
   );
   const queued = new Set(pending);
   measureCompilerStage(
@@ -195,8 +189,8 @@ export function analyzeModuleEffects(
       while (pending.length > 0) {
         const source = pending.pop()!;
         queued.delete(source);
-        for (const dependent of dependents[source]!) {
-          const targetEffects = effectNamesByNode[dependent]!;
+        for (const dependent of dependents[source] ?? []) {
+          const targetEffects = effectNamesByNode[dependent] ??= new Set();
           const previousSize = targetEffects.size;
           for (const effect of effectNamesByNode[source]!) targetEffects.add(effect);
           if (targetEffects.size === previousSize || queued.has(dependent)) continue;
@@ -227,7 +221,7 @@ export function analyzeModuleEffects(
         }
         return effectSetFrom([
           ...module.declaredDefinitionEffects[definition]!,
-          ...effectNamesByNode[effectNode]!,
+          ...(effectNamesByNode[effectNode] ?? []),
         ]);
       }),
   );
