@@ -580,7 +580,7 @@ export class LambdaSetAnalysis {
       let appliedArguments = 0;
       let current = nodeIndex;
       while (appliedArguments < arity) {
-        const uses = parents[current]!;
+        const uses = parents[current] ?? [];
         if (uses.length !== 1) break;
         const use = uses[0]!;
         const parent = this.#node(use.parent);
@@ -595,15 +595,15 @@ export class LambdaSetAnalysis {
     }
   }
 
-  #indexParents(): readonly (readonly ParentEdge[])[] {
-    const parents: ParentEdge[][] = Array.from({ length: this.#nodes.length }, () => []);
+  #indexParents(): readonly (readonly ParentEdge[] | undefined)[] {
+    const parents: (ParentEdge[] | undefined)[] = new Array(this.#nodes.length);
     for (const [parentIndex, node] of this.#nodes.entries()) {
       const childReferences = node.tag === CoreTag.Apply
         ? [node.child0, ...this.#applicationArguments(node)]
         : [node.child0, node.child1, node.child2];
       for (const [childPosition, childIndex] of childReferences.entries()) {
         if (childIndex === NO_INDEX || childIndex >= this.#nodes.length) continue;
-        parents[childIndex]!.push({
+        (parents[childIndex] ??= []).push({
           parent: parentIndex,
           child: childPosition,
         });
