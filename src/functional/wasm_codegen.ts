@@ -1980,11 +1980,19 @@ class WasmCompiler {
   }
 
   lambdaSet(nodeIndex: number): LambdaSet {
-    this.#lambdaSetAnalysis ??= LambdaSetAnalysis.forWasm(
-      this.#module,
-      this.#nodes,
-      this.#coreIndex,
-    );
+    if (this.#lambdaSetAnalysis === undefined) {
+      const annotations = {
+        nodes: this.#nodes.length,
+        definitions: this.#module.definitionCount,
+      };
+      this.#lambdaSetAnalysis = this.#trace === undefined
+        ? LambdaSetAnalysis.forWasm(this.#module, this.#nodes, this.#coreIndex)
+        : this.#trace.measure(
+          "wasm.emit.lambda-sets",
+          annotations,
+          () => LambdaSetAnalysis.forWasm(this.#module, this.#nodes, this.#coreIndex),
+        );
+    }
     return this.#lambdaSetAnalysis.lambdaSet(nodeIndex);
   }
 

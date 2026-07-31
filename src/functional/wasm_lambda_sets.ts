@@ -43,7 +43,7 @@ export class LambdaSetAnalysis {
   readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
   readonly #representation: "core" | "wasm";
-  readonly #states: FlowState[];
+  readonly #states: (FlowState | undefined)[];
   readonly #edges: (Set<number> | undefined)[];
   readonly #applicationsByCallee: (ApplicationConstraint[] | undefined)[];
   readonly #lambdaBodies = new Map<number, number>();
@@ -55,7 +55,7 @@ export class LambdaSetAnalysis {
   readonly #constructorFieldBase: number;
   readonly #externalValue: number;
   readonly #workQueue: number[] = [];
-  readonly #queued: boolean[];
+  readonly #queued: Uint8Array;
   readonly #lambdaSets: (LambdaSet | undefined)[];
 
   static forCore(module: CompiledModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
@@ -93,14 +93,11 @@ export class LambdaSetAnalysis {
     this.#externalValue = this.#constructorFieldBase + constructorFieldOffsets.at(-1)!;
 
     const flowVariableCount = this.#externalValue + 1;
-    this.#states = Array.from(
-      { length: flowVariableCount },
-      () => ({ lambdaNodes: undefined, effectNames: undefined, incomplete: false }),
-    );
-    this.#edges = Array.from({ length: flowVariableCount }, () => undefined);
-    this.#applicationsByCallee = Array.from({ length: flowVariableCount }, () => undefined);
-    this.#queued = Array.from({ length: flowVariableCount }, () => false);
-    this.#lambdaSets = Array.from({ length: nodes.length }, () => undefined);
+    this.#states = new Array(flowVariableCount);
+    this.#edges = new Array(flowVariableCount);
+    this.#applicationsByCallee = new Array(flowVariableCount);
+    this.#queued = new Uint8Array(flowVariableCount);
+    this.#lambdaSets = new Array(nodes.length);
 
     this.#markIncomplete(this.#externalValue);
     this.#markEscapingConstructorFieldsIncomplete(coreIndex);
@@ -453,7 +450,7 @@ export class LambdaSetAnalysis {
     while (nextVariable < this.#workQueue.length) {
       const source = this.#workQueue[nextVariable]!;
       nextVariable += 1;
-      this.#queued[source] = false;
+      this.#queued[source] = 0;
       for (const target of this.#edges[source] ?? []) this.#merge(source, target);
       for (const application of this.#applicationsByCallee[source] ?? []) {
         this.#connectApplication(application);
@@ -566,8 +563,10 @@ export class LambdaSetAnalysis {
   }
 
   #enqueue(variable: number): void {
-    if (this.#queued[variable]) return;
-    this.#queued[variable] = true;
+    const queued = this.#queued[variable];
+    if (queued === undefined) this.#state(variable);
+    if (queued !== 0) return;
+    this.#queued[variable] = 1;
     this.#workQueue.push(variable);
   }
 
@@ -691,13 +690,16 @@ export class LambdaSetAnalysis {
   }
 
   #state(variable: number): FlowState {
-    const state = this.#states[variable];
-    if (state === undefined) {
+    if (!Number.isInteger(variable) || variable < 0 || variable >= this.#states.length) {
       throw new Error(
         `functional lambda-set flow variable ${variable} is outside ${this.#states.length} variables`,
       );
     }
-    return state;
+    return this.#states[variable] ??= {
+      lambdaNodes: undefined,
+      effectNames: undefined,
+      incomplete: false,
+    };
   }
 
   #node(index: number): CoreNode {
