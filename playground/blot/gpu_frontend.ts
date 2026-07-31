@@ -8,6 +8,7 @@ import {
 export type GpuSyntaxResult =
   | {
     readonly ok: true;
+    readonly cacheHit: boolean;
     readonly timings: GpuFrontendTimings;
     readonly tokenWords: number;
     readonly nodeWords: number;
@@ -17,6 +18,7 @@ export type GpuSyntaxResult =
   }
   | {
     readonly ok: false;
+    readonly cacheHit: boolean;
     readonly timings: GpuFrontendTimings;
     readonly diagnostics: readonly FrontendDiagnostic[];
     readonly adapter: string;
@@ -30,10 +32,18 @@ let session:
     readonly acceptingStateBySpec: Int32Array;
   }>
   | undefined;
+let cachedSyntax:
+  | {
+    readonly source: string;
+    readonly planUrl: string;
+    readonly result: Promise<GpuSyntaxResult>;
+  }
+  | undefined;
 
 export async function resetBlotSyntaxSession(): Promise<void> {
   const active = session;
   session = undefined;
+  cachedSyntax = undefined;
   if (active === undefined) return;
   (await active).runtime.dispose();
 }
@@ -75,11 +85,29 @@ async function syntaxSession(planUrl: URL) {
 }
 
 export async function validateBlotSyntax(source: string, planUrl: URL): Promise<GpuSyntaxResult> {
+  if (cachedSyntax?.source === source && cachedSyntax.planUrl === planUrl.href) {
+    return { ...await cachedSyntax.result, cacheHit: true };
+  }
+  const pending = validateUncachedBlotSyntax(source, planUrl);
+  cachedSyntax = { source, planUrl: planUrl.href, result: pending };
+  try {
+    return await pending;
+  } catch (error) {
+    if (cachedSyntax?.result === pending) cachedSyntax = undefined;
+    throw error;
+  }
+}
+
+async function validateUncachedBlotSyntax(
+  source: string,
+  planUrl: URL,
+): Promise<GpuSyntaxResult> {
   const { frontend, adapter, acceptingStateBySpec } = await syntaxSession(planUrl);
   const result = await frontend.ingest(source, { stageTimings: "collect" });
   if (!result.ok) {
     return {
       ok: false,
+      cacheHit: false,
       timings: result.timings,
       diagnostics: result.diagnostics,
       adapter,
@@ -87,6 +115,7 @@ export async function validateBlotSyntax(source: string, planUrl: URL): Promise<
   }
   return {
     ok: true,
+    cacheHit: false,
     timings: result.timings,
     tokenWords: result.program.tokens.length,
     nodeWords: result.program.nodes.length,

@@ -66,6 +66,9 @@ Deno.test("Blot cursor parser consumes lexer records produced by the GPU fronten
     const syntax = await validateBlotSyntax(source, parserPlan);
     ok(syntax.ok, syntax.ok ? undefined : syntax.diagnostics[0]?.message);
     if (!syntax.ok) return;
+    equal(syntax.cacheHit, false);
+    const cachedSyntax = await validateBlotSyntax(source, parserPlan);
+    equal(cachedSyntax.cacheHit, true);
     const path = "/examples/gpu-lexer-records.blot";
     configureSources({ [path]: source });
     configureSourceLexerRecords(path, source, syntax.lexerRecords);

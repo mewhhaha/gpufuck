@@ -296,7 +296,7 @@ async function compileAndRun(): Promise<void> {
     reached = "syntax";
     setStatus("Lexing, parsing, and validating Blot syntax on WebGPU…", "busy");
     const syntax = await validateBlotSyntax(editor.value, parserPlanUrl);
-    timings.set("syntax", syntax.timings.totalMs);
+    timings.set("syntax", syntax.cacheHit ? 0 : syntax.timings.totalMs);
     if (!syntax.ok) {
       timings.set("total", performance.now() - pipelineStart);
       renderStages(timings, reached);
