@@ -48,6 +48,7 @@
     "bench:lazuli-baba": "deno bench --unstable-webgpu --allow-read=language/lazuli/generated benchmarks/lazuli_baba_pipeline_bench.ts",
     "bench:lazuli": "deno bench --allow-read=language/lazuli/generated benchmarks/lazuli_compiler_bench.ts",
     "bench:blot-project": "deno run --unstable-webgpu --allow-read benchmarks/blot_project_bench.ts",
+    "bench:blot-syntax": "deno run --unstable-webgpu --allow-read benchmarks/blot_syntax_bench.ts",
     "bench:semantic-wavefront": "deno bench benchmarks/semantic_wavefront_bench.ts",
     "bench:sweep": "deno run --unstable-webgpu --allow-read benchmarks/sweep_vs_lazuli_bench.ts",
     "bench:sweep-editor": "deno run --unstable-webgpu --allow-read benchmarks/sweep_editor_bench.ts",

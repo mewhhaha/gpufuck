@@ -44,7 +44,7 @@ type Stage =
   | "total";
 
 const STAGE_LABELS: Readonly<Record<Stage, string>> = {
-  syntax: "Lex, parse, and validate on GPU",
+  syntax: "Optional Baba GPU syntax validation",
   "blot-load": "Blot cursor parse and dependency load",
   "blot-check": "Blot comptime, types, effects, and ownership",
   "blot-stage": "Blot staging and export preparation",
@@ -78,6 +78,7 @@ const resultPanel = element<HTMLDivElement>("result");
 const statusLine = element<HTMLParagraphElement>("status");
 const downloadLink = element<HTMLAnchorElement>("download");
 const disableCache = element<HTMLInputElement>("disable-cache");
+const gpuSyntax = element<HTMLInputElement>("gpu-syntax");
 
 const parserWasmUrl = new URL("./parser.wasm", location.href);
 const parserPlanUrl = new URL("./parser.plan", location.href);
@@ -279,6 +280,7 @@ async function compileAndRun(): Promise<void> {
   const coldRun = disableCache.checked;
   runButton.disabled = true;
   disableCache.disabled = true;
+  gpuSyntax.disabled = true;
   downloadLink.hidden = true;
   artifact = undefined;
   const timings = new Map<Stage, number>();
@@ -290,27 +292,33 @@ async function compileAndRun(): Promise<void> {
       disposeBlotParser();
       await resetBlotSyntaxSession();
     }
-    setStatus("Loading Blot parser and GPU frontend…", "busy");
+    setStatus(
+      gpuSyntax.checked ? "Loading Blot parser and GPU frontend…" : "Loading Blot parser…",
+      "busy",
+    );
     await initializeBlotParser(parserWasmUrl, parserPlanUrl);
 
-    reached = "syntax";
-    setStatus("Lexing, parsing, and validating Blot syntax on WebGPU…", "busy");
-    const syntax = await validateBlotSyntax(editor.value, parserPlanUrl);
-    timings.set("syntax", syntax.cacheHit ? 0 : syntax.timings.totalMs);
-    if (!syntax.ok) {
-      timings.set("total", performance.now() - pipelineStart);
-      renderStages(timings, reached);
-      renderDiagnostics(
-        "GPU syntax validation failed",
-        syntax.diagnostics.map((diagnostic) => ({
-          code: diagnostic.code,
-          message: diagnostic.message,
-          start: diagnostic.start,
-          end: diagnostic.end,
-        })),
-      );
-      setStatus("GPU syntax validation failed", "error");
-      return;
+    let syntax: Awaited<ReturnType<typeof validateBlotSyntax>> | undefined;
+    if (gpuSyntax.checked) {
+      reached = "syntax";
+      setStatus("Lexing, parsing, and validating Blot syntax on WebGPU…", "busy");
+      syntax = await validateBlotSyntax(editor.value, parserPlanUrl);
+      timings.set("syntax", syntax.cacheHit ? 0 : syntax.timings.totalMs);
+      if (!syntax.ok) {
+        timings.set("total", performance.now() - pipelineStart);
+        renderStages(timings, reached);
+        renderDiagnostics(
+          "GPU syntax validation failed",
+          syntax.diagnostics.map((diagnostic) => ({
+            code: diagnostic.code,
+            message: diagnostic.message,
+            start: diagnostic.start,
+            end: diagnostic.end,
+          })),
+        );
+        setStatus("GPU syntax validation failed", "error");
+        return;
+      }
     }
 
     reached = "blot-load";
@@ -322,7 +330,9 @@ async function compileAndRun(): Promise<void> {
       },
       { cache: coldRun ? "clear" : "reuse-unchanged" },
     );
-    configureSourceLexerRecords(selected.path, editor.value, syntax.lexerRecords);
+    if (syntax?.ok) {
+      configureSourceLexerRecords(selected.path, editor.value, syntax.lexerRecords);
+    }
     const evaluatorOutput: string[] = [];
     const wasmOutput: string[] = [];
     const activeSession = coldRun
@@ -363,9 +373,11 @@ async function compileAndRun(): Promise<void> {
       verified.wasm.byteLength,
       runtimeExports.length,
       wasmOutput,
-      `${syntax.tokenWords.toLocaleString()} token words, ` +
-        `${syntax.nodeWords.toLocaleString()} node words, ` +
-        `${syntax.edgeWords.toLocaleString()} edge words`,
+      syntax?.ok
+        ? `${syntax.tokenWords.toLocaleString()} token words, ` +
+          `${syntax.nodeWords.toLocaleString()} node words, ` +
+          `${syntax.edgeWords.toLocaleString()} edge words`
+        : "Blot CPU syntax path",
     );
     if (selected.project !== undefined && editor.value === selected.source) {
       const project = selected.project;
@@ -379,7 +391,9 @@ async function compileAndRun(): Promise<void> {
     }
     const evaluatorAgrees = JSON.stringify(evaluatorOutput) === JSON.stringify(wasmOutput);
     setStatus(
-      `${coldRun ? "Cold run" : "Resident run"} compiled on ${syntax.adapter}; ` +
+      `${coldRun ? "Cold run" : "Resident run"} compiled with ${
+        syntax?.adapter ?? "Blot CPU syntax and gpufuck WebGPU Core"
+      }; ` +
         `GPU and Wasm host output ${evaluatorAgrees ? "agree" : "differ"}.`,
       evaluatorAgrees ? "ok" : "error",
     );
@@ -391,6 +405,7 @@ async function compileAndRun(): Promise<void> {
   } finally {
     runButton.disabled = false;
     disableCache.disabled = false;
+    gpuSyntax.disabled = false;
   }
 }
 
@@ -455,7 +470,7 @@ clearOutline("Run a Blot module to see its canonical ABI sections, signatures, a
 if (navigator.gpu === undefined) {
   runButton.disabled = true;
   setStatus(
-    "This browser exposes no WebGPU, which the Blot syntax and Core paths require.",
+    "This browser exposes no WebGPU, which the Core compiler and optional Baba GPU syntax path require.",
     "error",
   );
 } else {

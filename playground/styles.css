@@ -232,7 +232,7 @@ a:focus-visible {
   font-size: 0.85rem;
 }
 
-.cache-control {
+.run-control {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -242,7 +242,7 @@ a:focus-visible {
   cursor: pointer;
 }
 
-.cache-control input {
+.run-control input {
   margin: 0;
 }
 

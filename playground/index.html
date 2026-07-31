@@ -15,9 +15,10 @@
     <header>
       <h1>gpufuck</h1>
       <p>
-        Baba validates Blot syntax on WebGPU. Blot then builds its cursor AST, checks types and
-        ownership in the browser, and hands Functional Core to gpufuck for GPU compilation and
-        canonical ABI WebAssembly. Everything below stays in this tab.
+        Blot builds its cursor AST and checks types and ownership in the browser, then hands
+        Functional Core to gpufuck for GPU compilation and canonical ABI WebAssembly. Baba's
+        optional WebGPU syntax path can validate the entry first. Everything below stays in this
+        tab.
       </p>
     </header>
 
@@ -35,11 +36,18 @@
           <button id="run" type="button">Run</button>
           <a id="download" href="#" hidden>Download .wasm</a>
           <label
-            class="cache-control"
+            class="run-control"
             title="Recreate parser and GPU resources, clear loaded and checked modules, and compile without resident artifacts on every run."
           >
             <input id="disable-cache" type="checkbox" />
             Disable cache (cold run)
+          </label>
+          <label
+            class="run-control"
+            title="Also lex, parse, and validate the entry with Baba on WebGPU. This demonstrates the GPU frontend but is slower than Blot's required CPU parse for current workloads."
+          >
+            <input id="gpu-syntax" type="checkbox" />
+            Validate syntax on GPU
           </label>
         </div>
       </section>
@@ -70,12 +78,11 @@
         phase timings show scaling separately from browser and GPU startup costs.
       </p>
       <p>
-        Baba&rsquo;s strict GPU frontend performs lexing, delimiter matching, island parsing, and flat
-        syntax allocation. Its lexer records feed Blot&rsquo;s cursor-producing parser, so the edited entry
-        is not lexed twice; Blot still builds its cursor AST on the CPU, and dependencies that bypass
-        the syntax gate use the CPU lexer. Blot&rsquo;s comptime evaluator, algebraic-subtyping checker, and
-        ownership pass remain on the CPU; gpufuck independently resolves and infers the lowered Core
-        on the GPU.
+        When enabled, Baba&rsquo;s strict GPU frontend performs lexing, delimiter matching, island parsing,
+        and flat syntax allocation. Its lexer records feed Blot&rsquo;s cursor-producing parser, so the
+        edited entry is not lexed twice. The faster default uses Blot&rsquo;s CPU lexer because Blot still
+        needs its own cursor AST. Blot&rsquo;s comptime evaluator, algebraic-subtyping checker, and ownership
+        pass remain on the CPU; gpufuck independently resolves and infers the lowered Core on the GPU.
       </p>
       <p>
         <a href="https://github.com/mewhhaha/gpufuck">Source</a> ·
