@@ -1,4 +1,6 @@
 /** Builds the self-contained Blot browser playground into `playground/dist`. */
+import { createBlotStressProject } from "./blot/stress_project.ts";
+
 const out = new URL("dist/", import.meta.url);
 const blot = new URL("blot/", import.meta.url);
 
@@ -23,6 +25,8 @@ const featured = [
   "compiled.blot",
 ] as const;
 
+const stressProject = createBlotStressProject();
+
 const sources: Record<string, string> = {
   "/blot/prelude.blot": await Deno.readTextFile(new URL("src/prelude/prelude.blot", blot)),
 };
@@ -41,11 +45,26 @@ for await (const entry of Deno.readDir(new URL("examples/lib/", blot))) {
   }
 }
 
-const examples = featured.map((file) => ({
-  name: file.replace(/\.blot$/, "").replaceAll("_", " "),
-  path: `/examples/${file}`,
-  source: sources[`/examples/${file}`]!,
-}));
+Object.assign(sources, stressProject.sources);
+
+const examples = [
+  ...featured.map((file) => ({
+    name: file.replace(/\.blot$/, "").replaceAll("_", " "),
+    path: `/examples/${file}`,
+    source: sources[`/examples/${file}`]!,
+  })),
+  {
+    name: "stress project",
+    path: stressProject.entryPath,
+    source: sources[stressProject.entryPath]!,
+    project: {
+      modules: stressProject.moduleCount,
+      definitions: stressProject.definitionCount,
+      lines: stressProject.lineCount,
+      bytes: stressProject.sourceBytes,
+    },
+  },
+];
 await Deno.writeTextFile(
   new URL("examples.json", out),
   JSON.stringify({ examples, sources }),

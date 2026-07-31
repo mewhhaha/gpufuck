@@ -17,3 +17,6 @@ The copied TypeScript retains Blot's own compiler configuration. Each vendored s
 `@ts-nocheck` boundary because gpufuck additionally enables `noUncheckedIndexedAccess` and
 `exactOptionalPropertyTypes`; the browser adapter outside `src/` remains checked with gpufuck's
 stricter settings.
+
+`stress_project.ts` is gpufuck-owned. It generates the deterministic multi-module workload shared by
+the browser showcase, benchmark, and regression test; it is not part of the Blot snapshot.

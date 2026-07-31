@@ -251,6 +251,17 @@ export async function runLoweringExport(
 export interface Verified extends Built {
   readonly value: unknown;
   readonly ran: unknown;
+  readonly timings: VerifyTimings;
+}
+
+export interface VerifyTimings {
+  readonly blotFrontendMilliseconds: number;
+  readonly gpuDeviceMilliseconds: number;
+  readonly gpuCompilerMilliseconds: number;
+  readonly coreCompileMilliseconds: number;
+  readonly gpuEvaluateMilliseconds: number;
+  readonly wasmExecuteMilliseconds: number;
+  readonly canonicalWasmMilliseconds: number;
 }
 
 export interface VerifyOptions {
@@ -271,6 +282,7 @@ export async function verify(
   const compiled = await compile(path);
   try {
     let value: unknown = null;
+    const gpuEvaluateStart = performance.now();
     try {
       const evaluator = await GpuEvaluator.create(compiled.device);
       const execution = await evaluator.evaluate(compiled.module, {
@@ -289,7 +301,9 @@ export async function verify(
         unavailable: message,
       };
     }
+    const gpuEvaluateMilliseconds = performance.now() - gpuEvaluateStart;
     let ran: unknown = null;
+    const wasmExecuteStart = performance.now();
     try {
       const execution = await runWasmModule(compiled.module, {
         init: wasmInit,
@@ -302,6 +316,7 @@ export async function verify(
         unavailable: message,
       };
     }
+    const wasmExecuteMilliseconds = performance.now() - wasmExecuteStart;
     const internalManifest = manifest(
       path,
       compiled.exports,
@@ -312,10 +327,12 @@ export async function verify(
     );
     const builtManifest = publicManifest(internalManifest);
     const manifestBytes = serializeManifest(builtManifest);
+    const canonicalWasmStart = performance.now();
     const coreWasm = await compileModuleToWasm(compiled.module, {
       canonicalAbi: canonicalInterface(internalManifest),
     });
     const wasm = appendCustomSection(coreWasm, "blot:abi", manifestBytes);
+    const canonicalWasmMilliseconds = performance.now() - canonicalWasmStart;
     return {
       wasm,
       value,
@@ -332,6 +349,12 @@ export async function verify(
       }),
       shapes: compiled.lowered.shapes,
       constructors: compiled.lowered.constructors,
+      timings: {
+        ...compiled.timings,
+        gpuEvaluateMilliseconds,
+        wasmExecuteMilliseconds,
+        canonicalWasmMilliseconds,
+      },
     };
   } finally {
     compiled.module.destroy();
@@ -340,10 +363,18 @@ export async function verify(
 }
 
 async function compile(path: string) {
+  const blotFrontendStart = performance.now();
   const prepared = await prepare(path);
+  const blotFrontendMilliseconds = performance.now() - blotFrontendStart;
+  const gpuDeviceStart = performance.now();
   const device = await requestWebGpuDevice();
+  const gpuDeviceMilliseconds = performance.now() - gpuDeviceStart;
+  const gpuCompilerStart = performance.now();
   const compiler = await GpuCompiler.create(device);
+  const gpuCompilerMilliseconds = performance.now() - gpuCompilerStart;
+  const coreCompileStart = performance.now();
   const compilation = await compiler.compileModule(prepared.module);
+  const coreCompileMilliseconds = performance.now() - coreCompileStart;
   if (!compilation.ok) {
     device.destroy();
     throw loweringBug(compilation.diagnostics, prepared.loaded.module.span);
@@ -353,6 +384,12 @@ async function compile(path: string) {
     module: compilation.module,
     lowered: prepared.lowered,
     exports: prepared.exports,
+    timings: {
+      blotFrontendMilliseconds,
+      gpuDeviceMilliseconds,
+      gpuCompilerMilliseconds,
+      coreCompileMilliseconds,
+    },
   };
 }
 

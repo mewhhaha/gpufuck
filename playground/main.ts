@@ -14,6 +14,12 @@ interface Example {
   readonly name: string;
   readonly path: string;
   readonly source: string;
+  readonly project?: {
+    readonly modules: number;
+    readonly definitions: number;
+    readonly lines: number;
+    readonly bytes: number;
+  };
 }
 
 interface PlaygroundSources {
@@ -21,12 +27,28 @@ interface PlaygroundSources {
   readonly sources: Readonly<Record<string, string>>;
 }
 
-type Stage = "syntax" | "compile";
+type Stage =
+  | "syntax"
+  | "blot"
+  | "gpu-device"
+  | "gpu-compiler"
+  | "core"
+  | "gpu-run"
+  | "wasm-run"
+  | "wasm-emit";
 
 const STAGE_LABELS: Readonly<Record<Stage, string>> = {
   syntax: "Lex, parse, and validate on GPU",
-  compile: "Cursor AST, comptime, types, ownership, Core, and Wasm",
+  blot: "Blot parse, comptime, types, ownership, and lowering",
+  "gpu-device": "Request GPU device",
+  "gpu-compiler": "Initialize GPU compiler",
+  core: "Resolve and infer Functional Core on GPU",
+  "gpu-run": "Initialize and run GPU evaluator",
+  "wasm-run": "Emit, instantiate, and run executable Wasm",
+  "wasm-emit": "Emit canonical ABI Wasm",
 };
+
+const STAGES = Object.keys(STAGE_LABELS) as readonly Stage[];
 
 const element = <T extends HTMLElement>(id: string): T => {
   const found = document.getElementById(id);
@@ -64,7 +86,7 @@ function setStatus(text: string, tone: "idle" | "busy" | "error" | "ok" = "idle"
 
 function renderStages(timings: ReadonlyMap<Stage, number>, reached?: Stage): void {
   stageList.replaceChildren();
-  for (const stage of ["syntax", "compile"] as const) {
+  for (const stage of STAGES) {
     const term = document.createElement("dt");
     term.textContent = STAGE_LABELS[stage];
     const detail = document.createElement("dd");
@@ -267,7 +289,7 @@ async function compileAndRun(): Promise<void> {
       return;
     }
 
-    reached = "compile";
+    reached = "blot";
     setStatus("Building Blot's cursor AST, then checking and compiling…", "busy");
     configureSources({
       ...playground.sources,
@@ -275,12 +297,17 @@ async function compileAndRun(): Promise<void> {
     });
     const evaluatorOutput: string[] = [];
     const wasmOutput: string[] = [];
-    const compileStart = performance.now();
     const verified = await verify(selected.path, {
       evaluatorInit: hostInit((line) => evaluatorOutput.push(line)),
       wasmInit: hostInit((line) => wasmOutput.push(line)),
     });
-    timings.set("compile", performance.now() - compileStart);
+    timings.set("blot", verified.timings.blotFrontendMilliseconds);
+    timings.set("gpu-device", verified.timings.gpuDeviceMilliseconds);
+    timings.set("gpu-compiler", verified.timings.gpuCompilerMilliseconds);
+    timings.set("core", verified.timings.coreCompileMilliseconds);
+    timings.set("gpu-run", verified.timings.gpuEvaluateMilliseconds);
+    timings.set("wasm-run", verified.timings.wasmExecuteMilliseconds);
+    timings.set("wasm-emit", verified.timings.canonicalWasmMilliseconds);
     reached = undefined;
 
     artifact = verified.wasm;
@@ -298,6 +325,16 @@ async function compileAndRun(): Promise<void> {
         `${syntax.nodeWords.toLocaleString()} node words, ` +
         `${syntax.edgeWords.toLocaleString()} edge words`,
     );
+    if (selected.project !== undefined && editor.value === selected.source) {
+      const project = selected.project;
+      const projectSummary = document.createElement("p");
+      projectSummary.className = "meta";
+      projectSummary.textContent = `${project.modules.toLocaleString()} project modules · ` +
+        `${project.definitions.toLocaleString()} reachable functions · ` +
+        `${project.lines.toLocaleString()} lines · ` +
+        `${(project.bytes / 1024).toFixed(1)} KB source`;
+      resultPanel.append(projectSummary);
+    }
     const evaluatorAgrees = JSON.stringify(evaluatorOutput) === JSON.stringify(wasmOutput);
     setStatus(
       `Compiled on ${syntax.adapter}; GPU and Wasm host output ${
