@@ -682,8 +682,12 @@ function artifactDefinitionReachability(
   readonly definitionNames: ReadonlySet<string>;
   readonly referencedSymbols: ReadonlySet<string>;
 } {
-  const dependencies = new Map<string, Set<string>>();
-  const symbolsByDefinition = new Map<string, Set<string>>();
+  const definitionScopes = new Map<string, {
+    readonly definition: SurfaceDefinition;
+    readonly localDefinitions: ReadonlyMap<string, string>;
+    readonly importedDefinitions: ReadonlyMap<string, string>;
+  }>();
+  const importedTargets = new Map<string, string | undefined>();
   const roots: string[] = [];
   const entryDefinition = exportedDefinitions.get(exportKey(entry.module, entry.exportName));
   if (entryDefinition !== undefined) roots.push(entryDefinition);
@@ -702,26 +706,15 @@ function artifactDefinitionReachability(
         exportKey(imported.fromModule, imported.exportName),
       );
       importedDefinitions.set(imported.name, alias);
-      dependencies.set(alias, new Set(target === undefined ? [] : [target]));
-      symbolsByDefinition.set(alias, new Set(target === undefined ? [] : [target]));
+      importedTargets.set(alias, target);
     }
     for (const definition of artifact.definitions) {
       const name = localDefinitions.get(definition.name)!;
-      const referenced = new Set<string>();
-      const symbols = new Set<string>();
-      collectReferencedDefinitions(
-        definition.body,
-        new Map(definition.parameters.map((parameter) => [parameter, 1])),
-        (reference) => {
-          symbols.add(reference);
-          const target = importedDefinitions.get(reference) ??
-            localDefinitions.get(reference);
-          if (target !== undefined) referenced.add(target);
-        },
-        (constructor) => symbols.add(constructor),
-      );
-      dependencies.set(name, referenced);
-      symbolsByDefinition.set(name, symbols);
+      definitionScopes.set(name, {
+        definition,
+        localDefinitions,
+        importedDefinitions,
+      });
     }
     for (const exported of artifact.options.wasmExports ?? []) {
       const root = localDefinitions.get(exported.definition);
@@ -736,12 +729,27 @@ function artifactDefinitionReachability(
     const definition = pending.pop()!;
     if (reachable.has(definition)) continue;
     reachable.add(definition);
-    for (const symbol of symbolsByDefinition.get(definition) ?? []) {
-      referencedSymbols.add(symbol);
+    if (importedTargets.has(definition)) {
+      const target = importedTargets.get(definition);
+      if (target !== undefined) {
+        referencedSymbols.add(target);
+        if (!reachable.has(target)) pending.push(target);
+      }
+      continue;
     }
-    for (const dependency of dependencies.get(definition) ?? []) {
-      if (!reachable.has(dependency)) pending.push(dependency);
-    }
+    const scope = definitionScopes.get(definition);
+    if (scope === undefined) continue;
+    collectReferencedDefinitions(
+      scope.definition.body,
+      new Map(scope.definition.parameters.map((parameter) => [parameter, 1])),
+      (reference) => {
+        referencedSymbols.add(reference);
+        const target = scope.importedDefinitions.get(reference) ??
+          scope.localDefinitions.get(reference);
+        if (target !== undefined && !reachable.has(target)) pending.push(target);
+      },
+      (constructor) => referencedSymbols.add(constructor),
+    );
   }
   return { definitionNames: reachable, referencedSymbols };
 }
