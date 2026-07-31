@@ -81,6 +81,29 @@ the preparation path. Both revisions emitted the same 297,776-byte artifact with
 `afb920a44162da9459b770a876c2089626b0ebb196039a7bc00ed4b34223e94a`. The complete suite now passes
 409 tests, including higher-order and fully applied curried effect inference.
 
+Two follow-up representation changes were rejected. Preparing the complete Wasm Core index beside
+lambda flow replaced the latter's lightweight parent index but moved too much backend-only work into
+semantic compilation. In twelve alternating same-process pairs, semantic compilation rose from 84.04
+to 94.44 ms, Wasm fell from 85.24 to 70.22 ms, and the complete path regressed from 167.54 to 170.91
+ms, or 2.0%. Encoding function bodies into typed byte arrays was also rejected. Its only changed
+trace stage, `wasm.encode`, moved from 10.24 to 11.12 ms; larger apparent whole-process changes were
+unrelated JIT and garbage-collection drift. Both spikes remain isolated on
+`perf/reuse-wasm-core-index` and `perf/typed-wasm-function-bodies`.
+
+A V8 CPU profile establishes the next architectural boundary. The representative artifact contains
+1,528 required functions, 266,055 instruction bytes, and 13,550 locals. Across 1,492 samples, no
+gpufuck JavaScript routine accounted for 2% of total CPU: work is distributed across lambda flow,
+Core indexing, capture analysis, recursive instruction emission, collection operations, and binary
+encoding. Another local data-structure substitution therefore cannot credibly meet the 5% threshold.
+
+The next Wasm experiment should separate deterministic closure conversion from body emission. A
+single immutable plan must assign every function slot, capture layout, call target, and function
+type before code generation. Each planned body can then be emitted independently, dispatched to a
+bounded worker pool for large modules, and concatenated in slot order; small modules should stay on
+the serial path. Parallelizing the current emitter is not credible because body compilation still
+discovers and mutates shared slots recursively. This is a new backend phase boundary, not a batching
+flag, and requires its own runtime, compile-time, and worker-transfer break-even measurements.
+
 The original same-machine timing runs were noisy: ABI 7 was faster for the 64- and 256-module
 batches, while the single module and linked project were slower by more than 5% in the sampled
 medians. The benchmark task deliberately treats timings as advisory. Production promotion was a
