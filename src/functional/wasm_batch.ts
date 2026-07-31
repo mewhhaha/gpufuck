@@ -42,10 +42,10 @@ export async function compileModulesToWasm(
   if (
     options.backend === "wasm-gc" &&
     (options.storageCore !== undefined || options.ownedTypeExports !== undefined ||
-      options.simd !== undefined)
+      options.simd !== undefined || options.canonicalAbi !== undefined)
   ) {
     throw new TypeError(
-      "functional WasmGC compilation does not accept linear-memory storage or SIMD options",
+      "functional WasmGC compilation does not accept linear-memory storage, canonical ABI, or SIMD options",
     );
   }
   if (modules.length === 0) {
@@ -60,6 +60,7 @@ export async function compileModulesToWasm(
       ? {}
       : { ownedTypeExports: options.ownedTypeExports }),
     ...(options.simd === undefined ? {} : { simd: options.simd }),
+    ...(options.canonicalAbi === undefined ? {} : { canonicalAbi: options.canonicalAbi }),
   };
   const nodes = await bundle.readCoreNodes();
   const bytes = wasmOptions.backend === "wasm-gc"

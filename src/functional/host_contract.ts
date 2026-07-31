@@ -98,6 +98,10 @@ export const WasmIntrinsic = {
   BufferAppend: "buffer-append",
   BufferEqual: "buffer-equal",
   BufferConvert: "buffer-convert",
+  TextCodePointLength: "text-code-point-length",
+  TextFromSignedInteger64: "text-from-signed-integer-64",
+  TextCompare: "text-compare",
+  TextContains: "text-contains",
 } as const;
 
 export type WasmIntrinsic = (typeof WasmIntrinsic)[keyof typeof WasmIntrinsic];
@@ -438,6 +442,48 @@ function requireWasmIntrinsicSignature(
   const intrinsic = field.wasmIntrinsic;
   if (intrinsic === undefined) return;
   const location = JSON.stringify(`${capability}.${field.name}`);
+  if (intrinsic === WasmIntrinsic.TextCodePointLength) {
+    requireTextType(field.parameter, `${location} parameter`);
+    requireTypeKind(field.result, "signed-integer-64", `${location} result`);
+    return;
+  }
+  if (intrinsic === WasmIntrinsic.TextFromSignedInteger64) {
+    requireTypeKind(
+      field.parameter,
+      "signed-integer-64",
+      `${location} parameter`,
+    );
+    requireTextType(field.result, `${location} result`);
+    return;
+  }
+  if (intrinsic === WasmIntrinsic.TextCompare) {
+    if (
+      field.parameter.kind !== "named" ||
+      field.parameter.arguments.length !== 2
+    ) {
+      throw new Error(
+        `functional WASM intrinsic ${location} parameter must be a two-field nominal`,
+      );
+    }
+    requireTextType(field.parameter.arguments[0]!, `${location} left`);
+    requireTextType(field.parameter.arguments[1]!, `${location} right`);
+    requireTypeKind(field.result, "signed-integer-64", `${location} result`);
+    return;
+  }
+  if (intrinsic === WasmIntrinsic.TextContains) {
+    if (
+      field.parameter.kind !== "named" ||
+      field.parameter.arguments.length !== 2
+    ) {
+      throw new Error(
+        `functional WASM intrinsic ${location} parameter must be a two-field nominal`,
+      );
+    }
+    requireTextType(field.parameter.arguments[0]!, `${location} text`);
+    requireTextType(field.parameter.arguments[1]!, `${location} query`);
+    requireTypeKind(field.result, "boolean", `${location} result`);
+    return;
+  }
   if (intrinsic === WasmIntrinsic.BufferByteLength) {
     requireBufferType(field.parameter, `${location} parameter`);
     requireTypeKind(field.result, "integer", `${location} result`);
@@ -504,6 +550,15 @@ function requireBufferType(type: HostType, location: string): void {
   throw new Error(`functional WASM intrinsic ${location} must be Text or Bytes`);
 }
 
+function requireTextType(type: HostType, location: string): void {
+  if (
+    type.kind === "named" &&
+    type.name === TEXT_TYPE_NAME &&
+    type.arguments.length === 0
+  ) return;
+  throw new Error(`functional WASM intrinsic ${location} must be Text`);
+}
+
 function requireSameBufferType(
   expected: HostType,
   actual: HostType,
@@ -520,7 +575,7 @@ function requireSameBufferType(
 
 function requireTypeKind(
   type: HostType,
-  kind: "integer" | "boolean",
+  kind: "integer" | "signed-integer-64" | "boolean",
   location: string,
 ): void {
   if (type.kind !== kind) {

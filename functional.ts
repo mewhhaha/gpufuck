@@ -62,6 +62,7 @@ export * from "./src/functional/fixed_vector.ts";
 // Running it as WebAssembly: code generation, the binary, and the host engine.
 export * from "./src/functional/wasm_artifacts.ts";
 export * from "./src/functional/wasm_batch.ts";
+export * from "./src/functional/canonical_abi.ts";
 export * from "./src/functional/wasm_contract.ts";
 export * from "./src/functional/wasm_execution.ts";
 export * from "./src/functional/wasm_arena.ts";

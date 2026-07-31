@@ -3,6 +3,11 @@
 A compiler backend that runs name resolution and Hindley–Milner type inference on the GPU, and emits
 WebAssembly.
 
+The linear-memory backend can also generate a caller-facing Canonical Core Wasm adapter with
+`WasmCompilationOptions.canonicalAbi`. It keeps gpufuck's tagged heap ABI private and publishes
+structural memory32 values, host imports, `cabi_realloc`, and post-return cleanup. See
+[docs/canonical-abi.md](docs/canonical-abi.md).
+
 You bring a language: a parser, your own source-language rules, and a desugaring step. gpufuck takes
 it from there — it typechecks, and it produces something you can run.
 

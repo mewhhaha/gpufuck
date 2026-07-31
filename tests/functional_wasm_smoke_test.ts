@@ -14,6 +14,7 @@ import {
   EvaluationProfile,
   FunctionalCompilerService,
   GpuCompiler,
+  planModuleStorage,
   requestWebGpuDevice,
   runWasmModule,
   surface,
@@ -274,6 +275,23 @@ Deno.test("emits a well-formed WebAssembly binary that instantiates standalone",
     // Magic number and version: the emitted bytes must be a real module, not a stub.
     equal(Array.from(bytes.slice(0, 4)).join(","), "0,97,115,109");
     ok(WebAssembly.validate(bytes), "emitted bytes failed WebAssembly.validate");
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("caller-supplied Storage Core retains the verified compilation path", async () => {
+  const compilation = await compileEntry(surface.integer(7));
+  try {
+    const storage = await planModuleStorage(compilation.module);
+    const bytes = await compileModuleToWasm(compilation.module, {
+      storageCore: storage.core,
+    });
+    ok(WebAssembly.validate(bytes), "Storage Core artifact failed WebAssembly.validate");
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 7);
   } finally {
     compilation.module.destroy();
   }

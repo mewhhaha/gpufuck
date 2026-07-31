@@ -214,6 +214,103 @@ export function freeFunction(typeIndex: number, heapStart: number): WasmFunction
   return functionBody(typeIndex, instructions, "free-list release");
 }
 
+/**
+ * Canonical ABI realloc over the runtime allocator.
+ *
+ * The allocator's sixteen-byte bookkeeping record stays immediately before
+ * the pointer visible to the canonical boundary, so arbitrary caller bytes
+ * never overwrite the metadata `free` needs.
+ */
+export function canonicalReallocateFunction(
+  typeIndex: number,
+  allocateFunctionIndex: number,
+  freeFunctionIndex: number,
+): WasmFunctionBody {
+  const instructions = new WasmInstructions(4);
+  const allocationHeaderByteLength = 16;
+  const newBase = instructions.addLocal(WasmValueType.I32);
+  const newPointer = instructions.addLocal(WasmValueType.I32);
+  const copyByteLength = instructions.addLocal(WasmValueType.I32);
+
+  instructions.localGet(1);
+  instructions.i32Const(
+    WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - allocationHeaderByteLength,
+  );
+  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+  instructions.localGet(3);
+  instructions.i32Const(
+    WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - allocationHeaderByteLength,
+  );
+  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+
+  // Alignment must be a non-zero power of two no wider than the allocator.
+  instructions.localGet(2);
+  instructions.emit(0x45, 0x04, 0x40, 0x00, 0x0b);
+  instructions.localGet(2);
+  instructions.localGet(2);
+  instructions.i32Const(1);
+  instructions.emit(0x6b, 0x71, 0x45);
+  instructions.localGet(2);
+  instructions.i32Const(8);
+  instructions.emit(0x4d, 0x71, 0x45, 0x04, 0x40, 0x00, 0x0b);
+
+  // A zero new length releases the old allocation and returns null.
+  instructions.localGet(3);
+  instructions.emit(0x45, 0x04, 0x40);
+  instructions.localGet(0);
+  instructions.emit(0x45, 0x04, 0x40);
+  instructions.i32Const(0);
+  instructions.emit(0x0f, 0x0b);
+  instructions.localGet(0);
+  instructions.i32Const(allocationHeaderByteLength);
+  instructions.emit(0x6b);
+  instructions.localGet(1);
+  instructions.i32Const(allocationHeaderByteLength);
+  instructions.emit(0x6a);
+  instructions.call(freeFunctionIndex);
+  instructions.i32Const(0);
+  instructions.emit(0x0f, 0x0b);
+
+  instructions.localGet(3);
+  instructions.i32Const(allocationHeaderByteLength);
+  instructions.emit(0x6a);
+  instructions.call(allocateFunctionIndex);
+  instructions.localTee(newBase);
+  instructions.i32Const(allocationHeaderByteLength);
+  instructions.emit(0x6a);
+  instructions.localTee(newPointer);
+  instructions.localGet(2);
+  instructions.i32Const(1);
+  instructions.emit(0x6b, 0x71, 0x04, 0x40, 0x00, 0x0b);
+
+  // Null old pointers denote fresh allocation. Otherwise copy the shared
+  // prefix and release the previous block.
+  instructions.localGet(0);
+  instructions.emit(0x45, 0x04, 0x40);
+  instructions.localGet(newPointer);
+  instructions.emit(0x0f, 0x0b);
+  instructions.localGet(3);
+  instructions.localGet(1);
+  instructions.localGet(1);
+  instructions.localGet(3);
+  instructions.emit(0x4b, 0x1b);
+  instructions.localSet(copyByteLength);
+  instructions.localGet(newPointer);
+  instructions.localGet(0);
+  instructions.localGet(copyByteLength);
+  instructions.memoryCopy();
+  instructions.localGet(0);
+  instructions.i32Const(allocationHeaderByteLength);
+  instructions.emit(0x6b);
+  instructions.localGet(1);
+  instructions.i32Const(allocationHeaderByteLength);
+  instructions.emit(0x6a);
+  instructions.call(freeFunctionIndex);
+  instructions.localGet(newPointer);
+
+  return functionBody(typeIndex, instructions, "canonical ABI realloc");
+}
+
 function emitNormalizeAllocationByteLength(
   instructions: WasmInstructions,
   byteLength: number,

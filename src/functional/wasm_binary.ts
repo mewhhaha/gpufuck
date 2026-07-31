@@ -172,6 +172,13 @@ export class WasmInstructions {
     this.unsigned(offset);
   }
 
+  i32Load16Unsigned(offset: number): void {
+    this.usesMemory = true;
+    this.emit(0x2f);
+    this.unsigned(1);
+    this.unsigned(offset);
+  }
+
   i64Load(offset: number, alignment = 3): void {
     this.usesMemory = true;
     this.emit(0x29);
@@ -204,6 +211,13 @@ export class WasmInstructions {
     this.usesMemory = true;
     this.emit(0x3a);
     this.unsigned(0);
+    this.unsigned(offset);
+  }
+
+  i32Store16(offset: number): void {
+    this.usesMemory = true;
+    this.emit(0x3b);
+    this.unsigned(1);
     this.unsigned(offset);
   }
 
@@ -260,8 +274,13 @@ export function encodeWasmModule(
   freeFunctionIndex?: number,
   functionExports: readonly { readonly name: string; readonly functionIndex: number }[] = [],
   instrumentedFuel = false,
+  canonicalAbiVersion?: {
+    readonly major: number;
+    readonly minor: number;
+  },
 ): Uint8Array<ArrayBuffer> {
   const types = wasmFunctionTypes(additionalFunctionTypes);
+  const runtimeGlobalCount = instrumentedFuel ? 9 : 7;
   const sections = [
     section(1, vector(types)),
     ...(imports.length === 0 ? [] : [section(
@@ -292,22 +311,43 @@ export function encodeWasmModule(
             [0x7f, 0x01, 0x41, 0x00, 0x0b],
           ]
           : []),
+        ...(canonicalAbiVersion === undefined ? [] : [
+          [
+            0x7f,
+            0x00,
+            0x41,
+            ...encodeSigned(BigInt(canonicalAbiVersion.major)),
+            0x0b,
+          ],
+          [
+            0x7f,
+            0x00,
+            0x41,
+            ...encodeSigned(BigInt(canonicalAbiVersion.minor)),
+            0x0b,
+          ],
+        ]),
       ]),
     ),
     section(
       7,
       vector([
-        [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
-        ...(valueForceFunctionIndex === undefined
+        ...(canonicalAbiVersion === undefined
+          ? [[...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)]]
+          : []),
+        ...(canonicalAbiVersion !== undefined ||
+            valueForceFunctionIndex === undefined
           ? []
           : [[...name("forceValue"), 0x00, ...encodeUnsigned(valueForceFunctionIndex)]]),
-        ...(initializeFunctionIndex === undefined
+        ...(canonicalAbiVersion !== undefined ||
+            initializeFunctionIndex === undefined
           ? []
           : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
-        ...(allocateFunctionIndex === undefined
+        ...(canonicalAbiVersion !== undefined ||
+            allocateFunctionIndex === undefined
           ? []
           : [[...name("allocate"), 0x00, ...encodeUnsigned(allocateFunctionIndex)]]),
-        ...(freeFunctionIndex === undefined
+        ...(canonicalAbiVersion !== undefined || freeFunctionIndex === undefined
           ? []
           : [[...name("free"), 0x00, ...encodeUnsigned(freeFunctionIndex)]]),
         ...functionExports.map((exported) => [
@@ -316,18 +356,26 @@ export function encodeWasmModule(
           ...encodeUnsigned(exported.functionIndex),
         ]),
         [...name("memory"), 0x02, 0x00],
-        globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
-        globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
-        globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
-        globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
-        globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
-        globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
-        ...(instrumentedFuel
+        ...(canonicalAbiVersion === undefined
           ? [
-            globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
-            globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
+            globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
+            globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
+            globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
+            globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
+            globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
+            globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
+            ...(instrumentedFuel
+              ? [
+                globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
+                globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
+              ]
+              : []),
           ]
           : []),
+        ...(canonicalAbiVersion === undefined ? [] : [
+          globalExport("blot:abi-major", runtimeGlobalCount),
+          globalExport("blot:abi-minor", runtimeGlobalCount + 1),
+        ]),
       ]),
     ),
     section(

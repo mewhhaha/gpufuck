@@ -1,6 +1,7 @@
 import type { Type } from "./schema_contract.ts";
 import type { StorageCoreProgram } from "./storage_core.ts";
 import type { CompilerPerformanceTrace } from "../compiler_performance_trace.ts";
+import type { CanonicalAbiInterface } from "./canonical_abi.ts";
 
 export type { WasmExportDeclaration } from "./module_contract.ts";
 
@@ -18,6 +19,7 @@ export interface WasmCompilationOptions {
   readonly simd?: WasmSimdMode;
   readonly storageCore?: StorageCoreProgram;
   readonly ownedTypeExports?: readonly WasmOwnedTypeExport[];
+  readonly canonicalAbi?: CanonicalAbiInterface;
   readonly trace?: CompilerPerformanceTrace;
 }
 

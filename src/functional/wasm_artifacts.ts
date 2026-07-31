@@ -63,7 +63,8 @@ export async function compileModuleToWasm(
     );
   }
   const customStorage = options.storageCore !== undefined ||
-    options.ownedTypeExports !== undefined;
+    options.ownedTypeExports !== undefined ||
+    options.canonicalAbi !== undefined;
   const totalAnnotations = {
     backend,
     cacheEligible: backend === "wasm-gc" || !customStorage,
@@ -77,10 +78,10 @@ export async function compileModuleToWasm(
       if (backend === "wasm-gc") {
         if (
           options.storageCore !== undefined || options.ownedTypeExports !== undefined ||
-          options.simd !== undefined
+          options.simd !== undefined || options.canonicalAbi !== undefined
         ) {
           throw new TypeError(
-            "functional WasmGC compilation does not accept linear-memory storage or SIMD options",
+            "functional WasmGC compilation does not accept linear-memory storage, canonical ABI, or SIMD options",
           );
         }
         return (await cachedWasmGcArtifact(module, options.trace)).bytes.slice();

@@ -13,6 +13,7 @@ interface WasmHostEmitterContext {
   readonly ownedRuntimeEnabled: boolean;
   allocateFunctionIndex(): number;
   emitDecodeInteger(instructions: WasmInstructions): void;
+  emitBoxSignedInteger64(instructions: WasmInstructions): void;
   emitEncodeBoolean(instructions: WasmInstructions): void;
   emitEncodeInteger(instructions: WasmInstructions): void;
   emitForceValue(instructions: WasmInstructions): void;
@@ -35,6 +36,22 @@ export class WasmHostEmitter {
   ): void {
     const argument = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(argument);
+    if (intrinsic === WasmIntrinsic.TextCodePointLength) {
+      this.emitTextCodePointLength(instructions, argument, parameter);
+      return;
+    }
+    if (intrinsic === WasmIntrinsic.TextFromSignedInteger64) {
+      this.emitTextFromSignedInteger64(instructions, argument);
+      return;
+    }
+    if (intrinsic === WasmIntrinsic.TextCompare) {
+      this.emitTextCompare(instructions, argument);
+      return;
+    }
+    if (intrinsic === WasmIntrinsic.TextContains) {
+      this.emitTextContains(instructions, argument);
+      return;
+    }
     if (intrinsic === WasmIntrinsic.BufferByteLength) {
       const pointer = this.bufferPointer(instructions, argument, parameter);
       instructions.localGet(pointer);
@@ -173,6 +190,330 @@ export class WasmHostEmitter {
     }
     intrinsic satisfies never;
     throw new Error(`functional WASM intrinsic ${intrinsic} is unsupported`);
+  }
+
+  private emitTextCodePointLength(
+    instructions: WasmInstructions,
+    argument: number,
+    parameter: HostType,
+  ): void {
+    const pointer = this.bufferPointer(instructions, argument, parameter);
+    instructions.localGet(pointer);
+    instructions.i32Load(8);
+    const byteLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(byteLength);
+    const index = instructions.addLocal(WasmValueType.I32);
+    const codePoints = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(index);
+    instructions.i32Const(0);
+    instructions.localSet(codePoints);
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(index);
+    instructions.localGet(byteLength);
+    instructions.emit(0x4f);
+    instructions.branchIf(1);
+    instructions.localGet(pointer);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.i32Const(0xc0);
+    instructions.emit(0x71);
+    instructions.i32Const(0x80);
+    instructions.emit(0x47, 0x04, 0x40);
+    instructions.localGet(codePoints);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(codePoints);
+    instructions.emit(0x0b);
+    instructions.localGet(index);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+    instructions.localGet(codePoints);
+    instructions.emit(0xac);
+    this.#context.emitBoxSignedInteger64(instructions);
+  }
+
+  private emitTextFromSignedInteger64(
+    instructions: WasmInstructions,
+    argument: number,
+  ): void {
+    instructions.localGet(argument);
+    instructions.emit(0xa7);
+    instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH);
+    const original = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(original);
+    const remaining = instructions.addLocal(WasmValueType.I64);
+    instructions.localGet(original);
+    instructions.localSet(remaining);
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(length);
+    instructions.localGet(remaining);
+    instructions.emit(0x50, 0x04, 0x40);
+    instructions.i32Const(1);
+    instructions.localSet(length);
+    instructions.emit(0x05);
+    instructions.emit(0x03, 0x40);
+    instructions.localGet(length);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(length);
+    instructions.localGet(remaining);
+    instructions.i64Const(10n);
+    instructions.emit(0x7f);
+    instructions.localTee(remaining);
+    instructions.emit(0x50, 0x45);
+    instructions.branchIf(0);
+    instructions.emit(0x0b, 0x0b);
+    instructions.localGet(original);
+    instructions.i64Const(0n);
+    instructions.emit(0x53, 0x04, 0x40);
+    instructions.localGet(length);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(length);
+    instructions.emit(0x0b);
+
+    const result = this.allocateBuffer(
+      instructions,
+      TEXT_OBJECT_KIND,
+      length,
+    );
+    const cursor = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(length);
+    instructions.localSet(cursor);
+    instructions.localGet(original);
+    instructions.localSet(remaining);
+    instructions.localGet(remaining);
+    instructions.emit(0x50, 0x04, 0x40);
+    instructions.localGet(cursor);
+    instructions.i32Const(1);
+    instructions.emit(0x6b);
+    instructions.localTee(cursor);
+    instructions.localGet(result);
+    instructions.emit(0x6a);
+    instructions.i32Const(48);
+    instructions.i32Store8(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x05);
+    instructions.emit(0x03, 0x40);
+    instructions.localGet(remaining);
+    instructions.i64Const(10n);
+    instructions.emit(0x81);
+    const remainder = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(remainder);
+    instructions.localGet(cursor);
+    instructions.i32Const(1);
+    instructions.emit(0x6b);
+    instructions.localTee(cursor);
+    instructions.localGet(result);
+    instructions.emit(0x6a);
+    instructions.i32Const(48);
+    instructions.localGet(original);
+    instructions.i64Const(0n);
+    instructions.emit(0x53, 0x04, WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localGet(remainder);
+    instructions.emit(0xa7, 0x6b, 0x05);
+    instructions.localGet(remainder);
+    instructions.emit(0xa7, 0x0b);
+    instructions.emit(0x6a);
+    instructions.i32Store8(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.localGet(remaining);
+    instructions.i64Const(10n);
+    instructions.emit(0x7f);
+    instructions.localTee(remaining);
+    instructions.emit(0x50, 0x45);
+    instructions.branchIf(0);
+    instructions.emit(0x0b, 0x0b);
+    instructions.localGet(original);
+    instructions.i64Const(0n);
+    instructions.emit(0x53, 0x04, 0x40);
+    instructions.localGet(cursor);
+    instructions.i32Const(1);
+    instructions.emit(0x6b);
+    instructions.localTee(cursor);
+    instructions.localGet(result);
+    instructions.emit(0x6a);
+    instructions.i32Const(45);
+    instructions.i32Store8(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x0b);
+    instructions.localGet(result);
+    instructions.emit(0xad);
+  }
+
+  private emitTextCompare(
+    instructions: WasmInstructions,
+    argument: number,
+  ): void {
+    const pair = this.objectPointer(instructions, argument);
+    const leftValue = this.objectField(instructions, pair, 0);
+    const rightValue = this.objectField(instructions, pair, 1);
+    const textType = { kind: "named", name: TEXT_TYPE_NAME, arguments: [] } as const;
+    const left = this.bufferPointer(instructions, leftValue, textType);
+    const right = this.bufferPointer(instructions, rightValue, textType);
+    instructions.localGet(left);
+    instructions.i32Load(8);
+    const leftLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(leftLength);
+    instructions.localGet(right);
+    instructions.i32Load(8);
+    const rightLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(rightLength);
+    const index = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(index);
+    const ordering = instructions.addLocal(WasmValueType.I64);
+    instructions.i64Const(0n);
+    instructions.localSet(ordering);
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(index);
+    instructions.localGet(leftLength);
+    instructions.emit(0x4f);
+    instructions.localGet(index);
+    instructions.localGet(rightLength);
+    instructions.emit(0x4f, 0x72);
+    instructions.branchIf(1);
+    instructions.localGet(left);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(OBJECT_HEADER_BYTE_LENGTH);
+    const leftByte = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(leftByte);
+    instructions.localGet(right);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(OBJECT_HEADER_BYTE_LENGTH);
+    const rightByte = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(rightByte);
+    instructions.localGet(leftByte);
+    instructions.localGet(rightByte);
+    instructions.emit(0x49, 0x04, 0x40);
+    instructions.i64Const(-1n);
+    instructions.localSet(ordering);
+    instructions.branch(2);
+    instructions.emit(0x0b);
+    instructions.localGet(leftByte);
+    instructions.localGet(rightByte);
+    instructions.emit(0x4b, 0x04, 0x40);
+    instructions.i64Const(1n);
+    instructions.localSet(ordering);
+    instructions.branch(2);
+    instructions.emit(0x0b);
+    instructions.localGet(index);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+    instructions.localGet(ordering);
+    instructions.emit(0x50, 0x04, 0x40);
+    instructions.localGet(leftLength);
+    instructions.localGet(rightLength);
+    instructions.emit(0x49, 0x04, 0x40);
+    instructions.i64Const(-1n);
+    instructions.localSet(ordering);
+    instructions.emit(0x05);
+    instructions.localGet(leftLength);
+    instructions.localGet(rightLength);
+    instructions.emit(0x4b, 0x04, 0x40);
+    instructions.i64Const(1n);
+    instructions.localSet(ordering);
+    instructions.emit(0x0b, 0x0b, 0x0b);
+    instructions.localGet(ordering);
+    this.#context.emitBoxSignedInteger64(instructions);
+  }
+
+  private emitTextContains(
+    instructions: WasmInstructions,
+    argument: number,
+  ): void {
+    const pair = this.objectPointer(instructions, argument);
+    const textValue = this.objectField(instructions, pair, 0);
+    const queryValue = this.objectField(instructions, pair, 1);
+    const textType = {
+      kind: "named",
+      name: TEXT_TYPE_NAME,
+      arguments: [],
+    } as const;
+    const text = this.bufferPointer(instructions, textValue, textType);
+    const query = this.bufferPointer(instructions, queryValue, textType);
+    const textLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(text);
+    instructions.i32Load(8);
+    instructions.localSet(textLength);
+    const queryLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(query);
+    instructions.i32Load(8);
+    instructions.localSet(queryLength);
+    this.#context.emitFuelChargeAmount(instructions, textLength, -1);
+
+    const found = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(found);
+    const lastStart = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(textLength);
+    instructions.localGet(queryLength);
+    instructions.emit(0x6b);
+    instructions.localSet(lastStart);
+    const start = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(start);
+    const index = instructions.addLocal(WasmValueType.I32);
+
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(start);
+    instructions.localGet(lastStart);
+    instructions.emit(0x4b);
+    instructions.localGet(queryLength);
+    instructions.localGet(textLength);
+    instructions.emit(0x4b, 0x72);
+    instructions.branchIf(1);
+
+    instructions.i32Const(1);
+    instructions.localSet(found);
+    instructions.i32Const(0);
+    instructions.localSet(index);
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(index);
+    instructions.localGet(queryLength);
+    instructions.emit(0x4f);
+    instructions.branchIf(1);
+    instructions.localGet(text);
+    instructions.localGet(start);
+    instructions.emit(0x6a);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.localGet(query);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x47, 0x04, 0x40);
+    instructions.i32Const(0);
+    instructions.localSet(found);
+    instructions.branch(2);
+    instructions.emit(0x0b);
+    instructions.localGet(index);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+
+    instructions.localGet(found);
+    instructions.branchIf(1);
+    instructions.localGet(start);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(start);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+    instructions.localGet(found);
+    this.#context.emitEncodeBoolean(instructions);
   }
 
   emitLiteral(

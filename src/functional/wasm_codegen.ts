@@ -9,6 +9,19 @@ import {
   UnaryOperator,
   UNIT_CONSTRUCTOR_NAME,
 } from "./abi.ts";
+import {
+  canonicalAbiCoreSignature,
+  type CanonicalAbiCoreType,
+  type CanonicalAbiExport,
+  type CanonicalAbiImport,
+  canonicalAbiLayout,
+  canonicalAbiParameterRecord,
+  canonicalAbiRecordLayout,
+  type CanonicalAbiType,
+  canonicalAbiVariantLayout,
+  flattenCanonicalAbiType,
+  validateCanonicalAbiInterface,
+} from "./canonical_abi.ts";
 import type { CompiledModule, CoreNode, WasmExport } from "./compiler_module.ts";
 import {
   BYTES_TYPE_NAME,
@@ -52,6 +65,7 @@ import {
 import { WasmHostEmitter } from "./wasm_host_emitter.ts";
 import {
   allocateFunction,
+  canonicalReallocateFunction,
   forceThunkFunction,
   freeFunction,
   functionBody,
@@ -100,11 +114,13 @@ import {
   WasmSimdOpcode,
 } from "./wasm_simd.ts";
 import type { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
+import { WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH } from "./wasm_runtime_layout.ts";
 
 const CLOSURE_OBJECT_KIND = WasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = WasmValueAbi.objectKinds.constructor;
 const THUNK_OBJECT_KIND = WasmValueAbi.objectKinds.thunk;
 const NUMERIC_OBJECT_KIND = WasmValueAbi.objectKinds.numeric;
+const TEXT_OBJECT_KIND = WasmValueAbi.objectKinds.text;
 const STORE_OBJECT_KIND = WasmValueAbi.objectKinds.store;
 const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
 const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
@@ -112,6 +128,11 @@ const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
+
+function canonicalWasmValueType(type: CanonicalAbiCoreType): number {
+  if (type === "i32") return WasmValueType.I32;
+  return WasmValueType.I64;
+}
 
 type ValueSource =
   | { readonly kind: "i64-local"; readonly index: number }
@@ -185,6 +206,7 @@ interface HostField {
   readonly capability: string;
   readonly declaration: HostFieldDeclaration;
   readonly importIndex: number | undefined;
+  readonly canonicalAbi?: CanonicalAbiImport;
   readonly closureSlot?: number;
 }
 
@@ -267,6 +289,9 @@ export function compileWasmArtifact(
   trace?: CompilerPerformanceTrace,
 ): WasmArtifact {
   trace ??= options.trace;
+  if (options.canonicalAbi !== undefined) {
+    validateCanonicalAbiInterface(options.canonicalAbi);
+  }
   const planSpan = trace?.start("wasm.plan");
   let plan: WasmBackendPlan;
   try {
@@ -287,7 +312,7 @@ export function compileWasmArtifact(
   });
   const emitSpan = trace?.start("wasm.emit");
   try {
-    if (plan.compactScalarEligible) {
+    if (plan.compactScalarEligible && options.canonicalAbi === undefined) {
       const compactCompiler = new WasmCompiler(
         plan,
         true,
@@ -395,6 +420,7 @@ class WasmCompiler {
       ownedRuntimeEnabled: this.#ownedRuntimeEnabled,
       allocateFunctionIndex: () => this.allocateFunctionIndex(),
       emitDecodeInteger: (instructions) => this.emitDecodeInteger(instructions),
+      emitBoxSignedInteger64: (instructions) => this.emitBoxSignedInteger64(instructions),
       emitEncodeBoolean: (instructions) => this.emitEncodeBoolean(instructions),
       emitEncodeInteger: (instructions) => this.emitEncodeInteger(instructions),
       emitForceValue: (instructions) => this.emitForceValue(instructions),
@@ -422,6 +448,11 @@ class WasmCompiler {
     const functionImports: WasmFunctionImport[] = [];
     for (const capability of module.hostCapabilities) {
       for (const declaration of capability.fields) {
+        const canonicalAbi = plan.options.canonicalAbi?.imports.find(
+          (candidate) =>
+            candidate.capability === capability.name &&
+            candidate.operation === declaration.name,
+        );
         if (declaration.kind === "value") {
           requireFirstOrderWasmType(
             module,
@@ -456,25 +487,51 @@ class WasmCompiler {
             : declaration.wasmIntrinsic === undefined
         ) {
           importIndex = functionImports.length;
+          let moduleName = hostImportModule(capability.name);
+          let fieldName = declaration.name;
+          let typeIndex: number;
+          if (canonicalAbi !== undefined) {
+            const signature = canonicalAbiCoreSignature(
+              canonicalAbi.function,
+              "import",
+            );
+            moduleName = canonicalAbi.module;
+            fieldName = canonicalAbi.name;
+            typeIndex = this.functionTypeIndex(
+              signature.parameters.map(canonicalWasmValueType),
+              signature.results.map(canonicalWasmValueType),
+            );
+          } else if (plan.options.canonicalAbi !== undefined) {
+            throw new TypeError(
+              `canonical ABI omitted host operation ${
+                JSON.stringify(`${capability.name}.${declaration.name}`)
+              }`,
+            );
+          } else if (declaration.kind === "value") {
+            typeIndex = this.functionTypeIndex([], [
+              wasmValueType(declaration.representation ?? declaration.type),
+            ]);
+          } else {
+            typeIndex = this.functionTypeIndex(
+              [wasmValueType(
+                declaration.parameterRepresentation ?? declaration.parameter,
+              )],
+              [wasmValueType(
+                declaration.resultRepresentation ?? declaration.result,
+              )],
+            );
+          }
           functionImports.push({
-            module: hostImportModule(capability.name),
-            name: declaration.name,
-            typeIndex: declaration.kind === "value"
-              ? this.functionTypeIndex([], [
-                wasmValueType(declaration.representation ?? declaration.type),
-              ])
-              : this.functionTypeIndex(
-                [wasmValueType(
-                  declaration.parameterRepresentation ?? declaration.parameter,
-                )],
-                [wasmValueType(declaration.resultRepresentation ?? declaration.result)],
-              ),
+            module: moduleName,
+            name: fieldName,
+            typeIndex,
           });
         }
         hostFields.push({
           capability: capability.name,
           declaration,
           importIndex,
+          ...(canonicalAbi === undefined ? {} : { canonicalAbi }),
           ...(declaration.kind === "operation"
             ? { closureSlot: this.reserveIndirectFunction() }
             : {}),
@@ -637,8 +694,10 @@ class WasmCompiler {
   }
 
   compile(): Uint8Array<ArrayBuffer> {
+    this.validateCanonicalAbiModule();
     const reachabilitySpan = this.#trace?.start("wasm.emit.reachability");
     const directCallableFunctions = this.#module.wasmExports.map((exported) => {
+      if (this.#compilationOptions.canonicalAbi !== undefined) return undefined;
       const { parameters, result } = this.wasmExportSignature(exported);
       return this.compileDirectIntegerWasmExport(exported, parameters, result);
     });
@@ -684,6 +743,21 @@ class WasmCompiler {
     const initializeFunctionIndex = this.indirectFunctionOffset() +
       this.#indirectFunctions.length;
     const callableFunctions = this.#module.wasmExports.map((exported, index) => {
+      const canonical = this.#compilationOptions.canonicalAbi?.exports.find(
+        (candidate) => candidate.name === exported.name,
+      );
+      if (canonical !== undefined) {
+        return this.compileCanonicalWasmExport(
+          exported,
+          canonical,
+          initializeFunctionIndex,
+        );
+      }
+      if (this.#compilationOptions.canonicalAbi !== undefined) {
+        throw new TypeError(
+          `canonical ABI omitted export ${JSON.stringify(exported.name)}`,
+        );
+      }
       const direct = directCallableFunctions[index];
       if (direct !== undefined) return direct;
       const { parameters, result } = this.wasmExportSignature(exported);
@@ -694,6 +768,19 @@ class WasmCompiler {
         initializeFunctionIndex,
       );
     });
+    const canonicalPostReturns = this.#compilationOptions.canonicalAbi?.exports
+      .filter((exported) => canonicalAbiCoreSignature(exported.function, "export").indirectResult)
+      .map((exported) => {
+        if (exported.postReturn === undefined) {
+          throw new TypeError(
+            `canonical ABI export ${JSON.stringify(exported.name)} omitted its post-return name`,
+          );
+        }
+        return {
+          name: exported.postReturn,
+          body: this.compileCanonicalPostReturn(exported),
+        };
+      }) ?? [];
     exportsSpan?.finish({
       exports: this.#module.wasmExports.length,
       functions: callableFunctions.length,
@@ -753,6 +840,7 @@ class WasmCompiler {
         "entry wrapper",
       ),
       ...callableFunctions,
+      ...canonicalPostReturns.map((postReturn) => postReturn.body),
     ];
     runtimeSpan?.finish({
       indirectFunctions: indirectFunctions.length,
@@ -795,6 +883,28 @@ class WasmCompiler {
         ]),
       ];
     const functions = [...baseFunctions, ...ownedRuntimeFunctions];
+    const canonicalReallocateType = this.#compilationOptions.canonicalAbi === undefined
+      ? undefined
+      : this.functionTypeIndex(
+        [
+          WasmValueType.I32,
+          WasmValueType.I32,
+          WasmValueType.I32,
+          WasmValueType.I32,
+        ],
+        [WasmValueType.I32],
+      );
+    const canonicalReallocateIndex = canonicalReallocateType === undefined
+      ? undefined
+      : this.#functionImports.length + functions.length;
+    const emittedFunctions = canonicalReallocateType === undefined ? functions : [
+      ...functions,
+      canonicalReallocateFunction(
+        canonicalReallocateType,
+        this.#functionImports.length,
+        this.#functionImports.length + 2,
+      ),
+    ];
     ownedSpan?.finish({
       exports: ownedTypeExports.length,
       functions: ownedRuntimeFunctions.length,
@@ -805,9 +915,11 @@ class WasmCompiler {
     const entryFunctionIndex = this.#functionImports.length + 5 +
       indirectFunctions.length;
     const encodeSpan = this.#trace?.start("wasm.encode");
+    const firstPostReturnFunctionIndex = entryFunctionIndex + 1 +
+      callableFunctions.length;
     const bytes = encodeWasmModule(
       this.#functionImports,
-      functions,
+      emittedFunctions,
       indirectFunctionIndices,
       entryFunctionIndex,
       this.heapStart(),
@@ -821,6 +933,14 @@ class WasmCompiler {
           name: exported.name,
           functionIndex: entryFunctionIndex + 1 + index,
         })),
+        ...canonicalPostReturns.map((postReturn, index) => ({
+          name: postReturn.name,
+          functionIndex: firstPostReturnFunctionIndex + index,
+        })),
+        ...(canonicalReallocateIndex === undefined ? [] : [{
+          name: "cabi_realloc",
+          functionIndex: canonicalReallocateIndex,
+        }]),
         ...(releaseOwnedFunctionIndex === undefined
           ? []
           : ownedTypeExports.flatMap((owned, index) => [{
@@ -832,13 +952,127 @@ class WasmCompiler {
           }])),
       ],
       this.#instrumentedFuel,
+      this.#compilationOptions.canonicalAbi === undefined ? undefined : { major: 1, minor: 0 },
     );
     encodeSpan?.finish(wasmEncodingAnnotations(
-      functions,
+      emittedFunctions,
       this.#functionImports.length,
       indirectFunctions.length,
     ));
     return bytes;
+  }
+
+  validateCanonicalAbiModule(): void {
+    const interface_ = this.#compilationOptions.canonicalAbi;
+    if (interface_ === undefined) return;
+    if (interface_.exports.length !== this.#module.wasmExports.length) {
+      throw new TypeError(
+        `canonical ABI declares ${interface_.exports.length} exports for ${this.#module.wasmExports.length} compiled exports`,
+      );
+    }
+    for (const exported of this.#module.wasmExports) {
+      const canonical = interface_.exports.find((candidate) => candidate.name === exported.name);
+      if (canonical === undefined) {
+        throw new TypeError(
+          `canonical ABI omitted export ${JSON.stringify(exported.name)}`,
+        );
+      }
+      const signature = this.wasmExportSignature(exported);
+      if (canonical.function.parameters.length !== signature.parameters.length) {
+        throw new TypeError(
+          `canonical ABI export ${
+            JSON.stringify(exported.name)
+          } has ${canonical.function.parameters.length} parameters; compiled export has ${signature.parameters.length}`,
+        );
+      }
+      for (const parameter of canonical.function.parameters) {
+        this.validateCanonicalAbiConstructors(parameter);
+      }
+      this.validateCanonicalAbiConstructors(canonical.function.result);
+    }
+    const operations = this.#hostFields.filter((field) =>
+      field.declaration.kind === "operation" &&
+      field.declaration.wasmIntrinsic === undefined
+    );
+    if (interface_.imports.length !== operations.length) {
+      throw new TypeError(
+        `canonical ABI declares ${interface_.imports.length} imports for ${operations.length} host operations`,
+      );
+    }
+    for (const imported of interface_.imports) {
+      const field = operations.find((candidate) =>
+        candidate.capability === imported.capability &&
+        candidate.declaration.name === imported.operation
+      );
+      if (field === undefined) {
+        throw new TypeError(
+          `canonical ABI import ${
+            JSON.stringify(`${imported.capability}.${imported.operation}`)
+          } has no compiled host operation`,
+        );
+      }
+      if (imported.function.parameters.length !== 1) {
+        throw new TypeError(
+          `canonical ABI host operation ${
+            JSON.stringify(`${imported.capability}.${imported.operation}`)
+          } must have one parameter`,
+        );
+      }
+      this.validateCanonicalAbiConstructors(imported.function.parameters[0]!);
+      this.validateCanonicalAbiConstructors(imported.function.result);
+    }
+  }
+
+  validateCanonicalAbiConstructors(type: CanonicalAbiType): void {
+    if (type.kind === "array") {
+      this.validateCanonicalAbiConstructors(type.element);
+      return;
+    }
+    if (type.kind === "sealed") {
+      const constructor = this.requiredConstructorIndex(type.constructor);
+      if (this.#module.constructorArities[constructor] !== 1) {
+        throw new TypeError(
+          `canonical ABI seal ${JSON.stringify(type.name)} constructor ${
+            JSON.stringify(type.constructor)
+          } must have one field`,
+        );
+      }
+      this.validateCanonicalAbiConstructors(type.inner);
+      return;
+    }
+    if (type.kind === "record") {
+      const constructor = this.requiredConstructorIndex(type.constructor);
+      if (this.#module.constructorArities[constructor] !== type.fields.length) {
+        throw new TypeError(
+          `canonical ABI record constructor ${
+            JSON.stringify(type.constructor)
+          } has ${type.fields.length} fields; compiled constructor has ${
+            this.#module.constructorArities[constructor]
+          }`,
+        );
+      }
+      for (const field of type.fields) {
+        this.validateCanonicalAbiConstructors(field.type);
+      }
+      return;
+    }
+    if (type.kind !== "variant") return;
+    for (const case_ of type.cases) {
+      const constructor = this.requiredConstructorIndex(case_.constructor);
+      const expectedArity = case_.payload === undefined ? 0 : 1;
+      if (this.#module.constructorArities[constructor] !== expectedArity) {
+        throw new TypeError(
+          `canonical ABI variant constructor ${
+            JSON.stringify(case_.constructor)
+          } has arity ${expectedArity}; compiled constructor has ${
+            this.#module.constructorArities[constructor]
+          }`,
+        );
+      }
+      if (case_.payload !== undefined) {
+        this.validateCanonicalAbiConstructors(case_.payload);
+      }
+    }
   }
 
   wasmExportSignature(exported: WasmExport): {
@@ -978,6 +1212,1186 @@ class WasmCompiler {
     );
   }
 
+  compileCanonicalWasmExport(
+    exported: WasmExport,
+    canonical: CanonicalAbiExport,
+    initializeFunctionIndex: number,
+  ): WasmFunctionBody {
+    const signature = canonicalAbiCoreSignature(canonical.function, "export");
+    const instructions = new WasmInstructions(signature.parameters.length);
+    instructions.call(initializeFunctionIndex);
+    instructions.emit(0x1a);
+
+    const parameterRecord = canonicalAbiParameterRecord(
+      canonical.function.parameters,
+    );
+    const parameterLayout = canonicalAbiRecordLayout(parameterRecord);
+    let parameterPointer: number;
+    let ownsParameterRecord = false;
+    if (signature.indirectParameters) {
+      parameterPointer = 0;
+      this.emitCanonicalPointerAlignmentGuard(
+        instructions,
+        parameterPointer,
+        parameterLayout.alignment,
+      );
+    } else {
+      parameterPointer = this.allocateCanonicalRecord(
+        instructions,
+        parameterLayout.byteLength,
+      );
+      ownsParameterRecord = parameterLayout.byteLength > 0;
+      this.emitCanonicalStoreFlat(
+        instructions,
+        parameterRecord,
+        parameterPointer,
+        0,
+        signature.parameters.map(canonicalWasmValueType),
+        0,
+      );
+    }
+
+    this.emitGlobalReference(instructions, exported.definitionIndex);
+    for (const field of parameterLayout.fields) {
+      instructions.emit(0xa7);
+      const closure = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(closure);
+      instructions.localGet(closure);
+      this.emitCanonicalLiftMemory(
+        instructions,
+        field.type,
+        parameterPointer,
+        field.offset,
+      );
+      instructions.localGet(closure);
+      instructions.i32Load(4);
+      instructions.callIndirect(WasmFunctionTypeIndex.ClosureCall);
+    }
+    const result = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(result);
+    if (ownsParameterRecord) {
+      this.freeCanonicalRecord(
+        instructions,
+        parameterPointer,
+        parameterLayout.byteLength,
+      );
+    }
+
+    const resultLayout = canonicalAbiLayout(canonical.function.result);
+    if (signature.indirectResult) {
+      const resultPointer = this.allocateCanonicalRecord(
+        instructions,
+        resultLayout.byteLength,
+      );
+      this.emitCanonicalStoreMemory(
+        instructions,
+        canonical.function.result,
+        result,
+        resultPointer,
+        0,
+      );
+      instructions.localGet(resultPointer);
+    } else {
+      this.emitCanonicalLowerDirectResult(
+        instructions,
+        canonical.function.result,
+        result,
+      );
+    }
+    return functionBody(
+      this.functionTypeIndex(
+        signature.parameters.map(canonicalWasmValueType),
+        signature.results.map(canonicalWasmValueType),
+      ),
+      instructions,
+      `canonical ABI export ${canonical.name}`,
+    );
+  }
+
+  compileCanonicalPostReturn(
+    canonical: CanonicalAbiExport,
+  ): WasmFunctionBody {
+    const signature = canonicalAbiCoreSignature(canonical.function, "export");
+    if (!signature.indirectResult) {
+      throw new Error(
+        `canonical ABI export ${JSON.stringify(canonical.name)} does not need post-return`,
+      );
+    }
+    const layout = canonicalAbiLayout(canonical.function.result);
+    const instructions = new WasmInstructions(1);
+    this.emitCanonicalCleanupMemory(
+      instructions,
+      canonical.function.result,
+      0,
+      0,
+    );
+    this.freeCanonicalRecord(instructions, 0, layout.byteLength);
+    return functionBody(
+      this.functionTypeIndex([WasmValueType.I32], []),
+      instructions,
+      `canonical ABI post-return ${canonical.name}`,
+    );
+  }
+
+  emitCanonicalLowerDirectResult(
+    instructions: WasmInstructions,
+    type: CanonicalAbiType,
+    value: number,
+  ): void {
+    if (type.kind === "sealed") {
+      instructions.localGet(value);
+      this.emitForceValue(instructions);
+      instructions.emit(0xa7);
+      instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH);
+      const inner = instructions.addLocal(WasmValueType.I64);
+      instructions.localSet(inner);
+      this.emitCanonicalLowerDirectResult(instructions, type.inner, inner);
+      return;
+    }
+    if (type.kind === "unit") return;
+    instructions.localGet(value);
+    this.emitForceValue(instructions);
+    if (type.kind === "signed-integer-64") {
+      this.emitUnboxSignedInteger64(instructions);
+      return;
+    }
+    if (type.kind === "boolean") {
+      this.emitDecodeBoolean(instructions);
+      return;
+    }
+    if (type.kind === "variant") {
+      if (type.cases.some((case_) => case_.payload !== undefined)) {
+        throw new Error(
+          "canonical ABI direct variant result unexpectedly carries a payload",
+        );
+      }
+      instructions.emit(0xa7);
+      const constructor = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(constructor);
+      this.emitCanonicalVariantDiscriminant(instructions, type, constructor);
+      return;
+    }
+    throw new Error(
+      `canonical ABI ${type.kind} result unexpectedly flattened directly`,
+    );
+  }
+
+  allocateCanonicalRecord(
+    instructions: WasmInstructions,
+    byteLength: number,
+  ): number {
+    if (byteLength === 0) {
+      const empty = instructions.addLocal(WasmValueType.I32);
+      instructions.i32Const(0);
+      instructions.localSet(empty);
+      return empty;
+    }
+    instructions.i32Const(byteLength + OBJECT_HEADER_BYTE_LENGTH);
+    instructions.call(this.allocateFunctionIndex());
+    const base = instructions.addLocal(WasmValueType.I32);
+    instructions.localTee(base);
+    instructions.i32Const(byteLength + OBJECT_HEADER_BYTE_LENGTH);
+    instructions.i32Store(8);
+    instructions.localGet(base);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    const pointer = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(pointer);
+    return pointer;
+  }
+
+  allocateCanonicalDynamic(
+    instructions: WasmInstructions,
+    byteLength: number,
+  ): number {
+    const pointer = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(byteLength);
+    instructions.i32Const(
+      WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - OBJECT_HEADER_BYTE_LENGTH,
+    );
+    instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    instructions.localGet(byteLength);
+    instructions.emit(0x04, 0x40);
+    instructions.localGet(byteLength);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.call(this.allocateFunctionIndex());
+    const base = instructions.addLocal(WasmValueType.I32);
+    instructions.localTee(base);
+    instructions.localGet(byteLength);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.i32Store(8);
+    instructions.localGet(base);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localSet(pointer);
+    instructions.emit(0x05);
+    instructions.i32Const(0);
+    instructions.localSet(pointer);
+    instructions.emit(0x0b);
+    return pointer;
+  }
+
+  freeCanonicalRecord(
+    instructions: WasmInstructions,
+    pointer: number,
+    byteLength: number,
+  ): void {
+    if (byteLength === 0) return;
+    instructions.localGet(pointer);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6b);
+    instructions.i32Const(byteLength + OBJECT_HEADER_BYTE_LENGTH);
+    instructions.call(this.#functionImports.length + 2);
+  }
+
+  freeCanonicalDynamic(
+    instructions: WasmInstructions,
+    pointer: number,
+    byteLength: number,
+  ): void {
+    instructions.localGet(byteLength);
+    instructions.emit(0x04, 0x40);
+    instructions.localGet(pointer);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6b);
+    instructions.localGet(byteLength);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.call(this.#functionImports.length + 2);
+    instructions.emit(0x0b);
+  }
+
+  emitCanonicalStoreFlat(
+    instructions: WasmInstructions,
+    type: CanonicalAbiType,
+    pointer: number,
+    offset: number,
+    sourceTypes: readonly number[],
+    firstSource: number,
+  ): number {
+    if (type.kind === "sealed") {
+      return this.emitCanonicalStoreFlat(
+        instructions,
+        type.inner,
+        pointer,
+        offset,
+        sourceTypes,
+        firstSource,
+      );
+    }
+    if (type.kind === "unit") return firstSource;
+    if (type.kind === "signed-integer-64") {
+      instructions.localGet(pointer);
+      instructions.localGet(firstSource);
+      instructions.i64Store(offset);
+      return firstSource + 1;
+    }
+    if (type.kind === "boolean") {
+      instructions.localGet(pointer);
+      instructions.localGet(firstSource);
+      if (sourceTypes[firstSource] === WasmValueType.I64) instructions.emit(0xa7);
+      instructions.i32Store8(offset);
+      return firstSource + 1;
+    }
+    if (type.kind === "text" || type.kind === "array") {
+      instructions.localGet(pointer);
+      instructions.localGet(firstSource);
+      instructions.i32Store(offset);
+      instructions.localGet(pointer);
+      instructions.localGet(firstSource + 1);
+      instructions.i32Store(offset + 4);
+      return firstSource + 2;
+    }
+    if (type.kind === "record") {
+      let source = firstSource;
+      for (const field of canonicalAbiRecordLayout(type).fields) {
+        source = this.emitCanonicalStoreFlat(
+          instructions,
+          field.type,
+          pointer,
+          offset + field.offset,
+          sourceTypes,
+          source,
+        );
+      }
+      return source;
+    }
+
+    const layout = canonicalAbiVariantLayout(type);
+    instructions.localGet(pointer);
+    instructions.localGet(firstSource);
+    this.emitCanonicalStoreDiscriminant(
+      instructions,
+      offset,
+      layout.discriminantByteLength,
+    );
+    const joinedPayload = flattenCanonicalAbiType(type).slice(1);
+    instructions.emit(0x02, 0x40);
+    for (const [caseIndex, case_] of type.cases.entries()) {
+      instructions.localGet(firstSource);
+      instructions.i32Const(caseIndex);
+      instructions.emit(0x46, 0x04, 0x40);
+      if (case_.payload !== undefined) {
+        this.emitCanonicalStoreFlat(
+          instructions,
+          case_.payload,
+          pointer,
+          offset + layout.payloadOffset,
+          sourceTypes,
+          firstSource + 1,
+        );
+      }
+      instructions.branch(1);
+      instructions.emit(0x0b);
+    }
+    instructions.emit(0x00, 0x0b);
+    return firstSource + 1 + joinedPayload.length;
+  }
+
+  emitCanonicalStoreDiscriminant(
+    instructions: WasmInstructions,
+    offset: number,
+    byteLength: 1 | 2 | 4,
+  ): void {
+    if (byteLength === 1) {
+      instructions.i32Store8(offset);
+      return;
+    }
+    if (byteLength === 2) {
+      instructions.i32Store16(offset);
+      return;
+    }
+    instructions.i32Store(offset);
+  }
+
+  emitCanonicalLoadDiscriminant(
+    instructions: WasmInstructions,
+    pointer: number,
+    offset: number,
+    byteLength: 1 | 2 | 4,
+  ): void {
+    instructions.localGet(pointer);
+    if (byteLength === 1) {
+      instructions.i32Load8Unsigned(offset);
+      return;
+    }
+    if (byteLength === 2) {
+      instructions.i32Load16Unsigned(offset);
+      return;
+    }
+    instructions.i32Load(offset);
+  }
+
+  emitCanonicalLiftMemory(
+    instructions: WasmInstructions,
+    type: CanonicalAbiType,
+    pointer: number,
+    offset: number,
+  ): void {
+    if (type.kind === "sealed") {
+      this.emitCanonicalLiftMemory(
+        instructions,
+        type.inner,
+        pointer,
+        offset,
+      );
+      const inner = instructions.addLocal(WasmValueType.I64);
+      instructions.localSet(inner);
+      this.emitConstructor(
+        instructions,
+        this.requiredConstructorIndex(type.constructor),
+        [{ kind: "i64-local", index: inner }],
+      );
+      return;
+    }
+    if (type.kind === "unit") {
+      this.emitCanonicalUnit(instructions);
+      return;
+    }
+    if (type.kind === "signed-integer-64") {
+      instructions.localGet(pointer);
+      instructions.i64Load(offset);
+      this.emitBoxSignedInteger64(instructions);
+      return;
+    }
+    if (type.kind === "boolean") {
+      instructions.localGet(pointer);
+      instructions.i32Load8Unsigned(offset);
+      const boolean = instructions.addLocal(WasmValueType.I32);
+      instructions.localTee(boolean);
+      instructions.i32Const(1);
+      instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+      instructions.localGet(boolean);
+      this.emitEncodeBoolean(instructions);
+      return;
+    }
+    if (type.kind === "text") {
+      this.emitCanonicalLiftText(instructions, pointer, offset);
+      return;
+    }
+    if (type.kind === "array") {
+      this.emitCanonicalLiftArray(instructions, type.element, pointer, offset);
+      return;
+    }
+    if (type.kind === "record") {
+      const fields: (ValueSource | undefined)[] = type.fields.map(() => undefined);
+      for (const field of canonicalAbiRecordLayout(type).fields) {
+        this.emitCanonicalLiftMemory(
+          instructions,
+          field.type,
+          pointer,
+          offset + field.offset,
+        );
+        const fieldValue = instructions.addLocal(WasmValueType.I64);
+        instructions.localSet(fieldValue);
+        fields[field.coreIndex] = {
+          kind: "i64-local",
+          index: fieldValue,
+        };
+      }
+      const constructorFields = fields.map((field, index) => {
+        if (field !== undefined) return field;
+        throw new Error(
+          `canonical ABI record ${type.constructor} omitted Core field ${index}`,
+        );
+      });
+      this.emitConstructor(
+        instructions,
+        this.requiredConstructorIndex(type.constructor),
+        constructorFields,
+      );
+      return;
+    }
+
+    const layout = canonicalAbiVariantLayout(type);
+    this.emitCanonicalLoadDiscriminant(
+      instructions,
+      pointer,
+      offset,
+      layout.discriminantByteLength,
+    );
+    const discriminant = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(discriminant);
+    const result = instructions.addLocal(WasmValueType.I64);
+    instructions.emit(0x02, 0x40);
+    for (const [caseIndex, case_] of type.cases.entries()) {
+      instructions.localGet(discriminant);
+      instructions.i32Const(caseIndex);
+      instructions.emit(0x46, 0x04, 0x40);
+      const fields: ValueSource[] = [];
+      if (case_.payload !== undefined) {
+        this.emitCanonicalLiftMemory(
+          instructions,
+          case_.payload,
+          pointer,
+          offset + layout.payloadOffset,
+        );
+        const payload = instructions.addLocal(WasmValueType.I64);
+        instructions.localSet(payload);
+        fields.push({ kind: "i64-local", index: payload });
+      }
+      this.emitConstructor(
+        instructions,
+        this.requiredConstructorIndex(case_.constructor),
+        fields,
+      );
+      instructions.localSet(result);
+      instructions.branch(1);
+      instructions.emit(0x0b);
+    }
+    instructions.emit(0x00, 0x0b);
+    instructions.localGet(result);
+  }
+
+  emitCanonicalLiftText(
+    instructions: WasmInstructions,
+    pointer: number,
+    offset: number,
+  ): void {
+    instructions.localGet(pointer);
+    instructions.i32Load(offset);
+    const bytes = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(bytes);
+    instructions.localGet(pointer);
+    instructions.i32Load(offset + 4);
+    const byteLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(byteLength);
+    this.emitRequireCanonicalUtf8(instructions, bytes, byteLength);
+    instructions.localGet(byteLength);
+    instructions.i32Const(
+      WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - OBJECT_HEADER_BYTE_LENGTH,
+    );
+    instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    instructions.localGet(byteLength);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.call(this.allocateFunctionIndex());
+    const text = instructions.addLocal(WasmValueType.I32);
+    instructions.localTee(text);
+    instructions.i32Const(TEXT_OBJECT_KIND);
+    instructions.i32Store(0);
+    instructions.localGet(text);
+    instructions.localGet(byteLength);
+    instructions.i32Store(8);
+    instructions.localGet(text);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(bytes);
+    instructions.localGet(byteLength);
+    instructions.memoryCopy();
+    instructions.localGet(text);
+    instructions.emit(0xad);
+  }
+
+  emitRequireCanonicalUtf8(
+    instructions: WasmInstructions,
+    bytes: number,
+    byteLength: number,
+  ): void {
+    const index = instructions.addLocal(WasmValueType.I32);
+    const lead = instructions.addLocal(WasmValueType.I32);
+    const sequenceLength = instructions.addLocal(WasmValueType.I32);
+    const minimumSecond = instructions.addLocal(WasmValueType.I32);
+    const maximumSecond = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(index);
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(index);
+    instructions.localGet(byteLength);
+    instructions.emit(0x4f);
+    instructions.branchIf(1);
+    instructions.localGet(bytes);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(0);
+    instructions.localTee(lead);
+    instructions.i32Const(0x80);
+    instructions.emit(0x49, 0x04, 0x40);
+    instructions.localGet(index);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(1);
+    instructions.emit(0x0b);
+
+    instructions.emit(0x02, 0x40);
+    this.emitCanonicalUtf8LeadCase(
+      instructions,
+      lead,
+      0xc2,
+      0xdf,
+      2,
+      0x80,
+      0xbf,
+      sequenceLength,
+      minimumSecond,
+      maximumSecond,
+    );
+    this.emitCanonicalUtf8LeadCase(
+      instructions,
+      lead,
+      0xe0,
+      0xe0,
+      3,
+      0xa0,
+      0xbf,
+      sequenceLength,
+      minimumSecond,
+      maximumSecond,
+    );
+    this.emitCanonicalUtf8LeadCase(
+      instructions,
+      lead,
+      0xe1,
+      0xec,
+      3,
+      0x80,
+      0xbf,
+      sequenceLength,
+      minimumSecond,
+      maximumSecond,
+    );
+    this.emitCanonicalUtf8LeadCase(
+      instructions,
+      lead,
+      0xed,
+      0xed,
+      3,
+      0x80,
+      0x9f,
+      sequenceLength,
+      minimumSecond,
+      maximumSecond,
+    );
+    this.emitCanonicalUtf8LeadCase(
+      instructions,
+      lead,
+      0xee,
+      0xef,
+      3,
+      0x80,
+      0xbf,
+      sequenceLength,
+      minimumSecond,
+      maximumSecond,
+    );
+    this.emitCanonicalUtf8LeadCase(
+      instructions,
+      lead,
+      0xf0,
+      0xf0,
+      4,
+      0x90,
+      0xbf,
+      sequenceLength,
+      minimumSecond,
+      maximumSecond,
+    );
+    this.emitCanonicalUtf8LeadCase(
+      instructions,
+      lead,
+      0xf1,
+      0xf3,
+      4,
+      0x80,
+      0xbf,
+      sequenceLength,
+      minimumSecond,
+      maximumSecond,
+    );
+    this.emitCanonicalUtf8LeadCase(
+      instructions,
+      lead,
+      0xf4,
+      0xf4,
+      4,
+      0x80,
+      0x8f,
+      sequenceLength,
+      minimumSecond,
+      maximumSecond,
+    );
+    instructions.emit(0x00, 0x0b);
+
+    instructions.localGet(index);
+    instructions.localGet(sequenceLength);
+    instructions.emit(0x6a);
+    instructions.localGet(byteLength);
+    instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    instructions.localGet(bytes);
+    instructions.localGet(index);
+    instructions.emit(0x6a);
+    instructions.i32Load8Unsigned(1);
+    const second = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(second);
+    instructions.localGet(second);
+    instructions.localGet(minimumSecond);
+    instructions.emit(0x49);
+    instructions.localGet(second);
+    instructions.localGet(maximumSecond);
+    instructions.emit(0x4b, 0x72, 0x04, 0x40, 0x00, 0x0b);
+    for (let continuation = 2; continuation < 4; continuation += 1) {
+      instructions.localGet(sequenceLength);
+      instructions.i32Const(continuation);
+      instructions.emit(0x4b, 0x04, 0x40);
+      instructions.localGet(bytes);
+      instructions.localGet(index);
+      instructions.emit(0x6a);
+      instructions.i32Load8Unsigned(continuation);
+      instructions.i32Const(0xc0);
+      instructions.emit(0x71);
+      instructions.i32Const(0x80);
+      instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+      instructions.emit(0x0b);
+    }
+    instructions.localGet(index);
+    instructions.localGet(sequenceLength);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+  }
+
+  emitCanonicalUtf8LeadCase(
+    instructions: WasmInstructions,
+    lead: number,
+    minimumLead: number,
+    maximumLead: number,
+    sequenceByteLength: number,
+    minimumSecondByte: number,
+    maximumSecondByte: number,
+    sequenceLength: number,
+    minimumSecond: number,
+    maximumSecond: number,
+  ): void {
+    instructions.localGet(lead);
+    instructions.i32Const(minimumLead);
+    instructions.emit(0x4f);
+    instructions.localGet(lead);
+    instructions.i32Const(maximumLead);
+    instructions.emit(0x4d, 0x71, 0x04, 0x40);
+    instructions.i32Const(sequenceByteLength);
+    instructions.localSet(sequenceLength);
+    instructions.i32Const(minimumSecondByte);
+    instructions.localSet(minimumSecond);
+    instructions.i32Const(maximumSecondByte);
+    instructions.localSet(maximumSecond);
+    instructions.branch(1);
+    instructions.emit(0x0b);
+  }
+
+  emitCanonicalLiftArray(
+    instructions: WasmInstructions,
+    element: CanonicalAbiType,
+    pointer: number,
+    offset: number,
+  ): void {
+    instructions.localGet(pointer);
+    instructions.i32Load(offset);
+    const elements = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(elements);
+    instructions.localGet(pointer);
+    instructions.i32Load(offset + 4);
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(length);
+    const layout = canonicalAbiLayout(element);
+    this.emitCanonicalPointerAlignmentGuard(
+      instructions,
+      elements,
+      layout.alignment,
+    );
+    instructions.localGet(length);
+    instructions.i32Const(MAXIMUM_STORE_LENGTH);
+    instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    if (layout.byteLength > 0) {
+      instructions.localGet(length);
+      instructions.i32Const(Math.floor(0xffff_ffff / layout.byteLength));
+      instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    }
+    const store = this.allocateStore(instructions, length);
+    const index = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(index);
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(index);
+    instructions.localGet(length);
+    instructions.emit(0x4f);
+    instructions.branchIf(1);
+    this.emitCanonicalLiftMemory(
+      instructions,
+      element,
+      elements,
+      0,
+    );
+    const value = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(value);
+    instructions.localGet(store);
+    instructions.localGet(index);
+    instructions.i32Const(3);
+    instructions.emit(0x74, 0x6a);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(value);
+    instructions.i64Store(0);
+    if (layout.byteLength > 0) {
+      instructions.localGet(elements);
+      instructions.i32Const(layout.byteLength);
+      instructions.emit(0x6a);
+      instructions.localSet(elements);
+    }
+    instructions.localGet(index);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+    instructions.localGet(store);
+    instructions.emit(0xad);
+  }
+
+  emitCanonicalPointerAlignmentGuard(
+    instructions: WasmInstructions,
+    pointer: number,
+    alignment: number,
+  ): void {
+    if (alignment <= 1) return;
+    instructions.localGet(pointer);
+    instructions.i32Const(alignment - 1);
+    instructions.emit(0x71, 0x04, 0x40, 0x00, 0x0b);
+  }
+
+  emitCanonicalStoreMemory(
+    instructions: WasmInstructions,
+    type: CanonicalAbiType,
+    value: number,
+    pointer: number,
+    offset: number,
+  ): void {
+    instructions.localGet(value);
+    this.emitForceValue(instructions);
+    const forced = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(forced);
+    if (type.kind === "sealed") {
+      instructions.localGet(forced);
+      instructions.emit(0xa7);
+      instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH);
+      const inner = instructions.addLocal(WasmValueType.I64);
+      instructions.localSet(inner);
+      this.emitCanonicalStoreMemory(
+        instructions,
+        type.inner,
+        inner,
+        pointer,
+        offset,
+      );
+      return;
+    }
+    if (type.kind === "unit") return;
+    if (type.kind === "signed-integer-64") {
+      instructions.localGet(pointer);
+      instructions.localGet(forced);
+      this.emitUnboxSignedInteger64(instructions);
+      instructions.i64Store(offset);
+      return;
+    }
+    if (type.kind === "boolean") {
+      instructions.localGet(pointer);
+      instructions.localGet(forced);
+      this.emitDecodeBoolean(instructions);
+      instructions.i32Store8(offset);
+      return;
+    }
+    if (type.kind === "text") {
+      this.emitCanonicalStoreText(instructions, forced, pointer, offset);
+      return;
+    }
+    if (type.kind === "array") {
+      this.emitCanonicalStoreArray(
+        instructions,
+        type.element,
+        forced,
+        pointer,
+        offset,
+      );
+      return;
+    }
+
+    instructions.localGet(forced);
+    instructions.emit(0xa7);
+    const constructor = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(constructor);
+    if (type.kind === "record") {
+      const expected = this.requiredConstructorIndex(type.constructor);
+      instructions.localGet(constructor);
+      instructions.i32Load(4);
+      instructions.i32Const(expected);
+      instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+      for (const field of canonicalAbiRecordLayout(type).fields) {
+        instructions.localGet(constructor);
+        instructions.i64Load(
+          OBJECT_HEADER_BYTE_LENGTH + field.coreIndex * VALUE_BYTE_LENGTH,
+        );
+        const fieldValue = instructions.addLocal(WasmValueType.I64);
+        instructions.localSet(fieldValue);
+        this.emitCanonicalStoreMemory(
+          instructions,
+          field.type,
+          fieldValue,
+          pointer,
+          offset + field.offset,
+        );
+      }
+      return;
+    }
+
+    const layout = canonicalAbiVariantLayout(type);
+    instructions.emit(0x02, 0x40);
+    for (const [caseIndex, case_] of type.cases.entries()) {
+      instructions.localGet(constructor);
+      instructions.i32Load(4);
+      instructions.i32Const(this.requiredConstructorIndex(case_.constructor));
+      instructions.emit(0x46, 0x04, 0x40);
+      instructions.localGet(pointer);
+      instructions.i32Const(caseIndex);
+      this.emitCanonicalStoreDiscriminant(
+        instructions,
+        offset,
+        layout.discriminantByteLength,
+      );
+      if (case_.payload !== undefined) {
+        instructions.localGet(constructor);
+        instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH);
+        const payload = instructions.addLocal(WasmValueType.I64);
+        instructions.localSet(payload);
+        this.emitCanonicalStoreMemory(
+          instructions,
+          case_.payload,
+          payload,
+          pointer,
+          offset + layout.payloadOffset,
+        );
+      }
+      instructions.branch(1);
+      instructions.emit(0x0b);
+    }
+    instructions.emit(0x00, 0x0b);
+  }
+
+  emitCanonicalStoreText(
+    instructions: WasmInstructions,
+    value: number,
+    pointer: number,
+    offset: number,
+  ): void {
+    instructions.localGet(value);
+    instructions.emit(0xa7);
+    const text = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(text);
+    instructions.localGet(text);
+    instructions.i32Load(8);
+    const byteLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(byteLength);
+    const bytes = this.allocateCanonicalDynamic(instructions, byteLength);
+    instructions.localGet(bytes);
+    instructions.localGet(text);
+    instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
+    instructions.emit(0x6a);
+    instructions.localGet(byteLength);
+    instructions.memoryCopy();
+    instructions.localGet(pointer);
+    instructions.localGet(bytes);
+    instructions.i32Store(offset);
+    instructions.localGet(pointer);
+    instructions.localGet(byteLength);
+    instructions.i32Store(offset + 4);
+  }
+
+  emitCanonicalStoreArray(
+    instructions: WasmInstructions,
+    element: CanonicalAbiType,
+    value: number,
+    pointer: number,
+    offset: number,
+  ): void {
+    instructions.localGet(value);
+    instructions.emit(0xa7);
+    const store = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(store);
+    instructions.localGet(store);
+    instructions.i32Load(8);
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(length);
+    const elementLayout = canonicalAbiLayout(element);
+    if (elementLayout.byteLength > 0) {
+      instructions.localGet(length);
+      instructions.i32Const(
+        Math.floor(0xffff_ffff / elementLayout.byteLength),
+      );
+      instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    }
+    instructions.localGet(length);
+    instructions.i32Const(elementLayout.byteLength);
+    instructions.emit(0x6c);
+    const byteLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(byteLength);
+    const elements = this.allocateCanonicalDynamic(instructions, byteLength);
+    const index = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(index);
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(index);
+    instructions.localGet(length);
+    instructions.emit(0x4f);
+    instructions.branchIf(1);
+    instructions.localGet(store);
+    instructions.localGet(index);
+    instructions.i32Const(3);
+    instructions.emit(0x74, 0x6a);
+    instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH);
+    const elementValue = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(elementValue);
+    this.emitCanonicalStoreMemory(
+      instructions,
+      element,
+      elementValue,
+      elements,
+      0,
+    );
+    if (elementLayout.byteLength > 0) {
+      instructions.localGet(elements);
+      instructions.i32Const(elementLayout.byteLength);
+      instructions.emit(0x6a);
+      instructions.localSet(elements);
+    }
+    instructions.localGet(index);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+    instructions.localGet(elements);
+    instructions.localGet(length);
+    instructions.i32Const(elementLayout.byteLength);
+    instructions.emit(0x6c, 0x6b);
+    const firstElement = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(firstElement);
+    instructions.localGet(pointer);
+    instructions.localGet(firstElement);
+    instructions.i32Store(offset);
+    instructions.localGet(pointer);
+    instructions.localGet(length);
+    instructions.i32Store(offset + 4);
+  }
+
+  emitCanonicalCleanupMemory(
+    instructions: WasmInstructions,
+    type: CanonicalAbiType,
+    pointer: number,
+    offset: number,
+  ): void {
+    if (type.kind === "sealed") {
+      this.emitCanonicalCleanupMemory(
+        instructions,
+        type.inner,
+        pointer,
+        offset,
+      );
+      return;
+    }
+    if (
+      type.kind === "unit" ||
+      type.kind === "signed-integer-64" ||
+      type.kind === "boolean"
+    ) return;
+    if (type.kind === "text") {
+      instructions.localGet(pointer);
+      instructions.i32Load(offset);
+      const bytes = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(bytes);
+      instructions.localGet(pointer);
+      instructions.i32Load(offset + 4);
+      const byteLength = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(byteLength);
+      this.freeCanonicalDynamic(instructions, bytes, byteLength);
+      return;
+    }
+    if (type.kind === "record") {
+      for (const field of canonicalAbiRecordLayout(type).fields) {
+        this.emitCanonicalCleanupMemory(
+          instructions,
+          field.type,
+          pointer,
+          offset + field.offset,
+        );
+      }
+      return;
+    }
+    if (type.kind === "variant") {
+      const layout = canonicalAbiVariantLayout(type);
+      this.emitCanonicalLoadDiscriminant(
+        instructions,
+        pointer,
+        offset,
+        layout.discriminantByteLength,
+      );
+      const discriminant = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(discriminant);
+      instructions.emit(0x02, 0x40);
+      for (const [caseIndex, case_] of type.cases.entries()) {
+        instructions.localGet(discriminant);
+        instructions.i32Const(caseIndex);
+        instructions.emit(0x46, 0x04, 0x40);
+        if (case_.payload !== undefined) {
+          this.emitCanonicalCleanupMemory(
+            instructions,
+            case_.payload,
+            pointer,
+            offset + layout.payloadOffset,
+          );
+        }
+        instructions.branch(1);
+        instructions.emit(0x0b);
+      }
+      instructions.emit(0x00, 0x0b);
+      return;
+    }
+
+    instructions.localGet(pointer);
+    instructions.i32Load(offset);
+    const elements = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(elements);
+    instructions.localGet(pointer);
+    instructions.i32Load(offset + 4);
+    const length = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(length);
+    const elementLayout = canonicalAbiLayout(type.element);
+    const index = instructions.addLocal(WasmValueType.I32);
+    instructions.i32Const(0);
+    instructions.localSet(index);
+    instructions.emit(0x02, 0x40, 0x03, 0x40);
+    instructions.localGet(index);
+    instructions.localGet(length);
+    instructions.emit(0x4f);
+    instructions.branchIf(1);
+    this.emitCanonicalCleanupMemory(instructions, type.element, elements, 0);
+    if (elementLayout.byteLength > 0) {
+      instructions.localGet(elements);
+      instructions.i32Const(elementLayout.byteLength);
+      instructions.emit(0x6a);
+      instructions.localSet(elements);
+    }
+    instructions.localGet(index);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(index);
+    instructions.branch(0);
+    instructions.emit(0x0b, 0x0b);
+    instructions.localGet(elements);
+    instructions.localGet(length);
+    instructions.i32Const(elementLayout.byteLength);
+    instructions.emit(0x6c, 0x6b);
+    const firstElement = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(firstElement);
+    instructions.localGet(length);
+    instructions.i32Const(elementLayout.byteLength);
+    instructions.emit(0x6c);
+    const byteLength = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(byteLength);
+    this.freeCanonicalDynamic(instructions, firstElement, byteLength);
+  }
+
+  emitCanonicalVariantDiscriminant(
+    instructions: WasmInstructions,
+    type: Extract<CanonicalAbiType, { readonly kind: "variant" }>,
+    constructor: number,
+  ): void {
+    instructions.emit(0x02, WasmValueType.I32);
+    for (const [caseIndex, case_] of type.cases.entries()) {
+      instructions.localGet(constructor);
+      instructions.i32Load(4);
+      instructions.i32Const(this.requiredConstructorIndex(case_.constructor));
+      instructions.emit(0x46, 0x04, 0x40);
+      instructions.i32Const(caseIndex);
+      instructions.branch(1);
+      instructions.emit(0x0b);
+    }
+    instructions.emit(0x00, 0x0b);
+  }
+
+  emitCanonicalUnit(instructions: WasmInstructions): void {
+    const constructorIndex = this.requiredConstructorIndex(UNIT_CONSTRUCTOR_NAME);
+    const offset = this.#nullaryConstructorOffsets[constructorIndex];
+    if (offset === undefined) {
+      throw new Error(
+        `canonical ABI unit omitted its shared constructor slot for ${constructorIndex}`,
+      );
+    }
+    instructions.i32Const(offset);
+    instructions.i64Load(0);
+  }
+
   emitPublicResult(
     instructions: WasmInstructions,
     result: Type,
@@ -1027,6 +2441,19 @@ class WasmCompiler {
           } omitted its import`,
         );
       }
+      if (field.canonicalAbi !== undefined) {
+        this.emitCanonicalHostOperation(
+          instructions,
+          field.canonicalAbi,
+          field.importIndex,
+        );
+        this.#indirectFunctions[field.closureSlot] = functionBody(
+          WasmFunctionTypeIndex.ClosureCall,
+          instructions,
+          `canonical host operation ${hostFieldKey(field.capability, field.declaration.name)}`,
+        );
+        continue;
+      }
       this.emitHostArgument(
         instructions,
         field.declaration.parameterRepresentation ?? field.declaration.parameter,
@@ -1042,6 +2469,211 @@ class WasmCompiler {
         `host operation ${hostFieldKey(field.capability, field.declaration.name)}`,
       );
     }
+  }
+
+  emitCanonicalHostOperation(
+    instructions: WasmInstructions,
+    canonical: CanonicalAbiImport,
+    importIndex: number,
+  ): void {
+    if (canonical.function.parameters.length !== 1) {
+      throw new TypeError(
+        `canonical host operation ${
+          JSON.stringify(`${canonical.capability}.${canonical.operation}`)
+        } has ${canonical.function.parameters.length} parameters; gpufuck host operations are unary`,
+      );
+    }
+    const signature = canonicalAbiCoreSignature(canonical.function, "import");
+    const argumentType = canonical.function.parameters[0]!;
+    const argumentLayout = canonicalAbiLayout(argumentType);
+    const argument = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(argument);
+    const argumentPointer = this.allocateCanonicalRecord(
+      instructions,
+      argumentLayout.byteLength,
+    );
+    this.emitCanonicalStoreMemory(
+      instructions,
+      argumentType,
+      argument,
+      argumentPointer,
+      0,
+    );
+
+    if (signature.indirectParameters) {
+      instructions.localGet(argumentPointer);
+    } else {
+      for (
+        const local of this.emitCanonicalLoadFlatLocals(
+          instructions,
+          argumentType,
+          argumentPointer,
+          0,
+        )
+      ) {
+        instructions.localGet(local);
+      }
+    }
+
+    const resultLayout = canonicalAbiLayout(canonical.function.result);
+    const resultPointer = this.allocateCanonicalRecord(
+      instructions,
+      resultLayout.byteLength,
+    );
+    if (signature.indirectResult) instructions.localGet(resultPointer);
+    instructions.call(importIndex);
+
+    if (!signature.indirectResult) {
+      const resultLocals: number[] = [];
+      for (const type of signature.results) {
+        resultLocals.push(instructions.addLocal(canonicalWasmValueType(type)));
+      }
+      for (const local of [...resultLocals].reverse()) {
+        instructions.localSet(local);
+      }
+      const sourceTypes: number[] = [];
+      for (const [index, local] of resultLocals.entries()) {
+        sourceTypes[local] = canonicalWasmValueType(signature.results[index]!);
+      }
+      this.emitCanonicalStoreFlat(
+        instructions,
+        canonical.function.result,
+        resultPointer,
+        0,
+        sourceTypes,
+        resultLocals[0] ?? 0,
+      );
+    }
+
+    this.emitCanonicalCleanupMemory(
+      instructions,
+      argumentType,
+      argumentPointer,
+      0,
+    );
+    this.freeCanonicalRecord(
+      instructions,
+      argumentPointer,
+      argumentLayout.byteLength,
+    );
+    this.emitCanonicalLiftMemory(
+      instructions,
+      canonical.function.result,
+      resultPointer,
+      0,
+    );
+    const result = instructions.addLocal(WasmValueType.I64);
+    instructions.localSet(result);
+    this.emitCanonicalCleanupMemory(
+      instructions,
+      canonical.function.result,
+      resultPointer,
+      0,
+    );
+    this.freeCanonicalRecord(
+      instructions,
+      resultPointer,
+      resultLayout.byteLength,
+    );
+    instructions.localGet(result);
+  }
+
+  emitCanonicalLoadFlatLocals(
+    instructions: WasmInstructions,
+    type: CanonicalAbiType,
+    pointer: number,
+    offset: number,
+  ): number[] {
+    if (type.kind === "sealed") {
+      return this.emitCanonicalLoadFlatLocals(
+        instructions,
+        type.inner,
+        pointer,
+        offset,
+      );
+    }
+    if (type.kind === "unit") return [];
+    if (type.kind === "signed-integer-64") {
+      instructions.localGet(pointer);
+      instructions.i64Load(offset);
+      const value = instructions.addLocal(WasmValueType.I64);
+      instructions.localSet(value);
+      return [value];
+    }
+    if (type.kind === "boolean") {
+      instructions.localGet(pointer);
+      instructions.i32Load8Unsigned(offset);
+      const value = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(value);
+      return [value];
+    }
+    if (type.kind === "text" || type.kind === "array") {
+      instructions.localGet(pointer);
+      instructions.i32Load(offset);
+      const address = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(address);
+      instructions.localGet(pointer);
+      instructions.i32Load(offset + 4);
+      const length = instructions.addLocal(WasmValueType.I32);
+      instructions.localSet(length);
+      return [address, length];
+    }
+    if (type.kind === "record") {
+      const locals: number[] = [];
+      for (const field of canonicalAbiRecordLayout(type).fields) {
+        locals.push(...this.emitCanonicalLoadFlatLocals(
+          instructions,
+          field.type,
+          pointer,
+          offset + field.offset,
+        ));
+      }
+      return locals;
+    }
+
+    const layout = canonicalAbiVariantLayout(type);
+    this.emitCanonicalLoadDiscriminant(
+      instructions,
+      pointer,
+      offset,
+      layout.discriminantByteLength,
+    );
+    const discriminant = instructions.addLocal(WasmValueType.I32);
+    instructions.localSet(discriminant);
+    const joinedTypes = flattenCanonicalAbiType(type).slice(1);
+    const payloadLocals = joinedTypes.map((flatType) => {
+      const local = instructions.addLocal(canonicalWasmValueType(flatType));
+      if (flatType === "i64") instructions.i64Const(0n);
+      else instructions.i32Const(0);
+      instructions.localSet(local);
+      return local;
+    });
+    instructions.emit(0x02, 0x40);
+    for (const [caseIndex, case_] of type.cases.entries()) {
+      instructions.localGet(discriminant);
+      instructions.i32Const(caseIndex);
+      instructions.emit(0x46, 0x04, 0x40);
+      if (case_.payload !== undefined) {
+        const caseLocals = this.emitCanonicalLoadFlatLocals(
+          instructions,
+          case_.payload,
+          pointer,
+          offset + layout.payloadOffset,
+        );
+        const caseTypes = flattenCanonicalAbiType(case_.payload);
+        for (const [index, local] of caseLocals.entries()) {
+          instructions.localGet(local);
+          if (joinedTypes[index] === "i64" && caseTypes[index] === "i32") {
+            instructions.emit(0xad);
+          }
+          instructions.localSet(payloadLocals[index]!);
+        }
+      }
+      instructions.branch(1);
+      instructions.emit(0x0b);
+    }
+    instructions.emit(0x00, 0x0b);
+    return [discriminant, ...payloadLocals];
   }
 
   emitEntryCall(instructions: WasmInstructions): void {
@@ -4941,19 +6573,8 @@ class WasmCompiler {
   }
 
   expressionIsWhnf(nodeIndex: number): boolean {
-    switch (this.node(nodeIndex).tag) {
-      case CoreTag.Integer:
-      case CoreTag.SignedInteger64:
-      case CoreTag.Float32:
-      case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
-      case CoreTag.Boolean:
-      case CoreTag.Lambda:
-      case CoreTag.Constructor:
-        return true;
-      default:
-        return false;
-    }
+    this.node(nodeIndex);
+    return this.#coreIndex.weakHeadNormalForms.has(nodeIndex);
   }
 
   canCompileIntegerExpression(nodeIndex: number): boolean {
