@@ -45,8 +45,16 @@ export function lowerCoreForWasm(
       lowered[nodeIndex] = { ...node, payload: NO_INDEX, child1: argument };
       continue;
     }
-    if (node.tag === CoreTag.Case) {
-      lowered[nodeIndex] = lowerCase(module, lowered, nodeIndex, node);
+    if (
+      node.tag === CoreTag.Case &&
+      (node.payload > module.caseAlternatives.length ||
+        node.child1 > module.caseAlternatives.length - node.payload)
+    ) {
+      throw new Error(
+        `functional Wasm lowering case ${nodeIndex} references alternatives ${node.payload}..${
+          node.payload + node.child1
+        } outside ${module.caseAlternatives.length}`,
+      );
     }
   }
   for (const node of lowered) {
@@ -190,65 +198,5 @@ function lowerApplication(
     child0: callee,
     child1: finalArgument.node,
     evaluationMode: finalArgument.evaluationMode,
-  };
-}
-
-function lowerCase(
-  module: CompiledModule,
-  nodes: CoreNode[],
-  nodeIndex: number,
-  expression: CoreNode,
-): CoreNode {
-  if (
-    expression.child1 > module.caseAlternatives.length ||
-    expression.payload > module.caseAlternatives.length - expression.child1
-  ) {
-    throw new Error(
-      `functional Wasm lowering case ${nodeIndex} references alternatives ${expression.payload}..${
-        expression.payload + expression.child1
-      } outside ${module.caseAlternatives.length}`,
-    );
-  }
-  let nextAlternative = NO_INDEX;
-  for (let offset = expression.child1; offset > 0; offset--) {
-    const alternativeIndex = expression.payload + offset - 1;
-    const alternative = module.caseAlternatives[alternativeIndex];
-    if (alternative === undefined) {
-      throw new Error(
-        `functional Wasm lowering case ${nodeIndex} omitted alternative ${alternativeIndex}`,
-      );
-    }
-    let body = alternative.body;
-    for (let binder = 0; binder < alternative.binderCount; binder++) {
-      const patternNode = nodes.length;
-      nodes.push({
-        tag: CoreTag.PatternBind,
-        payload: 0,
-        child0: body,
-        child1: NO_INDEX,
-        child2: NO_INDEX,
-        sourceByteOffset: alternative.sourceByteOffset,
-        sourceEndByte: alternative.sourceEndByte,
-        evaluationMode: EvaluationMode.LazyCallByNeed,
-      });
-      body = patternNode;
-    }
-    const alternativeNode = nodes.length;
-    nodes.push({
-      tag: CoreTag.CaseArm,
-      payload: alternative.constructor,
-      child0: body,
-      child1: nextAlternative,
-      child2: NO_INDEX,
-      sourceByteOffset: alternative.sourceByteOffset,
-      sourceEndByte: alternative.sourceEndByte,
-      evaluationMode: EvaluationMode.LazyCallByNeed,
-    });
-    nextAlternative = alternativeNode;
-  }
-  return {
-    ...expression,
-    payload: 0,
-    child1: nextAlternative,
   };
 }

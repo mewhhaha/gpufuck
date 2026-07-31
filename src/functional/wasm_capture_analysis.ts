@@ -1,11 +1,13 @@
 import { CoreTag, NO_INDEX } from "./abi.ts";
-import type { CoreNode } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 
 export class WasmCaptureAnalysis {
+  readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
   readonly #freeLocalDepths: (readonly number[] | undefined)[];
 
-  constructor(nodes: readonly CoreNode[]) {
+  constructor(module: CompiledModule, nodes: readonly CoreNode[]) {
+    this.#module = module;
     this.#nodes = nodes;
     this.#freeLocalDepths = Array.from({ length: nodes.length }, () => undefined);
   }
@@ -76,11 +78,21 @@ export class WasmCaptureAnalysis {
           this.freeLocalDepths(node.child2),
         );
         break;
-      case CoreTag.Case:
       case CoreTag.CaseArm:
         depths = mergeLocalDepths(
           this.freeLocalDepths(node.child0),
           node.child1 === NO_INDEX ? [] : this.freeLocalDepths(node.child1),
+        );
+        break;
+      case CoreTag.Case:
+        depths = mergeLocalDepths(
+          this.freeLocalDepths(node.child0),
+          ...this.#caseAlternatives(node).map((alternative) =>
+            removeBoundLocals(
+              this.freeLocalDepths(alternative.body),
+              alternative.binderCount,
+            )
+          ),
         );
         break;
     }
@@ -136,10 +148,20 @@ export class WasmCaptureAnalysis {
       case CoreTag.LetRec:
         return this.localReferenceCount(node.child0, localDepth + 1) +
           this.localReferenceCount(node.child1, localDepth + 1);
-      case CoreTag.Case:
       case CoreTag.CaseArm:
         return this.localReferenceCount(node.child0, localDepth) +
           (node.child1 === NO_INDEX ? 0 : this.localReferenceCount(node.child1, localDepth));
+      case CoreTag.Case:
+        return this.localReferenceCount(node.child0, localDepth) +
+          this.#caseAlternatives(node).reduce(
+            (total, alternative) =>
+              total +
+              this.localReferenceCount(
+                alternative.body,
+                localDepth + alternative.binderCount,
+              ),
+            0,
+          );
     }
   }
 
@@ -288,7 +310,6 @@ export class WasmCaptureAnalysis {
           parameterCount,
           insideLambda,
         );
-      case CoreTag.Case:
       case CoreTag.CaseArm:
         return this.#containsUnsaturatedLocalReference(
           node.child0,
@@ -302,7 +323,37 @@ export class WasmCaptureAnalysis {
               parameterCount,
               insideLambda,
             );
+      case CoreTag.Case:
+        return this.#containsUnsaturatedLocalReference(
+          node.child0,
+          localDepth,
+          parameterCount,
+          insideLambda,
+        ) || this.#caseAlternatives(node).some((alternative) =>
+          this.#containsUnsaturatedLocalReference(
+            alternative.body,
+            localDepth + alternative.binderCount,
+            parameterCount,
+            insideLambda,
+          )
+        );
     }
+  }
+
+  #caseAlternatives(
+    node: CoreNode,
+  ): readonly CompiledModule["caseAlternatives"][number][] {
+    if (
+      node.payload > this.#module.caseAlternatives.length ||
+      node.child1 > this.#module.caseAlternatives.length - node.payload
+    ) {
+      throw new Error(
+        `functional WASM capture analysis case alternatives ${node.payload}..${
+          node.payload + node.child1
+        } exceed ${this.#module.caseAlternatives.length}`,
+      );
+    }
+    return this.#module.caseAlternatives.slice(node.payload, node.payload + node.child1);
   }
 
   #node(index: number): CoreNode {

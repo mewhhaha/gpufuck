@@ -6,7 +6,7 @@ import {
   NO_INDEX,
   UnaryOperator,
 } from "./abi.ts";
-import type { CoreNode } from "./compiler_module.ts";
+import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
   type ConstantEnvironment,
   extendConstantEnvironment,
@@ -45,6 +45,7 @@ export interface NumericFold {
 }
 
 export class WasmFunctionAnalysis {
+  readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
   readonly #definitionRoots: readonly number[];
   readonly #constantAnalysis: WasmConstantAnalysis;
@@ -57,11 +58,13 @@ export class WasmFunctionAnalysis {
   >();
 
   constructor(
+    module: CompiledModule,
     nodes: readonly CoreNode[],
     definitionRoots: readonly number[],
     constantAnalysis: WasmConstantAnalysis,
     coreIndex?: WasmCoreIndex,
   ) {
+    this.#module = module;
     this.#nodes = nodes;
     this.#definitionRoots = definitionRoots;
     this.#constantAnalysis = constantAnalysis;
@@ -161,6 +164,20 @@ export class WasmFunctionAnalysis {
           const recursiveEnvironment = extendConstantEnvironment(undefined, environment);
           pendingNodes.push({ nodeIndex: node.child0, environment: recursiveEnvironment });
           pendingNodes.push({ nodeIndex: node.child1, environment: recursiveEnvironment });
+          continue;
+        }
+        if (node.tag === CoreTag.Case) {
+          pendingNodes.push({ nodeIndex: node.child0, environment });
+          for (const alternative of this.#caseAlternatives(node)) {
+            let bodyEnvironment = environment;
+            for (let binder = 0; binder < alternative.binderCount; binder++) {
+              bodyEnvironment = extendConstantEnvironment(undefined, bodyEnvironment);
+            }
+            pendingNodes.push({
+              nodeIndex: alternative.body,
+              environment: bodyEnvironment,
+            });
+          }
           continue;
         }
         if (node.tag === CoreTag.Lambda || node.tag === CoreTag.PatternBind) {
@@ -381,7 +398,12 @@ export class WasmFunctionAnalysis {
       case CoreTag.LetRec:
         return [...child(node.child0, 1, false), ...child(node.child1, 1, true)];
       case CoreTag.Case:
-        return [...child(node.child0, 0, false), ...child(node.child1, 0, true)];
+        return [
+          ...child(node.child0, 0, false),
+          ...this.#caseAlternatives(node).map((alternative) =>
+            [alternative.body, alternative.binderCount, true] as const
+          ),
+        ];
       case CoreTag.CaseArm:
         return [...child(node.child0, 0, true), ...child(node.child1, 0, true)];
       case CoreTag.Prim:
@@ -425,10 +447,12 @@ export class WasmFunctionAnalysis {
         functionShape,
         binderDepth,
         "any",
-      ) || this.#containsNonTailSelfReference(
-        node.child1,
-        functionShape,
-        binderDepth,
+      ) || this.#caseAlternatives(node).some((alternative) =>
+        this.#containsNonTailSelfReference(
+          alternative.body,
+          functionShape,
+          binderDepth + alternative.binderCount,
+        )
       );
     }
     if (node.tag === CoreTag.CaseArm) {
@@ -687,11 +711,13 @@ export class WasmFunctionAnalysis {
           functionShape,
           binderDepth,
           scope,
-        ) || this.#containsSelfReference(
-          node.child1,
-          functionShape,
-          binderDepth,
-          scope,
+        ) || this.#caseAlternatives(node).some((alternative) =>
+          this.#containsSelfReference(
+            alternative.body,
+            functionShape,
+            binderDepth + alternative.binderCount,
+            scope,
+          )
         );
       case CoreTag.CaseArm:
         return this.#containsSelfReference(
@@ -728,7 +754,13 @@ export class WasmFunctionAnalysis {
       return this.#containsTailCall(this.#node(joinLambda).child0, loop, binderDepth + 1);
     }
     if (node.tag === CoreTag.Case) {
-      return this.#containsTailCall(node.child1, loop, binderDepth);
+      return this.#caseAlternatives(node).some((alternative) =>
+        this.#containsTailCall(
+          alternative.body,
+          loop,
+          binderDepth + alternative.binderCount,
+        )
+      );
     }
     if (node.tag === CoreTag.CaseArm) {
       return this.#containsTailCall(node.child0, loop, binderDepth) ||
@@ -933,11 +965,18 @@ export class WasmFunctionAnalysis {
           visit(node.child2, binderDepth, numericContext);
           return;
         case CoreTag.Case:
-        case CoreTag.CaseArm:
           visit(node.child0, binderDepth, false);
-          if (node.child1 !== NO_INDEX) {
-            visit(node.child1, binderDepth, numericContext);
+          for (const alternative of this.#caseAlternatives(node)) {
+            visit(
+              alternative.body,
+              binderDepth + alternative.binderCount,
+              numericContext,
+            );
           }
+          return;
+        case CoreTag.CaseArm:
+          visit(node.child0, binderDepth, numericContext);
+          if (node.child1 !== NO_INDEX) visit(node.child1, binderDepth, numericContext);
           return;
         default:
           return;
@@ -955,6 +994,22 @@ export class WasmFunctionAnalysis {
       );
     }
     return node;
+  }
+
+  #caseAlternatives(
+    node: CoreNode,
+  ): readonly CompiledModule["caseAlternatives"][number][] {
+    if (
+      node.payload > this.#module.caseAlternatives.length ||
+      node.child1 > this.#module.caseAlternatives.length - node.payload
+    ) {
+      throw new Error(
+        `functional WASM function analysis case alternatives ${node.payload}..${
+          node.payload + node.child1
+        } exceed ${this.#module.caseAlternatives.length}`,
+      );
+    }
+    return this.#module.caseAlternatives.slice(node.payload, node.payload + node.child1);
   }
 }
 

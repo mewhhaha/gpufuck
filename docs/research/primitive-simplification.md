@@ -13,8 +13,8 @@ Package 0.7.0 was recorded in `45cc6d4`; there is no ABI-6 compatibility decoder
   use trailing parameter and argument tables. Empty lists are genuine zero-arity functions and
   calls.
 - `Case(scrutinee, firstAlternative, alternativeCount)` uses packed alternative and binder tables.
-  `CaseArm` and `PatternBind` are not emitted as Core expressions. Linear Wasm and WasmGC expand
-  them only into a private backend representation.
+  `CaseArm` and `PatternBind` are not emitted as Core expressions. Linear Wasm and WasmGC consume
+  the packed tables directly.
 - `Prim(opcode, firstOperand, operandCount, auxiliaryType)` replaces emitted unary, binary,
   conversion, buffer, and persistent-Store operation nodes. One declaration table owns opcode,
   arity, type rule, fault class, effects, and backend availability and generates the WGSL lookup.
@@ -24,7 +24,7 @@ Package 0.7.0 was recorded in `45cc6d4`; there is no ABI-6 compatibility decoder
   calls unary restores the existing bound while retaining the list ABI. Gleam, Sweep, JavaScript,
   and the public Functional Surface emit their natural exact arities.
 
-The current integrated gpufuck suite passes 392 tests, including GPU evaluation, packed compilation,
+The current integrated gpufuck suite passes 408 tests, including GPU evaluation, packed compilation,
 linear-memory Wasm, WasmGC, rank-3 and indexed inference, lazy sharing and blackholes, genuine
 zero-arity calls, polymorphic Store values, effects, and malformed-input rejection.
 
@@ -41,6 +41,20 @@ counters compare as follows:
 | 256-module batch                  |      300,544 nodes |      265,216 nodes |    -11.8% |
 | Linked 51-module project          |       60,031 nodes |       52,993 nodes |    -11.7% |
 | Generated Gleam Wasm              |       40,005 bytes |       40,005 bytes | unchanged |
+
+The Wasm packed-case follow-up on 2026-07-31 removed the backend-only expansion that remained after
+ABI 7. On the reachable Gleam stdlib corpus, backend lowering now produces 15,750 nodes instead of
+17,719 by omitting 812 case-arm and 1,157 pattern-binding nodes. Four alternating process pairs
+measured 24 emissions per process after three warmups:
+
+| Measurement              | `0be17e2` control | Packed-case backend | Change |
+| ------------------------ | ----------------: | ------------------: | -----: |
+| Full Wasm compile median |          37.79 ms |            35.42 ms |  -6.3% |
+| Backend-plan median      |           9.33 ms |             7.82 ms | -16.2% |
+| Emitted artifact         |     297,776 bytes |       297,776 bytes |   none |
+
+Both variants produced SHA-256 `afb920a44162da9459b770a876c2089626b0ebb196039a7bc00ed4b34223e94a`,
+so runtime code is byte-identical. The complete 408-test suite passed after the change.
 
 The original same-machine timing runs were noisy: ABI 7 was faster for the 64- and 256-module
 batches, while the single module and linked project were slower by more than 5% in the sampled

@@ -3481,7 +3481,7 @@ class WasmCompiler {
         if (constructor !== undefined) {
           this.compileKnownCaseArm(
             instructions,
-            node.child1,
+            node,
             constructor,
             environment,
             nodeIndex,
@@ -4648,7 +4648,7 @@ class WasmCompiler {
     if (virtualConstructor !== undefined) {
       this.compileKnownCaseArm(
         instructions,
-        node.child1,
+        node,
         virtualConstructor,
         environment,
         nodeIndex,
@@ -4680,9 +4680,9 @@ class WasmCompiler {
       instructions.emit(0xa7);
       instructions.localSet(constructor);
     }
-    this.compileCaseArm(
+    this.compileCaseAlternatives(
       instructions,
-      node.child1,
+      node,
       constructor,
       environment,
       nodeIndex,
@@ -4692,7 +4692,7 @@ class WasmCompiler {
 
   compileKnownCaseArm(
     instructions: WasmInstructions,
-    firstArmIndex: number,
+    node: CoreNode,
     constructor: VirtualConstructor,
     environment: Environment,
     caseNodeIndex: number,
@@ -4714,24 +4714,15 @@ class WasmCompiler {
         constructor.environment,
       )
     );
-    let armIndex = firstArmIndex;
-    while (armIndex !== NO_INDEX) {
-      const arm = this.node(armIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
-        throw new Error(
-          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
-        );
-      }
-      if (arm.payload === constructor.constructorIndex) {
-        let bodyNode = arm.child0;
+    for (const alternative of this.caseAlternatives(node, caseNodeIndex)) {
+      if (alternative.constructor === constructor.constructorIndex) {
+        if (alternative.binderCount !== arity) {
+          throw new Error(
+            `functional WASM case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${constructor.constructorIndex}; expected ${arity}`,
+          );
+        }
         let armEnvironment = [...environment];
         for (let bindingIndex = 0; bindingIndex < arity; bindingIndex += 1) {
-          const binding = this.node(bodyNode);
-          if (binding.tag !== CoreTag.PatternBind) {
-            throw new Error(
-              `functional WASM case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-            );
-          }
           const field = fields[arity - bindingIndex - 1];
           if (field === undefined) {
             throw new Error(
@@ -4741,21 +4732,19 @@ class WasmCompiler {
             );
           }
           armEnvironment = [field, ...armEnvironment];
-          bodyNode = binding.child0;
         }
         if (resultKind === "integer") {
-          this.compileIntegerExpression(instructions, bodyNode, armEnvironment);
+          this.compileIntegerExpression(instructions, alternative.body, armEnvironment);
         } else {
           this.compileExpression(
             instructions,
-            bodyNode,
+            alternative.body,
             armEnvironment,
             constructorReuse,
           );
         }
         return;
       }
-      armIndex = arm.child1;
     }
     throw new Error(
       `functional WASM case at core node ${caseNodeIndex} has no arm for known constructor ${constructor.constructorIndex}`,
@@ -4793,42 +4782,30 @@ class WasmCompiler {
     return { kind: "i64-value", index: value };
   }
 
-  compileCaseArm(
+  compileCaseAlternatives(
     instructions: WasmInstructions,
-    armIndex: number,
+    node: CoreNode,
     constructor: number,
     environment: Environment,
     caseNodeIndex: number,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
-    let currentArmIndex = armIndex;
     let openArmCount = 0;
-    while (currentArmIndex !== NO_INDEX) {
-      const arm = this.node(currentArmIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
+    for (const alternative of this.caseAlternatives(node, caseNodeIndex)) {
+      const arity = this.#module.constructorArities[alternative.constructor];
+      if (arity === undefined || alternative.binderCount !== arity) {
         throw new Error(
-          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${currentArmIndex}; expected a case arm`,
-        );
-      }
-      const arity = this.#module.constructorArities[arm.payload];
-      if (arity === undefined) {
-        throw new Error(
-          `functional WASM case arm ${currentArmIndex} refers to missing constructor ${arm.payload}`,
+          `functional WASM case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${alternative.constructor}; expected ${
+            String(arity)
+          }`,
         );
       }
       instructions.localGet(constructor);
       instructions.i32Load(4);
-      instructions.i32Const(arm.payload);
+      instructions.i32Const(alternative.constructor);
       instructions.emit(0x46, 0x04, WasmValueType.I64);
-      let bodyNode = arm.child0;
       let armEnvironment = [...environment];
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
-        const binding = this.node(bodyNode);
-        if (binding.tag !== CoreTag.PatternBind) {
-          throw new Error(
-            `functional WASM case arm ${currentArmIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-          );
-        }
         instructions.localGet(constructor);
         instructions.i64Load(
           OBJECT_HEADER_BYTE_LENGTH +
@@ -4840,17 +4817,15 @@ class WasmCompiler {
           { kind: "i64-local", index: field },
           ...armEnvironment,
         ];
-        bodyNode = binding.child0;
       }
       this.compileExpression(
         instructions,
-        bodyNode,
+        alternative.body,
         armEnvironment,
         constructorReuse,
       );
       instructions.emit(0x05);
       openArmCount += 1;
-      currentArmIndex = arm.child1;
     }
     instructions.emit(0x00);
     for (let index = 0; index < openArmCount; index++) instructions.emit(0x0b);
@@ -6265,7 +6240,7 @@ class WasmCompiler {
     if (virtualConstructor !== undefined) {
       this.compileKnownTailCaseArm(
         instructions,
-        node.child1,
+        node,
         virtualConstructor,
         environment,
         nodeIndex,
@@ -6282,9 +6257,9 @@ class WasmCompiler {
     instructions.emit(0xa7);
     const constructor = instructions.addLocal(WasmValueType.I32);
     instructions.localSet(constructor);
-    this.compileTailCaseArms(
+    this.compileTailCaseAlternatives(
       instructions,
-      node.child1,
+      node,
       constructor,
       environment,
       nodeIndex,
@@ -6299,7 +6274,7 @@ class WasmCompiler {
 
   compileKnownTailCaseArm(
     instructions: WasmInstructions,
-    firstArmIndex: number,
+    node: CoreNode,
     constructor: VirtualConstructor,
     environment: Environment,
     caseNodeIndex: number,
@@ -6321,30 +6296,20 @@ class WasmCompiler {
     const fields = constructor.arguments.map((argument) =>
       this.compileExpressionBinding(instructions, argument, constructor.environment)
     );
-    let armIndex = firstArmIndex;
-    while (armIndex !== NO_INDEX) {
-      const arm = this.node(armIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
-        throw new Error(
-          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
-        );
-      }
-      if (arm.payload === constructor.constructorIndex) {
-        let bodyNode = arm.child0;
+    for (const alternative of this.caseAlternatives(node, caseNodeIndex)) {
+      if (alternative.constructor === constructor.constructorIndex) {
+        if (alternative.binderCount !== arity) {
+          throw new Error(
+            `functional WASM case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${constructor.constructorIndex}; expected ${arity}`,
+          );
+        }
         let armEnvironment = [...environment];
         for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
-          const binding = this.node(bodyNode);
-          if (binding.tag !== CoreTag.PatternBind) {
-            throw new Error(
-              `functional WASM case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-            );
-          }
           armEnvironment = [fields[arity - bindingIndex - 1]!, ...armEnvironment];
-          bodyNode = binding.child0;
         }
         this.compileTailPosition(
           instructions,
-          bodyNode,
+          alternative.body,
           armEnvironment,
           loop,
           parameterLocals,
@@ -6355,16 +6320,15 @@ class WasmCompiler {
         );
         return;
       }
-      armIndex = arm.child1;
     }
     throw new Error(
       `functional WASM case at core node ${caseNodeIndex} has no arm for known constructor ${constructor.constructorIndex}`,
     );
   }
 
-  compileTailCaseArms(
+  compileTailCaseAlternatives(
     instructions: WasmInstructions,
-    armIndex: number,
+    node: CoreNode,
     constructor: number,
     environment: Environment,
     caseNodeIndex: number,
@@ -6375,34 +6339,22 @@ class WasmCompiler {
     resultBranchDepth: number,
     resultKind: "value" | "integer",
   ): void {
-    let currentArmIndex = armIndex;
     let openArmCount = 0;
-    while (currentArmIndex !== NO_INDEX) {
-      const arm = this.node(currentArmIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
+    for (const alternative of this.caseAlternatives(node, caseNodeIndex)) {
+      const arity = this.#module.constructorArities[alternative.constructor];
+      if (arity === undefined || alternative.binderCount !== arity) {
         throw new Error(
-          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${currentArmIndex}; expected a case arm`,
-        );
-      }
-      const arity = this.#module.constructorArities[arm.payload];
-      if (arity === undefined) {
-        throw new Error(
-          `functional WASM case arm ${currentArmIndex} refers to missing constructor ${arm.payload}`,
+          `functional WASM case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${alternative.constructor}; expected ${
+            String(arity)
+          }`,
         );
       }
       instructions.localGet(constructor);
       instructions.i32Load(4);
-      instructions.i32Const(arm.payload);
+      instructions.i32Const(alternative.constructor);
       instructions.emit(0x46, 0x04, 0x40);
-      let bodyNode = arm.child0;
       let armEnvironment = [...environment];
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
-        const binding = this.node(bodyNode);
-        if (binding.tag !== CoreTag.PatternBind) {
-          throw new Error(
-            `functional WASM case arm ${currentArmIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-          );
-        }
         instructions.localGet(constructor);
         instructions.i64Load(
           OBJECT_HEADER_BYTE_LENGTH + (arity - bindingIndex - 1) * VALUE_BYTE_LENGTH,
@@ -6410,11 +6362,10 @@ class WasmCompiler {
         const field = instructions.addLocal(WasmValueType.I64);
         instructions.localSet(field);
         armEnvironment = [{ kind: "i64-local", index: field }, ...armEnvironment];
-        bodyNode = binding.child0;
       }
       this.compileTailPosition(
         instructions,
-        bodyNode,
+        alternative.body,
         armEnvironment,
         loop,
         parameterLocals,
@@ -6425,7 +6376,6 @@ class WasmCompiler {
       );
       instructions.emit(0x05);
       openArmCount++;
-      currentArmIndex = arm.child1;
     }
     instructions.emit(0x00);
     for (let index = 0; index < openArmCount; index++) instructions.emit(0x0b);
@@ -6499,5 +6449,22 @@ class WasmCompiler {
       );
     }
     return node;
+  }
+
+  caseAlternatives(
+    node: CoreNode,
+    nodeIndex: number,
+  ): readonly CompiledModule["caseAlternatives"][number][] {
+    if (
+      node.payload > this.#module.caseAlternatives.length ||
+      node.child1 > this.#module.caseAlternatives.length - node.payload
+    ) {
+      throw new Error(
+        `functional WASM case at core node ${nodeIndex} references alternatives ${node.payload}..${
+          node.payload + node.child1
+        } outside ${this.#module.caseAlternatives.length}`,
+      );
+    }
+    return this.#module.caseAlternatives.slice(node.payload, node.payload + node.child1);
   }
 }

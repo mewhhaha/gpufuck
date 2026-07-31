@@ -315,11 +315,7 @@ export class LambdaSetAnalysis {
         return;
       case CoreTag.Case:
         this.#visitExpression(node.child0, environment);
-        if (this.#representation === "wasm") {
-          this.#visitCaseArms(node.child1, environment, nodeIndex);
-        } else {
-          this.#visitCaseAlternatives(node.payload, node.child1, environment, nodeIndex);
-        }
+        this.#visitCaseAlternatives(node.payload, node.child1, environment, nodeIndex);
         return;
       case CoreTag.CaseArm:
       case CoreTag.PatternBind:
@@ -363,50 +359,6 @@ export class LambdaSetAnalysis {
       this.#applicationsByCallee[application.callee] = [application];
     } else {
       applications.push(application);
-    }
-  }
-
-  #visitCaseArms(
-    firstArm: number,
-    environment: number[],
-    caseNode: number,
-  ): void {
-    let armIndex = firstArm;
-    while (armIndex !== NO_INDEX) {
-      const arm = this.#node(armIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
-        throw new Error(
-          `functional lambda-set case ${caseNode} links core tag ${arm.tag} at arm node ${armIndex}`,
-        );
-      }
-      const arity = this.#module.constructorArities[arm.payload];
-      if (arity === undefined) {
-        throw new Error(
-          `functional lambda-set case arm ${armIndex} refers to missing constructor ${arm.payload}`,
-        );
-      }
-
-      let body = arm.child0;
-      const outerEnvironmentDepth = environment.length;
-      for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
-        const binding = this.#node(body);
-        if (binding.tag !== CoreTag.PatternBind) {
-          throw new Error(
-            `functional lambda-set case arm ${armIndex} has ${bindingIndex} bindings before core tag ${binding.tag}; expected ${arity}`,
-          );
-        }
-        const field = arity - bindingIndex - 1;
-        this.#addEdge(
-          this.#constructorField(arm.payload, field),
-          this.#binderVariable(body),
-        );
-        environment.push(this.#binderVariable(body));
-        body = binding.child0;
-      }
-      this.#visitExpression(body, environment);
-      environment.length = outerEnvironmentDepth;
-      this.#addEdge(this.#nodeVariable(body), this.#nodeVariable(caseNode));
-      armIndex = arm.child1;
     }
   }
 

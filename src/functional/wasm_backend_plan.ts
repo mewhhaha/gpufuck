@@ -54,8 +54,6 @@ export function createWasmBackendPlan(
     outputNodes: 0,
     addedApplications: 0,
     addedLambdas: 0,
-    addedCaseArms: 0,
-    addedPatternBinders: 0,
   };
   const loweredNodes = measureCompilerStage(
     trace,
@@ -68,8 +66,6 @@ export function createWasmBackendPlan(
         const tag = result[nodeIndex]!.tag;
         if (tag === CoreTag.Apply) loweringAnnotations.addedApplications += 1;
         else if (tag === CoreTag.Lambda) loweringAnnotations.addedLambdas += 1;
-        else if (tag === CoreTag.CaseArm) loweringAnnotations.addedCaseArms += 1;
-        else if (tag === CoreTag.PatternBind) loweringAnnotations.addedPatternBinders += 1;
       }
     },
   );
@@ -93,7 +89,7 @@ export function createWasmBackendPlan(
     analysisAnnotations,
     () =>
       [
-        new WasmCaptureAnalysis(loweredNodes),
+        new WasmCaptureAnalysis(module, loweredNodes),
         new WasmConstantAnalysis(loweredNodes),
       ] as const,
   );
@@ -157,6 +153,7 @@ export function createWasmBackendPlan(
     analysisAnnotations,
     () =>
       new WasmFunctionAnalysis(
+        module,
         loweredNodes,
         module.definitionRoots,
         constantAnalysis,
@@ -314,9 +311,16 @@ function compactFixedVectorProgramIsProvable(
       case CoreTag.Let:
       case CoreTag.LetRec:
       case CoreTag.Binary:
-      case CoreTag.Case:
       case CoreTag.CaseArm:
         return children(node.child0, node.child1);
+      case CoreTag.Case:
+        return children(
+          node.child0,
+          ...module.caseAlternatives.slice(
+            node.payload,
+            node.payload + node.child1,
+          ).map((alternative) => alternative.body),
+        );
       case CoreTag.If:
         return children(node.child0, node.child1, node.child2);
       case CoreTag.Text:
