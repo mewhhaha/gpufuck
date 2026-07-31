@@ -4,6 +4,7 @@ import {
   BinaryOperator,
   buildSurfaceModule,
   compileModuleToWasm,
+  CompilerPerformanceTrace,
   CpuCompiler,
   effectSet,
   HostTypes,
@@ -77,6 +78,50 @@ Deno.test("canonical ABI exports use caller-facing scalar signatures", async () 
     ok(minor instanceof WebAssembly.Global);
     equal(major.value, 1);
     equal(minor.value, 0);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("canonical ABI reuses an unchanged resolved-Core artifact", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: signedInteger64,
+      body: surface.signedInteger64(42n),
+    }],
+    [],
+    "main",
+    0,
+    { wasmExports: [{ name: "blot:main", definition: "main" }] },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  const canonicalAbi = {
+    version: 1 as const,
+    imports: [],
+    exports: [{
+      name: "blot:main",
+      function: { parameters: [], result: canonicalSignedInteger64 },
+    }],
+  };
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, { canonicalAbi });
+    const warmTrace = new CompilerPerformanceTrace();
+    const warmBytes = await compileModuleToWasm(compilation.module, {
+      canonicalAbi,
+      trace: warmTrace,
+    });
+
+    deepStrictEqual(warmBytes, bytes);
+    const cachedArtifact = warmTrace.snapshot().find((event) =>
+      event.stage === "wasm.artifact.resolved-core"
+    );
+    equal(cachedArtifact?.annotations.cacheHit, true);
+    equal(warmTrace.snapshot().some((event) => event.stage === "wasm.emit"), false);
   } finally {
     compilation.module.destroy();
   }

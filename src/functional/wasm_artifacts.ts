@@ -11,10 +11,14 @@ import {
   compileWasmArtifactWithSignedLiteralUpdate,
   type WasmArtifact,
 } from "./wasm_codegen.ts";
-import { resolvedCoreStructuralFingerprint } from "./semantic_fingerprint.ts";
+import {
+  resolvedCoreStructuralFingerprint,
+  structuralFingerprint,
+} from "./semantic_fingerprint.ts";
 import { validateWasmSimdMode } from "./wasm_backend_plan.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import { compileWasmGc } from "./wasm_gc_codegen.ts";
+import { type CanonicalAbiInterface, validateCanonicalAbiInterface } from "./canonical_abi.ts";
 
 const MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS = 64;
 
@@ -50,6 +54,10 @@ const wasmArtifactsByResolvedCore = new Map<
   string,
   Promise<WasmArtifact>
 >();
+const canonicalWasmArtifactsByResolvedCore = new Map<
+  string,
+  Promise<WasmArtifact>
+>();
 
 export async function compileModuleToWasm(
   module: CompiledModule,
@@ -68,8 +76,8 @@ export async function compileModuleToWasm(
     );
   }
   const customStorage = options.storageCore !== undefined ||
-    options.ownedTypeExports !== undefined ||
-    options.canonicalAbi !== undefined;
+    options.ownedTypeExports !== undefined;
+  const canonicalCacheEligible = !customStorage && options.canonicalAbi !== undefined;
   const totalAnnotations = {
     backend,
     cacheEligible: backend === "wasm-gc" || !customStorage,
@@ -91,8 +99,17 @@ export async function compileModuleToWasm(
         }
         return (await cachedWasmGcArtifact(module, options.trace)).bytes.slice();
       }
-      if (options.simd === "wasm-simd" && !customStorage) {
+      if (options.simd === "wasm-simd" && !customStorage && options.canonicalAbi === undefined) {
         return (await cachedSimdWasmArtifact(module, options.trace)).bytes.slice();
+      }
+      if (canonicalCacheEligible) {
+        return (await cachedCanonicalWasmArtifact(
+          module,
+          options.canonicalAbi!,
+          options.simd,
+          options.trace,
+        ))
+          .bytes.slice();
       }
       if (customStorage) {
         const nodes = await measureCompilerStageAsync(
@@ -106,6 +123,56 @@ export async function compileModuleToWasm(
       return (await cachedWasmArtifact(module, options.trace)).bytes.slice();
     },
     (bytes) => totalAnnotations.bytes = bytes.byteLength,
+  );
+}
+
+async function cachedCanonicalWasmArtifact(
+  module: CompiledModule,
+  canonicalAbi: CanonicalAbiInterface,
+  simd: WasmCompilationOptions["simd"],
+  trace?: CompilerPerformanceTrace,
+): Promise<WasmArtifact> {
+  validateCanonicalAbiInterface(canonicalAbi);
+  const nodes = await measureCompilerStageAsync(
+    trace,
+    "wasm.read-core",
+    { nodes: module.nodeCount },
+    () => module.readCoreNodes(),
+  );
+  const coreFingerprint = await fingerprintResolvedCore(module, nodes, trace);
+  const key = `${coreFingerprint}:canonical-v1:${simd ?? "portable-scalar"}:` +
+    structuralFingerprint(canonicalAbi);
+  const annotations = { backend: "linear-memory", canonicalAbi: true, cacheHit: false };
+  return await measureCompilerStageAsync(
+    trace,
+    "wasm.artifact.resolved-core",
+    annotations,
+    async () => {
+      const cached = canonicalWasmArtifactsByResolvedCore.get(key);
+      if (cached !== undefined) {
+        annotations.cacheHit = true;
+        canonicalWasmArtifactsByResolvedCore.delete(key);
+        canonicalWasmArtifactsByResolvedCore.set(key, cached);
+        return await cached;
+      }
+      const compilation = Promise.resolve().then(() =>
+        compileWasmArtifact(module, nodes, false, {
+          canonicalAbi,
+          ...(simd === undefined ? {} : { simd }),
+          ...(trace === undefined ? {} : { trace }),
+        })
+      );
+      canonicalWasmArtifactsByResolvedCore.set(key, compilation);
+      evictOldestResolvedCoreArtifacts(canonicalWasmArtifactsByResolvedCore);
+      try {
+        return await compilation;
+      } catch (error) {
+        if (canonicalWasmArtifactsByResolvedCore.get(key) === compilation) {
+          canonicalWasmArtifactsByResolvedCore.delete(key);
+        }
+        throw error;
+      }
+    },
   );
 }
 
