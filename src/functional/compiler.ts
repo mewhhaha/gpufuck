@@ -53,6 +53,7 @@ import type {
   GpuModule,
 } from "./compiler_module.ts";
 import { registerCompleteTypeDeclarations } from "./compiler_module.ts";
+import { registerPreparedWasmLambdaAnalysis } from "./prepared_wasm_lambda_analysis.ts";
 import { concreteType } from "./schema_contract.ts";
 
 export type {
@@ -609,6 +610,9 @@ async function publicModule(
     )),
   };
   registerCompleteTypeDeclarations(completed, encodedModule.typeDeclarations);
+  if (effects.wasmLambdaAnalysis !== undefined) {
+    registerPreparedWasmLambdaAnalysis(completed, effects.wasmLambdaAnalysis);
+  }
   return completed;
 }
 

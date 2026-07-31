@@ -6,17 +6,26 @@ import {
 import { createOwnedModuleArtifact } from "../functional/module_linker.ts";
 import {
   registerEquivalentModuleFingerprint,
+  registerModuleFingerprint,
   structuralFingerprint,
 } from "../functional/semantic_fingerprint.ts";
+import {
+  tryApplyLinkedLiteralUpdates,
+  tryRegisterLiteralModuleUpdate,
+} from "../functional/incremental_module.ts";
 import { type GleamDiagnostic, GleamSyntaxError } from "./diagnostic.ts";
 import type { GleamFrontendResult, GleamSourceModule } from "./frontend.ts";
 import { linkLoweredGleamModules, lowerGleamSources, lowerParsedGleamModules } from "./frontend.ts";
+import {
+  type SignedIntegerChange,
+  tryUpdateLoweredSignedIntegerLiterals,
+} from "./incremental_lowering.ts";
 import {
   type GleamExportSignature,
   type LoweredGleamModule,
   lowerGleamModule,
 } from "./lowering.ts";
-import { IncrementalGleamModuleParser } from "./parser.ts";
+import { GleamModuleParser, parsedIntegerUpdate } from "./parser.ts";
 
 interface CachedGleamProject {
   readonly sources: readonly GleamSourceModule[];
@@ -25,12 +34,25 @@ interface CachedGleamProject {
   readonly result: GleamFrontendResult;
 }
 
+interface LiteralSemanticLineage {
+  // Keeping the base key lets a reverted edit recover the exact original compiler cache entry.
+  readonly baseSemantics: string;
+  readonly baseValues: ReadonlyMap<string, bigint>;
+  readonly currentValues: ReadonlyMap<string, bigint>;
+}
+
+interface CachedProjectSignatures {
+  readonly modules: readonly GleamModule[];
+  readonly signatures: readonly GleamExportSignature[];
+  readonly key: string;
+}
+
 export interface GleamFrontendServiceLowerOptions {
   readonly trace?: CompilerPerformanceTrace;
 }
 
 export class GleamFrontendService {
-  readonly #moduleParsers = new Map<string, IncrementalGleamModuleParser>();
+  readonly #moduleParsers = new Map<string, GleamModuleParser>();
   readonly #parsedModules = new Map<
     string,
     { readonly source: string; readonly module: GleamModule }
@@ -41,11 +63,13 @@ export class GleamFrontendService {
       readonly source: string;
       readonly signatures: string;
       readonly semantics: string;
-      readonly locations: string;
+      readonly locations?: string;
       readonly lowered: LoweredGleamModule;
+      readonly literalLineage?: LiteralSemanticLineage;
     }
   >();
   #cachedProject: CachedGleamProject | undefined;
+  #cachedSignatures: CachedProjectSignatures | undefined;
 
   lower(
     sources: readonly GleamSourceModule[],
@@ -67,9 +91,8 @@ export class GleamFrontendService {
       sameSourcesIgnoringTrailingTrivia(cached.sources, sources);
 
     const activeModules = new Set(sources.map((source) => source.name));
-    for (const [name, parser] of this.#moduleParsers) {
+    for (const name of this.#moduleParsers.keys()) {
       if (activeModules.has(name)) continue;
-      parser.dispose();
       this.#moduleParsers.delete(name);
       this.#parsedModules.delete(name);
       this.#loweredModules.delete(name);
@@ -110,7 +133,7 @@ export class GleamFrontendService {
           module: source.name,
           sourceCharacters: source.source.length,
           declarations: 0,
-          incremental: this.#moduleParsers.has(source.name),
+          reparse: this.#moduleParsers.has(source.name),
         };
         const module = measureCompilerStage(
           options.trace,
@@ -119,10 +142,10 @@ export class GleamFrontendService {
           () => {
             let parser = this.#moduleParsers.get(source.name);
             if (parser === undefined) {
-              parser = new IncrementalGleamModuleParser(source.name, source.source);
+              parser = new GleamModuleParser(source.name, source.source);
               this.#moduleParsers.set(source.name, parser);
             } else {
-              parser.update(source.source, options.trace);
+              parser.update(source.source);
             }
             return parser.parse(options.trace);
           },
@@ -141,8 +164,9 @@ export class GleamFrontendService {
 
     const sourceByModule = new Map(sources.map((source) => [source.name, source.source]));
     if (reusesProjectSemantics && cached?.result.ok) {
+      const previousProject = cached.result.lowered;
       const previousModules = new Map(
-        cached.result.lowered.modules.map((lowered) => [lowered.source.name, lowered]),
+        previousProject.modules.map((lowered) => [lowered.source.name, lowered]),
       );
       const loweredModules = modules.map((module): LoweredGleamModule => {
         const previous = previousModules.get(module.name);
@@ -155,10 +179,11 @@ export class GleamFrontendService {
           throw new Error(`Gleam frontend service omitted source for module ${module.name}`);
         }
         if (cachedLowering.source === source) return previous;
+        const sourceGeometryUnchanged = previous.artifact.sourceByteLength === module.span.endByte;
         const lowered = {
           ...previous,
           source: module,
-          artifact: createOwnedModuleArtifact({
+          artifact: sourceGeometryUnchanged ? previous.artifact : createOwnedModuleArtifact({
             ...previous.artifact,
             sourceByteLength: module.span.endByte,
           }),
@@ -170,17 +195,60 @@ export class GleamFrontendService {
         });
         return lowered;
       });
+      const sourceGeometryUnchanged = loweredModules.every((lowered, index) =>
+        lowered.artifact.sourceByteLength ===
+          previousProject.modules[index]?.artifact.sourceByteLength
+      );
+      if (this.#cachedSignatures !== undefined) {
+        this.#cachedSignatures = {
+          ...this.#cachedSignatures,
+          modules: Object.freeze([...modules]),
+        };
+      }
+      if (sourceGeometryUnchanged) {
+        const linked = measureCompilerStage(
+          options.trace,
+          "frontend.link",
+          {
+            modules: previousProject.linked.sources.length,
+            nodes: previousProject.module.nodeCount,
+            definitions: previousProject.module.definitionCount,
+            types: previousProject.module.typeCount,
+            cacheHit: true,
+          },
+          () => previousProject.linked,
+        );
+        return this.#rememberProject(sources, entry, {
+          ok: true,
+          lowered: {
+            modules: loweredModules,
+            linked,
+            module: linked.module,
+          },
+        });
+      }
       const result = linkLoweredGleamModules(modules, loweredModules, entry, options.trace);
       if (result.ok) {
         registerEquivalentModuleFingerprint(
-          cached.result.lowered.module,
+          previousProject.module,
           result.lowered.module,
         );
       }
       return this.#rememberProject(sources, entry, result);
     }
 
-    let signatureKey: string | undefined;
+    const cachedSignatures = this.#cachedSignatures;
+    const reusableSignatures = cachedSignatures !== undefined &&
+        cachedSignatures.modules.length === modules.length &&
+        modules.every((module, index) => {
+          const previous = cachedSignatures.modules[index];
+          return module === previous || parsedIntegerUpdate(module) === previous;
+        })
+      ? cachedSignatures
+      : undefined;
+    let signatureKey: string | undefined = reusableSignatures?.key;
+    let projectSignatures: readonly GleamExportSignature[] | undefined;
+    const previousLinkedProject = cached?.result.ok ? cached.result.lowered : undefined;
     const result = lowerParsedGleamModules(
       modules,
       entry,
@@ -200,37 +268,173 @@ export class GleamFrontendService {
         ) {
           return cachedLowering.lowered;
         }
-        const semantics = structuralFingerprint({
-          imports: module.imports,
-          declarations: module.declarations,
-        });
-        const locations = structuralFingerprint({
-          imports: module.imports,
-          declarations: module.declarations,
-        }, { includeSourceLocations: true });
-        const lowered = cachedLowering?.signatures === signatureKey &&
-            cachedLowering.semantics === semantics &&
-            cachedLowering.locations === locations
-          ? {
-            ...cachedLowering.lowered,
-            source: module,
-            artifact: createOwnedModuleArtifact({
-              ...cachedLowering.lowered.artifact,
-              sourceByteLength: module.span.endByte,
-            }),
-          }
-          : lowerGleamModule(module, signatures);
+        const literalUpdateAnnotations = { changedLiterals: 0 };
+        const literalUpdate = cachedLowering?.signatures === signatureKey
+          ? measureCompilerStage(
+            options.trace,
+            "frontend.lower.literal-update",
+            literalUpdateAnnotations,
+            () =>
+              tryUpdateLoweredSignedIntegerLiterals(
+                cachedLowering.lowered,
+                module,
+              ),
+            (updated) => {
+              literalUpdateAnnotations.changedLiterals = updated?.changedLiterals ?? 0;
+            },
+          )
+          : undefined;
+        const literalLineage = literalUpdate === undefined || cachedLowering === undefined
+          ? undefined
+          : updateLiteralSemanticLineage(
+            cachedLowering.literalLineage,
+            cachedLowering.semantics,
+            literalUpdate.literalChanges,
+          );
+        const fingerprintAnnotations = {
+          incremental: literalLineage !== undefined,
+          changedLiterals: literalUpdate?.changedLiterals ?? 0,
+        };
+        const semantics = measureCompilerStage(
+          options.trace,
+          "frontend.lower.semantic-fingerprint",
+          fingerprintAnnotations,
+          () =>
+            literalLineage === undefined
+              ? structuralFingerprint({
+                imports: module.imports,
+                declarations: module.declarations,
+              })
+              : literalSemanticFingerprint(literalLineage),
+        );
+        let locations = literalUpdate === undefined ? undefined : cachedLowering?.locations;
+        let locationsUnchanged = false;
+        if (
+          literalUpdate === undefined &&
+          cachedLowering?.signatures === signatureKey &&
+          cachedLowering.semantics === semantics
+        ) {
+          const locationFingerprintAnnotations = {
+            previousCached: cachedLowering.locations !== undefined,
+          };
+          const comparedLocations = measureCompilerStage(
+            options.trace,
+            "frontend.lower.location-fingerprint",
+            locationFingerprintAnnotations,
+            () => {
+              const previous = cachedLowering.locations ??
+                structuralFingerprint({
+                  imports: cachedLowering.lowered.source.imports,
+                  declarations: cachedLowering.lowered.source.declarations,
+                }, { includeSourceLocations: true });
+              const current = structuralFingerprint({
+                imports: module.imports,
+                declarations: module.declarations,
+              }, { includeSourceLocations: true });
+              return { previous, current };
+            },
+          );
+          locations = comparedLocations.current;
+          locationsUnchanged = comparedLocations.previous === comparedLocations.current;
+        }
+        const lowered = literalUpdate?.lowered ??
+          (cachedLowering?.signatures === signatureKey &&
+              cachedLowering.semantics === semantics &&
+              locationsUnchanged
+            ? {
+              ...cachedLowering.lowered,
+              source: module,
+              artifact: createOwnedModuleArtifact({
+                ...cachedLowering.lowered.artifact,
+                sourceByteLength: module.span.endByte,
+              }),
+            }
+            : lowerGleamModule(module, signatures));
         this.#loweredModules.set(module.name, {
           source,
           signatures: signatureKey,
           semantics,
-          locations,
           lowered,
+          ...(locations === undefined ? {} : { locations }),
+          ...(literalLineage === undefined ? {} : { literalLineage }),
         });
         return lowered;
       },
-      options.trace,
+      {
+        ...(options.trace === undefined ? {} : { trace: options.trace }),
+        ...(reusableSignatures === undefined ? {} : { signatures: reusableSignatures.signatures }),
+        captureSignatures: (signatures) => projectSignatures = signatures,
+        link: (parsedModules, loweredModules, projectEntry, trace) => {
+          if (previousLinkedProject !== undefined) {
+            const updateAnnotations = { modules: loweredModules.length, changedNodes: 0 };
+            const update = measureCompilerStage(
+              trace,
+              "frontend.link.literal-update",
+              updateAnnotations,
+              () =>
+                tryApplyLinkedLiteralUpdates(
+                  previousLinkedProject.linked,
+                  previousLinkedProject.modules.map((lowered) => lowered.artifact),
+                  loweredModules.map((lowered) => lowered.artifact),
+                ),
+              (literalUpdate) => {
+                updateAnnotations.changedNodes = literalUpdate?.changedNodes ?? 0;
+              },
+            );
+            if (update !== undefined) {
+              return {
+                ok: true,
+                lowered: {
+                  modules: loweredModules,
+                  linked: update.linked,
+                  module: update.linked.module,
+                },
+              };
+            }
+          }
+          return linkLoweredGleamModules(parsedModules, loweredModules, projectEntry, trace);
+        },
+      },
     );
+    if (result.ok) {
+      if (signatureKey === undefined || projectSignatures === undefined) {
+        throw new Error("Gleam frontend service omitted project signatures after lowering");
+      }
+      this.#cachedSignatures = {
+        modules: Object.freeze([...modules]),
+        signatures: projectSignatures,
+        key: signatureKey,
+      };
+      const moduleSemantics = result.lowered.modules.map((lowered) => {
+        const cachedLowering = this.#loweredModules.get(lowered.source.name);
+        if (cachedLowering === undefined) {
+          throw new Error(
+            `Gleam frontend service omitted lowered module ${lowered.source.name}`,
+          );
+        }
+        return {
+          name: lowered.source.name,
+          semantics: cachedLowering.semantics,
+        };
+      });
+      registerModuleFingerprint(
+        result.lowered.module,
+        `gleam-project-v1:${
+          structuralFingerprint({
+            entryModule: entry.module,
+            entryExport: entry.exportName,
+            signatures: signatureKey,
+            modules: moduleSemantics,
+          })
+        }`,
+      );
+      if (cached?.result.ok) {
+        tryRegisterLiteralModuleUpdate(
+          cached.result.lowered.module,
+          result.lowered.module,
+        );
+      }
+    }
     return this.#rememberProject(sources, entry, result);
   }
 
@@ -239,6 +443,7 @@ export class GleamFrontendService {
     entry: { readonly module: string; readonly exportName: string },
     result: GleamFrontendResult,
   ): GleamFrontendResult {
+    if (!result.ok) this.#cachedSignatures = undefined;
     this.#cachedProject = {
       sources: sources.map(({ name, source }) => ({ name, source })),
       entryModule: entry.module,
@@ -249,12 +454,45 @@ export class GleamFrontendService {
   }
 
   clear(): void {
-    for (const parser of this.#moduleParsers.values()) parser.dispose();
     this.#moduleParsers.clear();
     this.#parsedModules.clear();
     this.#loweredModules.clear();
     this.#cachedProject = undefined;
+    this.#cachedSignatures = undefined;
   }
+}
+
+function updateLiteralSemanticLineage(
+  previous: LiteralSemanticLineage | undefined,
+  previousSemantics: string,
+  changes: readonly SignedIntegerChange[],
+): LiteralSemanticLineage {
+  const baseSemantics = previous?.baseSemantics ?? previousSemantics;
+  const baseValues = new Map(previous?.baseValues ?? []);
+  const currentValues = new Map(previous?.currentValues ?? []);
+  for (const change of changes) {
+    const key = `${change.startByte}:${change.endByte}`;
+    const baseValue = baseValues.get(key);
+    const currentValue = currentValues.get(key) ?? baseValue ?? change.previousValue;
+    if (currentValue !== change.previousValue) {
+      throw new Error(
+        `Gleam literal fingerprint expected ${currentValue} at bytes ${key}; received ${change.previousValue}`,
+      );
+    }
+    if (baseValue === undefined) baseValues.set(key, change.previousValue);
+    currentValues.set(key, change.updatedValue);
+  }
+  return { baseSemantics, baseValues, currentValues };
+}
+
+function literalSemanticFingerprint(lineage: LiteralSemanticLineage): string {
+  const deviations = [...lineage.currentValues]
+    .filter(([key, value]) => value !== lineage.baseValues.get(key))
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([key, value]) => `${key}:${value}`);
+  return deviations.length === 0
+    ? lineage.baseSemantics
+    : `gleam-literal-v1:${lineage.baseSemantics}:${structuralFingerprint(deviations)}`;
 }
 
 function sourcesDifferOnlyInTrailingTrivia(previous: string, current: string): boolean {

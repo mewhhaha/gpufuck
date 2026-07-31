@@ -1,14 +1,20 @@
-import { deepStrictEqual, equal, ok, throws } from "node:assert/strict";
+import { deepStrictEqual, equal, notDeepStrictEqual, ok, throws } from "node:assert/strict";
 
 import {
+  buildSurfaceModule,
   compileModuleToWasm,
   CompilerPerformanceTrace,
   CpuCompiler,
+  defineEffectOperation,
+  effectSet,
   FunctionalCompilerService,
   renderCompilerPerformanceTrace,
+  runWasmModule,
   summarizeCompilerPerformance,
+  surface,
 } from "../functional.ts";
-import { lowerGleamSources } from "../gleam.ts";
+import { compileWasmArtifact } from "../src/functional/wasm_codegen.ts";
+import { GleamFrontendService, lowerGleamSources } from "../gleam.ts";
 
 Deno.test("compiler performance trace records nested stages and work annotations", () => {
   const ticks = [100, 105, 112, 118, 125];
@@ -163,6 +169,55 @@ Deno.test("performance tracing preserves Gleam Core and Wasm output", async () =
   plainCompilation.module.destroy();
 });
 
+Deno.test("effect analysis prepares lambda flow for Wasm compilation", async () => {
+  const integer = { kind: "integer" as const };
+  const encoded = buildSurfaceModule(
+    [
+      defineEffectOperation({
+        name: "tick",
+        parameter: { name: "value", type: integer },
+        result: integer,
+        effects: effectSet("Clock.Tick"),
+        body: surface.name("value"),
+      }),
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.apply(surface.name("tick"), surface.integer(42)),
+      },
+    ],
+    [],
+    "main",
+    0,
+  );
+  const semanticTrace = new CompilerPerformanceTrace();
+  const compilation = await new CpuCompiler().compileModule(encoded, { trace: semanticTrace });
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const semanticLowering = semanticTrace.snapshot().find((event) =>
+      event.stage === "semantic.effects.lower-wasm-core"
+    );
+    equal(semanticLowering?.annotations.inputNodes, compilation.module.nodeCount);
+    ok(Number(semanticLowering?.annotations.outputNodes) >= compilation.module.nodeCount);
+
+    const wasmTrace = new CompilerPerformanceTrace();
+    await compileModuleToWasm(compilation.module, { trace: wasmTrace });
+    const wasmLowering = wasmTrace.snapshot().find((event) =>
+      event.stage === "wasm.plan.lower-core"
+    );
+    equal(wasmLowering?.annotations.reused, true);
+    equal(
+      wasmTrace.snapshot().some((event) => event.stage === "wasm.emit.lambda-sets"),
+      false,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("performance tracing reports compiler and Wasm cache hits", async () => {
   const frontend = lowerGleamSources(
     [{
@@ -263,4 +318,251 @@ Deno.test("performance tracing reports compiler and Wasm cache hits", async () =
 
   coldCompilation.module.destroy();
   await service.destroy();
+});
+
+Deno.test("incremental project fingerprints recover prior compiled edits", async () => {
+  const frontend = new GleamFrontendService();
+  const compiler = new FunctionalCompilerService({ backend: "cpu" });
+  const entry = { module: "main", exportName: "main" };
+  const compile = async (value: number, trace?: CompilerPerformanceTrace) => {
+    const lowered = frontend.lower(
+      [{ name: "main", source: `pub fn main() -> Int { "λ" ${value} }\n` }],
+      entry,
+      trace === undefined ? {} : { trace },
+    );
+    if (!lowered.ok) throw new Error(lowered.diagnostics[0].message);
+    const compilation = await compiler.compileModule(
+      lowered.lowered.module,
+      trace === undefined ? {} : { trace },
+    );
+    if (!compilation.ok) throw new Error(compilation.diagnostics[0].message);
+    const wasm = await compileModuleToWasm(
+      compilation.module,
+      trace === undefined ? {} : { trace },
+    );
+    return { surface: lowered.lowered.module, module: compilation.module, wasm };
+  };
+
+  const first = await compile(63);
+  const changedTrace = new CompilerPerformanceTrace();
+  const second = await compile(64, changedTrace);
+  const chainedTrace = new CompilerPerformanceTrace();
+  const third = await compile(65, chainedTrace);
+  const trace = new CompilerPerformanceTrace();
+  const recovered = await compile(63, trace);
+
+  const changedSemanticCache = changedTrace.snapshot().find((event) =>
+    event.stage === "semantic.service-cache"
+  );
+  equal(changedSemanticCache?.annotations.cacheLevel, "literal-update");
+  equal(
+    changedTrace.snapshot().some((event) => event.stage === "semantic.inference.solve"),
+    false,
+  );
+  const loweredUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.lower.literal-update"
+  );
+  equal(loweredUpdate?.annotations.changedLiterals, 1);
+  const parsedUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.parse.materialize"
+  );
+  equal(parsedUpdate?.annotations.cacheHit, true);
+  const signatureUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.signatures.value"
+  );
+  equal(signatureUpdate?.annotations.cacheHit, true);
+  const semanticFingerprint = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.lower.semantic-fingerprint"
+  );
+  equal(semanticFingerprint?.annotations.incremental, true);
+  const linkedUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "frontend.link.literal-update"
+  );
+  equal(linkedUpdate?.annotations.changedNodes, 1);
+  const incrementalArtifact = changedTrace.snapshot().find((event) =>
+    event.stage === "wasm.artifact.resolved-core"
+  );
+  equal(incrementalArtifact?.annotations.incremental, true);
+  equal(
+    changedTrace.snapshot().some((event) => event.stage === "wasm.plan.index-core"),
+    false,
+  );
+  const wasmPlanUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "wasm.plan.literal-update"
+  );
+  equal(wasmPlanUpdate?.annotations.changedNodes, 1);
+  const wasmEmissionUpdate = changedTrace.snapshot().find((event) =>
+    event.stage === "wasm.emit.literal-update"
+  );
+  equal(wasmEmissionUpdate?.annotations.changedImmediates, 2);
+  const wasmEncoding = changedTrace.snapshot().find((event) => event.stage === "wasm.encode");
+  ok(Number(wasmEncoding?.annotations.reusedFunctionBodies) > 0);
+  equal(wasmEncoding?.annotations.reusedSectionsBeforeCode, true);
+  equal(
+    changedTrace.snapshot().some((event) => event.stage === "wasm.emit.closures"),
+    false,
+  );
+  notDeepStrictEqual(second.wasm, first.wasm);
+  const fullyLowered = lowerGleamSources(
+    [{ name: "main", source: 'pub fn main() -> Int { "λ" 64 }\n' }],
+    entry,
+  );
+  if (!fullyLowered.ok) throw new Error(fullyLowered.diagnostics[0].message);
+  deepStrictEqual(second.surface, fullyLowered.lowered.module);
+  const fullArtifact = compileWasmArtifact(
+    second.module,
+    await second.module.readCoreNodes(),
+  );
+  deepStrictEqual(second.wasm, fullArtifact.bytes);
+  const chainedFullArtifact = compileWasmArtifact(
+    third.module,
+    await third.module.readCoreNodes(),
+  );
+  deepStrictEqual(third.wasm, chainedFullArtifact.bytes);
+  equal(
+    chainedTrace.snapshot().some((event) => event.stage === "wasm.emit.literal-update"),
+    true,
+  );
+  const execution = await runWasmModule(second.module);
+  equal(execution.value.kind, "signed-integer-64");
+  equal(execution.value.kind === "signed-integer-64" ? execution.value.value : undefined, 64n);
+
+  const semanticCache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
+  equal(semanticCache?.annotations.cacheHit, true);
+  equal(semanticCache?.annotations.cacheLevel, "semantics");
+  const coreCache = trace.snapshot().find((event) => event.stage === "wasm.artifact.resolved-core");
+  equal(coreCache?.annotations.cacheHit, true);
+  equal(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"), false);
+  equal(trace.snapshot().some((event) => event.stage === "wasm.emit"), false);
+  deepStrictEqual(recovered.wasm, first.wasm);
+
+  first.module.destroy();
+  second.module.destroy();
+  third.module.destroy();
+  recovered.module.destroy();
+  frontend.clear();
+  await compiler.destroy();
+});
+
+Deno.test("incremental semantic reuse rejects structural expression edits", async () => {
+  const frontend = new GleamFrontendService();
+  const compiler = new FunctionalCompilerService({ backend: "cpu" });
+  const entry = { module: "main", exportName: "main" };
+  const first = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 41 + 1 }\n" }],
+    entry,
+  );
+  if (!first.ok) throw new Error(first.diagnostics[0].message);
+  const firstCompilation = await compiler.compileModule(first.lowered.module);
+  if (!firstCompilation.ok) throw new Error(firstCompilation.diagnostics[0].message);
+
+  const trace = new CompilerPerformanceTrace();
+  const second = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 41 - 1 }\n" }],
+    entry,
+    { trace },
+  );
+  if (!second.ok) throw new Error(second.diagnostics[0].message);
+  const secondCompilation = await compiler.compileModule(second.lowered.module, { trace });
+  if (!secondCompilation.ok) throw new Error(secondCompilation.diagnostics[0].message);
+
+  const semanticCache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
+  equal(semanticCache?.annotations.cacheLevel, "none");
+  const linkedUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.link.literal-update"
+  );
+  const loweredUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.lower.literal-update"
+  );
+  equal(loweredUpdate?.annotations.changedLiterals, 0);
+  const parsedUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.parse.materialize"
+  );
+  equal(parsedUpdate?.annotations.cacheHit, false);
+  const syntaxParse = trace.snapshot().find((event) => event.stage === "frontend.parse.syntax");
+  equal(syntaxParse?.annotations.reparse, true);
+  const signatureUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.signatures.value"
+  );
+  equal(signatureUpdate?.annotations.cacheHit, false);
+  const semanticFingerprint = trace.snapshot().find((event) =>
+    event.stage === "frontend.lower.semantic-fingerprint"
+  );
+  equal(semanticFingerprint?.annotations.incremental, false);
+  equal(linkedUpdate?.annotations.changedNodes, 0);
+  ok(trace.snapshot().some((event) => event.stage === "frontend.link"));
+  ok(trace.snapshot().some((event) => event.stage === "semantic.inference.solve"));
+
+  firstCompilation.module.destroy();
+  secondCompilation.module.destroy();
+  frontend.clear();
+  await compiler.destroy();
+});
+
+Deno.test("incremental lowering rejects shifted source locations", () => {
+  const frontend = new GleamFrontendService();
+  const entry = { module: "main", exportName: "main" };
+  const first = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 42 }\n" }],
+    entry,
+  );
+  if (!first.ok) throw new Error(first.diagnostics[0].message);
+
+  const shiftedSource = "pub fn main() -> Int {\n  42\n}\n";
+  const trace = new CompilerPerformanceTrace();
+  const shifted = frontend.lower(
+    [{ name: "main", source: shiftedSource }],
+    entry,
+    { trace },
+  );
+  if (!shifted.ok) throw new Error(shifted.diagnostics[0].message);
+  const fresh = lowerGleamSources(
+    [{ name: "main", source: shiftedSource }],
+    entry,
+  );
+  if (!fresh.ok) throw new Error(fresh.diagnostics[0].message);
+
+  notDeepStrictEqual(
+    shifted.lowered.modules[0]?.definitions,
+    first.lowered.modules[0]?.definitions,
+  );
+  deepStrictEqual(shifted.lowered.module, fresh.lowered.module);
+  const locationFingerprint = trace.snapshot().find((event) =>
+    event.stage === "frontend.lower.location-fingerprint"
+  );
+  equal(locationFingerprint?.annotations.previousCached, false);
+
+  frontend.clear();
+});
+
+Deno.test("incremental integer patterns match fresh lowering", () => {
+  const frontend = new GleamFrontendService();
+  const entry = { module: "main", exportName: "main" };
+  const source = (subject: number, pattern: number) => `
+pub fn main() -> Int {
+  case ${subject} {
+    ${pattern} -> 10
+    _ -> 20
+  }
+}
+`;
+  const first = frontend.lower([{ name: "main", source: source(2, 1) }], entry);
+  if (!first.ok) throw new Error(first.diagnostics[0].message);
+  const trace = new CompilerPerformanceTrace();
+  const updated = frontend.lower(
+    [{ name: "main", source: source(3, 3) }],
+    entry,
+    { trace },
+  );
+  if (!updated.ok) throw new Error(updated.diagnostics[0].message);
+  const fresh = lowerGleamSources([{ name: "main", source: source(3, 3) }], entry);
+  if (!fresh.ok) throw new Error(fresh.diagnostics[0].message);
+
+  deepStrictEqual(updated.lowered.module, fresh.lowered.module);
+  const loweredUpdate = trace.snapshot().find((event) =>
+    event.stage === "frontend.lower.literal-update"
+  );
+  equal(loweredUpdate?.annotations.changedLiterals, 2);
+
+  frontend.clear();
 });

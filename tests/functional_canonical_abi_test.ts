@@ -189,10 +189,11 @@ Deno.test("canonical ABI host operations use the full structural boundary", asyn
         }],
       },
     });
-    let memory: WebAssembly.Memory | undefined;
+    const memoryReference: { current?: WebAssembly.Memory } = {};
     const { instance } = await WebAssembly.instantiate(bytes, {
       "blot:host/Exchange": {
         exchange(left: bigint, right: bigint, result: number) {
+          const memory = memoryReference.current;
           if (memory === undefined) throw new Error("memory is not initialized");
           const view = new DataView(memory.buffer);
           view.setBigInt64(result, right, true);
@@ -202,13 +203,13 @@ Deno.test("canonical ABI host operations use the full structural boundary", asyn
     });
     const exportedMemory = instance.exports.memory;
     ok(exportedMemory instanceof WebAssembly.Memory);
-    memory = exportedMemory;
+    memoryReference.current = exportedMemory;
     const roundtrip = instance.exports["blot:roundtrip"];
     const postReturn = instance.exports["cabi_post_blot:roundtrip"];
     ok(typeof roundtrip === "function");
     ok(typeof postReturn === "function");
     const result = roundtrip(20n, 22n);
-    const view = new DataView(memory.buffer);
+    const view = new DataView(exportedMemory.buffer);
     equal(view.getBigInt64(result, true), 22n);
     equal(view.getBigInt64(result + 8, true), 20n);
     postReturn(result);
@@ -384,12 +385,13 @@ Deno.test("canonical ABI accepts and releases empty host text", async () => {
         }],
       },
     });
-    let importedMemory: WebAssembly.Memory | undefined;
+    const memoryReference: { current?: WebAssembly.Memory } = {};
     const { instance } = await WebAssembly.instantiate(bytes, {
       "blot:host/Source": {
         read(resultPointer: number) {
-          ok(importedMemory instanceof WebAssembly.Memory);
-          const view = new DataView(importedMemory.buffer);
+          const memory = memoryReference.current;
+          ok(memory instanceof WebAssembly.Memory);
+          const view = new DataView(memory.buffer);
           view.setUint32(resultPointer, 0, true);
           view.setUint32(resultPointer + 4, 0, true);
         },
@@ -401,7 +403,7 @@ Deno.test("canonical ABI accepts and releases empty host text", async () => {
     ok(typeof read === "function");
     ok(typeof postReturn === "function");
     ok(memory instanceof WebAssembly.Memory);
-    importedMemory = memory;
+    memoryReference.current = memory;
     for (let call = 0; call < 2; call += 1) {
       const resultPointer: number = Number(read());
       const view: DataView = new DataView(memory.buffer);

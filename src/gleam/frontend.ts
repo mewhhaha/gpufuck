@@ -39,6 +39,18 @@ export type GleamFrontendResult =
     readonly diagnostics: readonly [GleamDiagnostic, ...GleamDiagnostic[]];
   };
 
+interface LowerParsedGleamModuleOptions {
+  readonly trace?: CompilerPerformanceTrace;
+  readonly signatures?: readonly GleamExportSignature[];
+  readonly captureSignatures?: (signatures: readonly GleamExportSignature[]) => void;
+  readonly link?: (
+    modules: readonly GleamModule[],
+    loweredModules: readonly LoweredGleamModule[],
+    entry: { readonly module: string; readonly exportName: string },
+    trace?: CompilerPerformanceTrace,
+  ) => GleamFrontendResult;
+}
+
 export function lowerGleamSources(
   sources: readonly GleamSourceModule[],
   entry: { readonly module: string; readonly exportName: string },
@@ -109,7 +121,9 @@ export function lowerGleamSources(
     return modules;
   });
   if (!Array.isArray(parsed)) return parsed;
-  return lowerParsedGleamModules(parsed, entry, lowerGleamModule, options.trace);
+  return lowerParsedGleamModules(parsed, entry, lowerGleamModule, {
+    ...(options.trace === undefined ? {} : { trace: options.trace }),
+  });
 }
 
 export function lowerParsedGleamModules(
@@ -119,22 +133,34 @@ export function lowerParsedGleamModules(
     module: GleamModule,
     signatures: readonly GleamExportSignature[],
   ) => LoweredGleamModule = lowerGleamModule,
-  trace?: CompilerPerformanceTrace,
+  options: LowerParsedGleamModuleOptions = {},
 ): GleamFrontendResult {
-  const signatures: GleamExportSignature[] = [];
-  const nominalAnnotations = { modules: modules.length, signatures: 0 };
+  const trace = options.trace;
+  const signatures: GleamExportSignature[] = [...(options.signatures ?? [])];
+  const signaturesCached = options.signatures !== undefined;
+  const nominalAnnotations = {
+    modules: modules.length,
+    signatures: signaturesCached ? signatures.length : 0,
+    cacheHit: signaturesCached,
+  };
   measureCompilerStage(trace, "frontend.signatures.nominal", nominalAnnotations, () => {
+    if (signaturesCached) return;
     for (const module of modules) {
       signatures.push(...gleamNominalExportSignatures(module));
     }
     nominalAnnotations.signatures = signatures.length;
   });
-  const valueAnnotations = { modules: modules.length, signatures: 0 };
+  const valueAnnotations = {
+    modules: modules.length,
+    signatures: signaturesCached ? signatures.length : 0,
+    cacheHit: signaturesCached,
+  };
   const signatureDiagnostic = measureCompilerStage(
     trace,
     "frontend.signatures.value",
     valueAnnotations,
     () => {
+      if (signaturesCached) return null;
       for (const module of modules) {
         try {
           signatures.push(...gleamValueExportSignatures(module, signatures));
@@ -150,6 +176,7 @@ export function lowerParsedGleamModules(
     },
   );
   if (signatureDiagnostic !== null) return signatureDiagnostic;
+  options.captureSignatures?.(Object.freeze([...signatures]));
 
   const loweredModules: LoweredGleamModule[] = [];
   const lowerAnnotations = { modules: modules.length, signatures: signatures.length };
@@ -184,7 +211,7 @@ export function lowerParsedGleamModules(
   );
   if (loweringDiagnostic !== null) return loweringDiagnostic;
 
-  return linkLoweredGleamModules(modules, loweredModules, entry, trace);
+  return (options.link ?? linkLoweredGleamModules)(modules, loweredModules, entry, trace);
 }
 
 export function linkLoweredGleamModules(
@@ -238,6 +265,7 @@ export function linkLoweredGleamModules(
         linkModules(
           artifacts,
           entryArtifact === null ? entry : { module: entryArtifact.name, exportName: "main" },
+          trace === undefined ? {} : { trace },
         ),
       (result) => {
         linkAnnotations.nodes = result.module.nodeCount;

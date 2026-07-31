@@ -16,6 +16,10 @@ import {
   type SurfaceExpression,
   type SurfaceTypeDeclaration,
 } from "./surface_builder.ts";
+import {
+  type CompilerPerformanceTrace,
+  measureCompilerStage,
+} from "../compiler_performance_trace.ts";
 
 export type LinkDiagnosticCode =
   | "F4001"
@@ -115,6 +119,10 @@ export type LinkedSource = SourceRange;
 export interface LinkedModule {
   readonly module: EncodedModule;
   readonly sources: readonly LinkedSource[];
+}
+
+export interface ModuleLinkOptions {
+  readonly trace?: CompilerPerformanceTrace;
 }
 
 export function createModuleArtifact(
@@ -291,6 +299,7 @@ function freezeModuleArtifact(artifact: ModuleArtifact): ModuleArtifact {
 export function linkModules(
   artifacts: readonly ModuleArtifact[],
   entry: { readonly module: string; readonly exportName: string },
+  options: ModuleLinkOptions = {},
 ): LinkedModule {
   if (artifacts.length === 0) {
     throw new LinkError({
@@ -299,6 +308,8 @@ export function linkModules(
       message: "functional module linker requires at least one module",
     });
   }
+  const indexAnnotations = { modules: artifacts.length, exports: 0 };
+  const indexSpan = options.trace?.start("frontend.link.index");
   const modules = new Map<string, ModuleArtifact>();
   for (const candidate of artifacts) {
     const artifact = snapshottedModules.has(candidate)
@@ -337,10 +348,23 @@ export function linkModules(
       );
     }
   }
-  const artifactReachability = artifactDefinitionReachability(
-    modules,
-    exportedDefinitions,
-    entry,
+  indexAnnotations.exports = exportedDefinitions.size + exportedTypes.size +
+    exportedConstructors.size;
+  indexSpan?.finish(indexAnnotations);
+  const reachabilityAnnotations = { modules: modules.size, definitions: 0 };
+  const artifactReachability = measureCompilerStage(
+    options.trace,
+    "frontend.link.reachability",
+    reachabilityAnnotations,
+    () =>
+      artifactDefinitionReachability(
+        modules,
+        exportedDefinitions,
+        entry,
+      ),
+    (reachability) => {
+      reachabilityAnnotations.definitions = reachability.definitionNames.size;
+    },
   );
   const linkedDefinitions: SurfaceDefinition[] = [];
   const linkedTypes: SurfaceTypeDeclaration[] = [];
@@ -356,6 +380,7 @@ export function linkModules(
   let sourceBase = 0;
   let evaluationProfile: EvaluationProfile | undefined;
 
+  const rewriteSpan = options.trace?.start("frontend.link.rewrite");
   for (const artifact of modules.values()) {
     const profile = artifact.options.evaluationProfile ?? EvaluationProfile.StrictEager;
     if (evaluationProfile !== undefined && evaluationProfile !== profile) {
@@ -589,6 +614,7 @@ export function linkModules(
     }
     sourceBase += artifact.sourceByteLength;
   }
+  rewriteSpan?.finish({ modules: modules.size });
   const entryDefinition = exportedDefinitions.get(exportKey(entry.module, entry.exportName));
   if (entryDefinition === undefined) {
     throw new LinkError({
@@ -620,17 +646,27 @@ export function linkModules(
         fields: capability.fields.filter((field) => fields.has(field.name)),
       }];
     });
-  const module = buildSurfaceModule(
-    linkedDefinitions,
-    linkedTypes,
-    entryDefinition,
-    sourceBase,
+  const module = measureCompilerStage(
+    options.trace,
+    "frontend.link.pack",
     {
-      hostCapabilities: reachableCapabilities,
-      hostDefinitions: reachableHostDefinitions,
-      evaluationProfile: evaluationProfile ?? EvaluationProfile.StrictEager,
-      wasmExports: linkedWasmExports,
+      definitions: linkedDefinitions.length,
+      types: linkedTypes.length,
+      sourceBytes: sourceBase,
     },
+    () =>
+      buildSurfaceModule(
+        linkedDefinitions,
+        linkedTypes,
+        entryDefinition,
+        sourceBase,
+        {
+          hostCapabilities: reachableCapabilities,
+          hostDefinitions: reachableHostDefinitions,
+          evaluationProfile: evaluationProfile ?? EvaluationProfile.StrictEager,
+          wasmExports: linkedWasmExports,
+        },
+      ),
   );
   return {
     module: { ...module, sources: Object.freeze(sources) },
@@ -646,8 +682,12 @@ function artifactDefinitionReachability(
   readonly definitionNames: ReadonlySet<string>;
   readonly referencedSymbols: ReadonlySet<string>;
 } {
-  const dependencies = new Map<string, Set<string>>();
-  const symbolsByDefinition = new Map<string, Set<string>>();
+  const definitionScopes = new Map<string, {
+    readonly definition: SurfaceDefinition;
+    readonly localDefinitions: ReadonlyMap<string, string>;
+    readonly importedDefinitions: ReadonlyMap<string, string>;
+  }>();
+  const importedTargets = new Map<string, string | undefined>();
   const roots: string[] = [];
   const entryDefinition = exportedDefinitions.get(exportKey(entry.module, entry.exportName));
   if (entryDefinition !== undefined) roots.push(entryDefinition);
@@ -666,26 +706,15 @@ function artifactDefinitionReachability(
         exportKey(imported.fromModule, imported.exportName),
       );
       importedDefinitions.set(imported.name, alias);
-      dependencies.set(alias, new Set(target === undefined ? [] : [target]));
-      symbolsByDefinition.set(alias, new Set(target === undefined ? [] : [target]));
+      importedTargets.set(alias, target);
     }
     for (const definition of artifact.definitions) {
       const name = localDefinitions.get(definition.name)!;
-      const referenced = new Set<string>();
-      const symbols = new Set<string>();
-      collectReferencedDefinitions(
-        definition.body,
-        new Map(definition.parameters.map((parameter) => [parameter, 1])),
-        (reference) => {
-          symbols.add(reference);
-          const target = importedDefinitions.get(reference) ??
-            localDefinitions.get(reference);
-          if (target !== undefined) referenced.add(target);
-        },
-        (constructor) => symbols.add(constructor),
-      );
-      dependencies.set(name, referenced);
-      symbolsByDefinition.set(name, symbols);
+      definitionScopes.set(name, {
+        definition,
+        localDefinitions,
+        importedDefinitions,
+      });
     }
     for (const exported of artifact.options.wasmExports ?? []) {
       const root = localDefinitions.get(exported.definition);
@@ -700,12 +729,27 @@ function artifactDefinitionReachability(
     const definition = pending.pop()!;
     if (reachable.has(definition)) continue;
     reachable.add(definition);
-    for (const symbol of symbolsByDefinition.get(definition) ?? []) {
-      referencedSymbols.add(symbol);
+    if (importedTargets.has(definition)) {
+      const target = importedTargets.get(definition);
+      if (target !== undefined) {
+        referencedSymbols.add(target);
+        if (!reachable.has(target)) pending.push(target);
+      }
+      continue;
     }
-    for (const dependency of dependencies.get(definition) ?? []) {
-      if (!reachable.has(dependency)) pending.push(dependency);
-    }
+    const scope = definitionScopes.get(definition);
+    if (scope === undefined) continue;
+    collectReferencedDefinitions(
+      scope.definition.body,
+      new Map(scope.definition.parameters.map((parameter) => [parameter, 1])),
+      (reference) => {
+        referencedSymbols.add(reference);
+        const target = scope.importedDefinitions.get(reference) ??
+          scope.localDefinitions.get(reference);
+        if (target !== undefined && !reachable.has(target)) pending.push(target);
+      },
+      (constructor) => referencedSymbols.add(constructor),
+    );
   }
   return { definitionNames: reachable, referencedSymbols };
 }

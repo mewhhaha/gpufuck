@@ -49,7 +49,7 @@ export function createStoragePlan(
   return createLoweredCoreStoragePlan(
     module,
     loweredNodes,
-    new WasmCaptureAnalysis(loweredNodes),
+    new WasmCaptureAnalysis(module, loweredNodes),
     options,
     coreIndex,
   );

@@ -69,6 +69,13 @@ export function registerEquivalentModuleFingerprint(
   fingerprints.set(equivalent, semanticModuleFingerprint(reference));
 }
 
+export function registerModuleFingerprint(
+  module: EncodedModule,
+  fingerprint: string,
+): void {
+  fingerprints.set(module, fingerprint);
+}
+
 export function structuralFingerprint(
   value: unknown,
   options: { readonly includeSourceLocations?: boolean } = {},
@@ -129,6 +136,13 @@ export function registerEquivalentResolvedCoreFingerprint(
 ): void {
   const fingerprint = resolvedCoreFingerprints.get(reference);
   if (fingerprint !== undefined) resolvedCoreFingerprints.set(equivalent, fingerprint);
+}
+
+export function registerResolvedCoreFingerprint(
+  module: CompiledModule,
+  fingerprint: string,
+): void {
+  resolvedCoreFingerprints.set(module, fingerprint);
 }
 
 class StructuralHash {

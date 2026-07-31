@@ -5,7 +5,12 @@ import {
   measureCompilerStage,
   measureCompilerStageAsync,
 } from "../compiler_performance_trace.ts";
-import { compileWasmArtifact, type WasmArtifact } from "./wasm_codegen.ts";
+import { compiledLiteralUpdate } from "./compiled_module_rebinding.ts";
+import {
+  compileWasmArtifact,
+  compileWasmArtifactWithSignedLiteralUpdate,
+  type WasmArtifact,
+} from "./wasm_codegen.ts";
 import { resolvedCoreStructuralFingerprint } from "./semantic_fingerprint.ts";
 import { validateWasmSimdMode } from "./wasm_backend_plan.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
@@ -193,7 +198,7 @@ async function sharedWasmArtifact(
   nodes: readonly CoreNode[],
   trace?: CompilerPerformanceTrace,
 ): Promise<WasmArtifact> {
-  const annotations = { backend: "linear-memory", cacheHit: false };
+  const annotations = { backend: "linear-memory", cacheHit: false, incremental: false };
   return await measureCompilerStageAsync(
     trace,
     "wasm.artifact.resolved-core",
@@ -207,9 +212,23 @@ async function sharedWasmArtifact(
         wasmArtifactsByResolvedCore.set(fingerprint, cached);
         return await cached;
       }
-      const compilation = Promise.resolve().then(() =>
-        compileWasmArtifact(module, nodes, false, {}, trace)
-      );
+      const literalUpdate = compiledLiteralUpdate(module);
+      const referenceArtifact = literalUpdate === undefined
+        ? undefined
+        : wasmArtifactsByModule.get(literalUpdate.reference);
+      const compilation = Promise.resolve().then(async () => {
+        if (literalUpdate !== undefined && referenceArtifact !== undefined) {
+          annotations.incremental = true;
+          return compileWasmArtifactWithSignedLiteralUpdate(
+            module,
+            nodes,
+            await referenceArtifact,
+            literalUpdate.changedNodes,
+            trace,
+          );
+        }
+        return compileWasmArtifact(module, nodes, false, {}, trace);
+      });
       wasmArtifactsByResolvedCore.set(fingerprint, compilation);
       evictOldestResolvedCoreArtifacts(wasmArtifactsByResolvedCore);
       try {

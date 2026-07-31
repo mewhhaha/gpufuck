@@ -88,6 +88,29 @@ Deno.test("Gleam frontend service reuses an unchanged project", () => {
   frontend.clear();
 });
 
+Deno.test("Gleam frontend service reuses linked source geometry", () => {
+  const frontend = new GleamFrontendService();
+  const entry = { module: "main", exportName: "main" };
+  const source = "pub fn main() -> Int { 42 }\n";
+  const first = frontend.lower(
+    [{ name: "main", source: `${source}// source one\n` }],
+    entry,
+  );
+  const trace = new CompilerPerformanceTrace();
+  const second = frontend.lower(
+    [{ name: "main", source: `${source}// source two\n` }],
+    entry,
+    { trace },
+  );
+  ok(first.ok);
+  ok(second.ok);
+  if (!first.ok || !second.ok) return;
+  strictEqual(second.lowered.module, first.lowered.module);
+  const link = trace.snapshot().find((event) => event.stage === "frontend.link");
+  equal(link?.annotations.cacheHit, true);
+  frontend.clear();
+});
+
 Deno.test("trailing trivia reuse distinguishes comment markers inside strings", () => {
   const frontend = new GleamFrontendService();
   const first = frontend.lower(
@@ -105,7 +128,7 @@ Deno.test("trailing trivia reuse distinguishes comment markers inside strings", 
   frontend.clear();
 });
 
-Deno.test("Gleam frontend service incrementally reparses internal edits", () => {
+Deno.test("Gleam frontend service reparses internal edits", () => {
   const frontend = new GleamFrontendService();
   const declarations = Array.from(
     { length: 64 },
@@ -130,21 +153,10 @@ Deno.test("Gleam frontend service incrementally reparses internal edits", () => 
   if (!first.ok || !edited.ok) return;
   equal(edited.lowered.module === first.lowered.module, false);
 
-  const incremental = trace.snapshot().find((event) =>
-    event.stage === "frontend.parse.incremental"
-  );
-  equal(incremental?.annotations.replacedCharacters, 1);
-  equal(incremental?.annotations.insertedCharacters, 1);
-  ok(
-    typeof incremental?.annotations.scannedCodeUnits === "number" &&
-      incremental.annotations.scannedCodeUnits < editedSource.length,
-  );
-  ok(
-    typeof incremental?.annotations.reusedCheckpoints === "number" &&
-      incremental.annotations.reusedCheckpoints > 0,
-  );
+  const syntax = trace.snapshot().find((event) => event.stage === "frontend.parse.syntax");
+  equal(syntax?.annotations.reparse, true);
   const moduleParse = trace.snapshot().find((event) => event.stage === "frontend.parse.module");
-  equal(moduleParse?.annotations.incremental, true);
+  equal(moduleParse?.annotations.reparse, true);
 
   const empty = frontend.lower([], entry);
   equal(empty.ok, false);
@@ -155,10 +167,10 @@ Deno.test("Gleam frontend service incrementally reparses internal edits", () => 
     { trace: afterRemovalTrace },
   );
   ok(afterRemoval.ok);
-  equal(
-    afterRemovalTrace.snapshot().some((event) => event.stage === "frontend.parse.incremental"),
-    false,
+  const afterRemovalSyntax = afterRemovalTrace.snapshot().find((event) =>
+    event.stage === "frontend.parse.syntax"
   );
+  equal(afterRemovalSyntax?.annotations.reparse, false);
 
   frontend.clear();
   const afterClearTrace = new CompilerPerformanceTrace();
@@ -168,14 +180,14 @@ Deno.test("Gleam frontend service incrementally reparses internal edits", () => 
     { trace: afterClearTrace },
   );
   ok(afterClear.ok);
-  equal(
-    afterClearTrace.snapshot().some((event) => event.stage === "frontend.parse.incremental"),
-    false,
+  const afterClearSyntax = afterClearTrace.snapshot().find((event) =>
+    event.stage === "frontend.parse.syntax"
   );
+  equal(afterClearSyntax?.annotations.reparse, false);
   frontend.clear();
 });
 
-Deno.test("Gleam frontend service recovers an incremental document after a syntax error", () => {
+Deno.test("Gleam frontend service reparses after a syntax error", () => {
   const frontend = new GleamFrontendService();
   const entry = { module: "main", exportName: "main" };
   const valid = frontend.lower(
@@ -198,7 +210,8 @@ Deno.test("Gleam frontend service recovers an incremental document after a synta
     { trace },
   );
   ok(corrected.ok);
-  ok(trace.snapshot().some((event) => event.stage === "frontend.parse.incremental"));
+  const syntax = trace.snapshot().find((event) => event.stage === "frontend.parse.syntax");
+  equal(syntax?.annotations.reparse, true);
   frontend.clear();
 });
 

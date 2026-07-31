@@ -22,6 +22,7 @@ import {
   measureCompilerStageAsync,
   renderCompilerPerformanceTrace,
   requestWebGpuDevice,
+  runWasmModule,
   summarizeCompilerPerformance,
 } from "../functional.ts";
 import { GleamFrontendService, type GleamSourceModule, lowerGleamSources } from "../gleam.ts";
@@ -325,6 +326,70 @@ try {
   wasmSamples.sort((left, right) => left - right);
   const wasmMilliseconds = wasmSamples[Math.floor(wasmSamples.length / 2)]!;
 
+  const emptyRuntimeResult = "\n  Nil\n}\n";
+  if (!entry.source.endsWith(emptyRuntimeResult)) {
+    throw new Error("generated stdlib entry does not end in its expected Nil result");
+  }
+  const runtimeEntry = {
+    ...entry,
+    source: `${
+      entry.source.slice(0, -emptyRuntimeResult.length)
+    }\n  gleam_list.fold(\n    gleam_list.map(gleam_list.repeat(1, 10_000), fn(value) { value + 1 }),\n    0,\n    fn(value, total) { value + total },\n  )\n}\n`,
+  };
+  const runtimeFrontend = lowerGleamSources(
+    [...sources, runtimeEntry],
+    { module: runtimeEntry.name, exportName: "main" },
+  );
+  if (!runtimeFrontend.ok) {
+    throw new Error(
+      `runtime lowering failed: ${runtimeFrontend.diagnostics[0]?.message}`,
+    );
+  }
+  const runtimeCompilation = await cpuCompiler.compileModule(runtimeFrontend.lowered.module);
+  if (!runtimeCompilation.ok) {
+    throw new Error(
+      `runtime CPU compilation failed: ${runtimeCompilation.diagnostics[0]?.code}`,
+    );
+  }
+  const benchmarkInit: Record<string, Record<string, () => never>> = Object.fromEntries(
+    runtimeCompilation.module.hostCapabilities.map((capability) => [
+      capability.name,
+      Object.fromEntries(capability.fields.flatMap((field) => {
+        if (field.kind === "value") {
+          if (field.wasmLiteral !== undefined) return [];
+          throw new Error(
+            `stdlib runtime benchmark cannot stub host value ${
+              JSON.stringify(`${capability.name}.${field.name}`)
+            }`,
+          );
+        }
+        if (field.wasmIntrinsic !== undefined) return [];
+        return [[field.name, () => {
+          throw new Error(
+            `stdlib runtime benchmark unexpectedly called ${
+              JSON.stringify(`${capability.name}.${field.name}`)
+            }`,
+          );
+        }]];
+      })),
+    ]),
+  );
+  const wasmRuntimeMilliseconds = await median(async () => {
+    const execution = await runWasmModule(runtimeCompilation.module, { init: benchmarkInit });
+    if (
+      execution.value.kind !== "signed-integer-64" ||
+      execution.value.value !== 20_000n
+    ) {
+      throw new Error(
+        `stdlib benchmark entry expected 20000; received ${
+          JSON.stringify(execution.value, (_key, value) =>
+            typeof value === "bigint" ? value.toString() : value)
+        }`,
+      );
+    }
+  });
+  runtimeCompilation.module.destroy();
+
   const cpuInferenceMilliseconds = await median(() => {
     const inferred = inferTypes(frontend.lowered.module);
     if (!inferred.ok) {
@@ -519,20 +584,15 @@ try {
   };
   const internalCodeEditCompleteWithWasm = await median(compileInternalCodeEdit);
   const representativeInternalEditTrace = representativePipelineTrace(incrementalTraces);
-  const incrementalEvent = representativeInternalEditTrace.snapshot().find((event) =>
-    event.stage === "frontend.parse.incremental"
+  const reparseEvent = representativeInternalEditTrace.snapshot().find((event) =>
+    event.stage === "frontend.parse.syntax" && event.annotations.reparse === true
   );
-  if (incrementalEvent === undefined) {
-    throw new Error("internal-code edit trace omitted frontend.parse.incremental");
+  if (reparseEvent === undefined) {
+    throw new Error("internal-code edit trace omitted its frontend.parse.syntax reparse");
   }
-  const incrementalEditWork = {
-    scannedCodeUnits: incrementalEvent.annotations.scannedCodeUnits,
-    createdTokens: incrementalEvent.annotations.createdTokens,
-    reusedTokens: incrementalEvent.annotations.reusedTokens,
-    parserActions: incrementalEvent.annotations.parserActions,
-    reuseChecks: incrementalEvent.annotations.reuseChecks,
-    reusedCheckpoints: incrementalEvent.annotations.reusedCheckpoints,
-    createdCheckpoints: incrementalEvent.annotations.createdCheckpoints,
+  const parserEditWork = {
+    sourceCharacters: reparseEvent.annotations.sourceCharacters,
+    reparse: reparseEvent.annotations.reparse,
   };
   const tracedInternalCodeEditMilliseconds = medianStageMilliseconds(incrementalTraces);
   const tracedInternalCodeEditBreakdown = pipelineBreakdown(representativeInternalEditTrace);
@@ -554,6 +614,7 @@ try {
         gpuResolveAndInfer: Number(gpuMilliseconds.toFixed(1)),
         cpuHindleyMilnerOracle: Number(cpuInferenceMilliseconds.toFixed(1)),
         emitWasm: Number(wasmMilliseconds.toFixed(1)),
+        runWasm: Number(wasmRuntimeMilliseconds.toFixed(1)),
         cpuCompleteWithWasm: Number(cpuCompleteWithWasm.toFixed(1)),
         gpuCompleteWithWasm: Number(gpuCompleteWithWasm.toFixed(1)),
         warmCompleteWithWasm: Number(warmCompleteWithWasm.toFixed(3)),
@@ -566,7 +627,7 @@ try {
         gleamSourceOnlyEditBuild: Number(gleamMilliseconds.sourceOnlyEdit.toFixed(1)),
         gleamInternalCodeEditBuild: Number(gleamMilliseconds.internalCodeEdit.toFixed(1)),
       },
-      incrementalEditWork,
+      parserEditWork,
       tracedSourceOnlyEditMilliseconds,
       tracedSourceOnlyEditBreakdown,
       tracedInternalCodeEditMilliseconds,
@@ -687,11 +748,13 @@ function pipelineBreakdown(
     "frontend.signatures.value",
     "frontend.lower",
     "frontend.link",
+    "frontend.link.literal-update",
   ].reduce((sum, stage) => sum + (stages.get(stage) ?? 0), 0);
   const semantic = [
     "semantic.fingerprint",
     "semantic.service-cache",
     "semantic.rebind-source",
+    "semantic.apply-literal-update",
     "semantic.validate-envelope",
     "semantic.validate-declarations",
     "semantic.symbol-index",

@@ -747,40 +747,38 @@ class GcCoreEmitter {
     const scrutineeLocal = this.#instructions.addValueLocal();
     this.#instructions.localSet(scrutineeLocal);
 
-    const visitedArms = new Set<number>();
-    let armIndex = node.child1;
+    if (
+      node.payload > this.#module.caseAlternatives.length ||
+      node.child1 > this.#module.caseAlternatives.length - node.payload
+    ) {
+      throw new Error(
+        `functional WasmGC backend case at core node ${caseNodeIndex} references alternatives ${node.payload}..${
+          node.payload + node.child1
+        } outside ${this.#module.caseAlternatives.length}`,
+      );
+    }
+    const alternatives = this.#module.caseAlternatives.slice(
+      node.payload,
+      node.payload + node.child1,
+    );
     let openArmCount = 0;
-    while (armIndex !== NO_INDEX) {
-      if (visitedArms.has(armIndex)) {
+    for (const alternative of alternatives) {
+      const arity = this.constructorArity(alternative.constructor, caseNodeIndex);
+      if (alternative.binderCount !== arity) {
         throw new Error(
-          `functional WasmGC backend case at core node ${caseNodeIndex} has a cycle through arm ${armIndex}`,
+          `functional WasmGC backend case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${alternative.constructor}; expected ${arity}`,
         );
       }
-      visitedArms.add(armIndex);
-      const arm = this.node(armIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
-        throw new Error(
-          `functional WasmGC backend case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
-        );
-      }
-      const arity = this.constructorArity(arm.payload, armIndex);
 
       this.#instructions.localGet(scrutineeLocal);
       this.#instructions.refAsNonNull();
       this.#instructions.structGet(VALUE_PAYLOAD_FIELD);
-      this.#instructions.i32Const(arm.payload);
+      this.#instructions.i32Const(alternative.constructor);
       this.#instructions.emit(0x46);
       this.#instructions.ifValue();
 
-      let bodyNode = arm.child0;
       let armEnvironment = [...environment];
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex += 1) {
-        const binding = this.node(bodyNode);
-        if (binding.tag !== CoreTag.PatternBind) {
-          throw new Error(
-            `functional WasmGC backend case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-          );
-        }
         this.#instructions.localGet(scrutineeLocal);
         this.#instructions.refAsNonNull();
         this.#instructions.structGet(VALUE_FIELDS_FIELD);
@@ -789,12 +787,10 @@ class GcCoreEmitter {
         const fieldLocal = this.#instructions.addValueLocal();
         this.#instructions.localSet(fieldLocal);
         armEnvironment = [fieldLocal, ...armEnvironment];
-        bodyNode = binding.child0;
       }
-      this.emitExpression(bodyNode, armEnvironment);
+      this.emitExpression(alternative.body, armEnvironment);
       this.#instructions.else();
       openArmCount += 1;
-      armIndex = arm.child1;
     }
     this.#instructions.unreachable();
     for (let index = 0; index < openArmCount; index += 1) this.#instructions.end();

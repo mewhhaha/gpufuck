@@ -46,14 +46,22 @@ export function indexWasmCore(
   }
 
   for (const [nodeIndex, node] of nodes.entries()) {
-    for (const [childPosition, child] of coreChildren(node)) {
-      if (child === NO_INDEX) continue;
-      if (child >= nodes.length) {
-        throw new Error(
-          `functional Wasm Core index node ${nodeIndex} child${childPosition} ${child} exceeds ${nodes.length} resolved nodes`,
-        );
+    if (node.tag === CoreTag.Case) {
+      addCoreParent(nodes, parents, nodeIndex, 0, node.child0);
+      for (let offset = 0; offset < node.child1; offset += 1) {
+        const alternativeIndex = node.payload + offset;
+        const alternative = module.caseAlternatives[alternativeIndex];
+        if (alternative === undefined) {
+          throw new Error(
+            `functional Wasm Core index node ${nodeIndex} references missing case alternative ${alternativeIndex}`,
+          );
+        }
+        addCoreParent(nodes, parents, nodeIndex, 1, alternative.body);
       }
-      parents[child]!.push({ parent: nodeIndex, child: childPosition });
+    } else {
+      for (const [childPosition, child] of coreChildren(node)) {
+        addCoreParent(nodes, parents, nodeIndex, childPosition, child);
+      }
     }
     if (node.tag === CoreTag.Apply) directCallees.add(node.child0);
     if (node.tag === CoreTag.Global && node.payload < globalReferences.length) {
@@ -115,6 +123,22 @@ export function indexWasmCore(
     referencedNullaryConstructors,
     hasLazyEvaluationBoundary,
   });
+}
+
+function addCoreParent(
+  nodes: readonly CoreNode[],
+  parents: WasmCoreParent[][],
+  nodeIndex: number,
+  childPosition: 0 | 1 | 2,
+  child: number,
+): void {
+  if (child === NO_INDEX) return;
+  if (child >= nodes.length) {
+    throw new Error(
+      `functional Wasm Core index node ${nodeIndex} child${childPosition} ${child} exceeds ${nodes.length} resolved nodes`,
+    );
+  }
+  parents[child]!.push({ parent: nodeIndex, child: childPosition });
 }
 
 function lambdaParameterCount(
@@ -191,11 +215,12 @@ function coreChildren(
     case CoreTag.LetRec:
     case CoreTag.Binary:
     case CoreTag.BufferAppend:
-    case CoreTag.Case:
     case CoreTag.CaseArm:
     case CoreTag.StoreNew:
     case CoreTag.StoreRead:
       return [[0, node.child0], [1, node.child1]];
+    case CoreTag.Case:
+      throw new Error("functional Wasm Core index reached a packed case through generic children");
     case CoreTag.If:
     case CoreTag.StoreWrite:
     case CoreTag.StoreGrow:

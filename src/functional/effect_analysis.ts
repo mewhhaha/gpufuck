@@ -5,11 +5,14 @@ import {
 } from "../compiler_performance_trace.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
+import type { PreparedWasmLambdaAnalysis } from "./prepared_wasm_lambda_analysis.ts";
 import { LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
+import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 
 export interface ModuleEffectAnalysis {
   readonly definitionEffects: readonly EffectSet[];
   readonly entryEffects: EffectSet;
+  readonly wasmLambdaAnalysis?: PreparedWasmLambdaAnalysis;
 }
 
 /**
@@ -39,20 +42,24 @@ export function analyzeModuleEffects(
       entryEffects: empty,
     });
   }
+  const loweringAnnotations = { inputNodes: nodes.length, outputNodes: 0 };
+  const wasmNodes = measureCompilerStage(
+    trace,
+    "semantic.effects.lower-wasm-core",
+    loweringAnnotations,
+    () => lowerCoreForWasm(module, nodes),
+    (result) => {
+      loweringAnnotations.outputNodes = result.length;
+    },
+  );
   const lambdaSets = measureCompilerStage(
     trace,
     "semantic.effects.lambda-sets",
-    { nodes: nodes.length, definitions: module.definitionCount },
-    () => LambdaSetAnalysis.forCore(module, nodes),
+    { nodes: wasmNodes.length, definitions: module.definitionCount },
+    () => LambdaSetAnalysis.forWasm(module, wasmNodes),
   );
-  const effectNamesByNode = Array.from(
-    { length: nodes.length },
-    () => new Set<string>(),
-  );
-  const dependents = Array.from(
-    { length: nodes.length },
-    () => new Set<number>(),
-  );
+  const effectNamesByNode: (Set<string> | undefined)[] = new Array(nodes.length);
+  const dependents: (Set<number> | undefined)[] = new Array(nodes.length);
   const hostEffectsByDefinition = new Map(
     module.hostDefinitions.map((binding) => {
       const definition = module.definitionNames.indexOf(binding.definition);
@@ -78,7 +85,7 @@ export function analyzeModuleEffects(
         `functional effect analysis node ${nodeIndex} depends on missing node ${dependency}`,
       );
     }
-    dependents[dependency]!.add(nodeIndex);
+    (dependents[dependency] ??= new Set()).add(nodeIndex);
   };
 
   measureCompilerStage(
@@ -112,7 +119,7 @@ export function analyzeModuleEffects(
             }
             if (nodes[root]?.tag !== CoreTag.Lambda) {
               for (const effect of module.declaredDefinitionEffects[node.payload]!) {
-                effectNamesByNode[nodeIndex]!.add(effect);
+                (effectNamesByNode[nodeIndex] ??= new Set()).add(effect);
               }
               dependOn(nodeIndex, root);
             }
@@ -138,7 +145,7 @@ export function analyzeModuleEffects(
                 }
                 dependOn(nodeIndex, lambda.child0);
               },
-              (effect) => effectNamesByNode[nodeIndex]!.add(effect),
+              (effect) => (effectNamesByNode[nodeIndex] ??= new Set()).add(effect),
             );
             break;
           }
@@ -184,7 +191,7 @@ export function analyzeModuleEffects(
   );
 
   const pending = effectNamesByNode.flatMap((effects, nodeIndex) =>
-    effects.size === 0 ? [] : [nodeIndex]
+    effects === undefined || effects.size === 0 ? [] : [nodeIndex]
   );
   const queued = new Set(pending);
   measureCompilerStage(
@@ -195,8 +202,8 @@ export function analyzeModuleEffects(
       while (pending.length > 0) {
         const source = pending.pop()!;
         queued.delete(source);
-        for (const dependent of dependents[source]!) {
-          const targetEffects = effectNamesByNode[dependent]!;
+        for (const dependent of dependents[source] ?? []) {
+          const targetEffects = effectNamesByNode[dependent] ??= new Set();
           const previousSize = targetEffects.size;
           for (const effect of effectNamesByNode[source]!) targetEffects.add(effect);
           if (targetEffects.size === previousSize || queued.has(dependent)) continue;
@@ -227,7 +234,7 @@ export function analyzeModuleEffects(
         }
         return effectSetFrom([
           ...module.declaredDefinitionEffects[definition]!,
-          ...effectNamesByNode[effectNode]!,
+          ...(effectNamesByNode[effectNode] ?? []),
         ]);
       }),
   );
@@ -240,5 +247,6 @@ export function analyzeModuleEffects(
   return Object.freeze({
     definitionEffects: Object.freeze(definitionEffects),
     entryEffects,
+    wasmLambdaAnalysis: Object.freeze({ nodes: wasmNodes, lambdaSets }),
   });
 }

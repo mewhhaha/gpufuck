@@ -33,7 +33,10 @@ import {
   WasmIntrinsic,
 } from "./host_contract.ts";
 import {
+  type CachedWasmFunctionBody,
   encodeCompactScalarWasmModule,
+  type EncodedWasmModule,
+  encodeSignedWasmInteger64,
   encodeWasmModule,
   WASM_BASE_FUNCTION_TYPE_COUNT,
   WASM_BASE_FUNCTION_TYPES,
@@ -42,6 +45,8 @@ import {
   type WasmFunctionType,
   WasmFunctionTypeIndex,
   WasmInstructions,
+  type WasmModuleEncoding,
+  type WasmSignedInteger64Literal,
   WasmValueType,
 } from "./wasm_binary.ts";
 import { WasmValueAbi } from "./wasm_abi.ts";
@@ -104,7 +109,11 @@ import {
   F32x4Definition,
   MASK32X4_CONSTRUCTOR_NAME,
 } from "./fixed_vector_contract.ts";
-import { createWasmBackendPlan, type WasmBackendPlan } from "./wasm_backend_plan.ts";
+import {
+  createWasmBackendPlan,
+  updateWasmBackendPlanSignedLiterals,
+  type WasmBackendPlan,
+} from "./wasm_backend_plan.ts";
 import {
   f32x4ExtractedLane,
   f32x4ReplacementLane,
@@ -127,7 +136,7 @@ const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByte
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
-const MAXIMUM_SPECIALIZED_INLINE_SITES = 512;
+const MAXIMUM_SPECIALIZED_INLINE_SITES = 128;
 
 function canonicalWasmValueType(type: CanonicalAbiCoreType): number {
   if (type === "i32") return WasmValueType.I32;
@@ -264,6 +273,16 @@ export interface WasmArtifact {
   readonly automaticArenaReset: boolean;
 }
 
+const backendPlansByArtifact = new WeakMap<WasmArtifact, WasmBackendPlan>();
+
+interface CachedLinearWasmEmission {
+  readonly encoding: WasmModuleEncoding;
+  readonly functionBodies: readonly CachedWasmFunctionBody[];
+  readonly sectionsBeforeCode: readonly (readonly number[])[];
+}
+
+const linearEmissionsByArtifact = new WeakMap<WasmArtifact, CachedLinearWasmEmission>();
+
 function wasmEncodingAnnotations(
   functions: readonly WasmFunctionBody[],
   imports: number,
@@ -310,9 +329,216 @@ export function compileWasmArtifact(
     definitions: module.definitionCount,
     constructors: module.constructorCount,
   });
+  return emitWasmArtifact(plan, trace);
+}
+
+export function compileWasmArtifactWithSignedLiteralUpdate(
+  module: CompiledModule,
+  nodes: readonly CoreNode[],
+  referenceArtifact: WasmArtifact,
+  changedNodes: readonly number[],
+  trace?: CompilerPerformanceTrace,
+): WasmArtifact {
+  const referencePlan = backendPlansByArtifact.get(referenceArtifact);
+  if (referencePlan === undefined) {
+    return compileWasmArtifact(module, nodes, false, {}, trace);
+  }
+  const planSpan = trace?.start("wasm.plan");
+  let plan: WasmBackendPlan;
+  try {
+    plan = updateWasmBackendPlanSignedLiterals(
+      referencePlan,
+      module,
+      nodes,
+      changedNodes,
+      trace,
+    );
+  } catch (error) {
+    planSpan?.finish({
+      failed: true,
+      nodes: nodes.length,
+      definitions: module.definitionCount,
+      constructors: module.constructorCount,
+    });
+    throw error;
+  }
+  planSpan?.finish({
+    nodes: nodes.length,
+    definitions: module.definitionCount,
+    constructors: module.constructorCount,
+    incremental: true,
+  });
+  const referenceEmission = linearEmissionsByArtifact.get(referenceArtifact);
+  if (referenceEmission !== undefined) {
+    return emitWasmSignedLiteralUpdate(
+      plan,
+      referenceArtifact,
+      referenceEmission,
+      changedNodes,
+      trace,
+    );
+  }
+  return emitWasmArtifact(plan, trace);
+}
+
+function emitWasmSignedLiteralUpdate(
+  plan: WasmBackendPlan,
+  referenceArtifact: WasmArtifact,
+  referenceEmission: CachedLinearWasmEmission,
+  changedNodes: readonly number[],
+  trace?: CompilerPerformanceTrace,
+): WasmArtifact {
   const emitSpan = trace?.start("wasm.emit");
   try {
-    if (plan.compactScalarEligible && options.canonicalAbi === undefined) {
+    const updateAnnotations = {
+      functions: referenceEmission.encoding.functions.length,
+      changedNodes: changedNodes.length,
+      changedImmediates: 0,
+    };
+    const changedValues = new Map<number, bigint>();
+    for (const nodeIndex of changedNodes) {
+      const node = plan.nodes[nodeIndex];
+      if (node?.tag !== CoreTag.SignedInteger64) {
+        throw new Error(
+          `incremental WebAssembly emission received non-literal Core node ${nodeIndex}`,
+        );
+      }
+      changedValues.set(nodeIndex, wideLiteralBits(node));
+    }
+    const functions = trace === undefined
+      ? updateSignedInteger64Literals(
+        referenceEmission.encoding.functions,
+        changedValues,
+        updateAnnotations,
+      )
+      : trace.measure(
+        "wasm.emit.literal-update",
+        updateAnnotations,
+        () =>
+          updateSignedInteger64Literals(
+            referenceEmission.encoding.functions,
+            changedValues,
+            updateAnnotations,
+          ),
+      );
+    const encoding = Object.freeze({ ...referenceEmission.encoding, functions });
+    const encodeSpan = trace?.start("wasm.encode");
+    const encoded = encodeLinearWasmEmission(
+      encoding,
+      referenceEmission.functionBodies,
+      referenceEmission.sectionsBeforeCode,
+    );
+    encodeSpan?.finish({
+      ...wasmEncodingAnnotations(
+        functions,
+        encoding.imports.length,
+        encoding.indirectFunctionIndices.length,
+      ),
+      reusedFunctionBodies: encoded.reusedFunctionBodies,
+      reusedSectionsBeforeCode: encoded.reusedSectionsBeforeCode,
+    });
+    const artifact = {
+      bytes: encoded.bytes,
+      specializedCallSites: referenceArtifact.specializedCallSites,
+      automaticArenaReset: referenceArtifact.automaticArenaReset,
+    };
+    backendPlansByArtifact.set(artifact, plan);
+    linearEmissionsByArtifact.set(artifact, {
+      encoding,
+      functionBodies: encoded.functionBodies,
+      sectionsBeforeCode: encoded.sectionsBeforeCode,
+    });
+    emitSpan?.finish({
+      nodes: plan.nodes.length,
+      bytes: encoded.bytes.byteLength,
+      specializedCallSites: artifact.specializedCallSites,
+      incremental: true,
+    });
+    return artifact;
+  } catch (error) {
+    emitSpan?.finish({ failed: true, nodes: plan.nodes.length, incremental: true });
+    throw error;
+  }
+}
+
+function updateSignedInteger64Literals(
+  functions: readonly WasmFunctionBody[],
+  changedValues: ReadonlyMap<number, bigint>,
+  annotations: { changedImmediates: number },
+): readonly WasmFunctionBody[] {
+  return functions.map((body) => {
+    if (
+      !body.signedInteger64Literals.some((literal) => changedValues.has(literal.nodeIndex))
+    ) return body;
+    const instructions: number[] = [];
+    const literals: WasmSignedInteger64Literal[] = [];
+    let previousOffset = 0;
+    for (const literal of body.signedInteger64Literals) {
+      appendInstructionRange(
+        instructions,
+        body.instructions,
+        previousOffset,
+        literal.immediateOffset,
+      );
+      const value = changedValues.get(literal.nodeIndex);
+      const immediate = value === undefined ? undefined : encodeSignedWasmInteger64(value);
+      const immediateOffset = instructions.length;
+      if (immediate === undefined) {
+        appendInstructionRange(
+          instructions,
+          body.instructions,
+          literal.immediateOffset,
+          literal.immediateOffset + literal.immediateLength,
+        );
+      } else {
+        for (const byte of immediate) instructions.push(byte);
+      }
+      literals.push({
+        nodeIndex: literal.nodeIndex,
+        immediateOffset,
+        immediateLength: instructions.length - immediateOffset,
+      });
+      if (value !== undefined) annotations.changedImmediates += 1;
+      previousOffset = literal.immediateOffset + literal.immediateLength;
+    }
+    appendInstructionRange(
+      instructions,
+      body.instructions,
+      previousOffset,
+      body.instructions.length,
+    );
+    return {
+      ...body,
+      instructions,
+      signedInteger64Literals: literals,
+    };
+  });
+}
+
+function appendInstructionRange(
+  target: number[],
+  source: readonly number[],
+  start: number,
+  end: number,
+): void {
+  for (let offset = start; offset < end; offset++) target.push(source[offset]!);
+}
+
+function encodeLinearWasmEmission(
+  encoding: WasmModuleEncoding,
+  functionBodies: readonly CachedWasmFunctionBody[] = [],
+  sectionsBeforeCode?: readonly (readonly number[])[],
+): EncodedWasmModule {
+  return encodeWasmModule(encoding, functionBodies, sectionsBeforeCode);
+}
+
+function emitWasmArtifact(
+  plan: WasmBackendPlan,
+  trace?: CompilerPerformanceTrace,
+): WasmArtifact {
+  const emitSpan = trace?.start("wasm.emit");
+  try {
+    if (plan.compactScalarEligible && plan.options.canonicalAbi === undefined) {
       const compactCompiler = new WasmCompiler(
         plan,
         true,
@@ -327,6 +553,7 @@ export function compileWasmArtifact(
         bytes: artifact.bytes.byteLength,
         specializedCallSites: artifact.specializedCallSites,
       });
+      backendPlansByArtifact.set(artifact, plan);
       return artifact;
     }
 
@@ -340,6 +567,7 @@ export function compileWasmArtifact(
       bytes: artifact.bytes.byteLength,
       specializedCallSites: artifact.specializedCallSites,
     });
+    backendPlansByArtifact.set(artifact, plan);
     return artifact;
   } catch (error) {
     emitSpan?.finish({ failed: true, nodes: plan.nodes.length });
@@ -384,6 +612,7 @@ class WasmCompiler {
   readonly #ownedRuntimeEnabled: boolean;
   readonly #hostEmitter: WasmHostEmitter;
   readonly #trace: CompilerPerformanceTrace | undefined;
+  #linearEmission: CachedLinearWasmEmission | undefined;
   #lambdaSetAnalysis: LambdaSetAnalysis | undefined;
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
@@ -437,6 +666,7 @@ class WasmCompiler {
     this.#constantAnalysis = plan.constantAnalysis;
     this.#functionAnalysis = plan.functionAnalysis;
     this.#uniqueReuseAnalysis = plan.uniqueReuseAnalysis;
+    this.#lambdaSetAnalysis = plan.lambdaSetAnalysis;
     this.#coreIndex = plan.coreIndex;
     this.#directOnlyDefinitions = plan.coreIndex.directOnlyDefinitions;
     this.#lambdaSlots = Array.from({ length: nodes.length }, () => undefined);
@@ -592,11 +822,15 @@ class WasmCompiler {
   }
 
   artifact(bytes: Uint8Array<ArrayBuffer>): WasmArtifact {
-    return {
+    const artifact = {
       bytes,
       specializedCallSites: this.#specializedCallSiteCount,
       automaticArenaReset: this.#automaticArenaReset,
     };
+    if (this.#linearEmission !== undefined) {
+      linearEmissionsByArtifact.set(artifact, this.#linearEmission);
+    }
+    return artifact;
   }
 
   scalarSpecializationEnabled(): boolean {
@@ -914,52 +1148,66 @@ class WasmCompiler {
     );
     const entryFunctionIndex = this.#functionImports.length + 5 +
       indirectFunctions.length;
-    const encodeSpan = this.#trace?.start("wasm.encode");
     const firstPostReturnFunctionIndex = entryFunctionIndex + 1 +
       callableFunctions.length;
-    const bytes = encodeWasmModule(
-      this.#functionImports,
-      emittedFunctions,
+    const functionExports = [
+      ...this.#module.wasmExports.map((exported, index) => ({
+        name: exported.name,
+        functionIndex: entryFunctionIndex + 1 + index,
+      })),
+      ...canonicalPostReturns.map((postReturn, index) => ({
+        name: postReturn.name,
+        functionIndex: firstPostReturnFunctionIndex + index,
+      })),
+      ...(canonicalReallocateIndex === undefined ? [] : [{
+        name: "cabi_realloc",
+        functionIndex: canonicalReallocateIndex,
+      }]),
+      ...(releaseOwnedFunctionIndex === undefined
+        ? []
+        : ownedTypeExports.flatMap((owned, index) => [{
+          name: `retain_${owned.name}`,
+          functionIndex: releaseOwnedFunctionIndex + 1 + index * 2,
+        }, {
+          name: `drop_${owned.name}`,
+          functionIndex: releaseOwnedFunctionIndex + 2 + index * 2,
+        }])),
+    ];
+    const encoding = Object.freeze({
+      imports: this.#functionImports,
+      functions: emittedFunctions,
       indirectFunctionIndices,
       entryFunctionIndex,
-      this.heapStart(),
-      this.#additionalFunctionTypes,
-      this.#functionImports.length + 3,
-      this.#functionImports.length + 4 + indirectFunctions.length,
-      this.#functionImports.length,
-      this.#functionImports.length + 2,
-      [
-        ...this.#module.wasmExports.map((exported, index) => ({
-          name: exported.name,
-          functionIndex: entryFunctionIndex + 1 + index,
-        })),
-        ...canonicalPostReturns.map((postReturn, index) => ({
-          name: postReturn.name,
-          functionIndex: firstPostReturnFunctionIndex + index,
-        })),
-        ...(canonicalReallocateIndex === undefined ? [] : [{
-          name: "cabi_realloc",
-          functionIndex: canonicalReallocateIndex,
-        }]),
-        ...(releaseOwnedFunctionIndex === undefined
-          ? []
-          : ownedTypeExports.flatMap((owned, index) => [{
-            name: `retain_${owned.name}`,
-            functionIndex: releaseOwnedFunctionIndex + 1 + index * 2,
-          }, {
-            name: `drop_${owned.name}`,
-            functionIndex: releaseOwnedFunctionIndex + 2 + index * 2,
-          }])),
-      ],
-      this.#instrumentedFuel,
-      this.#compilationOptions.canonicalAbi === undefined ? undefined : { major: 1, minor: 0 },
-    );
-    encodeSpan?.finish(wasmEncodingAnnotations(
-      emittedFunctions,
-      this.#functionImports.length,
-      indirectFunctions.length,
-    ));
-    return bytes;
+      heapStart: this.heapStart(),
+      additionalFunctionTypes: this.#additionalFunctionTypes,
+      valueForceFunctionIndex: this.#functionImports.length + 3,
+      initializeFunctionIndex: this.#functionImports.length + 4 +
+        indirectFunctions.length,
+      allocateFunctionIndex: this.#functionImports.length,
+      freeFunctionIndex: this.#functionImports.length + 2,
+      functionExports,
+      instrumentedFuel: this.#instrumentedFuel,
+      ...(this.#compilationOptions.canonicalAbi === undefined
+        ? {}
+        : { canonicalAbiVersion: { major: 1, minor: 0 } }),
+    });
+    const encodeSpan = this.#trace?.start("wasm.encode");
+    const encoded = encodeLinearWasmEmission(encoding);
+    this.#linearEmission = {
+      encoding,
+      functionBodies: encoded.functionBodies,
+      sectionsBeforeCode: encoded.sectionsBeforeCode,
+    };
+    encodeSpan?.finish({
+      ...wasmEncodingAnnotations(
+        emittedFunctions,
+        this.#functionImports.length,
+        indirectFunctions.length,
+      ),
+      reusedFunctionBodies: encoded.reusedFunctionBodies,
+      reusedSectionsBeforeCode: encoded.reusedSectionsBeforeCode,
+    });
+    return encoded.bytes;
   }
 
   validateCanonicalAbiModule(): void {
@@ -3367,11 +3615,19 @@ class WasmCompiler {
   }
 
   lambdaSet(nodeIndex: number): LambdaSet {
-    this.#lambdaSetAnalysis ??= LambdaSetAnalysis.forWasm(
-      this.#module,
-      this.#nodes,
-      this.#coreIndex,
-    );
+    if (this.#lambdaSetAnalysis === undefined) {
+      const annotations = {
+        nodes: this.#nodes.length,
+        definitions: this.#module.definitionCount,
+      };
+      this.#lambdaSetAnalysis = this.#trace === undefined
+        ? LambdaSetAnalysis.forWasm(this.#module, this.#nodes, this.#coreIndex)
+        : this.#trace.measure(
+          "wasm.emit.lambda-sets",
+          annotations,
+          () => LambdaSetAnalysis.forWasm(this.#module, this.#nodes, this.#coreIndex),
+        );
+    }
     return this.#lambdaSetAnalysis.lambdaSet(nodeIndex);
   }
 
@@ -4860,7 +5116,7 @@ class WasmCompiler {
         if (constructor !== undefined) {
           this.compileKnownCaseArm(
             instructions,
-            node.child1,
+            node,
             constructor,
             environment,
             nodeIndex,
@@ -5034,7 +5290,7 @@ class WasmCompiler {
     const node = this.node(nodeIndex);
     switch (node.tag) {
       case CoreTag.SignedInteger64:
-        instructions.i64Const(wideLiteralBits(node));
+        instructions.signedInteger64Literal(nodeIndex, wideLiteralBits(node));
         return;
       case CoreTag.Unary:
         if (node.payload !== UnaryOperator.NegateSignedInteger64) {
@@ -6027,7 +6283,7 @@ class WasmCompiler {
     if (virtualConstructor !== undefined) {
       this.compileKnownCaseArm(
         instructions,
-        node.child1,
+        node,
         virtualConstructor,
         environment,
         nodeIndex,
@@ -6059,9 +6315,9 @@ class WasmCompiler {
       instructions.emit(0xa7);
       instructions.localSet(constructor);
     }
-    this.compileCaseArm(
+    this.compileCaseAlternatives(
       instructions,
-      node.child1,
+      node,
       constructor,
       environment,
       nodeIndex,
@@ -6071,7 +6327,7 @@ class WasmCompiler {
 
   compileKnownCaseArm(
     instructions: WasmInstructions,
-    firstArmIndex: number,
+    node: CoreNode,
     constructor: VirtualConstructor,
     environment: Environment,
     caseNodeIndex: number,
@@ -6093,24 +6349,15 @@ class WasmCompiler {
         constructor.environment,
       )
     );
-    let armIndex = firstArmIndex;
-    while (armIndex !== NO_INDEX) {
-      const arm = this.node(armIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
-        throw new Error(
-          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
-        );
-      }
-      if (arm.payload === constructor.constructorIndex) {
-        let bodyNode = arm.child0;
+    for (const alternative of this.caseAlternatives(node, caseNodeIndex)) {
+      if (alternative.constructor === constructor.constructorIndex) {
+        if (alternative.binderCount !== arity) {
+          throw new Error(
+            `functional WASM case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${constructor.constructorIndex}; expected ${arity}`,
+          );
+        }
         let armEnvironment = [...environment];
         for (let bindingIndex = 0; bindingIndex < arity; bindingIndex += 1) {
-          const binding = this.node(bodyNode);
-          if (binding.tag !== CoreTag.PatternBind) {
-            throw new Error(
-              `functional WASM case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-            );
-          }
           const field = fields[arity - bindingIndex - 1];
           if (field === undefined) {
             throw new Error(
@@ -6120,21 +6367,19 @@ class WasmCompiler {
             );
           }
           armEnvironment = [field, ...armEnvironment];
-          bodyNode = binding.child0;
         }
         if (resultKind === "integer") {
-          this.compileIntegerExpression(instructions, bodyNode, armEnvironment);
+          this.compileIntegerExpression(instructions, alternative.body, armEnvironment);
         } else {
           this.compileExpression(
             instructions,
-            bodyNode,
+            alternative.body,
             armEnvironment,
             constructorReuse,
           );
         }
         return;
       }
-      armIndex = arm.child1;
     }
     throw new Error(
       `functional WASM case at core node ${caseNodeIndex} has no arm for known constructor ${constructor.constructorIndex}`,
@@ -6172,42 +6417,30 @@ class WasmCompiler {
     return { kind: "i64-value", index: value };
   }
 
-  compileCaseArm(
+  compileCaseAlternatives(
     instructions: WasmInstructions,
-    armIndex: number,
+    node: CoreNode,
     constructor: number,
     environment: Environment,
     caseNodeIndex: number,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
-    let currentArmIndex = armIndex;
     let openArmCount = 0;
-    while (currentArmIndex !== NO_INDEX) {
-      const arm = this.node(currentArmIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
+    for (const alternative of this.caseAlternatives(node, caseNodeIndex)) {
+      const arity = this.#module.constructorArities[alternative.constructor];
+      if (arity === undefined || alternative.binderCount !== arity) {
         throw new Error(
-          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${currentArmIndex}; expected a case arm`,
-        );
-      }
-      const arity = this.#module.constructorArities[arm.payload];
-      if (arity === undefined) {
-        throw new Error(
-          `functional WASM case arm ${currentArmIndex} refers to missing constructor ${arm.payload}`,
+          `functional WASM case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${alternative.constructor}; expected ${
+            String(arity)
+          }`,
         );
       }
       instructions.localGet(constructor);
       instructions.i32Load(4);
-      instructions.i32Const(arm.payload);
+      instructions.i32Const(alternative.constructor);
       instructions.emit(0x46, 0x04, WasmValueType.I64);
-      let bodyNode = arm.child0;
       let armEnvironment = [...environment];
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
-        const binding = this.node(bodyNode);
-        if (binding.tag !== CoreTag.PatternBind) {
-          throw new Error(
-            `functional WASM case arm ${currentArmIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-          );
-        }
         instructions.localGet(constructor);
         instructions.i64Load(
           OBJECT_HEADER_BYTE_LENGTH +
@@ -6219,17 +6452,15 @@ class WasmCompiler {
           { kind: "i64-local", index: field },
           ...armEnvironment,
         ];
-        bodyNode = binding.child0;
       }
       this.compileExpression(
         instructions,
-        bodyNode,
+        alternative.body,
         armEnvironment,
         constructorReuse,
       );
       instructions.emit(0x05);
       openArmCount += 1;
-      currentArmIndex = arm.child1;
     }
     instructions.emit(0x00);
     for (let index = 0; index < openArmCount; index++) instructions.emit(0x0b);
@@ -6573,8 +6804,19 @@ class WasmCompiler {
   }
 
   expressionIsWhnf(nodeIndex: number): boolean {
-    this.node(nodeIndex);
-    return this.#coreIndex.weakHeadNormalForms.has(nodeIndex);
+    switch (this.node(nodeIndex).tag) {
+      case CoreTag.Integer:
+      case CoreTag.SignedInteger64:
+      case CoreTag.Float32:
+      case CoreTag.Float64:
+      case CoreTag.WholeNumberF64:
+      case CoreTag.Boolean:
+      case CoreTag.Lambda:
+      case CoreTag.Constructor:
+        return true;
+      default:
+        return false;
+    }
   }
 
   canCompileIntegerExpression(nodeIndex: number): boolean {
@@ -7633,7 +7875,7 @@ class WasmCompiler {
     if (virtualConstructor !== undefined) {
       this.compileKnownTailCaseArm(
         instructions,
-        node.child1,
+        node,
         virtualConstructor,
         environment,
         nodeIndex,
@@ -7650,9 +7892,9 @@ class WasmCompiler {
     instructions.emit(0xa7);
     const constructor = instructions.addLocal(WasmValueType.I32);
     instructions.localSet(constructor);
-    this.compileTailCaseArms(
+    this.compileTailCaseAlternatives(
       instructions,
-      node.child1,
+      node,
       constructor,
       environment,
       nodeIndex,
@@ -7667,7 +7909,7 @@ class WasmCompiler {
 
   compileKnownTailCaseArm(
     instructions: WasmInstructions,
-    firstArmIndex: number,
+    node: CoreNode,
     constructor: VirtualConstructor,
     environment: Environment,
     caseNodeIndex: number,
@@ -7689,30 +7931,20 @@ class WasmCompiler {
     const fields = constructor.arguments.map((argument) =>
       this.compileExpressionBinding(instructions, argument, constructor.environment)
     );
-    let armIndex = firstArmIndex;
-    while (armIndex !== NO_INDEX) {
-      const arm = this.node(armIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
-        throw new Error(
-          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${armIndex}; expected a case arm`,
-        );
-      }
-      if (arm.payload === constructor.constructorIndex) {
-        let bodyNode = arm.child0;
+    for (const alternative of this.caseAlternatives(node, caseNodeIndex)) {
+      if (alternative.constructor === constructor.constructorIndex) {
+        if (alternative.binderCount !== arity) {
+          throw new Error(
+            `functional WASM case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${constructor.constructorIndex}; expected ${arity}`,
+          );
+        }
         let armEnvironment = [...environment];
         for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
-          const binding = this.node(bodyNode);
-          if (binding.tag !== CoreTag.PatternBind) {
-            throw new Error(
-              `functional WASM case arm ${armIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-            );
-          }
           armEnvironment = [fields[arity - bindingIndex - 1]!, ...armEnvironment];
-          bodyNode = binding.child0;
         }
         this.compileTailPosition(
           instructions,
-          bodyNode,
+          alternative.body,
           armEnvironment,
           loop,
           parameterLocals,
@@ -7723,16 +7955,15 @@ class WasmCompiler {
         );
         return;
       }
-      armIndex = arm.child1;
     }
     throw new Error(
       `functional WASM case at core node ${caseNodeIndex} has no arm for known constructor ${constructor.constructorIndex}`,
     );
   }
 
-  compileTailCaseArms(
+  compileTailCaseAlternatives(
     instructions: WasmInstructions,
-    armIndex: number,
+    node: CoreNode,
     constructor: number,
     environment: Environment,
     caseNodeIndex: number,
@@ -7743,34 +7974,22 @@ class WasmCompiler {
     resultBranchDepth: number,
     resultKind: "value" | "integer",
   ): void {
-    let currentArmIndex = armIndex;
     let openArmCount = 0;
-    while (currentArmIndex !== NO_INDEX) {
-      const arm = this.node(currentArmIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
+    for (const alternative of this.caseAlternatives(node, caseNodeIndex)) {
+      const arity = this.#module.constructorArities[alternative.constructor];
+      if (arity === undefined || alternative.binderCount !== arity) {
         throw new Error(
-          `functional WASM case at core node ${caseNodeIndex} links tag ${arm.tag} at node ${currentArmIndex}; expected a case arm`,
-        );
-      }
-      const arity = this.#module.constructorArities[arm.payload];
-      if (arity === undefined) {
-        throw new Error(
-          `functional WASM case arm ${currentArmIndex} refers to missing constructor ${arm.payload}`,
+          `functional WASM case at core node ${caseNodeIndex} binds ${alternative.binderCount} fields for constructor ${alternative.constructor}; expected ${
+            String(arity)
+          }`,
         );
       }
       instructions.localGet(constructor);
       instructions.i32Load(4);
-      instructions.i32Const(arm.payload);
+      instructions.i32Const(alternative.constructor);
       instructions.emit(0x46, 0x04, 0x40);
-      let bodyNode = arm.child0;
       let armEnvironment = [...environment];
       for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
-        const binding = this.node(bodyNode);
-        if (binding.tag !== CoreTag.PatternBind) {
-          throw new Error(
-            `functional WASM case arm ${currentArmIndex} has ${bindingIndex} bindings before tag ${binding.tag}; expected ${arity}`,
-          );
-        }
         instructions.localGet(constructor);
         instructions.i64Load(
           OBJECT_HEADER_BYTE_LENGTH + (arity - bindingIndex - 1) * VALUE_BYTE_LENGTH,
@@ -7778,11 +7997,10 @@ class WasmCompiler {
         const field = instructions.addLocal(WasmValueType.I64);
         instructions.localSet(field);
         armEnvironment = [{ kind: "i64-local", index: field }, ...armEnvironment];
-        bodyNode = binding.child0;
       }
       this.compileTailPosition(
         instructions,
-        bodyNode,
+        alternative.body,
         armEnvironment,
         loop,
         parameterLocals,
@@ -7793,7 +8011,6 @@ class WasmCompiler {
       );
       instructions.emit(0x05);
       openArmCount++;
-      currentArmIndex = arm.child1;
     }
     instructions.emit(0x00);
     for (let index = 0; index < openArmCount; index++) instructions.emit(0x0b);
@@ -7867,5 +8084,22 @@ class WasmCompiler {
       );
     }
     return node;
+  }
+
+  caseAlternatives(
+    node: CoreNode,
+    nodeIndex: number,
+  ): readonly CompiledModule["caseAlternatives"][number][] {
+    if (
+      node.payload > this.#module.caseAlternatives.length ||
+      node.child1 > this.#module.caseAlternatives.length - node.payload
+    ) {
+      throw new Error(
+        `functional WASM case at core node ${nodeIndex} references alternatives ${node.payload}..${
+          node.payload + node.child1
+        } outside ${this.#module.caseAlternatives.length}`,
+      );
+    }
+    return this.#module.caseAlternatives.slice(node.payload, node.payload + node.child1);
   }
 }

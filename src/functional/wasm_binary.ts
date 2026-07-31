@@ -22,8 +22,15 @@ export interface WasmFunctionBody {
   readonly typeIndex: number;
   readonly localTypes: readonly number[];
   readonly instructions: readonly number[];
+  readonly signedInteger64Literals: readonly WasmSignedInteger64Literal[];
   readonly usesMemory: boolean;
   readonly usesIndirectCalls: boolean;
+}
+
+export interface WasmSignedInteger64Literal {
+  readonly nodeIndex: number;
+  readonly immediateOffset: number;
+  readonly immediateLength: number;
 }
 
 export interface WasmFunctionImport {
@@ -35,6 +42,41 @@ export interface WasmFunctionImport {
 export interface WasmFunctionType {
   readonly parameters: readonly number[];
   readonly results: readonly number[];
+}
+
+export interface WasmModuleEncoding {
+  readonly imports: readonly WasmFunctionImport[];
+  readonly functions: readonly WasmFunctionBody[];
+  readonly indirectFunctionIndices: readonly number[];
+  readonly entryFunctionIndex: number;
+  readonly heapStart: number;
+  readonly additionalFunctionTypes: readonly WasmFunctionType[];
+  readonly valueForceFunctionIndex?: number;
+  readonly initializeFunctionIndex?: number;
+  readonly allocateFunctionIndex?: number;
+  readonly freeFunctionIndex?: number;
+  readonly functionExports?: readonly {
+    readonly name: string;
+    readonly functionIndex: number;
+  }[];
+  readonly instrumentedFuel?: boolean;
+  readonly canonicalAbiVersion?: {
+    readonly major: number;
+    readonly minor: number;
+  };
+}
+
+export interface CachedWasmFunctionBody {
+  readonly body: WasmFunctionBody;
+  readonly encoded: readonly number[];
+}
+
+export interface EncodedWasmModule {
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly functionBodies: readonly CachedWasmFunctionBody[];
+  readonly sectionsBeforeCode: readonly (readonly number[])[];
+  readonly reusedFunctionBodies: number;
+  readonly reusedSectionsBeforeCode: boolean;
 }
 
 export const WASM_BASE_FUNCTION_TYPES: readonly WasmFunctionType[] = Object.freeze([
@@ -50,6 +92,7 @@ export const WASM_BASE_FUNCTION_TYPE_COUNT = WASM_BASE_FUNCTION_TYPES.length;
 export class WasmInstructions {
   readonly bytes: number[] = [];
   readonly localTypes: number[] = [];
+  readonly signedInteger64Literals: WasmSignedInteger64Literal[] = [];
   usesMemory = false;
   usesIndirectCalls = false;
 
@@ -65,26 +108,69 @@ export class WasmInstructions {
     return index;
   }
 
-  emit(...bytes: number[]): void {
-    this.bytes.push(...bytes);
+  // Rest parameters allocate at every opcode site; fixed slots keep this hot path allocation-free.
+  emit(
+    first: number,
+    second?: number,
+    third?: number,
+    fourth?: number,
+    fifth?: number,
+    sixth?: number,
+    seventh?: number,
+    eighth?: number,
+    ninth?: number,
+  ): void {
+    this.bytes.push(first);
+    if (second === undefined) return;
+    this.bytes.push(second);
+    if (third === undefined) return;
+    this.bytes.push(third);
+    if (fourth === undefined) return;
+    this.bytes.push(fourth);
+    if (fifth === undefined) return;
+    this.bytes.push(fifth);
+    if (sixth === undefined) return;
+    this.bytes.push(sixth);
+    if (seventh === undefined) return;
+    this.bytes.push(seventh);
+    if (eighth === undefined) return;
+    this.bytes.push(eighth);
+    if (ninth !== undefined) this.bytes.push(ninth);
   }
 
   simd(opcode: number, ...immediateBytes: number[]): void {
     this.emit(0xfd);
     this.unsigned(opcode);
-    this.emit(...immediateBytes);
+    for (const byte of immediateBytes) this.bytes.push(byte);
   }
 
   unsigned(value: number): void {
-    this.bytes.push(...encodeUnsigned(value));
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`WebAssembly unsigned integer must be non-negative; received ${value}`);
+    }
+    do {
+      const byte = value & 0x7f;
+      value = Math.floor(value / 128);
+      this.bytes.push(value === 0 ? byte : byte | 0x80);
+    } while (value !== 0);
   }
 
   signed32(value: number): void {
-    this.bytes.push(...encodeSigned(BigInt(value | 0)));
+    value |= 0;
+    while (true) {
+      const byte = value & 0x7f;
+      value >>= 7;
+      const signBit = (byte & 0x40) !== 0;
+      if ((value === 0 && !signBit) || (value === -1 && signBit)) {
+        this.bytes.push(byte);
+        return;
+      }
+      this.bytes.push(byte | 0x80);
+    }
   }
 
   signed64(value: bigint): void {
-    this.bytes.push(...encodeSigned(value));
+    appendSignedInteger64(this.bytes, value);
   }
 
   localGet(index: number): void {
@@ -142,6 +228,17 @@ export class WasmInstructions {
   i64Const(value: bigint): void {
     this.emit(0x42);
     this.signed64(value);
+  }
+
+  signedInteger64Literal(nodeIndex: number, value: bigint): void {
+    this.emit(0x42);
+    const immediateOffset = this.bytes.length;
+    this.signed64(value);
+    this.signedInteger64Literals.push({
+      nodeIndex,
+      immediateOffset,
+      immediateLength: this.bytes.length - immediateOffset,
+    });
   }
 
   f32Const(value: number): void {
@@ -261,147 +358,197 @@ export class WasmInstructions {
   }
 }
 
+export function encodeSignedWasmInteger64(value: bigint): readonly number[] {
+  const bytes: number[] = [];
+  appendSignedInteger64(bytes, value);
+  return bytes;
+}
+
+function appendSignedInteger64(bytes: number[], value: bigint): void {
+  while (true) {
+    const byte = Number(value & 0x7fn);
+    value >>= 7n;
+    const signBit = (byte & 0x40) !== 0;
+    if ((value === 0n && !signBit) || (value === -1n && signBit)) {
+      bytes.push(byte);
+      return;
+    }
+    bytes.push(byte | 0x80);
+  }
+}
+
 export function encodeWasmModule(
-  imports: readonly WasmFunctionImport[],
-  functions: readonly WasmFunctionBody[],
-  indirectFunctionIndices: readonly number[],
-  entryFunctionIndex: number,
-  heapStart: number,
-  additionalFunctionTypes: readonly WasmFunctionType[],
-  valueForceFunctionIndex?: number,
-  initializeFunctionIndex?: number,
-  allocateFunctionIndex?: number,
-  freeFunctionIndex?: number,
-  functionExports: readonly { readonly name: string; readonly functionIndex: number }[] = [],
-  instrumentedFuel = false,
-  canonicalAbiVersion?: {
-    readonly major: number;
-    readonly minor: number;
-  },
-): Uint8Array<ArrayBuffer> {
-  const types = wasmFunctionTypes(additionalFunctionTypes);
+  encoding: WasmModuleEncoding,
+  cachedFunctionBodies: readonly CachedWasmFunctionBody[] = [],
+  cachedSectionsBeforeCode?: readonly (readonly number[])[],
+): EncodedWasmModule {
+  const {
+    imports,
+    functions,
+    indirectFunctionIndices,
+    entryFunctionIndex,
+    heapStart,
+    additionalFunctionTypes,
+    valueForceFunctionIndex,
+    initializeFunctionIndex,
+    allocateFunctionIndex,
+    freeFunctionIndex,
+    functionExports = [],
+    instrumentedFuel = false,
+    canonicalAbiVersion,
+  } = encoding;
   const runtimeGlobalCount = instrumentedFuel ? 9 : 7;
-  const sections = [
-    section(1, vector(types)),
-    ...(imports.length === 0 ? [] : [section(
-      2,
-      vector(imports.map((imported) => [
-        ...name(imported.module),
-        ...name(imported.name),
-        0x00,
-        ...encodeUnsigned(imported.typeIndex),
-      ])),
-    )]),
-    section(3, vector(functions.map((body) => encodeUnsigned(body.typeIndex)))),
-    section(4, vector([[0x70, 0x00, ...encodeUnsigned(indirectFunctionIndices.length)]])),
-    section(5, vector([[0x00, 0x01]])),
-    section(
-      6,
-      vector([
-        [0x7f, 0x01, 0x41, ...encodeSigned(BigInt(heapStart)), 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
-        [0x7f, 0x01, 0x41, 0x00, 0x0b],
-        ...(instrumentedFuel
-          ? [
-            [0x7f, 0x01, 0x41, 0x00, 0x0b],
-            [0x7f, 0x01, 0x41, 0x00, 0x0b],
-          ]
-          : []),
-        ...(canonicalAbiVersion === undefined ? [] : [
+  let reusedFunctionBodies = 0;
+  const functionBodies = functions.map((body, index) => {
+    const cached = cachedFunctionBodies[index];
+    if (cached?.body !== body) return { body, encoded: encodeFunctionBody(body) };
+    reusedFunctionBodies += 1;
+    return cached;
+  });
+  let sectionsBeforeCode = cachedSectionsBeforeCode;
+  if (sectionsBeforeCode === undefined) {
+    const types = wasmFunctionTypes(additionalFunctionTypes);
+    sectionsBeforeCode = [
+      section(1, vector(types)),
+      ...(imports.length === 0 ? [] : [section(
+        2,
+        vector(imports.map((imported) => [
+          ...name(imported.module),
+          ...name(imported.name),
+          0x00,
+          ...encodeUnsigned(imported.typeIndex),
+        ])),
+      )]),
+      section(3, vector(functions.map((body) => encodeUnsigned(body.typeIndex)))),
+      section(4, vector([[0x70, 0x00, ...encodeUnsigned(indirectFunctionIndices.length)]])),
+      section(5, vector([[0x00, 0x01]])),
+      section(
+        6,
+        vector([
+          [0x7f, 0x01, 0x41, ...encodeSigned(BigInt(heapStart)), 0x0b],
+          [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
+          [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
+          [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          ...(instrumentedFuel
+            ? [
+              [0x7f, 0x01, 0x41, 0x00, 0x0b],
+              [0x7f, 0x01, 0x41, 0x00, 0x0b],
+            ]
+            : []),
+          ...(canonicalAbiVersion === undefined ? [] : [
+            [
+              0x7f,
+              0x00,
+              0x41,
+              ...encodeSigned(BigInt(canonicalAbiVersion.major)),
+              0x0b,
+            ],
+            [
+              0x7f,
+              0x00,
+              0x41,
+              ...encodeSigned(BigInt(canonicalAbiVersion.minor)),
+              0x0b,
+            ],
+          ]),
+        ]),
+      ),
+      section(
+        7,
+        vector([
+          ...(canonicalAbiVersion === undefined
+            ? [[...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)]]
+            : []),
+          ...(canonicalAbiVersion !== undefined || valueForceFunctionIndex === undefined
+            ? []
+            : [[...name("forceValue"), 0x00, ...encodeUnsigned(valueForceFunctionIndex)]]),
+          ...(canonicalAbiVersion !== undefined || initializeFunctionIndex === undefined
+            ? []
+            : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
+          ...(canonicalAbiVersion !== undefined || allocateFunctionIndex === undefined
+            ? []
+            : [[...name("allocate"), 0x00, ...encodeUnsigned(allocateFunctionIndex)]]),
+          ...(canonicalAbiVersion !== undefined || freeFunctionIndex === undefined
+            ? []
+            : [[...name("free"), 0x00, ...encodeUnsigned(freeFunctionIndex)]]),
+          ...functionExports.map((exported) => [
+            ...name(exported.name),
+            0x00,
+            ...encodeUnsigned(exported.functionIndex),
+          ]),
+          [...name("memory"), 0x02, 0x00],
+          ...(canonicalAbiVersion === undefined
+            ? [
+              globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
+              globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
+              globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
+              globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
+              globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
+              globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
+              ...(instrumentedFuel
+                ? [
+                  globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
+                  globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
+                ]
+                : []),
+            ]
+            : []),
+          ...(canonicalAbiVersion === undefined ? [] : [
+            globalExport("blot:abi-major", runtimeGlobalCount),
+            globalExport("blot:abi-minor", runtimeGlobalCount + 1),
+          ]),
+        ]),
+      ),
+      section(
+        9,
+        vector([
           [
-            0x7f,
             0x00,
             0x41,
-            ...encodeSigned(BigInt(canonicalAbiVersion.major)),
-            0x0b,
-          ],
-          [
-            0x7f,
             0x00,
-            0x41,
-            ...encodeSigned(BigInt(canonicalAbiVersion.minor)),
             0x0b,
+            ...vector(indirectFunctionIndices.map(encodeUnsigned)),
           ],
         ]),
-      ]),
-    ),
-    section(
-      7,
-      vector([
-        ...(canonicalAbiVersion === undefined
-          ? [[...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)]]
-          : []),
-        ...(canonicalAbiVersion !== undefined ||
-            valueForceFunctionIndex === undefined
-          ? []
-          : [[...name("forceValue"), 0x00, ...encodeUnsigned(valueForceFunctionIndex)]]),
-        ...(canonicalAbiVersion !== undefined ||
-            initializeFunctionIndex === undefined
-          ? []
-          : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
-        ...(canonicalAbiVersion !== undefined ||
-            allocateFunctionIndex === undefined
-          ? []
-          : [[...name("allocate"), 0x00, ...encodeUnsigned(allocateFunctionIndex)]]),
-        ...(canonicalAbiVersion !== undefined || freeFunctionIndex === undefined
-          ? []
-          : [[...name("free"), 0x00, ...encodeUnsigned(freeFunctionIndex)]]),
-        ...functionExports.map((exported) => [
-          ...name(exported.name),
-          0x00,
-          ...encodeUnsigned(exported.functionIndex),
-        ]),
-        [...name("memory"), 0x02, 0x00],
-        ...(canonicalAbiVersion === undefined
-          ? [
-            globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
-            globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
-            globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
-            globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
-            globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
-            globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
-            ...(instrumentedFuel
-              ? [
-                globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
-                globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
-              ]
-              : []),
-          ]
-          : []),
-        ...(canonicalAbiVersion === undefined ? [] : [
-          globalExport("blot:abi-major", runtimeGlobalCount),
-          globalExport("blot:abi-minor", runtimeGlobalCount + 1),
-        ]),
-      ]),
-    ),
-    section(
-      9,
-      vector([
-        [
-          0x00,
-          0x41,
-          0x00,
-          0x0b,
-          ...vector(indirectFunctionIndices.map(encodeUnsigned)),
-        ],
-      ]),
-    ),
-    section(10, vector(functions.map(encodeFunctionBody))),
-  ];
-  return new Uint8Array(concatenateBytes([[
-    0x00,
-    0x61,
-    0x73,
-    0x6d,
-    0x01,
-    0x00,
-    0x00,
-    0x00,
-  ], ...sections]));
+      ),
+    ];
+  }
+  const functionCount = encodeUnsigned(functionBodies.length);
+  const codeContentsLength = functionCount.length +
+    functionBodies.reduce((total, body) => total + body.encoded.length, 0);
+  const encodedCodeContentsLength = encodeUnsigned(codeContentsLength);
+  const sectionsLength = sectionsBeforeCode.reduce(
+    (total, encodedSection) => total + encodedSection.length,
+    0,
+  );
+  const bytes = new Uint8Array(
+    8 + sectionsLength + 1 + encodedCodeContentsLength.length + codeContentsLength,
+  );
+  bytes.set([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+  let offset = 8;
+  for (const encodedSection of sectionsBeforeCode) {
+    bytes.set(encodedSection, offset);
+    offset += encodedSection.length;
+  }
+  bytes[offset++] = 10;
+  bytes.set(encodedCodeContentsLength, offset);
+  offset += encodedCodeContentsLength.length;
+  bytes.set(functionCount, offset);
+  offset += functionCount.length;
+  for (const body of functionBodies) {
+    bytes.set(body.encoded, offset);
+    offset += body.encoded.length;
+  }
+  return {
+    bytes,
+    functionBodies,
+    sectionsBeforeCode,
+    reusedFunctionBodies,
+    reusedSectionsBeforeCode: cachedSectionsBeforeCode !== undefined,
+  };
 }
 
 export function encodeCompactScalarWasmModule(

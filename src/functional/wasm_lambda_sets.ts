@@ -43,7 +43,7 @@ export class LambdaSetAnalysis {
   readonly #module: CompiledModule;
   readonly #nodes: readonly CoreNode[];
   readonly #representation: "core" | "wasm";
-  readonly #states: FlowState[];
+  readonly #states: (FlowState | undefined)[];
   readonly #edges: (Set<number> | undefined)[];
   readonly #applicationsByCallee: (ApplicationConstraint[] | undefined)[];
   readonly #lambdaBodies = new Map<number, number>();
@@ -55,7 +55,7 @@ export class LambdaSetAnalysis {
   readonly #constructorFieldBase: number;
   readonly #externalValue: number;
   readonly #workQueue: number[] = [];
-  readonly #queued: boolean[];
+  readonly #queued: Uint8Array;
   readonly #lambdaSets: (LambdaSet | undefined)[];
 
   static forCore(module: CompiledModule, nodes: readonly CoreNode[]): LambdaSetAnalysis {
@@ -93,14 +93,11 @@ export class LambdaSetAnalysis {
     this.#externalValue = this.#constructorFieldBase + constructorFieldOffsets.at(-1)!;
 
     const flowVariableCount = this.#externalValue + 1;
-    this.#states = Array.from(
-      { length: flowVariableCount },
-      () => ({ lambdaNodes: undefined, effectNames: undefined, incomplete: false }),
-    );
-    this.#edges = Array.from({ length: flowVariableCount }, () => undefined);
-    this.#applicationsByCallee = Array.from({ length: flowVariableCount }, () => undefined);
-    this.#queued = Array.from({ length: flowVariableCount }, () => false);
-    this.#lambdaSets = Array.from({ length: nodes.length }, () => undefined);
+    this.#states = new Array(flowVariableCount);
+    this.#edges = new Array(flowVariableCount);
+    this.#applicationsByCallee = new Array(flowVariableCount);
+    this.#queued = new Uint8Array(flowVariableCount);
+    this.#lambdaSets = new Array(nodes.length);
 
     this.#markIncomplete(this.#externalValue);
     this.#markEscapingConstructorFieldsIncomplete(coreIndex);
@@ -318,11 +315,7 @@ export class LambdaSetAnalysis {
         return;
       case CoreTag.Case:
         this.#visitExpression(node.child0, environment);
-        if (this.#representation === "wasm") {
-          this.#visitCaseArms(node.child1, environment, nodeIndex);
-        } else {
-          this.#visitCaseAlternatives(node.payload, node.child1, environment, nodeIndex);
-        }
+        this.#visitCaseAlternatives(node.payload, node.child1, environment, nodeIndex);
         return;
       case CoreTag.CaseArm:
       case CoreTag.PatternBind:
@@ -369,50 +362,6 @@ export class LambdaSetAnalysis {
     }
   }
 
-  #visitCaseArms(
-    firstArm: number,
-    environment: number[],
-    caseNode: number,
-  ): void {
-    let armIndex = firstArm;
-    while (armIndex !== NO_INDEX) {
-      const arm = this.#node(armIndex);
-      if (arm.tag !== CoreTag.CaseArm) {
-        throw new Error(
-          `functional lambda-set case ${caseNode} links core tag ${arm.tag} at arm node ${armIndex}`,
-        );
-      }
-      const arity = this.#module.constructorArities[arm.payload];
-      if (arity === undefined) {
-        throw new Error(
-          `functional lambda-set case arm ${armIndex} refers to missing constructor ${arm.payload}`,
-        );
-      }
-
-      let body = arm.child0;
-      const outerEnvironmentDepth = environment.length;
-      for (let bindingIndex = 0; bindingIndex < arity; bindingIndex++) {
-        const binding = this.#node(body);
-        if (binding.tag !== CoreTag.PatternBind) {
-          throw new Error(
-            `functional lambda-set case arm ${armIndex} has ${bindingIndex} bindings before core tag ${binding.tag}; expected ${arity}`,
-          );
-        }
-        const field = arity - bindingIndex - 1;
-        this.#addEdge(
-          this.#constructorField(arm.payload, field),
-          this.#binderVariable(body),
-        );
-        environment.push(this.#binderVariable(body));
-        body = binding.child0;
-      }
-      this.#visitExpression(body, environment);
-      environment.length = outerEnvironmentDepth;
-      this.#addEdge(this.#nodeVariable(body), this.#nodeVariable(caseNode));
-      armIndex = arm.child1;
-    }
-  }
-
   #visitCaseAlternatives(
     firstAlternative: number,
     alternativeCount: number,
@@ -453,7 +402,7 @@ export class LambdaSetAnalysis {
     while (nextVariable < this.#workQueue.length) {
       const source = this.#workQueue[nextVariable]!;
       nextVariable += 1;
-      this.#queued[source] = false;
+      this.#queued[source] = 0;
       for (const target of this.#edges[source] ?? []) this.#merge(source, target);
       for (const application of this.#applicationsByCallee[source] ?? []) {
         this.#connectApplication(application);
@@ -566,8 +515,10 @@ export class LambdaSetAnalysis {
   }
 
   #enqueue(variable: number): void {
-    if (this.#queued[variable]) return;
-    this.#queued[variable] = true;
+    const queued = this.#queued[variable];
+    if (queued === undefined) this.#state(variable);
+    if (queued !== 0) return;
+    this.#queued[variable] = 1;
     this.#workQueue.push(variable);
   }
 
@@ -581,7 +532,7 @@ export class LambdaSetAnalysis {
       let appliedArguments = 0;
       let current = nodeIndex;
       while (appliedArguments < arity) {
-        const uses = parents[current]!;
+        const uses = parents[current] ?? [];
         if (uses.length !== 1) break;
         const use = uses[0]!;
         const parent = this.#node(use.parent);
@@ -596,15 +547,15 @@ export class LambdaSetAnalysis {
     }
   }
 
-  #indexParents(): readonly (readonly ParentEdge[])[] {
-    const parents: ParentEdge[][] = Array.from({ length: this.#nodes.length }, () => []);
+  #indexParents(): readonly (readonly ParentEdge[] | undefined)[] {
+    const parents: (ParentEdge[] | undefined)[] = new Array(this.#nodes.length);
     for (const [parentIndex, node] of this.#nodes.entries()) {
       const childReferences = node.tag === CoreTag.Apply
         ? [node.child0, ...this.#applicationArguments(node)]
         : [node.child0, node.child1, node.child2];
       for (const [childPosition, childIndex] of childReferences.entries()) {
         if (childIndex === NO_INDEX || childIndex >= this.#nodes.length) continue;
-        parents[childIndex]!.push({
+        (parents[childIndex] ??= []).push({
           parent: parentIndex,
           child: childPosition,
         });
@@ -691,13 +642,16 @@ export class LambdaSetAnalysis {
   }
 
   #state(variable: number): FlowState {
-    const state = this.#states[variable];
-    if (state === undefined) {
+    if (!Number.isInteger(variable) || variable < 0 || variable >= this.#states.length) {
       throw new Error(
         `functional lambda-set flow variable ${variable} is outside ${this.#states.length} variables`,
       );
     }
-    return state;
+    return this.#states[variable] ??= {
+      lambdaNodes: undefined,
+      effectNames: undefined,
+      incomplete: false,
+    };
   }
 
   #node(index: number): CoreNode {

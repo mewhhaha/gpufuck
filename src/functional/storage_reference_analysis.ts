@@ -279,7 +279,40 @@ export function analyzeStorageReferences(
           globalOwners: childGlobalOwners,
         });
         continue;
-      case CoreTag.Case:
+      case CoreTag.Case: {
+        if (
+          node.payload > module.caseAlternatives.length ||
+          node.child1 > module.caseAlternatives.length - node.payload
+        ) {
+          throw new Error(
+            `functional storage reference analysis case alternatives ${node.payload}..${
+              node.payload + node.child1
+            } exceed ${module.caseAlternatives.length}`,
+          );
+        }
+        for (
+          const alternative of module.caseAlternatives.slice(
+            node.payload,
+            node.payload + node.child1,
+          )
+        ) {
+          let bodyEnvironment = environment;
+          for (let binder = 0; binder < alternative.binderCount; binder += 1) {
+            bodyEnvironment = { storageName: undefined, parent: bodyEnvironment };
+          }
+          pending.push({
+            nodeIndex: alternative.body,
+            environment: bodyEnvironment,
+            globalOwners: childGlobalOwners,
+          });
+        }
+        pending.push({
+          nodeIndex: node.child0,
+          environment,
+          globalOwners: childGlobalOwners,
+        });
+        continue;
+      }
       case CoreTag.CaseArm:
         if (node.child1 !== NO_INDEX) {
           pending.push({

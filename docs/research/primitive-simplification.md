@@ -13,8 +13,8 @@ Package 0.7.0 was recorded in `45cc6d4`; there is no ABI-6 compatibility decoder
   use trailing parameter and argument tables. Empty lists are genuine zero-arity functions and
   calls.
 - `Case(scrutinee, firstAlternative, alternativeCount)` uses packed alternative and binder tables.
-  `CaseArm` and `PatternBind` are not emitted as Core expressions. Linear Wasm and WasmGC expand
-  them only into a private backend representation.
+  `CaseArm` and `PatternBind` are not emitted as Core expressions. Linear Wasm and WasmGC consume
+  the packed tables directly.
 - `Prim(opcode, firstOperand, operandCount, auxiliaryType)` replaces emitted unary, binary,
   conversion, buffer, and persistent-Store operation nodes. One declaration table owns opcode,
   arity, type rule, fault class, effects, and backend availability and generates the WGSL lookup.
@@ -24,7 +24,7 @@ Package 0.7.0 was recorded in `45cc6d4`; there is no ABI-6 compatibility decoder
   calls unary restores the existing bound while retaining the list ABI. Gleam, Sweep, JavaScript,
   and the public Functional Surface emit their natural exact arities.
 
-The current integrated gpufuck suite passes 392 tests, including GPU evaluation, packed compilation,
+The current integrated gpufuck suite passes 408 tests, including GPU evaluation, packed compilation,
 linear-memory Wasm, WasmGC, rank-3 and indexed inference, lazy sharing and blackholes, genuine
 zero-arity calls, polymorphic Store values, effects, and malformed-input rejection.
 
@@ -41,6 +41,68 @@ counters compare as follows:
 | 256-module batch                  |      300,544 nodes |      265,216 nodes |    -11.8% |
 | Linked 51-module project          |       60,031 nodes |       52,993 nodes |    -11.7% |
 | Generated Gleam Wasm              |       40,005 bytes |       40,005 bytes | unchanged |
+
+The Wasm packed-case follow-up on 2026-07-31 removed the backend-only expansion that remained after
+ABI 7. On the reachable Gleam stdlib corpus, backend lowering now produces 15,750 nodes instead of
+17,719 by omitting 812 case-arm and 1,157 pattern-binding nodes. Four alternating process pairs
+measured 24 emissions per process after three warmups:
+
+| Measurement              | `0be17e2` control | Packed-case backend | Change |
+| ------------------------ | ----------------: | ------------------: | -----: |
+| Full Wasm compile median |          37.79 ms |            35.42 ms |  -6.3% |
+| Backend-plan median      |           9.33 ms |             7.82 ms | -16.2% |
+| Emitted artifact         |     297,776 bytes |       297,776 bytes |   none |
+
+Both variants produced SHA-256 `afb920a44162da9459b770a876c2089626b0ebb196039a7bc00ed4b34223e94a`,
+so runtime code is byte-identical. The complete 408-test suite passed after the change.
+
+The next follow-up removed a second whole-program lambda-flow solve for effectful modules. Semantic
+effect inference already needs finite lambda provenance; it now computes that provenance over the
+same lowered Core consumed by Wasm and privately retains both immutable results on the completed
+module. Linear Wasm reuses them. Pure, transferred, source-rebound, and literal-updated modules
+retain the ordinary lowering and analysis fallback, so preparation is an optimization rather than a
+new module invariant or public API.
+
+The machine was concurrently occupied by an unrelated high-priority job, so separate-process wall
+times drifted too much to compare. The accepted measurement instead loaded both revisions in one
+process, pinned that process to one CPU, alternated revision order on every repetition, discarded
+four warmups, and measured twelve adjacent pairs:
+
+| Reachable Gleam stdlib work | `7e09e27` control | Shared analysis | Change |
+| --------------------------- | ----------------: | --------------: | -----: |
+| Semantic wall time          |          83.47 ms |        87.70 ms |  +5.1% |
+| Wasm wall time              |         114.69 ms |        95.52 ms | -16.7% |
+| Complete wall time          |         192.45 ms |       180.50 ms |  -6.2% |
+| Complete process CPU time   |         191.54 ms |       178.97 ms |  -6.6% |
+
+The semantic-only cost is explicit: preparing Wasm Core adds work when an effectful module is never
+sent to Wasm. The complete path clears the 5% acceptance threshold, while pure modules do not take
+the preparation path. Both revisions emitted the same 297,776-byte artifact with SHA-256
+`afb920a44162da9459b770a876c2089626b0ebb196039a7bc00ed4b34223e94a`. The complete suite now passes
+409 tests, including higher-order and fully applied curried effect inference.
+
+Two follow-up representation changes were rejected. Preparing the complete Wasm Core index beside
+lambda flow replaced the latter's lightweight parent index but moved too much backend-only work into
+semantic compilation. In twelve alternating same-process pairs, semantic compilation rose from 84.04
+to 94.44 ms, Wasm fell from 85.24 to 70.22 ms, and the complete path regressed from 167.54 to 170.91
+ms, or 2.0%. Encoding function bodies into typed byte arrays was also rejected. Its only changed
+trace stage, `wasm.encode`, moved from 10.24 to 11.12 ms; larger apparent whole-process changes were
+unrelated JIT and garbage-collection drift. Both spikes remain isolated on
+`perf/reuse-wasm-core-index` and `perf/typed-wasm-function-bodies`.
+
+A V8 CPU profile establishes the next architectural boundary. The representative artifact contains
+1,528 required functions, 266,055 instruction bytes, and 13,550 locals. Across 1,492 samples, no
+gpufuck JavaScript routine accounted for 2% of total CPU: work is distributed across lambda flow,
+Core indexing, capture analysis, recursive instruction emission, collection operations, and binary
+encoding. Another local data-structure substitution therefore cannot credibly meet the 5% threshold.
+
+The next Wasm experiment should separate deterministic closure conversion from body emission. A
+single immutable plan must assign every function slot, capture layout, call target, and function
+type before code generation. Each planned body can then be emitted independently, dispatched to a
+bounded worker pool for large modules, and concatenated in slot order; small modules should stay on
+the serial path. Parallelizing the current emitter is not credible because body compilation still
+discovers and mutates shared slots recursively. This is a new backend phase boundary, not a batching
+flag, and requires its own runtime, compile-time, and worker-transfer break-even measurements.
 
 The original same-machine timing runs were noisy: ABI 7 was faster for the 64- and 256-module
 batches, while the single module and linked project were slower by more than 5% in the sampled

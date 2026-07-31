@@ -23,8 +23,10 @@ import { WasmFunctionAnalysis } from "./wasm_function_analysis.ts";
 import { createLoweredCoreStoragePlan } from "./storage_plan.ts";
 import { requireFirstOrderWasmType } from "./wasm_value_codec.ts";
 import { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
+import { preparedWasmLambdaAnalysis } from "./prepared_wasm_lambda_analysis.ts";
 import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 import { indexWasmCore, type WasmCoreIndex } from "./wasm_core_index.ts";
+import type { LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 
 export interface WasmBackendPlan {
   readonly module: CompiledModule;
@@ -33,6 +35,7 @@ export interface WasmBackendPlan {
   readonly constantAnalysis: WasmConstantAnalysis;
   readonly functionAnalysis: WasmFunctionAnalysis;
   readonly uniqueReuseAnalysis: WasmUniqueReuseAnalysis;
+  readonly lambdaSetAnalysis: LambdaSetAnalysis | undefined;
   readonly coreIndex: WasmCoreIndex;
   readonly entry: WasmEntry;
   readonly compactScalarEligible: boolean;
@@ -49,27 +52,25 @@ export function createWasmBackendPlan(
   trace?: CompilerPerformanceTrace,
 ): WasmBackendPlan {
   measureCompilerStage(trace, "wasm.plan.validate", {}, () => validateWasmSimdMode(options.simd));
+  const preparedLambdaAnalysis = preparedWasmLambdaAnalysis(module);
   const loweringAnnotations = {
     inputNodes: nodes.length,
     outputNodes: 0,
     addedApplications: 0,
     addedLambdas: 0,
-    addedCaseArms: 0,
-    addedPatternBinders: 0,
+    reused: preparedLambdaAnalysis !== undefined,
   };
   const loweredNodes = measureCompilerStage(
     trace,
     "wasm.plan.lower-core",
     loweringAnnotations,
-    () => lowerCoreForWasm(module, nodes),
+    () => preparedLambdaAnalysis?.nodes ?? lowerCoreForWasm(module, nodes),
     (result) => {
       loweringAnnotations.outputNodes = result.length;
       for (let nodeIndex = nodes.length; nodeIndex < result.length; nodeIndex++) {
         const tag = result[nodeIndex]!.tag;
         if (tag === CoreTag.Apply) loweringAnnotations.addedApplications += 1;
         else if (tag === CoreTag.Lambda) loweringAnnotations.addedLambdas += 1;
-        else if (tag === CoreTag.CaseArm) loweringAnnotations.addedCaseArms += 1;
-        else if (tag === CoreTag.PatternBind) loweringAnnotations.addedPatternBinders += 1;
       }
     },
   );
@@ -93,7 +94,7 @@ export function createWasmBackendPlan(
     analysisAnnotations,
     () =>
       [
-        new WasmCaptureAnalysis(loweredNodes),
+        new WasmCaptureAnalysis(module, loweredNodes),
         new WasmConstantAnalysis(loweredNodes),
       ] as const,
   );
@@ -157,6 +158,7 @@ export function createWasmBackendPlan(
     analysisAnnotations,
     () =>
       new WasmFunctionAnalysis(
+        module,
         loweredNodes,
         module.definitionRoots,
         constantAnalysis,
@@ -176,6 +178,7 @@ export function createWasmBackendPlan(
     constantAnalysis,
     functionAnalysis,
     uniqueReuseAnalysis,
+    lambdaSetAnalysis: preparedLambdaAnalysis?.lambdaSets,
     coreIndex,
     entry,
     compactScalarEligible,
@@ -183,6 +186,59 @@ export function createWasmBackendPlan(
     options,
     trace,
   });
+}
+
+export function updateWasmBackendPlanSignedLiterals(
+  reference: WasmBackendPlan,
+  module: CompiledModule,
+  nodes: readonly CoreNode[],
+  changedNodes: readonly number[],
+  trace?: CompilerPerformanceTrace,
+): WasmBackendPlan {
+  const annotations = {
+    nodes: reference.nodes.length,
+    changedNodes: changedNodes.length,
+  };
+  return measureCompilerStage(
+    trace,
+    "wasm.plan.literal-update",
+    annotations,
+    () => {
+      if (nodes.length > reference.nodes.length) {
+        throw new Error(
+          `incremental WebAssembly plan has ${reference.nodes.length} lowered nodes for ${nodes.length} Core nodes`,
+        );
+      }
+      // Signed literals are leaves, and every cached analysis depends only on their tag and edges.
+      // Replacing their payloads therefore preserves indexing, captures, reachability, and reuse.
+      const loweredNodes = [...reference.nodes];
+      for (const nodeIndex of changedNodes) {
+        const previous = reference.nodes[nodeIndex];
+        const updated = nodes[nodeIndex];
+        if (
+          previous === undefined || updated === undefined ||
+          previous.tag !== CoreTag.SignedInteger64 ||
+          updated.tag !== CoreTag.SignedInteger64 ||
+          previous.child1 !== updated.child1 ||
+          previous.child2 !== updated.child2 ||
+          previous.sourceByteOffset !== updated.sourceByteOffset ||
+          previous.sourceEndByte !== updated.sourceEndByte ||
+          previous.evaluationMode !== updated.evaluationMode
+        ) {
+          throw new Error(
+            `incremental WebAssembly plan received a non-literal change at Core node ${nodeIndex}`,
+          );
+        }
+        loweredNodes[nodeIndex] = updated;
+      }
+      return Object.freeze({
+        ...reference,
+        module,
+        nodes: Object.freeze(loweredNodes),
+        trace,
+      });
+    },
+  );
 }
 
 function compactFixedVectorProgramIsProvable(
@@ -261,9 +317,16 @@ function compactFixedVectorProgramIsProvable(
       case CoreTag.Let:
       case CoreTag.LetRec:
       case CoreTag.Binary:
-      case CoreTag.Case:
       case CoreTag.CaseArm:
         return children(node.child0, node.child1);
+      case CoreTag.Case:
+        return children(
+          node.child0,
+          ...module.caseAlternatives.slice(
+            node.payload,
+            node.payload + node.child1,
+          ).map((alternative) => alternative.body),
+        );
       case CoreTag.If:
         return children(node.child0, node.child1, node.child2);
       case CoreTag.Text:

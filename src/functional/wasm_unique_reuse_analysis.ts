@@ -53,38 +53,28 @@ export class WasmUniqueReuseAnalysis {
     } else if (node.tag === CoreTag.Let) {
       fieldCount = this.uniqueConstructorFieldCount(node.child1, analysisDepth + 1);
     } else if (node.tag === CoreTag.Case) {
-      fieldCount = this.#caseArmFieldCount(node.child1, analysisDepth + 1);
+      fieldCount = this.#caseAlternativeFieldCount(node, analysisDepth + 1);
     }
     this.#resultFieldCounts[nodeIndex] = fieldCount ?? null;
     return fieldCount;
   }
 
-  #caseArmFieldCount(firstArm: number, analysisDepth: number): number | undefined {
+  #caseAlternativeFieldCount(node: CoreNode, analysisDepth: number): number | undefined {
     if (analysisDepth > MAXIMUM_UNIQUE_REUSE_ANALYSIS_DEPTH) return undefined;
-    let armIndex = firstArm;
     let fieldCount: number | undefined;
-    let sawArm = false;
-    while (armIndex !== NO_INDEX) {
-      const arm = this.#node(armIndex);
-      if (arm.tag !== CoreTag.CaseArm) return undefined;
-      sawArm = true;
-      let bodyNode = arm.child0;
-      const arity = this.#module.constructorArities[arm.payload];
-      if (arity === undefined) return undefined;
-      for (let binder = 0; binder < arity; binder += 1) {
-        const binding = this.#node(bodyNode);
-        if (binding.tag !== CoreTag.PatternBind) return undefined;
-        bodyNode = binding.child0;
-      }
-      const armFieldCount = this.uniqueConstructorFieldCount(bodyNode, analysisDepth + 1);
+    const alternatives = this.#caseAlternatives(node);
+    for (const alternative of alternatives) {
+      const armFieldCount = this.uniqueConstructorFieldCount(
+        alternative.body,
+        analysisDepth + 1,
+      );
       if (armFieldCount === undefined) return undefined;
       fieldCount = fieldCount === undefined
         ? armFieldCount
         : matchingFieldCount(fieldCount, armFieldCount);
       if (fieldCount === undefined) return undefined;
-      armIndex = arm.child1;
     }
-    return sawArm ? fieldCount : undefined;
+    return alternatives.length === 0 ? undefined : fieldCount;
   }
 
   #constructorApplication(
@@ -212,10 +202,19 @@ export class WasmUniqueReuseAnalysis {
             insideLambda,
             analysisDepth + 1,
           );
-        return sequentialConsumption(
-          selected,
-          this.#localConsumption(node.child1, localDepth, insideLambda, analysisDepth + 1),
-        );
+        let alternatives = EMPTY_CONSUMPTION;
+        let sawAlternative = false;
+        for (const alternative of this.#caseAlternatives(node)) {
+          const body = this.#localConsumption(
+            alternative.body,
+            localDepth + alternative.binderCount,
+            insideLambda,
+            analysisDepth + 1,
+          );
+          alternatives = sawAlternative ? alternativeConsumption(alternatives, body) : body;
+          sawAlternative = true;
+        }
+        return sequentialConsumption(selected, alternatives);
       }
       case CoreTag.CaseArm: {
         const current = this.#localConsumption(
@@ -239,6 +238,22 @@ export class WasmUniqueReuseAnalysis {
     throw new Error(
       `functional WASM unique-reuse analysis node ${nodeIndex} is outside ${this.#nodes.length} resolved nodes`,
     );
+  }
+
+  #caseAlternatives(
+    node: CoreNode,
+  ): readonly CompiledModule["caseAlternatives"][number][] {
+    if (
+      node.payload > this.#module.caseAlternatives.length ||
+      node.child1 > this.#module.caseAlternatives.length - node.payload
+    ) {
+      throw new Error(
+        `functional WASM unique-reuse analysis case alternatives ${node.payload}..${
+          node.payload + node.child1
+        } exceed ${this.#module.caseAlternatives.length}`,
+      );
+    }
+    return this.#module.caseAlternatives.slice(node.payload, node.payload + node.child1);
   }
 }
 
