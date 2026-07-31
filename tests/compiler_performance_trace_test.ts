@@ -444,6 +444,42 @@ Deno.test("incremental semantic reuse rejects structural expression edits", asyn
   await compiler.destroy();
 });
 
+Deno.test("incremental lowering rejects shifted source locations", () => {
+  const frontend = new GleamFrontendService();
+  const entry = { module: "main", exportName: "main" };
+  const first = frontend.lower(
+    [{ name: "main", source: "pub fn main() -> Int { 42 }\n" }],
+    entry,
+  );
+  if (!first.ok) throw new Error(first.diagnostics[0].message);
+
+  const shiftedSource = "pub fn main() -> Int {\n  42\n}\n";
+  const trace = new CompilerPerformanceTrace();
+  const shifted = frontend.lower(
+    [{ name: "main", source: shiftedSource }],
+    entry,
+    { trace },
+  );
+  if (!shifted.ok) throw new Error(shifted.diagnostics[0].message);
+  const fresh = lowerGleamSources(
+    [{ name: "main", source: shiftedSource }],
+    entry,
+  );
+  if (!fresh.ok) throw new Error(fresh.diagnostics[0].message);
+
+  notDeepStrictEqual(
+    shifted.lowered.modules[0]?.definitions,
+    first.lowered.modules[0]?.definitions,
+  );
+  deepStrictEqual(shifted.lowered.module, fresh.lowered.module);
+  const locationFingerprint = trace.snapshot().find((event) =>
+    event.stage === "frontend.lower.location-fingerprint"
+  );
+  equal(locationFingerprint?.annotations.previousCached, false);
+
+  frontend.clear();
+});
+
 Deno.test("incremental integer patterns match fresh lowering", () => {
   const frontend = new GleamFrontendService();
   const entry = { module: "main", exportName: "main" };

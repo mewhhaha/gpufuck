@@ -63,7 +63,7 @@ export class GleamFrontendService {
       readonly source: string;
       readonly signatures: string;
       readonly semantics: string;
-      readonly locations: string;
+      readonly locations?: string;
       readonly lowered: LoweredGleamModule;
       readonly literalLineage?: LiteralSemanticLineage;
     }
@@ -308,16 +308,40 @@ export class GleamFrontendService {
               })
               : literalSemanticFingerprint(literalLineage),
         );
-        const locations = literalUpdate === undefined || cachedLowering === undefined
-          ? structuralFingerprint({
-            imports: module.imports,
-            declarations: module.declarations,
-          }, { includeSourceLocations: true })
-          : cachedLowering.locations;
+        let locations = literalUpdate === undefined ? undefined : cachedLowering?.locations;
+        let locationsUnchanged = false;
+        if (
+          literalUpdate === undefined &&
+          cachedLowering?.signatures === signatureKey &&
+          cachedLowering.semantics === semantics
+        ) {
+          const locationFingerprintAnnotations = {
+            previousCached: cachedLowering.locations !== undefined,
+          };
+          const comparedLocations = measureCompilerStage(
+            options.trace,
+            "frontend.lower.location-fingerprint",
+            locationFingerprintAnnotations,
+            () => {
+              const previous = cachedLowering.locations ??
+                structuralFingerprint({
+                  imports: cachedLowering.lowered.source.imports,
+                  declarations: cachedLowering.lowered.source.declarations,
+                }, { includeSourceLocations: true });
+              const current = structuralFingerprint({
+                imports: module.imports,
+                declarations: module.declarations,
+              }, { includeSourceLocations: true });
+              return { previous, current };
+            },
+          );
+          locations = comparedLocations.current;
+          locationsUnchanged = comparedLocations.previous === comparedLocations.current;
+        }
         const lowered = literalUpdate?.lowered ??
           (cachedLowering?.signatures === signatureKey &&
               cachedLowering.semantics === semantics &&
-              cachedLowering.locations === locations
+              locationsUnchanged
             ? {
               ...cachedLowering.lowered,
               source: module,
@@ -331,8 +355,8 @@ export class GleamFrontendService {
           source,
           signatures: signatureKey,
           semantics,
-          locations,
           lowered,
+          ...(locations === undefined ? {} : { locations }),
           ...(literalLineage === undefined ? {} : { literalLineage }),
         });
         return lowered;
