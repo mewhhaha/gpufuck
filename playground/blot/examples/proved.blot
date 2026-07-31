@@ -1,0 +1,34 @@
+// What a branch proves, and what coverage does with it.
+//
+// Comparisons narrow a range, and they compose: two of them leave a bounded
+// set. A bounded integer range is finite, so `case` can cover it — the proof
+// and the coverage check meet, which is what "branches prove stuff" is for.
+
+open {} = (@import "blot:prelude") ();
+
+sig classify = Int -> Str;
+let classify = i =>
+  if i < 3
+  then (if i > 0
+    then case i of 1 => "one", 2 => "two" end   // i is 1..2 here; complete
+    else "zero or less"
+    end)
+  else "three or more"
+  end;
+
+// An unbounded domain cannot be covered by arms, so it says so. `@panic` is how
+// an arm records why reaching it is impossible.
+sig only_small = Int -> Str;
+let only_small = n => case n of
+  0 => "zero",
+  1 => "one",
+  _ => @panic "callers narrow to 0 | 1 before calling"
+end;
+
+return {
+  .below = classify 0;
+  .one = classify 1;
+  .two = classify 2;
+  .above = classify 9;
+  .small = only_small 1;
+};

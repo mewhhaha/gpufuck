@@ -1,0 +1,33 @@
+// Handlers that compile.
+//
+// gpufuck has no runtime handler representation, so blot specializes a handler
+// with selective CPS before Core exists. Each operation receives an affine
+// continuation for the rest of the computation.
+//
+// Handling means inlining the computation, because the evidence is lexical. A
+// closure has already resolved its operations against the global definitions,
+// so specializing the handler is not an optimization here: it is what makes it
+// mean anything.
+
+open {} = (@import "blot:prelude") ();
+
+const Counter = @effect { .bump = Int -> Int; };
+const Scale = @effect { .by = Int -> Int; };
+
+// A clause is `(argument, ?resume) => …`. `?` is affine, so resuming twice is a
+// static error and never resuming is an abort — which is a different feature.
+let doubling = { .bump = (n, ?resume) => resume (n * 2); };
+
+// Resume may appear beneath a block, conditional, or case.
+let stepping = {
+  .by = (n, ?resume) => do
+    let scaled = n * 10;
+    in resume (if n < 0 then 0 else scaled end)
+  end;
+};
+
+let counted = () => Counter.bump 20 + Counter.bump 1;
+let scaled = () => Scale.by 4;
+
+// Nested handlers discharge only what they replace.
+return @handle (Counter, counted, doubling) - @handle (Scale, scaled, stepping);

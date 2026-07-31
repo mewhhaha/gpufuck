@@ -1,0 +1,25 @@
+// Two distinct effects that share a name.
+//
+// An effect's identity is its own, not its spelling — `@effect` mints a fresh
+// one every time. So a Core definition is named by identity too, because a name
+// less unique than the memo that guards it is a duplicate waiting to happen.
+//
+// A capability name is the exception: it *is* the host-facing contract, so two
+// host effects claiming one is refused rather than mangled behind your back.
+
+open {} = (@import "blot:prelude") ();
+
+const Log = @effect { .write = Int -> Int; };
+let doubling = { .write = (n, ?resume) => resume (n * 2); };
+let work = () => Log.write 20;
+let first = @handle (Log, work, doubling);
+
+// A second, different effect that happens to share both names. This is a new
+// compile-time binding: `:=` preserves the previous binding's effect identity,
+// so a fresh effect is introduced with another `const`.
+const Log = @effect { .write = Int -> Int; };
+let tripling = { .write = (n, ?resume) => resume (n * 3); };
+let other = () => Log.write 1;
+let second = @handle (Log, other, tripling);
+
+return first + second;

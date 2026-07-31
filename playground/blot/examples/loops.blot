@@ -1,0 +1,105 @@
+// Loops, without assignment.
+//
+// `for` is a declaration, not an expression, because what a loop produces is
+// an effect on the enclosing scope: the names its body rebinds with `:=` are
+// the accumulator, and the last iteration's values are what escape. That is a
+// fold with the state inferred, which is how blot has `for` while having no
+// assignment anywhere — `:=` was already "a new binding, not a new value in
+// the old one", and it must preserve the binding's stable type.
+
+open {} = (@import "blot:prelude") ();
+
+// An iterator is a `.state` and a `.step`, where `step state` answers
+// `#Some (value, next_state)` or `#None`. `Iter.range` and `Iter.items` are
+// ordinary prelude functions over that shape, so a new kind of sequence is a function
+// someone writes rather than a case the compiler knows about.
+
+let counted = 0;
+for Iter.range (0, 5) do
+  counted := counted + 1;
+end;
+
+// `for x in …` binds each element.
+let total = 0;
+for n in Iter.range (1, 5) do
+  total := total + n;
+end;
+
+let joined = "";
+for word in Iter.items ["a", "b", "c"] do
+  joined := joined <> word;
+end;
+
+// A `let` inside the body is a local: the next iteration cannot see it, which
+// is what keeps the escaping set syntactic — and therefore something the
+// checker can pin a type to.
+let squares = 0;
+for n in Iter.range (1, 4) do
+  let square = n * n;
+  squares := squares + square;
+end;
+
+// Zero iterations leave every accumulator alone.
+let untouched = 7;
+for Iter.range (0, 0) do
+  untouched := untouched + 100;
+end;
+
+// An accumulator does not have to be a scalar. `[]` is the empty array literal,
+// and a spread rebuilds it — which reads as the append it is.
+let doubled = [];
+for n in Iter.range (1, 4) do
+  doubled := [...doubled, n * 2];
+end;
+
+// --- a refutable binder filters ---------------------------------------------
+//
+// `x in source` binds every element. A binder that *can* fail — a constructor,
+// a literal — becomes the `case` it looks like, with the other arm handing the
+// accumulator back untouched. An element that does not match skips the
+// iteration rather than failing it, which is what makes this a filter and
+// costs exactly one arm.
+
+let found = 0;
+for #Some n in Iter.items [Some 1, None, Some 20, None, Some 300] do
+  found := found + n;
+end;
+
+// A tuple binder cannot fail, so it stays a `let`.
+let labelled = "";
+for (rank, label) in Iter.items [(1, "one"), (2, "two")] do
+  labelled := labelled <> label <> Text.of_int rank;
+end;
+
+// --- writing one ------------------------------------------------------------
+//
+// Nothing about `Iter.range` is privileged. A step function and a starting
+// state is the whole protocol.
+
+const halving = start => {
+  .state = start;
+  .step = value =>
+    if is_less (@int.cmp value 1)
+    then None
+    else Some (value, @int.div value 2)
+    end;
+};
+
+let steps = 0;
+for value in halving 40 do
+  steps := steps + value;
+end;
+
+return {
+  .counted = counted;
+  .total = total;
+  .joined = joined;
+  .squares = squares;
+  .untouched = untouched;
+  .halved = steps;
+  .doubled = doubled;
+  .found = found;
+  .labelled = labelled;
+  .collected = collect (Iter.range (0, 4));
+  .folded = iterate (Iter.range (1, 4), 1, ((product, n) => product * n));
+};

@@ -1,0 +1,93 @@
+// Effects.
+//
+// There is no `effect` declaration form, no `perform`, no `with`, and no
+// handler declaration keyword. An effect is a shape of operation types handed
+// to one primitive; performing an operation is an ordinary call; a handler is
+// a shape; and `@handle` is a function.
+//
+// `x <- computation;` is `let x = computation ();` and nothing more. Performing
+// is already a call and the row is already inferred, so there is nothing left
+// for a perform form to declare — which leaves `<-` one honest job: naming what
+// a computation *returns* without spelling the `()`. Requiring a nullary value
+// is what stops it from being a second spelling for `let`.
+
+open {} = (@import "blot:prelude") ();
+
+const Console = @effect {
+  .write = Str -> Unit;
+};
+
+const Counter = @effect {
+  .next = Unit -> Str;
+};
+
+// Reading from an effect, which is what `<-` is for.
+const Terminal = @effect {
+  .read = Unit -> Str;
+};
+
+let ask = () => do
+  answer <- Terminal.read;
+  in answer <> "!"
+end;
+
+let answering = {
+  .read = ((), ?resume) => resume "42";
+  .return = value => value;
+};
+
+// Nothing here says "effectful". The row is inferred; performing is a call.
+let greet = () => do
+  let _ = Console.write "hello";
+  let _2 = Console.write "world";
+  in "done"
+end;
+
+// A handler is a shape: one field per operation taking `(argument, ?resume)`,
+// plus an optional `.return` clause applied to the computation's result.
+//
+// `?` is affine — at most once. Not a weaker `!`: a handler that never resumes
+// is aborting, which is legitimate, while resuming twice is not. `blot check`
+// catches the second call statically.
+let collecting = {
+  .write = (message, ?resume) => do
+    let rest = resume ();
+    in @text.concat (@text.concat message "|") rest
+  end;
+  .return = value => value;
+};
+
+let counting = {
+  .write = (_, ?resume) => @int.add 1 (resume ());
+  .return = _ => 0;
+};
+
+let passing = {
+  .write = (_, ?resume) => resume ();
+  .return = value => value;
+};
+
+// A handler that never resumes discards the rest of the computation, which is
+// how an abort is written without any exception machinery.
+let silencing = {
+  .write = (_, ?resume) => "silenced";
+  .return = value => value;
+};
+
+let transcript = @handle (Console, greet, collecting);
+let writes = @handle (Console, greet, counting);
+let silenced = @handle (Console, greet, silencing);
+
+// Handlers nest. The inner one discharges `Console`; the outer sees nothing
+// left to handle.
+let nested = @handle (Console, (() => @handle (Console, greet, counting)), passing);
+
+let asked = @handle (Terminal, ask, answering);
+
+return {
+  .transcript = transcript;
+  .writes = writes;
+  .silenced = silenced;
+  .nested = nested;
+  .asked = asked;
+};

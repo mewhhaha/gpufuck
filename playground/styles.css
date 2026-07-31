@@ -193,10 +193,6 @@ h2 {
   color: color-mix(in srgb, var(--error) 60%, var(--ink));
 }
 
-.tok-function {
-  color: color-mix(in srgb, var(--ink) 75%, var(--accent));
-}
-
 .tok-operator {
   color: var(--muted);
 }
@@ -391,21 +387,4 @@ footer a {
   border-radius: 8px;
   font: 12px/1.6 var(--mono);
   overflow-x: auto;
-}
-
-.batch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-.batch select {
-  font: inherit;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.25rem 0.4rem;
 }

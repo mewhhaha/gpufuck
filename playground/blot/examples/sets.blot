@@ -1,0 +1,52 @@
+// Set algebra, and what "overloading an operator" means here.
+//
+// `|`, `&`, and `\` are not syntax. The fixity table binds each spelling to a
+// field of a record named `Set`, exactly the way `+` is bound to `Num.add`:
+//
+//   infixl 45 (|)  = Set.union;
+//   infixl 45 (&)  = Set.intersect;
+//   infixl 45 (\)  = Set.diff;
+//
+// The prelude's `Set` operates on types, because types are sets. But the
+// binding is resolved by name at the use site, so a module that defines its own
+// `Set` changes what all three operators mean — with no `operators` block, no
+// fixity declaration, and nothing added to the compiler. Structural width
+// subtyping is the entire dispatch mechanism.
+
+open {} = (@import "blot:prelude") ();
+
+const Method = "GET" | "POST" | "PUT" | "DELETE";
+const Safe = Method \ "PUT" \ "DELETE";
+const Tag = (#X | #Y | #Z) & (#Y | #Z | #W);
+
+// A field is a function, so an operator is a function. `Set.diff Method` is the
+// section "everything in Method except", which is not a special form either.
+const without = Set.diff Method;
+const readonly = without "PUT";
+
+// --- a second implementation ------------------------------------------------
+//
+// Three fields with the right names is the whole contract. Shadowing `Set`
+// rebinds `|`, `&`, and `\` for the rest of the module.
+
+const member = (values, needle) =>
+  fold (values, False, ((seen, value) => seen || Ord.eq value needle));
+
+const Set = {
+  .union = left => (right => fold (right, left, ((all, value) =>
+    if member (all, value) then all else @array.push all value end)));
+  .intersect = left => (right => filter (left, (value => member (right, value))));
+  .diff = left => (right => filter (left, (value => not (member (right, value)))));
+};
+
+const evens = [2, 4, 6];
+const small = [1, 2, 3, 4];
+
+return {
+  .safe = Safe;
+  .tag = Tag;
+  .readonly = readonly;
+  .union = evens | small;
+  .intersect = evens & small;
+  .diff = small \ evens;
+};

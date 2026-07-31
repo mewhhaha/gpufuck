@@ -1,0 +1,42 @@
+// A handler composition is static sugar over nested `@handle` calls. Each
+// bound step names the program with that effect discharged; the final step
+// executes the fully handled program.
+
+open {} = (@import "blot:prelude") ();
+
+const Terminal = @effect { .read = Unit -> Int; };
+const Clock = @effect { .now = Unit -> Int; };
+const Random = @effect { .add = Int -> Int; };
+
+let program = () => do
+  input <- Terminal.read;
+  time <- Clock.now;
+  in Random.add (input + time)
+end;
+
+let fake_terminal = {
+  .read = ((), ?resume) => resume 10;
+};
+let fake_clock = {
+  .now = ((), ?resume) => resume 20;
+};
+let fake_random = {
+  .add = (value, ?resume) => resume (value + 12);
+};
+
+let result = try program then do
+  program_without_terminal <- @handle (Terminal, fake_terminal);
+  program_without_clock <- @handle (Clock, fake_clock);
+  @handle (Random, fake_random)
+end;
+
+let discarded = try program then do
+  _ <- @handle (Terminal, fake_terminal);
+  _ <- @handle (Clock, fake_clock);
+  @handle (Random, fake_random)
+end;
+
+return {
+  .named = result;
+  .discarded = discarded;
+};

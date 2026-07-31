@@ -1,0 +1,92 @@
+// Comptime type introspection.
+//
+// A type is a value, so inspecting one has to mean inspecting a value. There is
+// no type-level `case`; there is `@type.reflect`, which names which case of the
+// value domain a type is and hands back the parts as an ordinary tagged value.
+// The `case` below is the same `case` that destructures anything else.
+//
+// Everything after `reflect` — `refines`, `Extract`, `Exclude`, `Pick`, `Omit`,
+// and matching a parameterized nominal — is prelude source over that one
+// primitive.
+
+open {} = (@import "blot:prelude") ();
+
+const Status = range (100, 599);
+
+const describe = t => case reflect t of
+  #Int value => Text.append "the literal " (Text.of_int value),
+  #Text _ => "a text literal",
+  #Range _ => "a range",
+  #Union options => Text.append "a union of " (Text.of_int (@array.len options)),
+  #Shape fields => Text.append "a record with " (Text.of_int (@array.len (@shape.names fields))),
+  #Arrow _ => "a function",
+  #Sealed s => Text.append "the nominal " s.name,
+  _ => "something else"
+end;
+
+// --- refinement -------------------------------------------------------------
+//
+// `refines (narrow, wide)` is the comptime mirror of what biunification decides
+// during checking, over ground values rather than inferred ones.
+
+const Ok = { .status = Status; .body = Str; };
+const Failed = { .status = Status; .reason = Str; };
+const HasStatus = { .status = Status; };
+
+// --- Extract and Exclude ----------------------------------------------------
+//
+// A union filtered by which members refine a bound. The TypeScript pair, except
+// that neither can quietly produce a bottom type, because blot has none — an
+// empty result is an error where it happens rather than a value that poisons
+// everything downstream.
+
+const Message = Ok | Failed | #Timeout | 0;
+
+// --- parameterized nominals -------------------------------------------------
+//
+// `seal` is identified by its name together with its carrier, so a constructor
+// is an ordinary function and `List I32` is one type however many times it is
+// written. `opened` is the blot reading of `case t of List a => ...`.
+
+const List = element => seal ("List", element);
+const Pair = element => seal ("Pair", { .first = element; .second = element; });
+
+const element_of = t => unwrap_or (opened ("List", t), Unit);
+
+// --- struct -----------------------------------------------------------------
+//
+// `struct` is prelude source over `@shape.*`, and it returns the storage type
+// with its namespace attached — so `Header` is both the tuple a value of it is
+// and the place `new`, `slot`, and the field accessors live.
+
+const Header = struct { .code = U8; .label = Str; };
+
+return {
+  .literal = describe 42;
+  .range = describe Status;
+  .union = describe Message;
+  .record = describe Ok;
+  .nominal = describe (List I32);
+
+  .wider_refines_narrower = refines (Ok, HasStatus);
+  .narrower_does_not = refines (HasStatus, Ok);
+  .literal_in_range = refines (200, Status);
+  .literal_outside = refines (42, Status);
+
+  .with_status = Extract (Message, HasStatus);
+  .without_status = Exclude (Message, HasStatus);
+  .member_count = @array.len (members Message);
+
+  .same_list_twice = List I32 | List I32;
+  .list_element = element_of (List Str);
+  .not_a_list = element_of I32;
+  .pair_carrier = unwrap_or (opened ("Pair", Pair U8), Unit);
+
+  .header_fields = Header.fields;
+  .header_size = Header.size;
+  .header_storage = Header;
+  .label_at = Header.slot "label";
+  .built = Header.new { .code = 7; .label = "ok"; };
+  .picked = Pick (Ok, ["body"]);
+  .omitted = Omit (Ok, ["body"]);
+};

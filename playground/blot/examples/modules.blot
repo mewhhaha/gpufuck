@@ -1,0 +1,21 @@
+// Modules.
+//
+// A module is a function from an input record to an export record. Resolution
+// and invocation happen while compiling, and an imported module sees only the
+// record its caller hands it.
+
+const score = @import "./lib/score.blot";
+const prelude = @import "blot:prelude" ();
+
+// The module is a function; calling it is what produces its exports.
+let application = score { .base = 40; .bonus = 2; };
+
+// The prelude is an ordinary module. Importing it without opening it keeps its
+// exports behind the `prelude` name.
+let explicit = prelude.Num.add 20 22;
+
+return {
+  .run = application.run;
+  .scaled = application.scaled;
+  .explicit = explicit;
+};

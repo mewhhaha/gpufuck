@@ -1,0 +1,24 @@
+// Collections.
+//
+// `fold` is prelude source over `@array.*`, and `for` does not exist — there is
+// no assignment for it to drive. Recursion is what a loop always was, and it
+// compiles: `rec` becomes a Core `let-rec` rather than a lifted definition,
+// because the lambda captures the block it is written in.
+
+open {} = (@import "blot:prelude") ();
+
+let numbers = upto (0, 6);
+let total = sum numbers;
+
+// An explicit fold, to show what `sum` is.
+let doubled = fold (numbers, 0, ((state, value) => state + value * 2));
+
+// Arrays are Core's `Store`, and an empty one is allocated by `storeEmpty` —
+// the surrounding constraints infer what it holds. That is what lets `map` and
+// `filter` compile at all: their element is a callback's result, generic at the
+// definition, so there is no value to allocate one with.
+let counted = fold ([4, 8, 15], 0, ((state, _) => state + 1));
+let scaled = map (numbers, (n => n * 3));
+let small = filter (scaled, (n => n < 8));
+
+return total + doubled + counted * 8 + sum small - 36;

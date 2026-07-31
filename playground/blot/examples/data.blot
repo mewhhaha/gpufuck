@@ -1,0 +1,73 @@
+// Data: shapes, tuples, unions, and pattern matching.
+//
+// One structural aggregate. A tuple is a shape with integer labels, so there is
+// no stored-tuple versus transient-pack distinction to learn.
+
+open {} = (@import "blot:prelude") ();
+
+const Point = struct {
+  .x = I32;
+  .y = I32;
+};
+
+const Message = #Ready | #Progress I32 | #Failed Str;
+
+let origin = { .x = 0; .y = 0; };
+let moved = { ...origin; .x = 20; };
+
+// Width subtyping: a wider value matches a narrower pattern.
+let { .x; } = moved;
+let { .x = left; .y = right; } = moved;
+
+let pair = (40, 2);
+let (first, second) = pair;
+let positional = pair.0;
+
+let values = [1, 2, 3];
+let [one, two, three] = values;
+let extended = [0, ...values, 4];
+
+let describe = m => case m of
+  #Ready => "ready",
+  #Progress 0 => "idle",
+  #Progress n => "working",
+  #Failed reason => reason
+end;
+
+// Literals are singleton types, so matching one narrows the union branch.
+let classify = value => case value of
+  -1 => "negative one",
+  0 => "zero",
+  1 => "one",
+  _ => "other"
+end;
+
+let nested_match = value => case value of
+  #Progress (a, b) => a,
+  #Progress n => n,
+  _ => 0
+end;
+
+return {
+  .point_fields = Point.fields;
+  .constructed = Point.new { .x = 1; .y = 2; };
+  .projected = moved.x;
+  .moved = moved;
+  .x = x;
+  .left = left;
+  .right = right;
+  .first = first;
+  .second = second;
+  .positional = positional;
+  .one = one;
+  .three = three;
+  .extended = extended;
+  .doubled = map (values, (v => @int.mul v 2));
+  .ready = describe #Ready;
+  .idle = describe (#Progress 0);
+  .working = describe (#Progress 7);
+  .failed = describe (#Failed "boom");
+  .negative = classify (-1);
+  .other = classify 99;
+  .nested = nested_match (#Progress (5, 6));
+};

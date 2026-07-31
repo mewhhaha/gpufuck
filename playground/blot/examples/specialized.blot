@@ -1,0 +1,17 @@
+// A generic, compiled.
+//
+// The type parameter, the `refines` check, and the `expect` are all compile
+// time, so a specialized generic leaves nothing behind: what reaches
+// WebAssembly is the `@int.add` the check selected. `examples/generics.blot`
+// is the catalog; this is the proof it costs nothing.
+
+open {} = (@import "blot:prelude") ();
+
+const adding = T => do
+  let _ = expect (refines (T, Int), "adding is integers only, and this is not one");
+  in (a, b) => @int.add a b
+end;
+
+const add_i32 = adding I32;
+const add_u8 = adding U8;
+return add_i32 (add_u8 (1, 2), 39);

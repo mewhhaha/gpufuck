@@ -1,0 +1,61 @@
+// Compile-time programming.
+//
+// Compile time is the same language, so `derive` is a function. Nothing here is
+// a macro, an attribute, or a plugin — it is code you can read, step through,
+// and call from anywhere.
+
+open {} = (@import "blot:prelude") ();
+
+let folded = comptime (20 * 2 + 1);
+
+const Header = struct {
+  .kind = U8;
+  .urgent = U8;
+  .length = I32;
+};
+
+// Structuring and padding are ordinary code over `@shape.*`, so a width
+// function is all a layout strategy is. `examples/storage.blot` takes this
+// further; here it is only evidence that it is a call.
+const byte_width = _ => 1;
+const word_width = _ => 4;
+
+const packed_layout = layout (Header.shape, byte_width);
+const aligned_layout = layout (Header.shape, word_width);
+
+// Reflection is a normal call, so structural derivation is ordinary recursion
+// over a shape's fields. It takes the names rather than the struct: a struct's
+// namespace is compile-time and does not appear in its type, so a parameter
+// that wanted `.fields` would have no type to ask for.
+const derive_show = names => (value =>
+  fold (names, "", ((state, name) => do
+    let rendered = @text.of_int (@shape.get value name);
+    in @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
+  end)));
+
+const show_header = comptime (derive_show Header.fields);
+
+const derive_sum = names => (value =>
+  fold (names, 0, ((state, name) => @int.add state (@shape.get value name))));
+
+const sum_header = comptime (derive_sum Header.fields);
+
+let sample = { .kind = 5; .urgent = 1; .length = 120; };
+
+// Ordinary collection work, all of it prelude source over `fold`.
+let numbers = upto (0, 10);
+let evens = filter (numbers, (n => case @int.rem n 2 of 0 => #True, _ => #False end));
+let squares = map (evens, (n => @int.mul n n));
+
+return {
+  .folded = folded;
+  .packed_size = packed_layout.size;
+  .packed_fields = packed_layout.fields;
+  .aligned_size = aligned_layout.size;
+  .shown = show_header sample;
+  .summed = sum_header sample;
+  .numbers = numbers;
+  .evens = evens;
+  .squares = squares;
+  .total = sum squares;
+};

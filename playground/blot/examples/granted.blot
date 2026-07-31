@@ -1,0 +1,32 @@
+// Capabilities, at the WebAssembly boundary.
+//
+// The entry module's parameter is the program's whole authority: no ambient
+// filesystem, no ambient clock, nothing to import for more. At this boundary
+// that authority *is* the module's imports — each field the program reaches for
+// becomes a declared host operation, with the signature inference found for it.
+//
+// `init` has no runtime representation of its own. Nothing is passed in, and a
+// program that never asked for `print` cannot reach it.
+
+module init;
+
+open {} = (@import "blot:prelude") ();
+
+const Console = @effect { .write = Str -> Unit; };
+
+// The handler discharges the blot effect by forwarding it to the granted
+// capability, then resumes the rest of the computation.
+const to_host = {
+  .write = (message, ?resume) => do
+    let _ = init.print message;
+    in resume ()
+  end;
+};
+
+const report = () => do
+  let _ = Console.write "compiled";
+  let _2 = Console.write "linked";
+  in 42
+end;
+
+return @handle (Console, report, to_host);

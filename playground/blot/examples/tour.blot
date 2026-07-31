@@ -1,0 +1,157 @@
+// The whole language in one file.
+//
+// One aggregate and one namespace. `type`, `interface`, `effect`, `duck`,
+// `try`, `with`, `handler`, and assignment do not exist — each is either a
+// `const`, a call, or nothing at all.
+
+module init;
+
+// The header only adds precedence; `open` is what brings the names in. `+` is
+// `Num.add` either way — nothing about it is built in.
+operators {
+  infixl 65 (++) = Text.append;
+  infix 40 (===) = Eq.eq;
+};
+
+open {} = @import "blot:prelude" ();
+
+// --- types are values -------------------------------------------------------
+
+const Small = 1 | 2 | 3 | #Woop | "hello";
+const Message = #Ready | #Progress I32 | #Failed Str;
+const Counter = struct { .current = I32; .limit = I32; };
+
+// --- functions --------------------------------------------------------------
+
+let double = value => value * 2;
+let increment = value => value + 1;
+
+// Currying needs parentheses; the idiomatic multi-argument function takes one
+// shape instead.
+let apply_twice = f => (x => f (f x));
+let distance = (from, to) => Num.abs (to - from);
+
+// `rec` makes the binding's own name visible inside the lambda.
+const factorial = rec (n => if n < 2 then 1 else n * factorial (n - 1) end);
+
+// --- matching ---------------------------------------------------------------
+
+let describe = m => case m of
+  #Ready => "ready",
+  #Progress 0 => "idle",
+  #Progress n => "working",
+  #Failed reason => reason
+end;
+
+// Literal patterns narrow the union branch they match.
+let classify = value => case value of
+  -1 => "down",
+  1 => "up",
+  _ => "flat"
+end;
+
+// --- destructuring ----------------------------------------------------------
+
+let counter = { .current = 1; .limit = 10; };
+let { .current; .limit = ceiling; } = counter;
+let (left, right) = (40, 2);
+let [head, waist, tail] = [1, 2, 3];
+
+// --- shadowing and blocks ---------------------------------------------------
+
+let staged = do
+  let base = left * 2;
+  let scaled = base + right;
+  // `:=` rebinds at the same stable type; there is no assignment anywhere.
+  scaled := scaled + 1;
+  in scaled
+end;
+
+// A repeated `let` is explicit shadowing and may change the type.
+let changing = 1;
+let changing = "now text";
+
+// --- loops ------------------------------------------------------------------
+
+let folded = 0;
+for n in Iter.range (1, 4) do
+  folded := folded + n;
+end;
+
+let repeated = 0;
+for ever do
+  repeated := repeated + 1;
+  if repeated >= 3 then do
+    break;
+  end;
+end;
+
+// --- effects ----------------------------------------------------------------
+
+const Console = @effect { .write = Str -> Unit; };
+
+let report = () => do
+  let _ = Console.write "one";
+  let _2 = Console.write "two";
+  in "done"
+end;
+
+let joining = {
+  .write = (message, ?resume) => message ++ resume ();
+  .return = value => value;
+};
+
+// The host's handler is one blot did not write. `init.print` is an opaque
+// function and the program's entire authority.
+let printing = {
+  .write = (message, ?resume) => do
+    let _ = init.print message;
+    in resume ()
+  end;
+  .return = value => value;
+};
+
+// --- ownership --------------------------------------------------------------
+//
+// `!` marks a value consumed exactly once and `&` a bounded borrow. The
+// linearity pass gives them teeth; here they are ordinary binders.
+
+let !token = 41;
+let consume = (!value) => value + 1;
+
+return {
+  .small = Small;
+  .message = Message;
+  .counter_fields = Counter.fields;
+
+  .doubled = double 21;
+  .twice = apply_twice increment 5;
+  .distance = distance (2, 40);
+  .factorial = factorial 5;
+
+  .ready = describe #Ready;
+  .idle = describe (#Progress 0);
+  .failed = describe (#Failed "boom");
+  .down = classify (-1);
+
+  .current = current;
+  .ceiling = ceiling;
+  .left = left;
+  .head = head;
+  .tail = tail;
+  .staged = staged;
+  .changing = changing;
+  .folded = folded;
+  .repeated = repeated;
+
+  .joined = @handle (Console, report, joining);
+  .printed = @handle (Console, report, printing);
+
+  // A prefixed operand needs parentheses: a trailing operator in a flat chain
+  // reads as infix, which is what keeps expressions recursion-free.
+  .owned = consume (!token);
+  .compared = 20 + 22 === 42;
+  .appended = "a" ++ "b" ++ "c";
+  .piped = 20 |> Num.add 2 |> double;
+  .comptime = comptime (20 * 2 + 1);
+};

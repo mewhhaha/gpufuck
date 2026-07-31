@@ -1,0 +1,68 @@
+// `return` exits the nearest source function. A standalone `if` inherits that
+// target, while the normal path reaches the block value after `in`.
+
+open {} = @import "blot:prelude" ();
+
+let describe = value => do
+  if value < 0 then do
+    return "negative";
+  end;
+  if value == 0 then do
+    return "zero";
+  end;
+  in "positive"
+end;
+
+let unwrap = option => do
+  if let #Some value = option else do
+    return -1;
+  end;
+  in value
+end;
+
+let find = wanted => do
+  for value in Iter.range (0, 5) do
+    if value == wanted then do
+      return value;
+    end;
+  end;
+  in -1
+end;
+
+let count_to = limit => do
+  let count = 0;
+  for ever do
+    count := count + 1;
+    if count >= limit then do
+      return count;
+    end;
+  end;
+  in 0
+end;
+
+let count_or_stop = limit => do
+  let count = 0;
+  for ever do
+    count := count + 1;
+    if count >= limit then do
+      return count;
+    end;
+    if count >= 5 then do
+      break;
+    end;
+  end;
+  in -1
+end;
+
+return {
+  .negative = describe (-1);
+  .zero = describe 0;
+  .positive = describe 1;
+  .unwrapped = unwrap (Some 7);
+  .absent = unwrap None;
+  .found = find 3;
+  .missing = find 8;
+  .counted = count_to 4;
+  .returned_from_loop = count_or_stop 3;
+  .broke_loop = count_or_stop 8;
+};

@@ -1,0 +1,47 @@
+// What reaches WebAssembly today.
+//
+// Everything here compiles through gpufuck's Functional Core: prelude
+// operators, comparisons, records, tuples, unions, and recursion. `blot build`
+// emits a `.wasm` whose `main` export returns the module's result.
+//
+// The prelude is compiled, not inlined at every use — `+` is `Num.add`, an
+// ordinary closure that becomes one Core definition.
+
+open {} = (@import "blot:prelude") ();
+
+const Message = #Ready | #Busy Int | #Done Int;
+
+const describe = m => case m of
+  #Ready => 0,
+  #Busy n => n,
+  #Done n => n * 2
+end;
+
+const sum_to = rec (n => if n < 1 then 0 else n + sum_to (n - 1) end);
+
+let point = { .x = 20; .y = 22; };
+let moved = { ...point; .x = 18; };
+let { .x; .y = height; } = moved;
+let add = (a, b) => a + b;
+
+// A spread destructures its source once and rebuilds, and a destructuring
+// binding is the `case` it always meant.
+let total = add (x, height) + 4;
+
+// Arrays are Core's `Store`: allocated at the first element, then written.
+// A struct is compile-time machinery over an ordinary tuple: the name-to-slot
+// mapping is resolved before lowering, so what reaches Wasm is the storage
+// product and a projection at a fixed index. `new` must therefore be `const`
+// — a runtime call would be a computed field name, which does not lower.
+const Point = struct { .x = I32; .y = I32; };
+const placed = Point.new { .y = 3; .x = 5; };
+let stored = placed.0 * placed.1;
+
+let values = [1, 2, 3];
+let [one, _two, three] = values;
+let picked = one + three + @array.len values - 1;
+let counted = sum_to 8;
+let described = describe (#Done 3);
+let compared = if 20 < 22 then 1 else 0 end;
+
+return total + counted + described + compared + picked + stored - 66;

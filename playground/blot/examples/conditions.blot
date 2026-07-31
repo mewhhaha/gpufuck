@@ -1,0 +1,48 @@
+// What a condition proves about its scrutinee.
+//
+// Types here are sets, so what a branch learns is ordinary set algebra on them.
+// `n == 1` over `1 | 2 | 3` leaves the then-branch with `1` and the else-branch
+// with `2 | 3`, which is why each `case` below is complete without a catch-all
+// arm — and the one in the else-branch would be *rejected* if it named only `2`.
+//
+// Nothing in the checker knows what `==` is. The fixity table names the binding
+// `Eq.eq`, the checker reads the compile-time function that name is bound to,
+// and it derives what that function proves by interrogating the value: a
+// comparison factors through `@int.cmp`, whose three answers determine it on
+// every pair of integers. Bind `Eq` to something else and narrowing stops,
+// because the checker asks the value rather than the spelling.
+//
+// `examples/narrowing.blot` is the sibling rule for `case`, where the arm's own
+// pattern is the proof.
+
+open {} = (@import "blot:prelude") ();
+
+sig name = 1 | 2 | 3 -> Str;
+let name = n => if n == 1
+  then case n of 1 => "one" end
+  else case n of 2 => "two", 3 => "three" end
+end;
+
+// The chain accumulates: the fallback knows that none of the earlier conditions
+// fired, so `n` is `3` there and one arm covers it.
+sig ordinal = 1 | 2 | 3 -> Str;
+let ordinal = n => if n == 1
+  then "first"
+  else if n == 2 then "second"
+  else case n of 3 => "third" end
+end;
+
+// Nothing is enumerated. `@int.cmp` answers on every pair of integers, so a
+// comparison narrows an unbounded domain the same way it narrows a finite one:
+// `..9` and `10..` are the two halves `Int` splits into, and `size` could not
+// call either helper without the proof.
+sig small = range (@type.unbounded, 9) -> Str;
+let small = n => "small";
+
+sig large = range (10, @type.unbounded) -> Str;
+let large = n => "large";
+
+sig size = Int -> Str;
+let size = n => if n < 10 then small n else large n end;
+
+return (name 1, name 3, ordinal 2, size 4, size 40);

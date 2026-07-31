@@ -1,0 +1,85 @@
+// Type programming.
+//
+// There is no type-level sublanguage. A type is an ordinary compile-time value,
+// so type algebra is function application and `const` is the only declaration
+// form involved. This is what removes twelve rules from the grammar.
+
+open {} = (@import "blot:prelude") ();
+
+// Literals are singleton types: the type of `1` is `1`, never `Int`.
+
+const One = @type.of 1;
+const Method = "GET" | "POST" | "PUT";
+const Bit = 0 | 1;
+const Small = 1 | 2 | 3 | #Woop | "hello";
+
+// Set algebra is by containment, not by equality: a type is a set, so the
+// question is what it *contains*. Removing a point from an integer range splits
+// it, which is exact because integers are discrete. Text is dense — there is no
+// least string above `"a"` — so `Str \\ "a"` is refused rather than approximated.
+const NonZero = Int \ 0;
+const JustOne = Int & 1;
+
+// Set algebra over unions. `|` and `\` are `Set.union` and `Set.diff` — no
+// more built in than `+` is.
+const Value = I32 | Str;
+const Verb = Method \ "PUT";
+const Digit = range (0, 9);
+
+// Arrows are values too, so a signature is an expression.
+const Predicate = I32 -> (#True | #False);
+
+// A nominal type. Invariant, and never confused with its carrier.
+const Centimeter = @type.seal "Centimeter" 42;
+
+// Type constructors are ordinary functions, which is where higher-kinded
+// abstraction lives in blot: staged, not in the inference lattice.
+const Pair = (a, b) => { .first = a; .second = b; };
+const Boxed = a => { .value = a; };
+const Compose = (f, g) => (a => f (g a));
+
+const BoxedPair = Compose (Boxed, (a => Pair (a, a)));
+
+// Reflection is a normal call, so `derive` is a function rather than a macro,
+// an attribute, or a compiler builtin.
+const Record = struct {
+  .code = I32;
+  .label = Str;
+};
+
+// Derivation takes the field names, not the struct. A struct's namespace is
+// compile-time and does not appear in its type — `Record` *is* the storage
+// tuple — so a function that wanted `.fields` off its parameter would have no
+// type to ask for. Handing it `Record.fields` is both what type checks and
+// what the derivation actually needs.
+const derive_names = names => map (names, (name => @text.concat "." name));
+
+const describe = names => fold (names, "", ((state, name) =>
+  @text.concat state (@text.concat name " ")));
+
+return {
+  .one = One;
+  .method = Method;
+  .verb = Verb;
+  .bit = Bit;
+  .small = Small;
+  .non_zero = NonZero;
+  .just_one = JustOne;
+  .value = Value;
+  .digit = Digit;
+  .predicate = Predicate;
+  .centimeter = Centimeter;
+  .opened = @type.open Centimeter;
+
+  .pair = Pair (I32, Str);
+  .boxed_pair = BoxedPair U8;
+
+  .record_fields = Record.fields;
+  .derived_names = derive_names Record.fields;
+  .described = describe Record.fields;
+
+  // A range accepts what it contains and rejects what it does not; the check
+  // runs at compile time because everything here does.
+  .in_range = @satisfies 7 Digit;
+  .typed = @type.of { .x = 1; .y = "two"; };
+};

@@ -1,0 +1,43 @@
+// Capabilities.
+//
+// A module is a function from an input record to an export record. Importing
+// one grants it nothing. The entry module's parameter is the entire authority
+// the program has: there is no ambient filesystem, no ambient clock, and no
+// ambient print. `init.print` below is an opaque host function — the program
+// can call it and do nothing else with it.
+
+module init;
+
+open {} = (@import "blot:prelude") ();
+
+const Console = @effect {
+  .write = Str -> Unit;
+};
+
+// A host capability is simply a handler blot did not write. Here the handler is
+// written in blot over the granted function, which is the ordinary case.
+const to_host = {
+  .write = (message, ?resume) => do
+    let _ = init.print message;
+    in resume ()
+  end;
+  .return = value => value;
+};
+
+// The same computation, discharged two different ways. Nothing in `report`
+// mentions which.
+const report = () => do
+  let _ = Console.write "compiled";
+  let _2 = Console.write "linked";
+  in "ok"
+end;
+
+const to_memory = {
+  .write = (message, ?resume) => @text.concat message (resume ());
+  .return = _ => "";
+};
+
+return {
+  .printed = @handle (Console, report, to_host);
+  .captured = @handle (Console, report, to_memory);
+};

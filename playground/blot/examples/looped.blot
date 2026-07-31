@@ -1,0 +1,42 @@
+// A loop, compiled.
+//
+// `for` is surface syntax over `iterate`, which is prelude source over `rec`
+// and `case` — so there is no loop in the AST, none in the evaluator, and none
+// in the backend. What reaches WebAssembly is the fold that was always there.
+
+open {} = (@import "blot:prelude") ();
+
+let total = 0;
+for n in Iter.range (1, 10) do
+  total := total + n;
+end;
+
+// No binder: the loop runs for its rebindings alone.
+let ticks = 0;
+for Iter.range (0, 4) do
+  ticks := ticks + 1;
+end;
+
+// A written iterator is an ordinary record.
+const halving = start => {
+  .state = start;
+  .step = value =>
+    if is_less (@int.cmp value 1)
+    then None
+    else Some (value, @int.div value 2)
+    end;
+};
+
+let shrunk = 0;
+for value in halving 8 do
+  shrunk := shrunk + value;
+end;
+
+// A refutable binder is the `case` it looks like, with the other arm handing
+// the accumulator back — so filtering compiles too.
+let kept = 0;
+for #Some n in Iter.items [Some 3, None, Some 4] do
+  kept := kept + n;
+end;
+
+return total + ticks + shrunk + kept - 29;

@@ -1,0 +1,101 @@
+// Predictable storage.
+//
+// `structure` hands back the storage type *itself*, with the constructor and
+// accessors attached to it. One binding is both the type and its namespace, so
+// `Point` can be written in a `sig` and still answer `Point.new`. The members
+// are invisible to typing: `sig p = Point;` constrains `p` to the tuple, and
+// nothing about the namespace reaches the lattice.
+//
+// The storage is a tuple rather than an array because a tuple keeps one type
+// per slot. `[I32, Str]` collapses to "an array of int-or-text" the moment
+// inference looks at it, and storage that is imprecise is not predictable
+// storage.
+
+open {} = (@import "blot:prelude") ();
+
+const Point = struct { .x = I32; .y = I32; };
+
+// `Point` is the type.
+sig somewhere = Point;
+// Named record in, positional storage out. The call site writes the fields in
+// whatever order reads well; the placement decides where they land.
+let somewhere = Point.new { .y = 20; .x = 10; };
+
+// Three ways to the same slot: the accessor, the tuple field, and a pattern.
+let by_accessor = Point.x somewhere;
+let by_position = somewhere.0;
+let (across, up) = somewhere;
+
+// --- placement is a parameter -----------------------------------------------
+//
+// A shape's fields are in declaration order, and `reorder` rebuilds one in any
+// other — so choosing a placement is an operation on the shape, and `struct`
+// needs no second entry point for it.
+
+const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
+
+const byte_width = t =>
+  if refines (t, U8)
+  then 1
+  else (if refines (t, I32) then 4 else 8 end)
+  end;
+
+const Declared = struct Record;
+
+const alphabetical = names => sort_by (names, ((left, right) => is_less (@text.cmp left right)));
+const Sorted = struct (reorder (Record, alphabetical (@shape.names Record)));
+
+// --- packing is a different question ----------------------------------------
+//
+// `packed` is not `struct` with a sorted order. A placement decides which
+// *slot* a field occupies; packing decides which *bytes* it occupies, and a
+// packed record still has to say where each field starts, how wide it is, and
+// how much the order wasted. It reports a layout; `struct (reorder (...))` is
+// how you get storage arranged that way, and keeping that a separate call is
+// what keeps the two independent.
+
+const declared_bytes = aligned (Record, Declared.fields, byte_width);
+const tight = packed (Record, byte_width);
+const Tight = struct (reorder (Record, tight.order));
+
+// `layout` is the unpadded case: offsets in a given order, nothing inserted.
+const raw = layout (Record, byte_width);
+
+// --- attaching your own ------------------------------------------------------
+//
+// `<+` is not a struct feature. It attaches a namespace to any type value, and
+// it chains left, so a namespace reads as a sequence of attachments rather than
+// as nested calls.
+
+const Meters = seal ("Meters", I32)
+  <+ { .of = n => seal ("Meters", n); }
+  <+ { .unit = "m"; };
+
+const Located = Point <+ { .origin = { .x = 0; .y = 0; }; };
+
+return {
+  .meters_unit = Meters.unit;
+  .origin = Located.new Located.origin;
+  .type = Point;
+  .somewhere = somewhere;
+  .by_accessor = by_accessor;
+  .by_position = by_position;
+  .destructured = (across, up);
+  .y_slot = Point.slot "y";
+  .back_to_named = Point.named somewhere;
+
+  .declared_order = Declared.fields;
+  .declared_type = Declared;
+  .declared_size = declared_bytes.size;
+  .declared_padding = declared_bytes.padding;
+
+  .packed_order = tight.order;
+  .packed_type = Tight;
+  .packed_size = tight.size;
+  .packed_padding = tight.padding;
+  .packed_offsets = tight.fields;
+  .id_at = tight.offset "id";
+
+  .sorted_order = Sorted.fields;
+  .unpadded_size = raw.size;
+};

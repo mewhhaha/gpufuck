@@ -1,11 +1,11 @@
 /// <reference lib="dom" />
 
 /**
- * A Gleam highlighter for the playground editor.
+ * A Blot highlighter for the playground editor.
  *
  * Hand-written rather than a dependency, for the same reason the playground has no bundler: the
- * grammar it needs to colour is the subset this compiler accepts, which is small and already
- * documented in `examples/gleam/`. It is a lexer, not a parser — it never needs to be right about
+ * grammar it needs to colour is compact and documented by the vendored examples. It is a lexer,
+ * not a parser — it never needs to be right about
  * structure, only about which run of characters is a comment, a string, a number, a keyword, or a
  * capitalised name.
  *
@@ -14,38 +14,43 @@
 
 /** Reserved words in the accepted subset, plus the ones a user is likely to type by habit. */
 const KEYWORDS = new Set([
-  "as",
-  "assert",
+  "break",
   "case",
+  "comptime",
   "const",
-  "echo",
-  "fn",
+  "do",
+  "else",
+  "end",
+  "for",
   "if",
-  "import",
+  "in",
+  "infix",
+  "infixl",
+  "infixr",
   "let",
-  "opaque",
-  "panic",
-  "pub",
-  "todo",
-  "type",
-  "use",
+  "module",
+  "of",
+  "open",
+  "operators",
+  "prefix",
+  "rec",
+  "return",
+  "sig",
+  "then",
+  "try",
 ]);
 
 /** Prelude names worth distinguishing from user constructors, since they are always in scope. */
 const PRELUDE = new Set([
   "Bool",
-  "BitArray",
-  "Error",
-  "False",
-  "Float",
+  "I32",
+  "I64",
   "Int",
-  "List",
-  "Nil",
-  "Ok",
-  "Result",
-  "String",
+  "Str",
+  "U8",
+  "Unit",
+  "False",
   "True",
-  "UtfCodepoint",
 ]);
 
 type TokenKind =
@@ -55,7 +60,6 @@ type TokenKind =
   | "keyword"
   | "prelude"
   | "type"
-  | "function"
   | "operator"
   | "plain";
 
@@ -72,7 +76,7 @@ const TOKEN = new RegExp(
   [
     "(?<comment>\\/\\/[^\\n]*)",
     '(?<string>"(?:[^"\\\\\\n]|\\\\.)*"?)',
-    "(?<number>0[bx][0-9a-fA-F_]+|\\d[\\d_]*(?:\\.[\\d_]*)?(?:[eE][+-]?\\d+)?)",
+    "(?<number>-?\\d[\\d_]*)",
     "(?<upper>[A-Z][A-Za-z0-9_]*)",
     "(?<lower>[a-z_][A-Za-z0-9_]*)",
     "(?<operator>[-+*/%<>=!|&.,:;(){}\\[\\]#@]+)",
@@ -98,14 +102,7 @@ function tokenize(source: string): readonly Token[] {
     else if (groups.upper !== undefined) {
       tokens.push({ kind: PRELUDE.has(match[0]) ? "prelude" : "type", text: match[0] });
     } else if (groups.lower !== undefined) {
-      // A lowercase name directly followed by `(` reads as a call; that is a lexical guess and it
-      // is allowed to be wrong, because being wrong only changes a colour.
-      const next = source[cursor];
-      const kind: TokenKind = KEYWORDS.has(match[0])
-        ? "keyword"
-        : next === "("
-        ? "function"
-        : "plain";
+      const kind: TokenKind = KEYWORDS.has(match[0]) ? "keyword" : "plain";
       tokens.push({ kind, text: match[0] });
     } else if (groups.operator !== undefined) tokens.push({ kind: "operator", text: match[0] });
     else tokens.push({ kind: "plain", text: match[0] });

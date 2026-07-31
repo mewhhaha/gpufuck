@@ -1,0 +1,29 @@
+// What an arm learns from its own pattern.
+//
+// A wildcard arm leaves the scrutinee's constructor set open, but the named
+// arms still say what their payloads carry. `#Some inner` types `inner` from
+// the value, so a `case` with a default and an `if let` guard bind at the
+// payload's real type rather than at an unconstrained one.
+
+open {} = (@import "blot:prelude") ();
+
+let unwrap_or = m => case m of
+  #Some inner => inner,
+  _ => "none"
+end;
+
+let shout = m => do
+  if let #Some inner = m else do
+    return "none";
+  end;
+  in Text.append inner "!"
+end;
+
+// The default arm keeps the union open: `#Missing` is not one of the arms and
+// is still accepted.
+return {
+  .found = unwrap_or (#Some "here");
+  .absent = unwrap_or #Missing;
+  .shouted = shout (#Some "hi");
+  .silent = shout #None;
+};

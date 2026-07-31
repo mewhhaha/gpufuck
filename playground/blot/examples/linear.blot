@@ -1,0 +1,42 @@
+// Linearity.
+//
+// `!` marks a value consumed exactly once; `&` borrows one without spending it.
+// Neither is in the type lattice — they are a separate flow analysis, which is
+// what keeps biunification polynomial.
+
+open {} = (@import "blot:prelude") ();
+
+let consume = (!value) => value + 1;
+let peek = (&point) => point.x + point.y;
+
+let !token = 41;
+let owned = consume (!token);
+
+let borrowed = peek { .x = 20; .y = 22; };
+
+// A closure that captures a linear value becomes linear itself: the obligation
+// moves into it rather than being refused. `deferred` is linear even though
+// nothing here says `!` — it is linear because of what it holds — so it must be
+// called exactly once.
+let !ticket = 7;
+let deferred = () => consume (!ticket);
+let settled = deferred ();
+
+// `?` is affine: at most once. Not a weaker `!` but a different rule, and the
+// right one for a continuation — spending it on one branch and not the other is
+// still at most once, so branches need not agree.
+let choose = (?resume) => if 1 < 2 then resume 10 else 0 end;
+let chosen = choose (n => n);
+
+// Branches have to agree about what a *linear* value spent, so this consumes on
+// both.
+let !coin = 1;
+let flipped = if 1 < 2 then consume (!coin) else consume (!coin) end;
+
+return {
+  .owned = owned;
+  .borrowed = borrowed;
+  .settled = settled;
+  .chosen = chosen;
+  .flipped = flipped;
+};

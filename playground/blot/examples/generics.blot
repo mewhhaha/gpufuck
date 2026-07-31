@@ -1,0 +1,86 @@
+// Generics whose type variable is a value the program can look at.
+//
+// A type is a compile-time value, so a generic function is one that *takes* a
+// type. There is no separate mechanism: `T` is an ordinary parameter, `refines`
+// is an ordinary call, and `expect` refuses with a reason. This is the
+// `if a is i32 and b is i32 then … else compiler error` shape, and it needs no
+// type-level sublanguage to write.
+
+open {} = (@import "blot:prelude") ();
+
+// --- constrained on the type ------------------------------------------------
+//
+// `adding` is generic in `T` and rejects any `T` it cannot add. The rejection
+// happens while compiling, because `const` is compile time.
+
+const adding = T => do
+  let _ = expect (refines (T, Int), "adding is integers only, and this is not one");
+  in (a, b) => @int.add a b
+end;
+
+const add_i32 = adding I32;
+const add_u8 = adding U8;
+
+// `adding Str` here would stop the build with that message. `examples/rejected/
+// semantics/generic_refused.blot` is that program.
+
+// --- constrained on an interface --------------------------------------------
+//
+// An interface is a record of types, so "does `T` satisfy it" is `refines`
+// again. This works on the *shape* of a value, which is what structural
+// subtyping already checks — it does not need instances or coherence.
+
+const Point2 = { .x = I32; .y = I32; };
+const Point3 = { .x = I32; .y = I32; .z = I32; };
+const HasX = { .x = Int; };
+
+const projecting = T => do
+  let _ = expect (refines (T, HasX), "projecting needs a record with an .x");
+  in value => value.x
+end;
+
+const x_of_2 = projecting Point2;
+const x_of_3 = projecting Point3;
+
+// --- inspecting, rather than only checking ----------------------------------
+//
+// `reflect` gives the case and the parts, so a generic function can *branch* on
+// what it was instantiated with rather than only accept or refuse. A range
+// carries its domain, which is what makes `Int` and `Str` distinguishable at
+// all — both are unbounded in both directions.
+
+const describing = T => case reflect T of
+  #Range r => case r.domain of
+    #Int => "an integer range",
+    #Text => "a text range"
+  end,
+  #Shape fields => "a record of " <> Text.of_int (@array.len (@shape.names fields)),
+  #Union options => "one of " <> Text.of_int (@array.len options),
+  #Arrow _ => "a function",
+  _ => "something else"
+end;
+
+// Every check above is compile time, so a specialized generic leaves nothing
+// behind: `const` forces the reflection to happen while compiling, and what
+// reaches WebAssembly is the `@int.add` it selected.
+const described_int = describing I32;
+const described_text = describing Str;
+const described_record = describing Point2;
+const described_arrow = describing (I32 -> I32);
+
+return {
+  .sum = add_i32 (20, 22);
+  .byte = add_u8 (1, 2);
+  .x2 = x_of_2 { .x = 3; .y = 4; };
+  .x3 = x_of_3 { .x = 5; .y = 6; .z = 7; };
+
+  .int_is_int = refines (I32, Int);
+  .text_is_not_int = refines (Str, Int);
+  .wider_record_fits = refines (Point3, HasX);
+  .narrower_does_not = refines (HasX, Point3);
+
+  .described_int = described_int;
+  .described_text = described_text;
+  .described_record = described_record;
+  .described_arrow = described_arrow;
+};

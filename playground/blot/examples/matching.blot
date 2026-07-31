@@ -1,0 +1,44 @@
+// Matching, all the way to WebAssembly.
+//
+// Core dispatches on a constructor and nothing else, so the rest of blot's
+// patterns become what they always described: a literal payload is a guard
+// inside its constructor's arm, and a `case` over literals is a chain of
+// equality tests.
+
+open {} = (@import "blot:prelude") ();
+
+const Message = #Ready | #Progress Int | #Failed Int;
+
+let describe = m => case m of
+  #Ready => 0,
+  #Progress 0 => 100,
+  #Progress n => n * 2,
+  #Failed code => code
+end;
+
+// No union to dispatch on, so the arms are comparisons.
+let classify = value => case value of
+  -1 => 10,
+  1 => 20,
+  _ => 30
+end;
+
+// A declared literal union is a set, so its arms have to exhaust it the same
+// way a constructor set's do. Dropping the `3` arm is a type error here rather
+// than a trap at the call that passes `3`.
+sig rank = 1 | 2 | 3 -> Int;
+let rank = level => case level of
+  1 => 100,
+  2 => 200,
+  3 => 300
+end;
+
+// A compound payload binds one name and then destructures it.
+let unpack = m => case m of
+  #Pair (left, right) => left + right,
+  #Single n => n
+end;
+
+return describe #Ready + describe (#Progress 0) + describe (#Progress 4)
+  + describe (#Failed 3) + classify 1 + classify 7 + unpack (#Pair (5, 6))
+  + rank 2 - 330;

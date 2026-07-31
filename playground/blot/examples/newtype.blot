@@ -1,0 +1,61 @@
+// Newtypes, and method tables attached to them.
+//
+// A constructor gives a type a nominal identity: `#Money I32` is not `I32`,
+// and `refines` says so. `<+` then attaches a table of functions to that type
+// — the same side table `struct` puts `.new` in, invisible to typing and not a
+// field of anything a value carries.
+//
+// The two compose into what a trait is elsewhere: a named type, a table of
+// operations on it, and a bound the checker enforces — with no instances, no
+// coherence rules, and no dispatch at run time.
+
+open {} = (@import "blot:prelude") ();
+
+// Declared first, then rebound with its table. `:=` requires the new value to
+// keep the binding's type, and `<+` is transparent — so attaching members is
+// precisely the kind of rebinding `:=` exists for, and the table can mention
+// the name it is being attached to.
+const Money = #Money I32;
+
+Money := Money <+ {
+  .of = n => #Money n;
+  .zero = #Money 0;
+  .eq = left => (right => case (left, right) of
+    (#Money a, #Money b) => Ord.eq a b
+  end);
+  .add = left => (right => case (left, right) of
+    (#Money a, #Money b) => #Money (a + b)
+  end);
+};
+
+sig price = Money;
+let price = Money.of 42;
+
+// The table is reached through the *name*, not through a parameter. A type's
+// members are invisible to typing, so `(table, a, b) => table.eq a b` applied
+// to `Money` is `#Money is not a shape with .eq` — the same limit that stops a
+// function from reading `.fields` off a `struct` it was passed. Duck typing on
+// a *value* that carries `.eq` works and is a different thing.
+
+// `sig` pins the comparison results: a table's function is reached through a
+// compile-time projection, so inference cannot say what it returns on its own,
+// and an export must be concrete to reach WebAssembly.
+sig same = Bool;
+let same = (Money.eq price) (Money.of 42);
+
+sig differs = Bool;
+let differs = (Money.eq price) Money.zero;
+
+sig summed = Money;
+let summed = (Money.add price) (Money.of 8);
+
+return {
+  .type = Money;
+  .value = price;
+  .distinct_from_i32 = refines (Money, I32);
+
+  .same = same;
+  .differs = differs;
+  .summed = summed;
+
+};

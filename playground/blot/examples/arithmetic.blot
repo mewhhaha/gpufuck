@@ -1,0 +1,26 @@
+// Operators are prelude functions. `+` is `Num.add`, dispatched by the fixity
+// table; nothing about it is built into the compiler.
+
+open {} = (@import "blot:prelude") ();
+
+let sum = 20 + 22;
+let nested = 1 + 2 * 3 - 4;
+let negated = -7 + 10;
+let compared = 20 < 22;
+let equal = 21 * 2 == 42;
+
+// Currying is what makes a section like `Num.add 2` a value, which is what
+// makes `|>` work at all.
+let piped = 20 |> Num.add 2 |> Num.mul 2;
+
+let branch = if 3 < 4 then "less" else "not less" end;
+
+return {
+  .sum = sum;
+  .nested = nested;
+  .negated = negated;
+  .compared = compared;
+  .equal = equal;
+  .piped = piped;
+  .branch = branch;
+};

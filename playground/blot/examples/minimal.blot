@@ -1,0 +1,9 @@
+// The smallest legal module: no header, no operators, one result.
+//
+// Even this opens the prelude. It has no privilege — a module that does not
+// open it does not have `+`, because the default fixity for `+` names
+// `Num.add` and nothing would be in scope to answer.
+
+open {} = (@import "blot:prelude") ();
+
+return 42;

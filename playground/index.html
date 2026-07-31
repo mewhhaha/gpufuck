@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>gpufuck — compile Gleam on the GPU</title>
+    <title>gpufuck — compile Blot on the GPU</title>
     <meta
       name="description"
-      content="Resolve names and infer types on WebGPU, then emit and run WebAssembly, entirely in the browser tab."
+      content="Parse Blot and compile its Functional Core on WebGPU, then emit and run canonical ABI WebAssembly in the browser."
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -14,32 +14,24 @@
     <header>
       <h1>gpufuck</h1>
       <p>
-        A pure subset of Gleam, typechecked by Hindley–Milner inference running on your GPU, then
-        emitted as WebAssembly that needs no GPU to run. Everything below stays in this tab.
+        Baba validates Blot syntax on WebGPU. Blot then builds its cursor AST, checks types and
+        ownership in the browser, and hands Functional Core to gpufuck for GPU compilation and
+        canonical ABI WebAssembly. Everything below stays in this tab.
       </p>
     </header>
 
     <main>
       <section class="pane">
         <div class="pane-head">
-          <h2>Gleam source</h2>
+          <h2>Blot source</h2>
           <div id="examples" class="examples"></div>
         </div>
         <div class="editor">
           <pre id="highlight" class="highlight" aria-hidden="true"></pre>
-          <textarea id="source" spellcheck="false" aria-label="Gleam source"></textarea>
+          <textarea id="source" spellcheck="false" aria-label="Blot source"></textarea>
         </div>
         <div class="actions">
           <button id="run" type="button">Run</button>
-          <label class="batch">
-            <span>Batch</span>
-            <select id="batch">
-              <option value="1" selected>1 module</option>
-              <option value="64">64 modules</option>
-              <option value="256">256 modules</option>
-              <option value="1024">1,024 modules</option>
-            </select>
-          </label>
           <a id="download" href="#" hidden>Download .wasm</a>
         </div>
       </section>
@@ -63,17 +55,16 @@
 
     <footer>
       <p>
-        <strong>What to expect.</strong> A small module here is almost all fixed cost — one GPU
-        readback, measured at about 11 ms under Deno and unmeasured in browsers, so a 200-byte example
-        tells you nothing about the compiler. Pick the generated <em>stress</em> example, or raise the
-        batch count, to see per-module cost instead of that floor.
+        <strong>What this demonstrates.</strong> The <em>tour</em> covers compile-time values,
+        structural types, recursion, pattern matching, loops, effects and handlers, linear ownership,
+        records, arrays, operators, and host capabilities. The other examples isolate those features.
       </p>
       <p>
-        On one large real program — Gleam&rsquo;s standard library, 17,718 nodes — this pipeline is
-        <strong>3.0&times;</strong> slower than <code>gleam build</code>, down from 27&times; earlier
-        the same day. Batching is where it wins: a thousand independent modules compile about
-        <strong>17&times;</strong> faster than a compiler with no cross-package batching. Every number,
-        including the ones that turned out to be wrong, is in <code>BASELINE.md</code>.
+        Baba&rsquo;s strict GPU frontend performs lexing, delimiter matching, island parsing, and flat
+        syntax allocation. That result is currently the syntax gate; Blot repeats parsing with its
+        cursor-producing Wasm parser because its AST lowerer does not yet consume Baba&rsquo;s flat GPU IR.
+        Blot&rsquo;s comptime evaluator, algebraic-subtyping checker, and ownership pass remain on the CPU;
+        gpufuck independently resolves and infers the lowered Core on the GPU.
       </p>
       <p>
         <a href="https://github.com/mewhhaha/gpufuck">Source</a> ·

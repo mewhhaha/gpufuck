@@ -1,0 +1,753 @@
+// The prelude.
+//
+// Nothing here is built into the compiler. `Bool`, `Ord`, `+`, `struct`, and
+// `fold` are ordinary blot declarations over the `@` primitives, which is what
+// "few primitives" has to mean if it means anything.
+//
+// Two calling conventions, and the line between them is deliberate:
+//
+//   * anything an operator dispatches to is curried, because sections are the
+//     point of an operator — `Num.add 2` is what makes `20 |> Num.add 2` work;
+//   * every other multi-argument function takes one shape, because naming beats
+//     position and a tuple is still one parameter.
+
+// --- sets -------------------------------------------------------------------
+//
+// Types are sets, so the three set operations are one namespace rather than
+// three loose primitives. `|` names `Set.union` exactly the way `+` names
+// `Num.add`: the operator points at prelude source, and the prelude decides
+// which primitive answers. Nothing about `|` is privileged, and this has to
+// come first because the declarations below already use it.
+
+const Set = {
+  .union = left => (right => @type.union left right);
+  .intersect = left => (right => @type.intersect left right);
+  .diff = left => (right => @type.diff left right);
+};
+
+// --- functions --------------------------------------------------------------
+
+const identity = value => value;
+const always = value => (_ => value);
+
+// Curried: these are the targets of `$` and `|>`.
+const apply = f => (x => f x);
+const pipe = x => (f => f x);
+
+const compose = (f, g) => (x => f (g x));
+const flip = f => ((a, b) => f (b, a));
+
+const Fn = {
+  .identity = identity;
+  .always = always;
+  .apply = apply;
+  .pipe = pipe;
+  .compose = compose;
+  .flip = flip;
+};
+
+// --- booleans ---------------------------------------------------------------
+//
+// `#True` and `#False` are ordinary constructors. `if` accepts one of them and
+// nothing else, so there is no truthiness anywhere in the language.
+
+const True = #True;
+const False = #False;
+const Bool = #True | #False;
+
+const not = value => case value of
+  #True => False,
+  #False => True
+end;
+
+// Curried, because they are the targets of `&&` and `||`.
+//
+// Both arguments are evaluated: an operator is an ordinary function here, and
+// blot has no laziness for one to exploit. That is the honest cost of "nothing
+// is built in" — `if` is the short-circuiting form, and `a && perform ()` will
+// perform whatever `a` is.
+const and = left => (right => case left of
+  #False => False,
+  #True => right
+end);
+
+const or = left => (right => case left of
+  #True => True,
+  #False => right
+end);
+
+const Logic = { .not = not; .and = and; .or = or; };
+
+// Refusing, with a reason. This is how a compile-time check reports what it
+// found: `expect` in a `const` is a diagnostic before the program runs.
+const expect = (condition, message) => case condition of
+  #True => (),
+  #False => @fail message
+end;
+
+// --- ordering ---------------------------------------------------------------
+//
+// One comparison primitive yields the whole of `Eq` and `Ord`. Every member
+// here is curried: they are all operator targets.
+
+const Ordering = #Less | #Equal | #Greater;
+
+// Matched exhaustively rather than with `_`. A wildcard arm leaves the
+// constructor set unpinned in a polymorphic function, and the set is what the
+// backend needs to build a Core union — so being explicit here is what lets
+// every comparison in the language reach Wasm.
+const is_equal = o => case o of
+  #Equal => True,
+  #Less => False,
+  #Greater => False
+end;
+
+const is_less = o => case o of
+  #Less => True,
+  #Equal => False,
+  #Greater => False
+end;
+
+const is_greater = o => case o of
+  #Greater => True,
+  #Less => False,
+  #Equal => False
+end;
+
+const Ord = {
+  .cmp = left => (right => @int.cmp left right);
+  .eq = left => (right => is_equal (@int.cmp left right));
+  .ne = left => (right => not (is_equal (@int.cmp left right)));
+  .lt = left => (right => is_less (@int.cmp left right));
+  .le = left => (right => not (is_greater (@int.cmp left right)));
+  .gt = left => (right => is_greater (@int.cmp left right));
+  .ge = left => (right => not (is_less (@int.cmp left right)));
+  .min = left => (right => if is_greater (@int.cmp left right) then right else left end);
+  .max = left => (right => if is_less (@int.cmp left right) then right else left end);
+};
+
+const Eq = { .eq = Ord.eq; .ne = Ord.ne; };
+
+// --- numbers ----------------------------------------------------------------
+
+const Num = {
+  .add = left => (right => @int.add left right);
+  .sub = left => (right => @int.sub left right);
+  .mul = left => (right => @int.mul left right);
+  .div = left => (right => @int.div left right);
+  .rem = left => (right => @int.rem left right);
+  .negate = value => @int.neg value;
+  .abs = value => if is_less (@int.cmp value 0) then @int.neg value else value end;
+  .succ = value => @int.add value 1;
+  .pred = value => @int.sub value 1;
+};
+
+// --- text -------------------------------------------------------------------
+
+const Text = {
+  .append = left => (right => @text.concat left right);
+  .length = value => @text.len value;
+  .cmp = left => (right => @text.cmp left right);
+  .contains = text => (query => @text.contains text query);
+  .of_int = value => @text.of_int value;
+};
+
+const Semigroup = { .append = Text.append; };
+
+const text_eq = (left, right) => is_equal (@text.cmp left right);
+
+// --- arrays -----------------------------------------------------------------
+
+const Array = {
+  .empty = @array.empty;
+  .length = values => @array.len values;
+  .get = (values, index) => @array.get values index;
+  .set = (values, index, value) => @array.set values index value;
+  .push = (values, value) => @array.push values value;
+};
+
+// Structural recursion, which is all a surface loop becomes before inference.
+// Rebindings form the accumulator; `for` does not introduce assignment.
+const fold = (values, state, step) => do
+  let go = rec ((index, current) =>
+    if is_less (@int.cmp index (@array.len values))
+    then go (@int.add index 1, step (current, @array.get values index))
+    else current
+    end);
+  in go (0, state)
+end;
+
+const each = (values, visit) =>
+  fold (values, (), ((_, value) => visit value));
+
+const map = (values, f) =>
+  fold (values, @array.empty, ((state, value) => @array.push state (f value)));
+
+const filter = (values, keep) =>
+  fold (values, @array.empty, ((state, value) =>
+    case keep value of
+      #True => @array.push state value,
+      #False => state
+    end));
+
+const sum = values => fold (values, 0, ((state, value) => @int.add state value));
+
+const any = (values, holds) =>
+  fold (values, False, ((seen, value) => seen || holds value));
+
+const every = (values, holds) =>
+  fold (values, True, ((seen, value) => seen && holds value));
+
+const upto = (low, high) => do
+  let build = rec ((index, state) =>
+    if is_less (@int.cmp index high)
+    then build (@int.add index 1, @array.push state index)
+    else state
+    end);
+  in build (low, @array.empty)
+end;
+
+// --- option and result ------------------------------------------------------
+
+const Option = value => #None | #Some value;
+const None = #None;
+const Some = value => #Some value;
+
+const unwrap_or = (option, fallback) => case option of
+  #Some value => value,
+  #None => fallback
+end;
+
+const Result = (ok, error) => #Ok ok | #Error error;
+const Ok = value => #Ok value;
+const Error = value => #Error value;
+
+// --- iterators --------------------------------------------------------------
+//
+// An iterator is a `.state` and a `.step`, where `step state` answers
+// `#Some (value, next_state)` or `#None`. Three things follow from that shape
+// and are the reason for it.
+//
+// It answers an `Option` rather than a pair of new constructors. The prelude is
+// in scope in every module that opens it, and lowering needs a constructor name
+// to belong to one union per module — so a tag the prelude introduces is
+// reserved everywhere. `#Some` and `#None` were already spent.
+//
+// It is a *state* and a step rather than a closure that returns the next
+// closure. Both express the same protocol, but the closure form allocates one
+// closure per element and leaves gpufuck resolving a lambda set that grows with
+// the loop; this form is one closure total and a plain value threaded through
+// it, which is a Core loop.
+//
+// And it is source. `range` and `items` are ordinary functions, so a new kind
+// of sequence is a function someone writes rather than a case the compiler has
+// to know about.
+
+const ever = {
+  .state = ();
+  .step = _ => Some ((), ());
+};
+
+const iter_range = (from, to) => {
+  .state = from;
+  .step = index =>
+    if is_less (@int.cmp index to)
+    then Some (index, @int.add index 1)
+    else None
+    end;
+};
+
+const iter_items = values => {
+  .state = 0;
+  .step = index =>
+    if is_less (@int.cmp index (@array.len values))
+    then Some (@array.get values index, @int.add index 1)
+    else None
+    end;
+};
+
+// Draining one. `for` is this loop with the accumulator inferred from the names
+// its body rebinds; written out, it is the same fold.
+const iterate = (iterator, initial, visit) => do
+  let go = rec ((state, carried) => case iterator.step state of
+    #None => carried,
+    #Some pair => go (pair.1, visit (carried, pair.0))
+  end);
+  in go (iterator.state, initial)
+end;
+
+const collect = iterator => do
+  let values = @array.empty;
+  for value in iterator do
+    values := @array.push values value;
+  end;
+  in values
+end;
+
+// Namespaced because `range` is already the type constructor — `I32` is a
+// range — and two things called `range` in one scope would be worse than a
+// prefix. Every other group in this file is a record for the same reason.
+const Iter = {
+  .range = iter_range;
+  .items = iter_items;
+  .iterate = iterate;
+  .collect = collect;
+};
+
+// Stable insertion sort. `before (a, b)` is `#True` when `a` must come first;
+// stability is what lets `packed` reorder by width without scrambling the
+// declaration order of fields that tie.
+//
+// Written with `for` rather than a fold inside a fold: the inner pass carries
+// two things at once, and naming them beats threading a record through a
+// closure that has to rebuild it on every element.
+const sort_by = (values, before) => do
+  let sorted = @array.empty;
+  for value in Iter.items values do
+    let out = @array.empty;
+    let placed = False;
+    for existing in Iter.items sorted do
+      let goes_first = not placed && before (value, existing);
+      out := if goes_first
+        then @array.push (@array.push out value) existing
+        else @array.push out existing
+        end;
+      placed := placed || goes_first;
+    end;
+    sorted := if placed then out else @array.push out value end;
+  end;
+  in sorted
+end;
+
+// --- types ------------------------------------------------------------------
+//
+// Every one of these is an ordinary function over compile-time values. There is
+// no type-level sublanguage for them to live in.
+
+const range = (low, high) => @type.range low high;
+const arrow = (domain, codomain) => @type.arrow domain codomain;
+const type_of = value => @type.of value;
+const seal = (name, value) => @type.seal name value;
+const unseal = value => @type.open value;
+
+// Attaching a namespace to a type value, which is what lets `struct` hand back
+// the storage type itself rather than a record beside it. `<+` is this, and it
+// is curried and left-associative, so a namespace is written as a sequence of
+// attachments rather than as nested calls — which is as close to a sequence of
+// statements as a language without assignment gets.
+const attach = target => (members => fold (@shape.names members, target,
+  ((extended, name) => @type.attach extended name (@shape.get members name))));
+
+
+// The GPU frontend requires every integer literal to fit the signed 32-bit
+// domain, so wider bounds are computed rather than spelled. Compile time is the
+// same language, so this costs nothing at runtime.
+const pow2 = rec (n => if is_less (@int.cmp n 1) then 1 else @int.mul 2 (pow2 (@int.sub n 1)) end);
+
+// The unbounded domains. Arithmetic returns these: `@int.add` does not prove
+// its result fits a width, so a `sig` narrowing to `I32` is a real obligation
+// rather than a formality.
+const Int = @type.int;
+const Str = @type.text;
+
+const I32 = range (-2147483648, 2147483647);
+const I64 = range (@int.neg (pow2 63), @int.sub (pow2 63) 1);
+const U8 = range (0, 255);
+const Nat = range (0, @type.unbounded);
+const Unit = @type.unit;
+
+// Byte offsets and widths in declaration order, with no padding at all. This
+// is the raw hook; `aligned` and `packed` below are written over the same
+// idea rather than built in.
+const layout = (shape, width_of) => do
+  let offset = 0;
+  let fields = @array.empty;
+  for name in Iter.items (@shape.names shape) do
+    let width = width_of (@shape.get shape name);
+    fields := @array.push fields { .name = name; .offset = offset; .width = width; };
+    offset := @int.add offset width;
+  end;
+  in { .size = offset; .fields = fields; }
+end;
+
+// --- reflection -------------------------------------------------------------
+//
+// `@type.reflect` is the whole of the introspection machinery: it names which
+// case of the value domain a type is and hands back the parts, as an ordinary
+// tagged value. Everything below is blot over that result, using the `case`
+// the language already has. There is no type-level `case`, because a type is
+// not a different kind of thing to case on.
+
+const reflect = t => @type.reflect t;
+
+// A union's members, and any other type as the one-member array. `Extract`,
+// `Exclude`, and exhaustiveness checks are all folds over this.
+const members = t => case reflect t of
+  #Union options => options,
+  _ => [t]
+end;
+
+// Union has no identity element, so rebuilding one is a primitive rather than a
+// `fold`: an empty array is not the empty type, it is a mistake.
+const union_of = values => @type.union_of values;
+
+// `value` sits at or above a range's low end. `#Unbounded` is below everything,
+// and a bound in the wrong domain is not comparable rather than false-by-luck.
+// One helper serves both a literal and another range's bound.
+const above_low = (value, low) => case reflect low of
+  #Unbounded => True,
+  #Int l => case reflect value of
+    #Int v => not (is_less (@int.cmp v l)),
+    _ => False
+  end,
+  #Text l => case reflect value of
+    #Text v => not (is_less (@text.cmp v l)),
+    _ => False
+  end,
+  _ => False
+end;
+
+const below_high = (value, high) => case reflect high of
+  #Unbounded => True,
+  #Int h => case reflect value of
+    #Int v => not (is_greater (@int.cmp v h)),
+    _ => False
+  end,
+  #Text h => case reflect value of
+    #Text v => not (is_greater (@text.cmp v h)),
+    _ => False
+  end,
+  _ => False
+end;
+
+// A literal type is a singleton, so only the same literal refines it.
+const refines_literal = (narrow, value) => case reflect narrow of
+  #Int v => case reflect value of #Int w => Ord.eq v w, _ => False end,
+  #Text v => case reflect value of #Text w => text_eq (v, w), _ => False end,
+  _ => False
+end;
+
+const same_domain = (left, right) => case left of
+  #Int => case right of #Int => True, #Text => False end,
+  #Text => case right of #Text => True, #Int => False end
+end;
+
+// Does every value of `narrow` inhabit `wide`?
+//
+// This is the comptime mirror of what biunification decides during checking.
+// It is written here rather than exposed from the checker on purpose: the
+// checker's answer is about inferred types with variables in them, and this one
+// is about ground compile-time values, which is the only thing a program can
+// hold and ask about.
+const refines = rec ((narrow, wide) => case reflect wide of
+  #Unbounded => True,
+  #Union options => any (options, (option => refines (narrow, option))),
+  #Range r => case reflect narrow of
+    // Same ordered domain first: an unbounded text range and an unbounded
+    // integer range have identical bounds and are not each other.
+    #Range s => same_domain (s.domain, r.domain)
+      && above_low (s.low, r.low) && below_high (s.high, r.high),
+    _ => above_low (narrow, r.low) && below_high (narrow, r.high)
+  end,
+  #Shape wide_fields => case reflect narrow of
+    // Width and depth: a wider record refines a narrower one.
+    #Shape narrow_fields => every (@shape.names wide_fields, (name =>
+      if @shape.has narrow_fields name
+      then refines (@shape.get narrow_fields name, @shape.get wide_fields name)
+      else False
+      end)),
+    _ => False
+  end,
+  #Array wide_elements => case reflect narrow of
+    #Array narrow_elements =>
+      if Ord.eq (@array.len narrow_elements) (@array.len wide_elements)
+      then every (upto (0, @int.sub (@array.len wide_elements) 1), (index =>
+        refines (@array.get narrow_elements index, @array.get wide_elements index)))
+      else False
+      end,
+    _ => False
+  end,
+  #Arrow w => case reflect narrow of
+    // Contravariant in the domain, covariant in the codomain.
+    #Arrow n => refines (w.domain, n.domain) && refines (n.codomain, w.codomain),
+    _ => False
+  end,
+  #Tag w => case reflect narrow of
+    #Tag n => text_eq (n.name, w.name) && (case w.payload of
+      #None => case n.payload of #None => True, #Some _ => False end,
+      #Some carried => case n.payload of
+        #Some mine => refines (mine, carried),
+        #None => False
+      end
+    end),
+    _ => False
+  end,
+  // A seal is invariant: same name, and carriers that refine each other.
+  #Sealed w => case reflect narrow of
+    #Sealed n => text_eq (n.name, w.name)
+      && refines (n.inner, w.inner) && refines (w.inner, n.inner),
+    _ => False
+  end,
+  #Int v => refines_literal (narrow, v),
+  #Text v => refines_literal (narrow, v),
+  #Unit => case reflect narrow of #Unit => True, _ => False end,
+  #Opaque => False
+end);
+
+// The union members that fit the bound, and the ones that do not. `Extract` and
+// `Exclude` read as they do in TypeScript, except that neither can quietly
+// produce a bottom type, because blot does not have one — an empty result is
+// reported where it happens.
+const Extract = (whole, bound) =>
+  union_of (filter (members whole, (option => refines (option, bound))));
+
+const Exclude = (whole, bound) =>
+  union_of (filter (members whole, (option => not (refines (option, bound)))));
+
+// The field-level pair. `@shape.*` already does the work; these only name it.
+const Pick = (shape, names) => fold (names, @shape.empty,
+  ((kept, name) => @shape.set kept name (@shape.get shape name)));
+
+const Omit = (shape, names) => fold (names, shape,
+  ((kept, name) => @shape.remove kept name));
+
+// Matching a parameterized nominal. `opened ("List", t)` is `#Some element`
+// when `t` is a `List` of something, which is the blot reading of writing
+// `case t of List a => ...` in a language that had a type-level `case`.
+const opened = (name, t) => case reflect t of
+  #Sealed s => if text_eq (s.name, name) then Some s.inner else None end,
+  _ => None
+end;
+
+const Reflect = {
+  .of = reflect;
+  .members = members;
+  .union_of = union_of;
+  .refines = refines;
+  .extract = Extract;
+  .exclude = Exclude;
+  .pick = Pick;
+  .omit = Omit;
+  .opened = opened;
+};
+
+// --- structs ----------------------------------------------------------------
+//
+// `struct` hands back the storage type *itself*, with its constructor and
+// accessors attached to it by `<+`. One binding is both the type and its
+// namespace, so `Point` can be written in a `sig` and still answer
+// `Point.new`. The members are invisible to typing: `sig p = Point;`
+// constrains `p` to the tuple, and nothing about the namespace reaches the
+// lattice.
+//
+// The storage is a tuple rather than an array because a tuple keeps one type
+// per slot. `[I32, Str]` collapses to "an array of int-or-text" the moment
+// inference looks at it, and storage that is imprecise is not predictable
+// storage.
+//
+// There is no separate `structure (shape, order)`. A shape's fields are in
+// declaration order and `reorder` rebuilds one in any other, so choosing a
+// placement is an operation on the shape rather than a second entry point
+// into the struct.
+
+const reorder = (shape, order) => fold (order, @shape.empty,
+  ((moved, name) => @shape.set moved name (@shape.get shape name)));
+
+const struct = shape => do
+  let order = @shape.names shape;
+
+  // Where each field lives.
+  let next = 0;
+  let slots = @shape.empty;
+  for name in Iter.items order do
+    slots := @shape.set slots name next;
+    next := @int.add next 1;
+  end;
+  let at = slots;
+
+  let key = name => Text.of_int (@shape.get at name);
+
+  // One binding, rebound through both passes — the same shape binned's `struct`
+  // has, where `product_type` is built by one loop and extended by the next.
+  //
+  // Two passes rather than one because they build different things: the first
+  // fills a shape, and the second wraps that shape in a namespace. `@shape.set`
+  // takes a shape and `@type.attach` takes a type value, so the storage has to
+  // be finished before an accessor can go on it.
+  let product = @shape.empty;
+  for name in Iter.items order do
+    product := @shape.set product (key name) (@shape.get shape name);
+  end;
+
+  // One accessor per field: a projection at a known slot, nothing more. The
+  // names are computed, so this is `@type.attach` rather than `<+`.
+  for name in Iter.items order do
+    product := @type.attach product name (value => @shape.get value (key name));
+  end;
+
+  in product <+ {
+    // Named record in, positional storage out. The call site writes the fields
+    // in whatever order reads well; the order decides where they land. A field
+    // the shape does not declare is refused here rather than stored, and a
+    // missing one fails on the read.
+    .new = record => do
+      let _ = @satisfies (@shape.names record) order;
+      let product = @shape.empty;
+      for name in Iter.items order do
+        product := @shape.set product (key name)
+          (@satisfies (@shape.get record name) (@shape.get shape name));
+      end;
+      in product
+    end;
+
+    // ...and back, so storage can be read by name without knowing the order.
+    .named = value => do
+      let record = @shape.empty;
+      for name in Iter.items order do
+        record := @shape.set record name (@shape.get value (key name));
+      end;
+      in record
+    end;
+
+    .shape = shape;
+    .fields = order;
+    .size = @array.len order;
+    .slot = name => @shape.get at name;
+  }
+end;
+
+// --- packing ----------------------------------------------------------------
+//
+// Deliberately not `struct` with a different order. A placement decides which
+// *slot* a field occupies; packing decides which *bytes* it occupies, and the
+// two answer different questions — a packed record still has to say where each
+// field starts, how wide it is, and how much space the order wasted. Sharing
+// an implementation would force one of them to pretend to be the other.
+
+// Offsets in a given order, each field aligned to its own width. `.padding` is
+// reported rather than hidden: a placement that wastes space should say so,
+// because choosing a better order is the reason to look.
+const aligned = (shape, order, width_of) => do
+  let offset = 0;
+  let padding = 0;
+  let fields = @array.empty;
+  for name in Iter.items order do
+    let width = width_of (@shape.get shape name);
+    let slack = @int.rem offset width;
+    let pad = if Ord.eq slack 0 then 0 else @int.sub width slack end;
+    let start = @int.add offset pad;
+    fields := @array.push fields { .name = name; .offset = start; .width = width; };
+    padding := @int.add padding pad;
+    offset := @int.add start width;
+  end;
+  in { .size = offset; .padding = padding; .fields = fields; }
+end;
+
+// Widest field first, which with per-field alignment is the order that needs no
+// padding at all. `packed` reports the byte layout it chose; `struct (reorder
+// (shape, packed (shape, w).order))` is how you get storage arranged that way,
+// and keeping that a separate call is what keeps the two decoupled.
+const packed = (shape, width_of) => do
+  let order = sort_by (@shape.names shape, ((left, right) =>
+    is_greater (@int.cmp (width_of (@shape.get shape left)) (width_of (@shape.get shape right)))));
+  let bytes = aligned (shape, order, width_of);
+  in {
+    .order = order;
+    .size = bytes.size;
+    .padding = bytes.padding;
+    .fields = bytes.fields;
+    .offset = name => fold (bytes.fields, None,
+      ((found, field) => if text_eq (field.name, name) then Some field.offset else found end));
+  }
+end;
+
+
+const Type = {
+  .range = range;
+  .union = Set.union;
+  .intersect = Set.intersect;
+  .diff = Set.diff;
+  .arrow = arrow;
+  .of = type_of;
+  .seal = seal;
+  .unseal = unseal;
+  .attach = attach;
+};
+
+return {
+  .Fn = Fn;
+  .identity = identity;
+  .always = always;
+  .compose = compose;
+  .flip = flip;
+
+  .Bool = Bool;
+  .True = True;
+  .False = False;
+  .Logic = Logic;
+  .not = not;
+  .expect = expect;
+
+  .Ordering = Ordering;
+  .is_equal = is_equal;
+  .is_less = is_less;
+  .is_greater = is_greater;
+  .Ord = Ord;
+  .Eq = Eq;
+  .Num = Num;
+  .Text = Text;
+  .Semigroup = Semigroup;
+
+  .Array = Array;
+  .fold = fold;
+  .each = each;
+  .map = map;
+  .filter = filter;
+  .sum = sum;
+  .upto = upto;
+  .ever = ever;
+  .Iter = Iter;
+  .iterate = iterate;
+  .collect = collect;
+
+  .Option = Option;
+  .None = None;
+  .Some = Some;
+  .unwrap_or = unwrap_or;
+  .Result = Result;
+  .Ok = Ok;
+  .Error = Error;
+
+  .Type = Type;
+  .Set = Set;
+  .attach = attach;
+  .seal = seal;
+  .unseal = unseal;
+  .Reflect = Reflect;
+  .reflect = reflect;
+  .refines = refines;
+  .members = members;
+  .union_of = union_of;
+  .Extract = Extract;
+  .Exclude = Exclude;
+  .Pick = Pick;
+  .Omit = Omit;
+  .opened = opened;
+  .any = any;
+  .every = every;
+  .text_eq = text_eq;
+  .range = range;
+  .struct = struct;
+  .reorder = reorder;
+  .packed = packed;
+  .layout = layout;
+  .aligned = aligned;
+  .sort_by = sort_by;
+  .I32 = I32;
+  .I64 = I64;
+  .U8 = U8;
+  .Nat = Nat;
+  .Int = Int;
+  .Str = Str;
+  .Unit = Unit;
+};

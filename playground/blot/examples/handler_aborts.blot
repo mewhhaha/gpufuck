@@ -1,0 +1,9 @@
+// An aborting handler never resumes, so it discards the rest of the
+// computation. Selective CPS makes that continuation explicit before gpufuck.
+
+open {} = (@import "blot:prelude") ();
+
+const Ask = @effect { .ask = Int -> Int; };
+let quiet = { .ask = (n, ?resume) => 0; };
+let work = () => Ask.ask 1;
+return @handle (Ask, work, quiet);
