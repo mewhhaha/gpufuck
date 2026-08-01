@@ -498,15 +498,17 @@ export function lowerModule(
   }
 
   const body = lowerBlock(module.declarations, module.result, scope, lowering);
+  // Canonical calls reclaim their private arena, so module evaluation cannot be a memoized global
+  // thunk. The unit parameter also lets every export share this body without copying it.
+  const moduleArgument = lowering.fresh("module");
   lowering.definitions.push({
     name: MODULE_RESULT,
-    parameters: [],
+    parameters: [moduleArgument],
     annotation: null,
     body,
   });
   const exports = lowerExports(
     module.result,
-    body,
     runtimeExports,
     lowering,
   );
@@ -518,7 +520,7 @@ export function lowerModule(
       annotation: { kind: "unit" },
       body: surface.let(
         initialized,
-        surface.name(MODULE_RESULT),
+        moduleResultCall(),
         surface.name(UNIT_CONSTRUCTOR_NAME),
       ),
     });
@@ -527,7 +529,7 @@ export function lowerModule(
       name: ENTRY,
       parameters: [],
       annotation: null,
-      body: surface.name(MODULE_RESULT),
+      body: moduleResultCall(),
     });
   }
 
@@ -605,7 +607,6 @@ export function lowerModule(
 
 function lowerExports(
   result: Expr,
-  moduleBody: SurfaceExpression,
   exports: readonly RuntimeExport[],
   lowering: Lowering,
 ): LoweredExport[] {
@@ -614,7 +615,7 @@ function lowerExports(
   if (exports.length === 1 && first.sourceName === "default") {
     return [lowerExport(
       first,
-      moduleBody,
+      moduleResultCall(),
       0,
       result.span,
       lowering,
@@ -640,13 +641,20 @@ function lowerExports(
         `module result omitted runtime export ${exported.sourceName}`,
       );
     }
-    const body = surface.case(moduleBody, [{
+    const body = surface.case(moduleResultCall(), [{
       constructor: nominal.name,
       binders,
       body: surface.name(binders[field]),
     }]);
     return lowerExport(exported, body, index, result.span, lowering);
   });
+}
+
+function moduleResultCall(): SurfaceExpression {
+  return surface.apply(
+    surface.name(MODULE_RESULT),
+    surface.name(UNIT_CONSTRUCTOR_NAME),
+  );
 }
 
 function lowerExport(

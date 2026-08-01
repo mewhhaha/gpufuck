@@ -1,6 +1,6 @@
 import { equal, notStrictEqual, ok, strictEqual } from "node:assert/strict";
 
-import { validateLowering } from "../playground/blot/src/backend/compile.ts";
+import { BlotCompilerSession, validateLowering } from "../playground/blot/src/backend/compile.ts";
 import {
   configureSourceLexerRecords,
   configureSources,
@@ -27,6 +27,36 @@ Deno.test("Blot stress project keeps every module reachable through a runtime ex
     manifest.exports.filter((entry) => entry.phase === "runtime").length,
     project.moduleCount - 1,
   );
+});
+
+Deno.test("Blot tour shares one module body across runtime exports", async () => {
+  const blot = new URL("../playground/blot/", import.meta.url);
+  await initializeBlotParser(
+    new URL("generated/wasm/parser.wasm", blot),
+    new URL("generated/wasm/parser.plan", blot),
+  );
+  const path = "/examples/tour.blot";
+  configureSources({
+    "/blot/prelude.blot": await Deno.readTextFile(
+      new URL("src/prelude/prelude.blot", blot),
+    ),
+    [path]: await Deno.readTextFile(new URL("examples/tour.blot", blot)),
+  });
+
+  const session = await BlotCompilerSession.create();
+  try {
+    const verified = await session.verify(path);
+    equal(
+      verified.manifest.exports.filter((entry) => entry.phase === "runtime").length,
+      25,
+    );
+    ok(
+      verified.metrics.surfaceNodes < 2_000,
+      `Blot tour expanded to ${verified.metrics.surfaceNodes} Surface nodes`,
+    );
+  } finally {
+    session.destroy();
+  }
 });
 
 Deno.test("Blot source cache invalidates an edited importer but preserves its dependency", async () => {
