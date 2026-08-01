@@ -65,6 +65,8 @@ export * from "./src/functional/fixed_vector.ts";
 export * from "./src/functional/wasm_artifacts.ts";
 export * from "./src/functional/wasm_batch.ts";
 export * from "./src/functional/canonical_abi.ts";
+export * from "./src/functional/component_boundary.ts";
+export * from "./src/functional/component_reload.ts";
 export * from "./src/functional/wasm_contract.ts";
 export * from "./src/functional/wasm_execution.ts";
 export * from "./src/functional/wasm_arena.ts";
