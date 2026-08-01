@@ -2,13 +2,6 @@ import type { Type, TypeSchema } from "../semantic/abi.ts";
 
 export type { SourceType, Span, Type, TypeDeclaration, TypeSchema } from "../semantic/abi.ts";
 
-export const EvaluationProfile = {
-  LazyCallByNeed: "lazy-call-by-need-v1",
-  StrictEager: "strict-eager-v1",
-} as const;
-
-export type EvaluationProfile = (typeof EvaluationProfile)[keyof typeof EvaluationProfile];
-
 export const TypecheckingProfile = {
   HindleyMilnerIndexed: "hindley-milner-indexed-v1",
   PredicativeRankNIndexed: "predicative-rank-n-indexed-v1",

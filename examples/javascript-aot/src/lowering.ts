@@ -1,9 +1,4 @@
-import {
-  BinaryOperator,
-  type EncodedModule,
-  EvaluationProfile,
-  UnaryOperator,
-} from "../../../src/functional/abi.ts";
+import { BinaryOperator, type EncodedModule, UnaryOperator } from "../../../src/functional/abi.ts";
 import {
   buildSurfaceModule,
   type SurfaceDefinition,
@@ -235,7 +230,6 @@ class JavaScriptAotLowering {
         typeDeclarations,
         entry.name,
         this.sourceModule.span.endByte,
-        { evaluationProfile: EvaluationProfile.StrictEager },
       ),
     };
   }
@@ -401,16 +395,15 @@ class JavaScriptAotLowering {
     }
     this.validateBlockBindings(statements, parameterNames);
     const completeReturn = (value: SurfaceExpression) =>
-      returnContinuationName === null ? value : {
-        kind: "apply" as const,
-        callee: { kind: "name" as const, name: returnContinuationName, span },
-        arguments: [value],
+      returnContinuationName === null ? value : this.applyEagerly(
+        { kind: "name" as const, name: returnContinuationName, span },
+        [value],
         span,
-      };
+      );
     const completeThrow = (value: SurfaceExpression) =>
       throwContinuationName === null
         ? {
-          kind: "let" as const,
+          kind: "sequence" as const,
           name: this.freshBindingName("uncaughtException"),
           value,
           body: {
@@ -421,12 +414,11 @@ class JavaScriptAotLowering {
           },
           span,
         }
-        : {
-          kind: "apply" as const,
-          callee: { kind: "name" as const, name: throwContinuationName, span },
-          arguments: [value],
+        : this.applyEagerly(
+          { kind: "name" as const, name: throwContinuationName, span },
+          [value],
           span,
-        };
+        );
     let body = this.lowerStatementScope(
       statements,
       functionEnvironment,
@@ -446,7 +438,7 @@ class JavaScriptAotLowering {
     for (let index = hoistedBindings.length - 1; index >= 0; index--) {
       const binding = hoistedBindings[index]!;
       body = {
-        kind: "let",
+        kind: "sequence",
         name: binding.coreName,
         value: this.lowerUndefined(span),
         body,
@@ -588,7 +580,7 @@ class JavaScriptAotLowering {
         statement.value,
         environment,
         (value) => ({
-          kind: "let",
+          kind: "sequence",
           name: this.freshBindingName("discarded"),
           value,
           body: this.lowerStatements(
@@ -689,7 +681,7 @@ class JavaScriptAotLowering {
       for (let index = loweredDeclarations.length - 1; index >= 0; index--) {
         const declaration = loweredDeclarations[index]!;
         body = {
-          kind: "let",
+          kind: "sequence",
           name: declaration.name,
           value: declaration.value,
           body,
@@ -906,7 +898,7 @@ class JavaScriptAotLowering {
       }
       if (statement.catchName === null) {
         return {
-          kind: "let" as const,
+          kind: "sequence" as const,
           name: this.freshBindingName("caughtException"),
           value,
           body: this.lowerScopedBlock(
@@ -945,7 +937,7 @@ class JavaScriptAotLowering {
         return outerEnvironment;
       };
       return {
-        kind: "let" as const,
+        kind: "sequence" as const,
         name: coreName,
         value,
         body: this.lowerScopedBlock(
@@ -1117,7 +1109,7 @@ class JavaScriptAotLowering {
       assignable: true,
     });
     return {
-      kind: "let",
+      kind: "sequence",
       name: coreName,
       value,
       body: this.lowerStatements(
@@ -1197,12 +1189,11 @@ class JavaScriptAotLowering {
           span: statement.span,
         })),
       ];
-      return {
-        kind: "apply",
-        callee: { kind: "name", name: loopName, span: statement.span },
-        arguments: arguments_,
-        span: statement.span,
-      };
+      return this.applyEagerly(
+        { kind: "name", name: loopName, span: statement.span },
+        arguments_,
+        statement.span,
+      );
     };
     const continueAfterLoop = (currentEnvironment: JavaScriptAotEnvironment) =>
       this.lowerStatements(
@@ -1320,7 +1311,7 @@ class JavaScriptAotLowering {
           span: expression.span,
         };
         for (let index = expression.values.length - 1; index >= 0; index--) {
-          array = applyExpressions(
+          array = this.applyEagerly(
             { kind: "name", name: JAVASCRIPT_ARRAY_ELEMENT, span: expression.span },
             [this.lowerExpression(expression.values[index]!, environment), array],
             expression.span,
@@ -1333,7 +1324,7 @@ class JavaScriptAotLowering {
         const properties = new Map(
           expression.properties.map((property) => [property.name, property]),
         );
-        return applyExpressions(
+        return this.applyEagerly(
           { kind: "name", name: shape.constructorName, span: expression.span },
           shape.fields.map((name) =>
             this.lowerExpression(properties.get(name)!.value, environment)
@@ -1353,7 +1344,7 @@ class JavaScriptAotLowering {
         }
         if (expression.operator === "void") {
           return {
-            kind: "let",
+            kind: "sequence",
             name: this.freshBindingName("discarded"),
             value: this.lowerExpression(expression.value, environment),
             body: this.lowerUndefined(expression.span),
@@ -1443,7 +1434,7 @@ class JavaScriptAotLowering {
             );
           }
           const shape = this.objectShape([`$${expression.constructor}Value`]);
-          return applyExpressions(
+          return this.applyEagerly(
             { kind: "name", name: shape.constructorName, span: expression.span },
             [this.lowerExpression(
               primitiveConstantExpression(primitive, expression.span)!,
@@ -1472,7 +1463,7 @@ class JavaScriptAotLowering {
           };
           for (let index = expression.arguments.length - 1; index >= 0; index--) {
             constructed = {
-              kind: "let",
+              kind: "sequence",
               name: this.freshBindingName("errorArgument"),
               value: this.lowerExpression(expression.arguments[index]!, environment),
               body: constructed,
@@ -1535,7 +1526,7 @@ class JavaScriptAotLowering {
         }
         this.#usesArrays = true;
         this.#arrayDefinitions.add(JAVASCRIPT_ARRAY_LENGTH);
-        return applyExpressions(
+        return this.applyEagerly(
           { kind: "name", name: JAVASCRIPT_ARRAY_LENGTH, span: expression.span },
           [this.lowerExpression(expression.value, environment)],
           expression.span,
@@ -1564,7 +1555,7 @@ class JavaScriptAotLowering {
         }
         this.#usesArrays = true;
         this.#arrayDefinitions.add(JAVASCRIPT_ARRAY_INDEX);
-        return applyExpressions(
+        return this.applyEagerly(
           { kind: "name", name: JAVASCRIPT_ARRAY_INDEX, span: expression.span },
           [
             this.lowerExpression(expression.value, environment),
@@ -1611,7 +1602,7 @@ class JavaScriptAotLowering {
             assignable: false,
           });
           return {
-            kind: "let",
+            kind: "sequence",
             name: leftName,
             value: leftValue,
             body: this.lowerExpressionWithCompletion(
@@ -1632,7 +1623,7 @@ class JavaScriptAotLowering {
                   assignable: false,
                 });
                 return {
-                  kind: "let",
+                  kind: "sequence",
                   name: rightName,
                   value: rightValue,
                   body: onValue(this.lowerBinary({
@@ -1747,10 +1738,9 @@ class JavaScriptAotLowering {
       },
     );
     const thrownName = this.freshBindingName("thrownValue");
-    return {
-      kind: "apply",
-      callee: this.lowerExpression(expression.callee, environment),
-      arguments: [
+    return this.applyEagerly(
+      this.lowerExpression(expression.callee, environment),
+      [
         ...callArguments,
         {
           kind: "lambda",
@@ -1763,8 +1753,8 @@ class JavaScriptAotLowering {
           span: expression.span,
         },
       ],
-      span: expression.span,
-    };
+      expression.span,
+    );
   }
 
   private callThrowsAcrossBoundary(
@@ -1812,7 +1802,7 @@ class JavaScriptAotLowering {
           assignable: false,
         });
         return {
-          kind: "let",
+          kind: "sequence",
           name: coreName,
           value,
           body: this.lowerExpressionListWithCompletion(
@@ -2083,14 +2073,11 @@ class JavaScriptAotLowering {
         );
       }
     }
-    return {
-      kind: "apply",
-      callee: this.lowerExpression(expression.callee, environment),
-      arguments: expression.arguments.map((argument) =>
-        this.lowerExpression(argument, environment)
-      ),
-      span: expression.span,
-    };
+    return this.applyEagerly(
+      this.lowerExpression(expression.callee, environment),
+      expression.arguments.map((argument) => this.lowerExpression(argument, environment)),
+      expression.span,
+    );
   }
 
   private lowerArrayMethodCall(
@@ -2138,12 +2125,12 @@ class JavaScriptAotLowering {
       this.lowerExpression(argument, environment)
     );
     return method === "map"
-      ? applyExpressions(
+      ? this.applyEagerly(
         { kind: "name", name: JAVASCRIPT_ARRAY_MAP, span: expression.span },
         [arguments_[0]!, receiver],
         expression.span,
       )
-      : applyExpressions(
+      : this.applyEagerly(
         { kind: "name", name: JAVASCRIPT_ARRAY_REDUCE, span: expression.span },
         [arguments_[0]!, arguments_[1]!, receiver],
         expression.span,
@@ -2315,7 +2302,7 @@ class JavaScriptAotLowering {
       };
       return expression.operator === "&&"
         ? {
-          kind: "let",
+          kind: "sequence",
           name: leftName,
           value: left,
           body: {
@@ -2328,7 +2315,7 @@ class JavaScriptAotLowering {
           span: expression.span,
         }
         : {
-          kind: "let",
+          kind: "sequence",
           name: leftName,
           value: left,
           body: {
@@ -2841,6 +2828,33 @@ class JavaScriptAotLowering {
     }
   }
 
+  private applyEagerly(
+    callee: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
+    span: { readonly startByte: number; readonly endByte: number },
+  ): SurfaceExpression {
+    const calleeName = callee.kind === "name" ? undefined : this.freshBindingName("callTarget");
+    const argumentNames = arguments_.map(() => this.freshBindingName("argument"));
+    let result: SurfaceExpression = {
+      kind: "apply",
+      callee: calleeName === undefined ? callee : { kind: "name", name: calleeName, span },
+      arguments: argumentNames.map((name) => ({ kind: "name", name, span })),
+      span,
+    };
+    for (let index = arguments_.length - 1; index >= 0; index--) {
+      result = {
+        kind: "sequence",
+        name: argumentNames[index]!,
+        value: arguments_[index]!,
+        body: result,
+        span,
+      };
+    }
+    return calleeName === undefined
+      ? result
+      : { kind: "sequence", name: calleeName, value: callee, body: result, span };
+  }
+
   private freshBindingName(sourceName: string): string {
     return `$javascript#${this.#bindingIndex++}#${sourceName}`;
   }
@@ -2996,14 +3010,6 @@ function assignmentBinaryOperator(
         `JavaScript assignment ${operator} reached runtime operator lowering unexpectedly.`,
       );
   }
-}
-
-function applyExpressions(
-  callee: SurfaceExpression,
-  arguments_: readonly SurfaceExpression[],
-  span: { readonly startByte: number; readonly endByte: number },
-): SurfaceExpression {
-  return { kind: "apply", callee, arguments: arguments_, span };
 }
 
 function assignedNamesInStatements(

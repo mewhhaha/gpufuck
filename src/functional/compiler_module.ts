@@ -1,4 +1,4 @@
-import type { Diagnostic, EvaluationProfile, SourceRange, Type, TypeDeclaration } from "./abi.ts";
+import type { Diagnostic, SourceRange, Type, TypeDeclaration } from "./abi.ts";
 import type { CompilerPerformanceTrace } from "../compiler_performance_trace.ts";
 import type { EffectSet } from "./effect_set.ts";
 import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
@@ -40,7 +40,6 @@ export interface CompiledModule {
   readonly hostDefinitions: readonly HostDefinitionBinding[];
   readonly wasmExports: readonly WasmExport[];
   readonly sources: readonly SourceRange[];
-  readonly evaluationProfile: EvaluationProfile;
   readCoreNodes(): Promise<readonly CoreNode[]>;
   destroy(): void;
 }

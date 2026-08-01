@@ -1,4 +1,4 @@
-import { CoreTag, NO_INDEX } from "./abi.ts";
+import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
 import {
   type CompilerPerformanceTrace,
   measureCompilerStage,
@@ -163,9 +163,14 @@ export function analyzeModuleEffects(
           case CoreTag.BufferAppend:
           case CoreTag.StoreNew:
           case CoreTag.StoreRead:
-          case CoreTag.Let:
           case CoreTag.LetRec:
             dependOn(nodeIndex, node.child0);
+            dependOn(nodeIndex, node.child1);
+            break;
+          case CoreTag.Let:
+            if (node.evaluationMode === EvaluationMode.StrictEager || node.payload > 0) {
+              dependOn(nodeIndex, node.child0);
+            }
             dependOn(nodeIndex, node.child1);
             break;
           case CoreTag.Case:

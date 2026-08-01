@@ -1,6 +1,5 @@
 import {
   BinaryOperator,
-  EvaluationProfile,
   PAIR_CONSTRUCTOR_NAME,
   type Span,
   type TypeSchema,
@@ -278,7 +277,7 @@ export function gleamPreludeArtifact(): ModuleArtifact {
       { name: "TupleOne", constructor: GLEAM_TUPLE_ONE_VALUE },
     ],
     sourceByteLength: 0,
-    options: { evaluationProfile: EvaluationProfile.StrictEager },
+    options: {},
   });
   return cachedPreludeArtifact;
 }
@@ -368,7 +367,6 @@ class GleamLowering {
       ),
       sourceByteLength: this.module.span.endByte,
       options: {
-        evaluationProfile: EvaluationProfile.StrictEager,
         hostCapabilities: this.hostCapabilities(),
         hostDefinitions: this.#hostDefinitions,
       },
@@ -891,11 +889,14 @@ class GleamLowering {
         ? ["$gleam_unit_parameter"]
         : declaration.parameters.map((parameter) => parameter.name),
       annotation: declaredFunctionType(declaration, this.#typeResolver),
-      body: surface.at(declaration.span).apply(
+      body: this.applyEagerly(
         name(hostDefinition, declaration.span),
-        parameters.length === 0
-          ? parameterValues[0]!
-          : nestedTupleExpression(parameterValues, declaration.span),
+        [
+          parameters.length === 0
+            ? parameterValues[0]!
+            : this.nestedTupleExpression(parameterValues, declaration.span),
+        ],
+        declaration.span,
       ),
       span: declaration.span,
     }];
@@ -941,7 +942,7 @@ class GleamLowering {
             expression.message?.value ?? "Gleam panic",
           );
         }
-        return surface.at(expression.span).let(
+        return surface.at(expression.span).sequence(
           this.discardName(),
           this.lowerExpression(expression.message),
           surface.at(expression.span).runtimeFault("Gleam panic"),
@@ -985,14 +986,15 @@ class GleamLowering {
           return name(GLEAM_TUPLE_ZERO_VALUE, expression.span);
         }
         if (expression.values.length === 1) {
-          return surface.at(expression.span).apply(
+          return this.applyEagerly(
             name(GLEAM_TUPLE_ONE_VALUE, expression.span),
-            this.lowerExpression(expression.values[0]!),
+            [this.lowerExpression(expression.values[0]!)],
+            expression.span,
           );
         }
         let result = this.lowerExpression(expression.values.at(-1)!);
         for (let index = expression.values.length - 2; index >= 0; index--) {
-          result = applyMany(
+          result = this.applyEagerly(
             name(PAIR_CONSTRUCTOR_NAME, expression.span),
             [this.lowerExpression(expression.values[index]!), result],
             expression.span,
@@ -1005,7 +1007,7 @@ class GleamLowering {
           ? name(GLEAM_LIST_NIL, expression.span)
           : this.lowerExpression(expression.tail);
         for (let index = expression.values.length - 1; index >= 0; index--) {
-          result = applyMany(
+          result = this.applyEagerly(
             name(GLEAM_LIST_CONS, expression.span),
             [this.lowerExpression(expression.values[index]!), result],
             expression.span,
@@ -1026,14 +1028,15 @@ class GleamLowering {
         }
         const arguments_ = this.orderedCallArguments(expression);
         if (arguments_.length === 0) {
-          return surface.at(expression.span).apply(
+          return this.applyEagerly(
             this.lowerExpression(expression.callee),
-            name(UNIT_CONSTRUCTOR_NAME, expression.span),
+            [name(UNIT_CONSTRUCTOR_NAME, expression.span)],
+            expression.span,
           );
         }
         const captures = arguments_.filter((argument) => argument.kind === "capture");
         if (captures.length === 0) {
-          return applyMany(
+          return this.applyEagerly(
             this.lowerExpression(expression.callee),
             arguments_.map((argument) => this.lowerExpression(argument)),
             expression.span,
@@ -1048,7 +1051,7 @@ class GleamLowering {
         const parameter = `$gleam_capture_${this.#discardIndex++}`;
         return surface.at(expression.span).lambda(
           parameter,
-          applyMany(
+          this.applyEagerly(
             this.lowerExpression(expression.callee),
             arguments_.map((argument) =>
               argument.kind === "capture"
@@ -1062,14 +1065,14 @@ class GleamLowering {
       case "let": {
         const at = surface.at(expression.span);
         if (expression.pattern.kind === "variable") {
-          return at.let(
+          return at.sequence(
             expression.pattern.name,
             this.lowerExpression(expression.value),
             this.lowerExpression(expression.body),
           );
         }
         const subjectName = `$gleam_let_${this.#discardIndex++}`;
-        return at.let(
+        return at.sequence(
           subjectName,
           this.lowerExpression(expression.value),
           this.lowerPattern(
@@ -1146,7 +1149,7 @@ class GleamLowering {
     return surface.at(expression.span).case(this.lowerExpression(spreadArguments[0]!.value), [{
       constructor: expression.callee.name,
       binders,
-      body: applyMany(
+      body: this.applyEagerly(
         name(expression.callee.name, expression.callee.span),
         fields,
         expression.span,
@@ -1460,7 +1463,7 @@ class GleamLowering {
           success = surface.at(arm.span).if(this.lowerExpression(arm.guard), success, body);
         }
         if (sourcePattern.kind === "variable" || sourcePattern.kind === "alias") {
-          success = surface.at(sourcePattern.span).let(
+          success = surface.at(sourcePattern.span).sequence(
             sourcePattern.name,
             name(subjectName, sourcePattern.span),
             success,
@@ -1471,7 +1474,7 @@ class GleamLowering {
       return { constructor, binders, body, span };
     });
     const at = surface.at(span);
-    return at.let(subjectName, subject, at.case(name(subjectName, span), loweredArms));
+    return at.sequence(subjectName, subject, at.case(name(subjectName, span), loweredArms));
   }
 
   private lowerSequentialCase(
@@ -1495,9 +1498,10 @@ class GleamLowering {
       const at = surface.at(arm.span);
       const fallbackName = `$gleam_case_fallback_${this.#discardIndex++}`;
       const fallbackParameter = this.discardName();
-      const fallback = at.apply(
+      const fallback = this.applyEagerly(
         name(fallbackName, arm.span),
-        name(UNIT_CONSTRUCTOR_NAME, arm.span),
+        [name(UNIT_CONSTRUCTOR_NAME, arm.span)],
+        arm.span,
       );
       const body = this.lowerExpression(arm.body);
       const success = arm.guard === null
@@ -1509,10 +1513,10 @@ class GleamLowering {
         success,
         fallback,
       );
-      result = at.let(fallbackName, at.lambda(fallbackParameter, result), attempt);
+      result = at.sequence(fallbackName, at.lambda(fallbackParameter, result), attempt);
     }
     for (let index = expression.subjects.length - 1; index >= 0; index--) {
-      result = surface.at(expression.span).let(
+      result = surface.at(expression.span).sequence(
         subjectNames[index]!,
         this.lowerExpression(expression.subjects[index]!),
         result,
@@ -1612,8 +1616,13 @@ class GleamLowering {
     const at = surface.at(span);
     const parameter = this.discardName();
     return {
-      bind: (body) => at.let(joinName, at.lambda(parameter, failure), body),
-      use: () => at.apply(name(joinName, span), name(UNIT_CONSTRUCTOR_NAME, span)),
+      bind: (body) => at.sequence(joinName, at.lambda(parameter, failure), body),
+      use: () =>
+        this.applyEagerly(
+          name(joinName, span),
+          [name(UNIT_CONSTRUCTOR_NAME, span)],
+          span,
+        ),
     };
   }
 
@@ -1649,11 +1658,11 @@ class GleamLowering {
     const at = surface.at(pattern.span);
     const subject = name(subjectName, pattern.span);
     if (pattern.kind === "variable") {
-      return at.let(pattern.name, subject, success);
+      return at.sequence(pattern.name, subject, success);
     }
     if (pattern.kind === "discard") return success;
     if (pattern.kind === "alias") {
-      const aliasedSuccess = at.let(pattern.name, subject, success);
+      const aliasedSuccess = at.sequence(pattern.name, subject, success);
       return this.lowerPattern(subjectName, pattern.pattern, aliasedSuccess, failure);
     }
     if (pattern.kind === "string-prefix") {
@@ -1726,17 +1735,24 @@ class GleamLowering {
     const subject = name(subjectName, pattern.span);
     const prefixLength = at.integer(prefixByteLength);
     const slice = (start: SurfaceExpression, end: SurfaceExpression) =>
-      at.apply(
+      this.applyEagerly(
         name(GLEAM_TEXT_BYTE_SLICE, pattern.span),
-        nestedTupleExpression(
-          [subject, nestedTupleExpression([start, end], pattern.span)],
-          pattern.span,
-        ),
+        [
+          this.nestedTupleExpression(
+            [subject, this.nestedTupleExpression([start, end], pattern.span)],
+            pattern.span,
+          ),
+        ],
+        pattern.span,
       );
     const matchedRest = this.lowerPattern(restName, pattern.rest, success, failure);
-    return at.let(
+    return at.sequence(
       lengthName,
-      at.apply(name(GLEAM_TEXT_BYTE_LENGTH, pattern.span), subject),
+      this.applyEagerly(
+        name(GLEAM_TEXT_BYTE_LENGTH, pattern.span),
+        [subject],
+        pattern.span,
+      ),
       at.if(
         at.binary(
           BinaryOperator.GreaterEqual,
@@ -1748,7 +1764,7 @@ class GleamLowering {
             slice(at.integer(0), prefixLength),
             at.text(pattern.prefix),
           ),
-          at.let(
+          at.sequence(
             restName,
             slice(prefixLength, name(lengthName, pattern.span)),
             matchedRest,
@@ -1831,11 +1847,14 @@ class GleamLowering {
     ];
     const at = surface.at(pattern.span);
     return at.case(
-      at.apply(
+      this.applyEagerly(
         name(definitionName, pattern.span),
-        argumentValues.length === 1
-          ? argumentValues[0]!
-          : nestedTupleExpression(argumentValues, pattern.span),
+        [
+          argumentValues.length === 1
+            ? argumentValues[0]!
+            : this.nestedTupleExpression(argumentValues, pattern.span),
+        ],
+        pattern.span,
       ),
       [{
         constructor: GLEAM_RESULT_OK,
@@ -1896,9 +1915,10 @@ class GleamLowering {
         span: definitionSpan,
       });
     }
-    return surface.at(expression.span).apply(
+    return this.applyEagerly(
       name(GLEAM_BIT_ARRAY_FROM_UTF8_CODEPOINT, expression.span),
-      this.lowerExpression(segment.value),
+      [this.lowerExpression(segment.value)],
+      expression.span,
     );
   }
 
@@ -2004,7 +2024,7 @@ class GleamLowering {
           );
         }
         fallback = pattern.kind === "variable"
-          ? surface.at(arm.span).let(pattern.name, name(subjectName, pattern.span), body)
+          ? surface.at(arm.span).sequence(pattern.name, name(subjectName, pattern.span), body)
           : body;
         continue;
       }
@@ -2031,7 +2051,7 @@ class GleamLowering {
       );
     }
     if (fallback === null) throw new Error("Gleam scalar case lowering omitted its fallback.");
-    return surface.at(span).let(subjectName, subject, fallback);
+    return surface.at(span).sequence(subjectName, subject, fallback);
   }
 
   private lowerConstructorArms(
@@ -2109,9 +2129,9 @@ class GleamLowering {
         const binders = Array.from({ length: shape.fields.length }, () => this.discardName());
         let body = this.lowerExpression(catchAll!.body);
         if (pattern.kind === "variable") {
-          body = surface.at(catchAll.span).let(
+          body = surface.at(catchAll.span).sequence(
             pattern.name,
-            applyMany(
+            this.applyEagerly(
               name(constructor, pattern.span),
               binders.map((binder) => name(binder, pattern.span)),
               pattern.span,
@@ -2236,6 +2256,42 @@ class GleamLowering {
       pattern.span,
       "Nested Gleam constructor patterns currently accept only variables and discards.",
     );
+  }
+
+  private applyEagerly(
+    callee: SurfaceExpression,
+    arguments_: readonly SurfaceExpression[],
+    span: Span,
+  ): SurfaceExpression {
+    const at = surface.at(span);
+    const calleeName = callee.kind === "name" ? undefined : `$gleam_call_${this.#discardIndex++}`;
+    const argumentNames = arguments_.map(() => `$gleam_argument_${this.#discardIndex++}`);
+    let result = at.apply(
+      calleeName === undefined ? callee : name(calleeName, span),
+      ...argumentNames.map((argumentName) => name(argumentName, span)),
+    );
+    for (let index = arguments_.length - 1; index >= 0; index--) {
+      result = at.sequence(argumentNames[index]!, arguments_[index]!, result);
+    }
+    return calleeName === undefined ? result : at.sequence(calleeName, callee, result);
+  }
+
+  private nestedTupleExpression(
+    values: readonly SurfaceExpression[],
+    span: Span,
+  ): SurfaceExpression {
+    if (values.length === 0) {
+      throw new Error("A host operation argument list cannot be empty.");
+    }
+    let result = values.at(-1)!;
+    for (let index = values.length - 2; index >= 0; index--) {
+      result = this.applyEagerly(
+        name(PAIR_CONSTRUCTOR_NAME, span),
+        [values[index]!, result],
+        span,
+      );
+    }
+    return result;
   }
 
   private discardName(): string {
@@ -2537,22 +2593,6 @@ function nestedTupleSchema(
   let result = values.at(-1)!;
   for (let index = values.length - 2; index >= 0; index--) {
     result = { kind: "tuple", values: [values[index]!, result] };
-  }
-  return result;
-}
-
-function nestedTupleExpression(
-  values: readonly SurfaceExpression[],
-  span: Span,
-): SurfaceExpression {
-  if (values.length === 0) throw new Error("A host operation argument list cannot be empty.");
-  let result = values.at(-1)!;
-  for (let index = values.length - 2; index >= 0; index--) {
-    result = applyMany(
-      name(PAIR_CONSTRUCTOR_NAME, span),
-      [values[index]!, result],
-      span,
-    );
   }
   return result;
 }

@@ -1,6 +1,6 @@
 import { deepStrictEqual, equal } from "node:assert/strict";
 
-import { EvaluationProfile, linkModules, surface } from "../functional.ts";
+import { linkModules, surface } from "../functional.ts";
 
 Deno.test("linker follows reachable imports and prunes unused definitions", () => {
   const linked = linkModules([
@@ -24,7 +24,7 @@ Deno.test("linker follows reachable imports and prunes unused definitions", () =
       imports: [],
       exports: [{ name: "used", definition: "used", type: { kind: "integer" } }],
       sourceByteLength: 0,
-      options: { evaluationProfile: EvaluationProfile.StrictEager },
+      options: {},
     },
     {
       name: "application",
@@ -43,7 +43,7 @@ Deno.test("linker follows reachable imports and prunes unused definitions", () =
       }],
       exports: [{ name: "main", definition: "main", type: { kind: "integer" } }],
       sourceByteLength: 0,
-      options: { evaluationProfile: EvaluationProfile.StrictEager },
+      options: {},
     },
   ], { module: "application", exportName: "main" });
 

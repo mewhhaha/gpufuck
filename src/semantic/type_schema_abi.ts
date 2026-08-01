@@ -12,7 +12,7 @@ import {
   type TypeSchema,
 } from "./abi.ts";
 
-/** The schema buffer accompanies version 8 of the surface ABI. */
+/** The schema buffer accompanies version 9 of the surface ABI. */
 export const TYPE_SCHEMA_ABI_VERSION = MODULE_ABI_VERSION;
 export const TYPE_SCHEMA_WORD_LENGTH = 6;
 export const TYPE_SCHEMA_BYTE_LENGTH = TYPE_SCHEMA_WORD_LENGTH *

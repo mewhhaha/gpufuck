@@ -1,4 +1,4 @@
-import { CoreTag, EvaluationMode, EvaluationProfile, NO_INDEX } from "./abi.ts";
+import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
 import {
   type CompilerPerformanceTrace,
   measureCompilerStage,
@@ -154,11 +154,8 @@ export function createWasmBackendPlan(
     return result;
   });
   const scalarResult = functionalHostScalarType(entry.result);
-  const compactScalarEligible = module.evaluationProfile ===
-      EvaluationProfile.StrictEager &&
-    module.entryEffects.size === 0 &&
+  const compactScalarEligible = module.entryEffects.size === 0 &&
     module.hostCapabilities.every((capability) => capability.fields.length === 0) &&
-    !coreIndex.hasLazyEvaluationBoundary &&
     !entry.takesInit &&
     entry.parameter === undefined &&
     scalarResult !== undefined &&
@@ -496,7 +493,6 @@ function validateOwnedTypeExports(
     throw new TypeError("functional WASM ownedTypeExports require a verified frontend storageCore");
   }
   if (
-    module.evaluationProfile !== EvaluationProfile.StrictEager ||
     nodes.some((node) =>
       (node.tag === CoreTag.Apply || node.tag === CoreTag.Let) &&
       node.evaluationMode === EvaluationMode.LazyCallByNeed

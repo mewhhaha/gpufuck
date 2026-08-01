@@ -3,7 +3,6 @@ import {
   CORE_V1_PRIMITIVE_CAPABILITIES,
   type Diagnostic,
   type EncodedModule,
-  EvaluationProfile,
   MODULE_ABI_VERSION,
   TypecheckingProfile,
 } from "../functional/abi.ts";
@@ -16,7 +15,6 @@ export function lazuliSurfaceToModule(
   return {
     abiVersion: MODULE_ABI_VERSION,
     sourceByteLength,
-    evaluationProfile: EvaluationProfile.LazyCallByNeed,
     typecheckingProfile: TypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities: [],

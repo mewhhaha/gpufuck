@@ -137,7 +137,6 @@ export function literalModuleUpdate(module: EncodedModule): LiteralModuleUpdate 
 function sameModuleMetadata(left: EncodedModule, right: EncodedModule): boolean {
   return left.abiVersion === right.abiVersion &&
     left.sourceByteLength === right.sourceByteLength &&
-    left.evaluationProfile === right.evaluationProfile &&
     left.typecheckingProfile === right.typecheckingProfile &&
     left.nodeCount === right.nodeCount &&
     left.argumentCount === right.argumentCount &&

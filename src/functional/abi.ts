@@ -41,7 +41,7 @@ export {
   TYPE_WORD_LENGTH,
   UnaryOperator,
 } from "../semantic/abi.ts";
-export { EvaluationProfile, TypecheckingProfile } from "./schema_contract.ts";
+export { TypecheckingProfile } from "./schema_contract.ts";
 export { type SourceRange, type WasmExportDeclaration } from "./module_contract.ts";
 export {
   type SourceType,
@@ -59,7 +59,7 @@ import type {
 import type { EffectSet } from "./effect_set.ts";
 import type { HostCapabilityDeclaration, HostDefinitionBinding } from "./host_contract.ts";
 import type { SourceRange, WasmExportDeclaration } from "./module_contract.ts";
-import type { EvaluationProfile, Span, TypecheckingProfile } from "./schema_contract.ts";
+import type { Span, TypecheckingProfile } from "./schema_contract.ts";
 
 /** Reserved nominal names the surface builder installs; a frontend cannot declare them. */
 export const UNIT_CONSTRUCTOR_NAME = "$Unit";
@@ -128,7 +128,6 @@ export interface Diagnostic {
 export interface EncodedModule {
   readonly abiVersion: number;
   readonly sourceByteLength: number;
-  readonly evaluationProfile: EvaluationProfile;
   readonly typecheckingProfile: TypecheckingProfile;
   readonly primitiveCapabilities: readonly PrimitiveCapability[];
   readonly hostCapabilities?: readonly HostCapabilityDeclaration[];

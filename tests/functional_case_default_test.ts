@@ -7,7 +7,6 @@ import { equal, ok, throws } from "node:assert/strict";
 
 import {
   buildSurfaceModule,
-  EvaluationProfile,
   GpuCompiler,
   GpuEvaluator,
   linkModules,
@@ -63,7 +62,6 @@ async function runColour(subject: string, binder?: string) {
     [COLOUR],
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await compiler!.compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
@@ -111,7 +109,6 @@ Deno.test("a case default needs an arm naming a declared constructor", () => {
         [COLOUR],
         "main",
         0,
-        { evaluationProfile: EvaluationProfile.StrictEager },
       ),
     /needs at least one arm naming a declared constructor/,
   );
@@ -136,7 +133,7 @@ Deno.test("a default body's names survive linking and reachability", async () =>
       imports: [],
       exports: [{ name: "fallbackValue", definition: "fallbackValue", type: { kind: "integer" } }],
       sourceByteLength: 0,
-      options: { evaluationProfile: EvaluationProfile.StrictEager },
+      options: {},
     },
     {
       name: "colours",
@@ -160,7 +157,7 @@ Deno.test("a default body's names survive linking and reachability", async () =>
       }],
       exports: [{ name: "main", definition: "main", type: { kind: "integer" } }],
       sourceByteLength: 0,
-      options: { evaluationProfile: EvaluationProfile.StrictEager },
+      options: {},
     },
   ], { module: "colours", exportName: "main" });
 

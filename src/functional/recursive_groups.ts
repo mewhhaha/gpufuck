@@ -87,6 +87,7 @@ function elaborateExpression(
         body: elaborate(expression.body, withNames(lexicalNames, expression.parameters)),
       };
     case "let":
+    case "sequence":
       return {
         ...expression,
         value: elaborate(expression.value),
@@ -288,6 +289,7 @@ function rewriteNames(
         ),
       };
     case "let":
+    case "sequence":
       return {
         ...expression,
         value: rewrite(expression.value),

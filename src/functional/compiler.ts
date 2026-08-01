@@ -26,7 +26,6 @@ import {
   DefinitionWord,
   type Diagnostic,
   type EncodedModule,
-  EvaluationProfile,
   ExpressionTag,
   MAXIMUM_EXPRESSION_NODES,
   MAXIMUM_SOURCE_BYTE_LENGTH,
@@ -688,7 +687,6 @@ async function publicModule(
     hostDefinitions,
     wasmExports: Object.freeze(wasmExports),
     sources: Object.freeze([...(encodedModule.sources ?? [])]),
-    evaluationProfile: encodedModule.evaluationProfile,
     entryType: module.mainType,
     entryEffects: effectSet(),
     declaredDefinitionEffects,
@@ -807,7 +805,6 @@ function validateEncodedModule(module: EncodedModule): void {
       `functional module has invalid source byte length ${module.sourceByteLength}`,
     );
   }
-  requireEvaluationProfile(module.evaluationProfile, "functional module");
   if (
     module.typecheckingProfile !== TypecheckingProfile.HindleyMilnerIndexed &&
     module.typecheckingProfile !== TypecheckingProfile.PredicativeRankNIndexed
@@ -1059,21 +1056,6 @@ function validateSources(
     }
     previousEndByte = source.endByte;
   }
-}
-
-function requireEvaluationProfile(
-  profile: EvaluationProfile,
-  location: string,
-): void {
-  if (
-    profile === EvaluationProfile.LazyCallByNeed ||
-    profile === EvaluationProfile.StrictEager
-  ) return;
-  throw new Error(
-    `${location} evaluation profile ${JSON.stringify(profile)} is unsupported; expected ${
-      JSON.stringify(EvaluationProfile.LazyCallByNeed)
-    } or ${JSON.stringify(EvaluationProfile.StrictEager)}`,
-  );
 }
 
 function schemaContainsForall(schema: TypeSchema): boolean {

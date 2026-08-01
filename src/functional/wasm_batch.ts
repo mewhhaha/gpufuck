@@ -1,4 +1,4 @@
-import { CoreTag, EvaluationProfile, NO_INDEX } from "./abi.ts";
+import { CoreTag, NO_INDEX } from "./abi.ts";
 import {
   type CompiledModule,
   completeTypeDeclarations,
@@ -78,13 +78,6 @@ async function bundleCompiledModules(
 ): Promise<CompiledModule> {
   const first = modules[0]!;
   for (const [index, module] of modules.entries()) {
-    if (module.evaluationProfile !== first.evaluationProfile) {
-      throw new TypeError(
-        `functional Wasm batch module ${index} uses evaluation profile ${
-          profileName(module.evaluationProfile)
-        }; expected ${profileName(first.evaluationProfile)}`,
-      );
-    }
     if (!sameHostCapabilities(first, module)) {
       throw new TypeError(
         `functional Wasm batch module ${index} declares incompatible host capabilities`,
@@ -252,7 +245,6 @@ async function bundleCompiledModules(
     hostDefinitions: Object.freeze(hostDefinitions),
     wasmExports: Object.freeze(wasmExports),
     sources: Object.freeze(sources),
-    evaluationProfile: modules[0]!.evaluationProfile,
     readCoreNodes: () => Promise.resolve(Object.freeze(nodes)),
     destroy: () => {},
   });
@@ -386,8 +378,4 @@ function moduleSourceByteLength(
     ...module.sources.map((source) => source.endByte),
     ...nodes.map((node) => node.sourceEndByte),
   );
-}
-
-function profileName(profile: EvaluationProfile): string {
-  return profile === EvaluationProfile.StrictEager ? "strict-eager" : "lazy-call-by-need";
 }

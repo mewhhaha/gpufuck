@@ -3,7 +3,6 @@ import { deepStrictEqual, equal, ok } from "node:assert/strict";
 import {
   BinaryOperator,
   buildSurfaceModule,
-  EvaluationProfile,
   GpuCompiler,
   GpuEvaluator,
   requestWebGpuDevice,
@@ -76,7 +75,6 @@ Deno.test("mutually recursive local functions retain lexical captures", async ()
     [],
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
 
   const compilation = await functionalCompiler().compileModule(module);
@@ -124,7 +122,6 @@ Deno.test("nested recursive groups preserve source order through GPU compilation
     [],
     "main",
     30,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
 
   const compilation = await functionalCompiler().compileModule(module);
@@ -185,7 +182,6 @@ async function compileAndRunThunkModule(forceTwice: boolean) {
     [],
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalCompiler().compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);

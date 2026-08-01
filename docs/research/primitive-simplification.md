@@ -188,8 +188,7 @@ No branch changes `MODULE_ABI_VERSION`, the package version, or production behav
 | Buffer append                  | Primop candidate              | Gleam, JavaScript, Duck, Blot runtime lowering                                           |
 | Persistent `Store`             | Primop candidate              | JavaScript and storage-oriented consumers                                                |
 | Explicit runtime fault         | Distinct control effect       | Demand-sensitive faults and diagnostics                                                  |
-| Lazy/strict evaluation mode    | Evaluation metadata           | Lazuli is lazy; other frontends are strict                                               |
-| Module evaluation profile      | Public semantic contract      | Cannot be removed without an explicit-evaluation replacement                             |
+| Demand/sequence mode           | Evaluation metadata           | Ordinary bindings are lazy; explicit sequence nodes preserve required order              |
 | Effect sets                    | First-class metadata          | Higher-order inference and host boundary                                                 |
 | Lexical effect evidence        | Surface lowering contract     | Duck and gpufuck handlers; do not move into primops                                      |
 | Type schemas/annotations       | Checking metadata             | HM, indexed constructors, rank-N checking                                                |
@@ -197,7 +196,7 @@ No branch changes `MODULE_ABI_VERSION`, the package version, or production behav
 | Case defaults/recursive groups | Surface sugar                 | Host elaboration before packing                                                          |
 | Monomorphisation               | Frontend/backend optimization | Blot and gpufuck keep Core definitions polymorphic                                       |
 | Inlining/direct-call fusion    | Backend optimization          | Existing Wasm codegen already performs it                                                |
-| `StrictLet`/`StrictApply` tags | Surface evaluation encoding   | Lower to ordinary Core nodes plus evaluation mode                                        |
+| `Sequence` tag                 | Surface ordering encoding     | Lowers to a Core let whose value must run before its body                                |
 
 No exported construct is confirmed unused. The public runtime module has 109 runtime exports; types
 add further compile-time-only exports. `CoreTag`/`ExpressionTag` appear 1,056 times across 28
@@ -229,10 +228,10 @@ Exact counters stayed unchanged:
 | Linked project            |  60,031 | 51 modules                                                                            |
 
 The twelve-program baseline contains 2,309 Surface nodes. Its frequent tags are 773 names, 762
-applications (`Apply` plus `StrictApply`), 257 integers, 119 pattern binders, 98 lambdas, 91 case
-arms, 61 binary operations, and 52 cases. The operator sample contains 19 integer additions, nine
-integer equalities, seven integer multiplications, and smaller signed-i64, structural, and f64
-families.
+applications across the then-separate eager and demand forms, 257 integers, 119 pattern binders, 98
+lambdas, 91 case arms, 61 binary operations, and 52 cases. The operator sample contains 19 integer
+additions, nine integer equalities, seven integer multiplications, and smaller signed-i64,
+structural, and f64 families.
 
 Existing repository measurements remain relevant controls:
 
@@ -397,7 +396,7 @@ An executable structural prototype must delete, rather than deprecate:
 4. their inference, evaluator, capture, storage, trace, and Wasm switch arms;
 5. ABI-6 node validators and serializers in the same breaking release.
 
-Do not delete evaluation profiles/modes, effect sets/evidence, HM/indexed/rank-N inference, explicit
+Do not delete demand/sequence modes, effect sets/evidence, HM/indexed/rank-N inference, explicit
 faults, dedicated `if`, Store semantics, or existing backend specialization.
 
 ## Production migration

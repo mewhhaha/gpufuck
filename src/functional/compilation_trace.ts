@@ -163,6 +163,10 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
       return `${indent}(let ${expression.name}\n${nested(expression.value)}\n${
         nested(expression.body)
       })`;
+    case "sequence":
+      return `${indent}(sequence ${expression.name}\n${nested(expression.value)}\n${
+        nested(expression.body)
+      })`;
     case "let-rec":
       return `${indent}(let-rec ${expression.name}\n${nested(expression.value)}\n${
         nested(expression.body)
@@ -375,15 +379,13 @@ function surfacePayload(module: EncodedModule, tag: number, payload: number): st
       return `value=${payload === 0 ? "false" : "true"}`;
     case ExpressionTag.Name:
     case ExpressionTag.Let:
-    case ExpressionTag.StrictLet:
+    case ExpressionTag.Sequence:
     case ExpressionTag.LetRec:
     case ExpressionTag.CaseArm:
     case ExpressionTag.PatternBind:
       return `symbol=${symbol(module, payload)}`;
     case ExpressionTag.Binary:
       return `operator=${binaryOperatorName(payload)}`;
-    case ExpressionTag.StrictApply:
-      return "evaluation=strict";
     default:
       return "";
   }

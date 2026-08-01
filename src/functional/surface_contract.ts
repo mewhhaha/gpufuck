@@ -1,11 +1,4 @@
-import type {
-  BinaryOperator,
-  EvaluationProfile,
-  NumericConversion,
-  Span,
-  TypeSchema,
-  UnaryOperator,
-} from "./abi.ts";
+import type { BinaryOperator, NumericConversion, Span, TypeSchema, UnaryOperator } from "./abi.ts";
 import type { EffectSet } from "./effect_set.ts";
 
 export type SurfaceExpression =
@@ -75,7 +68,13 @@ export type SurfaceExpression =
     readonly name: string;
     readonly value: SurfaceExpression;
     readonly body: SurfaceExpression;
-    readonly valueEvaluation?: EvaluationProfile;
+    readonly span?: Span;
+  }
+  | {
+    readonly kind: "sequence";
+    readonly name: string;
+    readonly value: SurfaceExpression;
+    readonly body: SurfaceExpression;
     readonly span?: Span;
   }
   | {
@@ -98,7 +97,6 @@ export type SurfaceExpression =
     readonly kind: "apply";
     readonly callee: SurfaceExpression;
     readonly arguments: readonly SurfaceExpression[];
-    readonly argumentEvaluations?: readonly EvaluationProfile[];
     readonly span?: Span;
   }
   | {

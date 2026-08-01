@@ -1,9 +1,4 @@
-import {
-  EvaluationProfile,
-  PAIR_CONSTRUCTOR_NAME,
-  type TypeSchema,
-  UNIT_CONSTRUCTOR_NAME,
-} from "./abi.ts";
+import { PAIR_CONSTRUCTOR_NAME, type TypeSchema, UNIT_CONSTRUCTOR_NAME } from "./abi.ts";
 import {
   encodeConstant,
   functionalConstantFromDeepValue,
@@ -579,9 +574,7 @@ function prepareComptimeProgram(
       type: collectedType(outputs.map((output) => output.type)),
     }],
     sourceByteLength: 0,
-    options: {
-      evaluationProfile: EvaluationProfile.StrictEager,
-    },
+    options: {},
   };
   const linked = linkModules(
     [...functionalArtifacts, collector],
@@ -601,9 +594,7 @@ function comptimeArtifact(artifact: ComptimeModuleArtifact): ModuleArtifact {
     imports: artifact.imports,
     exports: artifact.exports,
     sourceByteLength: artifact.sourceByteLength,
-    options: {
-      evaluationProfile: artifact.evaluationProfile ?? EvaluationProfile.StrictEager,
-    },
+    options: {},
   });
 }
 

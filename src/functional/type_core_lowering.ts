@@ -1,4 +1,4 @@
-import { BinaryOperator, type EncodedModule, EvaluationProfile } from "./abi.ts";
+import { BinaryOperator, type EncodedModule } from "./abi.ts";
 import {
   buildSurfaceModule,
   surface,
@@ -70,7 +70,6 @@ export function lowerTypeCoreProgram(
       typeCoreRuntimeDeclarations(),
       TYPE_CORE_ENTRY_DEFINITION,
       validated.sourceByteLength,
-      { evaluationProfile: EvaluationProfile.StrictEager },
     ),
     symbolValues: symbols.values,
     entryKind: validated.entryKind,

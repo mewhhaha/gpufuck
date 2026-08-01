@@ -4,7 +4,6 @@ import {
   BinaryOperator,
   buildSurfaceModule,
   compileModuleToWasm,
-  EvaluationProfile,
   f32x4,
   F32x4Definition,
   FIXED_VECTOR_DEFINITIONS,
@@ -83,7 +82,6 @@ Deno.test("F32x4 shuffle agrees in portable and native SIMD modes", async () => 
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -193,7 +191,7 @@ Deno.test("linked fixed-vector definitions retain native SIMD lowering", async (
       type: { kind: "float-32" },
     }],
     sourceByteLength: 0,
-    options: { evaluationProfile: EvaluationProfile.StrictEager },
+    options: {},
   }], { module: "vectors", exportName: "main" });
 
   const compilation = await functionalWasmCompiler().compileModule(linked.module);
@@ -278,7 +276,6 @@ Deno.test("fixed F32x4 operations agree in portable and native SIMD modes", asyn
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
 
   const compilation = await functionalWasmCompiler().compileModule(encoded);
@@ -367,7 +364,6 @@ Deno.test("native F32x4 lane operations, comparisons, and reductions preserve Fl
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -386,7 +382,7 @@ Deno.test("native F32x4 lane operations, comparisons, and reductions preserve Fl
   }
 });
 
-Deno.test("strict F32x4 functions use an allocation-free internal vector worker", async () => {
+Deno.test("demanded F32x4 functions use an allocation-free internal vector worker", async () => {
   const encoded = buildSurfaceModule(
     [
       ...FIXED_VECTOR_DEFINITIONS,
@@ -423,7 +419,6 @@ Deno.test("strict F32x4 functions use an allocation-free internal vector worker"
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -444,7 +439,7 @@ Deno.test("strict F32x4 functions use an allocation-free internal vector worker"
   }
 });
 
-Deno.test("strict F32x4 values stay native across let-bound multi-function chains", async () => {
+Deno.test("demanded F32x4 values stay native across let-bound multi-function chains", async () => {
   const vector = f32x4.make([
     surface.float32(1),
     surface.float32(2),
@@ -497,7 +492,6 @@ Deno.test("strict F32x4 values stay native across let-bound multi-function chain
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -597,7 +591,6 @@ Deno.test("mixed boxed and native callers keep the whole F32x4 worker region box
     ],
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -684,7 +677,6 @@ Deno.test("projected record fields keep F32x4 workers boxed at their representat
     ],
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -706,7 +698,7 @@ Deno.test("projected record fields keep F32x4 workers boxed at their representat
   }
 });
 
-Deno.test("strict F32x4 values stay native in let-bound body locals", async () => {
+Deno.test("demanded F32x4 values stay native in let-bound body locals", async () => {
   const encoded = buildSurfaceModule(
     [
       ...FIXED_VECTOR_DEFINITIONS,
@@ -736,7 +728,6 @@ Deno.test("strict F32x4 values stay native in let-bound body locals", async () =
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -810,7 +801,6 @@ Deno.test("materialized closures box captured native F32x4 values", async () => 
     ],
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -870,7 +860,6 @@ Deno.test("recursive closures box captured native F32x4 values", async () => {
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -922,7 +911,6 @@ Deno.test("SIMD scalar entries fall back when compact emission needs the runtime
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -991,7 +979,6 @@ Deno.test("native vectors preserve values across ordinary boxed function boundar
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
@@ -1032,7 +1019,6 @@ Deno.test("requested SIMD preserves lazy lane evaluation through scalar fallback
     FIXED_VECTOR_TYPE_DECLARATIONS,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.LazyCallByNeed },
   );
   const compilation = await functionalWasmCompiler().compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);

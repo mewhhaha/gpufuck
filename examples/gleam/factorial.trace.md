@@ -17,7 +17,7 @@ fn factorial(n) {
 pub fn main() -&gt; Int {
   factorial(10)
 }</code></pre></td><td><pre><code>fn factorial(n) : &lt;inferred&gt; =
-  (let $gleam_case_0
+  (sequence $gleam_case_0
     n
     (if
       (EqualSignedInteger64
@@ -26,24 +26,28 @@ pub fn main() -&gt; Int {
       1i64
       (MultiplySignedInteger64
         n
-        (apply
-          factorial
+        (sequence $gleam_argument_1
           (SubtractSignedInteger64
             n
-            1i64)))))
+            1i64)
+          (apply
+            factorial
+            $gleam_argument_1)))))
 
 fn main($gleam_unit_parameter) : () -&gt; i64 =
-  (apply
-    factorial
-    10i64)</code></pre></td></tr>
+  (sequence $gleam_argument_2
+    10i64
+    (apply
+      factorial
+      $gleam_argument_2))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v6; entry=$gleam/entry::main
+<tr><td><pre><code>ABI v9; entry=$gleam/entry::main
 
 definitions:
-  d0 factorial::factorial root=n0 bytes=0..75 : &lt;inferred&gt;
-  d1 factorial::main root=n15 bytes=77..117 : () -&gt; i64
-  d2 $gleam/entry::$import$sourceEntry root=n19 bytes=118..118 : &lt;inferred&gt;
-  d3 $gleam/entry::main root=n20 bytes=118..118 : &lt;inferred&gt;
+  d0 factorial::factorial root=n0 bytes=0..75 : &lt;inferred&gt; effects=[]
+  d1 factorial::main root=n17 bytes=77..117 : () -&gt; i64 effects=[]
+  d2 $gleam/entry::$import$sourceEntry root=n23 bytes=118..118 : &lt;inferred&gt; effects=[]
+  d3 $gleam/entry::main root=n24 bytes=118..118 : &lt;inferred&gt; effects=[]
 
 types:
   t0 $gleam/prelude::$GleamList constructors=[c0,c2)
@@ -68,54 +72,62 @@ constructors:
   c9 $Tuple owner=t7 arity=2
 
 nodes:
-  n0 Lambda symbol=n children=[n1] parent=- bytes=0..75
-  n1 StrictLet symbol=$gleam_case_0 children=[n2,n3] parent=n0 bytes=16..75
+  n0 Lambda  children=[n1,n1] parent=- bytes=0..75
+  n1 Sequence symbol=$gleam_case_0 children=[n2,n3] parent=n0 bytes=16..75
   n2 Name symbol=n children=[] parent=n1 bytes=25..27
   n3 If  children=[n4,n7,n8] parent=n1 bytes=33..44
-  n4 Binary operator=EqualSignedInteger64 children=[n5,n6] parent=n3 bytes=33..34
+  n4 Prim  children=[n0,n2] parent=n3 bytes=33..34
   n5 Name symbol=$gleam_case_0 children=[] parent=n4 bytes=33..34
   n6 SignedInteger64  children=[n0] parent=n4 bytes=33..34
   n7 SignedInteger64  children=[n0] parent=n3 bytes=38..39
-  n8 Binary operator=MultiplySignedInteger64 children=[n9,n10] parent=n3 bytes=49..69
+  n8 Prim  children=[n2,n2] parent=n3 bytes=49..69
   n9 Name symbol=n children=[] parent=n8 bytes=49..51
-  n10 StrictApply evaluation=strict children=[n11,n12] parent=n8 bytes=53..69
-  n11 Name symbol=factorial::factorial children=[] parent=n10 bytes=53..62
-  n12 Binary operator=SubtractSignedInteger64 children=[n13,n14] parent=n10 bytes=63..68
-  n13 Name symbol=n children=[] parent=n12 bytes=63..65
-  n14 SignedInteger64  children=[n0] parent=n12 bytes=67..68
-  n15 Lambda symbol=$gleam_unit_parameter children=[n16] parent=- bytes=77..117
-  n16 StrictApply evaluation=strict children=[n17,n18] parent=n15 bytes=98..117
-  n17 Name symbol=factorial::factorial children=[] parent=n16 bytes=102..111
-  n18 SignedInteger64  children=[n0] parent=n16 bytes=112..114
-  n19 Name symbol=factorial::main children=[] parent=- bytes=118..118
-  n20 StrictApply evaluation=strict children=[n21,n22] parent=- bytes=118..118
-  n21 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n20 bytes=118..118
-  n22 Name symbol=$Unit children=[] parent=n20 bytes=118..118</code></pre></td><td><pre><code>entry=d3; type=i64; effects=[]
+  n10 Sequence symbol=$gleam_argument_1 children=[n11,n14] parent=n8 bytes=53..69
+  n11 Prim  children=[n4,n2] parent=n10 bytes=63..68
+  n12 Name symbol=n children=[] parent=n11 bytes=63..65
+  n13 SignedInteger64  children=[n0] parent=n11 bytes=67..68
+  n14 Apply  children=[n15,n1] parent=n10 bytes=53..69
+  n15 Name symbol=factorial::factorial children=[] parent=n14 bytes=53..62
+  n16 Name symbol=$gleam_argument_1 children=[] parent=n14 bytes=53..69
+  n17 Lambda  children=[n18,n1] parent=- bytes=77..117
+  n18 Sequence symbol=$gleam_argument_2 children=[n19,n20] parent=n17 bytes=98..117
+  n19 SignedInteger64  children=[n0] parent=n18 bytes=112..114
+  n20 Apply  children=[n21,n1] parent=n18 bytes=98..117
+  n21 Name symbol=factorial::factorial children=[] parent=n20 bytes=102..111
+  n22 Name symbol=$gleam_argument_2 children=[] parent=n20 bytes=98..117
+  n23 Name symbol=factorial::main children=[] parent=- bytes=118..118
+  n24 Apply  children=[n25,n1] parent=- bytes=118..118
+  n25 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n24 bytes=118..118
+  n26 Name symbol=$Unit children=[] parent=n24 bytes=118..118</code></pre></td><td><pre><code>entry=d3; type=i64; effects=[]
 
 nodes:
-  n0 Lambda symbol=n children=[n1] sourceByte=0
+  n0 Lambda parameters=p0..p1 children=[n1,n1] sourceByte=0
   n1 Let symbol=factorial::main evaluation=strict children=[n2,n3] sourceByte=16
   n2 Local depth=0 children=[] sourceByte=25
   n3 If  children=[n4,n7,n8] sourceByte=33
-  n4 Binary operator=EqualSignedInteger64 children=[n5,n6] sourceByte=33
+  n4 Prim opcode=EqualSignedInteger64 operands=a0..a2 children=[] sourceByte=33
   n5 Local depth=0 children=[] sourceByte=33
   n6 SignedInteger64  children=[n0] sourceByte=33
   n7 SignedInteger64 payload=1 children=[n0] sourceByte=38
-  n8 Binary operator=MultiplySignedInteger64 children=[n9,n10] sourceByte=49
+  n8 Prim opcode=MultiplySignedInteger64 operands=a2..a4 children=[] sourceByte=49
   n9 Local depth=1 children=[] sourceByte=49
-  n10 Apply evaluation=strict children=[n11,n12] sourceByte=53
-  n11 Global definition=d0 children=[] sourceByte=53
-  n12 Binary operator=SubtractSignedInteger64 children=[n13,n14] sourceByte=63
-  n13 Local depth=1 children=[] sourceByte=63
-  n14 SignedInteger64 payload=1 children=[n0] sourceByte=67
-  n15 Lambda symbol=$gleam_unit_parameter children=[n16] sourceByte=77
-  n16 Apply evaluation=strict children=[n17,n18] sourceByte=98
-  n17 Global definition=d0 children=[] sourceByte=102
-  n18 SignedInteger64 payload=10 children=[n0] sourceByte=112
-  n19 Global definition=d1 children=[] sourceByte=118
-  n20 Apply evaluation=strict children=[n21,n22] sourceByte=118
-  n21 Global definition=d2 children=[] sourceByte=118
-  n22 Constructor constructor=c8:$Unit children=[] sourceByte=118</code></pre></td></tr>
+  n10 Let symbol=factorial::main evaluation=strict children=[n11,n14] sourceByte=53
+  n11 Prim opcode=SubtractSignedInteger64 operands=a4..a6 children=[] sourceByte=63
+  n12 Local depth=1 children=[] sourceByte=63
+  n13 SignedInteger64 payload=1 children=[n0] sourceByte=67
+  n14 Apply arguments=a6..a7 children=[n15] sourceByte=53
+  n15 Global definition=d0 children=[] sourceByte=53
+  n16 Local depth=0 children=[] sourceByte=53
+  n17 Lambda parameters=p1..p2 children=[n18,n1] sourceByte=77
+  n18 Let symbol=factorial::main evaluation=strict children=[n19,n20] sourceByte=98
+  n19 SignedInteger64 payload=10 children=[n0] sourceByte=112
+  n20 Apply arguments=a7..a8 children=[n21] sourceByte=98
+  n21 Global definition=d0 children=[] sourceByte=102
+  n22 Local depth=0 children=[] sourceByte=98
+  n23 Global definition=d1 children=[] sourceByte=118
+  n24 Apply arguments=a8..a9 children=[n25] sourceByte=118
+  n25 Global definition=d2 children=[] sourceByte=118
+  n26 Constructor constructor=c8:$Unit children=[] sourceByte=118</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -130,10 +142,10 @@ nodes:
     "value": 3628800
   },
   "stats": {
-    "steps": 321,
-    "allocations": 96,
+    "steps": 363,
+    "allocations": 117,
     "peakStack": 13,
-    "thunkEvaluations": 4
+    "thunkEvaluations": 15
   }
 }
 ```

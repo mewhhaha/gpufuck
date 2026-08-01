@@ -9,7 +9,6 @@ import {
   CORE_V1_PRIMITIVE_CAPABILITIES,
   type EncodedModule,
   EvaluationMode,
-  EvaluationProfile,
   ExpressionTag,
   MAXIMUM_EXPRESSION_NODES,
   MODULE_ABI_VERSION,
@@ -185,8 +184,6 @@ export function buildSurfaceModule(
   if ((surfaceFeatures & SURFACE_FEATURE_RECURSIVE_GROUP) !== 0) {
     for (const definition of elaboratedDefinitions) expressionFeatureMask(definition.body);
   }
-  const evaluationProfile = options.evaluationProfile ?? EvaluationProfile.StrictEager;
-  requireEvaluationProfile(evaluationProfile, "functional surface module");
   const hostCapabilities = normalizeHostCapabilities(options.hostCapabilities);
   const declaredDefinitionEffects = Object.freeze(
     elaboratedDefinitions.map((definition, definitionIndex) => {
@@ -288,7 +285,6 @@ export function buildSurfaceModule(
     typeIndices,
     constructorIndices,
     callableArities,
-    evaluationProfile,
   );
   const definitionWords: number[] = [];
   for (const definition of elaboratedDefinitions) {
@@ -330,7 +326,6 @@ export function buildSurfaceModule(
   return {
     abiVersion: MODULE_ABI_VERSION,
     sourceByteLength,
-    evaluationProfile,
     typecheckingProfile: usesHigherRankTypes
       ? TypecheckingProfile.PredicativeRankNIndexed
       : TypecheckingProfile.HindleyMilnerIndexed,
@@ -730,6 +725,7 @@ function collectBoundaryTypeNames(
         visitExpression(expression.kind === "lambda" ? expression.body : expression.value);
         return;
       case "let":
+      case "sequence":
       case "let-rec":
         visitExpression(expression.value);
         visitExpression(expression.body);
@@ -840,6 +836,7 @@ function expressionFeatureMask(expression: SurfaceExpression): number {
         visit(nested.body);
         break;
       case "let":
+      case "sequence":
       case "let-rec":
         visit(nested.body);
         visit(nested.value);
@@ -1028,7 +1025,6 @@ class SurfaceExpressionEncoder {
     private readonly typeIndices: ReadonlyMap<string, number>,
     private readonly constructorIndices: ReadonlyMap<string, number>,
     private readonly callableArities: ReadonlyMap<string, number>,
-    private readonly defaultEvaluation: EvaluationProfile,
   ) {}
 
   get nodeCount(): number {
@@ -1193,15 +1189,20 @@ class SurfaceExpressionEncoder {
         return node;
       }
       case "let": {
-        const valueEvaluation = expression.valueEvaluation ?? this.defaultEvaluation;
-        requireEvaluationProfile(
-          valueEvaluation,
-          `functional let ${JSON.stringify(expression.name)}`,
-        );
         const node = this.reserveNode(
-          valueEvaluation === EvaluationProfile.StrictEager
-            ? ExpressionTag.StrictLet
-            : ExpressionTag.Let,
+          ExpressionTag.Let,
+          this.symbols.intern(expression.name),
+          parent,
+          expression.span,
+        );
+        const value = this.emit(expression.value, node);
+        const body = this.emit(expression.body, node);
+        this.setChildren(node, [value, body]);
+        return node;
+      }
+      case "sequence": {
+        const node = this.reserveNode(
+          ExpressionTag.Sequence,
           this.symbols.intern(expression.name),
           parent,
           expression.span,
@@ -1241,30 +1242,21 @@ class SurfaceExpressionEncoder {
       case "apply": {
         const applicationSegments: {
           readonly arguments: readonly SurfaceExpression[];
-          readonly evaluations: readonly EvaluationProfile[] | undefined;
         }[] = [{
           arguments: expression.arguments,
-          evaluations: expression.argumentEvaluations,
         }];
         let callee = expression.callee;
         while (callee.kind === "apply") {
           applicationSegments.push({
             arguments: callee.arguments,
-            evaluations: callee.argumentEvaluations,
           });
           callee = callee.callee;
         }
         applicationSegments.reverse();
         const arguments_ = applicationSegments.flatMap((segment) => segment.arguments);
-        const evaluations = applicationSegments.flatMap((segment) =>
-          segment.arguments.map((_, index) =>
-            segment.evaluations?.[index] ?? this.defaultEvaluation
-          )
-        );
         return this.emitApplication(
           callee,
           arguments_,
-          evaluations,
           parent,
           expression.span,
         );
@@ -1461,15 +1453,9 @@ class SurfaceExpressionEncoder {
   private emitApplication(
     callee: SurfaceExpression,
     arguments_: readonly SurfaceExpression[],
-    evaluations: readonly EvaluationProfile[],
     parent: number,
     span: Span | undefined,
   ): number {
-    if (evaluations.length !== arguments_.length) {
-      throw new Error(
-        `functional application has ${arguments_.length} arguments but ${evaluations.length} evaluation profiles`,
-      );
-    }
     const arity = callee.kind === "name" ? this.callableArities.get(callee.name) : undefined;
     if (arity !== undefined && arguments_.length < arity) {
       const parameters = Array.from(
@@ -1490,10 +1476,6 @@ class SurfaceExpressionEncoder {
               ...(span ? { span } : {}),
             })),
           ],
-          argumentEvaluations: [
-            ...evaluations,
-            ...parameters.map(() => this.defaultEvaluation),
-          ],
           ...(span === undefined ? {} : { span }),
         },
         ...(span === undefined ? {} : { span }),
@@ -1504,24 +1486,21 @@ class SurfaceExpressionEncoder {
         kind: "apply",
         callee,
         arguments: arguments_.slice(0, arity),
-        argumentEvaluations: evaluations.slice(0, arity),
         ...(span === undefined ? {} : { span }),
       };
       return this.emitPackedApplication(
         exactApplication,
         arguments_.slice(arity),
-        evaluations.slice(arity),
         parent,
         span,
       );
     }
-    return this.emitPackedApplication(callee, arguments_, evaluations, parent, span);
+    return this.emitPackedApplication(callee, arguments_, parent, span);
   }
 
   private emitPackedApplication(
     callee: SurfaceExpression,
     arguments_: readonly SurfaceExpression[],
-    evaluations: readonly EvaluationProfile[],
     parent: number,
     span: Span | undefined,
   ): number {
@@ -1532,16 +1511,10 @@ class SurfaceExpressionEncoder {
     const node = this.reserveNode(ExpressionTag.Apply, firstArgument, parent, span);
     const calleeNode = this.emit(callee, node);
     for (const [argumentIndex, argument] of arguments_.entries()) {
-      const evaluation = evaluations[argumentIndex];
-      if (evaluation === undefined) {
-        throw new Error(`functional application omitted evaluation ${argumentIndex}`);
-      }
-      requireEvaluationProfile(evaluation, `functional application argument ${argumentIndex}`);
       const argumentOffset = (firstArgument + argumentIndex) * ARGUMENT_WORD_LENGTH;
       this.argumentWords[argumentOffset + ArgumentWord.Node] = this.emit(argument, node);
-      this.argumentWords[argumentOffset + ArgumentWord.EvaluationMode] = evaluationModeForProfile(
-        evaluation,
-      );
+      this.argumentWords[argumentOffset + ArgumentWord.EvaluationMode] =
+        EvaluationMode.LazyCallByNeed;
     }
     this.setChildren(node, [calleeNode, arguments_.length]);
     return node;
@@ -1581,26 +1554,6 @@ class SurfaceExpressionEncoder {
       this.words[offset + childIndex] = child;
     }
   }
-}
-
-function requireEvaluationProfile(
-  profile: EvaluationProfile,
-  location: string,
-): void {
-  if (
-    profile === EvaluationProfile.LazyCallByNeed ||
-    profile === EvaluationProfile.StrictEager
-  ) return;
-  throw new Error(
-    `${location} has unsupported evaluation profile ${JSON.stringify(profile)}`,
-  );
-}
-
-function evaluationModeForProfile(profile: EvaluationProfile): EvaluationMode {
-  requireEvaluationProfile(profile, "functional expression");
-  return profile === EvaluationProfile.StrictEager
-    ? EvaluationMode.StrictEager
-    : EvaluationMode.LazyCallByNeed;
 }
 
 class SurfaceSymbolTable {
@@ -1711,7 +1664,11 @@ type SurfaceBuilderBase = Readonly<{
     name: string,
     value: SurfaceExpression,
     body: SurfaceExpression,
-    valueEvaluation?: EvaluationProfile,
+  ): SurfaceExpression;
+  sequence(
+    name: string,
+    value: SurfaceExpression,
+    body: SurfaceExpression,
   ): SurfaceExpression;
   /**
    * Shares a forward continuation. Calls produced by `jump` are ordinary typed applications; the
@@ -1841,7 +1798,6 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
         kind: "apply",
         callee: { kind: "name", name: THUNK_CONSTRUCTOR_NAME, ...spanned },
         arguments: [value],
-        argumentEvaluations: [EvaluationProfile.LazyCallByNeed],
         ...spanned,
       };
     },
@@ -1869,14 +1825,25 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       name: string,
       value: SurfaceExpression,
       body: SurfaceExpression,
-      valueEvaluation?: EvaluationProfile,
     ): SurfaceExpression {
       return {
         kind: "let",
         name,
         value,
         body,
-        ...(valueEvaluation === undefined ? {} : { valueEvaluation }),
+        ...spanned,
+      };
+    },
+    sequence(
+      name: string,
+      value: SurfaceExpression,
+      body: SurfaceExpression,
+    ): SurfaceExpression {
+      return {
+        kind: "sequence",
+        name,
+        value,
+        body,
         ...spanned,
       };
     },

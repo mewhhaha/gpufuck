@@ -36,26 +36,31 @@ pub fn main() -&gt; Result(Int, String) {
   (case
     result
     (Error reason -&gt;
-      (apply
-        Error
-        reason))
+      (sequence $gleam_argument_0
+        reason
+        (apply
+          Error
+          $gleam_argument_0)))
     (Ok value -&gt;
-      (apply
-        next
-        value)))
+      (sequence $gleam_argument_1
+        value
+        (apply
+          next
+          $gleam_argument_1))))
 
 fn divide(numerator, denominator) : &lt;inferred&gt; =
-  (let $gleam_case_0
+  (sequence $gleam_case_2
     denominator
     (if
       (EqualSignedInteger64
-        $gleam_case_0
+        $gleam_case_2
         0i64)
-      (apply
-        Error
-        "divide by zero")
-      (apply
-        Ok
+      (sequence $gleam_argument_4
+        "divide by zero"
+        (apply
+          Error
+          $gleam_argument_4))
+      (sequence $gleam_argument_3
         (if
           (EqualSignedInteger64
             denominator
@@ -63,49 +68,70 @@ fn divide(numerator, denominator) : &lt;inferred&gt; =
           0i64
           (DivideSignedInteger64
             numerator
-            denominator)))))
+            denominator))
+        (apply
+          Ok
+          $gleam_argument_3))))
 
 fn average(total, count, parts) : &lt;inferred&gt; =
-  (apply
-    (apply
-      try
-      (apply
+  (sequence $gleam_argument_12
+    (sequence $gleam_argument_5
+      total
+      (sequence $gleam_argument_6
+        count
         (apply
           divide
-          total)
-        count))
-    (lambda mean
-      (apply
-        (apply
-          try
-          (apply
+          $gleam_argument_5
+          $gleam_argument_6)))
+    (sequence $gleam_argument_13
+      (lambda (mean)
+        (sequence $gleam_argument_10
+          (sequence $gleam_argument_7
+            mean
+            (sequence $gleam_argument_8
+              parts
+              (apply
+                divide
+                $gleam_argument_7
+                $gleam_argument_8)))
+          (sequence $gleam_argument_11
+            (lambda (share)
+              (sequence $gleam_argument_9
+                share
+                (apply
+                  Ok
+                  $gleam_argument_9)))
             (apply
-              divide
-              mean)
-            parts))
-        (lambda share
-          (apply
-            Ok
-            share)))))
+              try
+              $gleam_argument_10
+              $gleam_argument_11))))
+      (apply
+        try
+        $gleam_argument_12
+        $gleam_argument_13)))
 
 fn main($gleam_unit_parameter) : () -&gt; $GleamResult&lt;i64, $FunctionalText&gt; =
-  (apply
-    (apply
-      (apply
-        average
-        840i64)
-      10i64)
-    2i64)</code></pre></td></tr>
+  (sequence $gleam_argument_14
+    840i64
+    (sequence $gleam_argument_15
+      10i64
+      (sequence $gleam_argument_16
+        2i64
+        (apply
+          average
+          $gleam_argument_14
+          $gleam_argument_15
+          $gleam_argument_16))))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v6; entry=$gleam/entry::main
+<tr><td><pre><code>ABI v9; entry=$gleam/entry::main
 
 definitions:
-  d0 result_use::try root=n0 bytes=85..193 : &lt;inferred&gt;
-  d1 result_use::divide root=n14 bytes=195..327 : &lt;inferred&gt;
-  d2 result_use::average root=n35 bytes=477..604 : &lt;inferred&gt;
-  d3 result_use::main root=n59 bytes=606..668 : () -&gt; $gleam/prelude::$GleamResult&lt;i64, $FunctionalText&gt;
-  d4 $gleam/entry::$import$sourceEntry root=n67 bytes=669..669 : &lt;inferred&gt;
-  d5 $gleam/entry::main root=n68 bytes=669..669 : &lt;inferred&gt;
+  d0 result_use::try root=n0 bytes=85..193 : &lt;inferred&gt; effects=[]
+  d1 result_use::divide root=n13 bytes=195..327 : &lt;inferred&gt; effects=[]
+  d2 result_use::average root=n37 bytes=477..604 : &lt;inferred&gt; effects=[]
+  d3 result_use::main root=n73 bytes=606..668 : () -&gt; $gleam/prelude::$GleamResult&lt;i64, $FunctionalText&gt; effects=[]
+  d4 $gleam/entry::$import$sourceEntry root=n85 bytes=669..669 : &lt;inferred&gt; effects=[]
+  d5 $gleam/entry::main root=n86 bytes=669..669 : &lt;inferred&gt; effects=[]
 
 types:
   t0 $gleam/prelude::$GleamList constructors=[c0,c2)
@@ -132,150 +158,186 @@ constructors:
   c10 $Tuple owner=t8 arity=2
 
 nodes:
-  n0 Lambda symbol=result children=[n1] parent=- bytes=85..193
-  n1 Lambda symbol=next children=[n2] parent=n0 bytes=85..193
-  n2 Case  children=[n3,n4] parent=n1 bytes=106..193
-  n3 Name symbol=result children=[] parent=n2 bytes=115..122
-  n4 CaseArm symbol=$gleam/prelude::Error children=[n5,n9] parent=n2 bytes=128..163
-  n5 PatternBind symbol=reason children=[n6] parent=n4 bytes=128..163
-  n6 StrictApply evaluation=strict children=[n7,n8] parent=n5 bytes=145..158
-  n7 Name symbol=$gleam/prelude::Error children=[] parent=n6 bytes=145..150
-  n8 Name symbol=reason children=[] parent=n6 bytes=151..157
-  n9 CaseArm symbol=$gleam/prelude::Ok children=[n10] parent=n4 bytes=163..190
-  n10 PatternBind symbol=value children=[n11] parent=n9 bytes=163..190
-  n11 StrictApply evaluation=strict children=[n12,n13] parent=n10 bytes=176..187
-  n12 Name symbol=next children=[] parent=n11 bytes=176..180
-  n13 Name symbol=value children=[] parent=n11 bytes=181..186
-  n14 Lambda symbol=numerator children=[n15] parent=- bytes=195..327
-  n15 Lambda symbol=denominator children=[n16] parent=n14 bytes=195..327
-  n16 StrictLet symbol=$gleam_case_0 children=[n17,n18] parent=n15 bytes=229..327
-  n17 Name symbol=denominator children=[] parent=n16 bytes=238..250
-  n18 If  children=[n19,n22,n25] parent=n16 bytes=256..289
-  n19 Binary operator=EqualSignedInteger64 children=[n20,n21] parent=n18 bytes=256..257
-  n20 Name symbol=$gleam_case_0 children=[] parent=n19 bytes=256..257
-  n21 SignedInteger64  children=[n0] parent=n19 bytes=256..257
-  n22 StrictApply evaluation=strict children=[n23,n24] parent=n18 bytes=261..284
+  n0 Lambda  children=[n1,n2] parent=- bytes=85..193
+  n1 Case  children=[n2,n2] parent=n0 bytes=106..193
+  n2 Name symbol=result children=[] parent=n1 bytes=115..122
+  n3 Sequence symbol=$gleam_argument_0 children=[n4,n5] parent=n1 bytes=145..158
+  n4 Name symbol=reason children=[] parent=n3 bytes=151..157
+  n5 Apply  children=[n6,n1] parent=n3 bytes=145..158
+  n6 Name symbol=$gleam/prelude::Error children=[] parent=n5 bytes=145..150
+  n7 Name symbol=$gleam_argument_0 children=[] parent=n5 bytes=145..158
+  n8 Sequence symbol=$gleam_argument_1 children=[n9,n10] parent=n1 bytes=176..187
+  n9 Name symbol=value children=[] parent=n8 bytes=181..186
+  n10 Apply  children=[n11,n1] parent=n8 bytes=176..187
+  n11 Name symbol=next children=[] parent=n10 bytes=176..180
+  n12 Name symbol=$gleam_argument_1 children=[] parent=n10 bytes=176..187
+  n13 Lambda  children=[n14,n2] parent=- bytes=195..327
+  n14 Sequence symbol=$gleam_case_2 children=[n15,n16] parent=n13 bytes=229..327
+  n15 Name symbol=denominator children=[] parent=n14 bytes=238..250
+  n16 If  children=[n17,n20,n25] parent=n14 bytes=256..289
+  n17 Prim  children=[n2,n2] parent=n16 bytes=256..257
+  n18 Name symbol=$gleam_case_2 children=[] parent=n17 bytes=256..257
+  n19 SignedInteger64  children=[n0] parent=n17 bytes=256..257
+  n20 Sequence symbol=$gleam_argument_4 children=[n21,n22] parent=n16 bytes=261..284
+  n21 Text  children=[n6] parent=n20 bytes=267..283
+  n22 Apply  children=[n23,n1] parent=n20 bytes=261..284
   n23 Name symbol=$gleam/prelude::Error children=[] parent=n22 bytes=261..266
-  n24 Text  children=[n6] parent=n22 bytes=267..283
-  n25 StrictApply evaluation=strict children=[n26,n27] parent=n18 bytes=294..321
-  n26 Name symbol=$gleam/prelude::Ok children=[] parent=n25 bytes=294..296
-  n27 If  children=[n28,n31,n32] parent=n25 bytes=297..320
-  n28 Binary operator=EqualSignedInteger64 children=[n29,n30] parent=n27 bytes=297..320
-  n29 Name symbol=denominator children=[] parent=n28 bytes=309..320
-  n30 SignedInteger64  children=[n0] parent=n28 bytes=309..320
-  n31 SignedInteger64  children=[n0] parent=n27 bytes=297..320
-  n32 Binary operator=DivideSignedInteger64 children=[n33,n34] parent=n27 bytes=297..320
-  n33 Name symbol=numerator children=[] parent=n32 bytes=297..307
-  n34 Name symbol=denominator children=[] parent=n32 bytes=309..320
-  n35 Lambda symbol=total children=[n36] parent=- bytes=477..604
-  n36 Lambda symbol=count children=[n37] parent=n35 bytes=477..604
-  n37 Lambda symbol=parts children=[n38] parent=n36 bytes=477..604
-  n38 StrictApply evaluation=strict children=[n39,n46] parent=n37 bytes=509..604
-  n39 StrictApply evaluation=strict children=[n40,n41] parent=n38 bytes=509..604
-  n40 Name symbol=result_use::try children=[] parent=n39 bytes=525..528
-  n41 StrictApply evaluation=strict children=[n42,n45] parent=n39 bytes=529..549
-  n42 StrictApply evaluation=strict children=[n43,n44] parent=n41 bytes=529..549
-  n43 Name symbol=result_use::divide children=[] parent=n42 bytes=529..535
-  n44 Name symbol=total children=[] parent=n42 bytes=536..541
-  n45 Name symbol=count children=[] parent=n41 bytes=543..548
-  n46 Lambda symbol=mean children=[n47] parent=n38 bytes=513..604
-  n47 StrictApply evaluation=strict children=[n48,n55] parent=n46 bytes=566..590
-  n48 StrictApply evaluation=strict children=[n49,n50] parent=n47 bytes=566..590
-  n49 Name symbol=result_use::try children=[] parent=n48 bytes=566..569
-  n50 StrictApply evaluation=strict children=[n51,n54] parent=n48 bytes=570..589
-  n51 StrictApply evaluation=strict children=[n52,n53] parent=n50 bytes=570..589
-  n52 Name symbol=result_use::divide children=[] parent=n51 bytes=570..576
-  n53 Name symbol=mean children=[] parent=n51 bytes=577..581
-  n54 Name symbol=parts children=[] parent=n50 bytes=583..588
-  n55 Lambda symbol=share children=[n56] parent=n47 bytes=553..604
-  n56 StrictApply evaluation=strict children=[n57,n58] parent=n55 bytes=593..602
-  n57 Name symbol=$gleam/prelude::Ok children=[] parent=n56 bytes=593..595
-  n58 Name symbol=share children=[] parent=n56 bytes=596..601
-  n59 Lambda symbol=$gleam_unit_parameter children=[n60] parent=- bytes=606..668
-  n60 StrictApply evaluation=strict children=[n61,n66] parent=n59 bytes=643..668
-  n61 StrictApply evaluation=strict children=[n62,n65] parent=n60 bytes=643..668
-  n62 StrictApply evaluation=strict children=[n63,n64] parent=n61 bytes=643..668
-  n63 Name symbol=result_use::average children=[] parent=n62 bytes=647..654
-  n64 SignedInteger64  children=[n0] parent=n62 bytes=655..658
-  n65 SignedInteger64  children=[n0] parent=n61 bytes=660..662
-  n66 SignedInteger64  children=[n0] parent=n60 bytes=664..665
-  n67 Name symbol=result_use::main children=[] parent=- bytes=669..669
-  n68 StrictApply evaluation=strict children=[n69,n70] parent=- bytes=669..669
-  n69 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n68 bytes=669..669
-  n70 Name symbol=$Unit children=[] parent=n68 bytes=669..669</code></pre></td><td><pre><code>entry=d5; type=$gleam/prelude::$GleamResult&lt;i64, $FunctionalText&gt;; effects=[]
+  n24 Name symbol=$gleam_argument_4 children=[] parent=n22 bytes=261..284
+  n25 Sequence symbol=$gleam_argument_3 children=[n26,n34] parent=n16 bytes=294..321
+  n26 If  children=[n27,n30,n31] parent=n25 bytes=297..320
+  n27 Prim  children=[n5,n2] parent=n26 bytes=297..320
+  n28 Name symbol=denominator children=[] parent=n27 bytes=309..320
+  n29 SignedInteger64  children=[n0] parent=n27 bytes=309..320
+  n30 SignedInteger64  children=[n0] parent=n26 bytes=297..320
+  n31 Prim  children=[n7,n2] parent=n26 bytes=297..320
+  n32 Name symbol=numerator children=[] parent=n31 bytes=297..307
+  n33 Name symbol=denominator children=[] parent=n31 bytes=309..320
+  n34 Apply  children=[n35,n1] parent=n25 bytes=294..321
+  n35 Name symbol=$gleam/prelude::Ok children=[] parent=n34 bytes=294..296
+  n36 Name symbol=$gleam_argument_3 children=[] parent=n34 bytes=294..321
+  n37 Lambda  children=[n38,n3] parent=- bytes=477..604
+  n38 Sequence symbol=$gleam_argument_12 children=[n39,n47] parent=n37 bytes=509..604
+  n39 Sequence symbol=$gleam_argument_5 children=[n40,n41] parent=n38 bytes=529..549
+  n40 Name symbol=total children=[] parent=n39 bytes=536..541
+  n41 Sequence symbol=$gleam_argument_6 children=[n42,n43] parent=n39 bytes=529..549
+  n42 Name symbol=count children=[] parent=n41 bytes=543..548
+  n43 Apply  children=[n44,n2] parent=n41 bytes=529..549
+  n44 Name symbol=result_use::divide children=[] parent=n43 bytes=529..535
+  n45 Name symbol=$gleam_argument_5 children=[] parent=n43 bytes=529..549
+  n46 Name symbol=$gleam_argument_6 children=[] parent=n43 bytes=529..549
+  n47 Sequence symbol=$gleam_argument_13 children=[n48,n69] parent=n38 bytes=509..604
+  n48 Lambda  children=[n49,n1] parent=n47 bytes=513..604
+  n49 Sequence symbol=$gleam_argument_10 children=[n50,n58] parent=n48 bytes=566..590
+  n50 Sequence symbol=$gleam_argument_7 children=[n51,n52] parent=n49 bytes=570..589
+  n51 Name symbol=mean children=[] parent=n50 bytes=577..581
+  n52 Sequence symbol=$gleam_argument_8 children=[n53,n54] parent=n50 bytes=570..589
+  n53 Name symbol=parts children=[] parent=n52 bytes=583..588
+  n54 Apply  children=[n55,n2] parent=n52 bytes=570..589
+  n55 Name symbol=result_use::divide children=[] parent=n54 bytes=570..576
+  n56 Name symbol=$gleam_argument_7 children=[] parent=n54 bytes=570..589
+  n57 Name symbol=$gleam_argument_8 children=[] parent=n54 bytes=570..589
+  n58 Sequence symbol=$gleam_argument_11 children=[n59,n65] parent=n49 bytes=566..590
+  n59 Lambda  children=[n60,n1] parent=n58 bytes=553..604
+  n60 Sequence symbol=$gleam_argument_9 children=[n61,n62] parent=n59 bytes=593..602
+  n61 Name symbol=share children=[] parent=n60 bytes=596..601
+  n62 Apply  children=[n63,n1] parent=n60 bytes=593..602
+  n63 Name symbol=$gleam/prelude::Ok children=[] parent=n62 bytes=593..595
+  n64 Name symbol=$gleam_argument_9 children=[] parent=n62 bytes=593..602
+  n65 Apply  children=[n66,n2] parent=n58 bytes=566..590
+  n66 Name symbol=result_use::try children=[] parent=n65 bytes=566..569
+  n67 Name symbol=$gleam_argument_10 children=[] parent=n65 bytes=566..590
+  n68 Name symbol=$gleam_argument_11 children=[] parent=n65 bytes=566..590
+  n69 Apply  children=[n70,n2] parent=n47 bytes=509..604
+  n70 Name symbol=result_use::try children=[] parent=n69 bytes=525..528
+  n71 Name symbol=$gleam_argument_12 children=[] parent=n69 bytes=509..604
+  n72 Name symbol=$gleam_argument_13 children=[] parent=n69 bytes=509..604
+  n73 Lambda  children=[n74,n1] parent=- bytes=606..668
+  n74 Sequence symbol=$gleam_argument_14 children=[n75,n76] parent=n73 bytes=643..668
+  n75 SignedInteger64  children=[n0] parent=n74 bytes=655..658
+  n76 Sequence symbol=$gleam_argument_15 children=[n77,n78] parent=n74 bytes=643..668
+  n77 SignedInteger64  children=[n0] parent=n76 bytes=660..662
+  n78 Sequence symbol=$gleam_argument_16 children=[n79,n80] parent=n76 bytes=643..668
+  n79 SignedInteger64  children=[n0] parent=n78 bytes=664..665
+  n80 Apply  children=[n81,n3] parent=n78 bytes=643..668
+  n81 Name symbol=result_use::average children=[] parent=n80 bytes=647..654
+  n82 Name symbol=$gleam_argument_14 children=[] parent=n80 bytes=643..668
+  n83 Name symbol=$gleam_argument_15 children=[] parent=n80 bytes=643..668
+  n84 Name symbol=$gleam_argument_16 children=[] parent=n80 bytes=643..668
+  n85 Name symbol=result_use::main children=[] parent=- bytes=669..669
+  n86 Apply  children=[n87,n1] parent=- bytes=669..669
+  n87 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n86 bytes=669..669
+  n88 Name symbol=$Unit children=[] parent=n86 bytes=669..669</code></pre></td><td><pre><code>entry=d5; type=$gleam/prelude::$GleamResult&lt;i64, $FunctionalText&gt;; effects=[]
 
 nodes:
-  n0 Lambda symbol=result children=[n1] sourceByte=85
-  n1 Lambda symbol=next children=[n2] sourceByte=85
-  n2 Case  children=[n3,n4] sourceByte=106
-  n3 Local depth=1 children=[] sourceByte=115
-  n4 CaseArm constructor=c4:$gleam/prelude::Error children=[n5,n9] sourceByte=128
-  n5 PatternBind symbol=reason children=[n6] sourceByte=128
-  n6 Apply evaluation=strict children=[n7,n8] sourceByte=145
-  n7 Constructor constructor=c4:$gleam/prelude::Error children=[] sourceByte=145
-  n8 Local depth=0 children=[] sourceByte=151
-  n9 CaseArm constructor=c3:$gleam/prelude::Ok children=[n10] sourceByte=163
-  n10 PatternBind symbol=value children=[n11] sourceByte=163
-  n11 Apply evaluation=strict children=[n12,n13] sourceByte=176
-  n12 Local depth=1 children=[] sourceByte=176
-  n13 Local depth=0 children=[] sourceByte=181
-  n14 Lambda symbol=numerator children=[n15] sourceByte=195
-  n15 Lambda symbol=denominator children=[n16] sourceByte=195
-  n16 Let symbol=result_use::divide evaluation=strict children=[n17,n18] sourceByte=229
-  n17 Local depth=0 children=[] sourceByte=238
-  n18 If  children=[n19,n22,n25] sourceByte=256
-  n19 Binary operator=EqualSignedInteger64 children=[n20,n21] sourceByte=256
-  n20 Local depth=0 children=[] sourceByte=256
-  n21 SignedInteger64  children=[n0] sourceByte=256
-  n22 Apply evaluation=strict children=[n23,n24] sourceByte=261
+  n0 Lambda parameters=p0..p2 children=[n1,n2] sourceByte=85
+  n1 Case alternatives=k0..k2 children=[n2] sourceByte=106
+  n2 Local depth=1 children=[] sourceByte=115
+  n3 Let symbol=result_use::divide evaluation=strict children=[n4,n5] sourceByte=145
+  n4 Local depth=0 children=[] sourceByte=151
+  n5 Apply arguments=a0..a1 children=[n6] sourceByte=145
+  n6 Constructor constructor=c4:$gleam/prelude::Error children=[] sourceByte=145
+  n7 Local depth=0 children=[] sourceByte=145
+  n8 Let symbol=result_use::divide evaluation=strict children=[n9,n10] sourceByte=176
+  n9 Local depth=0 children=[] sourceByte=181
+  n10 Apply arguments=a1..a2 children=[n11] sourceByte=176
+  n11 Local depth=2 children=[] sourceByte=176
+  n12 Local depth=0 children=[] sourceByte=176
+  n13 Lambda parameters=p2..p4 children=[n14,n2] sourceByte=195
+  n14 Let symbol=result_use::divide evaluation=strict children=[n15,n16] sourceByte=229
+  n15 Local depth=0 children=[] sourceByte=238
+  n16 If  children=[n17,n20,n25] sourceByte=256
+  n17 Prim opcode=EqualSignedInteger64 operands=a2..a4 children=[] sourceByte=256
+  n18 Local depth=0 children=[] sourceByte=256
+  n19 SignedInteger64  children=[n0] sourceByte=256
+  n20 Let symbol=result_use::divide evaluation=strict children=[n21,n22] sourceByte=261
+  n21 Text payload=36 children=[n6] sourceByte=267
+  n22 Apply arguments=a4..a5 children=[n23] sourceByte=261
   n23 Constructor constructor=c4:$gleam/prelude::Error children=[] sourceByte=261
-  n24 Text payload=33 children=[n6] sourceByte=267
-  n25 Apply evaluation=strict children=[n26,n27] sourceByte=294
-  n26 Constructor constructor=c3:$gleam/prelude::Ok children=[] sourceByte=294
-  n27 If  children=[n28,n31,n32] sourceByte=297
-  n28 Binary operator=EqualSignedInteger64 children=[n29,n30] sourceByte=297
-  n29 Local depth=1 children=[] sourceByte=309
-  n30 SignedInteger64  children=[n0] sourceByte=309
-  n31 SignedInteger64  children=[n0] sourceByte=297
-  n32 Binary operator=DivideSignedInteger64 children=[n33,n34] sourceByte=297
-  n33 Local depth=2 children=[] sourceByte=297
-  n34 Local depth=1 children=[] sourceByte=309
-  n35 Lambda symbol=total children=[n36] sourceByte=477
-  n36 Lambda symbol=count children=[n37] sourceByte=477
-  n37 Lambda symbol=parts children=[n38] sourceByte=477
-  n38 Apply evaluation=strict children=[n39,n46] sourceByte=509
-  n39 Apply evaluation=strict children=[n40,n41] sourceByte=509
-  n40 Global definition=d0 children=[] sourceByte=525
-  n41 Apply evaluation=strict children=[n42,n45] sourceByte=529
-  n42 Apply evaluation=strict children=[n43,n44] sourceByte=529
-  n43 Global definition=d1 children=[] sourceByte=529
-  n44 Local depth=2 children=[] sourceByte=536
-  n45 Local depth=1 children=[] sourceByte=543
-  n46 Lambda symbol=mean children=[n47] sourceByte=513
-  n47 Apply evaluation=strict children=[n48,n55] sourceByte=566
-  n48 Apply evaluation=strict children=[n49,n50] sourceByte=566
-  n49 Global definition=d0 children=[] sourceByte=566
-  n50 Apply evaluation=strict children=[n51,n54] sourceByte=570
-  n51 Apply evaluation=strict children=[n52,n53] sourceByte=570
-  n52 Global definition=d1 children=[] sourceByte=570
-  n53 Local depth=0 children=[] sourceByte=577
-  n54 Local depth=1 children=[] sourceByte=583
-  n55 Lambda symbol=share children=[n56] sourceByte=553
-  n56 Apply evaluation=strict children=[n57,n58] sourceByte=593
-  n57 Constructor constructor=c3:$gleam/prelude::Ok children=[] sourceByte=593
-  n58 Local depth=0 children=[] sourceByte=596
-  n59 Lambda symbol=$gleam_unit_parameter children=[n60] sourceByte=606
-  n60 Apply evaluation=strict children=[n61,n66] sourceByte=643
-  n61 Apply evaluation=strict children=[n62,n65] sourceByte=643
-  n62 Apply evaluation=strict children=[n63,n64] sourceByte=643
-  n63 Global definition=d2 children=[] sourceByte=647
-  n64 SignedInteger64 payload=840 children=[n0] sourceByte=655
-  n65 SignedInteger64 payload=10 children=[n0] sourceByte=660
-  n66 SignedInteger64 payload=2 children=[n0] sourceByte=664
-  n67 Global definition=d3 children=[] sourceByte=669
-  n68 Apply evaluation=strict children=[n69,n70] sourceByte=669
-  n69 Global definition=d4 children=[] sourceByte=669
-  n70 Constructor constructor=c9:$Unit children=[] sourceByte=669</code></pre></td></tr>
+  n24 Local depth=0 children=[] sourceByte=261
+  n25 Let symbol=result_use::divide evaluation=strict children=[n26,n34] sourceByte=294
+  n26 If  children=[n27,n30,n31] sourceByte=297
+  n27 Prim opcode=EqualSignedInteger64 operands=a5..a7 children=[] sourceByte=297
+  n28 Local depth=1 children=[] sourceByte=309
+  n29 SignedInteger64  children=[n0] sourceByte=309
+  n30 SignedInteger64  children=[n0] sourceByte=297
+  n31 Prim opcode=DivideSignedInteger64 operands=a7..a9 children=[] sourceByte=297
+  n32 Local depth=2 children=[] sourceByte=297
+  n33 Local depth=1 children=[] sourceByte=309
+  n34 Apply arguments=a9..a10 children=[n35] sourceByte=294
+  n35 Constructor constructor=c3:$gleam/prelude::Ok children=[] sourceByte=294
+  n36 Local depth=0 children=[] sourceByte=294
+  n37 Lambda parameters=p4..p7 children=[n38,n3] sourceByte=477
+  n38 Let symbol=result_use::divide evaluation=strict children=[n39,n47] sourceByte=509
+  n39 Let symbol=result_use::divide evaluation=strict children=[n40,n41] sourceByte=529
+  n40 Local depth=2 children=[] sourceByte=536
+  n41 Let symbol=result_use::divide evaluation=strict children=[n42,n43] sourceByte=529
+  n42 Local depth=2 children=[] sourceByte=543
+  n43 Apply arguments=a10..a12 children=[n44] sourceByte=529
+  n44 Global definition=d1 children=[] sourceByte=529
+  n45 Local depth=1 children=[] sourceByte=529
+  n46 Local depth=0 children=[] sourceByte=529
+  n47 Let symbol=result_use::divide evaluation=strict children=[n48,n69] sourceByte=509
+  n48 Lambda parameters=p7..p8 children=[n49,n1] sourceByte=513
+  n49 Let symbol=result_use::divide evaluation=strict children=[n50,n58] sourceByte=566
+  n50 Let symbol=result_use::divide evaluation=strict children=[n51,n52] sourceByte=570
+  n51 Local depth=0 children=[] sourceByte=577
+  n52 Let symbol=result_use::divide evaluation=strict children=[n53,n54] sourceByte=570
+  n53 Local depth=3 children=[] sourceByte=583
+  n54 Apply arguments=a12..a14 children=[n55] sourceByte=570
+  n55 Global definition=d1 children=[] sourceByte=570
+  n56 Local depth=1 children=[] sourceByte=570
+  n57 Local depth=0 children=[] sourceByte=570
+  n58 Let symbol=result_use::divide evaluation=strict children=[n59,n65] sourceByte=566
+  n59 Lambda parameters=p8..p9 children=[n60,n1] sourceByte=553
+  n60 Let symbol=result_use::divide evaluation=strict children=[n61,n62] sourceByte=593
+  n61 Local depth=0 children=[] sourceByte=596
+  n62 Apply arguments=a14..a15 children=[n63] sourceByte=593
+  n63 Constructor constructor=c3:$gleam/prelude::Ok children=[] sourceByte=593
+  n64 Local depth=0 children=[] sourceByte=593
+  n65 Apply arguments=a15..a17 children=[n66] sourceByte=566
+  n66 Global definition=d0 children=[] sourceByte=566
+  n67 Local depth=1 children=[] sourceByte=566
+  n68 Local depth=0 children=[] sourceByte=566
+  n69 Apply arguments=a17..a19 children=[n70] sourceByte=509
+  n70 Global definition=d0 children=[] sourceByte=525
+  n71 Local depth=1 children=[] sourceByte=509
+  n72 Local depth=0 children=[] sourceByte=509
+  n73 Lambda parameters=p9..p10 children=[n74,n1] sourceByte=606
+  n74 Let symbol=result_use::divide evaluation=strict children=[n75,n76] sourceByte=643
+  n75 SignedInteger64 payload=840 children=[n0] sourceByte=655
+  n76 Let symbol=result_use::divide evaluation=strict children=[n77,n78] sourceByte=643
+  n77 SignedInteger64 payload=10 children=[n0] sourceByte=660
+  n78 Let symbol=result_use::divide evaluation=strict children=[n79,n80] sourceByte=643
+  n79 SignedInteger64 payload=2 children=[n0] sourceByte=664
+  n80 Apply arguments=a19..a22 children=[n81] sourceByte=643
+  n81 Global definition=d2 children=[] sourceByte=647
+  n82 Local depth=2 children=[] sourceByte=643
+  n83 Local depth=1 children=[] sourceByte=643
+  n84 Local depth=0 children=[] sourceByte=643
+  n85 Global definition=d3 children=[] sourceByte=669
+  n86 Apply arguments=a22..a23 children=[n87] sourceByte=669
+  n87 Global definition=d4 children=[] sourceByte=669
+  n88 Constructor constructor=c9:$Unit children=[] sourceByte=669</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -302,8 +364,8 @@ nodes:
     "fieldCount": 1
   },
   "stats": {
-    "steps": 75,
-    "allocations": 51,
+    "steps": 87,
+    "allocations": 55,
     "peakStack": 0,
     "thunkEvaluations": 1
   }

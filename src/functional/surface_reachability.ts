@@ -58,6 +58,7 @@ export function analyzeSurfaceReachability(
           expressions.push(expression.body);
           break;
         case "let":
+        case "sequence":
         case "let-rec":
           expressions.push(expression.value, expression.body);
           break;

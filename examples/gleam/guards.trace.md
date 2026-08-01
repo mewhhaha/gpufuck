@@ -19,46 +19,52 @@ fn classify(value) {
 pub fn main() -&gt; String {
   classify(-4) &lt;&gt; " " &lt;&gt; classify(0) &lt;&gt; " " &lt;&gt; classify(7) &lt;&gt; " " &lt;&gt; classify(99)
 }</code></pre></td><td><pre><code>fn classify(value) : &lt;inferred&gt; =
-  (let $gleam_case_0
+  (sequence $gleam_case_0
     value
-    (let $gleam_case_fallback_7
-      (lambda $gleam_discard_8
-        (let $gleam_case_fallback_5
-          (lambda $gleam_discard_6
-            (let $gleam_case_fallback_3
-              (lambda $gleam_discard_4
-                (let $gleam_case_fallback_1
-                  (lambda $gleam_discard_2
+    (sequence $gleam_case_fallback_10
+      (lambda ($gleam_discard_11)
+        (sequence $gleam_case_fallback_7
+          (lambda ($gleam_discard_8)
+            (sequence $gleam_case_fallback_4
+              (lambda ($gleam_discard_5)
+                (sequence $gleam_case_fallback_1
+                  (lambda ($gleam_discard_2)
                     fault "unreachable exhaustive Gleam case")
                   "large"))
-              (let n
+              (sequence n
                 $gleam_case_0
                 (if
                   (LessSignedInteger64
                     n
                     10i64)
                   "small"
-                  (apply
-                    $gleam_case_fallback_3
-                    $Unit)))))
+                  (sequence $gleam_argument_6
+                    $Unit
+                    (apply
+                      $gleam_case_fallback_4
+                      $gleam_argument_6))))))
           (if
             (EqualSignedInteger64
               $gleam_case_0
               0i64)
             "zero"
-            (apply
-              $gleam_case_fallback_5
-              $Unit))))
-      (let n
+            (sequence $gleam_argument_9
+              $Unit
+              (apply
+                $gleam_case_fallback_7
+                $gleam_argument_9)))))
+      (sequence n
         $gleam_case_0
         (if
           (LessSignedInteger64
             n
             0i64)
           "negative"
-          (apply
-            $gleam_case_fallback_7
-            $Unit)))))
+          (sequence $gleam_argument_12
+            $Unit
+            (apply
+              $gleam_case_fallback_10
+              $gleam_argument_12))))))
 
 fn main($gleam_unit_parameter) : () -&gt; $FunctionalText =
   (text-append
@@ -67,29 +73,37 @@ fn main($gleam_unit_parameter) : () -&gt; $FunctionalText =
         (text-append
           (text-append
             (text-append
+              (sequence $gleam_argument_13
+                -4i64
+                (apply
+                  classify
+                  $gleam_argument_13))
+              " ")
+            (sequence $gleam_argument_14
+              0i64
               (apply
                 classify
-                -4i64)
-              " ")
-            (apply
-              classify
-              0i64))
+                $gleam_argument_14)))
           " ")
-        (apply
-          classify
-          7i64))
+        (sequence $gleam_argument_15
+          7i64
+          (apply
+            classify
+            $gleam_argument_15)))
       " ")
-    (apply
-      classify
-      99i64))</code></pre></td></tr>
+    (sequence $gleam_argument_16
+      99i64
+      (apply
+        classify
+        $gleam_argument_16)))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v6; entry=$gleam/entry::main
+<tr><td><pre><code>ABI v9; entry=$gleam/entry::main
 
 definitions:
-  d0 guards::classify root=n0 bytes=0..130 : &lt;inferred&gt;
-  d1 guards::main root=n41 bytes=132..241 : () -&gt; $FunctionalText
-  d2 $gleam/entry::$import$sourceEntry root=n63 bytes=242..242 : &lt;inferred&gt;
-  d3 $gleam/entry::main root=n64 bytes=242..242 : &lt;inferred&gt;
+  d0 guards::classify root=n0 bytes=0..130 : &lt;inferred&gt; effects=[]
+  d1 guards::main root=n47 bytes=132..241 : () -&gt; $FunctionalText effects=[]
+  d2 $gleam/entry::$import$sourceEntry root=n77 bytes=242..242 : &lt;inferred&gt; effects=[]
+  d3 $gleam/entry::main root=n78 bytes=242..242 : &lt;inferred&gt; effects=[]
 
 types:
   t0 $gleam/prelude::$GleamList constructors=[c0,c2)
@@ -116,142 +130,170 @@ constructors:
   c10 $Tuple owner=t8 arity=2
 
 nodes:
-  n0 Lambda symbol=value children=[n1] parent=- bytes=0..130
-  n1 StrictLet symbol=$gleam_case_0 children=[n2,n3] parent=n0 bytes=19..130
+  n0 Lambda  children=[n1,n1] parent=- bytes=0..130
+  n1 Sequence symbol=$gleam_case_0 children=[n2,n3] parent=n0 bytes=19..130
   n2 Name symbol=value children=[] parent=n1 bytes=28..34
-  n3 StrictLet symbol=$gleam_case_fallback_7 children=[n4,n31] parent=n1 bytes=40..69
-  n4 Lambda symbol=$gleam_discard_8 children=[n5] parent=n3 bytes=40..69
-  n5 StrictLet symbol=$gleam_case_fallback_5 children=[n6,n23] parent=n4 bytes=69..85
-  n6 Lambda symbol=$gleam_discard_6 children=[n7] parent=n5 bytes=69..85
-  n7 StrictLet symbol=$gleam_case_fallback_3 children=[n8,n13] parent=n6 bytes=85..112
-  n8 Lambda symbol=$gleam_discard_4 children=[n9] parent=n7 bytes=85..112
-  n9 StrictLet symbol=$gleam_case_fallback_1 children=[n10,n12] parent=n8 bytes=112..127
-  n10 Lambda symbol=$gleam_discard_2 children=[n11] parent=n9 bytes=112..127
-  n11 RuntimeFault  children=[] parent=n10 bytes=19..130
+  n3 Sequence symbol=$gleam_case_fallback_10 children=[n4,n35] parent=n1 bytes=40..69
+  n4 Lambda  children=[n5,n1] parent=n3 bytes=40..69
+  n5 Sequence symbol=$gleam_case_fallback_7 children=[n6,n25] parent=n4 bytes=69..85
+  n6 Lambda  children=[n7,n1] parent=n5 bytes=69..85
+  n7 Sequence symbol=$gleam_case_fallback_4 children=[n8,n13] parent=n6 bytes=85..112
+  n8 Lambda  children=[n9,n1] parent=n7 bytes=85..112
+  n9 Sequence symbol=$gleam_case_fallback_1 children=[n10,n12] parent=n8 bytes=112..127
+  n10 Lambda  children=[n11,n1] parent=n9 bytes=112..127
+  n11 RuntimeFault  children=[n0] parent=n10 bytes=19..130
   n12 Text  children=[n6] parent=n9 bytes=117..124
-  n13 StrictLet symbol=n children=[n14,n15] parent=n7 bytes=85..87
+  n13 Sequence symbol=n children=[n14,n15] parent=n7 bytes=85..87
   n14 Name symbol=$gleam_case_0 children=[] parent=n13 bytes=85..87
   n15 If  children=[n16,n19,n20] parent=n13 bytes=85..112
-  n16 Binary operator=LessSignedInteger64 children=[n17,n18] parent=n15 bytes=90..97
+  n16 Prim  children=[n0,n2] parent=n15 bytes=90..97
   n17 Name symbol=n children=[] parent=n16 bytes=90..92
   n18 SignedInteger64  children=[n0] parent=n16 bytes=94..96
   n19 Text  children=[n6] parent=n15 bytes=100..107
-  n20 StrictApply evaluation=strict children=[n21,n22] parent=n15 bytes=85..112
-  n21 Name symbol=$gleam_case_fallback_3 children=[] parent=n20 bytes=85..112
-  n22 Name symbol=$Unit children=[] parent=n20 bytes=85..112
-  n23 If  children=[n24,n27,n28] parent=n5 bytes=69..70
-  n24 Binary operator=EqualSignedInteger64 children=[n25,n26] parent=n23 bytes=69..70
-  n25 Name symbol=$gleam_case_0 children=[] parent=n24 bytes=69..70
-  n26 SignedInteger64  children=[n0] parent=n24 bytes=69..70
-  n27 Text  children=[n6] parent=n23 bytes=74..80
-  n28 StrictApply evaluation=strict children=[n29,n30] parent=n23 bytes=69..85
-  n29 Name symbol=$gleam_case_fallback_5 children=[] parent=n28 bytes=69..85
-  n30 Name symbol=$Unit children=[] parent=n28 bytes=69..85
-  n31 StrictLet symbol=n children=[n32,n33] parent=n3 bytes=40..42
-  n32 Name symbol=$gleam_case_0 children=[] parent=n31 bytes=40..42
-  n33 If  children=[n34,n37,n38] parent=n31 bytes=40..69
-  n34 Binary operator=LessSignedInteger64 children=[n35,n36] parent=n33 bytes=45..51
-  n35 Name symbol=n children=[] parent=n34 bytes=45..47
-  n36 SignedInteger64  children=[n0] parent=n34 bytes=49..50
-  n37 Text  children=[n6] parent=n33 bytes=54..64
-  n38 StrictApply evaluation=strict children=[n39,n40] parent=n33 bytes=40..69
-  n39 Name symbol=$gleam_case_fallback_7 children=[] parent=n38 bytes=40..69
-  n40 Name symbol=$Unit children=[] parent=n38 bytes=40..69
-  n41 Lambda symbol=$gleam_unit_parameter children=[n42] parent=- bytes=132..241
-  n42 BufferAppend  children=[n43,n60,n6] parent=n41 bytes=156..241
-  n43 BufferAppend  children=[n44,n59,n6] parent=n42 bytes=160..224
-  n44 BufferAppend  children=[n45,n56,n6] parent=n43 bytes=160..217
-  n45 BufferAppend  children=[n46,n55,n6] parent=n44 bytes=160..202
-  n46 BufferAppend  children=[n47,n52,n6] parent=n45 bytes=160..195
-  n47 BufferAppend  children=[n48,n51,n6] parent=n46 bytes=160..180
-  n48 StrictApply evaluation=strict children=[n49,n50] parent=n47 bytes=160..172
-  n49 Name symbol=guards::classify children=[] parent=n48 bytes=160..168
-  n50 SignedInteger64  children=[] parent=n48 bytes=169..171
-  n51 Text  children=[n6] parent=n47 bytes=176..179
-  n52 StrictApply evaluation=strict children=[n53,n54] parent=n46 bytes=183..194
-  n53 Name symbol=guards::classify children=[] parent=n52 bytes=183..191
-  n54 SignedInteger64  children=[n0] parent=n52 bytes=192..193
-  n55 Text  children=[n6] parent=n45 bytes=198..201
-  n56 StrictApply evaluation=strict children=[n57,n58] parent=n44 bytes=205..216
-  n57 Name symbol=guards::classify children=[] parent=n56 bytes=205..213
-  n58 SignedInteger64  children=[n0] parent=n56 bytes=214..215
-  n59 Text  children=[n6] parent=n43 bytes=220..223
-  n60 StrictApply evaluation=strict children=[n61,n62] parent=n42 bytes=227..239
-  n61 Name symbol=guards::classify children=[] parent=n60 bytes=227..235
-  n62 SignedInteger64  children=[n0] parent=n60 bytes=236..238
-  n63 Name symbol=guards::main children=[] parent=- bytes=242..242
-  n64 StrictApply evaluation=strict children=[n65,n66] parent=- bytes=242..242
-  n65 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n64 bytes=242..242
-  n66 Name symbol=$Unit children=[] parent=n64 bytes=242..242</code></pre></td><td><pre><code>entry=d3; type=$FunctionalText; effects=[]
+  n20 Sequence symbol=$gleam_argument_6 children=[n21,n22] parent=n15 bytes=85..112
+  n21 Name symbol=$Unit children=[] parent=n20 bytes=85..112
+  n22 Apply  children=[n23,n1] parent=n20 bytes=85..112
+  n23 Name symbol=$gleam_case_fallback_4 children=[] parent=n22 bytes=85..112
+  n24 Name symbol=$gleam_argument_6 children=[] parent=n22 bytes=85..112
+  n25 If  children=[n26,n29,n30] parent=n5 bytes=69..70
+  n26 Prim  children=[n3,n2] parent=n25 bytes=69..70
+  n27 Name symbol=$gleam_case_0 children=[] parent=n26 bytes=69..70
+  n28 SignedInteger64  children=[n0] parent=n26 bytes=69..70
+  n29 Text  children=[n6] parent=n25 bytes=74..80
+  n30 Sequence symbol=$gleam_argument_9 children=[n31,n32] parent=n25 bytes=69..85
+  n31 Name symbol=$Unit children=[] parent=n30 bytes=69..85
+  n32 Apply  children=[n33,n1] parent=n30 bytes=69..85
+  n33 Name symbol=$gleam_case_fallback_7 children=[] parent=n32 bytes=69..85
+  n34 Name symbol=$gleam_argument_9 children=[] parent=n32 bytes=69..85
+  n35 Sequence symbol=n children=[n36,n37] parent=n3 bytes=40..42
+  n36 Name symbol=$gleam_case_0 children=[] parent=n35 bytes=40..42
+  n37 If  children=[n38,n41,n42] parent=n35 bytes=40..69
+  n38 Prim  children=[n6,n2] parent=n37 bytes=45..51
+  n39 Name symbol=n children=[] parent=n38 bytes=45..47
+  n40 SignedInteger64  children=[n0] parent=n38 bytes=49..50
+  n41 Text  children=[n6] parent=n37 bytes=54..64
+  n42 Sequence symbol=$gleam_argument_12 children=[n43,n44] parent=n37 bytes=40..69
+  n43 Name symbol=$Unit children=[] parent=n42 bytes=40..69
+  n44 Apply  children=[n45,n1] parent=n42 bytes=40..69
+  n45 Name symbol=$gleam_case_fallback_10 children=[] parent=n44 bytes=40..69
+  n46 Name symbol=$gleam_argument_12 children=[] parent=n44 bytes=40..69
+  n47 Lambda  children=[n48,n1] parent=- bytes=132..241
+  n48 Prim  children=[n9,n2,n6] parent=n47 bytes=156..241
+  n49 Prim  children=[n11,n2,n6] parent=n48 bytes=160..224
+  n50 Prim  children=[n13,n2,n6] parent=n49 bytes=160..217
+  n51 Prim  children=[n15,n2,n6] parent=n50 bytes=160..202
+  n52 Prim  children=[n17,n2,n6] parent=n51 bytes=160..195
+  n53 Prim  children=[n19,n2,n6] parent=n52 bytes=160..180
+  n54 Sequence symbol=$gleam_argument_13 children=[n55,n56] parent=n53 bytes=160..172
+  n55 SignedInteger64  children=[] parent=n54 bytes=169..171
+  n56 Apply  children=[n57,n1] parent=n54 bytes=160..172
+  n57 Name symbol=guards::classify children=[] parent=n56 bytes=160..168
+  n58 Name symbol=$gleam_argument_13 children=[] parent=n56 bytes=160..172
+  n59 Text  children=[n6] parent=n53 bytes=176..179
+  n60 Sequence symbol=$gleam_argument_14 children=[n61,n62] parent=n52 bytes=183..194
+  n61 SignedInteger64  children=[n0] parent=n60 bytes=192..193
+  n62 Apply  children=[n63,n1] parent=n60 bytes=183..194
+  n63 Name symbol=guards::classify children=[] parent=n62 bytes=183..191
+  n64 Name symbol=$gleam_argument_14 children=[] parent=n62 bytes=183..194
+  n65 Text  children=[n6] parent=n51 bytes=198..201
+  n66 Sequence symbol=$gleam_argument_15 children=[n67,n68] parent=n50 bytes=205..216
+  n67 SignedInteger64  children=[n0] parent=n66 bytes=214..215
+  n68 Apply  children=[n69,n1] parent=n66 bytes=205..216
+  n69 Name symbol=guards::classify children=[] parent=n68 bytes=205..213
+  n70 Name symbol=$gleam_argument_15 children=[] parent=n68 bytes=205..216
+  n71 Text  children=[n6] parent=n49 bytes=220..223
+  n72 Sequence symbol=$gleam_argument_16 children=[n73,n74] parent=n48 bytes=227..239
+  n73 SignedInteger64  children=[n0] parent=n72 bytes=236..238
+  n74 Apply  children=[n75,n1] parent=n72 bytes=227..239
+  n75 Name symbol=guards::classify children=[] parent=n74 bytes=227..235
+  n76 Name symbol=$gleam_argument_16 children=[] parent=n74 bytes=227..239
+  n77 Name symbol=guards::main children=[] parent=- bytes=242..242
+  n78 Apply  children=[n79,n1] parent=- bytes=242..242
+  n79 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n78 bytes=242..242
+  n80 Name symbol=$Unit children=[] parent=n78 bytes=242..242</code></pre></td><td><pre><code>entry=d3; type=$FunctionalText; effects=[]
 
 nodes:
-  n0 Lambda symbol=value children=[n1] sourceByte=0
+  n0 Lambda parameters=p0..p1 children=[n1,n1] sourceByte=0
   n1 Let symbol=guards::main evaluation=strict children=[n2,n3] sourceByte=19
   n2 Local depth=0 children=[] sourceByte=28
-  n3 Let symbol=guards::main evaluation=strict children=[n4,n31] sourceByte=40
-  n4 Lambda symbol=$gleam_discard_8 children=[n5] sourceByte=40
-  n5 Let symbol=guards::main evaluation=strict children=[n6,n23] sourceByte=69
-  n6 Lambda symbol=$gleam_discard_6 children=[n7] sourceByte=69
+  n3 Let symbol=guards::main evaluation=strict children=[n4,n35] sourceByte=40
+  n4 Lambda parameters=p1..p2 children=[n5,n1] sourceByte=40
+  n5 Let symbol=guards::main evaluation=strict children=[n6,n25] sourceByte=69
+  n6 Lambda parameters=p2..p3 children=[n7,n1] sourceByte=69
   n7 Let symbol=guards::main evaluation=strict children=[n8,n13] sourceByte=85
-  n8 Lambda symbol=$gleam_discard_4 children=[n9] sourceByte=85
-  n9 Let symbol=guards::main evaluation=strict children=[n10,n12] sourceByte=112
-  n10 Lambda symbol=$gleam_discard_2 children=[n11] sourceByte=112
-  n11 RuntimeFault payload=34 children=[] sourceByte=19
+  n8 Lambda parameters=p3..p4 children=[n9,n1] sourceByte=85
+  n9 Let symbol=guards::classify evaluation=strict children=[n10,n12] sourceByte=112
+  n10 Lambda parameters=p4..p5 children=[n11,n1] sourceByte=112
+  n11 RuntimeFault payload=34 children=[n0] sourceByte=19
   n12 Text payload=35 children=[n6] sourceByte=117
   n13 Let symbol=guards::main evaluation=strict children=[n14,n15] sourceByte=85
   n14 Local depth=3 children=[] sourceByte=85
   n15 If  children=[n16,n19,n20] sourceByte=85
-  n16 Binary operator=LessSignedInteger64 children=[n17,n18] sourceByte=90
+  n16 Prim opcode=LessSignedInteger64 operands=a0..a2 children=[] sourceByte=90
   n17 Local depth=0 children=[] sourceByte=90
   n18 SignedInteger64 payload=10 children=[n0] sourceByte=94
   n19 Text payload=37 children=[n6] sourceByte=100
-  n20 Apply evaluation=strict children=[n21,n22] sourceByte=85
-  n21 Local depth=1 children=[] sourceByte=85
-  n22 Constructor constructor=c9:$Unit children=[] sourceByte=85
-  n23 If  children=[n24,n27,n28] sourceByte=69
-  n24 Binary operator=EqualSignedInteger64 children=[n25,n26] sourceByte=69
-  n25 Local depth=2 children=[] sourceByte=69
-  n26 SignedInteger64  children=[n0] sourceByte=69
-  n27 Text payload=38 children=[n6] sourceByte=74
-  n28 Apply evaluation=strict children=[n29,n30] sourceByte=69
-  n29 Local depth=0 children=[] sourceByte=69
-  n30 Constructor constructor=c9:$Unit children=[] sourceByte=69
-  n31 Let symbol=guards::main evaluation=strict children=[n32,n33] sourceByte=40
-  n32 Local depth=1 children=[] sourceByte=40
-  n33 If  children=[n34,n37,n38] sourceByte=40
-  n34 Binary operator=LessSignedInteger64 children=[n35,n36] sourceByte=45
-  n35 Local depth=0 children=[] sourceByte=45
-  n36 SignedInteger64  children=[n0] sourceByte=49
-  n37 Text payload=39 children=[n6] sourceByte=54
-  n38 Apply evaluation=strict children=[n39,n40] sourceByte=40
-  n39 Local depth=1 children=[] sourceByte=40
-  n40 Constructor constructor=c9:$Unit children=[] sourceByte=40
-  n41 Lambda symbol=$gleam_unit_parameter children=[n42] sourceByte=132
-  n42 BufferAppend  children=[n43,n60,n6] sourceByte=156
-  n43 BufferAppend  children=[n44,n59,n6] sourceByte=160
-  n44 BufferAppend  children=[n45,n56,n6] sourceByte=160
-  n45 BufferAppend  children=[n46,n55,n6] sourceByte=160
-  n46 BufferAppend  children=[n47,n52,n6] sourceByte=160
-  n47 BufferAppend  children=[n48,n51,n6] sourceByte=160
-  n48 Apply evaluation=strict children=[n49,n50] sourceByte=160
-  n49 Global definition=d0 children=[] sourceByte=160
-  n50 SignedInteger64 payload=4294967292 children=[] sourceByte=169
-  n51 Text payload=41 children=[n6] sourceByte=176
-  n52 Apply evaluation=strict children=[n53,n54] sourceByte=183
-  n53 Global definition=d0 children=[] sourceByte=183
-  n54 SignedInteger64  children=[n0] sourceByte=192
-  n55 Text payload=41 children=[n6] sourceByte=198
-  n56 Apply evaluation=strict children=[n57,n58] sourceByte=205
-  n57 Global definition=d0 children=[] sourceByte=205
-  n58 SignedInteger64 payload=7 children=[n0] sourceByte=214
-  n59 Text payload=41 children=[n6] sourceByte=220
-  n60 Apply evaluation=strict children=[n61,n62] sourceByte=227
-  n61 Global definition=d0 children=[] sourceByte=227
-  n62 SignedInteger64 payload=99 children=[n0] sourceByte=236
-  n63 Global definition=d1 children=[] sourceByte=242
-  n64 Apply evaluation=strict children=[n65,n66] sourceByte=242
-  n65 Global definition=d2 children=[] sourceByte=242
-  n66 Constructor constructor=c9:$Unit children=[] sourceByte=242</code></pre></td></tr>
+  n20 Let symbol=guards::main evaluation=strict children=[n21,n22] sourceByte=85
+  n21 Constructor constructor=c9:$Unit children=[] sourceByte=85
+  n22 Apply arguments=a2..a3 children=[n23] sourceByte=85
+  n23 Local depth=2 children=[] sourceByte=85
+  n24 Local depth=0 children=[] sourceByte=85
+  n25 If  children=[n26,n29,n30] sourceByte=69
+  n26 Prim opcode=EqualSignedInteger64 operands=a3..a5 children=[] sourceByte=69
+  n27 Local depth=2 children=[] sourceByte=69
+  n28 SignedInteger64  children=[n0] sourceByte=69
+  n29 Text payload=39 children=[n6] sourceByte=74
+  n30 Let symbol=guards::main evaluation=strict children=[n31,n32] sourceByte=69
+  n31 Constructor constructor=c9:$Unit children=[] sourceByte=69
+  n32 Apply arguments=a5..a6 children=[n33] sourceByte=69
+  n33 Local depth=1 children=[] sourceByte=69
+  n34 Local depth=0 children=[] sourceByte=69
+  n35 Let symbol=guards::main evaluation=strict children=[n36,n37] sourceByte=40
+  n36 Local depth=1 children=[] sourceByte=40
+  n37 If  children=[n38,n41,n42] sourceByte=40
+  n38 Prim opcode=LessSignedInteger64 operands=a6..a8 children=[] sourceByte=45
+  n39 Local depth=0 children=[] sourceByte=45
+  n40 SignedInteger64  children=[n0] sourceByte=49
+  n41 Text payload=41 children=[n6] sourceByte=54
+  n42 Let symbol=guards::main evaluation=strict children=[n43,n44] sourceByte=40
+  n43 Constructor constructor=c9:$Unit children=[] sourceByte=40
+  n44 Apply arguments=a8..a9 children=[n45] sourceByte=40
+  n45 Local depth=2 children=[] sourceByte=40
+  n46 Local depth=0 children=[] sourceByte=40
+  n47 Lambda parameters=p5..p6 children=[n48,n1] sourceByte=132
+  n48 Prim opcode=BufferAppend operands=a9..a11 children=[] sourceByte=156
+  n49 Prim opcode=BufferAppend operands=a11..a13 children=[] sourceByte=160
+  n50 Prim opcode=BufferAppend operands=a13..a15 children=[] sourceByte=160
+  n51 Prim opcode=BufferAppend operands=a15..a17 children=[] sourceByte=160
+  n52 Prim opcode=BufferAppend operands=a17..a19 children=[] sourceByte=160
+  n53 Prim opcode=BufferAppend operands=a19..a21 children=[] sourceByte=160
+  n54 Let symbol=guards::main evaluation=strict children=[n55,n56] sourceByte=160
+  n55 SignedInteger64 payload=4294967292 children=[] sourceByte=169
+  n56 Apply arguments=a21..a22 children=[n57] sourceByte=160
+  n57 Global definition=d0 children=[] sourceByte=160
+  n58 Local depth=0 children=[] sourceByte=160
+  n59 Text payload=45 children=[n6] sourceByte=176
+  n60 Let symbol=guards::main evaluation=strict children=[n61,n62] sourceByte=183
+  n61 SignedInteger64  children=[n0] sourceByte=192
+  n62 Apply arguments=a22..a23 children=[n63] sourceByte=183
+  n63 Global definition=d0 children=[] sourceByte=183
+  n64 Local depth=0 children=[] sourceByte=183
+  n65 Text payload=45 children=[n6] sourceByte=198
+  n66 Let symbol=guards::main evaluation=strict children=[n67,n68] sourceByte=205
+  n67 SignedInteger64 payload=7 children=[n0] sourceByte=214
+  n68 Apply arguments=a23..a24 children=[n69] sourceByte=205
+  n69 Global definition=d0 children=[] sourceByte=205
+  n70 Local depth=0 children=[] sourceByte=205
+  n71 Text payload=45 children=[n6] sourceByte=220
+  n72 Let symbol=guards::main evaluation=strict children=[n73,n74] sourceByte=227
+  n73 SignedInteger64 payload=99 children=[n0] sourceByte=236
+  n74 Apply arguments=a24..a25 children=[n75] sourceByte=227
+  n75 Global definition=d0 children=[] sourceByte=227
+  n76 Local depth=0 children=[] sourceByte=227
+  n77 Global definition=d1 children=[] sourceByte=242
+  n78 Apply arguments=a25..a26 children=[n79] sourceByte=242
+  n79 Global definition=d2 children=[] sourceByte=242
+  n80 Constructor constructor=c9:$Unit children=[] sourceByte=242</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -268,8 +310,8 @@ nodes:
     "value": "negative zero small large"
   },
   "stats": {
-    "steps": 241,
-    "allocations": 73,
+    "steps": 251,
+    "allocations": 81,
     "peakStack": 0,
     "thunkEvaluations": 1
   }

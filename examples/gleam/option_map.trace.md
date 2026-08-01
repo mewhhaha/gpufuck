@@ -34,36 +34,45 @@ fn map(option, transform) : &lt;inferred&gt; =
     (None  -&gt;
       None)
     (Some value -&gt;
-      (apply
-        Some
+      (sequence $gleam_argument_1
+        (sequence $gleam_argument_0
+          value
+          (apply
+            transform
+            $gleam_argument_0))
         (apply
-          transform
-          value))))
+          Some
+          $gleam_argument_1))))
 
 fn main($gleam_unit_parameter) : () -&gt; i64 =
   (case
-    (apply
-      (apply
-        map
+    (sequence $gleam_argument_3
+      (sequence $gleam_argument_2
+        21i64
         (apply
           Some
-          21i64))
-      (lambda value
-        (MultiplySignedInteger64
-          value
-          2i64)))
+          $gleam_argument_2))
+      (sequence $gleam_argument_4
+        (lambda (value)
+          (MultiplySignedInteger64
+            value
+            2i64))
+        (apply
+          map
+          $gleam_argument_3
+          $gleam_argument_4)))
     (None  -&gt;
       0i64)
     (Some value -&gt;
       value))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v6; entry=$gleam/entry::main
+<tr><td><pre><code>ABI v9; entry=$gleam/entry::main
 
 definitions:
-  d0 option_map::map root=n0 bytes=41..149 : &lt;inferred&gt;
-  d1 option_map::main root=n13 bytes=151..266 : () -&gt; i64
-  d2 $gleam/entry::$import$sourceEntry root=n30 bytes=267..267 : &lt;inferred&gt;
-  d3 $gleam/entry::main root=n31 bytes=267..267 : &lt;inferred&gt;
+  d0 option_map::map root=n0 bytes=41..149 : &lt;inferred&gt; effects=[]
+  d1 option_map::main root=n13 bytes=151..266 : () -&gt; i64 effects=[]
+  d2 $gleam/entry::$import$sourceEntry root=n32 bytes=267..267 : &lt;inferred&gt; effects=[]
+  d3 $gleam/entry::main root=n33 bytes=267..267 : &lt;inferred&gt; effects=[]
 
 types:
   t0 $gleam/prelude::$GleamList constructors=[c0,c2)
@@ -91,76 +100,80 @@ constructors:
   c11 $Tuple owner=t8 arity=2
 
 nodes:
-  n0 Lambda symbol=option children=[n1] parent=- bytes=41..149
-  n1 Lambda symbol=transform children=[n2] parent=n0 bytes=41..149
-  n2 Case  children=[n3,n4] parent=n1 bytes=67..149
-  n3 Name symbol=option children=[] parent=n2 bytes=76..83
-  n4 CaseArm symbol=option_map::None children=[n5,n6] parent=n2 bytes=89..106
-  n5 Name symbol=option_map::None children=[] parent=n4 bytes=97..106
-  n6 CaseArm symbol=option_map::Some children=[n7] parent=n4 bytes=106..146
-  n7 PatternBind symbol=value children=[n8] parent=n6 bytes=106..146
-  n8 StrictApply evaluation=strict children=[n9,n10] parent=n7 bytes=121..143
-  n9 Name symbol=option_map::Some children=[] parent=n8 bytes=121..125
-  n10 StrictApply evaluation=strict children=[n11,n12] parent=n8 bytes=126..142
-  n11 Name symbol=transform children=[] parent=n10 bytes=126..135
-  n12 Name symbol=value children=[] parent=n10 bytes=136..141
-  n13 Lambda symbol=$gleam_unit_parameter children=[n14] parent=- bytes=151..266
-  n14 Case  children=[n15,n25] parent=n13 bytes=172..266
-  n15 StrictApply evaluation=strict children=[n16,n21] parent=n14 bytes=181..219
-  n16 StrictApply evaluation=strict children=[n17,n18] parent=n15 bytes=181..219
-  n17 Name symbol=option_map::map children=[] parent=n16 bytes=181..184
-  n18 StrictApply evaluation=strict children=[n19,n20] parent=n16 bytes=185..193
+  n0 Lambda  children=[n1,n2] parent=- bytes=41..149
+  n1 Case  children=[n2,n2] parent=n0 bytes=67..149
+  n2 Name symbol=option children=[] parent=n1 bytes=76..83
+  n3 Name symbol=option_map::None children=[] parent=n1 bytes=97..106
+  n4 Sequence symbol=$gleam_argument_1 children=[n5,n10] parent=n1 bytes=121..143
+  n5 Sequence symbol=$gleam_argument_0 children=[n6,n7] parent=n4 bytes=126..142
+  n6 Name symbol=value children=[] parent=n5 bytes=136..141
+  n7 Apply  children=[n8,n1] parent=n5 bytes=126..142
+  n8 Name symbol=transform children=[] parent=n7 bytes=126..135
+  n9 Name symbol=$gleam_argument_0 children=[] parent=n7 bytes=126..142
+  n10 Apply  children=[n11,n1] parent=n4 bytes=121..143
+  n11 Name symbol=option_map::Some children=[] parent=n10 bytes=121..125
+  n12 Name symbol=$gleam_argument_1 children=[] parent=n10 bytes=121..143
+  n13 Lambda  children=[n14,n1] parent=- bytes=151..266
+  n14 Case  children=[n15,n2] parent=n13 bytes=172..266
+  n15 Sequence symbol=$gleam_argument_3 children=[n16,n21] parent=n14 bytes=181..219
+  n16 Sequence symbol=$gleam_argument_2 children=[n17,n18] parent=n15 bytes=185..193
+  n17 SignedInteger64  children=[n0] parent=n16 bytes=190..192
+  n18 Apply  children=[n19,n1] parent=n16 bytes=185..193
   n19 Name symbol=option_map::Some children=[] parent=n18 bytes=185..189
-  n20 SignedInteger64  children=[n0] parent=n18 bytes=190..192
-  n21 Lambda symbol=value children=[n22] parent=n15 bytes=195..218
-  n22 Binary operator=MultiplySignedInteger64 children=[n23,n24] parent=n21 bytes=205..218
-  n23 Name symbol=value children=[] parent=n22 bytes=207..213
-  n24 SignedInteger64  children=[n0] parent=n22 bytes=215..216
-  n25 CaseArm symbol=option_map::None children=[n26,n27] parent=n14 bytes=226..240
-  n26 SignedInteger64  children=[n0] parent=n25 bytes=234..235
-  n27 CaseArm symbol=option_map::Some children=[n28] parent=n25 bytes=240..263
-  n28 PatternBind symbol=value children=[n29] parent=n27 bytes=240..263
-  n29 Name symbol=value children=[] parent=n28 bytes=255..263
-  n30 Name symbol=option_map::main children=[] parent=- bytes=267..267
-  n31 StrictApply evaluation=strict children=[n32,n33] parent=- bytes=267..267
-  n32 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n31 bytes=267..267
-  n33 Name symbol=$Unit children=[] parent=n31 bytes=267..267</code></pre></td><td><pre><code>entry=d3; type=i64; effects=[]
+  n20 Name symbol=$gleam_argument_2 children=[] parent=n18 bytes=185..193
+  n21 Sequence symbol=$gleam_argument_4 children=[n22,n26] parent=n15 bytes=181..219
+  n22 Lambda  children=[n23,n1] parent=n21 bytes=195..218
+  n23 Prim  children=[n3,n2] parent=n22 bytes=205..218
+  n24 Name symbol=value children=[] parent=n23 bytes=207..213
+  n25 SignedInteger64  children=[n0] parent=n23 bytes=215..216
+  n26 Apply  children=[n27,n2] parent=n21 bytes=181..219
+  n27 Name symbol=option_map::map children=[] parent=n26 bytes=181..184
+  n28 Name symbol=$gleam_argument_3 children=[] parent=n26 bytes=181..219
+  n29 Name symbol=$gleam_argument_4 children=[] parent=n26 bytes=181..219
+  n30 SignedInteger64  children=[n0] parent=n14 bytes=234..235
+  n31 Name symbol=value children=[] parent=n14 bytes=255..263
+  n32 Name symbol=option_map::main children=[] parent=- bytes=267..267
+  n33 Apply  children=[n34,n1] parent=- bytes=267..267
+  n34 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n33 bytes=267..267
+  n35 Name symbol=$Unit children=[] parent=n33 bytes=267..267</code></pre></td><td><pre><code>entry=d3; type=i64; effects=[]
 
 nodes:
-  n0 Lambda symbol=option children=[n1] sourceByte=41
-  n1 Lambda symbol=transform children=[n2] sourceByte=41
-  n2 Case  children=[n3,n4] sourceByte=67
-  n3 Local depth=1 children=[] sourceByte=76
-  n4 CaseArm constructor=c7:option_map::None children=[n5,n6] sourceByte=89
-  n5 Constructor constructor=c7:option_map::None children=[] sourceByte=97
-  n6 CaseArm constructor=c8:option_map::Some children=[n7] sourceByte=106
-  n7 PatternBind symbol=value children=[n8] sourceByte=106
-  n8 Apply evaluation=strict children=[n9,n10] sourceByte=121
-  n9 Constructor constructor=c8:option_map::Some children=[] sourceByte=121
-  n10 Apply evaluation=strict children=[n11,n12] sourceByte=126
-  n11 Local depth=1 children=[] sourceByte=126
-  n12 Local depth=0 children=[] sourceByte=136
-  n13 Lambda symbol=$gleam_unit_parameter children=[n14] sourceByte=151
-  n14 Case  children=[n15,n25] sourceByte=172
-  n15 Apply evaluation=strict children=[n16,n21] sourceByte=181
-  n16 Apply evaluation=strict children=[n17,n18] sourceByte=181
-  n17 Global definition=d0 children=[] sourceByte=181
-  n18 Apply evaluation=strict children=[n19,n20] sourceByte=185
+  n0 Lambda parameters=p0..p2 children=[n1,n2] sourceByte=41
+  n1 Case alternatives=k0..k2 children=[n2] sourceByte=67
+  n2 Local depth=1 children=[] sourceByte=76
+  n3 Constructor constructor=c7:option_map::None children=[] sourceByte=97
+  n4 Let symbol=option_map::main evaluation=strict children=[n5,n10] sourceByte=121
+  n5 Let symbol=option_map::main evaluation=strict children=[n6,n7] sourceByte=126
+  n6 Local depth=0 children=[] sourceByte=136
+  n7 Apply arguments=a0..a1 children=[n8] sourceByte=126
+  n8 Local depth=2 children=[] sourceByte=126
+  n9 Local depth=0 children=[] sourceByte=126
+  n10 Apply arguments=a1..a2 children=[n11] sourceByte=121
+  n11 Constructor constructor=c8:option_map::Some children=[] sourceByte=121
+  n12 Local depth=0 children=[] sourceByte=121
+  n13 Lambda parameters=p2..p3 children=[n14,n1] sourceByte=151
+  n14 Case alternatives=k2..k4 children=[n15] sourceByte=172
+  n15 Let symbol=option_map::main evaluation=strict children=[n16,n21] sourceByte=181
+  n16 Let symbol=option_map::main evaluation=strict children=[n17,n18] sourceByte=185
+  n17 SignedInteger64 payload=21 children=[n0] sourceByte=190
+  n18 Apply arguments=a2..a3 children=[n19] sourceByte=185
   n19 Constructor constructor=c8:option_map::Some children=[] sourceByte=185
-  n20 SignedInteger64 payload=21 children=[n0] sourceByte=190
-  n21 Lambda symbol=value children=[n22] sourceByte=195
-  n22 Binary operator=MultiplySignedInteger64 children=[n23,n24] sourceByte=205
-  n23 Local depth=0 children=[] sourceByte=207
-  n24 SignedInteger64 payload=2 children=[n0] sourceByte=215
-  n25 CaseArm constructor=c7:option_map::None children=[n26,n27] sourceByte=226
-  n26 SignedInteger64  children=[n0] sourceByte=234
-  n27 CaseArm constructor=c8:option_map::Some children=[n28] sourceByte=240
-  n28 PatternBind symbol=value children=[n29] sourceByte=240
-  n29 Local depth=0 children=[] sourceByte=255
-  n30 Global definition=d1 children=[] sourceByte=267
-  n31 Apply evaluation=strict children=[n32,n33] sourceByte=267
-  n32 Global definition=d2 children=[] sourceByte=267
-  n33 Constructor constructor=c10:$Unit children=[] sourceByte=267</code></pre></td></tr>
+  n20 Local depth=0 children=[] sourceByte=185
+  n21 Let symbol=option_map::main evaluation=strict children=[n22,n26] sourceByte=181
+  n22 Lambda parameters=p3..p4 children=[n23,n1] sourceByte=195
+  n23 Prim opcode=MultiplySignedInteger64 operands=a3..a5 children=[] sourceByte=205
+  n24 Local depth=0 children=[] sourceByte=207
+  n25 SignedInteger64 payload=2 children=[n0] sourceByte=215
+  n26 Apply arguments=a5..a7 children=[n27] sourceByte=181
+  n27 Global definition=d0 children=[] sourceByte=181
+  n28 Local depth=1 children=[] sourceByte=181
+  n29 Local depth=0 children=[] sourceByte=181
+  n30 SignedInteger64  children=[n0] sourceByte=234
+  n31 Local depth=0 children=[] sourceByte=255
+  n32 Global definition=d1 children=[] sourceByte=267
+  n33 Apply arguments=a7..a8 children=[n34] sourceByte=267
+  n34 Global definition=d2 children=[] sourceByte=267
+  n35 Constructor constructor=c10:$Unit children=[] sourceByte=267</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -175,10 +188,10 @@ nodes:
     "value": 42
   },
   "stats": {
-    "steps": 68,
-    "allocations": 30,
+    "steps": 84,
+    "allocations": 39,
     "peakStack": 5,
-    "thunkEvaluations": 4
+    "thunkEvaluations": 9
   }
 }
 ```

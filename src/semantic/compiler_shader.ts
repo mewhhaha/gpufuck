@@ -211,8 +211,7 @@ const SURFACE_CASE: u32 = 10u;
 const SURFACE_CASE_ARM: u32 = 11u;
 const SURFACE_PATTERN_BIND: u32 = 12u;
 const SURFACE_LET_REC: u32 = 16u;
-const SURFACE_STRICT_LET: u32 = 17u;
-const SURFACE_STRICT_APPLY: u32 = 18u;
+const SURFACE_SEQUENCE: u32 = 17u;
 const SURFACE_SIGNED_INTEGER_64: u32 = 19u;
 const SURFACE_FLOAT_32: u32 = 20u;
 const SURFACE_FLOAT_64: u32 = 21u;
@@ -386,7 +385,7 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
       return node.payload < state.symbol_count && node.child0 == NO_INDEX &&
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
-    case SURFACE_LET, SURFACE_STRICT_LET: {
+    case SURFACE_LET, SURFACE_SEQUENCE: {
       return node.payload < state.symbol_count && required_child_is_valid(node_index, node.child0) &&
         required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
     }
@@ -403,7 +402,7 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     case SURFACE_LAMBDA: {
       return required_child_is_valid(node_index, node.child0) && node.child2 == NO_INDEX;
     }
-    case SURFACE_APPLY, SURFACE_STRICT_APPLY: {
+    case SURFACE_APPLY: {
       return required_child_is_valid(node_index, node.child0) && node.child2 == NO_INDEX;
     }
     case SURFACE_PRIM: {
@@ -685,7 +684,7 @@ fn write_lowered_node() {
     select(
       0u,
       1u,
-      surface_node.tag == SURFACE_STRICT_LET || surface_node.tag == SURFACE_STRICT_APPLY,
+      surface_node.tag == SURFACE_SEQUENCE,
     ),
   );
   state.primary_cursor += 1u;
@@ -720,13 +719,11 @@ fn lower_node() {
   }
   state.core_tag = surface_node.tag;
   state.core_payload = surface_node.payload;
-  if surface_node.tag == SURFACE_STRICT_LET {
+  if surface_node.tag == SURFACE_SEQUENCE {
     state.core_tag = SURFACE_LET;
-  } else if surface_node.tag == SURFACE_STRICT_APPLY {
-    state.core_tag = SURFACE_APPLY;
   }
-  if surface_node.tag == SURFACE_LET || surface_node.tag == SURFACE_STRICT_LET {
-    state.core_payload = 1u;
+  if surface_node.tag == SURFACE_LET || surface_node.tag == SURFACE_SEQUENCE {
+    state.core_payload = 0u;
   }
   if surface_node.tag == SURFACE_NAME {
     state.resolution_node = state.primary_cursor;
@@ -756,7 +753,7 @@ fn resolve_local_name() {
 
   let parent = surface_nodes[state.surface_node_base + state.resolution_parent];
   let introduces_let_binding = (parent.tag == SURFACE_LET ||
-    parent.tag == SURFACE_STRICT_LET) &&
+    parent.tag == SURFACE_SEQUENCE) &&
     parent.child1 == state.resolution_child;
   let introduces_let_rec_binding = parent.tag == SURFACE_LET_REC &&
     (parent.child0 == state.resolution_child || parent.child1 == state.resolution_child);
@@ -767,6 +764,9 @@ fn resolve_local_name() {
   if introduces_let_binding || introduces_let_rec_binding || introduces_lambda_binding ||
     introduces_pattern_binding {
     if parent.payload == state.resolution_symbol {
+      if introduces_let_binding {
+        core_nodes[state.core_node_base + state.resolution_parent].payload += 1u;
+      }
       state.core_tag = CORE_LOCAL;
       state.core_payload = state.resolution_depth;
       write_lowered_node();
@@ -1054,8 +1054,7 @@ fn lower_planned_module(
     select(
       0u,
       1u,
-      surface_node.tag == SURFACE_STRICT_LET ||
-        surface_node.tag == SURFACE_STRICT_APPLY,
+      surface_node.tag == SURFACE_SEQUENCE,
     ),
   );
 }

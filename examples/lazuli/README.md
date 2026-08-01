@@ -1,11 +1,10 @@
 # Lazuli frontend
 
-Lazuli is the reference frontend — the syntax the GPU semantic compiler was built against, and the
-only one of the three that is lazy. Its adapter selects `EvaluationProfile.LazyCallByNeed` and
-`TypecheckingProfile.HindleyMilnerIndexed`, so a Lazuli program exercises call-by-need thunks and
-indexed constructors, which the strict Gleam and JavaScript frontends never reach. Its entry point
-is `mod.ts` and its CLI is `lazuli_cli.ts`; neither ships in the published package. This directory
-holds the sample programs both are run, tested, and profiled against.
+Lazuli is the reference frontend — the syntax the GPU semantic compiler was built against. Like
+every gpufuck frontend, it emits demand-driven lets and applications; its adapter selects
+`TypecheckingProfile.HindleyMilnerIndexed` for indexed constructors. Its entry point is `mod.ts` and
+its CLI is `lazuli_cli.ts`; neither ships in the published package. This directory holds the sample
+programs both are run, tested, and profiled against.
 
 Run one:
 
@@ -47,9 +46,9 @@ inputs even though the broad declaration workloads fit.
 | `syntax-tour.laz`        | Most of the surface in one file, for editor-theme inspection   |
 | `brainfuck_compiler.laz` | A Brainfuck-to-WebAssembly compiler, `Text -> Text`            |
 
-`lazy.laz` is the one to read for the evaluation profile: it binds `1 / 0` and never forces it, so
-the program returns 42 instead of faulting, and it adds a single binding to itself to show
-call-by-need sharing rather than re-evaluation.
+`lazy.laz` is the one to read for demand behavior: it binds `1 / 0` and never demands it, so the
+program returns 42 instead of faulting, and it adds a single binding to itself to show call-by-need
+sharing rather than re-evaluation.
 
 `proofs.laz` is what `TypecheckingProfile.HindleyMilnerIndexed` buys. Constructors carry a result
 type — `Refl : Equal a a` — so matching on one refines the indices in scope, which is how `cast` and

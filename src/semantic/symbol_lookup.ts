@@ -161,7 +161,7 @@ function createLoweringPlan(
     } else {
       plannedNode = {
         coreTag: normalizedCoreTag(tag),
-        corePayload: tag === ExpressionTag.Let || tag === ExpressionTag.StrictLet
+        corePayload: tag === ExpressionTag.Let || tag === ExpressionTag.Sequence
           ? bindingUses[node] ?? 0
           : payload,
         errorCode: SemanticCompilerErrorCode.None,
@@ -297,8 +297,7 @@ function lookupWord(
 }
 
 function normalizedCoreTag(tag: number): number {
-  if (tag === ExpressionTag.StrictLet) return CoreTag.Let;
-  if (tag === ExpressionTag.StrictApply) return CoreTag.Apply;
+  if (tag === ExpressionTag.Sequence) return CoreTag.Let;
   return tag;
 }
 
@@ -352,7 +351,7 @@ function resolveLocalDepths(
     const payload = surface.nodeWords[offset + NodeWord.Payload];
     if (tag === undefined || payload === undefined) return false;
     const payloadIsSymbol = tag === ExpressionTag.Name || tag === ExpressionTag.Let ||
-      tag === ExpressionTag.StrictLet || tag === ExpressionTag.LetRec;
+      tag === ExpressionTag.Sequence || tag === ExpressionTag.LetRec;
     if (payloadIsSymbol && payload >= symbolCount) return false;
     if (tag === ExpressionTag.Name) {
       const positions = bindingPositions.get(payload);
@@ -393,7 +392,7 @@ function resolveLocalDepths(
       return true;
     };
 
-    if (tag === ExpressionTag.Let || tag === ExpressionTag.StrictLet) {
+    if (tag === ExpressionTag.Let || tag === ExpressionTag.Sequence) {
       if (!pushScopedNode(child1, [payload]) || !pushNode(child0)) return false;
       continue;
     }
@@ -410,7 +409,7 @@ function resolveLocalDepths(
       if (!pushScopedNode(child0, parameters)) return false;
       continue;
     }
-    if (tag === ExpressionTag.Apply || tag === ExpressionTag.StrictApply) {
+    if (tag === ExpressionTag.Apply) {
       if (
         payload > surface.argumentCount ||
         child1 > surface.argumentCount - payload

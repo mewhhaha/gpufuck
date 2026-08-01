@@ -13,7 +13,6 @@ import {
   defineEffectOperation,
   effectSet,
   type EncodedModule,
-  EvaluationProfile,
   ExpressionTag,
   GpuCompiler,
   GpuEvaluator,
@@ -340,6 +339,142 @@ Deno.test("effect sets reject runtime mutation", () => {
     /incompatible receiver|not a Set/,
   );
   deepStrictEqual([...effects], ["Console.Write"]);
+});
+
+Deno.test("GPU evaluation skips an ordinary let value outside the selected branch", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.let(
+        "x",
+        surface.integer(1),
+        surface.let(
+          "y",
+          surface.runtimeFault("unselected let value"),
+          surface.if(
+            surface.equal(surface.name("x"), surface.integer(1)),
+            surface.name("x"),
+            surface.name("y"),
+          ),
+        ),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const { compiler, evaluator } = functionalRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
+  if (!compilation.ok) return;
+  try {
+    const result = await evaluator.evaluate(compilation.module);
+    ok(result.ok, result.ok ? undefined : result.fault.message);
+    if (result.ok) deepStrictEqual(result.value, { kind: "integer", value: 1 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("functional evaluation runs an unused sequenced value before its body", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.sequence(
+        "ignored",
+        surface.runtimeFault("sequenced value"),
+        surface.integer(42),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const { compiler, evaluator } = functionalRuntime();
+  const compilation = await compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
+  if (!compilation.ok) return;
+  try {
+    await rejects(() => evaluator.evaluate(compilation.module), /sequenced value/);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("effect analysis removes an operation under an unused ordinary let", async () => {
+  const integer = { kind: "integer" as const };
+  const module = buildSurfaceModule(
+    [
+      defineEffectOperation({
+        name: "tick",
+        parameter: { name: "value", type: integer },
+        result: integer,
+        effects: effectSet("Clock.Tick"),
+        body: surface.name("value"),
+      }),
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.let(
+          "ignored",
+          surface.apply(surface.name("tick"), surface.integer(41)),
+          surface.integer(42),
+        ),
+      },
+    ],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalRuntime().compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
+  if (!compilation.ok) return;
+  try {
+    deepStrictEqual([...compilation.module.entryEffects], []);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("effect analysis retains an operation under sequence", async () => {
+  const integer = { kind: "integer" as const };
+  const module = buildSurfaceModule(
+    [
+      defineEffectOperation({
+        name: "tick",
+        parameter: { name: "value", type: integer },
+        result: integer,
+        effects: effectSet("Clock.Tick"),
+        body: surface.name("value"),
+      }),
+      {
+        name: "main",
+        parameters: [],
+        annotation: integer,
+        body: surface.sequence(
+          "ignored",
+          surface.apply(surface.name("tick"), surface.integer(41)),
+          surface.integer(42),
+        ),
+      },
+    ],
+    [],
+    "main",
+    0,
+  );
+  const compilation = await functionalRuntime().compiler.compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
+  if (!compilation.ok) return;
+  try {
+    deepStrictEqual([...compilation.module.entryEffects], ["Clock.Tick"]);
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("infers effect sets through higher-order Core calls", async () => {
@@ -1092,7 +1227,6 @@ function integerModule(value: number, entryName = "entry"): EncodedModule {
   return {
     abiVersion: MODULE_ABI_VERSION,
     sourceByteLength: 2,
-    evaluationProfile: EvaluationProfile.LazyCallByNeed,
     typecheckingProfile: TypecheckingProfile.HindleyMilnerIndexed,
     primitiveCapabilities: CORE_V1_PRIMITIVE_CAPABILITIES,
     hostCapabilities: [],
@@ -1489,14 +1623,6 @@ Deno.test("rejects unsupported functional module envelopes before GPU work", asy
     new RegExp(
       `ABI version ${MODULE_ABI_VERSION + 1} is unsupported; expected ${MODULE_ABI_VERSION}`,
     ),
-  );
-  await rejects(
-    () =>
-      compiler.compileModule({
-        ...valid,
-        evaluationProfile: "strict-v1" as typeof valid.evaluationProfile,
-      }),
-    /evaluation profile "strict-v1" is unsupported/,
   );
   await rejects(
     () =>

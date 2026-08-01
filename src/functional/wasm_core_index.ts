@@ -1,4 +1,4 @@
-import { CoreTag, EvaluationMode, EvaluationProfile, NO_INDEX } from "./abi.ts";
+import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 
 export interface WasmCoreIndex {
@@ -94,20 +94,18 @@ export function indexWasmCore(
     }),
   ]);
   const directOnlyDefinitions = new Set<number>();
-  if (module.evaluationProfile === EvaluationProfile.StrictEager) {
-    for (const [definition, root] of module.definitionRoots.entries()) {
-      if (excludedDirectDefinitions.has(definition)) continue;
-      const parameterCount = lambdaParameterCount(nodes, root);
-      if (parameterCount === undefined || parameterCount === 0) continue;
-      const references = globalReferences[definition]!;
-      if (
-        references.length > 0 &&
-        references.every((reference) =>
-          everyUseIsSaturated(reference, parameterCount, nodes, parents)
-        )
-      ) {
-        directOnlyDefinitions.add(definition);
-      }
+  for (const [definition, root] of module.definitionRoots.entries()) {
+    if (excludedDirectDefinitions.has(definition)) continue;
+    const parameterCount = lambdaParameterCount(nodes, root);
+    if (parameterCount === undefined || parameterCount === 0) continue;
+    const references = globalReferences[definition]!;
+    if (
+      references.length > 0 &&
+      references.every((reference) =>
+        everyUseIsSaturated(reference, parameterCount, nodes, parents)
+      )
+    ) {
+      directOnlyDefinitions.add(definition);
     }
   }
 

@@ -4,7 +4,6 @@ import {
   BranchLikelihood,
   CoreTag,
   EvaluationMode,
-  EvaluationProfile,
   NO_INDEX,
   PAIR_CONSTRUCTOR_NAME,
   RuntimeFaultCategory,
@@ -790,9 +789,7 @@ class WasmCompiler {
         this.#runtimeEmitter.emitFault(instructions, fault, -1),
     });
     this.#hasLazyEvaluationBoundary = plan.coreIndex.hasLazyEvaluationBoundary;
-    this.#simdEnabled = !plan.instrumentedFuel && plan.options.simd === "wasm-simd" &&
-      module.evaluationProfile === EvaluationProfile.StrictEager &&
-      !this.#hasLazyEvaluationBoundary;
+    this.#simdEnabled = !plan.instrumentedFuel && plan.options.simd === "wasm-simd";
     this.#captureAnalysis = plan.captureAnalysis;
     this.#constantAnalysis = plan.constantAnalysis;
     this.#functionAnalysis = plan.functionAnalysis;
@@ -1776,10 +1773,8 @@ class WasmCompiler {
     result: Type,
   ): WasmFunctionBody | undefined {
     if (
-      this.#module.evaluationProfile !== EvaluationProfile.StrictEager ||
       exported.effects.size !== 0 ||
       this.#hostFields.length !== 0 ||
-      this.#hasLazyEvaluationBoundary ||
       result.kind !== "integer" ||
       parameters.some((parameter) => parameter.kind !== "integer")
     ) return undefined;
@@ -4780,12 +4775,8 @@ class WasmCompiler {
     functionShape: FunctionShape,
     parameter: number,
   ): boolean {
-    const profileMakesParameterStrict = this.#module.evaluationProfile ===
-        EvaluationProfile.StrictEager &&
-      !this.#hasLazyEvaluationBoundary;
     return this.#module.entryEffects.size === 0 &&
-      (profileMakesParameterStrict ||
-        functionShape.strictParameters[parameter] === true) &&
+      functionShape.strictParameters[parameter] === true &&
       (functionShape.numericParameters[parameter] === true ||
         this.#nativeIntegerFunctionNodes.has(functionShape.outerLambdaNode));
   }
@@ -4955,8 +4946,17 @@ class WasmCompiler {
     environment: Environment,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
+    if (node.evaluationMode === EvaluationMode.LazyCallByNeed && node.payload === 0) {
+      this.compileExpression(
+        instructions,
+        node.child1,
+        [undefined, ...environment],
+        constructorReuse,
+      );
+      return;
+    }
     if (
-      this.#simdEnabled && node.evaluationMode === EvaluationMode.StrictEager &&
+      this.#simdEnabled && this.f32x4LetValueIsEager(node, environment) &&
       this.isKnownF32x4Expression(node.child0, environment)
     ) {
       this.compileF32x4Expression(instructions, node.child0, environment);
@@ -5009,9 +5009,7 @@ class WasmCompiler {
     }
     const value = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(value);
-    const fieldCount = eager &&
-        this.#module.evaluationProfile === EvaluationProfile.StrictEager &&
-        !this.#hasLazyEvaluationBoundary && !this.#ownedRuntimeEnabled
+    const fieldCount = eager && !this.#ownedRuntimeEnabled
       ? this.#uniqueReuseAnalysis.uniqueConstructorFieldCount(node.child0)
       : undefined;
     const reusableCases = fieldCount === undefined
@@ -5757,6 +5755,10 @@ class WasmCompiler {
         this.compileLetRec(instructions, node, environment, nodeIndex, "integer");
         return;
       case CoreTag.Let: {
+        if (node.evaluationMode === EvaluationMode.LazyCallByNeed && node.payload === 0) {
+          this.compileIntegerExpression(instructions, node.child1, [undefined, ...environment]);
+          return;
+        }
         const virtualValue = this.virtualLambda(node.child0, environment);
         if (virtualValue !== undefined) {
           this.compileIntegerExpression(
@@ -5951,6 +5953,10 @@ class WasmCompiler {
         return;
       }
       case CoreTag.Let: {
+        if (node.evaluationMode === EvaluationMode.LazyCallByNeed && node.payload === 0) {
+          this.compileBooleanExpression(instructions, node.child1, [undefined, ...environment]);
+          return;
+        }
         const eager = node.evaluationMode === EvaluationMode.StrictEager ||
           this.expressionIsWhnf(node.child0) ||
           this.immediatelyForcesLocal(node.child1, 0);
@@ -6117,8 +6123,12 @@ class WasmCompiler {
         );
         return;
       case CoreTag.Let:
+        if (node.evaluationMode === EvaluationMode.LazyCallByNeed && node.payload === 0) {
+          this.compileFloat32Expression(instructions, node.child1, [undefined, ...environment]);
+          return;
+        }
         if (
-          this.#simdEnabled && node.evaluationMode === EvaluationMode.StrictEager &&
+          this.#simdEnabled && this.f32x4LetValueIsEager(node, environment) &&
           this.isKnownF32x4Expression(node.child0, environment)
         ) {
           this.compileF32x4Expression(instructions, node.child0, environment);
@@ -6228,12 +6238,18 @@ class WasmCompiler {
     const { definition, arguments: arguments_ } = application;
     const canonicalDefinition = canonicalFixedVectorName(definition);
     const extractedLane = f32x4ExtractedLane(definition);
-    if (extractedLane !== undefined && arguments_.length === 1) {
+    if (
+      extractedLane !== undefined && arguments_.length === 1 &&
+      this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[0]!.node, environment)
+    ) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       instructions.simd(WasmSimdOpcode.F32x4ExtractLane, extractedLane);
       return true;
     }
-    if (canonicalDefinition === F32x4Definition.ReduceAdd && arguments_.length === 1) {
+    if (
+      canonicalDefinition === F32x4Definition.ReduceAdd && arguments_.length === 1 &&
+      this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[0]!.node, environment)
+    ) {
       this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
       const vector = instructions.addLocal(WasmValueType.V128);
       instructions.localSet(vector);
@@ -6245,7 +6261,10 @@ class WasmCompiler {
       instructions.emit(0x92, 0x92);
       return true;
     }
-    if (canonicalDefinition === F32x4Definition.Fold && arguments_.length === 3) {
+    if (
+      canonicalDefinition === F32x4Definition.Fold && arguments_.length === 3 &&
+      this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[2]!.node, environment)
+    ) {
       const combine = this.float32CombineOperator(arguments_[0]!.node, environment);
       if (combine === undefined) return false;
       const combineOpcode = numericBinaryOpcode(combine);
@@ -6276,7 +6295,14 @@ class WasmCompiler {
         return;
       }
     }
-    if (node.tag === CoreTag.Let && node.evaluationMode === EvaluationMode.StrictEager) {
+    if (
+      node.tag === CoreTag.Let && node.evaluationMode === EvaluationMode.LazyCallByNeed &&
+      node.payload === 0
+    ) {
+      this.compileF32x4Expression(instructions, node.child1, [undefined, ...environment]);
+      return;
+    }
+    if (node.tag === CoreTag.Let && this.f32x4LetValueIsEager(node, environment)) {
       const knownValue = this.isKnownF32x4Expression(node.child0, environment);
       const knownBody = knownValue && this.isKnownF32x4Expression(node.child1, [
         { kind: "v128-f32x4", index: 0 },
@@ -6308,7 +6334,10 @@ class WasmCompiler {
       return;
     }
     if (this.compileF32x4ProjectionCase(instructions, nodeIndex, environment)) return;
-    if (node.tag === CoreTag.Apply) {
+    if (
+      node.tag === CoreTag.Apply &&
+      this.f32x4ExpressionCanBeEagerlyMaterialized(nodeIndex, environment)
+    ) {
       const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
       if (kind?.kind === "f32x4") return;
     }
@@ -6392,7 +6421,6 @@ class WasmCompiler {
     const node = this.node(nodeIndex);
     if (
       node.tag !== CoreTag.Case ||
-      this.#module.evaluationProfile !== EvaluationProfile.StrictEager ||
       this.#hasLazyEvaluationBoundary ||
       this.#ownedRuntimeEnabled
     ) return undefined;
@@ -6489,7 +6517,8 @@ class WasmCompiler {
     ) return undefined;
 
     const vectorParameters = application.arguments.map((argument) =>
-      this.isKnownF32x4Operand(argument.node, environment)
+      this.isKnownF32x4Operand(argument.node, environment) &&
+      this.f32x4ExpressionCanBeEagerlyMaterialized(argument.node, environment)
     );
     if (!vectorParameters.some(Boolean)) return undefined;
     const parameterBindings: Binding[] = vectorParameters.map((vector, parameter) =>
@@ -6513,6 +6542,111 @@ class WasmCompiler {
     return { application, vectorParameters, bodyEnvironment };
   }
 
+  f32x4LetValueIsEager(node: CoreNode, environment: Environment): boolean {
+    return node.evaluationMode === EvaluationMode.StrictEager ||
+      this.immediatelyForcesLocal(node.child1, 0) ||
+      this.f32x4ExpressionCanBeEagerlyMaterialized(node.child0, environment);
+  }
+
+  f32x4ExpressionCanBeEagerlyMaterialized(
+    nodeIndex: number,
+    environment: Environment,
+  ): boolean {
+    const node = this.node(nodeIndex);
+    if (node.tag === CoreTag.Local) {
+      return environment[node.payload]?.kind === "v128-f32x4";
+    }
+    if (node.tag === CoreTag.Let) {
+      if (!this.f32x4ExpressionCanBeEagerlyMaterialized(node.child0, environment)) return false;
+      return this.f32x4ExpressionCanBeEagerlyMaterialized(node.child1, [
+        { kind: "v128-f32x4", index: 0 },
+        ...environment,
+      ]);
+    }
+    if (node.tag === CoreTag.If) {
+      return this.#functionAnalysis.canEvaluateEagerly(node.child0) &&
+        this.f32x4ExpressionCanBeEagerlyMaterialized(node.child1, environment) &&
+        this.f32x4ExpressionCanBeEagerlyMaterialized(node.child2, environment);
+    }
+    const constructor = this.constructorApplication(nodeIndex);
+    if (
+      constructor !== undefined && constructor.arguments.length === 4 &&
+      canonicalFixedVectorName(
+          this.#module.constructorNames[constructor.constructorIndex]!,
+        ) === F32X4_CONSTRUCTOR_NAME
+    ) {
+      return constructor.arguments.every((argument) =>
+        this.#functionAnalysis.canEvaluateEagerly(argument.node)
+      );
+    }
+    const application = this.namedApplication(nodeIndex);
+    if (application === undefined) return false;
+    const { definition, arguments: arguments_ } = application;
+    const canonicalDefinition = canonicalFixedVectorName(definition);
+    if (canonicalDefinition === F32x4Definition.Splat && arguments_.length === 1) {
+      return this.#functionAnalysis.canEvaluateEagerly(arguments_[0]!.node);
+    }
+    if (simdF32x4BinaryOpcode(definition) !== undefined && arguments_.length === 2) {
+      return arguments_.every((argument) =>
+        this.f32x4ExpressionCanBeEagerlyMaterialized(argument.node, environment)
+      );
+    }
+    if (canonicalDefinition === F32x4Definition.Select && arguments_.length === 3) {
+      return this.mask32x4ExpressionCanBeEagerlyMaterialized(arguments_[0]!.node, environment) &&
+        this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[1]!.node, environment) &&
+        this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[2]!.node, environment);
+    }
+    if (canonicalDefinition === F32x4Definition.Shuffle && arguments_.length >= 2) {
+      return this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[0]!.node, environment) &&
+        this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[1]!.node, environment);
+    }
+    if (f32x4ReplacementLane(definition) !== undefined && arguments_.length === 2) {
+      return this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[0]!.node, environment) &&
+        this.#functionAnalysis.canEvaluateEagerly(arguments_[1]!.node);
+    }
+    if (canonicalDefinition === F32x4Definition.Map && arguments_.length === 2) {
+      const transform = this.virtualLambda(arguments_[0]!.node, environment);
+      const lambda = transform === undefined ? undefined : this.node(transform.node);
+      return lambda?.tag === CoreTag.Lambda &&
+        this.canVectorizeFloat32Expression(lambda.child0, 1) &&
+        this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[1]!.node, environment);
+    }
+    if (canonicalDefinition === F32x4Definition.Zip && arguments_.length === 3) {
+      const combine = this.virtualLambda(arguments_[0]!.node, environment);
+      const outerLambda = combine === undefined ? undefined : this.node(combine.node);
+      const innerLambda = outerLambda?.tag === CoreTag.Lambda
+        ? this.node(outerLambda.child0)
+        : undefined;
+      return innerLambda?.tag === CoreTag.Lambda &&
+        this.canVectorizeFloat32Expression(innerLambda.child0, 2) &&
+        this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[1]!.node, environment) &&
+        this.f32x4ExpressionCanBeEagerlyMaterialized(arguments_[2]!.node, environment);
+    }
+    const worker = this.f32x4WorkerApplication(nodeIndex, environment);
+    if (worker === undefined) return false;
+    return worker.application.arguments.every((argument, parameter) =>
+      worker.vectorParameters[parameter] ||
+      this.#functionAnalysis.canEvaluateEagerly(argument.node)
+    ) && this.f32x4ExpressionCanBeEagerlyMaterialized(
+      worker.application.functionShape.bodyNode,
+      worker.bodyEnvironment,
+    );
+  }
+
+  mask32x4ExpressionCanBeEagerlyMaterialized(
+    nodeIndex: number,
+    environment: Environment,
+  ): boolean {
+    const application = this.namedApplication(nodeIndex);
+    if (
+      application === undefined || application.arguments.length !== 2 ||
+      simdF32x4ComparisonOpcode(application.definition) === undefined
+    ) return false;
+    return application.arguments.every((argument) =>
+      this.f32x4ExpressionCanBeEagerlyMaterialized(argument.node, environment)
+    );
+  }
+
   isKnownF32x4Expression(
     nodeIndex: number,
     environment: Environment,
@@ -6521,7 +6655,7 @@ class WasmCompiler {
     if (node.tag === CoreTag.Local) {
       return environment[node.payload]?.kind === "v128-f32x4";
     }
-    if (node.tag === CoreTag.Let && node.evaluationMode === EvaluationMode.StrictEager) {
+    if (node.tag === CoreTag.Let && this.f32x4LetValueIsEager(node, environment)) {
       if (!this.isKnownF32x4Expression(node.child0, environment)) return false;
       return this.isKnownF32x4Expression(node.child1, [
         { kind: "v128-f32x4", index: 0 },
@@ -8711,6 +8845,20 @@ class WasmCompiler {
       return;
     }
     if (node.tag === CoreTag.Let) {
+      if (node.evaluationMode === EvaluationMode.LazyCallByNeed && node.payload === 0) {
+        this.compileTailPosition(
+          instructions,
+          node.child1,
+          [undefined, ...environment],
+          loop,
+          parameterLocals,
+          binderDepth + 1,
+          loopBranchDepth,
+          resultBranchDepth,
+          resultKind,
+        );
+        return;
+      }
       const joinLambda = this.#functionAnalysis.joinPointLambda(nodeIndex);
       if (joinLambda !== undefined) {
         const passesArgument = this.#functionAnalysis.joinPointPassesArgument(joinLambda);

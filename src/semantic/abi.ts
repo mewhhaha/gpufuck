@@ -1,4 +1,4 @@
-export const MODULE_ABI_VERSION = 8;
+export const MODULE_ABI_VERSION = 9;
 export const NO_INDEX = 0xffffffff;
 export const UNKNOWN_CONSTRUCTOR_FLAG = 0x80000000;
 export const MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
@@ -81,8 +81,7 @@ export const ExpressionTag = {
   CaseArm: 11,
   PatternBind: 12,
   LetRec: 16,
-  StrictLet: 17,
-  StrictApply: 18,
+  Sequence: 17,
   SignedInteger64: 19,
   Float32: 20,
   Float64: 21,

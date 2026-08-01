@@ -16,7 +16,6 @@ import {
   BinaryOperator,
   buildSurfaceModule,
   type EncodedModule,
-  EvaluationProfile,
   surface,
   type SurfaceDefinition,
   type SurfaceExpression,
@@ -259,8 +258,6 @@ export function lowerSweepModule(module: SweepModule, sourceByteLength: number):
         types,
         "main",
         sourceByteLength,
-        // Strict, because a checker that never suspends is one less thing for the sweep to model.
-        { evaluationProfile: EvaluationProfile.StrictEager },
       ),
     };
   } catch (error) {

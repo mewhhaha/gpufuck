@@ -1,10 +1,4 @@
-import {
-  type EncodedModule,
-  EvaluationProfile,
-  type SourceRange,
-  type Span,
-  type TypeSchema,
-} from "./abi.ts";
+import { type EncodedModule, type SourceRange, type Span, type TypeSchema } from "./abi.ts";
 import type { HostCapabilityDeclaration, SurfaceModuleOptions } from "./host_contract.ts";
 import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
 import { effectSetFrom } from "./effect_set.ts";
@@ -378,22 +372,8 @@ export function linkModules(
   }[] = [];
   const linkedWasmExportNames = new Set<string>();
   let sourceBase = 0;
-  let evaluationProfile: EvaluationProfile | undefined;
-
   const rewriteSpan = options.trace?.start("frontend.link.rewrite");
   for (const artifact of modules.values()) {
-    const profile = artifact.options.evaluationProfile ?? EvaluationProfile.StrictEager;
-    if (evaluationProfile !== undefined && evaluationProfile !== profile) {
-      throw new LinkError({
-        code: "F4004",
-        kind: "incompatible-profile",
-        module: artifact.name,
-        message: `functional module linker cannot mix evaluation profiles ${
-          JSON.stringify(evaluationProfile)
-        } and ${JSON.stringify(profile)}`,
-      });
-    }
-    evaluationProfile = profile;
     sources.push({
       module: artifact.name,
       startByte: sourceBase,
@@ -663,7 +643,6 @@ export function linkModules(
         {
           hostCapabilities: reachableCapabilities,
           hostDefinitions: reachableHostDefinitions,
-          evaluationProfile: evaluationProfile ?? EvaluationProfile.StrictEager,
           wasmExports: linkedWasmExports,
         },
       ),
@@ -772,6 +751,7 @@ function collectReferencedDefinitions(
       removeBoundNames(boundNames, expression.parameters);
       return;
     case "let":
+    case "sequence":
       collect(expression.value);
       addBoundNames(boundNames, [expression.name]);
       collect(expression.body);
@@ -918,7 +898,8 @@ function rewriteExpression(
       removeBoundNames(boundNames, expression.parameters);
       return { ...expression, body, span };
     }
-    case "let": {
+    case "let":
+    case "sequence": {
       const value = rewrite(expression.value);
       addBoundNames(boundNames, [expression.name]);
       const body = rewrite(expression.body);

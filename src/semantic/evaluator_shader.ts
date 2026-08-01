@@ -870,6 +870,18 @@ fn evaluate_node() {
         return;
       }
 
+      if node.payload == 0u {
+        // The body still uses source-level de Bruijn depths, so retain an empty environment
+        // frame for the discarded binder without allocating or evaluating its thunk.
+        let environment_index = allocate_heap_slot(HEAP_ENVIRONMENT, node.source_offset);
+        if environment_index == NO_INDEX {
+          return;
+        }
+        initialize_environment(environment_index, evaluation.environment, NO_INDEX);
+        evaluate_expression(node.child1, environment_index);
+        return;
+      }
+
       let thunk_index = allocate_heap_slot(HEAP_THUNK, node.source_offset);
       if thunk_index == NO_INDEX {
         return;

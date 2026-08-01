@@ -5,13 +5,27 @@ All notable changes to gpufuck are documented here. The project is published to 
 
 ## Unreleased
 
+## 0.10.0 - 2026-08-01
+
+### Added
+
+- `surface.sequence(name, value, body)` represents required evaluation order separately from
+  ordinary bindings.
+
+### Changed
+
+- Ordinary lets and application arguments are now always demand-driven. The compiler removes unused
+  bindings, infers eager evaluation where demanded or provably safe, and keeps effects and faults
+  attached to their actual demand points. Functional Core ABI 9 removes module-wide evaluation
+  profiles and represents required ordering with `Sequence`.
+
 ## 0.9.1 - 2026-08-01
 
 ### Added
 
 - Continuous integration now verifies formatting, linting, types, tests, the publish graph, and the
-  browser playground. The browser verifier exercises the Blot tour on hardware WebGPU and reports
-  an explicit skip when only a software adapter is available.
+  browser playground. The browser verifier exercises the Blot tour on hardware WebGPU and reports an
+  explicit skip when only a software adapter is available.
 
 ### Changed
 

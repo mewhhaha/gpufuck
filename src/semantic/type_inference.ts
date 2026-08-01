@@ -706,7 +706,7 @@ class InferenceContext {
           return;
         }
         case ExpressionTag.Let:
-        case ExpressionTag.StrictLet: {
+        case ExpressionTag.Sequence: {
           visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
           visit(
             this.requiredChild(nodeIndex, NodeWord.Child1),
@@ -751,7 +751,6 @@ class InferenceContext {
             visit(operand, boundSymbols);
           }
           return;
-        case ExpressionTag.StrictApply:
         case ExpressionTag.Binary:
         case ExpressionTag.BufferAppend:
         case ExpressionTag.StoreNew:
@@ -889,7 +888,7 @@ class InferenceContext {
         return this.instantiateScheme(scheme);
       }
       case ExpressionTag.Let:
-      case ExpressionTag.StrictLet: {
+      case ExpressionTag.Sequence: {
         const value = this.inferNode(
           this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
@@ -1008,19 +1007,6 @@ class InferenceContext {
           callee = result;
         }
         return callee;
-      }
-      case ExpressionTag.StrictApply: {
-        const callee = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-        );
-        const argument = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child1),
-          environment,
-        );
-        const result = expected ?? this.inferenceVariable();
-        this.unify(callee, { kind: "function", parameter: argument, result }, span);
-        return result;
       }
       case ExpressionTag.Unary: {
         if (payload === UnaryOperator.NegateWholeNumberF64) {

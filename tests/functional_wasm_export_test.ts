@@ -4,7 +4,6 @@ import {
   BinaryOperator,
   buildSurfaceModule,
   CpuCompiler,
-  EvaluationProfile,
   runWasmExport,
   runWasmModule,
   storeType,
@@ -21,7 +20,7 @@ Deno.test("owned Store updates reuse their backing allocation", async () => {
       body: surface.let(
         "source",
         surface.storeNew(surface.integer(1), surface.integer(7)),
-        surface.let(
+        surface.sequence(
           "updated",
           surface.storeWrite(
             surface.name("source"),
@@ -42,7 +41,7 @@ Deno.test("owned Store updates reuse their backing allocation", async () => {
       body: surface.let(
         "source",
         surface.storeNew(surface.integer(1), surface.integer(7)),
-        surface.let(
+        surface.sequence(
           "updated",
           surface.storeWrite(
             surface.name("source"),
@@ -64,7 +63,7 @@ Deno.test("owned Store updates reuse their backing allocation", async () => {
       body: surface.let(
         "source",
         surface.storeNew(surface.integer(3), surface.integer(1)),
-        surface.let(
+        surface.sequence(
           "updated",
           surface.storeGrow(
             surface.name("source"),
@@ -85,7 +84,7 @@ Deno.test("owned Store updates reuse their backing allocation", async () => {
       body: surface.let(
         "source",
         surface.storeNew(surface.integer(3), surface.integer(1)),
-        surface.let(
+        surface.sequence(
           "updated",
           surface.storeGrow(
             surface.name("source"),
@@ -109,7 +108,6 @@ Deno.test("owned Store updates reuse their backing allocation", async () => {
       [],
       "main",
       0,
-      { evaluationProfile: EvaluationProfile.StrictEager },
     );
     const compilation = await new CpuCompiler().compileModule(encoded);
     ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);

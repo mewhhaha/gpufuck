@@ -5,13 +5,7 @@
  */
 import { equal, ok, throws } from "node:assert/strict";
 
-import {
-  BinaryOperator,
-  EvaluationProfile,
-  type Span,
-  surface,
-  type SurfaceExpression,
-} from "../functional.ts";
+import { BinaryOperator, type Span, surface, type SurfaceExpression } from "../functional.ts";
 
 const SPAN: Span = { startByte: 10, endByte: 20 };
 
@@ -176,7 +170,7 @@ Deno.test("let, if, and case stamp the span the frontend would have written by h
   equal((branch as { readonly kind: string }).kind, "if");
 });
 
-Deno.test("let omits the evaluation profile unless one is requested", () => {
+Deno.test("let and sequence expose demand and sequencing as distinct expressions", () => {
   equal(
     JSON.stringify(surface.let("x", surface.integer(1), surface.name("x"))),
     JSON.stringify({
@@ -186,15 +180,14 @@ Deno.test("let omits the evaluation profile unless one is requested", () => {
       body: { kind: "name", name: "x" },
     }),
   );
-  const lazy = surface.let(
-    "x",
-    surface.integer(1),
-    surface.name("x"),
-    EvaluationProfile.LazyCallByNeed,
-  );
   equal(
-    (lazy as { readonly valueEvaluation?: EvaluationProfile }).valueEvaluation,
-    EvaluationProfile.LazyCallByNeed,
+    JSON.stringify(surface.sequence("x", surface.integer(1), surface.name("x"))),
+    JSON.stringify({
+      kind: "sequence",
+      name: "x",
+      value: { kind: "integer", value: 1 },
+      body: { kind: "name", name: "x" },
+    }),
   );
 });
 

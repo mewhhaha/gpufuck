@@ -1,5 +1,5 @@
 import type { WasmExportDeclaration } from "./module_contract.ts";
-import type { EvaluationProfile, TypeSchema } from "./schema_contract.ts";
+import type { TypeSchema } from "./schema_contract.ts";
 import { type EffectSet, effectSetFrom } from "./effect_set.ts";
 
 export type HostType = TypeSchema;
@@ -152,7 +152,6 @@ export interface HostDefinitionBinding {
 export interface SurfaceModuleOptions {
   readonly hostCapabilities?: readonly HostCapabilityDeclaration[];
   readonly hostDefinitions?: readonly HostDefinitionBinding[];
-  readonly evaluationProfile?: EvaluationProfile;
   readonly wasmExports?: readonly WasmExportDeclaration[];
 }
 

@@ -110,8 +110,7 @@ function resolvedSweepCore(module: EncodedModule): CompiledCoreArtifact {
       child2: module.nodeWords[surface + NodeWord.Child2] ?? NO_INDEX,
       sourceByteOffset: module.nodeWords[surface + NodeWord.StartByte] ?? 0,
       sourceEndByte: module.nodeWords[surface + NodeWord.EndByte] ?? 0,
-      evaluationMode: surfaceTag === ExpressionTag.StrictLet ||
-          surfaceTag === ExpressionTag.StrictApply
+      evaluationMode: surfaceTag === ExpressionTag.Sequence
         ? EvaluationMode.StrictEager
         : EvaluationMode.LazyCallByNeed,
     });

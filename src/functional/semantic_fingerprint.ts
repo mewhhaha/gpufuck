@@ -23,7 +23,6 @@ export function semanticModuleFingerprint(module: EncodedModule): string {
 
   const hash = new StructuralHash();
   hash.number(module.abiVersion);
-  hash.string(module.evaluationProfile);
   hash.string(module.typecheckingProfile);
   hash.strings(module.primitiveCapabilities);
   hash.value(module.hostCapabilities ?? []);
@@ -134,7 +133,6 @@ export function resolvedCoreStructuralFingerprint(
     ...exported,
     effects: effectNames(exported.effects),
   })));
-  hash.string(module.evaluationProfile);
   const fingerprint = hash.digest();
   resolvedCoreFingerprints.set(module, fingerprint);
   return fingerprint;

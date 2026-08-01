@@ -47,47 +47,59 @@ fn area(shape) : &lt;inferred&gt; =
         h)))
 
 fn larger(left, right) : &lt;inferred&gt; =
-  (let $gleam_case_0
+  (sequence $gleam_case_2
     (GreaterSignedInteger64
-      (apply
-        area
-        left)
-      (apply
-        area
-        right))
+      (sequence $gleam_argument_0
+        left
+        (apply
+          area
+          $gleam_argument_0))
+      (sequence $gleam_argument_1
+        right
+        (apply
+          area
+          $gleam_argument_1)))
     (if
       (StructuralEqual
-        $gleam_case_0
+        $gleam_case_2
         true)
       left
       (if
         (StructuralEqual
-          $gleam_case_0
+          $gleam_case_2
           false)
         right
         fault "unreachable exhaustive Bool case")))
 
 fn main($gleam_unit_parameter) : () -&gt; Shape =
-  (apply
-    (apply
-      larger
+  (sequence $gleam_argument_6
+    (sequence $gleam_argument_3
+      3i64
       (apply
         Circle
-        3i64))
-    (apply
+        $gleam_argument_3))
+    (sequence $gleam_argument_7
+      (sequence $gleam_argument_4
+        6i64
+        (sequence $gleam_argument_5
+          7i64
+          (apply
+            Rectangle
+            $gleam_argument_4
+            $gleam_argument_5)))
       (apply
-        Rectangle
-        6i64)
-      7i64))</code></pre></td></tr>
+        larger
+        $gleam_argument_6
+        $gleam_argument_7)))</code></pre></td></tr>
 <tr><th>Encoded functional ABI</th><th>GPU-resolved core IR</th></tr>
-<tr><td><pre><code>ABI v6; entry=$gleam/entry::main
+<tr><td><pre><code>ABI v9; entry=$gleam/entry::main
 
 definitions:
-  d0 records::area root=n0 bytes=79..195 : &lt;inferred&gt;
-  d1 records::larger root=n16 bytes=197..297 : &lt;inferred&gt;
-  d2 records::main root=n37 bytes=299..385 : () -&gt; records::Shape
-  d3 $gleam/entry::$import$sourceEntry root=n49 bytes=386..386 : &lt;inferred&gt;
-  d4 $gleam/entry::main root=n50 bytes=386..386 : &lt;inferred&gt;
+  d0 records::area root=n0 bytes=79..195 : &lt;inferred&gt; effects=[]
+  d1 records::larger root=n11 bytes=197..297 : &lt;inferred&gt; effects=[]
+  d2 records::main root=n35 bytes=299..385 : () -&gt; records::Shape effects=[]
+  d3 $gleam/entry::$import$sourceEntry root=n55 bytes=386..386 : &lt;inferred&gt; effects=[]
+  d4 $gleam/entry::main root=n56 bytes=386..386 : &lt;inferred&gt; effects=[]
 
 types:
   t0 $gleam/prelude::$GleamList constructors=[c0,c2)
@@ -115,114 +127,126 @@ constructors:
   c11 $Tuple owner=t8 arity=2
 
 nodes:
-  n0 Lambda symbol=shape children=[n1] parent=- bytes=79..195
-  n1 Case  children=[n2,n3] parent=n0 bytes=94..195
+  n0 Lambda  children=[n1,n1] parent=- bytes=79..195
+  n1 Case  children=[n2,n2] parent=n0 bytes=94..195
   n2 Name symbol=shape children=[] parent=n1 bytes=103..109
-  n3 CaseArm symbol=records::Circle children=[n4,n10] parent=n1 bytes=115..150
-  n4 PatternBind symbol=r children=[n5] parent=n3 bytes=115..150
-  n5 Binary operator=MultiplySignedInteger64 children=[n6,n9] parent=n4 bytes=136..150
-  n6 Binary operator=MultiplySignedInteger64 children=[n7,n8] parent=n5 bytes=136..142
-  n7 SignedInteger64  children=[n0] parent=n6 bytes=136..137
-  n8 Name symbol=r children=[] parent=n6 bytes=140..142
-  n9 Name symbol=r children=[] parent=n5 bytes=144..150
-  n10 CaseArm symbol=records::Rectangle children=[n11] parent=n3 bytes=150..192
-  n11 PatternBind symbol=h children=[n12] parent=n10 bytes=150..192
-  n12 PatternBind symbol=w children=[n13] parent=n11 bytes=150..192
-  n13 Binary operator=MultiplySignedInteger64 children=[n14,n15] parent=n12 bytes=184..192
-  n14 Name symbol=w children=[] parent=n13 bytes=184..186
-  n15 Name symbol=h children=[] parent=n13 bytes=188..192
-  n16 Lambda symbol=left children=[n17] parent=- bytes=197..297
-  n17 Lambda symbol=right children=[n18] parent=n16 bytes=197..297
-  n18 StrictLet symbol=$gleam_case_0 children=[n19,n26] parent=n17 bytes=220..297
-  n19 Binary operator=GreaterSignedInteger64 children=[n20,n23] parent=n18 bytes=229..254
-  n20 StrictApply evaluation=strict children=[n21,n22] parent=n19 bytes=229..239
-  n21 Name symbol=records::area children=[] parent=n20 bytes=229..233
-  n22 Name symbol=left children=[] parent=n20 bytes=234..238
-  n23 StrictApply evaluation=strict children=[n24,n25] parent=n19 bytes=242..253
-  n24 Name symbol=records::area children=[] parent=n23 bytes=242..246
-  n25 Name symbol=right children=[] parent=n23 bytes=247..252
-  n26 If  children=[n27,n30,n31] parent=n18 bytes=260..277
-  n27 Binary operator=StructuralEqual children=[n28,n29] parent=n26 bytes=260..264
-  n28 Name symbol=$gleam_case_0 children=[] parent=n27 bytes=260..264
-  n29 Boolean value=true children=[] parent=n27 bytes=260..264
-  n30 Name symbol=left children=[] parent=n26 bytes=268..277
-  n31 If  children=[n32,n35,n36] parent=n26 bytes=277..294
-  n32 Binary operator=StructuralEqual children=[n33,n34] parent=n31 bytes=277..282
-  n33 Name symbol=$gleam_case_0 children=[] parent=n32 bytes=277..282
-  n34 Boolean value=false children=[] parent=n32 bytes=277..282
-  n35 Name symbol=right children=[] parent=n31 bytes=286..294
-  n36 RuntimeFault  children=[] parent=n31 bytes=220..297
-  n37 Lambda symbol=$gleam_unit_parameter children=[n38] parent=- bytes=299..385
-  n38 StrictApply evaluation=strict children=[n39,n44] parent=n37 bytes=322..385
-  n39 StrictApply evaluation=strict children=[n40,n41] parent=n38 bytes=322..385
-  n40 Name symbol=records::larger children=[] parent=n39 bytes=326..332
-  n41 StrictApply evaluation=strict children=[n42,n43] parent=n39 bytes=333..350
-  n42 Name symbol=records::Circle children=[] parent=n41 bytes=333..339
-  n43 SignedInteger64  children=[n0] parent=n41 bytes=348..349
-  n44 StrictApply evaluation=strict children=[n45,n48] parent=n38 bytes=352..382
-  n45 StrictApply evaluation=strict children=[n46,n47] parent=n44 bytes=352..382
-  n46 Name symbol=records::Rectangle children=[] parent=n45 bytes=352..361
-  n47 SignedInteger64  children=[n0] parent=n45 bytes=369..370
-  n48 SignedInteger64  children=[n0] parent=n44 bytes=380..381
-  n49 Name symbol=records::main children=[] parent=- bytes=386..386
-  n50 StrictApply evaluation=strict children=[n51,n52] parent=- bytes=386..386
-  n51 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n50 bytes=386..386
-  n52 Name symbol=$Unit children=[] parent=n50 bytes=386..386</code></pre></td><td><pre><code>entry=d4; type=records::Shape; effects=[]
+  n3 Prim  children=[n0,n2] parent=n1 bytes=136..150
+  n4 Prim  children=[n2,n2] parent=n3 bytes=136..142
+  n5 SignedInteger64  children=[n0] parent=n4 bytes=136..137
+  n6 Name symbol=r children=[] parent=n4 bytes=140..142
+  n7 Name symbol=r children=[] parent=n3 bytes=144..150
+  n8 Prim  children=[n4,n2] parent=n1 bytes=184..192
+  n9 Name symbol=w children=[] parent=n8 bytes=184..186
+  n10 Name symbol=h children=[] parent=n8 bytes=188..192
+  n11 Lambda  children=[n12,n2] parent=- bytes=197..297
+  n12 Sequence symbol=$gleam_case_2 children=[n13,n24] parent=n11 bytes=220..297
+  n13 Prim  children=[n6,n2] parent=n12 bytes=229..254
+  n14 Sequence symbol=$gleam_argument_0 children=[n15,n16] parent=n13 bytes=229..239
+  n15 Name symbol=left children=[] parent=n14 bytes=234..238
+  n16 Apply  children=[n17,n1] parent=n14 bytes=229..239
+  n17 Name symbol=records::area children=[] parent=n16 bytes=229..233
+  n18 Name symbol=$gleam_argument_0 children=[] parent=n16 bytes=229..239
+  n19 Sequence symbol=$gleam_argument_1 children=[n20,n21] parent=n13 bytes=242..253
+  n20 Name symbol=right children=[] parent=n19 bytes=247..252
+  n21 Apply  children=[n22,n1] parent=n19 bytes=242..253
+  n22 Name symbol=records::area children=[] parent=n21 bytes=242..246
+  n23 Name symbol=$gleam_argument_1 children=[] parent=n21 bytes=242..253
+  n24 If  children=[n25,n28,n29] parent=n12 bytes=260..277
+  n25 Prim  children=[n10,n2] parent=n24 bytes=260..264
+  n26 Name symbol=$gleam_case_2 children=[] parent=n25 bytes=260..264
+  n27 Boolean value=true children=[] parent=n25 bytes=260..264
+  n28 Name symbol=left children=[] parent=n24 bytes=268..277
+  n29 If  children=[n30,n33,n34] parent=n24 bytes=277..294
+  n30 Prim  children=[n12,n2] parent=n29 bytes=277..282
+  n31 Name symbol=$gleam_case_2 children=[] parent=n30 bytes=277..282
+  n32 Boolean value=false children=[] parent=n30 bytes=277..282
+  n33 Name symbol=right children=[] parent=n29 bytes=286..294
+  n34 RuntimeFault  children=[n0] parent=n29 bytes=220..297
+  n35 Lambda  children=[n36,n1] parent=- bytes=299..385
+  n36 Sequence symbol=$gleam_argument_6 children=[n37,n42] parent=n35 bytes=322..385
+  n37 Sequence symbol=$gleam_argument_3 children=[n38,n39] parent=n36 bytes=333..350
+  n38 SignedInteger64  children=[n0] parent=n37 bytes=348..349
+  n39 Apply  children=[n40,n1] parent=n37 bytes=333..350
+  n40 Name symbol=records::Circle children=[] parent=n39 bytes=333..339
+  n41 Name symbol=$gleam_argument_3 children=[] parent=n39 bytes=333..350
+  n42 Sequence symbol=$gleam_argument_7 children=[n43,n51] parent=n36 bytes=322..385
+  n43 Sequence symbol=$gleam_argument_4 children=[n44,n45] parent=n42 bytes=352..382
+  n44 SignedInteger64  children=[n0] parent=n43 bytes=369..370
+  n45 Sequence symbol=$gleam_argument_5 children=[n46,n47] parent=n43 bytes=352..382
+  n46 SignedInteger64  children=[n0] parent=n45 bytes=380..381
+  n47 Apply  children=[n48,n2] parent=n45 bytes=352..382
+  n48 Name symbol=records::Rectangle children=[] parent=n47 bytes=352..361
+  n49 Name symbol=$gleam_argument_4 children=[] parent=n47 bytes=352..382
+  n50 Name symbol=$gleam_argument_5 children=[] parent=n47 bytes=352..382
+  n51 Apply  children=[n52,n2] parent=n42 bytes=322..385
+  n52 Name symbol=records::larger children=[] parent=n51 bytes=326..332
+  n53 Name symbol=$gleam_argument_6 children=[] parent=n51 bytes=322..385
+  n54 Name symbol=$gleam_argument_7 children=[] parent=n51 bytes=322..385
+  n55 Name symbol=records::main children=[] parent=- bytes=386..386
+  n56 Apply  children=[n57,n1] parent=- bytes=386..386
+  n57 Name symbol=$gleam/entry::$import$sourceEntry children=[] parent=n56 bytes=386..386
+  n58 Name symbol=$Unit children=[] parent=n56 bytes=386..386</code></pre></td><td><pre><code>entry=d4; type=records::Shape; effects=[]
 
 nodes:
-  n0 Lambda symbol=shape children=[n1] sourceByte=79
-  n1 Case  children=[n2,n3] sourceByte=94
+  n0 Lambda parameters=p0..p1 children=[n1,n1] sourceByte=79
+  n1 Case alternatives=k0..k2 children=[n2] sourceByte=94
   n2 Local depth=0 children=[] sourceByte=103
-  n3 CaseArm constructor=c7:records::Circle children=[n4,n10] sourceByte=115
-  n4 PatternBind symbol=r children=[n5] sourceByte=115
-  n5 Binary operator=MultiplySignedInteger64 children=[n6,n9] sourceByte=136
-  n6 Binary operator=MultiplySignedInteger64 children=[n7,n8] sourceByte=136
-  n7 SignedInteger64 payload=3 children=[n0] sourceByte=136
-  n8 Local depth=0 children=[] sourceByte=140
-  n9 Local depth=0 children=[] sourceByte=144
-  n10 CaseArm constructor=c8:records::Rectangle children=[n11] sourceByte=150
-  n11 PatternBind symbol=h children=[n12] sourceByte=150
-  n12 PatternBind symbol=w children=[n13] sourceByte=150
-  n13 Binary operator=MultiplySignedInteger64 children=[n14,n15] sourceByte=184
-  n14 Local depth=0 children=[] sourceByte=184
-  n15 Local depth=1 children=[] sourceByte=188
-  n16 Lambda symbol=left children=[n17] sourceByte=197
-  n17 Lambda symbol=right children=[n18] sourceByte=197
-  n18 Let symbol=records::larger evaluation=strict children=[n19,n26] sourceByte=220
-  n19 Binary operator=GreaterSignedInteger64 children=[n20,n23] sourceByte=229
-  n20 Apply evaluation=strict children=[n21,n22] sourceByte=229
-  n21 Global definition=d0 children=[] sourceByte=229
-  n22 Local depth=1 children=[] sourceByte=234
-  n23 Apply evaluation=strict children=[n24,n25] sourceByte=242
-  n24 Global definition=d0 children=[] sourceByte=242
-  n25 Local depth=0 children=[] sourceByte=247
-  n26 If  children=[n27,n30,n31] sourceByte=260
-  n27 Binary operator=StructuralEqual children=[n28,n29] sourceByte=260
-  n28 Local depth=0 children=[] sourceByte=260
-  n29 Boolean value=true children=[] sourceByte=260
-  n30 Local depth=2 children=[] sourceByte=268
-  n31 If  children=[n32,n35,n36] sourceByte=277
-  n32 Binary operator=StructuralEqual children=[n33,n34] sourceByte=277
-  n33 Local depth=0 children=[] sourceByte=277
-  n34 Boolean value=false children=[] sourceByte=277
-  n35 Local depth=1 children=[] sourceByte=286
-  n36 RuntimeFault payload=33 children=[] sourceByte=220
-  n37 Lambda symbol=$gleam_unit_parameter children=[n38] sourceByte=299
-  n38 Apply evaluation=strict children=[n39,n44] sourceByte=322
-  n39 Apply evaluation=strict children=[n40,n41] sourceByte=322
-  n40 Global definition=d1 children=[] sourceByte=326
-  n41 Apply evaluation=strict children=[n42,n43] sourceByte=333
-  n42 Constructor constructor=c7:records::Circle children=[] sourceByte=333
-  n43 SignedInteger64 payload=3 children=[n0] sourceByte=348
-  n44 Apply evaluation=strict children=[n45,n48] sourceByte=352
-  n45 Apply evaluation=strict children=[n46,n47] sourceByte=352
-  n46 Constructor constructor=c8:records::Rectangle children=[] sourceByte=352
-  n47 SignedInteger64 payload=6 children=[n0] sourceByte=369
-  n48 SignedInteger64 payload=7 children=[n0] sourceByte=380
-  n49 Global definition=d2 children=[] sourceByte=386
-  n50 Apply evaluation=strict children=[n51,n52] sourceByte=386
-  n51 Global definition=d3 children=[] sourceByte=386
-  n52 Constructor constructor=c10:$Unit children=[] sourceByte=386</code></pre></td></tr>
+  n3 Prim opcode=MultiplySignedInteger64 operands=a0..a2 children=[] sourceByte=136
+  n4 Prim opcode=MultiplySignedInteger64 operands=a2..a4 children=[] sourceByte=136
+  n5 SignedInteger64 payload=3 children=[n0] sourceByte=136
+  n6 Local depth=0 children=[] sourceByte=140
+  n7 Local depth=0 children=[] sourceByte=144
+  n8 Prim opcode=MultiplySignedInteger64 operands=a4..a6 children=[] sourceByte=184
+  n9 Local depth=0 children=[] sourceByte=184
+  n10 Local depth=1 children=[] sourceByte=188
+  n11 Lambda parameters=p1..p3 children=[n12,n2] sourceByte=197
+  n12 Let symbol=records::larger evaluation=strict children=[n13,n24] sourceByte=220
+  n13 Prim opcode=GreaterSignedInteger64 operands=a6..a8 children=[] sourceByte=229
+  n14 Let symbol=records::larger evaluation=strict children=[n15,n16] sourceByte=229
+  n15 Local depth=1 children=[] sourceByte=234
+  n16 Apply arguments=a8..a9 children=[n17] sourceByte=229
+  n17 Global definition=d0 children=[] sourceByte=229
+  n18 Local depth=0 children=[] sourceByte=229
+  n19 Let symbol=records::larger evaluation=strict children=[n20,n21] sourceByte=242
+  n20 Local depth=0 children=[] sourceByte=247
+  n21 Apply arguments=a9..a10 children=[n22] sourceByte=242
+  n22 Global definition=d0 children=[] sourceByte=242
+  n23 Local depth=0 children=[] sourceByte=242
+  n24 If  children=[n25,n28,n29] sourceByte=260
+  n25 Prim opcode=StructuralEqual operands=a10..a12 children=[] sourceByte=260
+  n26 Local depth=0 children=[] sourceByte=260
+  n27 Boolean value=true children=[] sourceByte=260
+  n28 Local depth=2 children=[] sourceByte=268
+  n29 If  children=[n30,n33,n34] sourceByte=277
+  n30 Prim opcode=StructuralEqual operands=a12..a14 children=[] sourceByte=277
+  n31 Local depth=0 children=[] sourceByte=277
+  n32 Boolean value=false children=[] sourceByte=277
+  n33 Local depth=1 children=[] sourceByte=286
+  n34 RuntimeFault payload=35 children=[n0] sourceByte=220
+  n35 Lambda parameters=p3..p4 children=[n36,n1] sourceByte=299
+  n36 Let symbol=records::larger evaluation=strict children=[n37,n42] sourceByte=322
+  n37 Let symbol=records::larger evaluation=strict children=[n38,n39] sourceByte=333
+  n38 SignedInteger64 payload=3 children=[n0] sourceByte=348
+  n39 Apply arguments=a14..a15 children=[n40] sourceByte=333
+  n40 Constructor constructor=c7:records::Circle children=[] sourceByte=333
+  n41 Local depth=0 children=[] sourceByte=333
+  n42 Let symbol=records::larger evaluation=strict children=[n43,n51] sourceByte=322
+  n43 Let symbol=records::larger evaluation=strict children=[n44,n45] sourceByte=352
+  n44 SignedInteger64 payload=6 children=[n0] sourceByte=369
+  n45 Let symbol=records::larger evaluation=strict children=[n46,n47] sourceByte=352
+  n46 SignedInteger64 payload=7 children=[n0] sourceByte=380
+  n47 Apply arguments=a15..a17 children=[n48] sourceByte=352
+  n48 Constructor constructor=c8:records::Rectangle children=[] sourceByte=352
+  n49 Local depth=1 children=[] sourceByte=352
+  n50 Local depth=0 children=[] sourceByte=352
+  n51 Apply arguments=a17..a19 children=[n52] sourceByte=322
+  n52 Global definition=d1 children=[] sourceByte=326
+  n53 Local depth=1 children=[] sourceByte=322
+  n54 Local depth=0 children=[] sourceByte=322
+  n55 Global definition=d2 children=[] sourceByte=386
+  n56 Apply arguments=a19..a20 children=[n57] sourceByte=386
+  n57 Global definition=d3 children=[] sourceByte=386
+  n58 Constructor constructor=c10:$Unit children=[] sourceByte=386</code></pre></td></tr>
 </table>
 
 ## Evaluation
@@ -240,8 +264,8 @@ nodes:
     "fieldCount": 2
   },
   "stats": {
-    "steps": 47,
-    "allocations": 36,
+    "steps": 53,
+    "allocations": 42,
     "peakStack": 0,
     "thunkEvaluations": 1
   }

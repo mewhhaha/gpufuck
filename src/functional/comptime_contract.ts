@@ -1,4 +1,4 @@
-import type { Diagnostic, EvaluationProfile, Span, Type, TypeSchema } from "./abi.ts";
+import type { Diagnostic, Span, Type, TypeSchema } from "./abi.ts";
 import type { EvaluationStats, RuntimeFault } from "./evaluator.ts";
 import type { ModuleArtifact, ModuleImport } from "./module_linker.ts";
 import type { SurfaceDefinition, SurfaceTypeDeclaration } from "./surface_builder.ts";
@@ -28,7 +28,6 @@ export interface ComptimeModuleArtifact {
   readonly imports: readonly ModuleImport[];
   readonly exports: readonly ComptimeModuleExport[];
   readonly sourceByteLength: number;
-  readonly evaluationProfile?: EvaluationProfile;
 }
 
 export interface ComptimeModuleExport {

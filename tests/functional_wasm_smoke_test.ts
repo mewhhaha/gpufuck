@@ -19,7 +19,6 @@ import {
   compileModulesToWasm,
   compileModuleToWasm,
   CpuCompiler,
-  EvaluationProfile,
   extendRecordType,
   FunctionalCompilerService,
   GpuCompiler,
@@ -61,7 +60,6 @@ async function compileEntry(body: Parameters<typeof surface.apply>[0]) {
     [],
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalCompiler().compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
@@ -80,7 +78,6 @@ async function compileCpuEntry(
     [],
     name,
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await compiler.compileModule(encoded);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
@@ -100,6 +97,45 @@ Deno.test("emits a WebAssembly artifact that runs to the expected value", async 
     const execution = await runWasmModule(compilation.module);
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("ordinary lets evaluate only the value selected by control flow", async () => {
+  const compilation = await compileEntry(
+    surface.let(
+      "x",
+      surface.integer(1),
+      surface.let(
+        "y",
+        surface.runtimeFault("unselected let value"),
+        surface.if(
+          surface.equal(surface.name("x"), surface.integer(1)),
+          surface.name("x"),
+          surface.name("y"),
+        ),
+      ),
+    ),
+  );
+  try {
+    const execution = await runWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 1 });
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("sequence evaluates an unused value before its body", async () => {
+  const compilation = await compileEntry(
+    surface.sequence(
+      "ignored",
+      surface.runtimeFault("sequenced value"),
+      surface.integer(42),
+    ),
+  );
+  try {
+    await rejects(() => runWasmModule(compilation.module), /sequenced value/);
   } finally {
     compilation.module.destroy();
   }
@@ -186,7 +222,7 @@ Deno.test("a value-carrying join returns its argument in WebAssembly", async () 
   }
 });
 
-Deno.test("a contified join evaluates a strict unused argument", async () => {
+Deno.test("a contified join skips an unused argument", async () => {
   const compilation = await compileEntry({
     kind: "let-rec-group",
     bindings: [{
@@ -210,10 +246,8 @@ Deno.test("a contified join evaluates a strict unused argument", async () => {
     body: surface.apply(surface.name("loop"), surface.integer(0)),
   });
   try {
-    await rejects(
-      () => runWasmModule(compilation.module),
-      /strict join argument/,
-    );
+    const execution = await runWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
   } finally {
     compilation.module.destroy();
   }
@@ -303,7 +337,6 @@ Deno.test("HasField evidence shares one open projection across record layouts", 
     declarations,
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalCompiler().compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
@@ -410,7 +443,6 @@ Deno.test("ExtendRecord evidence shares one open extension across layouts", asyn
     ],
     "main",
     0,
-    { evaluationProfile: EvaluationProfile.StrictEager },
   );
   const compilation = await functionalCompiler().compileModule(module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
@@ -448,7 +480,6 @@ Deno.test("CPU compilation emits executable Core without initializing WebGPU", a
       [],
       "main",
       0,
-      { evaluationProfile: EvaluationProfile.LazyCallByNeed },
     );
     const compilation = await service.compileModule(encoded);
     ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
@@ -663,7 +694,6 @@ Deno.test("batch WebAssembly exposes independent entries from one artifact", asy
       }],
       "main",
       0,
-      { evaluationProfile: EvaluationProfile.LazyCallByNeed },
     );
     const compilation = await cpuCompiler.compileModule(encoded);
     ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);

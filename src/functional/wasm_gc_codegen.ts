@@ -240,6 +240,11 @@ class GcCoreEmitter {
         );
         return;
       case CoreTag.Let: {
+        if (node.evaluationMode === EvaluationMode.LazyCallByNeed && node.payload === 0) {
+          const unusedLocal = this.#instructions.addValueLocal();
+          this.emitExpression(node.child1, [unusedLocal, ...environment]);
+          return;
+        }
         if (node.evaluationMode === EvaluationMode.StrictEager) {
           this.emitExpression(node.child0, environment);
         } else {

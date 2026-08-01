@@ -15,7 +15,6 @@ import {
   compileModuleToWasm,
   type CompilerPerformanceTrace,
   CpuCompiler,
-  EvaluationProfile,
   GpuCompiler,
   GpuEvaluator,
   type HostCapabilityDeclaration,
@@ -624,7 +623,6 @@ async function prepare(path: string) {
     lowered.entry,
     sourceByteLength,
     {
-      evaluationProfile: EvaluationProfile.StrictEager,
       hostCapabilities: lowered.capabilities,
       hostDefinitions: lowered.hostDefinitions,
       wasmExports: lowered.exports.map((exported) => ({

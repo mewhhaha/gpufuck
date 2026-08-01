@@ -165,6 +165,7 @@ unit and pair types. It does not decide what a source construct means.
 | Multi-parameter function       | `surface.lambda(["x", "y"], body)`                          |
 | Call                           | `surface.apply(callee, ...arguments)`                       |
 | Immutable local                | `surface.let(name, value, body)`                            |
+| Required source order          | `surface.sequence(name, value, body)`                       |
 | Conditional                    | `surface.if(condition, consequent, alternate)`              |
 | Algebraic value                | a declared constructor applied as an ordinary function      |
 | Pattern match                  | `surface.case(value, arms, otherwise)`                      |
@@ -300,20 +301,22 @@ dynamic interception: a function that already closed over the global operation s
 Host capabilities describe the operations supplied by an application at runtime. Keep this boundary
 small and structural; it becomes both the evaluator contract and the Wasm import contract.
 
-## SIMD, laziness, and branch hints
+## SIMD, demand, and branch hints
 
 The fixed-vector library has portable definitions and optional native Wasm SIMD lowering. Include
 `FIXED_VECTOR_TYPE_DECLARATIONS` and `FIXED_VECTOR_DEFINITIONS`, construct expressions with `f32x4`,
 then emit with `{ simd: "wasm-simd" }`.
 
-Strict, provably typed F32x4 values remain in `v128` across compatible calls, conditions,
-projections, and let-bound chains. Lazy and genuinely generic boundaries use the boxed
+Provably demanded or safely materialized F32x4 values remain in `v128` across compatible calls,
+conditions, projections, and let-bound chains. Genuinely lazy and generic boundaries use the boxed
 representation. Available operations include arithmetic, lane access and replacement, comparisons
 and masks, `select`, horizontal addition, shuffle, and swizzle.
 
-`EvaluationProfile.StrictEager` is the default. A lazy frontend can select
-`EvaluationProfile.LazyCallByNeed`, while individual values can use `surface.delay()` and
-`surface.force()`. Thunks are shared and evaluated at most once.
+Ordinary `let` bindings and application arguments are demand-driven. The compiler deletes unused
+bindings, evaluates a demanded value at most once, and may inline, sink, or eagerly materialize a
+pure total value when that preserves behavior. Use `surface.sequence(name, value, body)` when
+`value` must run before `body`, including ordered effects and intentional faults. `surface.delay()`
+and `surface.force()` remain available when a thunk is itself part of the program's value model.
 
 Frontends can attach non-semantic branch metadata:
 
