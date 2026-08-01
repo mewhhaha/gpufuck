@@ -389,12 +389,24 @@ class Parser {
       const span = { startByte: name.start, endByte: close.end };
       // Uppercase means a constructor; the distinction is lexical so no resolution is needed here.
       return /^[A-Z]/.test(name.text)
-        ? { kind: "construct", constructor: name.text, arguments: args, span }
+        ? {
+          kind: "construct",
+          constructor: name.text,
+          typeArguments,
+          arguments: args,
+          span,
+        }
         : { kind: "call", callee: name.text, typeArguments, arguments: args, span };
     }
     if (typeArguments.length > 0) this.#fail("type arguments require a call");
     return /^[A-Z]/.test(name.text)
-      ? { kind: "construct", constructor: name.text, arguments: [], span: this.#span(name) }
+      ? {
+        kind: "construct",
+        constructor: name.text,
+        typeArguments: [],
+        arguments: [],
+        span: this.#span(name),
+      }
       : { kind: "name", name: name.text, span: this.#span(name) };
   }
 

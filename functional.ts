@@ -68,6 +68,9 @@ export * from "./src/functional/canonical_abi.ts";
 export * from "./src/functional/wasm_contract.ts";
 export * from "./src/functional/wasm_execution.ts";
 export * from "./src/functional/wasm_arena.ts";
+export { GpuWasmEncoder, type GpuWasmEncodingResult } from "./src/functional/gpu_wasm_encoder.ts";
+export { type WasmModuleEncoding } from "./src/functional/wasm_binary.ts";
+export { prepareLinearWasmModuleEncoding } from "./src/functional/wasm_codegen.ts";
 
 // Mutable state behind the backend: the storage plan and the Storage Core it verifies.
 export * from "./src/functional/storage_contract.ts";

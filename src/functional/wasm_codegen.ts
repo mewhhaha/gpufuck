@@ -335,6 +335,20 @@ export function compileWasmArtifact(
   return emitWasmArtifact(plan, trace);
 }
 
+export function prepareLinearWasmModuleEncoding(
+  module: CompiledModule,
+  nodes: readonly CoreNode[],
+  options: WasmCompilationOptions = {},
+  trace?: CompilerPerformanceTrace,
+): WasmModuleEncoding {
+  trace ??= options.trace;
+  if (options.canonicalAbi !== undefined) {
+    validateCanonicalAbiInterface(options.canonicalAbi);
+  }
+  const plan = createWasmBackendPlan(module, nodes, false, options, trace);
+  return new WasmCompiler(plan, false).compileEncoding();
+}
+
 export function compileWasmArtifactWithSignedLiteralUpdate(
   module: CompiledModule,
   nodes: readonly CoreNode[],
@@ -933,6 +947,27 @@ class WasmCompiler {
   }
 
   compile(): Uint8Array<ArrayBuffer> {
+    const encoding = this.compileEncoding();
+    const encodeSpan = this.#trace?.start("wasm.encode");
+    const encoded = encodeLinearWasmEmission(encoding);
+    this.#linearEmission = {
+      encoding,
+      functionBodies: encoded.functionBodies,
+      sectionsBeforeCode: encoded.sectionsBeforeCode,
+    };
+    encodeSpan?.finish({
+      ...wasmEncodingAnnotations(
+        encoding.functions,
+        encoding.imports.length,
+        encoding.indirectFunctionIndices.length,
+      ),
+      reusedFunctionBodies: encoded.reusedFunctionBodies,
+      reusedSectionsBeforeCode: encoded.reusedSectionsBeforeCode,
+    });
+    return encoded.bytes;
+  }
+
+  compileEncoding(): WasmModuleEncoding {
     this.validateCanonicalAbiModule();
     const reachabilitySpan = this.#trace?.start("wasm.emit.reachability");
     const directCallableFunctions = this.#module.wasmExports.map((exported) => {
@@ -1196,23 +1231,7 @@ class WasmCompiler {
         ? {}
         : { canonicalAbiVersion: { major: 1, minor: 0 } }),
     });
-    const encodeSpan = this.#trace?.start("wasm.encode");
-    const encoded = encodeLinearWasmEmission(encoding);
-    this.#linearEmission = {
-      encoding,
-      functionBodies: encoded.functionBodies,
-      sectionsBeforeCode: encoded.sectionsBeforeCode,
-    };
-    encodeSpan?.finish({
-      ...wasmEncodingAnnotations(
-        emittedFunctions,
-        this.#functionImports.length,
-        indirectFunctions.length,
-      ),
-      reusedFunctionBodies: encoded.reusedFunctionBodies,
-      reusedSectionsBeforeCode: encoded.reusedSectionsBeforeCode,
-    });
-    return encoded.bytes;
+    return encoding;
   }
 
   validateCanonicalAbiModule(): void {

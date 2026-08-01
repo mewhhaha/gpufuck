@@ -52,6 +52,7 @@
     "bench:semantic-wavefront": "deno bench benchmarks/semantic_wavefront_bench.ts",
     "bench:sweep": "deno run --unstable-webgpu --allow-read benchmarks/sweep_vs_lazuli_bench.ts",
     "bench:sweep-editor": "deno run --unstable-webgpu --allow-read benchmarks/sweep_editor_bench.ts",
+    "bench:sweep-flattening": "deno run --unstable-webgpu --allow-read benchmarks/sweep_flattening_bench.ts",
     "bench:throughput": "deno run --unstable-webgpu --allow-read=language/lazuli/generated benchmarks/compile_throughput_bench.ts",
     "check": "deno check mod.ts functional.ts gleam.ts gleam_cli.ts sweep.ts sweep_cli.ts sweep_vim.ts lazuli_cli.ts benchmarks/*.ts examples/javascript-aot/*.ts tests/*.ts tools/*.ts playground/build.ts",
     "check:gpu-lexer": "deno run --unstable-webgpu --allow-read tools/check_gpu_lexer_fit.ts",

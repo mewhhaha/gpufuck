@@ -1,7 +1,7 @@
 import { deepStrictEqual, equal, match, ok } from "node:assert/strict";
 import { GpuCompiler, GpuEvaluator, requestWebGpuDevice, runWasmModule } from "../functional.ts";
 import type { WasmHostValue } from "../functional.ts";
-import { compileSweepSource, parseSweepModule } from "../sweep.ts";
+import { compileSweepSource, GpuSweepCompiler, parseSweepModule } from "../sweep.ts";
 
 /**
  * Sweep exists to test DESIGN.md, so these tests assert the rules hold rather than that the
@@ -9,7 +9,12 @@ import { compileSweepSource, parseSweepModule } from "../sweep.ts";
  * violation is rejected, because a rule the compiler does not enforce is a comment.
  */
 
-const RUNTIME: { device?: GPUDevice; compiler?: GpuCompiler; evaluator?: GpuEvaluator } = {};
+const RUNTIME: {
+  device?: GPUDevice;
+  compiler?: GpuCompiler;
+  sweepCompiler?: GpuSweepCompiler;
+  evaluator?: GpuEvaluator;
+} = {};
 
 async function evaluate(source: string): Promise<unknown> {
   const lowered = compileSweepSource("t", source);
@@ -37,6 +42,25 @@ async function evaluate(source: string): Promise<unknown> {
   }
 }
 
+async function evaluateCheckingOnly(source: string): Promise<unknown> {
+  RUNTIME.device ??= await requestWebGpuDevice();
+  RUNTIME.sweepCompiler ??= await GpuSweepCompiler.create(RUNTIME.device);
+  RUNTIME.evaluator ??= await GpuEvaluator.create(RUNTIME.device);
+  const compilation = await RUNTIME.sweepCompiler.compileSource("t", source);
+  ok(
+    compilation.ok,
+    compilation.ok ? undefined : compilation.diagnostics[0].message,
+  );
+  if (!compilation.ok) throw new Error("unreachable");
+  try {
+    const execution = await RUNTIME.evaluator.evaluate(compilation.module);
+    ok(execution.ok, execution.ok ? undefined : execution.fault.code);
+    return execution.ok ? execution.value : undefined;
+  } finally {
+    compilation.module.destroy();
+  }
+}
+
 Deno.test("Sweep compiles and runs through the GPU pipeline", async () => {
   const value = await evaluate(`type Shape = Circle(radius: Int) | Rect(width: Int, height: Int);
 
@@ -51,6 +75,33 @@ fn main() -> Int =
   if a > 0 then a else 0;
 `);
   equal((value as { value: number }).value, 42);
+});
+
+Deno.test("Sweep checking-only compilation runs without type inference", async () => {
+  const value = await evaluateCheckingOnly(`type Option[T] = None | Some(value: T);
+
+fn apply(f: (Int) -> Int, value: Int) -> Int = f(value);
+fn increment(value: Int) -> Int = value + 1;
+fn unwrap(value: Option[Int]) -> Int =
+  match value {
+    None -> 0;
+    Some(inner) -> inner;
+  };
+fn main() -> Int = apply(increment, unwrap(Some[Int](41)));
+`);
+  equal((value as { value: number }).value, 42);
+});
+
+Deno.test("Sweep checking-only compilation reports the first unequal annotation", async () => {
+  RUNTIME.device ??= await requestWebGpuDevice();
+  RUNTIME.sweepCompiler ??= await GpuSweepCompiler.create(RUNTIME.device);
+  const compilation = await RUNTIME.sweepCompiler.compileSource(
+    "t",
+    `fn main() -> Int = if true then 1 else false;\n`,
+  );
+  ok(!compilation.ok);
+  if (compilation.ok) return;
+  match(compilation.diagnostics[0].message, /if alternate has type Bool; expected Int/);
 });
 
 /** Rule 1: there is no syntax for an unannotated parameter, so this cannot even parse. */

@@ -71,6 +71,7 @@ export type SweepExpression =
   | {
     readonly kind: "construct";
     readonly constructor: string;
+    readonly typeArguments: readonly SweepType[];
     readonly arguments: readonly SweepExpression[];
     readonly span: SweepSpan;
   }

@@ -382,6 +382,43 @@ export function encodeWasmModule(
   cachedFunctionBodies: readonly CachedWasmFunctionBody[] = [],
   cachedSectionsBeforeCode?: readonly (readonly number[])[],
 ): EncodedWasmModule {
+  const { functions } = encoding;
+  let reusedFunctionBodies = 0;
+  const functionBodies = functions.map((body, index) => {
+    const cached = cachedFunctionBodies[index];
+    if (cached?.body !== body) return { body, encoded: encodeFunctionBody(body) };
+    reusedFunctionBodies += 1;
+    return cached;
+  });
+  const sectionsBeforeCode = cachedSectionsBeforeCode ?? encodeSectionsBeforeCode(encoding);
+  const bytes = assembleWasmModule(
+    sectionsBeforeCode,
+    functionBodies.length,
+    functionBodies.map((body) => body.encoded),
+  );
+  return {
+    bytes,
+    functionBodies,
+    sectionsBeforeCode,
+    reusedFunctionBodies,
+    reusedSectionsBeforeCode: cachedSectionsBeforeCode !== undefined,
+  };
+}
+
+export function encodeWasmModuleWithEncodedFunctionBodies(
+  encoding: WasmModuleEncoding,
+  encodedFunctionBodies: Uint8Array<ArrayBuffer>,
+): Uint8Array<ArrayBuffer> {
+  return assembleWasmModule(
+    encodeSectionsBeforeCode(encoding),
+    encoding.functions.length,
+    [encodedFunctionBodies],
+  );
+}
+
+function encodeSectionsBeforeCode(
+  encoding: WasmModuleEncoding,
+): readonly (readonly number[])[] {
   const {
     imports,
     functions,
@@ -398,127 +435,124 @@ export function encodeWasmModule(
     canonicalAbiVersion,
   } = encoding;
   const runtimeGlobalCount = instrumentedFuel ? 9 : 7;
-  let reusedFunctionBodies = 0;
-  const functionBodies = functions.map((body, index) => {
-    const cached = cachedFunctionBodies[index];
-    if (cached?.body !== body) return { body, encoded: encodeFunctionBody(body) };
-    reusedFunctionBodies += 1;
-    return cached;
-  });
-  let sectionsBeforeCode = cachedSectionsBeforeCode;
-  if (sectionsBeforeCode === undefined) {
-    const types = wasmFunctionTypes(additionalFunctionTypes);
-    sectionsBeforeCode = [
-      section(1, vector(types)),
-      ...(imports.length === 0 ? [] : [section(
-        2,
-        vector(imports.map((imported) => [
-          ...name(imported.module),
-          ...name(imported.name),
-          0x00,
-          ...encodeUnsigned(imported.typeIndex),
-        ])),
-      )]),
-      section(3, vector(functions.map((body) => encodeUnsigned(body.typeIndex)))),
-      section(4, vector([[0x70, 0x00, ...encodeUnsigned(indirectFunctionIndices.length)]])),
-      section(5, vector([[0x00, 0x01]])),
-      section(
-        6,
-        vector([
-          [0x7f, 0x01, 0x41, ...encodeSigned(BigInt(heapStart)), 0x0b],
-          [0x7f, 0x01, 0x41, 0x00, 0x0b],
-          [0x7f, 0x01, 0x41, 0x00, 0x0b],
-          [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
-          [0x7f, 0x01, 0x41, 0x00, 0x0b],
-          [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
-          [0x7f, 0x01, 0x41, 0x00, 0x0b],
-          ...(instrumentedFuel
-            ? [
-              [0x7f, 0x01, 0x41, 0x00, 0x0b],
-              [0x7f, 0x01, 0x41, 0x00, 0x0b],
-            ]
-            : []),
-          ...(canonicalAbiVersion === undefined ? [] : [
-            [
-              0x7f,
-              0x00,
-              0x41,
-              ...encodeSigned(BigInt(canonicalAbiVersion.major)),
-              0x0b,
-            ],
-            [
-              0x7f,
-              0x00,
-              0x41,
-              ...encodeSigned(BigInt(canonicalAbiVersion.minor)),
-              0x0b,
-            ],
-          ]),
-        ]),
-      ),
-      section(
-        7,
-        vector([
-          ...(canonicalAbiVersion === undefined
-            ? [[...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)]]
-            : []),
-          ...(canonicalAbiVersion !== undefined || valueForceFunctionIndex === undefined
-            ? []
-            : [[...name("forceValue"), 0x00, ...encodeUnsigned(valueForceFunctionIndex)]]),
-          ...(canonicalAbiVersion !== undefined || initializeFunctionIndex === undefined
-            ? []
-            : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
-          ...(canonicalAbiVersion !== undefined || allocateFunctionIndex === undefined
-            ? []
-            : [[...name("allocate"), 0x00, ...encodeUnsigned(allocateFunctionIndex)]]),
-          ...(canonicalAbiVersion !== undefined || freeFunctionIndex === undefined
-            ? []
-            : [[...name("free"), 0x00, ...encodeUnsigned(freeFunctionIndex)]]),
-          ...functionExports.map((exported) => [
-            ...name(exported.name),
-            0x00,
-            ...encodeUnsigned(exported.functionIndex),
-          ]),
-          [...name("memory"), 0x02, 0x00],
-          globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
-          globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
-          ...(canonicalAbiVersion === undefined
-            ? [
-              globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
-              globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
-              globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
-              globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
-              ...(instrumentedFuel
-                ? [
-                  globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
-                  globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
-                ]
-                : []),
-            ]
-            : []),
-          ...(canonicalAbiVersion === undefined ? [] : [
-            globalExport("blot:abi-major", runtimeGlobalCount),
-            globalExport("blot:abi-minor", runtimeGlobalCount + 1),
-          ]),
-        ]),
-      ),
-      section(
-        9,
-        vector([
+  return [
+    section(1, vector(wasmFunctionTypes(additionalFunctionTypes))),
+    ...(imports.length === 0 ? [] : [section(
+      2,
+      vector(imports.map((imported) => [
+        ...name(imported.module),
+        ...name(imported.name),
+        0x00,
+        ...encodeUnsigned(imported.typeIndex),
+      ])),
+    )]),
+    section(3, vector(functions.map((body) => encodeUnsigned(body.typeIndex)))),
+    section(4, vector([[0x70, 0x00, ...encodeUnsigned(indirectFunctionIndices.length)]])),
+    section(5, vector([[0x00, 0x01]])),
+    section(
+      6,
+      vector([
+        [0x7f, 0x01, 0x41, ...encodeSigned(BigInt(heapStart)), 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        [0x7f, 0x01, 0x41, ...encodeSigned(65_536n), 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        [0x7f, 0x01, 0x41, ...encodeSigned(-1n), 0x0b],
+        [0x7f, 0x01, 0x41, 0x00, 0x0b],
+        ...(instrumentedFuel
+          ? [
+            [0x7f, 0x01, 0x41, 0x00, 0x0b],
+            [0x7f, 0x01, 0x41, 0x00, 0x0b],
+          ]
+          : []),
+        ...(canonicalAbiVersion === undefined ? [] : [
           [
+            0x7f,
             0x00,
             0x41,
-            0x00,
+            ...encodeSigned(BigInt(canonicalAbiVersion.major)),
             0x0b,
-            ...vector(indirectFunctionIndices.map(encodeUnsigned)),
+          ],
+          [
+            0x7f,
+            0x00,
+            0x41,
+            ...encodeSigned(BigInt(canonicalAbiVersion.minor)),
+            0x0b,
           ],
         ]),
-      ),
-    ];
-  }
-  const functionCount = encodeUnsigned(functionBodies.length);
-  const codeContentsLength = functionCount.length +
-    functionBodies.reduce((total, body) => total + body.encoded.length, 0);
+      ]),
+    ),
+    section(
+      7,
+      vector([
+        ...(canonicalAbiVersion === undefined
+          ? [[...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)]]
+          : []),
+        ...(canonicalAbiVersion !== undefined || valueForceFunctionIndex === undefined
+          ? []
+          : [[...name("forceValue"), 0x00, ...encodeUnsigned(valueForceFunctionIndex)]]),
+        ...(canonicalAbiVersion !== undefined || initializeFunctionIndex === undefined
+          ? []
+          : [[...name("initialize"), 0x00, ...encodeUnsigned(initializeFunctionIndex)]]),
+        ...(canonicalAbiVersion !== undefined || allocateFunctionIndex === undefined
+          ? []
+          : [[...name("allocate"), 0x00, ...encodeUnsigned(allocateFunctionIndex)]]),
+        ...(canonicalAbiVersion !== undefined || freeFunctionIndex === undefined
+          ? []
+          : [[...name("free"), 0x00, ...encodeUnsigned(freeFunctionIndex)]]),
+        ...functionExports.map((exported) => [
+          ...name(exported.name),
+          0x00,
+          ...encodeUnsigned(exported.functionIndex),
+        ]),
+        [...name("memory"), 0x02, 0x00],
+        globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
+        globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
+        ...(canonicalAbiVersion === undefined
+          ? [
+            globalExport("thunkEvaluations", WasmRuntimeGlobal.ThunkEvaluations),
+            globalExport("heapTop", WasmRuntimeGlobal.HeapTop),
+            globalExport("freeListHead", WasmRuntimeGlobal.FreeListHead),
+            globalExport("arenaDepth", WasmRuntimeGlobal.ArenaDepth),
+            ...(instrumentedFuel
+              ? [
+                globalExport("comptimeFuel", WasmRuntimeGlobal.ComptimeFuel),
+                globalExport("comptimeSteps", WasmRuntimeGlobal.ComptimeSteps),
+              ]
+              : []),
+          ]
+          : []),
+        ...(canonicalAbiVersion === undefined ? [] : [
+          globalExport("blot:abi-major", runtimeGlobalCount),
+          globalExport("blot:abi-minor", runtimeGlobalCount + 1),
+        ]),
+      ]),
+    ),
+    section(
+      9,
+      vector([[
+        0x00,
+        0x41,
+        0x00,
+        0x0b,
+        ...vector(indirectFunctionIndices.map(encodeUnsigned)),
+      ]]),
+    ),
+  ];
+}
+
+function assembleWasmModule(
+  sectionsBeforeCode: readonly (readonly number[])[],
+  functionCountValue: number,
+  encodedFunctionBodies: readonly ArrayLike<number>[],
+): Uint8Array<ArrayBuffer> {
+  const functionCount = encodeUnsigned(functionCountValue);
+  const functionBodiesLength = encodedFunctionBodies.reduce(
+    (total, body) => total + body.length,
+    0,
+  );
+  const codeContentsLength = functionCount.length + functionBodiesLength;
   const encodedCodeContentsLength = encodeUnsigned(codeContentsLength);
   const sectionsLength = sectionsBeforeCode.reduce(
     (total, encodedSection) => total + encodedSection.length,
@@ -538,17 +572,11 @@ export function encodeWasmModule(
   offset += encodedCodeContentsLength.length;
   bytes.set(functionCount, offset);
   offset += functionCount.length;
-  for (const body of functionBodies) {
-    bytes.set(body.encoded, offset);
-    offset += body.encoded.length;
+  for (const body of encodedFunctionBodies) {
+    bytes.set(body, offset);
+    offset += body.length;
   }
-  return {
-    bytes,
-    functionBodies,
-    sectionsBeforeCode,
-    reusedFunctionBodies,
-    reusedSectionsBeforeCode: cachedSectionsBeforeCode !== undefined,
-  };
+  return bytes;
 }
 
 export function encodeCompactScalarWasmModule(

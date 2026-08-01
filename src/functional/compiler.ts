@@ -474,71 +474,79 @@ export class GpuCompiler {
     encodedModule: EncodedModule,
     artifact: CompiledCoreArtifact,
   ): Promise<GpuModule> {
-    validateEncodedModule(encodedModule);
-    const coreNodeBytes = encodeCoreArtifact(encodedModule, artifact);
-    const surface = encodedModule;
-    const entryDefinition = findEntryDefinition(encodedModule);
-    const buffers: GPUBuffer[] = [];
-    this.#device.pushErrorScope("validation");
-    this.#device.pushErrorScope("out-of-memory");
-    let allocationCause: unknown;
-    try {
-      const nodeBuffer = createRestoredBuffer(
-        this.#device,
-        "Functional restored Core nodes",
-        coreNodeBytes,
-        NODE_BYTE_LENGTH,
-      );
-      buffers.push(nodeBuffer);
-      const definitionBuffer = createRestoredBuffer(
-        this.#device,
-        "Functional restored definitions",
-        encodedModule.definitionWords,
-        DEFINITION_BYTE_LENGTH,
-      );
-      buffers.push(definitionBuffer);
-      const constructorBuffer = createRestoredBuffer(
-        this.#device,
-        "Functional restored constructors",
-        encodedModule.constructorWords,
-        CONSTRUCTOR_BYTE_LENGTH,
-      );
-      buffers.push(constructorBuffer);
-    } catch (cause) {
-      allocationCause = cause;
-    }
-    const [outOfMemory, validation] = await Promise.all([
-      this.#device.popErrorScope(),
-      this.#device.popErrorScope(),
-    ]);
-    if (validation !== null || outOfMemory !== null || allocationCause !== undefined) {
-      for (const buffer of buffers) buffer.destroy();
-      const evidence = validation?.message ?? outOfMemory?.message ?? String(allocationCause);
-      throw new Error(
-        `could not restore functional compiled Core with ${encodedModule.nodeCount} nodes, ${encodedModule.definitionCount} definitions, and ${encodedModule.constructorCount} constructors: ${evidence}`,
-        allocationCause === undefined ? undefined : { cause: allocationCause },
-      );
-    }
-    const [nodeBuffer, definitionBuffer, constructorBuffer] = buffers;
-    if (
-      nodeBuffer === undefined || definitionBuffer === undefined || constructorBuffer === undefined
-    ) {
-      for (const buffer of buffers) buffer.destroy();
-      throw new Error("functional compiled Core restoration omitted a module buffer");
-    }
-    const semanticModule = new CompiledGpuSemanticModule(
-      this.#device,
-      nodeBuffer,
-      definitionBuffer,
-      constructorBuffer,
-      surface,
-      entryDefinition,
-      artifact.entryType,
-      publicTypeMetadata(surface).typeDeclarations,
-      coreNodeBytes.slice(0, encodedModule.nodeCount * NODE_BYTE_LENGTH),
-    );
-    return await publicModule(semanticModule, encodedModule);
+    return await restoreCompiledCore(this.#device, encodedModule, artifact);
   }
+}
+
+export async function restoreCompiledCore(
+  device: GPUDevice,
+  encodedModule: EncodedModule,
+  artifact: CompiledCoreArtifact,
+): Promise<GpuModule> {
+  validateEncodedModule(encodedModule);
+  const coreNodeBytes = encodeCoreArtifact(encodedModule, artifact);
+  const surface = encodedModule;
+  const entryDefinition = findEntryDefinition(encodedModule);
+  const buffers: GPUBuffer[] = [];
+  device.pushErrorScope("validation");
+  device.pushErrorScope("out-of-memory");
+  let allocationCause: unknown;
+  try {
+    const nodeBuffer = createRestoredBuffer(
+      device,
+      "Functional restored Core nodes",
+      coreNodeBytes,
+      NODE_BYTE_LENGTH,
+    );
+    buffers.push(nodeBuffer);
+    const definitionBuffer = createRestoredBuffer(
+      device,
+      "Functional restored definitions",
+      encodedModule.definitionWords,
+      DEFINITION_BYTE_LENGTH,
+    );
+    buffers.push(definitionBuffer);
+    const constructorBuffer = createRestoredBuffer(
+      device,
+      "Functional restored constructors",
+      encodedModule.constructorWords,
+      CONSTRUCTOR_BYTE_LENGTH,
+    );
+    buffers.push(constructorBuffer);
+  } catch (cause) {
+    allocationCause = cause;
+  }
+  const [outOfMemory, validation] = await Promise.all([
+    device.popErrorScope(),
+    device.popErrorScope(),
+  ]);
+  if (validation !== null || outOfMemory !== null || allocationCause !== undefined) {
+    for (const buffer of buffers) buffer.destroy();
+    const evidence = validation?.message ?? outOfMemory?.message ?? String(allocationCause);
+    throw new Error(
+      `could not restore functional compiled Core with ${encodedModule.nodeCount} nodes, ${encodedModule.definitionCount} definitions, and ${encodedModule.constructorCount} constructors: ${evidence}`,
+      allocationCause === undefined ? undefined : { cause: allocationCause },
+    );
+  }
+  const [nodeBuffer, definitionBuffer, constructorBuffer] = buffers;
+  if (
+    nodeBuffer === undefined || definitionBuffer === undefined || constructorBuffer === undefined
+  ) {
+    for (const buffer of buffers) buffer.destroy();
+    throw new Error("functional compiled Core restoration omitted a module buffer");
+  }
+  const semanticModule = new CompiledGpuSemanticModule(
+    device,
+    nodeBuffer,
+    definitionBuffer,
+    constructorBuffer,
+    surface,
+    entryDefinition,
+    artifact.entryType,
+    publicTypeMetadata(surface).typeDeclarations,
+    coreNodeBytes.slice(0, encodedModule.nodeCount * NODE_BYTE_LENGTH),
+  );
+  return await publicModule(semanticModule, encodedModule);
 }
 
 function createRestoredBuffer(

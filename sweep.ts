@@ -24,6 +24,9 @@ export {
   type SweepParseResult,
 } from "./src/sweep/parser.ts";
 export { lowerSweepModule, type SweepLowerResult } from "./src/sweep/lowering.ts";
+export { createSweepCheckingPlan, type SweepCheckingPlan } from "./src/sweep/checking_plan.ts";
+export { GpuSweepChecker, type GpuSweepCheckResult } from "./src/sweep/gpu_checker.ts";
+export { GpuSweepCompiler, type GpuSweepCompileResult } from "./src/sweep/compiler.ts";
 
 import { parseSweepModule } from "./src/sweep/parser.ts";
 import { lowerSweepModule, type SweepLowerResult } from "./src/sweep/lowering.ts";
