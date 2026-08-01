@@ -423,6 +423,7 @@ function emitAllocationByteLength(
   byteLength: number,
 ): void {
   const valueByteLength = instructions.addLocal(WasmValueType.I32);
+  const allocationValueCount = instructions.addLocal(WasmValueType.I32);
   const headerByteLength = instructions.addLocal(WasmValueType.I32);
   const wideByteLength = instructions.addLocal(WasmValueType.I64);
   instructions.localGet(kind);
@@ -448,6 +449,21 @@ function emitAllocationByteLength(
   instructions.i32Const(WasmValueAbi.objectKinds.thunk);
   instructions.emit(0x46, 0x1b);
   instructions.localSet(valueCount);
+  instructions.localGet(pointer);
+  instructions.i32Load(4);
+  instructions.localGet(valueCount);
+  instructions.localGet(kind);
+  instructions.i32Const(WasmValueAbi.objectKinds.store);
+  instructions.emit(0x46, 0x1b);
+  instructions.localSet(allocationValueCount);
+  instructions.localGet(kind);
+  instructions.i32Const(WasmValueAbi.objectKinds.store);
+  instructions.emit(0x46, 0x04, 0x40);
+  instructions.localGet(allocationValueCount);
+  instructions.localGet(valueCount);
+  instructions.emit(0x49);
+  instructions.trapIf();
+  instructions.emit(0x0b);
   instructions.localGet(kind);
   instructions.i32Const(WasmValueAbi.objectKinds.numeric);
   instructions.emit(0x46);
@@ -457,7 +473,7 @@ function emitAllocationByteLength(
   instructions.localGet(kind);
   instructions.i32Const(WasmValueAbi.objectKinds.resource);
   instructions.emit(0x46);
-  instructions.localGet(valueCount);
+  instructions.localGet(allocationValueCount);
   instructions.i32Const(0);
   instructions.emit(0x47, 0x71, 0x72, 0x72);
   instructions.i32Const(1);
@@ -478,7 +494,7 @@ function emitAllocationByteLength(
   instructions.i32Const(WasmValueAbi.objectKinds.numeric);
   instructions.emit(0x46, 0x72, 0x1b);
   instructions.localSet(headerByteLength);
-  instructions.localGet(valueCount);
+  instructions.localGet(allocationValueCount);
   instructions.emit(0xad);
   instructions.localGet(valueByteLength);
   instructions.emit(0xad, 0x7e);

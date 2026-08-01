@@ -33,10 +33,12 @@ import {
   BufferAppendPrimop,
   numericConversionPrimop,
   StoreEmptyPrimop,
+  StoreGrowOwnedPrimop,
   StoreGrowPrimop,
   StoreLengthPrimop,
   StoreNewPrimop,
   StoreReadPrimop,
+  StoreWriteOwnedPrimop,
   StoreWritePrimop,
   unaryPrimop,
 } from "../semantic/primops.ts";
@@ -891,12 +893,26 @@ function expressionFeatureMask(expression: SurfaceExpression): number {
         break;
       case "store-write":
         features |= SURFACE_FEATURE_STORE;
+        if (nested.owned !== undefined && typeof nested.owned !== "boolean") {
+          throw new TypeError(
+            `functional store-write ownership must be boolean; received ${
+              JSON.stringify(nested.owned)
+            }`,
+          );
+        }
         visit(nested.value);
         visit(nested.index);
         visit(nested.store);
         break;
       case "store-grow":
         features |= SURFACE_FEATURE_STORE;
+        if (nested.owned !== undefined && typeof nested.owned !== "boolean") {
+          throw new TypeError(
+            `functional store-grow ownership must be boolean; received ${
+              JSON.stringify(nested.owned)
+            }`,
+          );
+        }
         visit(nested.initial);
         visit(nested.length);
         visit(nested.store);
@@ -1328,7 +1344,7 @@ class SurfaceExpressionEncoder {
       }
       case "store-write": {
         return this.emitPrim(
-          StoreWritePrimop,
+          expression.owned === true ? StoreWriteOwnedPrimop : StoreWritePrimop,
           [expression.store, expression.index, expression.value],
           parent,
           expression.span,
@@ -1337,7 +1353,7 @@ class SurfaceExpressionEncoder {
       }
       case "store-grow": {
         return this.emitPrim(
-          StoreGrowPrimop,
+          expression.owned === true ? StoreGrowOwnedPrimop : StoreGrowPrimop,
           [expression.store, expression.length, expression.initial],
           parent,
           expression.span,
@@ -1770,11 +1786,13 @@ type SurfaceBuilderBase = Readonly<{
     store: SurfaceExpression,
     index: SurfaceExpression,
     value: SurfaceExpression,
+    options?: { readonly owned: boolean },
   ): SurfaceExpression;
   storeGrow(
     store: SurfaceExpression,
     length: SurfaceExpression,
     initial: SurfaceExpression,
+    options?: { readonly owned: boolean },
   ): SurfaceExpression;
 }>;
 
@@ -1991,15 +2009,31 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       store: SurfaceExpression,
       index: SurfaceExpression,
       value: SurfaceExpression,
+      options?: { readonly owned: boolean },
     ): SurfaceExpression {
-      return { kind: "store-write", store, index, value, ...spanned };
+      return {
+        kind: "store-write",
+        store,
+        index,
+        value,
+        ...(options?.owned === true ? { owned: true } : {}),
+        ...spanned,
+      };
     },
     storeGrow(
       store: SurfaceExpression,
       length: SurfaceExpression,
       initial: SurfaceExpression,
+      options?: { readonly owned: boolean },
     ): SurfaceExpression {
-      return { kind: "store-grow", store, length, initial, ...spanned };
+      return {
+        kind: "store-grow",
+        store,
+        length,
+        initial,
+        ...(options?.owned === true ? { owned: true } : {}),
+        ...spanned,
+      };
     },
     text(value: string): SurfaceExpression {
       return { kind: "text", value, ...spanned };

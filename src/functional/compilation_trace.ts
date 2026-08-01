@@ -207,13 +207,13 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
     case "store-read":
       return `${indent}(store-read\n${nested(expression.store)}\n${nested(expression.index)})`;
     case "store-write":
-      return `${indent}(store-write\n${nested(expression.store)}\n${nested(expression.index)}\n${
-        nested(expression.value)
-      })`;
+      return `${indent}(store-write${expression.owned === true ? "-owned" : ""}\n${
+        nested(expression.store)
+      }\n${nested(expression.index)}\n${nested(expression.value)})`;
     case "store-grow":
-      return `${indent}(store-grow\n${nested(expression.store)}\n${nested(expression.length)}\n${
-        nested(expression.initial)
-      })`;
+      return `${indent}(store-grow${expression.owned === true ? "-owned" : ""}\n${
+        nested(expression.store)
+      }\n${nested(expression.length)}\n${nested(expression.initial)})`;
     case "numeric-convert":
       return `${indent}(convert${expression.conversion}\n${nested(expression.value)})`;
     case "case": {

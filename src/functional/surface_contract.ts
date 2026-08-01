@@ -52,6 +52,7 @@ export type SurfaceExpression =
     readonly store: SurfaceExpression;
     readonly index: SurfaceExpression;
     readonly value: SurfaceExpression;
+    readonly owned?: boolean;
     readonly span?: Span;
   }
   | {
@@ -59,6 +60,7 @@ export type SurfaceExpression =
     readonly store: SurfaceExpression;
     readonly length: SurfaceExpression;
     readonly initial: SurfaceExpression;
+    readonly owned?: boolean;
     readonly span?: Span;
   }
   | { readonly kind: "name"; readonly name: string; readonly span?: Span }

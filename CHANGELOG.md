@@ -7,6 +7,10 @@ All notable changes to gpufuck are documented here. The project is published to 
 
 ### Added
 
+- Store writes and growth can carry an ownership witness. The linear-memory backend reuses the
+  backing allocation when the frontend promises that no alias remains, while ordinary Store updates
+  stay persistent. Store allocations reserve geometric capacity so repeated owned growth does not
+  copy on every append.
 - Surface definitions can declare first-class effect sets. Typed effect operations carry their
   labels through globals, recursion, closures, higher-order calls, linking, compilation traces, and
   artifact fingerprints. Lexical handler evidence can replace an operation with a pure
