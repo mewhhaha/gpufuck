@@ -5,16 +5,81 @@ All notable changes to gpufuck are documented here. The project is published to 
 
 ## Unreleased
 
+## 0.9.1 - 2026-08-01
+
+### Added
+
+- Continuous integration now verifies formatting, linting, types, tests, the publish graph, and the
+  browser playground. The browser verifier exercises the Blot tour on hardware WebGPU and reports
+  an explicit skip when only a software adapter is available.
+
+### Changed
+
+- WebGPU pipelines are created synchronously so browsers do not stall indefinitely while building
+  the Blot tour. Playground run labels now distinguish cold and resident compilation accurately.
+
+## 0.9.0 - 2026-08-01
+
 ### Added
 
 - Store writes and growth can carry an ownership witness. The linear-memory backend reuses the
   backing allocation when the frontend promises that no alias remains, while ordinary Store updates
   stay persistent. Store allocations reserve geometric capacity so repeated owned growth does not
   copy on every append.
-- Surface definitions can declare first-class effect sets. Typed effect operations carry their
-  labels through globals, recursion, closures, higher-order calls, linking, compilation traces, and
-  artifact fingerprints. Lexical handler evidence can replace an operation with a pure
-  implementation, and nested handlers discharge only the labels they replace.
+
+### Changed
+
+- Native `F32x4` lowering now requires a complete compatible worker region. Mixed boxed and native
+  callers keep the region boxed, avoiding duplicated workers and repeated vector boxing at partial
+  native boundaries.
+
+## 0.8.1 - 2026-08-01
+
+### Changed
+
+- The README now leads consumers from installation through frontend lowering, compilation,
+  execution, diagnostics, and the optional Wasm features.
+- The parallel compiler worker no longer relies on a package-global triple-slash directive, so the
+  public graph passes JSR's API checks.
+
+## 0.8.0 - 2026-08-01
+
+### Added
+
+- Canonical ABI adapters expose structural Core Wasm values and generate matching WIT. Component
+  artifacts can be verified with `wasm-tools`, Wasmtime, and jco, and `ComponentReloadSlot` swaps
+  compatible instances after active calls drain.
+- The fixed-vector API exposes portable `F32x4` operations, optional native Wasm SIMD,
+  floating-point canonical boundaries, and standard Wasm branch-hint metadata.
+- The browser playground compiles the Blot language end to end and reports parser, frontend, Core,
+  evaluation, and Wasm phase timings on realistic examples and a multi-module stress project.
+
+### Changed
+
+- Resident services reuse parser results, linked Surface, resolved Core, Wasm plans, function
+  bodies, and literal-only edits. Independent modules can compile through persistent workers and
+  share one deterministic runtime artifact.
+- Functional Core ABI 8 uses exact-arity functions and calls at the frontend boundary while
+  retaining the existing unary inference representation internally.
+
+## 0.7.0 - 2026-07-29
+
+### Changed
+
+- Functional Core ABI 7 removed primitive declarations from Surface modules. Primitive types and
+  operations are now fixed ABI vocabulary rather than frontend-provided definitions.
+
+## 0.6.0 - 2026-07-29
+
+### Added
+
+- Surface definitions can declare source effect sets. Effects propagate through globals, recursion,
+  closures, higher-order calls, linking, worker transfer, and inferred export summaries.
+
+### Changed
+
+- Effect sets are immutable at runtime, host bindings enforce their declarations before GPU work,
+  and suspending operations must declare a nonempty effect set.
 
 ## 0.5.0 - 2026-07-28
 

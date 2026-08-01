@@ -13,7 +13,8 @@
     "jsr:@std/media-types@^1.1.0": "1.1.0",
     "jsr:@std/net@^1.0.6": "1.0.6",
     "jsr:@std/path@^1.1.6": "1.1.6",
-    "jsr:@std/streams@^1.1.1": "1.1.1"
+    "jsr:@std/streams@^1.1.1": "1.1.1",
+    "npm:playwright@1.62.1": "1.62.1"
   },
   "jsr": {
     "@mewhhaha/baba@7.9.0": {
@@ -68,6 +69,27 @@
     },
     "@std/streams@1.1.1": {
       "integrity": "92556d350e537e9dce527a6d08f6f15be3ff65e656079dea69d15252187c7613"
+    }
+  },
+  "npm": {
+    "fsevents@2.3.2": {
+      "integrity": "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==",
+      "os": ["darwin"],
+      "scripts": true
+    },
+    "playwright-core@1.62.1": {
+      "integrity": "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
+      "bin": true
+    },
+    "playwright@1.62.1": {
+      "integrity": "sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==",
+      "dependencies": [
+        "playwright-core"
+      ],
+      "optionalDependencies": [
+        "fsevents"
+      ],
+      "bin": true
     }
   },
   "workspace": {

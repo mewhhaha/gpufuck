@@ -36,6 +36,12 @@ jobs:
       - name: Build playground
         run: deno run -A playground/build.ts
 
+      - name: Install Chromium
+        run: deno run -A npm:playwright@1.62.1 install --with-deps chromium
+
+      - name: Verify the Blot playground in Chromium
+        run: xvfb-run -a deno run -A tools/verify_playground_browser.ts
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 

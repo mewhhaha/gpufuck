@@ -118,36 +118,32 @@ export class GpuSemanticCompiler {
         label: "semantic compiler pipeline layout",
         bindGroupLayouts: [semanticBindGroupLayout],
       });
-      const [
-        compilationPipeline,
-        plannedLoweringPipeline,
-        inferencePipeline,
-      ] = await Promise.all([
-        device.createComputePipelineAsync({
-          label: "semantic compiler pipeline",
-          layout: semanticPipelineLayout,
-          compute: {
-            module: shaderModule,
-            entryPoint: "compile_module",
-          },
-        }),
-        device.createComputePipelineAsync({
-          label: "planned lowering pipeline",
-          layout: semanticPipelineLayout,
-          compute: {
-            module: shaderModule,
-            entryPoint: "lower_planned_module",
-          },
-        }),
-        device.createComputePipelineAsync({
-          label: "type inference pipeline",
-          layout: "auto",
-          compute: {
-            module: inferenceShaderModule,
-            entryPoint: "infer_types",
-          },
-        }),
-      ]);
+      // Chromium 151 leaves the async pipeline promise pending indefinitely for these generated
+      // shaders. Synchronous creation completes on the same adapter; the browser tour guards this.
+      const compilationPipeline = device.createComputePipeline({
+        label: "semantic compiler pipeline",
+        layout: semanticPipelineLayout,
+        compute: {
+          module: shaderModule,
+          entryPoint: "compile_module",
+        },
+      });
+      const plannedLoweringPipeline = device.createComputePipeline({
+        label: "planned lowering pipeline",
+        layout: semanticPipelineLayout,
+        compute: {
+          module: shaderModule,
+          entryPoint: "lower_planned_module",
+        },
+      });
+      const inferencePipeline = device.createComputePipeline({
+        label: "type inference pipeline",
+        layout: "auto",
+        compute: {
+          module: inferenceShaderModule,
+          entryPoint: "infer_types",
+        },
+      });
       return new GpuSemanticCompiler(
         device,
         {

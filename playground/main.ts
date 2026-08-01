@@ -278,6 +278,7 @@ async function compileAndRun(): Promise<void> {
   if (selected === undefined) return;
   const pipelineStart = performance.now();
   const coldRun = disableCache.checked;
+  const residentRun = !coldRun && compilerSession !== undefined;
   runButton.disabled = true;
   disableCache.disabled = true;
   gpuSyntax.disabled = true;
@@ -391,7 +392,7 @@ async function compileAndRun(): Promise<void> {
     }
     const evaluatorAgrees = JSON.stringify(evaluatorOutput) === JSON.stringify(wasmOutput);
     setStatus(
-      `${coldRun ? "Cold run" : "Resident run"} compiled with ${
+      `${residentRun ? "Resident run" : "Cold run"} compiled with ${
         syntax?.adapter ?? "Blot CPU syntax and gpufuck WebGPU Core"
       }; ` +
         `GPU and Wasm host output ${evaluatorAgrees ? "agree" : "differ"}.`,

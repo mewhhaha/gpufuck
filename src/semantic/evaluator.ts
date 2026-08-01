@@ -1876,7 +1876,9 @@ export class GpuSemanticEvaluator {
     }
 
     try {
-      const pipeline = await device.createComputePipelineAsync({
+      // Chromium 151 leaves the async pipeline promise pending indefinitely for this generated
+      // shader. Synchronous creation completes on the same adapter; the browser tour guards this.
+      const pipeline = device.createComputePipeline({
         label: "lazy evaluator pipeline",
         layout: "auto",
         compute: {

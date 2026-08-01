@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.4
+          cache: true
+
+      - name: Check types
+        run: deno task check
+
+      - name: Check formatting
+        run: deno task fmt
+
+      - name: Lint
+        run: deno task lint
+
+      - name: Test
+        run: deno task test
+
+      - name: Validate package contents
+        run: deno task publish:dry-run
+
+  playground:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.4
+          cache: true
+
+      - name: Install Chromium
+        run: deno run -A npm:playwright@1.62.1 install --with-deps chromium
+
+      - name: Verify the Blot playground in Chromium
+        run: xvfb-run -a deno task test:playground-browser

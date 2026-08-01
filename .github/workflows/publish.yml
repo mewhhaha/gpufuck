@@ -26,7 +26,7 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$version"
 
       - name: Check package types
-        run: deno check functional.ts
+        run: deno task check
 
       - name: Check formatting
         run: deno task fmt
@@ -34,8 +34,11 @@ jobs:
       - name: Lint
         run: deno task lint
 
+      - name: Test
+        run: deno task test
+
       - name: Validate package contents
-        run: deno publish --dry-run
+        run: deno task publish:dry-run
 
       - name: Publish with provenance
         run: deno publish

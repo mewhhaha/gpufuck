@@ -1841,6 +1841,40 @@ lazy numeric loop within 1.6% of the prior runtime. A force-heavy program perfor
 improved from 0.11201 ms to 0.09025 ms while its artifact fell from 455,446 to 275,136 bytes. The
 focused Wasm, export, tracing, and Gleam suites passed 68 tests.
 
+## 2026-08-01 — the Blot tour in Chromium, and the freeze was pipeline creation
+
+`deno task measure:playground-browser` now builds the deployed playground, launches pinned Chromium
+151 against the host Vulkan adapter, drives the tour through a fresh-page and resident run, and
+reads the phase timings rendered to the user. The measured machine exposed an RTX 4080-class NVIDIA
+adapter. One run after the browser fix reported:
+
+| Phase                                  |    Cold page |    Resident |
+| -------------------------------------- | -----------: | ----------: |
+| Blot load, check, stage, lower, encode |      96.7 ms |      0.0 ms |
+| GPU device and pipeline setup          |     259.6 ms |      0.0 ms |
+| Core resolve and inference             |     419.5 ms |      7.9 ms |
+| GPU evaluation                         |      81.7 ms |      0.9 ms |
+| Executable Wasm emit and run           |      83.7 ms |      1.1 ms |
+| Canonical Wasm emit                    |      81.1 ms |      0.7 ms |
+| **Page-reported total**                | **813.3 ms** | **12.8 ms** |
+| **Browser-driver wall time**           | **856.6 ms** | **30.4 ms** |
+
+The evaluation and two Wasm rows run concurrently and must not be summed. The cold browser result
+does change the next optimization premise for Blot: Core compilation is the largest single phase,
+while the resident path is already small. Gleam cursor-to-Surface fusion remains useful to the Gleam
+frontend benchmark, but it is not the first Blot-browser lever.
+
+The original browser hang was earlier than program execution. Chromium accepted both generated
+shaders and produced compilation information, but `createComputePipelineAsync()` never resolved for
+the semantic compiler or evaluator. Creating the same pipelines synchronously completed the tour on
+the same adapter. The browser runner's 60-second guard now catches a recurrence and reports the last
+visible phase instead of leaving the page indefinitely busy.
+
+Chromium's bundled SwiftShader did not initialize these kernels within three minutes, even for the
+smallest example. The ordinary browser task therefore always verifies the built UI and compiles the
+tour only when it finds a hardware adapter. The measurement task requires hardware and fails rather
+than reporting software-adapter timings as performance evidence.
+
 ## Kill criteria
 
 The retarget is judged on the **GPU inference share**, not total wall time:
