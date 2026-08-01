@@ -280,6 +280,7 @@ export interface WasmArtifact {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly specializedCallSites: number;
   readonly nativeF32x4CallSites: number;
+  readonly nativeF32x4LetBindings: number;
   readonly automaticArenaReset: boolean;
 }
 
@@ -465,6 +466,7 @@ function emitWasmSignedLiteralUpdate(
       bytes: encoded.bytes,
       specializedCallSites: referenceArtifact.specializedCallSites,
       nativeF32x4CallSites: referenceArtifact.nativeF32x4CallSites,
+      nativeF32x4LetBindings: referenceArtifact.nativeF32x4LetBindings,
       automaticArenaReset: referenceArtifact.automaticArenaReset,
     };
     backendPlansByArtifact.set(artifact, plan);
@@ -645,6 +647,7 @@ class WasmCompiler {
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
   #specializedCallSiteCount = 0;
   #nativeF32x4CallSiteCount = 0;
+  #nativeF32x4LetBindingCount = 0;
   #nextStaticEnvironmentId = 0;
   #nativeScalarWorkerDepth = 0;
   #requestedAllocator = false;
@@ -855,6 +858,7 @@ class WasmCompiler {
       bytes,
       specializedCallSites: this.#specializedCallSiteCount,
       nativeF32x4CallSites: this.#nativeF32x4CallSiteCount,
+      nativeF32x4LetBindings: this.#nativeF32x4LetBindingCount,
       automaticArenaReset: this.#automaticArenaReset,
     };
     if (this.#linearEmission !== undefined) {
@@ -3236,6 +3240,14 @@ class WasmCompiler {
       case CoreTag.Local:
         {
           const source = this.localSource(environment, node.payload, nodeIndex);
+          if (source.kind === "v128-f32x4") {
+            instructions.localGet(source.index);
+            this.emitBoxF32x4(
+              instructions,
+              F32X4_CONSTRUCTOR_NAME,
+            );
+            return;
+          }
           this.emitBinding(instructions, source);
           if (source.kind === "i64-local" || source.kind === "capture") {
             this.emitForceValue(instructions);
@@ -4394,6 +4406,20 @@ class WasmCompiler {
     environment: Environment,
     constructorReuse?: ConstructorReuseTarget,
   ): void {
+    if (
+      this.#simdEnabled && node.evaluationMode === EvaluationMode.StrictEager &&
+      this.isKnownF32x4Expression(node.child0, environment)
+    ) {
+      this.compileF32x4Expression(instructions, node.child0, environment);
+      const value = instructions.addLocal(WasmValueType.V128);
+      instructions.localSet(value);
+      this.#nativeF32x4LetBindingCount += 1;
+      this.compileExpression(instructions, node.child1, [
+        { kind: "v128-f32x4", index: value },
+        ...environment,
+      ], constructorReuse);
+      return;
+    }
     const virtualValue = this.virtualLambda(node.child0, environment);
     if (virtualValue !== undefined) {
       this.compileExpression(instructions, node.child1, [
@@ -5443,6 +5469,22 @@ class WasmCompiler {
           "float-32",
         );
         return;
+      case CoreTag.Let:
+        if (
+          this.#simdEnabled && node.evaluationMode === EvaluationMode.StrictEager &&
+          this.isKnownF32x4Expression(node.child0, environment)
+        ) {
+          this.compileF32x4Expression(instructions, node.child0, environment);
+          const value = instructions.addLocal(WasmValueType.V128);
+          instructions.localSet(value);
+          this.#nativeF32x4LetBindingCount += 1;
+          this.compileFloat32Expression(instructions, node.child1, [
+            { kind: "v128-f32x4", index: value },
+            ...environment,
+          ]);
+          return;
+        }
+        break;
       case CoreTag.If: {
         const selectedBranch = this.constantIfBranch(node, environment);
         if (selectedBranch !== undefined) {
@@ -7528,6 +7570,20 @@ class WasmCompiler {
   requiredConstructorIndex(name: string): number {
     const constructor = this.#module.constructorNames.indexOf(name);
     if (constructor >= 0) return constructor;
+    const canonicalName = canonicalFixedVectorName(name);
+    if (canonicalName !== undefined) {
+      const matches = this.#module.constructorNames.flatMap((candidate, index) =>
+        canonicalFixedVectorName(candidate) === canonicalName ? [index] : []
+      );
+      if (matches.length === 1) return matches[0]!;
+      if (matches.length > 1) {
+        throw new Error(
+          `functional SIMD constructor ${JSON.stringify(name)} is ambiguous across indices ${
+            matches.join(", ")
+          }`,
+        );
+      }
+    }
     throw new Error(
       `functional SIMD module omitted constructor ${
         JSON.stringify(name)

@@ -464,6 +464,59 @@ Deno.test("strict F32x4 values stay native across let-bound multi-function chain
   }
 });
 
+Deno.test("strict F32x4 values stay native in let-bound body locals", async () => {
+  const encoded = buildSurfaceModule(
+    [
+      ...FIXED_VECTOR_DEFINITIONS,
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "float-32" },
+        body: surface.let(
+          "vector",
+          f32x4.make([
+            surface.float32(1),
+            surface.float32(2),
+            surface.float32(3),
+            surface.float32(4),
+          ]),
+          surface.let(
+            "doubled",
+            f32x4.multiply(
+              surface.name("vector"),
+              f32x4.splat(surface.float32(2)),
+            ),
+            f32x4.reduceAdd(surface.name("doubled")),
+          ),
+        ),
+      },
+    ],
+    FIXED_VECTOR_TYPE_DECLARATIONS,
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("functional F32x4 local module did not compile");
+  try {
+    const artifact = compileWasmArtifact(
+      compilation.module,
+      await compilation.module.readCoreNodes(),
+      false,
+      { simd: "wasm-simd" },
+    );
+    equal(artifact.nativeF32x4LetBindings, 2);
+    equal(artifact.nativeF32x4CallSites, 0);
+    const { instance } = await WebAssembly.instantiate(artifact.bytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 20);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("native vectors preserve values across ordinary boxed function boundaries", async () => {
   const vector = f32x4.make([
     surface.float32(1),
