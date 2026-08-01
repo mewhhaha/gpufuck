@@ -247,6 +247,12 @@ interface CompiledSimdVector {
   readonly constructorName: string;
 }
 
+interface F32x4WorkerApplication {
+  readonly application: UncurriedApplication;
+  readonly vectorParameters: readonly boolean[];
+  readonly bodyEnvironment: Environment;
+}
+
 function compiledSimdVector(
   definition: string,
   kind: CompiledSimdVector["kind"],
@@ -273,6 +279,7 @@ interface UncurriedWorker {
 export interface WasmArtifact {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly specializedCallSites: number;
+  readonly nativeF32x4CallSites: number;
   readonly automaticArenaReset: boolean;
 }
 
@@ -457,6 +464,7 @@ function emitWasmSignedLiteralUpdate(
     const artifact = {
       bytes: encoded.bytes,
       specializedCallSites: referenceArtifact.specializedCallSites,
+      nativeF32x4CallSites: referenceArtifact.nativeF32x4CallSites,
       automaticArenaReset: referenceArtifact.automaticArenaReset,
     };
     backendPlansByArtifact.set(artifact, plan);
@@ -605,7 +613,8 @@ class WasmCompiler {
   readonly #lambdaSlots: (number | undefined)[];
   readonly #recursiveLambdaOwners = new Map<number, number>();
   readonly #uncurriedWorkers = new Map<string, UncurriedWorker>();
-  readonly #f32x4Workers = new Map<number, number>();
+  readonly #f32x4Workers = new Map<string, number>();
+  readonly #activeF32x4Workers = new Set<number>();
   readonly #nativeIntegerFunctionNodes = new Set<number>();
   readonly #staticEnvironmentIds = new WeakMap<object, number>();
   readonly #additionalFunctionTypes: WasmFunctionType[] = [];
@@ -635,6 +644,7 @@ class WasmCompiler {
   #runtimeDefinitionIndices: ReadonlySet<number> = new Set();
   #remainingSpecializedInlineSites = MAXIMUM_SPECIALIZED_INLINE_SITES;
   #specializedCallSiteCount = 0;
+  #nativeF32x4CallSiteCount = 0;
   #nextStaticEnvironmentId = 0;
   #nativeScalarWorkerDepth = 0;
   #requestedAllocator = false;
@@ -844,6 +854,7 @@ class WasmCompiler {
     const artifact = {
       bytes,
       specializedCallSites: this.#specializedCallSiteCount,
+      nativeF32x4CallSites: this.#nativeF32x4CallSiteCount,
       automaticArenaReset: this.#automaticArenaReset,
     };
     if (this.#linearEmission !== undefined) {
@@ -3116,6 +3127,10 @@ class WasmCompiler {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     if (this.#simdEnabled && node.tag === CoreTag.Apply) {
+      if (this.compileSimdFloat32Application(instructions, nodeIndex, environment)) {
+        this.emitBoxFloat32(instructions);
+        return;
+      }
       const vectorKind = this.compileSimdVectorApplication(
         instructions,
         nodeIndex,
@@ -5560,6 +5575,37 @@ class WasmCompiler {
         return;
       }
     }
+    if (node.tag === CoreTag.Let && node.evaluationMode === EvaluationMode.StrictEager) {
+      const knownValue = this.isKnownF32x4Expression(node.child0, environment);
+      const knownBody = knownValue && this.isKnownF32x4Expression(node.child1, [
+        { kind: "v128-f32x4", index: 0 },
+        ...environment,
+      ]);
+      if (knownBody) {
+        this.compileF32x4Expression(instructions, node.child0, environment);
+        const value = instructions.addLocal(WasmValueType.V128);
+        instructions.localSet(value);
+        const bodyEnvironment = [
+          { kind: "v128-f32x4" as const, index: value },
+          ...environment,
+        ];
+        this.compileF32x4Expression(instructions, node.child1, bodyEnvironment);
+        return;
+      }
+    }
+    if (
+      node.tag === CoreTag.If &&
+      this.isKnownF32x4Expression(node.child1, environment) &&
+      this.isKnownF32x4Expression(node.child2, environment)
+    ) {
+      this.compileBooleanExpression(instructions, node.child0, environment);
+      instructions.emit(0x04, WasmValueType.V128);
+      this.compileF32x4Expression(instructions, node.child1, environment);
+      instructions.emit(0x05);
+      this.compileF32x4Expression(instructions, node.child2, environment);
+      instructions.emit(0x0b);
+      return;
+    }
     if (node.tag === CoreTag.Apply) {
       const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
       if (kind?.kind === "f32x4") return;
@@ -5589,52 +5635,87 @@ class WasmCompiler {
     nodeIndex: number,
     environment: Environment,
   ): boolean {
-    const application = this.uncurriedApplication(nodeIndex, environment);
-    if (
-      application === undefined || application.arguments.length !== 1 ||
-      application.functionShape.parameterCount !== 1 ||
-      application.staticEnvironment !== undefined ||
-      this.#recursiveLambdaOwners.has(application.functionShape.outerLambdaNode) ||
-      this.uncurriedWorkerHasEnvironmentParameter(
-        application.functionShape,
-        undefined,
-      ) ||
-      !this.isKnownF32x4Expression(application.arguments[0]!.node, environment)
-    ) return false;
+    const workerApplication = this.f32x4WorkerApplication(nodeIndex, environment);
+    if (workerApplication === undefined) return false;
+    const { application, vectorParameters, bodyEnvironment } = workerApplication;
 
-    const parameterBinding = { kind: "v128-f32x4" as const, index: 0 };
-    const bodyEnvironment = this.uncurriedBodyEnvironment(
-      application.functionShape,
-      [parameterBinding],
-      undefined,
-      undefined,
-      "worker",
-    );
-    if (!this.isKnownF32x4Expression(application.functionShape.bodyNode, bodyEnvironment)) {
-      return false;
-    }
-
-    let slot = this.#f32x4Workers.get(application.functionShape.outerLambdaNode);
+    const workerKey = `${application.functionShape.outerLambdaNode}:${
+      vectorParameters.map((vector) => vector ? "v" : "b").join("")
+    }`;
+    let slot = this.#f32x4Workers.get(workerKey);
     if (slot === undefined) {
       slot = this.reserveIndirectFunction();
-      this.#f32x4Workers.set(application.functionShape.outerLambdaNode, slot);
-      const workerInstructions = new WasmInstructions(1);
-      this.compileF32x4Expression(
-        workerInstructions,
-        application.functionShape.bodyNode,
-        bodyEnvironment,
+      this.#f32x4Workers.set(workerKey, slot);
+      const parameterTypes = vectorParameters.map((vector) =>
+        vector ? WasmValueType.V128 : WasmValueType.I64
       );
+      const workerInstructions = new WasmInstructions(parameterTypes.length);
+      this.#activeF32x4Workers.add(application.functionShape.outerLambdaNode);
+      try {
+        this.compileF32x4Expression(
+          workerInstructions,
+          application.functionShape.bodyNode,
+          bodyEnvironment,
+        );
+      } finally {
+        this.#activeF32x4Workers.delete(application.functionShape.outerLambdaNode);
+      }
       this.#indirectFunctions[slot] = functionBody(
-        this.functionTypeIndex([WasmValueType.V128], [WasmValueType.V128]),
+        this.functionTypeIndex(parameterTypes, [WasmValueType.V128]),
         workerInstructions,
         `F32x4 worker for lambda core node ${application.functionShape.outerLambdaNode}`,
       );
     }
 
-    this.compileF32x4Expression(instructions, application.arguments[0]!.node, environment);
+    for (const [parameter, argument] of application.arguments.entries()) {
+      if (vectorParameters[parameter]) {
+        this.compileF32x4Expression(instructions, argument.node, environment);
+      } else {
+        this.compileApplicationArgument(instructions, argument, environment, false);
+      }
+    }
     instructions.call(this.indirectFunctionOffset() + slot);
     this.#specializedCallSiteCount += 1;
+    this.#nativeF32x4CallSiteCount += 1;
     return true;
+  }
+
+  f32x4WorkerApplication(
+    nodeIndex: number,
+    environment: Environment,
+  ): F32x4WorkerApplication | undefined {
+    const application = this.uncurriedApplication(nodeIndex, environment);
+    if (
+      application === undefined ||
+      application.staticEnvironment !== undefined ||
+      this.#recursiveLambdaOwners.has(application.functionShape.outerLambdaNode) ||
+      this.#activeF32x4Workers.has(application.functionShape.outerLambdaNode) ||
+      this.uncurriedWorkerHasEnvironmentParameter(application.functionShape, undefined)
+    ) return undefined;
+
+    const vectorParameters = application.arguments.map((argument) =>
+      this.isKnownF32x4Expression(argument.node, environment)
+    );
+    if (!vectorParameters.some(Boolean)) return undefined;
+    const parameterBindings: Binding[] = vectorParameters.map((vector, parameter) =>
+      vector ? { kind: "v128-f32x4", index: parameter } : { kind: "i64-local", index: parameter }
+    );
+    const bodyEnvironment = this.uncurriedBodyEnvironment(
+      application.functionShape,
+      parameterBindings,
+      undefined,
+      undefined,
+      "worker",
+    );
+    this.#activeF32x4Workers.add(application.functionShape.outerLambdaNode);
+    try {
+      if (!this.isKnownF32x4Expression(application.functionShape.bodyNode, bodyEnvironment)) {
+        return undefined;
+      }
+    } finally {
+      this.#activeF32x4Workers.delete(application.functionShape.outerLambdaNode);
+    }
+    return { application, vectorParameters, bodyEnvironment };
   }
 
   isKnownF32x4Expression(
@@ -5645,6 +5726,17 @@ class WasmCompiler {
     if (node.tag === CoreTag.Local) {
       return environment[node.payload]?.kind === "v128-f32x4";
     }
+    if (node.tag === CoreTag.Let && node.evaluationMode === EvaluationMode.StrictEager) {
+      if (!this.isKnownF32x4Expression(node.child0, environment)) return false;
+      return this.isKnownF32x4Expression(node.child1, [
+        { kind: "v128-f32x4", index: 0 },
+        ...environment,
+      ]);
+    }
+    if (node.tag === CoreTag.If) {
+      return this.isKnownF32x4Expression(node.child1, environment) &&
+        this.isKnownF32x4Expression(node.child2, environment);
+    }
     const constructor = this.constructorApplication(nodeIndex);
     if (
       constructor !== undefined && constructor.arguments.length === 4 &&
@@ -5653,7 +5745,9 @@ class WasmCompiler {
         ) === F32X4_CONSTRUCTOR_NAME
     ) return true;
     const application = this.namedApplication(nodeIndex);
-    if (application === undefined) return false;
+    if (application === undefined) {
+      return this.f32x4WorkerApplication(nodeIndex, environment) !== undefined;
+    }
     const { definition, arguments: arguments_ } = application;
     const canonicalDefinition = canonicalFixedVectorName(definition);
     if (canonicalDefinition === F32x4Definition.Splat) return arguments_.length === 1;
@@ -5668,8 +5762,11 @@ class WasmCompiler {
         this.isKnownF32x4Expression(arguments_[1]!.node, environment) &&
         this.isKnownF32x4Expression(arguments_[2]!.node, environment);
     }
-    return f32x4ReplacementLane(definition) !== undefined && arguments_.length === 2 &&
-      this.isKnownF32x4Expression(arguments_[0]!.node, environment);
+    if (
+      f32x4ReplacementLane(definition) !== undefined && arguments_.length === 2 &&
+      this.isKnownF32x4Expression(arguments_[0]!.node, environment)
+    ) return true;
+    return this.f32x4WorkerApplication(nodeIndex, environment) !== undefined;
   }
 
   isKnownMask32x4Expression(

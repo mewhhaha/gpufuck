@@ -16,6 +16,7 @@ import {
   surface,
   type WasmCompilationOptions,
 } from "../functional.ts";
+import { compileWasmArtifact } from "../src/functional/wasm_codegen.ts";
 
 let device: GPUDevice | undefined;
 let compiler: GpuCompiler | undefined;
@@ -380,6 +381,81 @@ Deno.test("strict F32x4 functions use an allocation-free internal vector worker"
     const exportedNames = WebAssembly.Module.exports(wasmModule).map((exported) => exported.name);
     deepStrictEqual(exportedNames, ["main"]);
     const instance = await WebAssembly.instantiate(wasmModule);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 20);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("strict F32x4 values stay native across let-bound multi-function chains", async () => {
+  const vector = f32x4.make([
+    surface.float32(1),
+    surface.float32(2),
+    surface.float32(3),
+    surface.float32(4),
+  ]);
+  const encoded = buildSurfaceModule(
+    [
+      ...FIXED_VECTOR_DEFINITIONS,
+      {
+        name: "second",
+        parameters: ["ignored", "vector"],
+        annotation: {
+          kind: "function",
+          parameter: { kind: "integer" },
+          result: {
+            kind: "function",
+            parameter: f32x4.type,
+            result: f32x4.type,
+          },
+        },
+        body: surface.name("vector"),
+      },
+      {
+        name: "doubleVector",
+        parameters: ["vector"],
+        annotation: {
+          kind: "function",
+          parameter: f32x4.type,
+          result: f32x4.type,
+        },
+        body: f32x4.multiply(surface.name("vector"), f32x4.splat(surface.float32(2))),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "float-32" },
+        body: f32x4.reduceAdd(
+          surface.let(
+            "vector",
+            vector,
+            surface.apply(
+              surface.name("doubleVector"),
+              surface.apply(surface.name("second"), surface.integer(0), surface.name("vector")),
+            ),
+          ),
+        ),
+      },
+    ],
+    FIXED_VECTOR_TYPE_DECLARATIONS,
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("functional F32x4 chain module did not compile");
+  try {
+    const artifact = compileWasmArtifact(
+      compilation.module,
+      await compilation.module.readCoreNodes(),
+      false,
+      { simd: "wasm-simd" },
+    );
+    equal(artifact.nativeF32x4CallSites, 2);
+    const { instance } = await WebAssembly.instantiate(artifact.bytes);
     const main = instance.exports.main;
     ok(typeof main === "function");
     equal(main(), 20);

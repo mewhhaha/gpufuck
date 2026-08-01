@@ -252,7 +252,11 @@ not implemented. Full resumable and multi-shot handlers remain a separate contin
 
 `F32x4` is name-based. Build it with `f32x4`, splice in `FIXED_VECTOR_TYPE_DECLARATIONS` and
 `FIXED_VECTOR_DEFINITIONS`, and compile with `{ simd: "wasm-simd" }` for native `v128` instructions.
-Declaring your own four-field vector type instead gets you scalar-correct results and no SIMD.
+In a strict module, compatible `let`, conditional, and saturated function-call chains keep `F32x4`
+parameters and results in `v128`; mixed scalar/vector functions use their natural Core scalar ABI
+beside the native vector parameters. Boxing remains the fallback at lazy or genuinely generic value
+boundaries. Declaring your own four-field vector type instead gets you scalar-correct results and no
+SIMD.
 
 ### Typing
 
