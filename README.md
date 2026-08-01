@@ -1,24 +1,47 @@
 # gpufuck
 
-A compiler backend that runs name resolution and Hindley–Milner type inference on the GPU, and emits
+gpufuck is a typed compiler backend for functional languages. You bring a parser and your language
+rules; gpufuck resolves names, infers and checks types, produces a small Functional Core, and emits
 WebAssembly.
 
-The linear-memory backend can also generate a caller-facing Canonical Core Wasm adapter with
-`WasmCompilationOptions.canonicalAbi`. It keeps gpufuck's tagged heap ABI private and publishes
-structural memory32 values, host imports, `cabi_realloc`, and post-return cleanup. See
-[docs/canonical-abi.md](docs/canonical-abi.md).
-
-You bring a language: a parser, your own source-language rules, and a desugaring step. gpufuck takes
-it from there — it typechecks, and it produces something you can run.
+Use it when you are building a language, DSL, code generator, or staged system and want to own the
+source language without also building its typechecker and Wasm backend.
 
 ```text
-your parser  ──►  Surface  ──►  [ GPU: resolve + infer ]  ──►  Core  ──┬──►  GPU evaluator
-                 (you build)                                           └──►  WebAssembly
+source ──► your parser ──► your lowering ──► gpufuck Surface
+                                                │
+                                      resolve + infer + check
+                                                │
+                                                ▼
+                                         Functional Core
+                                           │          │
+                                           ▼          ▼
+                                      evaluate     WebAssembly
 ```
 
-The point of the project is the middle box. Whether putting a typechecker on a GPU is a good idea is
-an open question, and [BASELINE.md](BASELINE.md) is the honest running answer: **it depends entirely
-on your workload**, and the numbers are in [Is it fast?](#is-it-fast) below.
+gpufuck does not prescribe syntax, parse files, or silently reinterpret your language. Records,
+lists, modules, traits, and source-level control flow mean exactly what your frontend lowers them
+to.
+
+## Should I use it?
+
+gpufuck is a good fit when:
+
+- your language is expression-oriented and mostly functional;
+- Hindley–Milner inference, algebraic data types, effects, or indexed constructors cover its type
+  system;
+- you want runnable Wasm rather than only a typechecking library;
+- you can lower source constructs into functions, immutable bindings, calls, constructors, and
+  `case`; and
+- you are comfortable depending on a pre-1.0 API.
+
+It is probably the wrong backend when you need arbitrary mutation, exceptions with stack unwinding,
+dependent or impredicative types, a stable C ABI without an adapter, or excellent single-file cold
+compile latency.
+
+The default integration does not require a GPU. `FunctionalCompilerService` compiles ordinary HM
+modules on the CPU and creates a resident WebGPU compiler only for a GPU-only profile or when you
+explicitly request `{ backend: "gpu" }`.
 
 ## Install
 
@@ -26,7 +49,8 @@ on your workload**, and the numbers are in [Is it fast?](#is-it-fast) below.
 deno add jsr:@mewhhaha/gpufuck
 ```
 
-You need Deno 2.9+, a WebGPU adapter, and the unstable WebGPU flag in your `deno.json`:
+The package supports Deno 2.9+. Its public API includes WebGPU types, so enable Deno's WebGPU
+library even if your application initially uses the CPU compiler:
 
 ```json
 {
@@ -34,185 +58,220 @@ You need Deno 2.9+, a WebGPU adapter, and the unstable WebGPU flag in your `deno
 }
 ```
 
-There is no CPU fallback. `requestWebGpuDevice()` throws with setup evidence if WebGPU is disabled,
-adapter discovery fails, or no adapter exists. A software adapter is fine for correctness but tells
-you nothing about speed.
+A GPU deployment additionally needs a WebGPU adapter. `requestWebGpuDevice()` reports whether the
+runtime flag, adapter discovery, or device creation failed. A software adapter is useful for
+correctness, not performance measurements.
 
-## Quickstart
+## Compile your first module
 
-This builds `main = 40 + 2`, typechecks it on the GPU, evaluates it, and emits a Wasm binary. It
-runs as written:
+This complete example lowers `main = 40 + 2`, infers its type, executes it through the Wasm runtime,
+and obtains a reusable Wasm binary:
 
 ```ts
 import {
   BinaryOperator,
   buildSurfaceModule,
   compileModuleToWasm,
-  EvaluationProfile,
-  GpuCompiler,
-  GpuEvaluator,
-  requestWebGpuDevice,
+  FunctionalCompilerService,
+  runWasmModule,
   surface,
 } from "@mewhhaha/gpufuck";
 
 const source = "main = 40 + 2";
-
-// 1. Build a Surface module. Normally your frontend emits this from a parse tree.
-const module = buildSurfaceModule(
+const encoded = buildSurfaceModule(
   [{
     name: "main",
     parameters: [],
-    annotation: null, // types are inferred
-    body: surface.binary(BinaryOperator.Add, surface.integer(40), surface.integer(2)),
+    annotation: null,
+    body: surface.binary(
+      BinaryOperator.Add,
+      surface.integer(40),
+      surface.integer(2),
+    ),
   }],
-  [], // no type declarations
-  "main", // entry point
+  [],
+  "main",
   new TextEncoder().encode(source).byteLength,
-  { evaluationProfile: EvaluationProfile.StrictEager },
 );
 
-const device = await requestWebGpuDevice();
+const compiler = new FunctionalCompilerService();
 try {
-  // 2. Resolve and typecheck on the GPU.
-  const compiler = await GpuCompiler.create(device);
-  const compilation = await compiler.compileModule(module);
+  const compilation = await compiler.compileModule(encoded);
   if (!compilation.ok) {
-    const [first] = compilation.diagnostics;
-    throw new Error(`${first.code}: ${first.message}`);
+    const diagnostic = compilation.diagnostics[0];
+    throw new Error(`${diagnostic.code}: ${diagnostic.message}`);
   }
 
   try {
-    // 3a. Run it directly...
-    const evaluator = await GpuEvaluator.create(device);
-    const execution = await evaluator.evaluate(compilation.module);
-    if (!execution.ok) throw new Error(`faulted: ${execution.fault.code}`);
+    const execution = await runWasmModule(compilation.module);
     console.log(execution.value); // { kind: "integer", value: 42 }
 
-    // 3b. ...or emit WebAssembly.
     const wasm = await compileModuleToWasm(compilation.module);
-    console.log(wasm.byteLength); // 37
+    console.log(`emitted ${wasm.byteLength} bytes`);
   } finally {
-    compilation.module.destroy(); // owns GPU buffers
+    compilation.module.destroy();
   }
 } finally {
-  device.destroy();
+  await compiler.destroy();
 }
 ```
 
-Three rules that will save you time:
+The objects have separate lifetimes:
 
-- **Use `FunctionalCompilerService` for ordinary compilation.** It uses the CPU for HM modules and
-  initializes one resident GPU compiler only when a GPU-only typechecking profile requires it. It
-  also reuses an unchanged encoded module.
-- **Use `GleamFrontendService` for a long-lived Gleam project.** It applies internal source edits
-  through Baba's incremental parser, reuses unchanged lowerings, and returns the same packed module
-  for an identical project. Call `clear()` to release its retained parser documents and caches.
-- **Use `ParallelGleamProjectFrontend` for a cold project with at least four modules.** It parses,
-  collects public signatures, and lowers modules in resident workers before linking them in source
-  order.
-- **Use `ParallelGleamCompiler` for independent Gleam entries.** It keeps parsing, lowering,
-  semantic compilation, and Wasm emission in the same worker and returns results in input order.
-- **Use `ParallelFunctionalCompilerService` for independent packed modules.** It can compile Core,
-  emit separate Wasm artifacts concurrently, or assemble one deterministic shared-runtime artifact.
-- **`destroy()` a successful module in `finally`.** CPU modules make this a no-op; GPU modules
-  release their buffers.
-- **Use `compileModulesToWasm()` for independent entries that should share one artifact.**
+- an encoded module is immutable host memory and can be cached;
+- a successful compilation owns a resolved module and must be destroyed;
+- `FunctionalCompilerService` owns caches and, if used, its GPU device;
+- emitted Wasm bytes are ordinary application data.
 
-## Is it fast?
+CPU-backed modules make `destroy()` a no-op, but always calling it keeps the same frontend correct
+when its compiler policy changes.
 
-No. Against Gleam 1.17.0 on the same source, on a Ryzen 7 7800X3D with an RTX 4080 SUPER:
+## Choose the API for your application
 
-| Workload                                     | Reproduce                      | Result           |
-| -------------------------------------------- | ------------------------------ | ---------------- |
-| **One large module**, compiled once          | `deno task bench:gleam-stdlib` | **4.84× slower** |
-| **One internal code edit**                   | `deno task bench:gleam-stdlib` | **12.3× slower** |
-| **One source-only edit**                     | `deno task bench:gleam-stdlib` | **1.14× slower** |
-| **Unchanged large module**                   | `deno task bench:gleam-stdlib` | **~271× faster** |
-| **1,024 modules**, shared Wasm artifact      | `deno task bench:gleam-batch`  | **~1.5× slower** |
-| **1,024 independent modules**, fused workers | `deno task bench:gleam-batch`  | **~1.8× faster** |
+| Goal                                                   | Recommended API                                     |
+| ------------------------------------------------------ | --------------------------------------------------- |
+| Compile ordinary modules and reuse unchanged work      | `FunctionalCompilerService`                         |
+| Force host-only semantic compilation                   | `new FunctionalCompilerService({ backend: "cpu" })` |
+| Force GPU semantic compilation                         | `new FunctionalCompilerService({ backend: "gpu" })` |
+| Control a shared GPU device yourself                   | `GpuCompiler.create(device)`                        |
+| Execute with the general runtime and host imports      | `runWasmModule()` or `runWasmExport()`              |
+| Evaluate compatible Core directly on WebGPU            | `GpuEvaluator`                                      |
+| Emit a standalone module                               | `compileModuleToWasm()`                             |
+| Put independent entries in one shared-runtime artifact | `compileModulesToWasm()`                            |
+| Compile independent modules in workers                 | `ParallelFunctionalCompilerService`                 |
+| Publish structural host-facing values                  | `WasmCompilationOptions.canonicalAbi`               |
+| Generate matching Core Wasm and WIT                    | `compileModuleToComponentBoundary()`                |
 
-The earlier batch claim charged Gleam one process and package startup for every module while gpufuck
-used one resident process. The benchmark now gives both compilers all modules in one process and
-includes executable output on both sides. `CpuCompiler` and the default compiler service avoid
-WebGPU startup, but frontend work and Wasm emission still leave the full compiler behind. The cold
-stdlib row runs uncached gpufuck compiler work in a warm Deno process and launches a fresh Gleam
-process after `gleam clean`; it is not a process-startup comparison.
+Start with `FunctionalCompilerService` and `runWasmModule()`. Choose the lower-level compiler,
+evaluator, batch, or boundary APIs only after your deployment needs them.
 
-On the standard-library corpus, the median of three benchmark medians is 111.8 ms to parse and
-lower, 36.6 ms for host resolution, inference, and effects, and 64.9 ms for uncached Wasm emission.
-The separately timed complete pipeline is 217.4 ms, 4.84× Gleam's 44.9 ms cold build. The raw HM
-phase is 13.0 ms; sharing closed global environments removed its former quadratic top-level copying.
+## Build a frontend
 
-Independent compilation now breaks even between 512 and 1,024 modules. Across three complete
-benchmark processes, the 1,024-module median was 202.2 ms for the fused source-to-Wasm worker path
-and 361.6 ms for Gleam: gpufuck was 1.79× faster. Keeping the shared runtime changes the tradeoff:
-the 1,024-module artifact is 2.03 MiB instead of 3.07 MiB, but monolithic Wasm emission remains
-serial and the complete shared-artifact path is about 1.5× slower than Gleam.
+A frontend has four responsibilities:
 
-The warm result has two distinct meanings. An unchanged project takes about 0.068 ms because all
-three stages reuse immutable results, versus Gleam's 10.4 ms no-change build. A source-only comment
-edit takes 14.4 ms versus Gleam's 11.6 ms: parsing, lowering, semantic compilation, and Wasm all
-reuse their unchanged semantics, leaving whole-project relinking as the remaining edited-build
-bottleneck. [BASELINE.md](BASELINE.md) records the raw measurements and superseded claims;
-[TASKS.md](TASKS.md) ranks what is left.
+1. Parse source and enforce syntax-specific rules.
+2. Lower source expressions and declarations into Surface.
+3. Describe source types as `TypeSchema` values.
+4. Translate gpufuck diagnostics back into filenames and source-language wording.
 
-**Does it produce correct code?** 547 of Gleam's own 1,521 standard-library tests compile to
-WebAssembly and pass upstream's assertions — 97% of those needing no JavaScript FFI adapter. Run it
-with `deno task check:gleam-stdlib-wasm <stdlib-checkout>`.
+`buildSurfaceModule()` handles symbol interning, currying, the packed compiler ABI, and the reserved
+unit and pair types. It does not decide what a source construct means.
 
-## Building a frontend
+### Lower source concepts deliberately
 
-Your frontend does the language-specific work: parse, enforce your own rules, then desugar into the
-handful of things Core knows about — functions, immutable bindings, application, conditionals,
-constructors, and `case`. Lists, records, traits, and source modules are **not** Core primitives;
-you lower them (traits become explicit dictionaries, records become constructors, and so on).
+| Source concept                 | Typical Surface representation                              |
+| ------------------------------ | ----------------------------------------------------------- |
+| Literal or variable            | `surface.integer()`, `float32()`, `text()`, `name()`        |
+| Multi-parameter function       | `surface.lambda(["x", "y"], body)`                          |
+| Call                           | `surface.apply(callee, ...arguments)`                       |
+| Immutable local                | `surface.let(name, value, body)`                            |
+| Conditional                    | `surface.if(condition, consequent, alternate)`              |
+| Algebraic value                | a declared constructor applied as an ordinary function      |
+| Pattern match                  | `surface.case(value, arms, otherwise)`                      |
+| Record                         | usually one constructor; projections become `case` bindings |
+| List                           | usually `Nil \| Cons element list`                          |
+| Trait or interface             | an explicit record/dictionary argument                      |
+| Source module                  | a `ModuleArtifact`, then `linkModules()`                    |
+| Deferred value                 | `surface.delay()` and `surface.force()`                     |
+| Mutable indexed storage        | the `surface.store*` operations                             |
+| Unrecoverable source operation | `surface.runtimeFault(message)`                             |
 
-You also convert your nominal declarations and annotations into `TypeSchema` values, attach UTF-8
-byte spans, and translate the neutral diagnostics back into your own terminology.
+Surface is intentionally smaller than most source languages. A frontend should keep its own AST and
+lower into Surface at one boundary rather than use Surface as its parser AST.
 
-`buildSurfaceModule()` does the mechanical part: interning names, currying multi-parameter
-definitions, installing the reserved unit and pair constructors, and packing the ABI. Multiple
-parameters become nested unary lambdas, calls become left-associated `apply` nodes, and nested
-patterns become nested flat `case` expressions. `linkModules()` combines several `ModuleArtifact`
-values into one program before compilation, qualifying names and checking typed imports against
-exports.
+### Declare algebraic types
 
-### The surface builder
-
-`surface` covers literals, `name`, `lambda`, `apply`, `let`, `if`, `case`, `binary`, `unary`,
-`convert`, `equal`, `structuralEqual`, `delay`, `force`, `store*`, and `runtimeFault`. Several
-helpers exist because two unrelated frontends independently hand-rolled the same workaround:
+Constructors are globally named callable values. This declares `Option value`, constructs `Some 42`,
+and consumes it:
 
 ```ts
-// Spans: `at` stamps every node its helpers produce.
-const at = surface.at({ startByte: 42, endByte: 47 });
-at.binary(BinaryOperator.Add, at.integer(20), at.integer(22));
+const optionType = {
+  name: "Option",
+  parameters: ["value"],
+  constructors: [{
+    name: "None",
+    fields: [],
+  }, {
+    name: "Some",
+    fields: [{
+      name: "value",
+      type: { kind: "parameter" as const, name: "value" },
+    }],
+  }],
+};
 
-// Parameter lists fold right, so you do not curry by hand.
-surface.lambda(["x", "y"], surface.name("y"));
-
-// A case default: omitted arms are filled in, and the fallback binds once.
-surface.case(
-  subject,
-  [{ constructor: "Red", binders: [], body: surface.integer(1) }],
-  { binder: "other", body: surface.integer(0) },
-);
+const value = surface.apply(surface.name("Some"), surface.integer(42));
+const unwrapped = surface.case(value, [{
+  constructor: "Some",
+  binders: ["value"],
+  body: surface.name("value"),
+}], {
+  body: surface.integer(0),
+});
 ```
 
-`at` stamps the interior spine too, not just the outermost node: on `lambda(["x", "y"], body)` each
-curried lambda carries the span, and on `apply(callee, a, b)` each application node does. Stamping
-only the outside would silently drop one span per parameter and per extra argument — spans you would
-have kept writing the node literals by hand. `case` arms and the `otherwise` default carry their own
-optional spans, so `at` fills in only the blanks rather than overwriting a more precise arm span. A
-`case` default needs at least one arm naming a declared constructor, since that is how the owning
-type is found. `let-rec-group` is the only node kind with no builder.
+Pass `optionType` in the second argument to `buildSurfaceModule()`. Constructor fields and function
+annotations use the same `TypeSchema` vocabulary. An annotation may be `null`; exported and entry
+types still have to resolve to concrete first-order types.
 
-Traps need no host capability: `surface.runtimeFault(message)` is a first-class node that infers as
-a fresh variable, so it typechecks wherever a diverging expression belongs.
+### Preserve source locations
 
-### Effects
+Spans are UTF-8 byte offsets, not UTF-16 indices. Attach them while lowering:
 
-Source effect operations are typed functions whose effect labels travel with the callable value:
+```ts
+const at = surface.at({ startByte: 42, endByte: 47 });
+const sum = at.binary(BinaryOperator.Add, at.integer(20), at.integer(22));
+```
+
+The scoped builder stamps every node it creates, including each curried lambda or application in an
+expanded spine. Pass the complete source byte length to `buildSurfaceModule()`. After linking,
+`locateDiagnostic()` maps a linked offset back to the source module; your frontend remains
+responsible for line/column conversion and user-facing terminology.
+
+### Link source modules
+
+Lower each source module independently, describe its typed imports and exports with
+`createModuleArtifact()`, then call `linkModules()` on the entry artifact and its dependencies. The
+linker qualifies private names, follows reachable imports, checks source contracts, and reports
+`LinkError` separately from semantic diagnostics.
+
+Do not concatenate Surface definition arrays yourself. That loses module ownership, source offsets,
+and typed import checks.
+
+## Compile, run, or publish Wasm
+
+Compilation returns either diagnostics or a resolved `CompiledModule`. From that one value you can:
+
+- call `runWasmModule()` for the entry point;
+- call `runWasmExport()` for a named source export;
+- call `compileModuleToWasm()` to retain the binary;
+- use `GpuEvaluator` when the supported WebGPU evaluator is useful; or
+- inspect inferred types, effects, exports, and resolved Core metadata.
+
+`runWasmModule()` is the broadest execution path. It supports host capabilities, text, f64, stores,
+runtime faults, and bounded execution. `GpuEvaluator` delegates unsupported operations to bounded
+Wasm, so select it for its execution profile rather than as a requirement.
+
+For a program with host capabilities, supply the declared fields through the runner's `init` option.
+Synchronous capabilities use `runWasmModule()`; suspending operations use `runWasmModuleAsync()`.
+Missing or incorrectly typed bindings fail at the host boundary instead of becoming an untyped Wasm
+import error.
+
+### Wasm backends
+
+The default linear-memory backend supports the full private runtime, Canonical ABI adapters, SIMD,
+branch hints, and component boundaries. `{ backend: "wasm-gc" }` is useful when your target supports
+WasmGC, but it deliberately does not support every linear-memory feature.
+
+For a stable caller-facing boundary, pass a `CanonicalAbiInterface` as `canonicalAbi`. This keeps
+gpufuck's tagged heap private and publishes structural memory32 records, variants, arrays, text,
+booleans, signed i64, f32, and f64. See [Canonical Core Wasm adapters](docs/canonical-abi.md) for
+layouts, ownership, post-return, WIT, components, and `ComponentReloadSlot`.
+
+## Effects and host capabilities
+
+Effect operations are typed callable values. Their labels flow through higher-order calls and are
+included in inferred definition and export effects:
 
 ```ts
 const tick = defineEffectOperation({
@@ -228,140 +287,113 @@ const tick = defineEffectOperation({
 });
 ```
 
-Calling `tick` adds `Clock.Tick` to the enclosing definition's effect summary. Passing it to another
-function carries the same label through the higher-order call. Pure code is the empty set,
-`effectSet()`, and effect sets support `union`, `intersection`, `difference`, and
-`symmetricDifference`.
+`surface.withEffectHandler()` installs lexical evidence for an operation. A pure replacement can
+discharge its label, including through higher-order code that receives the replacement. It is not
+dynamic interception: a function that already closed over the global operation stays effectful.
 
-Handlers are ordinary lexical evidence. `surface.withEffectHandler("tick", implementation, body)`
-binds a replacement operation within `body`; a pure replacement discharges `Clock.Tick`, including
-when that binding is passed through higher-order code. Nesting handlers removes only the labels
-whose operation bindings they replace. This is lexical substitution, not dynamic interception: a
-function defined elsewhere that already refers to the global `tick` remains effectful when called
-inside the handler. Pass the operation into that function explicitly, or inline its body, when the
-replacement must reach it. Compilation exposes the original declarations through
-`GpuModule.declaredDefinitionEffects` and the inferred fixed point through `definitionEffects`,
-`entryEffects`, and each WebAssembly export's `effects`.
+Host capabilities describe the operations supplied by an application at runtime. Keep this boundary
+small and structural; it becomes both the evaluator contract and the Wasm import contract.
 
-Immutable effect sets are not structured-cloneable. Send an encoded module through a Worker with
-`encodeModuleForTransfer()`, then restore it with `decodeTransferredModule()` before compilation.
+## SIMD, laziness, and branch hints
 
-This evidence-passing path handles ordinary operation replacement. Abortive control has a smaller
-future Core design described in [ARCHITECTURE.md](ARCHITECTURE.md#abortive-control-boundary), but is
-not implemented. Full resumable and multi-shot handlers remain a separate continuation project.
+The fixed-vector library has portable definitions and optional native Wasm SIMD lowering. Include
+`FIXED_VECTOR_TYPE_DECLARATIONS` and `FIXED_VECTOR_DEFINITIONS`, construct expressions with `f32x4`,
+then emit with `{ simd: "wasm-simd" }`.
 
-`F32x4` is name-based. Build it with `f32x4`, splice in `FIXED_VECTOR_TYPE_DECLARATIONS` and
-`FIXED_VECTOR_DEFINITIONS`, and compile with `{ simd: "wasm-simd" }` for native `v128` instructions.
-In a strict module, compatible `let`, conditional, and saturated function-call chains keep `F32x4`
-parameters and results in `v128`; mixed scalar/vector functions use their natural Core scalar ABI
-beside the native vector parameters. Boxing remains the fallback at lazy or genuinely generic value
-boundaries. The builder includes lane comparisons and masks, `select`, constant `shuffle`, and
-one-vector `swizzle`. Declaring your own four-field vector type instead gets you scalar-correct
-results and no SIMD.
+Strict, provably typed F32x4 values remain in `v128` across compatible calls, conditions,
+projections, and let-bound chains. Lazy and genuinely generic boundaries use the boxed
+representation. Available operations include arithmetic, lane access and replacement, comparisons
+and masks, `select`, horizontal addition, shuffle, and swizzle.
 
-### Typing
+`EvaluationProfile.StrictEager` is the default. A lazy frontend can select
+`EvaluationProfile.LazyCallByNeed`, while individual values can use `surface.delay()` and
+`surface.force()`. Thunks are shared and evaluated at most once.
 
-Annotations are optional. Inference is Hindley–Milner with mutually recursive SCCs, GADT-style
-indexed constructor results, and explicitly annotated predicative rank-N function parameters. It is
-not dependent or impredicative, and your entry must resolve to a concrete first-order boundary type.
-
-Evaluation profile defaults to `StrictEager`; a Haskell-like frontend selects `LazyCallByNeed`, and
-individual binding boundaries can override it. Explicit laziness is separate: `surface.delay()`
-creates a typed `Thunk value` and `surface.force()` evaluates it at most once. The generated thunk
-test marks the already-resolved cache path likely. Frontends can annotate ordinary conditions with
-`surface.if(condition, consequent, alternate, { likely: "consequent" })` or `"alternate"`; the
-linear-memory backend records the hint in WebAssembly's standard branch-hint custom section without
-changing semantics on engines that ignore it.
-
-Worth knowing when reading a profile: **name resolution runs on the host**, not the GPU.
-`src/semantic/symbol_lookup.ts` computes de Bruijn depths and global, constructor, and case-arm
-resolution as a lowering plan; the shader copies it. The GPU owns inference — SCC discovery,
-unification, generalization, subsumption, indexed refinement, coverage, and entry concreteness.
-
-## Running your program
-
-Two runtimes, and the choice is mostly not yours to make.
-
-Portable WGSL has no `i64` or `f64` and does not promise host-Wasm rounding, so the GPU evaluator
-cannot execute 64-bit floats, portable whole-number f64, text, bytes, runtime faults, buffer append,
-`Store` operations, structural equality, f32 division, or f32 square root. `GpuEvaluator.evaluate`
-inspects resolved Core before dispatch and delegates any program using them to bounded WebAssembly,
-so you do not pass a flag. That delegated path accepts `maximumSteps` and result limits but rejects
-GPU-specific dispatch, heap, and stack options with a `TypeError`.
-
-A module declaring host capabilities must go through `runWasmModule` instead, because that is where
-the runner `init` is supplied:
+Frontends can attach non-semantic branch metadata:
 
 ```ts
-import { compileModuleToWasm, runWasmModule } from "@mewhhaha/gpufuck";
-
-const bytes = await compileModuleToWasm(compilation.module);
-await Deno.writeFile("main.wasm", bytes);
-
-const execution = await runWasmModule(compilation.module);
+surface.if(condition, fastPath, slowPath, { likely: "consequent" });
 ```
 
-Host capability declarations and `wasmExports` are consumed here: capabilities become the imported
-host boundary supplied through the run options' `init`, and exported definitions become module
-exports.
+The linear-memory backend emits the standard `metadata.code.branch_hint` custom section. Generated
+fault paths are cold, and a thunk's resolved cache path is likely. Engines that ignore the section
+preserve the same behavior.
 
-## Diagnostics and limits
+## Diagnostics and resource limits
 
-Expected failures are structured, in one `F####` namespace:
+Expected compile and runtime failures are structured:
 
-| Range                    | Meaning                                          |
-| ------------------------ | ------------------------------------------------ |
-| `F1001`–`F1003`          | structural and resolution diagnostics            |
-| `F2001`–`F2104`          | type, annotation, and coverage diagnostics       |
-| `F3001`–`F3012`          | evaluation faults, from either runtime           |
-| `F3013`, `F3101`–`F3104` | evaluation faults only bounded Wasm can raise    |
-| `F4001`–`F4007`          | `LinkError` from `linkModules()`                 |
-| `F4101`–`F4102`          | host boundary, including a missing runner `init` |
-| `F5001`–`F5002`          | comptime execution                               |
-| `F6001`–`F6006`          | Storage Core verification                        |
+| Range                            | Meaning                              |
+| -------------------------------- | ------------------------------------ |
+| `F1001`–`F1003`                  | structure and name resolution        |
+| `F2001`–`F2104`                  | inference, annotations, and coverage |
+| `F3001`–`F3013`, `F3101`–`F3104` | evaluation faults                    |
+| `F4001`–`F4007`                  | module linking                       |
+| `F4101`–`F4102`                  | host and Wasm boundaries             |
+| `F5001`–`F5002`                  | compile-time evaluation              |
+| `F6001`–`F6006`                  | Storage Core verification            |
 
-WebGPU setup and device failures throw or reject with a `cause`. Options a chosen runtime cannot
-honour throw a `TypeError`. Spans are UTF-8 byte offsets; `locateDiagnostic()` maps an offset in a
-linked module back to the owning module. Filenames, line/column lookup, and wording stay in your
-frontend.
+Compiler and evaluator options bound semantic steps, result nodes, result bytes, dispatch work,
+heap, and continuation depth. Cancellation uses `AbortSignal`. Invalid API options throw
+`TypeError`; WebGPU setup failures preserve their cause; source-program failures return diagnostics
+or typed runtime faults.
 
-## Worked examples
+Never turn a diagnostic into a generic “type error.” Preserve its code and evidence, locate its byte
+span in the owning source, and render the final message in your language's vocabulary.
 
-Three frontends live in the repository. They are samples rather than API — they are not in the
-published package, and you should read them rather than import them.
+## Long-lived and parallel builds
 
-| Frontend                                            | What it demonstrates                                           |
-| --------------------------------------------------- | -------------------------------------------------------------- |
-| [Gleam](examples/gleam/README.md)                   | Strict inference, module linking, pinned stdlib coverage       |
-| [Lazuli](examples/lazuli/)                          | Reference syntax, indexed proofs, host values, and laziness    |
-| [Sweep](examples/sweep/README.md)                   | A language shaped by [DESIGN.md](DESIGN.md); no inference      |
-| [JavaScript AOT](examples/javascript-aot/README.md) | Baba parsing, control flow, lexical exceptions, and strict f64 |
+`FunctionalCompilerService` caches by encoded module, semantic fingerprint, and literal-only update.
+Keep one service for the lifetime of a language server, build daemon, or application session.
 
-Gleam is the most complete and the one the benchmarks use; drive it with `deno task run:gleam`.
+Use `ParallelFunctionalCompilerService` for independent modules, not for splitting one module. It
+can return compiled Core, emit separate Wasm modules, or assemble one deterministic shared-runtime
+artifact. Transfer encoded modules with `encodeModuleForTransfer()` when you manage workers
+yourself; immutable effect sets are not directly structured-cloneable.
 
-[Ducklang](ARCHITECTURE.md#7-external-consumers) is the real out-of-repo consumer. It compiles
-through the WebAssembly backend and has no other code generator.
+## Reference frontends
 
-## Where to go next
+The repository contains complete frontends to read as implementation examples. They are deliberately
+excluded from the published package.
 
-| Document                           | What it is                                                      |
-| ---------------------------------- | --------------------------------------------------------------- |
-| [TASKS.md](TASKS.md)               | Ranked future work, each item with the measurement behind it    |
-| [CHALLENGES.md](CHALLENGES.md)     | Degenerate cases and hard walls: what breaks, why, and options  |
-| [DESIGN.md](DESIGN.md)             | Sketch: what a language designed for this pipeline would be     |
-| [BASELINE.md](BASELINE.md)         | Every performance claim, how it was measured, and what failed   |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Implementation boundaries and why they are where they are       |
-| [DEVELOPMENT.md](DEVELOPMENT.md)   | Contributing: the verification loop, test ownership, publishing |
-| [CHANGELOG.md](CHANGELOG.md)       | Release history                                                 |
+| Frontend                                            | Useful reference                                                |
+| --------------------------------------------------- | --------------------------------------------------------------- |
+| [Gleam](examples/gleam/README.md)                   | strict inference, project linking, records, and stdlib coverage |
+| [Lazuli](examples/lazuli/README.md)                 | small syntax, indexed constructors, host values, and laziness   |
+| [Sweep](examples/sweep/README.md)                   | explicit checking without inference and editor integration      |
+| [JavaScript AOT](examples/javascript-aot/README.md) | imperative control-flow lowering and lexical exceptions         |
 
-## Status
+Ducklang is the main out-of-repository consumer. It uses gpufuck as its only code generator.
 
-This is a research project, published so it can be depended on, not because it is finished. The API
-changed comprehensively in 0.4.0 and may change again. It is pre-1.0 and the version reflects that.
+## Performance and project status
 
-What is solid: the ABI, the diagnostics, the two execution paths, and the measurements. What is not:
-single-module compile latency, and the assumption that a GPU is the right place for type inference —
-which the project exists to test, and has not yet answered in the affirmative.
+gpufuck is not currently a faster replacement for a mature compiler on ordinary cold builds. On the
+recorded Ryzen 7 7800X3D and RTX 4080 SUPER benchmark, one large Gleam module is 4.84× slower and an
+internal edit is 12.3× slower. The useful cases are different: an unchanged large module is about
+271× faster through immutable reuse, and 1,024 independent modules compiled through fused workers
+are about 1.8× faster than the comparison Gleam build.
+
+Those numbers are workload-specific and have changed as the benchmark became fairer. Read
+[BASELINE.md](BASELINE.md) for raw measurements and methodology before making an architecture
+decision. [TASKS.md](TASKS.md) records the measured remaining work.
+
+The project is pre-1.0. The packed ABI, structured diagnostics, execution paths, and published
+package are tested; the frontend API may still change between minor releases.
+
+## Documentation
+
+| Document                               | Purpose                                             |
+| -------------------------------------- | --------------------------------------------------- |
+| [Canonical ABI](docs/canonical-abi.md) | public Wasm layouts, ownership, WIT, and components |
+| [ARCHITECTURE.md](ARCHITECTURE.md)     | internal boundaries and invariants                  |
+| [CHALLENGES.md](CHALLENGES.md)         | hard limits and degenerate cases                    |
+| [DESIGN.md](DESIGN.md)                 | a source language designed around this backend      |
+| [BASELINE.md](BASELINE.md)             | reproducible performance evidence                   |
+| [DEVELOPMENT.md](DEVELOPMENT.md)       | contributing, verification, and publishing          |
+| [CHANGELOG.md](CHANGELOG.md)           | release history                                     |
+
+Only exports from `functional.ts` are public API. Files under `src/` are implementation details even
+when a reference frontend imports them inside this repository.
 
 ## License
 
