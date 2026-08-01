@@ -1,5 +1,3 @@
-/// <reference lib="deno.worker" />
-
 import { CpuCompiler } from "./compiler.ts";
 import {
   compiledModuleTransferables,
@@ -52,9 +50,18 @@ export interface ParallelCompileResponse {
   readonly results: readonly ParallelCompileWorkerResult[];
 }
 
+interface ParallelCompilerWorkerScope {
+  onmessage: ((event: MessageEvent<ParallelCompileRequest>) => void | Promise<void>) | null;
+  postMessage(
+    response: ParallelCompileResponse,
+    options: { readonly transfer: readonly ArrayBuffer[] },
+  ): void;
+}
+
+const workerScope = globalThis as unknown as ParallelCompilerWorkerScope;
 const compiler = new CpuCompiler();
 
-self.onmessage = async (event: MessageEvent<ParallelCompileRequest>) => {
+workerScope.onmessage = async (event) => {
   const request = event.data;
   if (request.mode === "compiled-wasm") {
     const results: ParallelCompileWorkerResult[] = [];
@@ -65,7 +72,7 @@ self.onmessage = async (event: MessageEvent<ParallelCompileRequest>) => {
       results.push({ index, ok: true, wasm });
       transferables.push(wasm.buffer);
     }
-    self.postMessage({ results } satisfies ParallelCompileResponse, {
+    workerScope.postMessage({ results }, {
       transfer: transferables,
     });
     return;
@@ -102,7 +109,7 @@ self.onmessage = async (event: MessageEvent<ParallelCompileRequest>) => {
     }
     compilation.module.destroy();
   }
-  self.postMessage({ results } satisfies ParallelCompileResponse, {
+  workerScope.postMessage({ results }, {
     transfer: transferables,
   });
 };
