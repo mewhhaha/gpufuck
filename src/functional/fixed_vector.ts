@@ -23,6 +23,7 @@ export {
 } from "./fixed_vector_contract.ts";
 
 const FLOAT32_TYPE: TypeSchema = Object.freeze({ kind: "float-32" });
+const INTEGER_TYPE: TypeSchema = Object.freeze({ kind: "integer" });
 const BOOLEAN_TYPE: TypeSchema = Object.freeze({ kind: "boolean" });
 const F32X4_TYPE: TypeSchema = Object.freeze({
   kind: "named",
@@ -97,6 +98,7 @@ export const FIXED_VECTOR_DEFINITIONS: readonly SurfaceDefinition[] = Object
       BinaryOperator.LessFloat32,
     ),
     vectorSelectDefinition(),
+    vectorShuffleDefinition(),
     ...Array.from({ length: 4 }, (_, lane) => vectorExtractDefinition(lane)),
     ...Array.from({ length: 4 }, (_, lane) => vectorReplaceDefinition(lane)),
     vectorReduceAddDefinition(),
@@ -109,6 +111,14 @@ export const f32x4: Readonly<{
   readonly type: TypeSchema;
   readonly maskType: TypeSchema;
   make(
+    lanes: readonly [
+      SurfaceExpression,
+      SurfaceExpression,
+      SurfaceExpression,
+      SurfaceExpression,
+    ],
+  ): SurfaceExpression;
+  makeMask(
     lanes: readonly [
       SurfaceExpression,
       SurfaceExpression,
@@ -146,6 +156,15 @@ export const f32x4: Readonly<{
     whenTrue: SurfaceExpression,
     whenFalse: SurfaceExpression,
   ): SurfaceExpression;
+  shuffle(
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+    lanes: readonly [number, number, number, number],
+  ): SurfaceExpression;
+  swizzle(
+    vector: SurfaceExpression,
+    lanes: readonly [number, number, number, number],
+  ): SurfaceExpression;
   extractLane(vector: SurfaceExpression, lane: number): SurfaceExpression;
   replaceLane(
     vector: SurfaceExpression,
@@ -171,6 +190,7 @@ export const f32x4: Readonly<{
   type: F32X4_TYPE,
   maskType: MASK32X4_TYPE,
   make: f32x4Constructor,
+  makeMask: mask32x4Constructor,
   splat: (value) => vectorCall(F32x4Definition.Splat, [value]),
   add: (left, right) => vectorCall(F32x4Definition.Add, [left, right]),
   subtract: (left, right) => vectorCall(F32x4Definition.Subtract, [left, right]),
@@ -180,6 +200,22 @@ export const f32x4: Readonly<{
   less: (left, right) => vectorCall(F32x4Definition.Less, [left, right]),
   select: (mask, whenTrue, whenFalse) =>
     vectorCall(F32x4Definition.Select, [mask, whenTrue, whenFalse]),
+  shuffle(left, right, lanes) {
+    lanes.forEach(requireShuffleLane);
+    return vectorCall(F32x4Definition.Shuffle, [
+      left,
+      right,
+      ...lanes.map(surface.integer),
+    ]);
+  },
+  swizzle(vector, lanes) {
+    lanes.forEach(requireLane);
+    return vectorCall(F32x4Definition.Shuffle, [
+      vector,
+      vector,
+      ...lanes.map(surface.integer),
+    ]);
+  },
   extractLane(vector, lane) {
     return vectorCall(extractDefinition(lane), [vector]);
   },
@@ -260,6 +296,37 @@ function vectorSelectDefinition(): SurfaceDefinition {
         );
       });
     }),
+  );
+}
+
+function vectorShuffleDefinition(): SurfaceDefinition {
+  const selectors = ["lane0", "lane1", "lane2", "lane3"];
+  return vectorDefinition(
+    F32x4Definition.Shuffle,
+    ["left", "right", ...selectors],
+    functionType(
+      [F32X4_TYPE, F32X4_TYPE, ...selectors.map(() => INTEGER_TYPE)],
+      F32X4_TYPE,
+    ),
+    f32x4Case("left", "leftLane", (leftLanes) =>
+      f32x4Case("right", "rightLane", (rightLanes) => {
+        const sourceLanes = [...leftLanes, ...rightLanes];
+        return f32x4Constructor(selectors.map((selector) =>
+          sourceLanes.reduceRight<SurfaceExpression>(
+            (alternate, lane, index) =>
+              surface.if(
+                surface.binary(
+                  BinaryOperator.Equal,
+                  surface.name(selector),
+                  surface.integer(index),
+                ),
+                lane,
+                alternate,
+              ),
+            sourceLanes[0]!,
+          )
+        ));
+      })),
   );
 }
 
@@ -472,4 +539,11 @@ function replaceDefinition(lane: number): string {
 function requireLane(lane: number): void {
   if (Number.isInteger(lane) && lane >= 0 && lane < 4) return;
   throw new RangeError(`functional F32x4 lane must be an integer within [0, 3]; received ${lane}`);
+}
+
+function requireShuffleLane(lane: number): void {
+  if (Number.isInteger(lane) && lane >= 0 && lane < 8) return;
+  throw new RangeError(
+    `functional F32x4 shuffle lane must be an integer within [0, 7]; received ${lane}`,
+  );
 }

@@ -7,6 +7,7 @@ import {
   compileModuleToComponentBoundary,
   ComponentReloadSlot,
   CpuCompiler,
+  NumericConversion,
   surface,
 } from "../functional.ts";
 
@@ -76,6 +77,44 @@ Deno.test("component boundary pairs canonical Core Wasm with deterministic WIT",
     const add = instance.exports.add;
     ok(typeof add === "function");
     equal(add(20n, 22n), 42n);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("component boundary renders canonical floating-point types", async () => {
+  const float32 = { kind: "float-32" as const };
+  const float64 = { kind: "float-64" as const };
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: float64,
+      body: surface.float64(0),
+    }, {
+      name: "widen",
+      parameters: ["value"],
+      annotation: { kind: "function", parameter: float32, result: float64 },
+      body: surface.convert(NumericConversion.Float32ToFloat64, surface.name("value")),
+    }],
+    [],
+    "main",
+    0,
+    { wasmExports: [{ name: "widen", definition: "widen" }] },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("floating-point component fixture did not compile");
+  try {
+    const artifact = await compileModuleToComponentBoundary(compilation.module, {
+      version: 1,
+      imports: [],
+      exports: [{
+        name: "widen",
+        function: { parameters: [float32], result: float64 },
+      }],
+    });
+    ok(artifact.wit.includes("func(argument-0: float32) -> float64"));
   } finally {
     compilation.module.destroy();
   }

@@ -47,6 +47,61 @@ Deno.test("fixed F32x4 builders reject lanes outside the four-lane shape", () =>
     () => f32x4.replaceLane(vector, 4, surface.float32(0)),
     /lane must be an integer within \[0, 3\]; received 4/,
   );
+  throws(
+    () => f32x4.shuffle(vector, vector, [0, 1, 2, 8]),
+    /shuffle lane must be an integer within \[0, 7\]; received 8/,
+  );
+  throws(
+    () => f32x4.swizzle(vector, [0, 1, 2, 4]),
+    /lane must be an integer within \[0, 3\]; received 4/,
+  );
+});
+
+Deno.test("F32x4 shuffle agrees in portable and native SIMD modes", async () => {
+  const shuffled = f32x4.shuffle(
+    f32x4.make([
+      surface.float32(1),
+      surface.float32(2),
+      surface.float32(3),
+      surface.float32(4),
+    ]),
+    f32x4.make([
+      surface.float32(5),
+      surface.float32(6),
+      surface.float32(7),
+      surface.float32(8),
+    ]),
+    [0, 5, 2, 7],
+  );
+  const encoded = buildSurfaceModule(
+    [...FIXED_VECTOR_DEFINITIONS, {
+      name: "main",
+      parameters: [],
+      annotation: { kind: "float-32" },
+      body: f32x4.reduceAdd(shuffled),
+    }],
+    FIXED_VECTOR_TYPE_DECLARATIONS,
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("functional shuffle module did not compile");
+  try {
+    const portable = await runWasmModule(compilation.module);
+    deepStrictEqual(portable.value, { kind: "float-32", value: 18 });
+    const nativeBytes = await compileModuleToWasm(compilation.module, {
+      simd: "wasm-simd",
+    });
+    ok(nativeBytes.includes(0xfd), "native shuffle omitted its SIMD instruction prefix");
+    const { instance } = await WebAssembly.instantiate(nativeBytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 18);
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("canonical fixed-vector definitions are deeply immutable", () => {

@@ -4,10 +4,10 @@
 synchronous memory32 Canonical ABI interface. This interface is separate from `WasmValueAbi`: the
 latter remains gpufuck's private tagged-value and heap contract.
 
-The descriptor supplies structural unit, signed-i64, boolean, text, array, record, variant, and
-sealed types. Record and variant names must be uniquely sorted. Constructor names connect those
-structural descriptions to Core only while generating adapters; callers use field names, case names,
-and canonical layouts rather than constructor indices.
+The descriptor supplies structural unit, signed-i64, f32, f64, boolean, text, array, record,
+variant, and sealed types. Record and variant names must be uniquely sorted. Constructor names
+connect those structural descriptions to Core only while generating adapters; callers use field
+names, case names, and canonical layouts rather than constructor indices.
 
 Each record field also carries its private Core constructor slot. This lets canonical memory remain
 name-sorted without changing a frontend's source record order. A frontend should omit that adapter
@@ -25,7 +25,8 @@ The backend:
 
 Strings use UTF-8. Arrays recursively use their element memory layout. The backend applies the
 Component Model limits of 16 flat parameters and one flat result, using indirect canonical records
-beyond those limits.
+beyond those limits. F32 and f64 remain native flat values and use four-byte and eight-byte
+canonical memory layouts respectively.
 
 Canonical allocation keeps the runtime allocator's metadata in a hidden sixteen-byte prefix. Caller
 writes therefore cannot overwrite free-list metadata. The generated post-return recursively releases

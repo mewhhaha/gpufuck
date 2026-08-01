@@ -3,6 +3,7 @@ import { canonicalFixedVectorName, F32x4Definition } from "./fixed_vector_contra
 
 export const WasmSimdOpcode = Object.freeze(
   {
+    I8x16Shuffle: 13,
     I32x4Splat: 17,
     F32x4Splat: 19,
     I32x4ExtractLane: 27,

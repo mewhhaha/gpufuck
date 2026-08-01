@@ -13,6 +13,7 @@ export {
   ARGUMENT_WORD_LENGTH,
   ArgumentWord,
   BinaryOperator,
+  BranchLikelihood,
   CASE_ALTERNATIVE_WORD_LENGTH,
   CaseAlternativeWord,
   CONSTRUCTOR_BYTE_LENGTH,

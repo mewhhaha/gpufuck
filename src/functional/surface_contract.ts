@@ -89,6 +89,7 @@ export type SurfaceExpression =
     readonly condition: SurfaceExpression;
     readonly consequent: SurfaceExpression;
     readonly alternate: SurfaceExpression;
+    readonly likely?: "consequent" | "alternate";
     readonly span?: Span;
   }
   | {

@@ -10,6 +10,8 @@
 export type CanonicalAbiType =
   | { readonly kind: "unit" }
   | { readonly kind: "signed-integer-64" }
+  | { readonly kind: "float-32" }
+  | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "text" }
   | {
@@ -70,7 +72,7 @@ export interface CanonicalAbiInterface {
   readonly imports: readonly CanonicalAbiImport[];
 }
 
-export type CanonicalAbiCoreType = "i32" | "i64";
+export type CanonicalAbiCoreType = "i32" | "i64" | "f32" | "f64";
 
 export interface CanonicalAbiCoreSignature {
   readonly parameters: readonly CanonicalAbiCoreType[];
@@ -224,6 +226,8 @@ function validateCanonicalAbiType(
   if (
     type.kind === "unit" ||
     type.kind === "signed-integer-64" ||
+    type.kind === "float-32" ||
+    type.kind === "float-64" ||
     type.kind === "boolean" ||
     type.kind === "text"
   ) return;
@@ -351,6 +355,10 @@ export function flattenCanonicalAbiType(
       return [];
     case "signed-integer-64":
       return ["i64"];
+    case "float-32":
+      return ["f32"];
+    case "float-64":
+      return ["f64"];
     case "boolean":
       return ["i32"];
     case "text":
@@ -380,6 +388,10 @@ export function canonicalAbiLayout(
     case "boolean":
       return { alignment: 1, byteLength: 1 };
     case "signed-integer-64":
+      return { alignment: 8, byteLength: 8 };
+    case "float-32":
+      return { alignment: 4, byteLength: 4 };
+    case "float-64":
       return { alignment: 8, byteLength: 8 };
     case "text":
     case "array":
@@ -480,7 +492,9 @@ function joinCanonicalAbiFlatTypes(
       joined.push(leftType);
       continue;
     }
-    joined.push("i64");
+    const leftIs32Bit = leftType === "i32" || leftType === "f32";
+    const rightIs32Bit = rightType === "i32" || rightType === "f32";
+    joined.push(leftIs32Bit && rightIs32Bit ? "i32" : "i64");
   }
   return joined;
 }

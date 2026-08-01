@@ -14,6 +14,7 @@ const F32X4_DEFINITION_NAMES = {
   Equal: "$F32x4Equal",
   Less: "$F32x4Less",
   Select: "$F32x4Select",
+  Shuffle: "$F32x4Shuffle",
   ExtractLane0: "$F32x4ExtractLane0",
   ExtractLane1: "$F32x4ExtractLane1",
   ExtractLane2: "$F32x4ExtractLane2",

@@ -184,7 +184,8 @@ export function freeFunction(typeIndex: number, heapStart: number): WasmFunction
   instructions.emit(0x49, 0x72);
   instructions.localGet(end);
   instructions.globalGet(WasmRuntimeGlobal.HeapTop);
-  instructions.emit(0x4b, 0x72, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x4b, 0x72);
+  instructions.trapIf();
   instructions.localGet(0);
   instructions.i32Load(0);
   instructions.localSet(kind);
@@ -198,7 +199,8 @@ export function freeFunction(typeIndex: number, heapStart: number): WasmFunction
   emitNormalizeAllocationByteLength(instructions, expectedByteLength);
   instructions.localGet(expectedByteLength);
   instructions.localGet(1);
-  instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x47);
+  instructions.trapIf();
   instructions.localGet(0);
   instructions.i32Const(WASM_FREE_BLOCK_MAGIC);
   instructions.i32Store(0);
@@ -238,23 +240,27 @@ export function canonicalReallocateFunction(
   instructions.i32Const(
     WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - allocationHeaderByteLength,
   );
-  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x4b);
+  instructions.trapIf();
   instructions.localGet(3);
   instructions.i32Const(
     WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - allocationHeaderByteLength,
   );
-  instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x4b);
+  instructions.trapIf();
 
   // Alignment must be a non-zero power of two no wider than the allocator.
   instructions.localGet(2);
-  instructions.emit(0x45, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x45);
+  instructions.trapIf();
   instructions.localGet(2);
   instructions.localGet(2);
   instructions.i32Const(1);
   instructions.emit(0x6b, 0x71, 0x45);
   instructions.localGet(2);
   instructions.i32Const(8);
-  instructions.emit(0x4d, 0x71, 0x45, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x4d, 0x71, 0x45);
+  instructions.trapIf();
 
   // A zero new length releases the old allocation and returns null.
   instructions.localGet(3);
@@ -283,7 +289,8 @@ export function canonicalReallocateFunction(
   instructions.localTee(newPointer);
   instructions.localGet(2);
   instructions.i32Const(1);
-  instructions.emit(0x6b, 0x71, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x6b, 0x71);
+  instructions.trapIf();
 
   // Null old pointers denote fresh allocation. Otherwise copy the shared
   // prefix and release the previous block.
@@ -382,7 +389,8 @@ function emitFreeBlockGuard(
   instructions.emit(0x71);
   instructions.localGet(pointer);
   instructions.i32Const(heapStart);
-  instructions.emit(0x49, 0x72, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x49, 0x72);
+  instructions.trapIf();
   instructions.localGet(pointer);
   instructions.i32Load(0);
   instructions.i32Const(WASM_FREE_BLOCK_MAGIC);
@@ -403,7 +411,8 @@ function emitFreeBlockGuard(
   instructions.emit(0x49);
   instructions.localGet(end);
   instructions.globalGet(WasmRuntimeGlobal.HeapTop);
-  instructions.emit(0x4b, 0x72, 0x72, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x4b, 0x72, 0x72);
+  instructions.trapIf();
 }
 
 function emitAllocationByteLength(
@@ -477,7 +486,8 @@ function emitAllocationByteLength(
   instructions.emit(0xad, 0x7c);
   instructions.localTee(wideByteLength);
   instructions.i64Const(BigInt(WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH));
-  instructions.emit(0x56, 0x72, 0x04, 0x40, 0x00, 0x0b);
+  instructions.emit(0x56, 0x72);
+  instructions.trapIf();
   instructions.localGet(wideByteLength);
   instructions.emit(0xa7);
   instructions.localSet(byteLength);
@@ -490,13 +500,14 @@ export function forceThunkFunction(): WasmFunctionBody {
   instructions.localGet(0);
   instructions.i32Load(4);
   instructions.i32Const(THUNK_EVALUATED);
-  instructions.emit(0x46, 0x04, WasmValueType.I64);
+  instructions.emit(0x46);
+  instructions.hintedIf(WasmValueType.I64, true);
   instructions.localGet(0);
   instructions.i64Load(16);
   instructions.emit(0x05);
   instructions.localGet(0);
   instructions.i32Load(4);
-  instructions.emit(0x04, 0x40);
+  instructions.hintedIf(0x40, false);
   instructions.i32Const(WASM_FAULT_BLACKHOLE);
   instructions.globalSet(WasmRuntimeGlobal.RuntimeFault);
   instructions.i32Const(-1);
@@ -541,6 +552,7 @@ export function functionBody(
     typeIndex,
     localTypes: instructions.localTypes,
     instructions: instructions.bytes,
+    branchHints: instructions.branchHints,
     signedInteger64Literals: instructions.signedInteger64Literals,
     usesMemory: instructions.usesMemory,
     usesIndirectCalls: instructions.usesIndirectCalls,

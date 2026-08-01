@@ -1,6 +1,7 @@
 import {
   ARGUMENT_WORD_LENGTH,
   ArgumentWord,
+  BranchLikelihood,
   CASE_ALTERNATIVE_WORD_LENGTH,
   CaseAlternativeWord,
   CoreTag,
@@ -161,6 +162,16 @@ export function validateCoreArtifact(
         node.child0,
         node.child1,
         module.argumentCount,
+      );
+    }
+    if (
+      node.tag === CoreTag.If &&
+      node.payload !== BranchLikelihood.None &&
+      node.payload !== BranchLikelihood.Consequent &&
+      node.payload !== BranchLikelihood.Alternate
+    ) {
+      throw new Error(
+        `functional compiled Core if ${nodeIndex} has unknown branch likelihood ${node.payload}`,
       );
     }
     if (

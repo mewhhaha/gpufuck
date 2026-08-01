@@ -130,6 +130,8 @@ class WitRenderer {
   #type(type: CanonicalAbiType): string {
     if (type.kind === "unit") return "tuple<>";
     if (type.kind === "signed-integer-64") return "s64";
+    if (type.kind === "float-32") return "float32";
+    if (type.kind === "float-64") return "float64";
     if (type.kind === "boolean") return "bool";
     if (type.kind === "text") return "string";
     if (type.kind === "array") return `list<${this.#type(type.element)}>`;
@@ -217,6 +219,7 @@ function validateLegacyCanonicalNames(canonicalAbi: CanonicalAbiInterface): void
 function witTypeFingerprint(type: CanonicalAbiType): string {
   if (
     type.kind === "unit" || type.kind === "signed-integer-64" ||
+    type.kind === "float-32" || type.kind === "float-64" ||
     type.kind === "boolean" || type.kind === "text"
   ) return type.kind;
   if (type.kind === "array") return `array(${witTypeFingerprint(type.element)})`;

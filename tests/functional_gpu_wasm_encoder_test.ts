@@ -76,6 +76,7 @@ Deno.test("GPU function-body emission preserves order across scan blocks", async
     typeIndex: WasmFunctionTypeIndex.NullaryI32,
     localTypes: index % 2 === 0 ? [WasmValueType.I32, WasmValueType.I32, WasmValueType.I64] : [],
     instructions: [0x41, index % 64],
+    branchHints: [],
     signedInteger64Literals: [],
     usesMemory: false,
     usesIndirectCalls: false,

@@ -16,8 +16,151 @@ import {
 
 const signedInteger64 = { kind: "signed-integer-64" as const };
 const canonicalSignedInteger64 = { kind: "signed-integer-64" as const };
+const float32 = { kind: "float-32" as const };
+const float64 = { kind: "float-64" as const };
 const unit = { kind: "unit" as const };
 const canonicalUnit = { kind: "unit" as const };
+
+Deno.test("canonical ABI carries Float32 and Float64 values without integer coercion", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: float64,
+      body: surface.float64(0),
+    }, {
+      name: "identity32",
+      parameters: ["value"],
+      annotation: { kind: "function", parameter: float32, result: float32 },
+      body: surface.name("value"),
+    }, {
+      name: "identity64",
+      parameters: ["value"],
+      annotation: { kind: "function", parameter: float64, result: float64 },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+    {
+      wasmExports: [
+        { name: "identity32", definition: "identity32" },
+        { name: "identity64", definition: "identity64" },
+      ],
+    },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, {
+      canonicalAbi: {
+        version: 1,
+        imports: [],
+        exports: [{
+          name: "identity32",
+          function: { parameters: [float32], result: float32 },
+        }, {
+          name: "identity64",
+          function: { parameters: [float64], result: float64 },
+        }],
+      },
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const identity32 = instance.exports.identity32;
+    const identity64 = instance.exports.identity64;
+    ok(typeof identity32 === "function");
+    ok(typeof identity64 === "function");
+    equal(identity32(1.1), Math.fround(1.1));
+    equal(identity64(Math.PI), Math.PI);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("canonical ABI preserves floating-point variant payloads through joined flat slots", async () => {
+  const choice = { kind: "named" as const, name: "FloatChoice", arguments: [] };
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: float64,
+      body: surface.float64(0),
+    }, {
+      name: "identity",
+      parameters: ["value"],
+      annotation: { kind: "function", parameter: choice, result: choice },
+      body: surface.name("value"),
+    }],
+    [{
+      name: "FloatChoice",
+      parameters: [],
+      constructors: [{
+        name: "Single",
+        fields: [{ name: "value", type: float32 }],
+      }, {
+        name: "Double",
+        fields: [{ name: "value", type: float64 }],
+      }],
+    }],
+    "main",
+    0,
+    { wasmExports: [{ name: "identity", definition: "identity" }] },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  const canonicalChoice = {
+    kind: "variant" as const,
+    cases: [{ name: "Double", constructor: "Double", payload: float64 }, {
+      name: "Single",
+      constructor: "Single",
+      payload: float32,
+    }],
+  };
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, {
+      canonicalAbi: {
+        version: 1,
+        imports: [],
+        exports: [{
+          name: "identity",
+          postReturn: "cabi_post_identity",
+          function: {
+            parameters: [canonicalChoice],
+            result: canonicalChoice,
+          },
+        }],
+      },
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const identity = instance.exports.identity;
+    const postReturn = instance.exports.cabi_post_identity;
+    const memory = instance.exports.memory;
+    ok(typeof identity === "function");
+    ok(typeof postReturn === "function");
+    ok(memory instanceof WebAssembly.Memory);
+
+    const encoded = new DataView(new ArrayBuffer(8));
+    encoded.setFloat64(0, Math.PI, true);
+    const doubleResult = identity(0, encoded.getBigInt64(0, true));
+    const doubleView = new DataView(memory.buffer);
+    equal(doubleView.getUint8(doubleResult), 0);
+    equal(doubleView.getFloat64(doubleResult + 8, true), Math.PI);
+    postReturn(doubleResult);
+
+    encoded.setFloat32(0, 1.25, true);
+    const singleResult = identity(1, BigInt(encoded.getUint32(0, true)));
+    const singleView = new DataView(memory.buffer);
+    equal(singleView.getUint8(singleResult), 1);
+    equal(singleView.getFloat32(singleResult + 8, true), 1.25);
+    postReturn(singleResult);
+  } finally {
+    compilation.module.destroy();
+  }
+});
 
 Deno.test("canonical ABI exports use caller-facing scalar signatures", async () => {
   const module = buildSurfaceModule(

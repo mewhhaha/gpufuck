@@ -35,7 +35,8 @@ export class WasmRuntimeEmitter {
       ? requiredCompactGlobal(fuel?.steps, "semantic steps")
       : WasmRuntimeGlobal.ComptimeSteps;
     instructions.globalGet(remainingFuelGlobal);
-    instructions.emit(0x45, 0x04, 0x40);
+    instructions.emit(0x45);
+    instructions.hintedIf(0x40, false);
     this.emitFault(instructions, WASM_FAULT_OUT_OF_FUEL, nodeIndex);
     instructions.emit(0x0b);
     instructions.globalGet(remainingFuelGlobal);
@@ -63,7 +64,8 @@ export class WasmRuntimeEmitter {
       : WasmRuntimeGlobal.ComptimeSteps;
     instructions.globalGet(remainingFuelGlobal);
     instructions.localGet(amount);
-    instructions.emit(0x49, 0x04, 0x40);
+    instructions.emit(0x49);
+    instructions.hintedIf(0x40, false);
     this.emitFault(instructions, WASM_FAULT_OUT_OF_FUEL, nodeIndex);
     instructions.emit(0x0b);
     instructions.globalGet(remainingFuelGlobal);

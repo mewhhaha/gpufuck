@@ -153,6 +153,14 @@ export const EvaluationMode = {
 
 export type EvaluationMode = (typeof EvaluationMode)[keyof typeof EvaluationMode];
 
+export const BranchLikelihood = {
+  None: 0,
+  Consequent: 1,
+  Alternate: 2,
+} as const;
+
+export type BranchLikelihood = (typeof BranchLikelihood)[keyof typeof BranchLikelihood];
+
 export const UnaryOperator = {
   Negate: 1,
   NegateSignedInteger64: 2,

@@ -255,8 +255,9 @@ not implemented. Full resumable and multi-shot handlers remain a separate contin
 In a strict module, compatible `let`, conditional, and saturated function-call chains keep `F32x4`
 parameters and results in `v128`; mixed scalar/vector functions use their natural Core scalar ABI
 beside the native vector parameters. Boxing remains the fallback at lazy or genuinely generic value
-boundaries. Declaring your own four-field vector type instead gets you scalar-correct results and no
-SIMD.
+boundaries. The builder includes lane comparisons and masks, `select`, constant `shuffle`, and
+one-vector `swizzle`. Declaring your own four-field vector type instead gets you scalar-correct
+results and no SIMD.
 
 ### Typing
 
@@ -266,7 +267,11 @@ not dependent or impredicative, and your entry must resolve to a concrete first-
 
 Evaluation profile defaults to `StrictEager`; a Haskell-like frontend selects `LazyCallByNeed`, and
 individual binding boundaries can override it. Explicit laziness is separate: `surface.delay()`
-creates a typed `Thunk value` and `surface.force()` evaluates it at most once.
+creates a typed `Thunk value` and `surface.force()` evaluates it at most once. The generated thunk
+test marks the already-resolved cache path likely. Frontends can annotate ordinary conditions with
+`surface.if(condition, consequent, alternate, { likely: "consequent" })` or `"alternate"`; the
+linear-memory backend records the hint in WebAssembly's standard branch-hint custom section without
+changing semantics on engines that ignore it.
 
 Worth knowing when reading a profile: **name resolution runs on the host**, not the GPU.
 `src/semantic/symbol_lookup.ts` computes de Bruijn depths and global, constructor, and case-arm

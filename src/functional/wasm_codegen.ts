@@ -1,6 +1,7 @@
 import type { CompilerPerformanceTrace } from "../compiler_performance_trace.ts";
 import {
   BinaryOperator,
+  BranchLikelihood,
   CoreTag,
   EvaluationMode,
   EvaluationProfile,
@@ -153,7 +154,9 @@ const MAXIMUM_SPECIALIZED_INLINE_SITES = 128;
 
 function canonicalWasmValueType(type: CanonicalAbiCoreType): number {
   if (type === "i32") return WasmValueType.I32;
-  return WasmValueType.I64;
+  if (type === "i64") return WasmValueType.I64;
+  if (type === "f32") return WasmValueType.F32;
+  return WasmValueType.F64;
 }
 
 function sameCanonicalCompiledType(left: Type, right: Type): boolean {
@@ -525,6 +528,8 @@ function emitWasmSignedLiteralUpdate(
       nodes: plan.nodes.length,
       bytes: encoded.bytes.byteLength,
       specializedCallSites: artifact.specializedCallSites,
+      nativeF32x4CallSites: artifact.nativeF32x4CallSites,
+      nativeF32x4LetBindings: artifact.nativeF32x4LetBindings,
       incremental: true,
     });
     return artifact;
@@ -580,9 +585,18 @@ function updateSignedInteger64Literals(
       previousOffset,
       body.instructions.length,
     );
+    const branchHints = body.branchHints.map((hint) => {
+      let instructionOffset = hint.instructionOffset;
+      for (const [index, literal] of body.signedInteger64Literals.entries()) {
+        if (literal.immediateOffset + literal.immediateLength > hint.instructionOffset) break;
+        instructionOffset += literals[index]!.immediateLength - literal.immediateLength;
+      }
+      return { ...hint, instructionOffset };
+    });
     return {
       ...body,
       instructions,
+      branchHints,
       signedInteger64Literals: literals,
     };
   });
@@ -623,6 +637,8 @@ function emitWasmArtifact(
           nodes: plan.nodes.length,
           bytes: artifact.bytes.byteLength,
           specializedCallSites: artifact.specializedCallSites,
+          nativeF32x4CallSites: artifact.nativeF32x4CallSites,
+          nativeF32x4LetBindings: artifact.nativeF32x4LetBindings,
         });
         backendPlansByArtifact.set(artifact, plan);
         return artifact;
@@ -638,6 +654,8 @@ function emitWasmArtifact(
       nodes: plan.nodes.length,
       bytes: artifact.bytes.byteLength,
       specializedCallSites: artifact.specializedCallSites,
+      nativeF32x4CallSites: artifact.nativeF32x4CallSites,
+      nativeF32x4LetBindings: artifact.nativeF32x4LetBindings,
     });
     backendPlansByArtifact.set(artifact, plan);
     return artifact;
@@ -1415,6 +1433,7 @@ class WasmCompiler {
   ): void {
     if (
       canonical.kind === "unit" || canonical.kind === "signed-integer-64" ||
+      canonical.kind === "float-32" || canonical.kind === "float-64" ||
       canonical.kind === "boolean"
     ) {
       if (compiled.kind !== canonical.kind) {
@@ -1907,7 +1926,7 @@ class WasmCompiler {
     const state = this.canonicalCallStateOffset();
     instructions.i32Const(state);
     instructions.i32Load(CANONICAL_CALL_EXPORT_OFFSET);
-    instructions.emit(0x04, 0x40, 0x00, 0x0b);
+    instructions.trapIf();
 
     instructions.i32Const(state);
     instructions.globalGet(WasmRuntimeGlobal.HeapTop);
@@ -1933,11 +1952,13 @@ class WasmCompiler {
     instructions.i32Const(state);
     instructions.i32Load(CANONICAL_CALL_EXPORT_OFFSET);
     instructions.i32Const(callId);
-    instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x47);
+    instructions.trapIf();
     instructions.i32Const(state);
     instructions.i32Load(CANONICAL_CALL_RESULT_OFFSET);
     instructions.localGet(0);
-    instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x47);
+    instructions.trapIf();
   }
 
   emitCanonicalCallFinish(
@@ -1948,7 +1969,8 @@ class WasmCompiler {
     instructions.i32Const(state);
     instructions.i32Load(CANONICAL_CALL_EXPORT_OFFSET);
     instructions.i32Const(callId);
-    instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x47);
+    instructions.trapIf();
     instructions.i32Const(state);
     instructions.i32Load(CANONICAL_CALL_HEAP_TOP_OFFSET);
     instructions.globalSet(WasmRuntimeGlobal.HeapTop);
@@ -1983,6 +2005,14 @@ class WasmCompiler {
     this.emitForceValue(instructions);
     if (type.kind === "signed-integer-64") {
       this.emitUnboxSignedInteger64(instructions);
+      return;
+    }
+    if (type.kind === "float-32") {
+      this.emitUnboxFloat32(instructions);
+      return;
+    }
+    if (type.kind === "float-64") {
+      this.emitUnboxFloat64(instructions);
       return;
     }
     if (type.kind === "boolean") {
@@ -2039,7 +2069,8 @@ class WasmCompiler {
     instructions.i32Const(
       WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - OBJECT_HEADER_BYTE_LENGTH,
     );
-    instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x4b);
+    instructions.trapIf();
     instructions.localGet(byteLength);
     instructions.emit(0x04, 0x40);
     instructions.localGet(byteLength);
@@ -2115,7 +2146,23 @@ class WasmCompiler {
     if (type.kind === "signed-integer-64") {
       instructions.localGet(pointer);
       instructions.localGet(firstSource);
+      if (sourceTypes[firstSource] === WasmValueType.F64) instructions.emit(0xbd);
       instructions.i64Store(offset);
+      return firstSource + 1;
+    }
+    if (type.kind === "float-32") {
+      instructions.localGet(pointer);
+      instructions.localGet(firstSource);
+      if (sourceTypes[firstSource] === WasmValueType.I64) instructions.emit(0xa7);
+      if (sourceTypes[firstSource] !== WasmValueType.F32) instructions.emit(0xbe);
+      instructions.f32Store(offset);
+      return firstSource + 1;
+    }
+    if (type.kind === "float-64") {
+      instructions.localGet(pointer);
+      instructions.localGet(firstSource);
+      if (sourceTypes[firstSource] === WasmValueType.I64) instructions.emit(0xbf);
+      instructions.f64Store(offset);
       return firstSource + 1;
     }
     if (type.kind === "boolean") {
@@ -2246,13 +2293,26 @@ class WasmCompiler {
       this.emitBoxSignedInteger64(instructions);
       return;
     }
+    if (type.kind === "float-32") {
+      instructions.localGet(pointer);
+      instructions.f32Load(offset);
+      this.emitBoxFloat32(instructions);
+      return;
+    }
+    if (type.kind === "float-64") {
+      instructions.localGet(pointer);
+      instructions.f64Load(offset);
+      this.emitBoxFloat64(instructions);
+      return;
+    }
     if (type.kind === "boolean") {
       instructions.localGet(pointer);
       instructions.i32Load8Unsigned(offset);
       const boolean = instructions.addLocal(WasmValueType.I32);
       instructions.localTee(boolean);
       instructions.i32Const(1);
-      instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+      instructions.emit(0x4b);
+      instructions.trapIf();
       instructions.localGet(boolean);
       this.emitEncodeBoolean(instructions);
       return;
@@ -2353,7 +2413,8 @@ class WasmCompiler {
     instructions.i32Const(
       WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH - OBJECT_HEADER_BYTE_LENGTH,
     );
-    instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x4b);
+    instructions.trapIf();
     instructions.localGet(byteLength);
     instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
     instructions.emit(0x6a);
@@ -2509,7 +2570,8 @@ class WasmCompiler {
     instructions.localGet(sequenceLength);
     instructions.emit(0x6a);
     instructions.localGet(byteLength);
-    instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x4b);
+    instructions.trapIf();
     instructions.localGet(bytes);
     instructions.localGet(index);
     instructions.emit(0x6a);
@@ -2521,7 +2583,8 @@ class WasmCompiler {
     instructions.emit(0x49);
     instructions.localGet(second);
     instructions.localGet(maximumSecond);
-    instructions.emit(0x4b, 0x72, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x4b, 0x72);
+    instructions.trapIf();
     for (let continuation = 2; continuation < 4; continuation += 1) {
       instructions.localGet(sequenceLength);
       instructions.i32Const(continuation);
@@ -2533,7 +2596,8 @@ class WasmCompiler {
       instructions.i32Const(0xc0);
       instructions.emit(0x71);
       instructions.i32Const(0x80);
-      instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+      instructions.emit(0x47);
+      instructions.trapIf();
       instructions.emit(0x0b);
     }
     instructions.localGet(index);
@@ -2594,11 +2658,13 @@ class WasmCompiler {
     );
     instructions.localGet(length);
     instructions.i32Const(MAXIMUM_STORE_LENGTH);
-    instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x4b);
+    instructions.trapIf();
     if (layout.byteLength > 0) {
       instructions.localGet(length);
       instructions.i32Const(Math.floor(0xffff_ffff / layout.byteLength));
-      instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+      instructions.emit(0x4b);
+      instructions.trapIf();
     }
     const store = this.allocateStore(instructions, length);
     const index = instructions.addLocal(WasmValueType.I32);
@@ -2649,7 +2715,8 @@ class WasmCompiler {
     if (alignment <= 1) return;
     instructions.localGet(pointer);
     instructions.i32Const(alignment - 1);
-    instructions.emit(0x71, 0x04, 0x40, 0x00, 0x0b);
+    instructions.emit(0x71);
+    instructions.trapIf();
   }
 
   emitCanonicalStoreMemory(
@@ -2686,6 +2753,20 @@ class WasmCompiler {
       instructions.i64Store(offset);
       return;
     }
+    if (type.kind === "float-32") {
+      instructions.localGet(pointer);
+      instructions.localGet(forced);
+      this.emitUnboxFloat32(instructions);
+      instructions.f32Store(offset);
+      return;
+    }
+    if (type.kind === "float-64") {
+      instructions.localGet(pointer);
+      instructions.localGet(forced);
+      this.emitUnboxFloat64(instructions);
+      instructions.f64Store(offset);
+      return;
+    }
     if (type.kind === "boolean") {
       instructions.localGet(pointer);
       instructions.localGet(forced);
@@ -2717,7 +2798,8 @@ class WasmCompiler {
       instructions.localGet(constructor);
       instructions.i32Load(4);
       instructions.i32Const(expected);
-      instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+      instructions.emit(0x47);
+      instructions.trapIf();
       for (const field of canonicalAbiRecordLayout(type).fields) {
         instructions.localGet(constructor);
         instructions.i64Load(
@@ -2819,7 +2901,8 @@ class WasmCompiler {
       instructions.i32Const(
         Math.floor(0xffff_ffff / elementLayout.byteLength),
       );
-      instructions.emit(0x4b, 0x04, 0x40, 0x00, 0x0b);
+      instructions.emit(0x4b);
+      instructions.trapIf();
     }
     instructions.localGet(length);
     instructions.i32Const(elementLayout.byteLength);
@@ -2893,6 +2976,8 @@ class WasmCompiler {
     if (
       type.kind === "unit" ||
       type.kind === "signed-integer-64" ||
+      type.kind === "float-32" ||
+      type.kind === "float-64" ||
       type.kind === "boolean"
     ) return;
     if (type.kind === "text") {
@@ -3230,6 +3315,20 @@ class WasmCompiler {
       instructions.localSet(value);
       return [value];
     }
+    if (type.kind === "float-32") {
+      instructions.localGet(pointer);
+      instructions.f32Load(offset);
+      const value = instructions.addLocal(WasmValueType.F32);
+      instructions.localSet(value);
+      return [value];
+    }
+    if (type.kind === "float-64") {
+      instructions.localGet(pointer);
+      instructions.f64Load(offset);
+      const value = instructions.addLocal(WasmValueType.F64);
+      instructions.localSet(value);
+      return [value];
+    }
     if (type.kind === "boolean") {
       instructions.localGet(pointer);
       instructions.i32Load8Unsigned(offset);
@@ -3274,6 +3373,8 @@ class WasmCompiler {
     const payloadLocals = joinedTypes.map((flatType) => {
       const local = instructions.addLocal(canonicalWasmValueType(flatType));
       if (flatType === "i64") instructions.i64Const(0n);
+      else if (flatType === "f32") instructions.f32Const(0);
+      else if (flatType === "f64") instructions.f64Const(0);
       else instructions.i32Const(0);
       instructions.localSet(local);
       return local;
@@ -3293,8 +3394,16 @@ class WasmCompiler {
         const caseTypes = flattenCanonicalAbiType(case_.payload);
         for (const [index, local] of caseLocals.entries()) {
           instructions.localGet(local);
-          if (joinedTypes[index] === "i64" && caseTypes[index] === "i32") {
+          const joinedType = joinedTypes[index];
+          const caseType = caseTypes[index];
+          if (joinedType === "i32" && caseType === "f32") {
+            instructions.emit(0xbc);
+          } else if (joinedType === "i64" && caseType === "i32") {
             instructions.emit(0xad);
+          } else if (joinedType === "i64" && caseType === "f32") {
+            instructions.emit(0xbc, 0xad);
+          } else if (joinedType === "i64" && caseType === "f64") {
+            instructions.emit(0xbd);
           }
           instructions.localSet(payloadLocals[index]!);
         }
@@ -4940,11 +5049,27 @@ class WasmCompiler {
       return;
     }
     this.compileBooleanExpression(instructions, node.child0, environment);
-    instructions.emit(0x04, WasmValueType.I64);
+    this.emitIf(instructions, node, WasmValueType.I64);
     this.compileExpression(instructions, node.child1, environment, constructorReuse);
     instructions.emit(0x05);
     this.compileExpression(instructions, node.child2, environment, constructorReuse);
     instructions.emit(0x0b);
+  }
+
+  emitIf(
+    instructions: WasmInstructions,
+    node: CoreNode,
+    blockType: number,
+  ): void {
+    if (node.payload === BranchLikelihood.Consequent) {
+      instructions.hintedIf(blockType, true);
+      return;
+    }
+    if (node.payload === BranchLikelihood.Alternate) {
+      instructions.hintedIf(blockType, false);
+      return;
+    }
+    instructions.emit(0x04, blockType);
   }
 
   constantIfBranch(
@@ -5118,7 +5243,8 @@ class WasmCompiler {
       if (update.node.tag === CoreTag.StoreWrite) {
         instructions.localGet(operand);
         instructions.localGet(currentLength);
-        instructions.emit(0x4f, 0x04, 0x40);
+        instructions.emit(0x4f);
+        instructions.hintedIf(0x40, false);
         this.#runtimeEmitter.emitFault(
           instructions,
           WASM_FAULT_OUT_OF_BOUNDS,
@@ -5131,7 +5257,8 @@ class WasmCompiler {
       this.requireStoreLength(instructions, operand, update.nodeIndex);
       instructions.localGet(currentLength);
       instructions.localGet(operand);
-      instructions.emit(0x4b, 0x04, 0x40);
+      instructions.emit(0x4b);
+      instructions.hintedIf(0x40, false);
       this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, update.nodeIndex);
       instructions.emit(0x0b);
       const previousLength = instructions.addLocal(WasmValueType.I32);
@@ -5191,7 +5318,8 @@ class WasmCompiler {
   ): void {
     instructions.localGet(length);
     instructions.i32Const(MAXIMUM_STORE_LENGTH);
-    instructions.emit(0x4b, 0x04, 0x40);
+    instructions.emit(0x4b);
+    instructions.hintedIf(0x40, false);
     this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, nodeIndex);
     instructions.emit(0x0b);
   }
@@ -5205,7 +5333,8 @@ class WasmCompiler {
     instructions.localGet(index);
     instructions.localGet(pointer);
     instructions.i32Load(8);
-    instructions.emit(0x4f, 0x04, 0x40);
+    instructions.emit(0x4f);
+    instructions.hintedIf(0x40, false);
     this.#runtimeEmitter.emitFault(instructions, WASM_FAULT_OUT_OF_BOUNDS, nodeIndex);
     instructions.emit(0x0b);
   }
@@ -5433,7 +5562,7 @@ class WasmCompiler {
           return;
         }
         this.compileBooleanExpression(instructions, node.child0, environment);
-        instructions.emit(0x04, WasmValueType.I32);
+        this.emitIf(instructions, node, WasmValueType.I32);
         this.compileIntegerExpression(instructions, node.child1, environment);
         instructions.emit(0x05);
         this.compileIntegerExpression(instructions, node.child2, environment);
@@ -5644,7 +5773,7 @@ class WasmCompiler {
           return;
         }
         this.compileBooleanExpression(instructions, node.child0, environment);
-        instructions.emit(0x04, WasmValueType.I32);
+        this.emitIf(instructions, node, WasmValueType.I32);
         this.compileBooleanExpression(instructions, node.child1, environment);
         instructions.emit(0x05);
         this.compileBooleanExpression(instructions, node.child2, environment);
@@ -5755,7 +5884,7 @@ class WasmCompiler {
           return;
         }
         this.compileBooleanExpression(instructions, node.child0, environment);
-        instructions.emit(0x04, WasmValueType.I64);
+        this.emitIf(instructions, node, WasmValueType.I64);
         this.compileSignedInteger64Expression(
           instructions,
           node.child1,
@@ -5840,7 +5969,7 @@ class WasmCompiler {
           return;
         }
         this.compileBooleanExpression(instructions, node.child0, environment);
-        instructions.emit(0x04, WasmValueType.F32);
+        this.emitIf(instructions, node, WasmValueType.F32);
         this.compileFloat32Expression(instructions, node.child1, environment);
         instructions.emit(0x05);
         this.compileFloat32Expression(instructions, node.child2, environment);
@@ -5885,6 +6014,18 @@ class WasmCompiler {
       this.compileF32x4Expression(instructions, arguments_[2]!.node, environment);
       this.compileMask32x4Expression(instructions, arguments_[0]!.node, environment);
       instructions.simd(WasmSimdOpcode.V128BitSelect);
+      return compiledSimdVector(definition, "f32x4");
+    }
+    const shuffleLanes = canonicalDefinition === F32x4Definition.Shuffle
+      ? this.f32x4ShuffleLanes(arguments_)
+      : undefined;
+    if (shuffleLanes !== undefined) {
+      this.compileF32x4Expression(instructions, arguments_[0]!.node, environment);
+      this.compileF32x4Expression(instructions, arguments_[1]!.node, environment);
+      instructions.simd(
+        WasmSimdOpcode.I8x16Shuffle,
+        ...shuffleLanes.flatMap((lane) => Array.from({ length: 4 }, (_, byte) => lane * 4 + byte)),
+      );
       return compiledSimdVector(definition, "f32x4");
     }
     const replacementLane = f32x4ReplacementLane(definition);
@@ -5989,7 +6130,7 @@ class WasmCompiler {
       this.isKnownF32x4Expression(node.child2, environment)
     ) {
       this.compileBooleanExpression(instructions, node.child0, environment);
-      instructions.emit(0x04, WasmValueType.V128);
+      this.emitIf(instructions, node, WasmValueType.V128);
       this.compileF32x4Expression(instructions, node.child1, environment);
       instructions.emit(0x05);
       this.compileF32x4Expression(instructions, node.child2, environment);
@@ -6238,6 +6379,11 @@ class WasmCompiler {
         this.isKnownF32x4Operand(arguments_[1]!.node, environment) &&
         this.isKnownF32x4Operand(arguments_[2]!.node, environment);
     }
+    if (canonicalDefinition === F32x4Definition.Shuffle) {
+      return this.f32x4ShuffleLanes(arguments_) !== undefined &&
+        this.isKnownF32x4Operand(arguments_[0]!.node, environment) &&
+        this.isKnownF32x4Operand(arguments_[1]!.node, environment);
+    }
     if (
       f32x4ReplacementLane(definition) !== undefined && arguments_.length === 2 &&
       this.isKnownF32x4Operand(arguments_[0]!.node, environment)
@@ -6422,6 +6568,18 @@ class WasmCompiler {
     return { definition, arguments: Object.freeze(reverseArguments.reverse()) };
   }
 
+  f32x4ShuffleLanes(
+    arguments_: readonly CallArgument[],
+  ): readonly [number, number, number, number] | undefined {
+    if (arguments_.length !== 6) return undefined;
+    const lanes = arguments_.slice(2).map((argument) => {
+      const node = this.node(argument.node);
+      return node.tag === CoreTag.Integer && node.payload < 8 ? node.payload : undefined;
+    });
+    if (lanes.some((lane) => lane === undefined)) return undefined;
+    return lanes as [number, number, number, number];
+  }
+
   emitExtractF32x4Lane(
     instructions: WasmInstructions,
     vector: number,
@@ -6469,7 +6627,7 @@ class WasmCompiler {
           return;
         }
         this.compileBooleanExpression(instructions, node.child0, environment);
-        instructions.emit(0x04, WasmValueType.F64);
+        this.emitIf(instructions, node, WasmValueType.F64);
         this.compileFloat64Expression(instructions, node.child1, environment);
         instructions.emit(0x05);
         this.compileFloat64Expression(instructions, node.child2, environment);
@@ -6544,7 +6702,7 @@ class WasmCompiler {
           return;
         }
         this.compileBooleanExpression(instructions, node.child0, environment);
-        instructions.emit(0x04, WasmValueType.F64);
+        this.emitIf(instructions, node, WasmValueType.F64);
         this.compileWholeNumberF64Expression(instructions, node.child1, environment);
         instructions.emit(0x05);
         this.compileWholeNumberF64Expression(instructions, node.child2, environment);
@@ -6617,7 +6775,8 @@ class WasmCompiler {
     const upper = result === "integer" ? 2_147_483_648 : 9_223_372_036_854_775_808;
     if (source === "float-32") instructions.f32Const(upper);
     else instructions.f64Const(upper);
-    instructions.emit(source === "float-32" ? 0x60 : 0x66, 0x72, 0x04, 0x40);
+    instructions.emit(source === "float-32" ? 0x60 : 0x66, 0x72);
+    instructions.hintedIf(0x40, false);
     this.#runtimeEmitter.emitFault(
       instructions,
       WASM_FAULT_INVALID_NUMERIC_CONVERSION,
@@ -6774,7 +6933,8 @@ class WasmCompiler {
     divisorType: "i32" | "i64",
   ): void {
     instructions.localGet(divisor);
-    instructions.emit(divisorType === "i32" ? 0x45 : 0x50, 0x04, 0x40);
+    instructions.emit(divisorType === "i32" ? 0x45 : 0x50);
+    instructions.hintedIf(0x40, false);
     this.#runtimeEmitter.emitFault(
       instructions,
       WASM_FAULT_DIVIDE_BY_ZERO,
@@ -7395,7 +7555,8 @@ class WasmCompiler {
     instructions.localGet(pointer);
     instructions.i32Load(4);
     instructions.i32Const(THUNK_EVALUATED);
-    instructions.emit(0x46, 0x04, WasmValueType.I64);
+    instructions.emit(0x46);
+    instructions.hintedIf(WasmValueType.I64, true);
     instructions.localGet(pointer);
     instructions.i64Load(16);
     instructions.emit(0x05);
@@ -8340,7 +8501,7 @@ class WasmCompiler {
         return;
       }
       this.compileBooleanExpression(instructions, node.child0, environment);
-      instructions.emit(0x04, 0x40);
+      this.emitIf(instructions, node, 0x40);
       this.compileTailPosition(
         instructions,
         node.child1,

@@ -22,9 +22,15 @@ export interface WasmFunctionBody {
   readonly typeIndex: number;
   readonly localTypes: readonly number[];
   readonly instructions: readonly number[];
+  readonly branchHints: readonly WasmBranchHint[];
   readonly signedInteger64Literals: readonly WasmSignedInteger64Literal[];
   readonly usesMemory: boolean;
   readonly usesIndirectCalls: boolean;
+}
+
+export interface WasmBranchHint {
+  readonly instructionOffset: number;
+  readonly conditionLikely: boolean;
 }
 
 export interface WasmSignedInteger64Literal {
@@ -93,6 +99,7 @@ export class WasmInstructions {
   readonly bytes: number[] = [];
   readonly localTypes: number[] = [];
   readonly signedInteger64Literals: WasmSignedInteger64Literal[] = [];
+  readonly branchHints: WasmBranchHint[] = [];
   usesMemory = false;
   usesIndirectCalls = false;
 
@@ -142,6 +149,19 @@ export class WasmInstructions {
     this.emit(0xfd);
     this.unsigned(opcode);
     for (const byte of immediateBytes) this.bytes.push(byte);
+  }
+
+  hintedIf(blockType: number, conditionLikely: boolean): void {
+    this.branchHints.push({
+      instructionOffset: this.bytes.length,
+      conditionLikely,
+    });
+    this.emit(0x04, blockType);
+  }
+
+  trapIf(): void {
+    this.hintedIf(0x40, false);
+    this.emit(0x00, 0x0b);
   }
 
   unsigned(value: number): void {
@@ -395,6 +415,7 @@ export function encodeWasmModule(
     sectionsBeforeCode,
     functionBodies.length,
     functionBodies.map((body) => body.encoded),
+    encodeBranchHintSection(encoding.functions, encoding.imports.length),
   );
   return {
     bytes,
@@ -413,6 +434,7 @@ export function encodeWasmModuleWithEncodedFunctionBodies(
     encodeSectionsBeforeCode(encoding),
     encoding.functions.length,
     [encodedFunctionBodies],
+    encodeBranchHintSection(encoding.functions, encoding.imports.length),
   );
 }
 
@@ -546,6 +568,7 @@ function assembleWasmModule(
   sectionsBeforeCode: readonly (readonly number[])[],
   functionCountValue: number,
   encodedFunctionBodies: readonly ArrayLike<number>[],
+  branchHintSection?: readonly number[],
 ): Uint8Array<ArrayBuffer> {
   const functionCount = encodeUnsigned(functionCountValue);
   const functionBodiesLength = encodedFunctionBodies.reduce(
@@ -558,14 +581,20 @@ function assembleWasmModule(
     (total, encodedSection) => total + encodedSection.length,
     0,
   );
+  const branchHintSectionLength = branchHintSection?.length ?? 0;
   const bytes = new Uint8Array(
-    8 + sectionsLength + 1 + encodedCodeContentsLength.length + codeContentsLength,
+    8 + sectionsLength + branchHintSectionLength + 1 +
+      encodedCodeContentsLength.length + codeContentsLength,
   );
   bytes.set([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
   let offset = 8;
   for (const encodedSection of sectionsBeforeCode) {
     bytes.set(encodedSection, offset);
     offset += encodedSection.length;
+  }
+  if (branchHintSection !== undefined) {
+    bytes.set(branchHintSection, offset);
+    offset += branchHintSection.length;
   }
   bytes[offset++] = 10;
   bytes.set(encodedCodeContentsLength, offset);
@@ -577,6 +606,30 @@ function assembleWasmModule(
     offset += body.length;
   }
   return bytes;
+}
+
+function encodeBranchHintSection(
+  functions: readonly WasmFunctionBody[],
+  importedFunctionCount: number,
+): number[] | undefined {
+  const hintedFunctions = functions.flatMap((body, functionOffset) => {
+    if (body.branchHints.length === 0) return [];
+    const localsLength = encodeFunctionLocals(body.localTypes).length;
+    const hints = body.branchHints.map((hint) => [
+      ...encodeUnsigned(localsLength + hint.instructionOffset),
+      0x01,
+      hint.conditionLikely ? 0x01 : 0x00,
+    ]);
+    return [[
+      ...encodeUnsigned(importedFunctionCount + functionOffset),
+      ...vector(hints),
+    ]];
+  });
+  if (hintedFunctions.length === 0) return undefined;
+  return section(0, [
+    ...name("metadata.code.branch_hint"),
+    ...vector(hintedFunctions),
+  ]);
 }
 
 export function encodeCompactScalarWasmModule(
@@ -628,6 +681,7 @@ export function encodeCompactScalarWasmModule(
     }
   }
   const globals = indexedGlobals.map((global) => global.definition);
+  const branchHintSection = encodeBranchHintSection(functions, 0);
   const sections = [
     section(1, vector(usedFunctionTypes)),
     section(
@@ -678,6 +732,7 @@ export function encodeCompactScalarWasmModule(
         ]),
       ]),
     ),
+    ...(branchHintSection === undefined ? [] : [branchHintSection]),
     section(10, vector(functions.map(encodeFunctionBody))),
   ];
   return new Uint8Array(concatenateBytes([[
@@ -707,18 +762,7 @@ function functionType(parameters: readonly number[], results: readonly number[])
 }
 
 function encodeFunctionBody(body: WasmFunctionBody): number[] {
-  const localGroups: number[][] = [];
-  for (const type of body.localTypes) {
-    const last = localGroups.at(-1);
-    if (last?.[1] === type) {
-      last[0]! += 1;
-    } else {
-      localGroups.push([1, type]);
-    }
-  }
-  const locals = vector(
-    localGroups.map(([count, type]) => [...encodeUnsigned(count!), type!]),
-  );
+  const locals = encodeFunctionLocals(body.localTypes);
   const contentLength = locals.length + body.instructions.length + 1;
   return concatenateBytes([
     encodeUnsigned(contentLength),
@@ -726,6 +770,21 @@ function encodeFunctionBody(body: WasmFunctionBody): number[] {
     body.instructions,
     [0x0b],
   ]);
+}
+
+function encodeFunctionLocals(localTypes: readonly number[]): number[] {
+  const localGroups: number[][] = [];
+  for (const type of localTypes) {
+    const last = localGroups.at(-1);
+    if (last?.[1] === type) {
+      last[0]! += 1;
+    } else {
+      localGroups.push([1, type]);
+    }
+  }
+  return vector(
+    localGroups.map(([count, type]) => [...encodeUnsigned(count!), type!]),
+  );
 }
 
 function section(id: number, contents: readonly number[]): number[] {

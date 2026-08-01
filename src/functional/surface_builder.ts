@@ -2,6 +2,7 @@ import {
   ARGUMENT_WORD_LENGTH,
   ArgumentWord,
   BinaryOperator,
+  BranchLikelihood,
   CASE_ALTERNATIVE_WORD_LENGTH,
   CaseAlternativeWord,
   CONSTRUCTOR_WORD_LENGTH,
@@ -847,6 +848,16 @@ function expressionFeatureMask(expression: SurfaceExpression): number {
         for (const binding of nested.bindings) visit(binding.body);
         break;
       case "if":
+        if (
+          nested.likely !== undefined && nested.likely !== "consequent" &&
+          nested.likely !== "alternate"
+        ) {
+          throw new TypeError(
+            `functional if branch likelihood must be consequent or alternate; received ${
+              JSON.stringify(nested.likely)
+            }`,
+          );
+        }
         visit(nested.alternate);
         visit(nested.consequent);
         visit(nested.condition);
@@ -1199,7 +1210,12 @@ class SurfaceExpressionEncoder {
       case "let-rec-group":
         throw new Error("functional recursive group reached the packed surface encoder");
       case "if": {
-        const node = this.reserveNode(ExpressionTag.If, 0, parent, expression.span);
+        const likelihood = expression.likely === "consequent"
+          ? BranchLikelihood.Consequent
+          : expression.likely === "alternate"
+          ? BranchLikelihood.Alternate
+          : BranchLikelihood.None;
+        const node = this.reserveNode(ExpressionTag.If, likelihood, parent, expression.span);
         const condition = this.emit(expression.condition, node);
         const consequent = this.emit(expression.consequent, node);
         const alternate = this.emit(expression.alternate, node);
@@ -1707,6 +1723,7 @@ type SurfaceBuilderBase = Readonly<{
     condition: SurfaceExpression,
     consequent: SurfaceExpression,
     alternate: SurfaceExpression,
+    options?: { readonly likely: "consequent" | "alternate" },
   ): SurfaceExpression;
   /**
    * Arms and the `otherwise` default carry their own optional spans, so `at` fills in only the ones
@@ -1889,8 +1906,16 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       condition: SurfaceExpression,
       consequent: SurfaceExpression,
       alternate: SurfaceExpression,
+      options?: { readonly likely: "consequent" | "alternate" },
     ): SurfaceExpression {
-      return { kind: "if", condition, consequent, alternate, ...spanned };
+      return {
+        kind: "if",
+        condition,
+        consequent,
+        alternate,
+        ...(options === undefined ? {} : { likely: options.likely }),
+        ...spanned,
+      };
     },
     case(
       value: SurfaceExpression,
