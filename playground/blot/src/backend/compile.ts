@@ -112,6 +112,7 @@ interface InternalWasmManifest {
     readonly name: string | null;
     readonly phase: "runtime" | "comptime";
     readonly function: CanonicalAbiFunction | null;
+    readonly sourceFunction: CanonicalAbiFunction | null;
     readonly postReturn: string | null;
     readonly effects: readonly string[];
     readonly ownership: "owned" | null;
@@ -149,6 +150,7 @@ export async function build(path: string): Promise<Built> {
     const manifestBytes = serializeManifest(builtManifest);
     const coreWasm = await compileModuleToWasm(compiled.module, {
       canonicalAbi: canonicalInterface(internalManifest),
+      simd: "wasm-simd",
     });
     const wasm = appendCustomSection(coreWasm, "blot:abi", manifestBytes);
     return {
@@ -453,6 +455,7 @@ async function verifyWithSession(
         const start = performance.now();
         const bytes = await compileModuleToWasm(compiled.module, {
           canonicalAbi: canonicalInterface(internalManifest),
+          simd: "wasm-simd",
         });
         return { bytes, milliseconds: performance.now() - start };
       })(),
@@ -741,6 +744,7 @@ function manifest(
     readonly sourceName: string;
     readonly wasmName: string;
     readonly type: TypeSchema;
+    readonly compiledType: TypeSchema;
   }[],
   compiledExports: readonly {
     readonly name: string;
@@ -791,6 +795,7 @@ function manifest(
         name = runtime.wasmName;
       }
       let function_: CanonicalAbiFunction | null = null;
+      let sourceFunction: CanonicalAbiFunction | null = null;
       let postReturn: string | null = null;
       let effects: readonly string[] = [];
       let ownership: "owned" | null = null;
@@ -803,7 +808,8 @@ function manifest(
         if (runtime === undefined) {
           throw new Error(`lowering omitted runtime schema ${name}`);
         }
-        function_ = canonicalFunction(runtime.type, runtimeTypes);
+        function_ = canonicalFunction(runtime.compiledType, runtimeTypes);
+        sourceFunction = canonicalFunction(runtime.type, runtimeTypes);
         if (canonicalResultIsIndirect(function_.result)) {
           postReturn = `cabi_post_${name}`;
         }
@@ -815,6 +821,7 @@ function manifest(
         name,
         phase: exported.phase,
         function: function_,
+        sourceFunction,
         postReturn,
         effects,
         ownership,
@@ -854,8 +861,8 @@ function publicManifest(internal: InternalWasmManifest): WasmManifest {
     source: internal.source,
     exports: internal.exports.map((exported) => {
       let function_: WasmAbiFunction | null = null;
-      if (exported.function !== null) {
-        function_ = publicFunction(exported.function);
+      if (exported.sourceFunction !== null) {
+        function_ = publicFunction(exported.sourceFunction);
       }
       return {
         sourceName: exported.sourceName,

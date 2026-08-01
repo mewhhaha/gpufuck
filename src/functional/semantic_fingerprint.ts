@@ -93,7 +93,11 @@ export function resolvedCoreStructuralFingerprint(
   if (cached !== undefined) return cached;
 
   const hash = new StructuralHash();
-  hash.number(1);
+  hash.number(2);
+  hash.number(module.nodeCount);
+  hash.number(module.definitionCount);
+  hash.number(module.constructorCount);
+  hash.number(module.typeCount);
   hash.number(nodes.length);
   for (const node of nodes) {
     hash.number(node.tag);
@@ -107,6 +111,12 @@ export function resolvedCoreStructuralFingerprint(
   hash.value(module.definitionRoots);
   hash.strings(module.constructorNames);
   hash.value(module.constructorArities);
+  hash.strings(module.typeNames);
+  hash.strings(module.symbolNames);
+  hash.number(module.parameterCount);
+  hash.value(module.arguments);
+  hash.number(module.caseBinderCount);
+  hash.value(module.caseAlternatives);
   hash.number(module.entryDefinition);
   hash.value(module.entryType);
   hash.value(effectNames(module.entryEffects));

@@ -161,7 +161,7 @@ async function bundleCompiledModules(
     constructorArities.push(...module.constructorArities);
     definitionNames.push(...module.definitionNames.map((name) => `${exportName}::${name}`));
     typeNames.push(...module.typeNames);
-    symbolNames.push(...module.symbolNames.map((name) => `${exportName}::${name}`));
+    symbolNames.push(...module.symbolNames);
     definitionRoots.push(...module.definitionRoots.map((root) => root + nodeOffset));
     declaredDefinitionEffects.push(...module.declaredDefinitionEffects);
     definitionEffects.push(...module.definitionEffects);

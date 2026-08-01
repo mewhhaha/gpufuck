@@ -3,11 +3,19 @@
  * gpufuck change reaches it with no version pin. Nothing else in this suite emits WebAssembly;
  * without these tests the code generator can be deleted or broken and the suite stays green.
  */
-import { equal, notStrictEqual, ok, rejects, strictEqual } from "node:assert/strict";
+import {
+  deepStrictEqual,
+  equal,
+  notStrictEqual,
+  ok,
+  rejects,
+  strictEqual,
+} from "node:assert/strict";
 
 import {
   BinaryOperator,
   buildSurfaceModule,
+  type CompiledModule,
   compileModulesToWasm,
   compileModuleToWasm,
   CpuCompiler,
@@ -16,13 +24,17 @@ import {
   FunctionalCompilerService,
   GpuCompiler,
   hasFieldType,
+  HostTypes,
   planModuleStorage,
   requestWebGpuDevice,
   runWasmModule,
   structuralRecordTypeDeclarations,
   surface,
+  type SurfaceExpression,
+  type TypeSchema,
   WasmRuntimeFaultCode,
 } from "../functional.ts";
+import { decodeWasmValue } from "../src/functional/wasm_value_codec.ts";
 
 let device: GPUDevice | undefined;
 let compiler: GpuCompiler | undefined;
@@ -55,6 +67,25 @@ async function compileEntry(body: Parameters<typeof surface.apply>[0]) {
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
   if (!compilation.ok) throw new Error("smoke module did not compile");
   return compilation;
+}
+
+async function compileCpuEntry(
+  compiler: CpuCompiler,
+  name: string,
+  annotation: TypeSchema,
+  body: SurfaceExpression,
+): Promise<CompiledModule> {
+  const encoded = buildSurfaceModule(
+    [{ name, parameters: [], annotation, body }],
+    [],
+    name,
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await compiler.compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0]?.message);
+  if (!compilation.ok) throw new Error(`CPU entry ${JSON.stringify(name)} did not compile`);
+  return compilation.module;
 }
 
 Deno.test("emits a WebAssembly artifact that runs to the expected value", async () => {
@@ -507,6 +538,100 @@ Deno.test("compiler service reuses semantics while rebinding changed source span
     );
   } finally {
     await service.destroy();
+  }
+});
+
+Deno.test("resolved-Core cache distinguishes text literal payloads", async () => {
+  const cpuCompiler = new CpuCompiler();
+  const first = await compileCpuEntry(
+    cpuCompiler,
+    "cached_text_entry",
+    HostTypes.text,
+    surface.text("alpha"),
+  );
+  const second = await compileCpuEntry(
+    cpuCompiler,
+    "cached_text_entry",
+    HostTypes.text,
+    surface.text("bravo"),
+  );
+  try {
+    deepStrictEqual((await runWasmModule(first)).value, { kind: "text", value: "alpha" });
+    deepStrictEqual((await runWasmModule(second)).value, { kind: "text", value: "bravo" });
+  } finally {
+    first.destroy();
+    second.destroy();
+  }
+});
+
+Deno.test("resolved-Core cache distinguishes bytes literal payloads", async () => {
+  const cpuCompiler = new CpuCompiler();
+  const firstValue = Uint8Array.of(0, 1, 127, 255);
+  const secondValue = Uint8Array.of(2, 3, 128, 254);
+  const first = await compileCpuEntry(
+    cpuCompiler,
+    "cached_bytes_entry",
+    HostTypes.bytes,
+    surface.bytes(firstValue),
+  );
+  const second = await compileCpuEntry(
+    cpuCompiler,
+    "cached_bytes_entry",
+    HostTypes.bytes,
+    surface.bytes(secondValue),
+  );
+  try {
+    deepStrictEqual((await runWasmModule(first)).value, { kind: "bytes", value: firstValue });
+    deepStrictEqual((await runWasmModule(second)).value, { kind: "bytes", value: secondValue });
+  } finally {
+    first.destroy();
+    second.destroy();
+  }
+});
+
+Deno.test("batch WebAssembly preserves text and bytes literal payloads", async () => {
+  const cpuCompiler = new CpuCompiler();
+  const firstBytes = Uint8Array.of(0, 127, 128, 255);
+  const secondBytes = Uint8Array.of(1, 2, 3, 4);
+  const modules = await Promise.all([
+    compileCpuEntry(cpuCompiler, "first_text", HostTypes.text, surface.text("hello")),
+    compileCpuEntry(cpuCompiler, "second_text", HostTypes.text, surface.text("world")),
+    compileCpuEntry(cpuCompiler, "first_bytes", HostTypes.bytes, surface.bytes(firstBytes)),
+    compileCpuEntry(cpuCompiler, "second_bytes", HostTypes.bytes, surface.bytes(secondBytes)),
+  ]);
+  try {
+    const exportNames = ["firstText", "secondText", "firstBytes", "secondBytes"];
+    const artifact = await compileModulesToWasm(modules, { exportNames });
+    const instance = new WebAssembly.Instance(new WebAssembly.Module(artifact.bytes), {});
+    const initialize = instance.exports.initialize;
+    ok(typeof initialize === "function");
+    initialize();
+
+    const expected = [
+      { kind: "text", value: "hello" },
+      { kind: "text", value: "world" },
+      { kind: "bytes", value: firstBytes },
+      { kind: "bytes", value: secondBytes },
+    ] as const;
+    for (const [index, name] of exportNames.entries()) {
+      const exported = instance.exports[name];
+      ok(typeof exported === "function", `batch WebAssembly omitted export ${name}`);
+      const encoded = exported() as bigint;
+      const decoded = decodeWasmValue(
+        instance,
+        modules[index]!,
+        modules[index]!.entryType,
+        encoded,
+        16,
+        1_024,
+      );
+      deepStrictEqual(decoded, {
+        kind: expected[index]!.kind,
+        value: expected[index]!.value,
+      });
+    }
+  } finally {
+    for (const module of modules) module.destroy();
   }
 });
 

@@ -1,0 +1,9 @@
+// Each local stays as a native v128 through the arithmetic chain. Blot only
+// exposes integers at its boundary, so vector lanes enter as f32 and the final
+// reduction truncates back to Int.
+
+let lanes = @f32x4.make 1 2 3 4;
+let shifted = @f32x4.add lanes (@f32x4.splat 10);
+let doubled = @f32x4.mul shifted (@f32x4.splat 2);
+
+return @f32x4.reduce_add doubled;

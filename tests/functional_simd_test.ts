@@ -517,6 +517,185 @@ Deno.test("strict F32x4 values stay native in let-bound body locals", async () =
   }
 });
 
+Deno.test("materialized closures box captured native F32x4 values", async () => {
+  const readerType = {
+    kind: "function" as const,
+    parameter: { kind: "integer" as const },
+    result: f32x4.type,
+  };
+  const encoded = buildSurfaceModule(
+    [
+      ...FIXED_VECTOR_DEFINITIONS,
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "float-32" },
+        body: surface.let(
+          "vector",
+          f32x4.make([
+            surface.float32(1),
+            surface.float32(2),
+            surface.float32(3),
+            surface.float32(4),
+          ]),
+          surface.let(
+            "boxedReader",
+            surface.apply(
+              surface.name("VectorReader"),
+              surface.lambda("ignored", surface.name("vector")),
+            ),
+            f32x4.reduceAdd(
+              surface.case(surface.name("boxedReader"), [{
+                constructor: "VectorReader",
+                binders: ["read"],
+                body: surface.apply(surface.name("read"), surface.integer(0)),
+              }]),
+            ),
+          ),
+        ),
+      },
+    ],
+    [
+      ...FIXED_VECTOR_TYPE_DECLARATIONS,
+      {
+        name: "VectorReaderBox",
+        parameters: [],
+        constructors: [{
+          name: "VectorReader",
+          fields: [{ name: "read", type: readerType }],
+        }],
+      },
+    ],
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("captured F32x4 closure module did not compile");
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, { simd: "wasm-simd" });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 10);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("recursive closures box captured native F32x4 values", async () => {
+  const encoded = buildSurfaceModule(
+    [
+      ...FIXED_VECTOR_DEFINITIONS,
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "float-32" },
+        body: f32x4.reduceAdd(
+          surface.let(
+            "vector",
+            f32x4.make([
+              surface.float32(1),
+              surface.float32(2),
+              surface.float32(3),
+              surface.float32(4),
+            ]),
+            {
+              kind: "let-rec",
+              name: "loop",
+              value: surface.lambda(
+                "iteration",
+                surface.if(
+                  surface.equal(surface.name("iteration"), surface.integer(0)),
+                  surface.name("vector"),
+                  surface.apply(
+                    surface.name("loop"),
+                    surface.binary(
+                      BinaryOperator.Subtract,
+                      surface.name("iteration"),
+                      surface.integer(1),
+                    ),
+                  ),
+                ),
+              ),
+              body: surface.apply(surface.name("loop"), surface.integer(1)),
+            },
+          ),
+        ),
+      },
+    ],
+    FIXED_VECTOR_TYPE_DECLARATIONS,
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("recursive captured F32x4 module did not compile");
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, { simd: "wasm-simd" });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 10);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("SIMD scalar entries fall back when compact emission needs the runtime", async () => {
+  const vector = f32x4.make([
+    surface.float32(1),
+    surface.float32(2),
+    surface.float32(3),
+    surface.float32(4),
+  ]);
+  const encoded = buildSurfaceModule(
+    [
+      ...FIXED_VECTOR_DEFINITIONS,
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "float-32" },
+        body: f32x4.reduceAdd(
+          surface.let(
+            "mapped",
+            f32x4.map(
+              surface.lambda(
+                "lane",
+                surface.binary(
+                  BinaryOperator.MultiplyFloat32,
+                  surface.name("lane"),
+                  surface.float32(2),
+                ),
+              ),
+              vector,
+            ),
+            surface.name("mapped"),
+          ),
+        ),
+      },
+    ],
+    FIXED_VECTOR_TYPE_DECLARATIONS,
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("SIMD compact fallback module did not compile");
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, { simd: "wasm-simd" });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 20);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("native vectors preserve values across ordinary boxed function boundaries", async () => {
   const vector = f32x4.make([
     surface.float32(1),

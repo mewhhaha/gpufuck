@@ -23,6 +23,8 @@ const featured = [
   "matching.blot",
   "modules.blot",
   "compiled.blot",
+  "simd_arithmetic.blot",
+  "simd_functions.blot",
 ] as const;
 
 const stressProject = createBlotStressProject();

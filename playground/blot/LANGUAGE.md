@@ -1004,7 +1004,22 @@ Everything not listed here belongs in source, normally the prelude.
 
 Division and remainder by zero are errors. Runtime integer results outside signed 64-bit range trap.
 
-### 13.3 Arrays and shapes
+### 13.3 Fixed-width vectors
+
+`F32x4` is an opaque runtime type. Blot integers are converted to `f32` when lanes enter a vector,
+and `@f32x4.reduce_add` converts the scalar sum back to an integer by truncating toward zero.
+
+| primitive           | meaning                             |
+| ------------------- | ----------------------------------- |
+| `@f32x4.make`       | construct four lanes                |
+| `@f32x4.splat`      | copy one value into all four lanes  |
+| `@f32x4.add`        | lane-wise addition                  |
+| `@f32x4.sub`        | lane-wise subtraction               |
+| `@f32x4.mul`        | lane-wise multiplication            |
+| `@f32x4.div`        | lane-wise division                  |
+| `@f32x4.reduce_add` | add all lanes and return an integer |
+
+### 13.4 Arrays and shapes
 
 | primitive       | meaning                                         |
 | --------------- | ----------------------------------------------- |
@@ -1022,7 +1037,7 @@ Division and remainder by zero are errors. Runtime integer results outside signe
 
 Array indexing is zero-based and bounds-checked.
 
-### 13.4 Type values
+### 13.5 Type values
 
 | primitive         | meaning                                     |
 | ----------------- | ------------------------------------------- |
@@ -1063,7 +1078,7 @@ representing an empty compile-time union.
 #Opaque
 ```
 
-### 13.5 Ownership markers
+### 13.6 Ownership markers
 
 `@linear.own` and `@linear.borrow` are runtime identities whose meaning comes from ownership
 analysis and the default prefix fixities `!` and `&`. `@linear.maybe` is the reserved target of
@@ -1120,6 +1135,7 @@ Before gpufuck lowering, Blot:
 - lowers shapes and tuples to nominal records;
 - lowers constructor sets to nominal variants;
 - lowers arrays to gpufuck `Store`;
+- lowers fixed vectors to gpufuck's canonical `F32x4` definitions;
 - lowers `rec` to local `let-rec`;
 - specializes source handlers with selective CPS; and
 - turns host effects and entry-module projections into typed imports.

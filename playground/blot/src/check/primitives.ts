@@ -37,6 +37,7 @@ const ORDERING: SimpleType = variant([
 
 /** A type value — what `@type.*` produces. Opaque to inference by design. */
 const TYPE: SimpleType = { tag: "opaque", name: "Type" };
+const F32X4: SimpleType = { tag: "opaque", name: "F32x4" };
 
 /**
  * What `@type.reflect` answers with.
@@ -115,6 +116,15 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@int.neg", mono(curried([INT], INT))],
   // One comparison primitive; `Eq` and `Ord` are prelude source over it.
   ["@int.cmp", mono(curried([INT, INT], ORDERING))],
+
+  // --- fixed-width vectors ---
+  ["@f32x4.make", mono(curried([INT, INT, INT, INT], F32X4))],
+  ["@f32x4.splat", mono(curried([INT], F32X4))],
+  ["@f32x4.add", mono(curried([F32X4, F32X4], F32X4))],
+  ["@f32x4.sub", mono(curried([F32X4, F32X4], F32X4))],
+  ["@f32x4.mul", mono(curried([F32X4, F32X4], F32X4))],
+  ["@f32x4.div", mono(curried([F32X4, F32X4], F32X4))],
+  ["@f32x4.reduce_add", mono(curried([F32X4], INT))],
 
   // --- text ---
   ["@text.concat", mono(curried([TEXT, TEXT], TEXT))],

@@ -22,6 +22,10 @@ import {
   BinaryOperator,
   defineEffectOperation,
   effectSet,
+  f32x4,
+  F32x4Definition,
+  FIXED_VECTOR_DEFINITIONS,
+  FIXED_VECTOR_TYPE_DECLARATIONS,
   type HostCapabilityDeclaration,
   type HostDefinitionBinding,
   HostTypes,
@@ -183,6 +187,7 @@ export interface LoweredExport {
   readonly wasmName: string;
   readonly definition: string;
   readonly type: TypeSchema;
+  readonly compiledType: TypeSchema;
 }
 
 class Lowering {
@@ -200,6 +205,7 @@ class Lowering {
   readonly capabilityOwners = new Map<string, number>();
   /** Blot effect operations, as Core evidence a handler can replace. */
   readonly effectOperations = new Map<string, string>();
+  requiresFixedVectors = false;
   private next = 0;
 
   /**
@@ -461,6 +467,13 @@ const BINARY: ReadonlyMap<string, BinaryOperator> = new Map([
   ["@int.rem", BinaryOperator.RemainderSignedInteger64],
 ]);
 
+const F32X4_BINARY: ReadonlyMap<string, string> = new Map([
+  ["@f32x4.add", F32x4Definition.Add],
+  ["@f32x4.sub", F32x4Definition.Subtract],
+  ["@f32x4.mul", F32x4Definition.Multiply],
+  ["@f32x4.div", F32x4Definition.Divide],
+]);
+
 export function lowerModule(
   module: Module,
   facts: Facts,
@@ -493,6 +506,7 @@ export function lowerModule(
   });
   const exports = lowerExports(
     module.result,
+    body,
     runtimeExports,
     lowering,
   );
@@ -518,8 +532,12 @@ export function lowerModule(
   }
 
   return {
-    definitions: lowering.definitions,
-    types: lowering.declarations(),
+    definitions: lowering.requiresFixedVectors
+      ? [...FIXED_VECTOR_DEFINITIONS, ...lowering.definitions]
+      : lowering.definitions,
+    types: lowering.requiresFixedVectors
+      ? [...FIXED_VECTOR_TYPE_DECLARATIONS, ...lowering.declarations()]
+      : lowering.declarations(),
     entry: ENTRY,
     capabilities: [...lowering.capabilities.values()],
     hostDefinitions: lowering.hostDefinitions,
@@ -587,6 +605,7 @@ export function lowerModule(
 
 function lowerExports(
   result: Expr,
+  moduleBody: SurfaceExpression,
   exports: readonly RuntimeExport[],
   lowering: Lowering,
 ): LoweredExport[] {
@@ -595,7 +614,7 @@ function lowerExports(
   if (exports.length === 1 && first.sourceName === "default") {
     return [lowerExport(
       first,
-      surface.name(MODULE_RESULT),
+      moduleBody,
       0,
       result.span,
       lowering,
@@ -621,7 +640,7 @@ function lowerExports(
         `module result omitted runtime export ${exported.sourceName}`,
       );
     }
-    const body = surface.case(surface.name(MODULE_RESULT), [{
+    const body = surface.case(moduleBody, [{
       constructor: nominal.name,
       binders,
       body: surface.name(binders[field]),
@@ -650,17 +669,39 @@ function lowerExport(
   } else {
     type = exportSchema(exported.type, exported.sourceName, span, lowering);
   }
+  const parameters: string[] = [];
+  let definitionBody = body;
+  let residualType = type;
+  while (residualType.kind === "function") {
+    parameters.push(lowering.fresh("parameter"));
+    residualType = residualType.result;
+  }
+  let compiledType = type;
+  if (parameters.length === 0) {
+    parameters.push(lowering.fresh("export"));
+    compiledType = {
+      kind: "function",
+      parameter: { kind: "unit" },
+      result: type,
+    };
+  } else {
+    definitionBody = surface.apply(
+      definitionBody,
+      ...parameters.map((parameter) => surface.name(parameter)),
+    );
+  }
   lowering.definitions.push({
     name: definition,
-    parameters: [],
-    annotation: type,
-    body,
+    parameters,
+    annotation: compiledType,
+    body: definitionBody,
   });
   return {
     sourceName: exported.sourceName,
     wasmName,
     definition,
     type,
+    compiledType,
   };
 }
 
@@ -2634,6 +2675,43 @@ function lowerApply(
   }
 
   if (spine.callee.tag === "intrinsic") {
+    if (spine.callee.name === "@f32x4.make" && spine.args.length === 4) {
+      lowering.requiresFixedVectors = true;
+      return f32x4.make(spine.args.map((argument) =>
+        at.convert(
+          NumericConversion.SignedInteger64ToFloat32,
+          lower(argument, scope, lowering),
+        )
+      ));
+    }
+    if (spine.callee.name === "@f32x4.splat" && spine.args.length === 1) {
+      lowering.requiresFixedVectors = true;
+      return f32x4.splat(
+        at.convert(
+          NumericConversion.SignedInteger64ToFloat32,
+          lower(spine.args[0], scope, lowering),
+        ),
+      );
+    }
+    const fixedVectorBinary = F32X4_BINARY.get(spine.callee.name);
+    if (fixedVectorBinary !== undefined && spine.args.length === 2) {
+      lowering.requiresFixedVectors = true;
+      return at.apply(
+        at.name(fixedVectorBinary),
+        lower(spine.args[0], scope, lowering),
+        lower(spine.args[1], scope, lowering),
+      );
+    }
+    if (
+      spine.callee.name === "@f32x4.reduce_add" &&
+      spine.args.length === 1
+    ) {
+      lowering.requiresFixedVectors = true;
+      return at.convert(
+        NumericConversion.Float32ToSignedInteger64,
+        f32x4.reduceAdd(lower(spine.args[0], scope, lowering)),
+      );
+    }
     const operator = BINARY.get(spine.callee.name);
     if (operator !== undefined && spine.args.length === 2) {
       return lowerIntegerBinary(

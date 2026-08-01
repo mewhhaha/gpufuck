@@ -12,6 +12,7 @@ Three boundaries differ from the source repository:
 - gpufuck imports point at this checkout's `functional.ts`;
 - `src/load.ts` reads an explicitly configured in-memory source map instead of the filesystem;
 - `src/syntax/parse.ts` fetches parser assets supplied by the playground build.
+- the backend exposes gpufuck's fixed `F32x4` operations and emits Wasm SIMD.
 
 The copied TypeScript retains Blot's own compiler configuration. Each vendored source file has a
 `@ts-nocheck` boundary because gpufuck additionally enables `noUncheckedIndexedAccess` and

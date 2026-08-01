@@ -1,0 +1,10 @@
+// gpufuck proves these lifted unary definitions strict from their call sites,
+// so their F32x4 parameters and results use v128 instead of boxed Core values.
+
+const twice = vector => @f32x4.add vector vector;
+const quadruple = vector => twice (twice vector);
+
+let lanes = @f32x4.make 1 2 3 4;
+let scaled = quadruple lanes;
+
+return @f32x4.reduce_add scaled;

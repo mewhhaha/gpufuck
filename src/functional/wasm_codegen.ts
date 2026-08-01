@@ -5,6 +5,7 @@ import {
   EvaluationMode,
   EvaluationProfile,
   NO_INDEX,
+  PAIR_CONSTRUCTOR_NAME,
   RuntimeFaultCategory,
   type Type,
   UnaryOperator,
@@ -23,7 +24,12 @@ import {
   flattenCanonicalAbiType,
   validateCanonicalAbiInterface,
 } from "./canonical_abi.ts";
-import type { CompiledModule, CoreNode, WasmExport } from "./compiler_module.ts";
+import {
+  type CompiledModule,
+  completeTypeDeclarations,
+  type CoreNode,
+  type WasmExport,
+} from "./compiler_module.ts";
 import {
   BYTES_TYPE_NAME,
   type HostFieldDeclaration,
@@ -51,8 +57,8 @@ import {
   WasmValueType,
 } from "./wasm_binary.ts";
 import { WasmValueAbi } from "./wasm_abi.ts";
-import { concreteType } from "./schema_contract.ts";
-import { requireFirstOrderWasmType } from "./wasm_value_codec.ts";
+import { concreteType, instantiateSchema } from "./schema_contract.ts";
+import { describeType, requireFirstOrderWasmType } from "./wasm_value_codec.ts";
 import type { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import { type LambdaSet, LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 import type {
@@ -100,7 +106,7 @@ import {
   releaseOwnedValueFunction,
   retainOwnedValueFunction,
 } from "./wasm_owned_runtime.ts";
-import { MAXIMUM_STORE_LENGTH } from "./store_contract.ts";
+import { MAXIMUM_STORE_LENGTH, STORE_TYPE_NAME } from "./store_contract.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import type { ConstantResolver, WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { functionalBytesFromLiteralSymbol } from "./static_literals.ts";
@@ -125,7 +131,7 @@ import {
   WasmSimdOpcode,
 } from "./wasm_simd.ts";
 import type { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
-import { WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH } from "./wasm_runtime_layout.ts";
+import { WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH, WasmRuntimeGlobal } from "./wasm_runtime_layout.ts";
 
 const CLOSURE_OBJECT_KIND = WasmValueAbi.objectKinds.closure;
 const CONSTRUCTOR_OBJECT_KIND = WasmValueAbi.objectKinds.constructor;
@@ -137,12 +143,44 @@ const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
 const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
+const CANONICAL_CALL_STATE_BYTE_LENGTH = 16;
+const CANONICAL_CALL_EXPORT_OFFSET = 0;
+const CANONICAL_CALL_RESULT_OFFSET = 4;
+const CANONICAL_CALL_HEAP_TOP_OFFSET = 8;
+const CANONICAL_CALL_FREE_LIST_OFFSET = 12;
 // Specialization is optional for correctness; this cap bounds generated code for recursive input.
 const MAXIMUM_SPECIALIZED_INLINE_SITES = 128;
 
 function canonicalWasmValueType(type: CanonicalAbiCoreType): number {
   if (type === "i32") return WasmValueType.I32;
   return WasmValueType.I64;
+}
+
+function sameCanonicalCompiledType(left: Type, right: Type): boolean {
+  if (left.kind !== right.kind) return false;
+  switch (left.kind) {
+    case "integer":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+    case "boolean":
+    case "unit":
+      return true;
+    case "tuple":
+      return right.kind === "tuple" &&
+        sameCanonicalCompiledType(left.values[0], right.values[0]) &&
+        sameCanonicalCompiledType(left.values[1], right.values[1]);
+    case "named":
+      return right.kind === "named" && left.name === right.name &&
+        left.arguments.length === right.arguments.length &&
+        left.arguments.every((argument, index) =>
+          sameCanonicalCompiledType(argument, right.arguments[index]!)
+        );
+    case "function":
+      return right.kind === "function" &&
+        sameCanonicalCompiledType(left.parameter, right.parameter) &&
+        sameCanonicalCompiledType(left.result, right.result);
+  }
 }
 
 type ValueSource =
@@ -571,17 +609,16 @@ function emitWasmArtifact(
         true,
       );
       const compactBytes = compactCompiler.compileCompactScalar();
-      if (compactBytes === undefined) {
-        throw new Error("functional compact scalar preflight accepted a runtime-dependent program");
+      if (compactBytes !== undefined) {
+        const artifact = compactCompiler.artifact(compactBytes);
+        emitSpan?.finish({
+          nodes: plan.nodes.length,
+          bytes: artifact.bytes.byteLength,
+          specializedCallSites: artifact.specializedCallSites,
+        });
+        backendPlansByArtifact.set(artifact, plan);
+        return artifact;
       }
-      const artifact = compactCompiler.artifact(compactBytes);
-      emitSpan?.finish({
-        nodes: plan.nodes.length,
-        bytes: artifact.bytes.byteLength,
-        specializedCallSites: artifact.specializedCallSites,
-      });
-      backendPlansByArtifact.set(artifact, plan);
-      return artifact;
     }
 
     const compiler = new WasmCompiler(
@@ -826,6 +863,7 @@ class WasmCompiler {
       plan.coreIndex.referencedNullaryConstructors,
     );
     if (
+      plan.options.canonicalAbi !== undefined ||
       hostFields.some((field) =>
         field.declaration.kind === "value"
           ? field.declaration.type.kind === "unit"
@@ -1012,6 +1050,7 @@ class WasmCompiler {
       this.#globalThunkSlots[definitionIndex] = this.reserveIndirectFunction();
     }
     this.#automaticArenaReset = !this.#globalThunkSlots.some((slot) => slot !== undefined);
+    this.validateCanonicalAbiArenaReset();
     this.compileHostOperationClosures();
     this.compileGlobalThunks();
     closureSpan?.finish({
@@ -1040,6 +1079,7 @@ class WasmCompiler {
           exported,
           canonical,
           initializeFunctionIndex,
+          index + 1,
         );
       }
       if (this.#compilationOptions.canonicalAbi !== undefined) {
@@ -1067,7 +1107,10 @@ class WasmCompiler {
         }
         return {
           name: exported.postReturn,
-          body: this.compileCanonicalPostReturn(exported),
+          body: this.compileCanonicalPostReturn(
+            exported,
+            this.#module.wasmExports.findIndex((candidate) => candidate.name === exported.name) + 1,
+          ),
         };
       }) ?? [];
     exportsSpan?.finish({
@@ -1272,10 +1315,18 @@ class WasmCompiler {
           } has ${canonical.function.parameters.length} parameters; compiled export has ${signature.parameters.length}`,
         );
       }
-      for (const parameter of canonical.function.parameters) {
-        this.validateCanonicalAbiConstructors(parameter);
+      for (const [index, parameter] of canonical.function.parameters.entries()) {
+        this.validateCanonicalAbiType(
+          parameter,
+          signature.parameters[index]!,
+          `export ${JSON.stringify(exported.name)} parameter ${index}`,
+        );
       }
-      this.validateCanonicalAbiConstructors(canonical.function.result);
+      this.validateCanonicalAbiType(
+        canonical.function.result,
+        signature.result,
+        `export ${JSON.stringify(exported.name)} result`,
+      );
     }
     const operations = this.#hostFields.filter((field) =>
       field.declaration.kind === "operation" &&
@@ -1298,6 +1349,13 @@ class WasmCompiler {
           } has no compiled host operation`,
         );
       }
+      if (field.declaration.kind !== "operation") {
+        throw new Error(
+          `canonical ABI host field ${
+            JSON.stringify(`${imported.capability}.${imported.operation}`)
+          } is not an operation`,
+        );
+      }
       if (imported.function.parameters.length !== 1) {
         throw new TypeError(
           `canonical ABI host operation ${
@@ -1305,61 +1363,269 @@ class WasmCompiler {
           } must have one parameter`,
         );
       }
-      this.validateCanonicalAbiConstructors(imported.function.parameters[0]!);
-      this.validateCanonicalAbiConstructors(imported.function.result);
+      const parameter = concreteType(
+        field.declaration.parameterRepresentation ?? field.declaration.parameter,
+      );
+      const result = concreteType(
+        field.declaration.resultRepresentation ?? field.declaration.result,
+      );
+      this.validateCanonicalAbiType(
+        imported.function.parameters[0]!,
+        parameter,
+        `host operation ${
+          JSON.stringify(`${imported.capability}.${imported.operation}`)
+        } parameter`,
+      );
+      this.validateCanonicalAbiType(
+        imported.function.result,
+        result,
+        `host operation ${JSON.stringify(`${imported.capability}.${imported.operation}`)} result`,
+      );
     }
   }
 
-  validateCanonicalAbiConstructors(type: CanonicalAbiType): void {
-    if (type.kind === "array") {
-      this.validateCanonicalAbiConstructors(type.element);
+  validateCanonicalAbiArenaReset(): void {
+    if (this.#compilationOptions.canonicalAbi === undefined) return;
+    const canonicalDefinitions = this.#functionAnalysis.reachableDefinitions(
+      this.#module.wasmExports.map((exported) => exported.definitionIndex),
+      { constantBranches: this.#instrumentedFuel ? "preserve" : "prune" },
+    );
+    for (const [definitionIndex, slot] of this.#globalThunkSlots.entries()) {
+      if (slot === undefined || !canonicalDefinitions.has(definitionIndex)) continue;
+      throw new TypeError(
+        `canonical ABI cannot reclaim its private arena because global thunk d${definitionIndex} (${
+          JSON.stringify(this.#module.definitionNames[definitionIndex])
+        }) may retain a heap allocation across calls`,
+      );
+    }
+  }
+
+  validateCanonicalAbiType(
+    canonical: CanonicalAbiType,
+    compiled: Type,
+    location: string,
+  ): void {
+    if (
+      canonical.kind === "unit" || canonical.kind === "signed-integer-64" ||
+      canonical.kind === "boolean"
+    ) {
+      if (compiled.kind !== canonical.kind) {
+        this.throwCanonicalAbiTypeMismatch(canonical, compiled, location);
+      }
       return;
     }
-    if (type.kind === "sealed") {
-      const constructor = this.requiredConstructorIndex(type.constructor);
-      if (this.#module.constructorArities[constructor] !== 1) {
-        throw new TypeError(
-          `canonical ABI seal ${JSON.stringify(type.name)} constructor ${
-            JSON.stringify(type.constructor)
-          } must have one field`,
+    if (canonical.kind === "text") {
+      if (
+        compiled.kind !== "named" || compiled.name !== TEXT_TYPE_NAME ||
+        compiled.arguments.length !== 0
+      ) {
+        this.throwCanonicalAbiTypeMismatch(canonical, compiled, location);
+      }
+      return;
+    }
+    if (canonical.kind === "array") {
+      if (
+        compiled.kind !== "named" || compiled.name !== STORE_TYPE_NAME ||
+        compiled.arguments.length !== 1
+      ) {
+        this.throwCanonicalAbiTypeMismatch(canonical, compiled, location);
+      }
+      this.validateCanonicalAbiType(
+        canonical.element,
+        compiled.arguments[0]!,
+        `${location} element`,
+      );
+      return;
+    }
+
+    const constructors = this.canonicalAbiConstructors(compiled, location);
+    if (canonical.kind === "sealed") {
+      if (constructors.length !== 1 || constructors[0]!.name !== canonical.constructor) {
+        this.throwCanonicalAbiTypeMismatch(
+          canonical,
+          compiled,
+          location,
+          `expected sole Core constructor ${JSON.stringify(canonical.constructor)}`,
         );
       }
-      this.validateCanonicalAbiConstructors(type.inner);
-      return;
-    }
-    if (type.kind === "record") {
-      const constructor = this.requiredConstructorIndex(type.constructor);
-      if (this.#module.constructorArities[constructor] !== type.fields.length) {
-        throw new TypeError(
-          `canonical ABI record constructor ${
-            JSON.stringify(type.constructor)
-          } has ${type.fields.length} fields; compiled constructor has ${
-            this.#module.constructorArities[constructor]
-          }`,
+      const fields = constructors[0]!.fields;
+      if (fields.length !== 1) {
+        this.throwCanonicalAbiTypeMismatch(
+          canonical,
+          compiled,
+          location,
+          `Core constructor ${JSON.stringify(canonical.constructor)} has ${fields.length} fields`,
         );
       }
-      for (const field of type.fields) {
-        this.validateCanonicalAbiConstructors(field.type);
+      this.validateCanonicalAbiType(canonical.inner, fields[0]!.type, `${location} carrier`);
+      return;
+    }
+    if (canonical.kind === "record") {
+      if (constructors.length !== 1 || constructors[0]!.name !== canonical.constructor) {
+        this.throwCanonicalAbiTypeMismatch(
+          canonical,
+          compiled,
+          location,
+          `expected sole Core constructor ${JSON.stringify(canonical.constructor)}`,
+        );
+      }
+      const fields = constructors[0]!.fields;
+      if (fields.length !== canonical.fields.length) {
+        this.throwCanonicalAbiTypeMismatch(
+          canonical,
+          compiled,
+          location,
+          `Core constructor ${JSON.stringify(canonical.constructor)} has ${fields.length} fields`,
+        );
+      }
+      for (const field of canonical.fields) {
+        this.validateCanonicalAbiType(
+          field.type,
+          fields[field.coreIndex]!.type,
+          `${location} field ${JSON.stringify(field.name)}`,
+        );
       }
       return;
     }
-    if (type.kind !== "variant") return;
-    for (const case_ of type.cases) {
-      const constructor = this.requiredConstructorIndex(case_.constructor);
-      const expectedArity = case_.payload === undefined ? 0 : 1;
-      if (this.#module.constructorArities[constructor] !== expectedArity) {
-        throw new TypeError(
-          `canonical ABI variant constructor ${
+
+    const remaining = new Map(constructors.map((constructor) => [constructor.name, constructor]));
+    for (const case_ of canonical.cases) {
+      const constructor = remaining.get(case_.constructor);
+      if (constructor === undefined) {
+        this.throwCanonicalAbiTypeMismatch(
+          canonical,
+          compiled,
+          location,
+          `Core constructor ${JSON.stringify(case_.constructor)} is missing or repeated`,
+        );
+      }
+      remaining.delete(case_.constructor);
+      if (case_.payload === undefined) {
+        if (constructor.fields.length !== 0) {
+          this.throwCanonicalAbiTypeMismatch(
+            canonical,
+            compiled,
+            location,
+            `Core constructor ${
+              JSON.stringify(case_.constructor)
+            } has ${constructor.fields.length} fields`,
+          );
+        }
+        continue;
+      }
+      if (constructor.fields.length !== 1) {
+        this.throwCanonicalAbiTypeMismatch(
+          canonical,
+          compiled,
+          location,
+          `Core constructor ${
             JSON.stringify(case_.constructor)
-          } has arity ${expectedArity}; compiled constructor has ${
-            this.#module.constructorArities[constructor]
-          }`,
+          } has ${constructor.fields.length} fields`,
         );
       }
-      if (case_.payload !== undefined) {
-        this.validateCanonicalAbiConstructors(case_.payload);
-      }
+      this.validateCanonicalAbiType(
+        case_.payload,
+        constructor.fields[0]!.type,
+        `${location} case ${JSON.stringify(case_.name)}`,
+      );
     }
+    if (remaining.size !== 0) {
+      this.throwCanonicalAbiTypeMismatch(
+        canonical,
+        compiled,
+        location,
+        `descriptor omits Core constructors ${JSON.stringify([...remaining.keys()])}`,
+      );
+    }
+  }
+
+  canonicalAbiConstructors(
+    compiled: Type,
+    location: string,
+  ): readonly {
+    readonly name: string;
+    readonly fields: readonly { readonly name: string; readonly type: Type }[];
+  }[] {
+    if (compiled.kind === "tuple") {
+      const constructor = this.requiredConstructorIndex(PAIR_CONSTRUCTOR_NAME);
+      if (this.#module.constructorArities[constructor] !== 2) {
+        throw new TypeError(
+          `canonical ABI ${location} Core constructor ${
+            JSON.stringify(PAIR_CONSTRUCTOR_NAME)
+          } has ${
+            this.#module.constructorArities[constructor]
+          } fields; tuple representation requires 2`,
+        );
+      }
+      return [{
+        name: PAIR_CONSTRUCTOR_NAME,
+        fields: [
+          { name: "0", type: compiled.values[0] },
+          { name: "1", type: compiled.values[1] },
+        ],
+      }];
+    }
+    if (compiled.kind !== "named") {
+      throw new TypeError(
+        `canonical ABI ${location} describes a nominal value but compiled type is ${
+          describeType(compiled)
+        }`,
+      );
+    }
+    const declaration = completeTypeDeclarations(this.#module).find((candidate) =>
+      candidate.name === compiled.name
+    );
+    if (declaration === undefined) {
+      throw new TypeError(
+        `canonical ABI ${location} references compiled type ${
+          JSON.stringify(compiled.name)
+        } without a complete declaration`,
+      );
+    }
+    if (declaration.parameters.length !== compiled.arguments.length) {
+      throw new TypeError(
+        `canonical ABI ${location} compiled type ${
+          JSON.stringify(compiled.name)
+        } has ${compiled.arguments.length} arguments; declaration expects ${declaration.parameters.length}`,
+      );
+    }
+    const parameters = new Map(
+      declaration.parameters.map((parameter, index) => [parameter, compiled.arguments[index]!]),
+    );
+    return declaration.constructors.flatMap((constructor) => {
+      if (
+        constructor.result !== undefined &&
+        !sameCanonicalCompiledType(instantiateSchema(constructor.result, parameters), compiled)
+      ) return [];
+      const constructorIndex = this.requiredConstructorIndex(constructor.name);
+      if (this.#module.constructorArities[constructorIndex] !== constructor.fields.length) {
+        throw new TypeError(
+          `canonical ABI ${location} Core constructor ${JSON.stringify(constructor.name)} has ${
+            this.#module.constructorArities[constructorIndex]
+          } fields; type declaration has ${constructor.fields.length}`,
+        );
+      }
+      return [{
+        name: constructor.name,
+        fields: constructor.fields.map((field) => ({
+          name: field.name,
+          type: instantiateSchema(field.type, parameters),
+        })),
+      }];
+    });
+  }
+
+  throwCanonicalAbiTypeMismatch(
+    canonical: CanonicalAbiType,
+    compiled: Type,
+    location: string,
+    evidence?: string,
+  ): never {
+    throw new TypeError(
+      `canonical ABI ${location} describes ${canonical.kind}, but compiled type is ${
+        describeType(compiled)
+      }${evidence === undefined ? "" : `; ${evidence}`}`,
+    );
   }
 
   wasmExportSignature(exported: WasmExport): {
@@ -1503,11 +1769,13 @@ class WasmCompiler {
     exported: WasmExport,
     canonical: CanonicalAbiExport,
     initializeFunctionIndex: number,
+    callId: number,
   ): WasmFunctionBody {
     const signature = canonicalAbiCoreSignature(canonical.function, "export");
     const instructions = new WasmInstructions(signature.parameters.length);
     instructions.call(initializeFunctionIndex);
     instructions.emit(0x1a);
+    this.emitCanonicalCallBegin(instructions, callId);
 
     const parameterRecord = canonicalAbiParameterRecord(
       canonical.function.parameters,
@@ -1577,6 +1845,9 @@ class WasmCompiler {
         resultPointer,
         0,
       );
+      instructions.i32Const(this.canonicalCallStateOffset());
+      instructions.localGet(resultPointer);
+      instructions.i32Store(CANONICAL_CALL_RESULT_OFFSET);
       instructions.localGet(resultPointer);
     } else {
       this.emitCanonicalLowerDirectResult(
@@ -1584,6 +1855,12 @@ class WasmCompiler {
         canonical.function.result,
         result,
       );
+      const directResult = signature.results[0] === undefined
+        ? undefined
+        : instructions.addLocal(canonicalWasmValueType(signature.results[0]));
+      if (directResult !== undefined) instructions.localSet(directResult);
+      this.emitCanonicalCallFinish(instructions, callId);
+      if (directResult !== undefined) instructions.localGet(directResult);
     }
     return functionBody(
       this.functionTypeIndex(
@@ -1597,6 +1874,7 @@ class WasmCompiler {
 
   compileCanonicalPostReturn(
     canonical: CanonicalAbiExport,
+    callId: number,
   ): WasmFunctionBody {
     const signature = canonicalAbiCoreSignature(canonical.function, "export");
     if (!signature.indirectResult) {
@@ -1604,20 +1882,77 @@ class WasmCompiler {
         `canonical ABI export ${JSON.stringify(canonical.name)} does not need post-return`,
       );
     }
-    const layout = canonicalAbiLayout(canonical.function.result);
     const instructions = new WasmInstructions(1);
-    this.emitCanonicalCleanupMemory(
-      instructions,
-      canonical.function.result,
-      0,
-      0,
-    );
-    this.freeCanonicalRecord(instructions, 0, layout.byteLength);
+    this.emitCanonicalPostReturnGuard(instructions, callId);
+    this.emitCanonicalCallFinish(instructions, callId);
     return functionBody(
       this.functionTypeIndex([WasmValueType.I32], []),
       instructions,
       `canonical ABI post-return ${canonical.name}`,
     );
+  }
+
+  emitCanonicalCallBegin(
+    instructions: WasmInstructions,
+    callId: number,
+  ): void {
+    const state = this.canonicalCallStateOffset();
+    instructions.i32Const(state);
+    instructions.i32Load(CANONICAL_CALL_EXPORT_OFFSET);
+    instructions.emit(0x04, 0x40, 0x00, 0x0b);
+
+    instructions.i32Const(state);
+    instructions.globalGet(WasmRuntimeGlobal.HeapTop);
+    instructions.i32Store(CANONICAL_CALL_HEAP_TOP_OFFSET);
+    instructions.i32Const(state);
+    instructions.globalGet(WasmRuntimeGlobal.FreeListHead);
+    instructions.i32Store(CANONICAL_CALL_FREE_LIST_OFFSET);
+    instructions.i32Const(0);
+    instructions.globalSet(WasmRuntimeGlobal.FreeListHead);
+    instructions.i32Const(state);
+    instructions.i32Const(callId);
+    instructions.i32Store(CANONICAL_CALL_EXPORT_OFFSET);
+    instructions.i32Const(state);
+    instructions.i32Const(0);
+    instructions.i32Store(CANONICAL_CALL_RESULT_OFFSET);
+  }
+
+  emitCanonicalPostReturnGuard(
+    instructions: WasmInstructions,
+    callId: number,
+  ): void {
+    const state = this.canonicalCallStateOffset();
+    instructions.i32Const(state);
+    instructions.i32Load(CANONICAL_CALL_EXPORT_OFFSET);
+    instructions.i32Const(callId);
+    instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+    instructions.i32Const(state);
+    instructions.i32Load(CANONICAL_CALL_RESULT_OFFSET);
+    instructions.localGet(0);
+    instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+  }
+
+  emitCanonicalCallFinish(
+    instructions: WasmInstructions,
+    callId: number,
+  ): void {
+    const state = this.canonicalCallStateOffset();
+    instructions.i32Const(state);
+    instructions.i32Load(CANONICAL_CALL_EXPORT_OFFSET);
+    instructions.i32Const(callId);
+    instructions.emit(0x47, 0x04, 0x40, 0x00, 0x0b);
+    instructions.i32Const(state);
+    instructions.i32Load(CANONICAL_CALL_HEAP_TOP_OFFSET);
+    instructions.globalSet(WasmRuntimeGlobal.HeapTop);
+    instructions.i32Const(state);
+    instructions.i32Load(CANONICAL_CALL_FREE_LIST_OFFSET);
+    instructions.globalSet(WasmRuntimeGlobal.FreeListHead);
+    instructions.i32Const(state);
+    instructions.i32Const(0);
+    instructions.i32Store(CANONICAL_CALL_RESULT_OFFSET);
+    instructions.i32Const(state);
+    instructions.i32Const(0);
+    instructions.i32Store(CANONICAL_CALL_EXPORT_OFFSET);
   }
 
   emitCanonicalLowerDirectResult(
@@ -3111,15 +3446,20 @@ class WasmCompiler {
   }
 
   heapStart(): number {
+    const staticByteLength = this.canonicalCallStateOffset() +
+      (this.#compilationOptions.canonicalAbi === undefined ? 0 : CANONICAL_CALL_STATE_BYTE_LENGTH);
+    return Math.max(
+      1_024,
+      Math.ceil(staticByteLength / VALUE_BYTE_LENGTH) * VALUE_BYTE_LENGTH,
+    );
+  }
+
+  canonicalCallStateOffset(): number {
     const nullaryConstructorCount =
       this.#nullaryConstructorOffsets.filter((offset) => offset !== undefined)
         .length;
-    const globalByteLength = (this.#module.definitionCount + nullaryConstructorCount) *
+    return (this.#module.definitionCount + nullaryConstructorCount) *
       VALUE_BYTE_LENGTH;
-    return Math.max(
-      1_024,
-      Math.ceil(globalByteLength / VALUE_BYTE_LENGTH) * VALUE_BYTE_LENGTH,
-    );
   }
 
   compileExpression(
@@ -7229,9 +7569,9 @@ class WasmCompiler {
         instructions.i64Load(source.byteOffset);
         return;
       case "v128-f32x4":
-        throw new Error(
-          `functional WASM attempted to box an internal F32x4 local ${source.index} outside a vector boundary`,
-        );
+        instructions.localGet(source.index);
+        this.emitBoxF32x4(instructions, F32X4_CONSTRUCTOR_NAME);
+        return;
       case "join-point":
         // Unreachable by construction: `joinPointLambda` only contifies a binder whose every
         // reference is a tail call, so nothing can ask for its value.

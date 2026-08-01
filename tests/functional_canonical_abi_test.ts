@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, ok } from "node:assert/strict";
+import { deepStrictEqual, equal, ok, rejects } from "node:assert/strict";
 
 import {
   BinaryOperator,
@@ -16,6 +16,8 @@ import {
 
 const signedInteger64 = { kind: "signed-integer-64" as const };
 const canonicalSignedInteger64 = { kind: "signed-integer-64" as const };
+const unit = { kind: "unit" as const };
+const canonicalUnit = { kind: "unit" as const };
 
 Deno.test("canonical ABI exports use caller-facing scalar signatures", async () => {
   const module = buildSurfaceModule(
@@ -24,7 +26,11 @@ Deno.test("canonical ABI exports use caller-facing scalar signatures", async () 
         name: "main",
         parameters: [],
         annotation: signedInteger64,
-        body: surface.signedInteger64(0n),
+        body: surface.binary(
+          BinaryOperator.AddSignedInteger64,
+          surface.signedInteger64(0n),
+          surface.signedInteger64(0n),
+        ),
       },
       {
         name: "add",
@@ -72,6 +78,13 @@ Deno.test("canonical ABI exports use caller-facing scalar signatures", async () 
     const add = instance.exports["blot:add"];
     ok(typeof add === "function");
     equal(add(20n, 22n), 42n);
+    const memory = instance.exports.memory;
+    ok(memory instanceof WebAssembly.Memory);
+    const warmByteLength = memory.buffer.byteLength;
+    for (let call = 0; call < 20_000; call += 1) {
+      equal(add(20n, 22n), 42n);
+    }
+    equal(memory.buffer.byteLength, warmByteLength);
     ok(typeof instance.exports.cabi_realloc === "function");
     const major = instance.exports["blot:abi-major"];
     const minor = instance.exports["blot:abi-minor"];
@@ -98,8 +111,12 @@ Deno.test("canonical ABI exports the standard unreachable fault category", async
       body: surface.signedInteger64(0n),
     }, {
       name: "fail",
-      parameters: [],
-      annotation: signedInteger64,
+      parameters: ["unit"],
+      annotation: {
+        kind: "function",
+        parameter: unit,
+        result: signedInteger64,
+      },
       body: surface.unreachable("impossible canonical result"),
     }],
     [],
@@ -118,7 +135,7 @@ Deno.test("canonical ABI exports the standard unreachable fault category", async
         imports: [],
         exports: [{
           name: "blot:fail",
-          function: { parameters: [], result: canonicalSignedInteger64 },
+          function: { parameters: [canonicalUnit], result: canonicalSignedInteger64 },
         }],
       },
     });
@@ -321,6 +338,192 @@ Deno.test("canonical ABI host operations use the full structural boundary", asyn
   }
 });
 
+Deno.test("canonical ABI rejects descriptors that disagree with compiled representations", async () => {
+  const module = buildSurfaceModule(
+    [
+      {
+        name: "main",
+        parameters: [],
+        annotation: signedInteger64,
+        body: surface.signedInteger64(0n),
+      },
+      {
+        name: "exchange",
+        parameters: [],
+        annotation: {
+          kind: "function",
+          parameter: signedInteger64,
+          result: signedInteger64,
+        },
+        body: surface.runtimeFault("host operation Exchange.exchange"),
+      },
+      {
+        name: "roundtrip",
+        parameters: ["value"],
+        annotation: {
+          kind: "function",
+          parameter: signedInteger64,
+          result: signedInteger64,
+        },
+        effects: effectSet("Exchange"),
+        body: surface.apply(surface.name("exchange"), surface.name("value")),
+      },
+    ],
+    [],
+    "main",
+    0,
+    {
+      hostCapabilities: [{
+        name: "Exchange",
+        fields: [{
+          kind: "operation",
+          name: "exchange",
+          effects: effectSet("Exchange"),
+          parameter: signedInteger64,
+          result: signedInteger64,
+          parameterRepresentation: HostTypes.erased,
+          resultRepresentation: HostTypes.erased,
+        }],
+      }],
+      hostDefinitions: [{
+        definition: "exchange",
+        capability: "Exchange",
+        field: "exchange",
+      }],
+      wasmExports: [{ name: "blot:roundtrip", definition: "roundtrip" }],
+    },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    await rejects(
+      () =>
+        compileModuleToWasm(compilation.module, {
+          canonicalAbi: {
+            version: 1,
+            imports: [{
+              capability: "Exchange",
+              operation: "exchange",
+              module: "blot:host/Exchange",
+              name: "exchange",
+              function: {
+                parameters: [canonicalSignedInteger64],
+                result: canonicalSignedInteger64,
+              },
+            }],
+            exports: [{
+              name: "blot:roundtrip",
+              function: {
+                parameters: [canonicalSignedInteger64],
+                result: canonicalSignedInteger64,
+              },
+            }],
+          },
+        }),
+      /host operation "Exchange\.exchange" parameter describes signed-integer-64, but compiled type is \$FunctionalErased/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("canonical ABI rejects boolean descriptors for signed i64 exports", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: signedInteger64,
+      body: surface.signedInteger64(0n),
+    }, {
+      name: "identity",
+      parameters: ["value"],
+      annotation: {
+        kind: "function",
+        parameter: signedInteger64,
+        result: signedInteger64,
+      },
+      body: surface.name("value"),
+    }],
+    [],
+    "main",
+    0,
+    { wasmExports: [{ name: "blot:identity", definition: "identity" }] },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    await rejects(
+      () =>
+        compileModuleToWasm(compilation.module, {
+          canonicalAbi: {
+            version: 1,
+            imports: [],
+            exports: [{
+              name: "blot:identity",
+              function: {
+                parameters: [{ kind: "boolean" }],
+                result: canonicalSignedInteger64,
+              },
+            }],
+          },
+        }),
+      /export "blot:identity" parameter 0 describes boolean, but compiled type is signed i64/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("canonical ABI rejects global thunks that can retain private allocations", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: signedInteger64,
+      body: surface.signedInteger64(0n),
+    }, {
+      name: "computed",
+      parameters: [],
+      annotation: signedInteger64,
+      body: surface.binary(
+        BinaryOperator.AddSignedInteger64,
+        surface.signedInteger64(20n),
+        surface.signedInteger64(22n),
+      ),
+    }],
+    [],
+    "main",
+    0,
+    { wasmExports: [{ name: "blot:computed", definition: "computed" }] },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    await rejects(
+      () =>
+        compileModuleToWasm(compilation.module, {
+          canonicalAbi: {
+            version: 1,
+            imports: [],
+            exports: [{
+              name: "blot:computed",
+              function: { parameters: [], result: canonicalSignedInteger64 },
+            }],
+          },
+        }),
+      /global thunk d1 \("computed"\) may retain a heap allocation across calls/,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("canonical ABI text validates UTF-8 before entering Core", async () => {
   const module = buildSurfaceModule(
     [
@@ -376,15 +579,6 @@ Deno.test("canonical ABI text validates UTF-8 before entering Core", async () =>
     ok(typeof identity === "function");
     ok(typeof postReturn === "function");
     const pointer = reallocate(0, 0, 1, 4);
-    new Uint8Array(memory.buffer, pointer, 4).set([0x61, 0xf0, 0x9f, 0x98]);
-    let trapped = false;
-    try {
-      identity(pointer, 4);
-    } catch (error) {
-      trapped = error instanceof WebAssembly.RuntimeError;
-    }
-    ok(trapped, "an incomplete UTF-8 sequence did not trap");
-
     new Uint8Array(memory.buffer, pointer, 4).set([0xf0, 0x9f, 0x98, 0x80]);
     const resultPointer = identity(pointer, 4);
     const view = new DataView(memory.buffer);
@@ -397,14 +591,20 @@ Deno.test("canonical ABI text validates UTF-8 before entering Core", async () =>
       "😀",
     );
     postReturn(resultPointer);
-    reallocate(pointer, 4, 1, 0);
+    new Uint8Array(memory.buffer, pointer, 4).set([0x61, 0xf0, 0x9f, 0x98]);
+    let trapped = false;
+    try {
+      identity(pointer, 4);
+    } catch (error) {
+      trapped = error instanceof WebAssembly.RuntimeError;
+    }
+    ok(trapped, "an incomplete UTF-8 sequence did not trap");
   } finally {
     compilation.module.destroy();
   }
 });
 
 Deno.test("canonical ABI accepts and releases empty host text", async () => {
-  const unit = { kind: "unit" as const };
   const module = buildSurfaceModule(
     [
       {
@@ -425,8 +625,12 @@ Deno.test("canonical ABI accepts and releases empty host text", async () => {
       },
       {
         name: "read_once",
-        parameters: [],
-        annotation: HostTypes.text,
+        parameters: ["unit"],
+        annotation: {
+          kind: "function",
+          parameter: unit,
+          result: HostTypes.text,
+        },
         effects: effectSet("Source"),
         body: surface.apply(
           surface.name("read"),
@@ -482,7 +686,7 @@ Deno.test("canonical ABI accepts and releases empty host text", async () => {
           name: "blot:read",
           postReturn: "cabi_post_blot:read",
           function: {
-            parameters: [],
+            parameters: [canonicalUnit],
             result: text,
           },
         }],
@@ -529,8 +733,12 @@ Deno.test("canonical ABI aggregate results are released by post-return", async (
       },
       {
         name: "values",
-        parameters: [],
-        annotation: storeType(signedInteger64),
+        parameters: ["unit"],
+        annotation: {
+          kind: "function",
+          parameter: unit,
+          result: storeType(signedInteger64),
+        },
         body: surface.storeNew(
           surface.integer(2),
           surface.signedInteger64(7n),
@@ -555,7 +763,7 @@ Deno.test("canonical ABI aggregate results are released by post-return", async (
           name: "blot:values",
           postReturn: "cabi_post_blot:values",
           function: {
-            parameters: [],
+            parameters: [canonicalUnit],
             result: {
               kind: "array",
               element: canonicalSignedInteger64,
@@ -587,6 +795,30 @@ Deno.test("canonical ABI aggregate results are released by post-return", async (
       [7n, 7n],
     );
     postReturn(resultPointer);
+    const warmByteLength = memory.buffer.byteLength;
+    for (let call = 0; call < 2_000; call += 1) {
+      const repeatedResult = values();
+      postReturn(repeatedResult);
+    }
+    equal(memory.buffer.byteLength, warmByteLength);
+
+    const outstandingResult = values();
+    let overlapTrapped = false;
+    try {
+      values();
+    } catch (error) {
+      overlapTrapped = error instanceof WebAssembly.RuntimeError;
+    }
+    ok(overlapTrapped, "an overlapping canonical call did not trap");
+
+    let mismatchedPostReturnTrapped = false;
+    try {
+      postReturn(outstandingResult + 8);
+    } catch (error) {
+      mismatchedPostReturnTrapped = error instanceof WebAssembly.RuntimeError;
+    }
+    ok(mismatchedPostReturnTrapped, "a mismatched post-return pointer did not trap");
+    postReturn(outstandingResult);
   } finally {
     compilation.module.destroy();
   }
