@@ -519,7 +519,107 @@ Deno.test("strict F32x4 values stay native across let-bound multi-function chain
   }
 });
 
-Deno.test("strict F32x4 workers accept projected record fields", async () => {
+Deno.test("mixed boxed and native callers keep the whole F32x4 worker region boxed", async () => {
+  const readerType = {
+    kind: "function" as const,
+    parameter: { kind: "integer" as const },
+    result: f32x4.type,
+  };
+  const vector = f32x4.make([
+    surface.float32(1),
+    surface.float32(2),
+    surface.float32(3),
+    surface.float32(4),
+  ]);
+  const encoded = buildSurfaceModule(
+    [
+      ...FIXED_VECTOR_DEFINITIONS,
+      {
+        name: "doubleVector",
+        parameters: ["vector"],
+        annotation: {
+          kind: "function",
+          parameter: f32x4.type,
+          result: f32x4.type,
+        },
+        body: f32x4.multiply(surface.name("vector"), f32x4.splat(surface.float32(2))),
+      },
+      {
+        name: "throughWorker",
+        parameters: ["vector"],
+        annotation: {
+          kind: "function",
+          parameter: f32x4.type,
+          result: f32x4.type,
+        },
+        body: surface.apply(surface.name("doubleVector"), surface.name("vector")),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "float-32" },
+        body: surface.let(
+          "vector",
+          vector,
+          surface.let(
+            "boxedReader",
+            surface.apply(
+              surface.name("VectorReader"),
+              surface.lambda(
+                "ignored",
+                surface.apply(surface.name("doubleVector"), surface.name("vector")),
+              ),
+            ),
+            f32x4.reduceAdd(
+              f32x4.add(
+                surface.apply(surface.name("throughWorker"), surface.name("vector")),
+                surface.case(surface.name("boxedReader"), [{
+                  constructor: "VectorReader",
+                  binders: ["read"],
+                  body: surface.apply(surface.name("read"), surface.integer(0)),
+                }]),
+              ),
+            ),
+          ),
+        ),
+      },
+    ],
+    [
+      ...FIXED_VECTOR_TYPE_DECLARATIONS,
+      {
+        name: "VectorReaderBox",
+        parameters: [],
+        constructors: [{
+          name: "VectorReader",
+          fields: [{ name: "read", type: readerType }],
+        }],
+      },
+    ],
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("mixed F32x4 worker module did not compile");
+  try {
+    const artifact = compileWasmArtifact(
+      compilation.module,
+      await compilation.module.readCoreNodes(),
+      false,
+      { simd: "wasm-simd" },
+    );
+    equal(artifact.nativeF32x4CallSites, 0);
+    const { instance } = await WebAssembly.instantiate(artifact.bytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 40);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("projected record fields keep F32x4 workers boxed at their representation boundary", async () => {
   const vectorPairType = {
     kind: "named" as const,
     name: "VectorPair",
@@ -596,7 +696,7 @@ Deno.test("strict F32x4 workers accept projected record fields", async () => {
       false,
       { simd: "wasm-simd" },
     );
-    equal(artifact.nativeF32x4CallSites, 1);
+    equal(artifact.nativeF32x4CallSites, 0);
     const { instance } = await WebAssembly.instantiate(artifact.bytes);
     const main = instance.exports.main;
     ok(typeof main === "function");

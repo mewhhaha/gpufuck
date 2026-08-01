@@ -403,7 +403,17 @@ export function prepareLinearWasmModuleEncoding(
     validateCanonicalAbiInterface(options.canonicalAbi);
   }
   const plan = createWasmBackendPlan(module, nodes, false, options, trace);
-  return new WasmCompiler(plan, false).compileEncoding();
+  const disabledF32x4Workers = new Set<number>();
+  let compiler = new WasmCompiler(plan, false, disabledF32x4Workers);
+  let encoding = compiler.compileEncoding();
+  let conflictingWorkers = compiler.conflictingF32x4WorkerRegion();
+  while (conflictingWorkers.size > 0) {
+    for (const worker of conflictingWorkers) disabledF32x4Workers.add(worker);
+    compiler = new WasmCompiler(plan, false, disabledF32x4Workers);
+    encoding = compiler.compileEncoding();
+    conflictingWorkers = compiler.conflictingF32x4WorkerRegion();
+  }
+  return encoding;
 }
 
 export function compileWasmArtifactWithSignedLiteralUpdate(
@@ -626,30 +636,48 @@ function emitWasmArtifact(
   const emitSpan = trace?.start("wasm.emit");
   try {
     if (plan.compactScalarEligible && plan.options.canonicalAbi === undefined) {
-      const compactCompiler = new WasmCompiler(
+      const disabledF32x4Workers = new Set<number>();
+      let compactCompiler = new WasmCompiler(
         plan,
         true,
+        disabledF32x4Workers,
       );
-      const compactBytes = compactCompiler.compileCompactScalar();
-      if (compactBytes !== undefined) {
-        const artifact = compactCompiler.artifact(compactBytes);
-        emitSpan?.finish({
-          nodes: plan.nodes.length,
-          bytes: artifact.bytes.byteLength,
-          specializedCallSites: artifact.specializedCallSites,
-          nativeF32x4CallSites: artifact.nativeF32x4CallSites,
-          nativeF32x4LetBindings: artifact.nativeF32x4LetBindings,
-        });
-        backendPlansByArtifact.set(artifact, plan);
-        return artifact;
+      let compactBytes = compactCompiler.compileCompactScalar();
+      while (compactBytes !== undefined) {
+        const conflictingWorkers = compactCompiler.conflictingF32x4WorkerRegion();
+        if (conflictingWorkers.size === 0) {
+          const artifact = compactCompiler.artifact(compactBytes);
+          emitSpan?.finish({
+            nodes: plan.nodes.length,
+            bytes: artifact.bytes.byteLength,
+            specializedCallSites: artifact.specializedCallSites,
+            nativeF32x4CallSites: artifact.nativeF32x4CallSites,
+            nativeF32x4LetBindings: artifact.nativeF32x4LetBindings,
+          });
+          backendPlansByArtifact.set(artifact, plan);
+          return artifact;
+        }
+        for (const worker of conflictingWorkers) disabledF32x4Workers.add(worker);
+        compactCompiler = new WasmCompiler(plan, true, disabledF32x4Workers);
+        compactBytes = compactCompiler.compileCompactScalar();
       }
     }
 
-    const compiler = new WasmCompiler(
+    const disabledF32x4Workers = new Set<number>();
+    let compiler = new WasmCompiler(
       plan,
       false,
+      disabledF32x4Workers,
     );
-    const artifact = compiler.artifact(compiler.compile());
+    let encoding = compiler.compileEncoding();
+    let conflictingWorkers = compiler.conflictingF32x4WorkerRegion();
+    while (conflictingWorkers.size > 0) {
+      for (const worker of conflictingWorkers) disabledF32x4Workers.add(worker);
+      compiler = new WasmCompiler(plan, false, disabledF32x4Workers);
+      encoding = compiler.compileEncoding();
+      conflictingWorkers = compiler.conflictingF32x4WorkerRegion();
+    }
+    const artifact = compiler.artifact(compiler.encode(encoding));
     emitSpan?.finish({
       nodes: plan.nodes.length,
       bytes: artifact.bytes.byteLength,
@@ -679,7 +707,13 @@ class WasmCompiler {
   readonly #recursiveLambdaOwners = new Map<number, number>();
   readonly #uncurriedWorkers = new Map<string, UncurriedWorker>();
   readonly #f32x4Workers = new Map<string, number>();
+  readonly #f32x4WorkerPatterns = new Map<number, Set<string>>();
+  readonly #boxedFunctionNodes = new Set<number>();
+  readonly #f32x4WorkerBoundaries = new Set<number>();
+  readonly #f32x4WorkerDependencies = new Map<number, Set<number>>();
   readonly #activeF32x4Workers = new Set<number>();
+  readonly #activeF32x4WorkerStack: number[] = [];
+  readonly #disabledF32x4Workers: ReadonlySet<number>;
   readonly #nativeIntegerFunctionNodes = new Set<number>();
   readonly #staticEnvironmentIds = new WeakMap<object, number>();
   readonly #additionalFunctionTypes: WasmFunctionType[] = [];
@@ -720,11 +754,13 @@ class WasmCompiler {
   constructor(
     plan: WasmBackendPlan,
     compactScalar: boolean,
+    disabledF32x4Workers: ReadonlySet<number> = new Set(),
   ) {
     const { module, nodes } = plan;
     this.#module = module;
     this.#nodes = nodes;
     this.#compactScalar = compactScalar;
+    this.#disabledF32x4Workers = disabledF32x4Workers;
     for (const [index, type] of WASM_BASE_FUNCTION_TYPES.entries()) {
       this.#additionalFunctionTypeIndices.set(
         `${type.parameters.join(",")}->${type.results.join(",")}`,
@@ -931,6 +967,60 @@ class WasmCompiler {
     return artifact;
   }
 
+  conflictingF32x4WorkerRegion(): ReadonlySet<number> {
+    const nativeWorkers = new Set(this.#f32x4WorkerPatterns.keys());
+    const conflictingWorkers = new Set<number>();
+    for (const worker of nativeWorkers) {
+      const patterns = this.#f32x4WorkerPatterns.get(worker);
+      if (
+        this.#boxedFunctionNodes.has(worker) ||
+        this.#f32x4WorkerBoundaries.has(worker) ||
+        (patterns?.size ?? 0) > 1
+      ) {
+        conflictingWorkers.add(worker);
+      }
+    }
+    if (conflictingWorkers.size === 0) return conflictingWorkers;
+
+    const connectedWorkers = new Map<number, Set<number>>();
+    for (const [caller, callees] of this.#f32x4WorkerDependencies) {
+      if (!nativeWorkers.has(caller)) continue;
+      for (const callee of callees) {
+        if (!nativeWorkers.has(callee) || caller === callee) continue;
+        const callerConnections = connectedWorkers.get(caller) ?? new Set<number>();
+        callerConnections.add(callee);
+        connectedWorkers.set(caller, callerConnections);
+        const calleeConnections = connectedWorkers.get(callee) ?? new Set<number>();
+        calleeConnections.add(caller);
+        connectedWorkers.set(callee, calleeConnections);
+      }
+    }
+
+    const pending = [...conflictingWorkers];
+    while (pending.length > 0) {
+      const worker = pending.pop()!;
+      for (const connected of connectedWorkers.get(worker) ?? []) {
+        if (conflictingWorkers.has(connected)) continue;
+        conflictingWorkers.add(connected);
+        pending.push(connected);
+      }
+    }
+    return conflictingWorkers;
+  }
+
+  recordF32x4WorkerDependency(callee: number): void {
+    const caller = this.#activeF32x4WorkerStack.at(-1);
+    if (caller === undefined || caller === callee) return;
+    const callees = this.#f32x4WorkerDependencies.get(caller) ?? new Set<number>();
+    callees.add(callee);
+    this.#f32x4WorkerDependencies.set(caller, callees);
+  }
+
+  recordF32x4WorkerBoundary(): void {
+    const worker = this.#activeF32x4WorkerStack.at(-1);
+    if (worker !== undefined) this.#f32x4WorkerBoundaries.add(worker);
+  }
+
   scalarSpecializationEnabled(): boolean {
     return this.#compactScalar || this.#nativeScalarWorkerDepth > 0;
   }
@@ -1025,8 +1115,7 @@ class WasmCompiler {
     return bytes;
   }
 
-  compile(): Uint8Array<ArrayBuffer> {
-    const encoding = this.compileEncoding();
+  encode(encoding: WasmModuleEncoding): Uint8Array<ArrayBuffer> {
     const encodeSpan = this.#trace?.start("wasm.encode");
     const encoded = encodeLinearWasmEmission(encoding);
     this.#linearEmission = {
@@ -4396,6 +4485,8 @@ class WasmCompiler {
     staticEnvironment: Environment | undefined,
     resultKind: "value" | "integer",
   ): UncurriedWorker {
+    this.#boxedFunctionNodes.add(functionShape.outerLambdaNode);
+    this.recordF32x4WorkerDependency(functionShape.outerLambdaNode);
     let environmentKey = "runtime";
     if (staticEnvironment !== undefined) {
       let environmentId = this.#staticEnvironmentIds.get(staticEnvironment);
@@ -6255,19 +6346,25 @@ class WasmCompiler {
     const workerApplication = this.f32x4WorkerApplication(nodeIndex, environment);
     if (workerApplication === undefined) return false;
     const { application, vectorParameters, bodyEnvironment } = workerApplication;
+    const workerNode = application.functionShape.outerLambdaNode;
+    this.recordF32x4WorkerDependency(workerNode);
 
-    const workerKey = `${application.functionShape.outerLambdaNode}:${
+    const workerKey = `${workerNode}:${
       vectorParameters.map((vector) => vector ? "v" : "b").join("")
     }`;
     let slot = this.#f32x4Workers.get(workerKey);
     if (slot === undefined) {
       slot = this.reserveIndirectFunction();
       this.#f32x4Workers.set(workerKey, slot);
+      const workerPatterns = this.#f32x4WorkerPatterns.get(workerNode) ?? new Set<string>();
+      workerPatterns.add(workerKey);
+      this.#f32x4WorkerPatterns.set(workerNode, workerPatterns);
       const parameterTypes = vectorParameters.map((vector) =>
         vector ? WasmValueType.V128 : WasmValueType.I64
       );
       const workerInstructions = new WasmInstructions(parameterTypes.length);
-      this.#activeF32x4Workers.add(application.functionShape.outerLambdaNode);
+      this.#activeF32x4Workers.add(workerNode);
+      this.#activeF32x4WorkerStack.push(workerNode);
       try {
         this.compileF32x4Expression(
           workerInstructions,
@@ -6275,12 +6372,13 @@ class WasmCompiler {
           bodyEnvironment,
         );
       } finally {
-        this.#activeF32x4Workers.delete(application.functionShape.outerLambdaNode);
+        this.#activeF32x4WorkerStack.pop();
+        this.#activeF32x4Workers.delete(workerNode);
       }
       this.#indirectFunctions[slot] = functionBody(
         this.functionTypeIndex(parameterTypes, [WasmValueType.V128]),
         workerInstructions,
-        `F32x4 worker for lambda core node ${application.functionShape.outerLambdaNode}`,
+        `F32x4 worker for lambda core node ${workerNode}`,
       );
     }
 
@@ -6304,6 +6402,7 @@ class WasmCompiler {
     const application = this.uncurriedApplication(nodeIndex, environment);
     if (
       application === undefined ||
+      this.#disabledF32x4Workers.has(application.functionShape.outerLambdaNode) ||
       application.staticEnvironment !== undefined ||
       this.#recursiveLambdaOwners.has(application.functionShape.outerLambdaNode) ||
       this.#activeF32x4Workers.has(application.functionShape.outerLambdaNode) ||
@@ -8071,6 +8170,7 @@ class WasmCompiler {
   }
 
   emitBoxF32x4(instructions: WasmInstructions, constructorName: string): void {
+    this.recordF32x4WorkerBoundary();
     const vector = instructions.addLocal(WasmValueType.V128);
     instructions.localSet(vector);
     const fields: ValueSource[] = [];
@@ -8135,6 +8235,7 @@ class WasmCompiler {
   }
 
   emitUnboxF32x4(instructions: WasmInstructions): void {
+    this.recordF32x4WorkerBoundary();
     instructions.emit(0xa7);
     const pointer = instructions.addLocal(WasmValueType.I32);
     instructions.localSet(pointer);
@@ -8233,6 +8334,8 @@ class WasmCompiler {
   }
 
   lambdaSlot(lambdaNode: number): number {
+    this.#boxedFunctionNodes.add(lambdaNode);
+    this.recordF32x4WorkerDependency(lambdaNode);
     const existing = this.#lambdaSlots[lambdaNode];
     if (existing !== undefined) return existing;
     const lambda = this.node(lambdaNode);
