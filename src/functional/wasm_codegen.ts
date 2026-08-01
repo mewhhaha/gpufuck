@@ -107,6 +107,7 @@ import {
   releaseOwnedValueFunction,
   retainOwnedValueFunction,
 } from "./wasm_owned_runtime.ts";
+import { StoreUpdateMode } from "../semantic/primops.ts";
 import { MAXIMUM_STORE_LENGTH, STORE_TYPE_NAME } from "./store_contract.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import type { ConstantResolver, WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
@@ -5215,6 +5216,18 @@ class WasmCompiler {
     }
     updates.reverse();
 
+    const owned = updates[0]!.node.payload === StoreUpdateMode.Owned;
+    for (const update of updates) {
+      if (
+        update.node.payload !== StoreUpdateMode.Persistent &&
+        update.node.payload !== StoreUpdateMode.Owned
+      ) {
+        throw new Error(
+          `functional WASM Store update at core node ${update.nodeIndex} has unknown mode ${update.node.payload}`,
+        );
+      }
+    }
+
     const source = this.compileStorePointer(instructions, sourceNodeIndex, environment);
     const sourceLength = instructions.addLocal(WasmValueType.I32);
     instructions.localGet(source);
@@ -5274,9 +5287,48 @@ class WasmCompiler {
       });
     }
 
-    this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
-    const destination = this.allocateStore(instructions, currentLength);
-    this.emitStoreCopy(instructions, destination, source, sourceLength);
+    const destination = instructions.addLocal(WasmValueType.I32);
+    if (owned && evaluated.every((update) => update.kind === "write")) {
+      instructions.localGet(source);
+      instructions.localSet(destination);
+    } else if (owned) {
+      const sourceCapacity = instructions.addLocal(WasmValueType.I32);
+      instructions.localGet(source);
+      instructions.i32Load(4);
+      instructions.localSet(sourceCapacity);
+      const requiredCapacity = this.storeCapacity(instructions, currentLength);
+      instructions.localGet(requiredCapacity);
+      instructions.localGet(sourceCapacity);
+      instructions.emit(0x4d, 0x04, 0x40);
+      const growth = instructions.addLocal(WasmValueType.I32);
+      instructions.localGet(currentLength);
+      instructions.localGet(sourceLength);
+      instructions.emit(0x6b);
+      instructions.localSet(growth);
+      this.#runtimeEmitter.emitFuelChargeAmount(
+        instructions,
+        growth,
+        nodeIndex,
+      );
+      instructions.localGet(source);
+      instructions.localSet(destination);
+      instructions.emit(0x05);
+      this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
+      const resized = this.allocateStore(instructions, currentLength);
+      this.emitStoreCopy(instructions, resized, source, sourceLength);
+      instructions.localGet(resized);
+      instructions.localSet(destination);
+      instructions.emit(0x0b);
+    } else {
+      this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
+      const copied = this.allocateStore(instructions, currentLength);
+      this.emitStoreCopy(instructions, copied, source, sourceLength);
+      instructions.localGet(copied);
+      instructions.localSet(destination);
+    }
+    instructions.localGet(destination);
+    instructions.localGet(currentLength);
+    instructions.i32Store(8);
     for (const update of evaluated) {
       if (update.kind === "write") {
         this.emitStoreElementAddress(instructions, destination, update.index);
@@ -5340,7 +5392,8 @@ class WasmCompiler {
   }
 
   allocateStore(instructions: WasmInstructions, length: number): number {
-    instructions.localGet(length);
+    const capacity = this.storeCapacity(instructions, length);
+    instructions.localGet(capacity);
     instructions.i32Const(3);
     instructions.emit(0x74);
     instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
@@ -5351,7 +5404,7 @@ class WasmCompiler {
     instructions.i32Const(STORE_OBJECT_KIND);
     instructions.i32Store(0);
     instructions.localGet(pointer);
-    instructions.i32Const(0);
+    instructions.localGet(capacity);
     instructions.i32Store(4);
     instructions.localGet(pointer);
     instructions.localGet(length);
@@ -5362,6 +5415,32 @@ class WasmCompiler {
       instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
     }
     return pointer;
+  }
+
+  storeCapacity(instructions: WasmInstructions, length: number): number {
+    const capacity = instructions.addLocal(WasmValueType.I32);
+    instructions.localGet(length);
+    instructions.emit(0x45, 0x04, 0x40);
+    instructions.i32Const(1);
+    instructions.localSet(capacity);
+    instructions.emit(0x05);
+    instructions.localGet(length);
+    instructions.i32Const(1);
+    instructions.emit(0x6b);
+    instructions.localSet(capacity);
+    for (const shift of [1, 2, 4, 8, 16]) {
+      instructions.localGet(capacity);
+      instructions.localGet(capacity);
+      instructions.i32Const(shift);
+      instructions.emit(0x76, 0x72);
+      instructions.localSet(capacity);
+    }
+    instructions.localGet(capacity);
+    instructions.i32Const(1);
+    instructions.emit(0x6a);
+    instructions.localSet(capacity);
+    instructions.emit(0x0b);
+    return capacity;
   }
 
   emitStoreCopy(

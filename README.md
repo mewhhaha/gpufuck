@@ -179,6 +179,12 @@ unit and pair types. It does not decide what a source construct means.
 Surface is intentionally smaller than most source languages. A frontend should keep its own AST and
 lower into Surface at one boundary rather than use Surface as its parser AST.
 
+Store writes and growth are persistent unless the frontend supplies `{ owned: true }` to
+`surface.storeWrite` or `surface.storeGrow`. That option is a proof obligation: the Store operand
+must have no observable aliases after its operands finish evaluating. Linear-memory WebAssembly then
+writes through the source allocation, growing geometrically when an append exceeds its spare
+capacity; WasmGC reuses the backing array for same-length writes.
+
 ### Declare algebraic types
 
 Constructors are globally named callable values. This declares `Option value`, constructs `Some 42`,

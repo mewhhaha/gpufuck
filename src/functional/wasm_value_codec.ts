@@ -226,7 +226,9 @@ export function encodeWasmValue(
     payload: number,
     fields: readonly bigint[],
   ): bigint => {
-    const byteLength = OBJECT_HEADER_BYTE_LENGTH + fields.length * VALUE_BYTE_LENGTH;
+    let valueCapacity = fields.length;
+    if (objectKind === STORE_OBJECT_KIND) valueCapacity = payload;
+    const byteLength = OBJECT_HEADER_BYTE_LENGTH + valueCapacity * VALUE_BYTE_LENGTH;
     const pointer = allocateBytesLength(byteLength);
     const view = new DataView(memory.buffer);
     view.setUint32(pointer, objectKind, true);
@@ -492,7 +494,9 @@ export function encodeWasmValue(
         pending.push({
           kind: "object",
           objectKind,
-          payload: 0,
+          payload: objectKind === STORE_OBJECT_KIND
+            ? 2 ** Math.ceil(Math.log2(Math.max(1, values.length)))
+            : 0,
           fieldCount: values.length,
           source: currentValue,
         });

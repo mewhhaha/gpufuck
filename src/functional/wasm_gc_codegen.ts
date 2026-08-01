@@ -27,6 +27,7 @@ import {
 } from "./wasm_runtime_binary.ts";
 import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 import { analyzeProvenStoreReads } from "./store_bounds_analysis.ts";
+import { StoreUpdateMode } from "../semantic/primops.ts";
 
 const VALUE_TYPE_INDEX = 0;
 const VALUE_FIELDS_TYPE_INDEX = 1;
@@ -977,6 +978,17 @@ class GcCoreEmitter {
       sourceNodeIndex = sourceNode.child0;
     }
     updates.reverse();
+    const owned = updates[0]!.node.payload === StoreUpdateMode.Owned;
+    for (const update of updates) {
+      if (
+        update.node.payload !== StoreUpdateMode.Persistent &&
+        update.node.payload !== StoreUpdateMode.Owned
+      ) {
+        throw new Error(
+          `functional WasmGC Store update at core node ${update.nodeIndex} has unknown mode ${update.node.payload}`,
+        );
+      }
+    }
 
     this.emitExpression(sourceNodeIndex, environment);
     const store = this.#instructions.addValueLocal();
@@ -1034,16 +1046,23 @@ class GcCoreEmitter {
     }
 
     const fields = this.#instructions.addFieldsLocal();
-    const allocationInitial = evaluated.findLast((update) => update.kind === "grow") ??
-      evaluated[0]!;
-    this.#instructions.localGet(
-      allocationInitial.kind === "grow" ? allocationInitial.initial : allocationInitial.value,
-    );
-    this.#instructions.refAsNonNull();
-    this.#instructions.localGet(currentLength);
-    this.#instructions.arrayNew();
-    this.#instructions.localSet(fields);
-    this.copyStoreFields(fields, store, sourceLength);
+    if (owned && evaluated.every((update) => update.kind === "write")) {
+      this.#instructions.localGet(store);
+      this.#instructions.refAsNonNull();
+      this.#instructions.structGet(VALUE_FIELDS_FIELD);
+      this.#instructions.localSet(fields);
+    } else {
+      const allocationInitial = evaluated.findLast((update) => update.kind === "grow") ??
+        evaluated[0]!;
+      this.#instructions.localGet(
+        allocationInitial.kind === "grow" ? allocationInitial.initial : allocationInitial.value,
+      );
+      this.#instructions.refAsNonNull();
+      this.#instructions.localGet(currentLength);
+      this.#instructions.arrayNew();
+      this.#instructions.localSet(fields);
+      this.copyStoreFields(fields, store, sourceLength);
+    }
     for (const update of evaluated) {
       if (update.kind === "write") {
         this.#instructions.localGet(fields);

@@ -15,6 +15,13 @@ export const PrimopFamily = {
 
 export type PrimopFamily = (typeof PrimopFamily)[keyof typeof PrimopFamily];
 
+export const StoreUpdateMode = {
+  Persistent: 0,
+  Owned: 1,
+} as const;
+
+export type StoreUpdateMode = (typeof StoreUpdateMode)[keyof typeof StoreUpdateMode];
+
 export interface PrimopDeclaration {
   readonly opcode: number;
   readonly name: string;
@@ -41,6 +48,8 @@ const STORE_LENGTH_OPCODE = 147;
 const STORE_READ_OPCODE = 148;
 const STORE_WRITE_OPCODE = 149;
 const STORE_GROW_OPCODE = 150;
+const STORE_WRITE_OWNED_OPCODE = 151;
+const STORE_GROW_OWNED_OPCODE = 152;
 
 const allBackends = Object.freeze({ gpu: true, linearWasm: true, wasmGc: true });
 const wasmBackends = Object.freeze({ gpu: false, linearWasm: true, wasmGc: true });
@@ -183,7 +192,7 @@ export const PRIMOPS: readonly PrimopDeclaration[] = Object.freeze([
     opcode: STORE_WRITE_OPCODE,
     name: "StoreWrite",
     family: PrimopFamily.StoreWrite,
-    operation: 0,
+    operation: StoreUpdateMode.Persistent,
     arity: 3,
     typeRule: "store-update",
     fault: "bounds",
@@ -194,7 +203,29 @@ export const PRIMOPS: readonly PrimopDeclaration[] = Object.freeze([
     opcode: STORE_GROW_OPCODE,
     name: "StoreGrow",
     family: PrimopFamily.StoreGrow,
-    operation: 0,
+    operation: StoreUpdateMode.Persistent,
+    arity: 3,
+    typeRule: "store-update",
+    fault: "bounds",
+    effects: noEffects,
+    backends: wasmBackends,
+  },
+  {
+    opcode: STORE_WRITE_OWNED_OPCODE,
+    name: "StoreWriteOwned",
+    family: PrimopFamily.StoreWrite,
+    operation: StoreUpdateMode.Owned,
+    arity: 3,
+    typeRule: "store-update",
+    fault: "bounds",
+    effects: noEffects,
+    backends: wasmBackends,
+  },
+  {
+    opcode: STORE_GROW_OWNED_OPCODE,
+    name: "StoreGrowOwned",
+    family: PrimopFamily.StoreGrow,
+    operation: StoreUpdateMode.Owned,
     arity: 3,
     typeRule: "store-update",
     fault: "bounds",
@@ -230,6 +261,8 @@ export const StoreLengthPrimop = STORE_LENGTH_OPCODE;
 export const StoreReadPrimop = STORE_READ_OPCODE;
 export const StoreWritePrimop = STORE_WRITE_OPCODE;
 export const StoreGrowPrimop = STORE_GROW_OPCODE;
+export const StoreWriteOwnedPrimop = STORE_WRITE_OWNED_OPCODE;
+export const StoreGrowOwnedPrimop = STORE_GROW_OWNED_OPCODE;
 
 export function primopDeclaration(opcode: number): PrimopDeclaration | undefined {
   return declarationByOpcode.get(opcode);

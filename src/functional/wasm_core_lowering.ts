@@ -119,6 +119,9 @@ function lowerPrimop(
     ? declaration.operation
     : declaration.family === PrimopFamily.BufferAppend
     ? 0
+    : declaration.family === PrimopFamily.StoreWrite ||
+        declaration.family === PrimopFamily.StoreGrow
+    ? declaration.operation
     : primop.child2;
   return {
     ...primop,

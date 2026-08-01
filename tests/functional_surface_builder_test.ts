@@ -31,6 +31,23 @@ Deno.test("the default builder emits no span, so existing output is unchanged", 
   );
 });
 
+Deno.test("Store updates carry ownership only when the frontend proves it", () => {
+  const persistent = surface.storeWrite(
+    surface.name("values"),
+    surface.integer(0),
+    surface.integer(1),
+  ) as Extract<SurfaceExpression, { readonly kind: "store-write" }>;
+  const owned = surface.storeGrow(
+    surface.name("values"),
+    surface.integer(2),
+    surface.integer(1),
+    { owned: true },
+  ) as Extract<SurfaceExpression, { readonly kind: "store-grow" }>;
+
+  ok(!Object.hasOwn(persistent, "owned"));
+  equal(owned.owned, true);
+});
+
 Deno.test("at() stamps the node each helper produces", () => {
   equal(spanOf(surface.at(SPAN).integer(1)), SPAN);
   equal(spanOf(surface.at(SPAN).storeEmpty()), SPAN);
