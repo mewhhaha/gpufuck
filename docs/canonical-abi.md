@@ -32,9 +32,8 @@ Canonical allocation keeps the runtime allocator's metadata in a hidden sixteen-
 writes therefore cannot overwrite free-list metadata. The generated post-return recursively releases
 nested strings and arrays before releasing an indirect result record.
 
-Canonical ABI options are intentionally unavailable with the WasmGC backend. Compilation with a
-descriptor bypasses shared artifact caches because the descriptor changes the emitted public
-interface.
+Compilation with a descriptor bypasses shared artifact caches because the descriptor changes the
+emitted public interface.
 
 ## Component boundary
 

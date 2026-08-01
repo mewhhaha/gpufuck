@@ -15,7 +15,6 @@ import {
   type EncodedModule,
   ExpressionTag,
   GpuCompiler,
-  GpuEvaluator,
   INIT_CONSTRUCTOR_NAME,
   INIT_TYPE_NAME,
   linkModules,
@@ -33,6 +32,7 @@ import {
   type TypeSchema,
   WasmIntrinsic,
 } from "../functional.ts";
+import { GpuEvaluator } from "../src/functional/evaluator.ts";
 import { GpuLazuliCompiler, lazuliSurfaceToModule, parseLazuliSource } from "../mod.ts";
 
 interface Runtime {

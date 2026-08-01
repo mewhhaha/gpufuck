@@ -1,4 +1,4 @@
-import { GpuCompiler, GpuEvaluator, requestWebGpuDevice } from "./functional.ts";
+import { GpuCompiler, requestWebGpuDevice, runWasmModule } from "./functional.ts";
 import { type GleamSourceModule, lowerGleamSources, renderGleamTrace } from "./gleam.ts";
 
 type GleamCommand = "run" | "trace";
@@ -50,22 +50,8 @@ export async function main(
       return 1;
     }
     try {
-      const evaluator = await GpuEvaluator.create(device);
-      const evaluation = await evaluator.evaluate(compilation.module, {
-        heapSlots: gleamHeapSlots(compilation.module),
-        // `run` prints the value, so it wants the whole tree: the shallow form reports a
-        // constructor's arity instead of its fields and refuses text outright. `trace` keeps the
-        // shallow form, because the checked-in traces are written against it.
-        ...(command === "run" ? { resultForm: "deep" as const } : {}),
-      });
+      const evaluation = await runWasmModule(compilation.module);
       if (command === "run") {
-        if (!evaluation.ok) {
-          const location = evaluation.fault.sourceByteOffset === null
-            ? ""
-            : ` byte ${evaluation.fault.sourceByteOffset}`;
-          output.error(`error[${evaluation.fault.code}]${location}: ${evaluation.fault.message}`);
-          return 1;
-        }
         output.log(JSON.stringify(
           {
             entryType: compilation.module.entryType,
@@ -91,24 +77,13 @@ export async function main(
         evaluation,
       });
       await writeTrace(tracePath!, trace);
-      return evaluation.ok ? 0 : 1;
+      return 0;
     } finally {
       compilation.module.destroy();
     }
   } finally {
     device.destroy();
   }
-}
-
-/**
- * The evaluator sizes its default heap from the node count, but Gleam lowers `Int` to i64 and i64
- * values are boxed, so an arithmetic-heavy module allocates far more per node than that default
- * assumes. The kernel example otherwise fails with `evaluation exhausted its heap of 256 slots`.
- */
-function gleamHeapSlots(
-  module: { readonly nodeCount: number; readonly definitionCount: number },
-): number {
-  return Math.max(4096, (module.definitionCount + module.nodeCount * 4) * 8);
 }
 
 async function readModuleSource(

@@ -1,6 +1,6 @@
 import { renderCompilationTrace } from "../functional/compilation_trace.ts";
 import type { CoreNode, GpuModule } from "../functional/compiler.ts";
-import type { EvaluationResult } from "../functional/evaluator.ts";
+import type { WasmExecution } from "../functional/wasm_execution.ts";
 import type { LoweredGleamProgram } from "./frontend.ts";
 
 export interface GleamTraceInput {
@@ -9,7 +9,7 @@ export interface GleamTraceInput {
   readonly lowered: LoweredGleamProgram;
   readonly compiledModule: GpuModule;
   readonly coreNodes: readonly CoreNode[];
-  readonly evaluation: EvaluationResult;
+  readonly evaluation: WasmExecution;
 }
 
 export function renderGleamTrace(input: GleamTraceInput): string {

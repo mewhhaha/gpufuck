@@ -1,4 +1,4 @@
-import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
+import { CoreTag, NO_INDEX } from "./abi.ts";
 import {
   type CompilerPerformanceTrace,
   measureCompilerStage,
@@ -23,8 +23,6 @@ import { WasmCaptureAnalysis } from "./wasm_capture_analysis.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import { WasmConstantAnalysis } from "./wasm_constant_analysis.ts";
 import { WasmFunctionAnalysis } from "./wasm_function_analysis.ts";
-import { createLoweredCoreStoragePlan } from "./storage_plan.ts";
-import { requireFirstOrderWasmType } from "./wasm_value_codec.ts";
 import { WasmUniqueReuseAnalysis } from "./wasm_unique_reuse_analysis.ts";
 import { preparedWasmLambdaAnalysis } from "./prepared_wasm_lambda_analysis.ts";
 import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
@@ -115,43 +113,8 @@ export function createWasmBackendPlan(
       analysisAnnotations[WASM_PROVEN_STORE_READS_TRACE_ANNOTATION] = result[2].size;
     },
   );
-  const storageAnnotations = {
-    nodes: loweredNodes.length,
-    values: 0,
-    closureValues: 0,
-    constructorValues: 0,
-    thunkValues: 0,
-    references: 0,
-    boundaries: 0,
-    skipped: options.storageCore === undefined,
-  };
-  measureCompilerStage(
-    trace,
-    "wasm.plan.storage",
-    storageAnnotations,
-    () =>
-      options.storageCore === undefined
-        ? undefined
-        : createLoweredCoreStoragePlan(module, loweredNodes, captureAnalysis, {
-          storageCore: options.storageCore,
-        }, coreIndex),
-    (result) => {
-      if (result === undefined) return;
-      storageAnnotations.values = result.values.length;
-      storageAnnotations.closureValues =
-        result.values.filter((value) => value.valueKind === "closure").length;
-      storageAnnotations.constructorValues =
-        result.values.filter((value) => value.valueKind === "constructor").length;
-      storageAnnotations.thunkValues =
-        result.values.filter((value) => value.valueKind === "thunk").length;
-      storageAnnotations.references = result.references.length;
-      storageAnnotations.boundaries = result.boundaries.length;
-    },
-  );
   const entry = measureCompilerStage(trace, "wasm.plan.boundary", {}, () => {
-    const result = functionalWasmEntry(module);
-    validateOwnedTypeExports(module, loweredNodes, options);
-    return result;
+    return functionalWasmEntry(module);
   });
   const scalarResult = functionalHostScalarType(entry.result);
   const compactScalarEligible = module.entryEffects.size === 0 &&
@@ -160,8 +123,6 @@ export function createWasmBackendPlan(
     entry.parameter === undefined &&
     scalarResult !== undefined &&
     scalarResult.kind !== "unit" &&
-    options.storageCore === undefined &&
-    (options.ownedTypeExports?.length ?? 0) === 0 &&
     module.wasmExports.every(compactIntegerExportIsProvable) &&
     (compactScalarProgramIsProvable(module, loweredNodes) ||
       options.simd === "wasm-simd" &&
@@ -476,78 +437,5 @@ export function validateWasmSimdMode(
         JSON.stringify(simd)
       }`,
     );
-  }
-}
-
-function validateOwnedTypeExports(
-  module: CompiledModule,
-  nodes: readonly CoreNode[],
-  options: WasmCompilationOptions,
-): void {
-  const ownedTypeExports = options.ownedTypeExports ?? [];
-  if (!Array.isArray(ownedTypeExports)) {
-    throw new TypeError("functional WASM ownedTypeExports must be an array");
-  }
-  if (ownedTypeExports.length === 0) return;
-  if (options.storageCore === undefined) {
-    throw new TypeError("functional WASM ownedTypeExports require a verified frontend storageCore");
-  }
-  if (
-    nodes.some((node) =>
-      (node.tag === CoreTag.Apply || node.tag === CoreTag.Let) &&
-      node.evaluationMode === EvaluationMode.LazyCallByNeed
-    )
-  ) {
-    throw new TypeError(
-      "functional WASM ownedTypeExports require strict Core without lazy boundaries",
-    );
-  }
-  const exportNames = new Set(["main", ...module.wasmExports.map((exported) => exported.name)]);
-  const storageValues = new Set<string>();
-  for (const owned of ownedTypeExports) {
-    if (owned === null || typeof owned !== "object") {
-      throw new TypeError("functional WASM owned type export must be an object");
-    }
-    if (typeof owned.name !== "string" || owned.name.length === 0) {
-      throw new TypeError("functional WASM owned type export name must be a non-empty string");
-    }
-    if (typeof owned.storageValue !== "string" || owned.storageValue.length === 0) {
-      throw new TypeError(
-        `functional WASM owned type export ${
-          JSON.stringify(owned.name)
-        } storageValue must be a non-empty string`,
-      );
-    }
-    if (storageValues.has(owned.storageValue)) {
-      throw new TypeError(
-        `functional WASM owned type exports repeat Storage Core value ${
-          JSON.stringify(owned.storageValue)
-        }`,
-      );
-    }
-    if (
-      !options.storageCore.operations.some((operation) =>
-        (operation.kind === "declare" && operation.value === owned.storageValue &&
-          operation.lifetime === "owned") ||
-        (operation.kind === "promote" && operation.target === owned.storageValue &&
-          operation.targetLifetime === "owned")
-      )
-    ) {
-      throw new TypeError(
-        `functional WASM owned type export ${
-          JSON.stringify(owned.name)
-        } requires owned Storage Core value ${JSON.stringify(owned.storageValue)}`,
-      );
-    }
-    storageValues.add(owned.storageValue);
-    requireFirstOrderWasmType(module, owned.type, `owned type ${owned.name}`);
-    for (const generatedName of [`retain_${owned.name}`, `drop_${owned.name}`]) {
-      if (exportNames.has(generatedName)) {
-        throw new TypeError(
-          `functional WASM owned type export repeats ${JSON.stringify(generatedName)}`,
-        );
-      }
-      exportNames.add(generatedName);
-    }
   }
 }

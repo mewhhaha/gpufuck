@@ -17,7 +17,6 @@ import {
 } from "./semantic_fingerprint.ts";
 import { validateWasmSimdMode } from "./wasm_backend_plan.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
-import { compileWasmGc } from "./wasm_gc_codegen.ts";
 import { type CanonicalAbiInterface, validateCanonicalAbiInterface } from "./canonical_abi.ts";
 
 const MAXIMUM_RESOLVED_CORE_WASM_ARTIFACTS = 64;
@@ -33,13 +32,6 @@ const simdWasmArtifactsByModule = new WeakMap<
 const executableWasmByModule = new WeakMap<
   CompiledModule,
   Promise<WebAssembly.Module>
->();
-const wasmGcArtifactsByModule = new WeakMap<
-  CompiledModule,
-  Promise<{
-    readonly bytes: Uint8Array<ArrayBuffer>;
-    readonly nodes: readonly CoreNode[];
-  }>
 >();
 const instrumentedWasmByModule = new WeakMap<
   CompiledModule,
@@ -67,20 +59,10 @@ export async function compileModuleToWasm(
     throw new TypeError("functional WASM compilation options must be an object");
   }
   validateWasmSimdMode(options.simd);
-  const backend = options.backend ?? "linear-memory";
-  if (backend !== "linear-memory" && backend !== "wasm-gc") {
-    throw new TypeError(
-      `functional WASM backend must be linear-memory or wasm-gc; received ${
-        JSON.stringify(backend)
-      }`,
-    );
-  }
-  const customStorage = options.storageCore !== undefined ||
-    options.ownedTypeExports !== undefined;
-  const canonicalCacheEligible = !customStorage && options.canonicalAbi !== undefined;
+  const canonicalCacheEligible = options.canonicalAbi !== undefined;
   const totalAnnotations = {
-    backend,
-    cacheEligible: backend === "wasm-gc" || !customStorage,
+    backend: "linear-memory",
+    cacheEligible: true,
     bytes: 0,
   };
   return await measureCompilerStageAsync(
@@ -88,18 +70,7 @@ export async function compileModuleToWasm(
     "wasm.total",
     totalAnnotations,
     async () => {
-      if (backend === "wasm-gc") {
-        if (
-          options.storageCore !== undefined || options.ownedTypeExports !== undefined ||
-          options.simd !== undefined || options.canonicalAbi !== undefined
-        ) {
-          throw new TypeError(
-            "functional WasmGC compilation does not accept linear-memory storage, canonical ABI, or SIMD options",
-          );
-        }
-        return (await cachedWasmGcArtifact(module, options.trace)).bytes.slice();
-      }
-      if (options.simd === "wasm-simd" && !customStorage && options.canonicalAbi === undefined) {
+      if (options.simd === "wasm-simd" && options.canonicalAbi === undefined) {
         return (await cachedSimdWasmArtifact(module, options.trace)).bytes.slice();
       }
       if (canonicalCacheEligible) {
@@ -110,15 +81,6 @@ export async function compileModuleToWasm(
           options.trace,
         ))
           .bytes.slice();
-      }
-      if (customStorage) {
-        const nodes = await measureCompilerStageAsync(
-          options.trace,
-          "wasm.read-core",
-          { nodes: module.nodeCount },
-          () => module.readCoreNodes(),
-        );
-        return compileWasmArtifact(module, nodes, false, options, options.trace).bytes.slice();
       }
       return (await cachedWasmArtifact(module, options.trace)).bytes.slice();
     },
@@ -199,41 +161,6 @@ async function cachedSimdWasmArtifact(
       trace,
       stage: "wasm.artifact.module",
       annotations: { backend: "linear-memory", simd: true },
-    },
-  );
-}
-
-export async function cachedWasmGcArtifact(
-  module: CompiledModule,
-  trace?: CompilerPerformanceTrace,
-): Promise<{
-  readonly bytes: Uint8Array<ArrayBuffer>;
-  readonly nodes: readonly CoreNode[];
-}> {
-  return await cachedModuleValue(
-    wasmGcArtifactsByModule,
-    module,
-    () =>
-      measureCompilerStageAsync(
-        trace,
-        "wasm.read-core",
-        { nodes: module.nodeCount },
-        () => module.readCoreNodes(),
-      ).then((nodes) => {
-        const annotations = { nodes: nodes.length, bytes: 0 };
-        const bytes = measureCompilerStage(
-          trace,
-          "wasm.gc.emit",
-          annotations,
-          () => compileWasmGc(module, nodes),
-          (emitted) => annotations.bytes = emitted.byteLength,
-        );
-        return { bytes, nodes };
-      }),
-    trace === undefined ? undefined : {
-      trace,
-      stage: "wasm.artifact.module",
-      annotations: { backend: "wasm-gc" },
     },
   );
 }

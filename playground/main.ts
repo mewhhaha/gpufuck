@@ -36,9 +36,7 @@ type Stage =
   | "surface"
   | "gpu-device"
   | "gpu-compiler"
-  | "gpu-evaluator"
   | "core"
-  | "gpu-run"
   | "wasm-run"
   | "wasm-emit"
   | "total";
@@ -52,9 +50,7 @@ const STAGE_LABELS: Readonly<Record<Stage, string>> = {
   surface: "Encode Functional Surface",
   "gpu-device": "Request GPU device",
   "gpu-compiler": "Initialize GPU compiler",
-  "gpu-evaluator": "Initialize GPU evaluator",
   core: "Resolve and infer Functional Core on GPU",
-  "gpu-run": "Initialize and run GPU evaluator",
   "wasm-run": "Emit, instantiate, and run executable Wasm",
   "wasm-emit": "Emit canonical ABI Wasm",
   total: "Total end-to-end, including setup",
@@ -175,7 +171,6 @@ function renderFailure(error: unknown): void {
 
 function renderValue(
   value: unknown,
-  gpuValue: unknown,
   wasmBytes: number,
   runtimeExports: number,
   output: readonly string[],
@@ -193,9 +188,8 @@ function renderValue(
   );
   const meta = document.createElement("p");
   meta.className = "meta";
-  const agrees = runtimeJson(value) === runtimeJson(gpuValue);
   meta.textContent = `${(wasmBytes / 1024).toFixed(1)} KB canonical ABI Wasm · ` +
-    `${runtimeExports} runtime exports · GPU evaluator ${agrees ? "agrees" : "differs"} · ` +
+    `${runtimeExports} runtime exports · ` +
     syntaxWords;
   resultPanel.append(title, pre, meta);
   if (output.length > 0) {
@@ -204,17 +198,6 @@ function renderValue(
     transcript.textContent = `host output\n${output.join("\n")}`;
     resultPanel.append(transcript);
   }
-}
-
-function bigintJson(_key: string, value: unknown): unknown {
-  return typeof value === "bigint" ? value.toString() : value;
-}
-
-function runtimeJson(value: unknown): string {
-  return JSON.stringify(value, (key, entry) => {
-    if (key === "fieldCount") return undefined;
-    return bigintJson(key, entry);
-  });
 }
 
 function clearOutline(note: string): void {
@@ -334,7 +317,6 @@ async function compileAndRun(): Promise<void> {
     if (syntax?.ok) {
       configureSourceLexerRecords(selected.path, editor.value, syntax.lexerRecords);
     }
-    const evaluatorOutput: string[] = [];
     const wasmOutput: string[] = [];
     const activeSession = coldRun
       ? await BlotCompilerSession.create()
@@ -342,7 +324,6 @@ async function compileAndRun(): Promise<void> {
     let verified: Awaited<ReturnType<BlotCompilerSession["verify"]>>;
     try {
       verified = await activeSession.verify(selected.path, {
-        evaluatorInit: hostInit((line) => evaluatorOutput.push(line)),
         wasmInit: hostInit((line) => wasmOutput.push(line)),
       });
     } finally {
@@ -355,9 +336,7 @@ async function compileAndRun(): Promise<void> {
     timings.set("surface", verified.timings.surfaceEncodeMilliseconds);
     timings.set("gpu-device", verified.timings.gpuDeviceMilliseconds);
     timings.set("gpu-compiler", verified.timings.gpuCompilerMilliseconds);
-    timings.set("gpu-evaluator", verified.timings.gpuEvaluatorMilliseconds);
     timings.set("core", verified.timings.coreCompileMilliseconds);
-    timings.set("gpu-run", verified.timings.gpuEvaluateMilliseconds);
     timings.set("wasm-run", verified.timings.wasmExecuteMilliseconds);
     timings.set("wasm-emit", verified.timings.canonicalWasmMilliseconds);
     timings.set("total", performance.now() - pipelineStart);
@@ -369,7 +348,6 @@ async function compileAndRun(): Promise<void> {
     renderOutline(readWasmOutline(verified.wasm));
     const runtimeExports = verified.manifest.exports.filter((entry) => entry.phase === "runtime");
     renderValue(
-      verified.ran,
       verified.value,
       verified.wasm.byteLength,
       runtimeExports.length,
@@ -390,13 +368,11 @@ async function compileAndRun(): Promise<void> {
         `${(project.bytes / 1024).toFixed(1)} KB source`;
       resultPanel.append(projectSummary);
     }
-    const evaluatorAgrees = JSON.stringify(evaluatorOutput) === JSON.stringify(wasmOutput);
     setStatus(
       `${residentRun ? "Resident run" : "Cold run"} compiled with ${
         syntax?.adapter ?? "Blot CPU syntax and gpufuck WebGPU Core"
-      }; ` +
-        `GPU and Wasm host output ${evaluatorAgrees ? "agree" : "differ"}.`,
-      evaluatorAgrees ? "ok" : "error",
+      }; Wasm execution completed.`,
+      "ok",
     );
   } catch (error) {
     timings.set("total", performance.now() - pipelineStart);

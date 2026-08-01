@@ -1,17 +1,9 @@
 import type { Type } from "./schema_contract.ts";
-import type { StorageCoreProgram } from "./storage_core.ts";
 import type { CompilerPerformanceTrace } from "../compiler_performance_trace.ts";
 import type { CanonicalAbiInterface } from "./canonical_abi.ts";
 
 export type { WasmExportDeclaration } from "./module_contract.ts";
 
-export interface WasmOwnedTypeExport {
-  readonly name: string;
-  readonly storageValue: string;
-  readonly type: Type;
-}
-
-export type WasmBackend = "linear-memory" | "wasm-gc";
 export type WasmSimdMode = "portable-scalar" | "wasm-simd";
 
 /** Stable codes exported through the `runtimeFault` global in standalone WebAssembly. */
@@ -27,10 +19,7 @@ export const WasmRuntimeFaultCode = {
 } as const;
 
 export interface WasmCompilationOptions {
-  readonly backend?: WasmBackend;
   readonly simd?: WasmSimdMode;
-  readonly storageCore?: StorageCoreProgram;
-  readonly ownedTypeExports?: readonly WasmOwnedTypeExport[];
   readonly canonicalAbi?: CanonicalAbiInterface;
   readonly trace?: CompilerPerformanceTrace;
 }

@@ -242,7 +242,6 @@ Deno.test("performance tracing preserves Gleam Core and Wasm output", async () =
       "semantic.inference.graph",
       "semantic.inference.solve",
       "semantic.effects",
-      "wasm.plan.storage",
       "wasm.total",
       "wasm.artifact.module",
       "wasm.emit",
@@ -257,21 +256,6 @@ Deno.test("performance tracing preserves Gleam Core and Wasm output", async () =
   equal(emitted?.annotations.bytes, tracedWasm.byteLength);
   const coreIndex = trace.snapshot().find((event) => event.stage === "wasm.plan.index-core");
   equal(coreIndex?.annotations.directOnlyDefinitions, 1);
-  const storage = trace.snapshot().find((event) => event.stage === "wasm.plan.storage");
-  equal(storage?.annotations.skipped, true);
-  equal(storage?.annotations.values, 0);
-
-  const gcTrace = new CompilerPerformanceTrace();
-  const tracedWasmGc = await compileModuleToWasm(tracedCompilation.module, {
-    backend: "wasm-gc",
-    trace: gcTrace,
-  });
-  const plainWasmGc = await compileModuleToWasm(plainCompilation.module, {
-    backend: "wasm-gc",
-  });
-  deepStrictEqual(tracedWasmGc, plainWasmGc);
-  ok(gcTrace.snapshot().some((event) => event.stage === "wasm.gc.emit"));
-
   tracedCompilation.module.destroy();
   plainCompilation.module.destroy();
 });

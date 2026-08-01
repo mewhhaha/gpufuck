@@ -5,7 +5,7 @@
  *
  * @module
  */
-import { GpuCompiler, GpuEvaluator, requestWebGpuDevice } from "./functional.ts";
+import { GpuCompiler, requestWebGpuDevice, runWasmModule } from "./functional.ts";
 import { compileSweepSource } from "./sweep.ts";
 
 export async function main(
@@ -41,12 +41,7 @@ export async function main(
       return 1;
     }
     try {
-      const evaluator = await GpuEvaluator.create(device);
-      const execution = await evaluator.evaluate(compilation.module);
-      if (!execution.ok) {
-        output.error(`fault[${execution.fault.code}] ${execution.fault.message}`);
-        return 1;
-      }
+      const execution = await runWasmModule(compilation.module);
       output.log(
         JSON.stringify(
           execution.value,

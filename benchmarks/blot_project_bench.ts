@@ -31,9 +31,7 @@ const stages: readonly [label: string, timing: keyof VerifyTimings][] = [
   ["Surface encode", "surfaceEncodeMilliseconds"],
   ["GPU device", "gpuDeviceMilliseconds"],
   ["GPU compiler init", "gpuCompilerMilliseconds"],
-  ["GPU evaluator init", "gpuEvaluatorMilliseconds"],
   ["Core compile", "coreCompileMilliseconds"],
-  ["GPU evaluate", "gpuEvaluateMilliseconds"],
   ["Wasm emit + run", "wasmExecuteMilliseconds"],
   ["Canonical Wasm emit", "canonicalWasmMilliseconds"],
 ];
@@ -145,7 +143,6 @@ async function measureVerification(
   const trace = new CompilerPerformanceTrace();
   const start = performance.now();
   const verified = await session.verify(workload.path, {
-    evaluatorInit: compilerHost,
     wasmInit: compilerHost,
     trace,
   });
@@ -219,7 +216,6 @@ async function measureResident(
   const session = await BlotCompilerSession.create();
   try {
     const seeded = await session.verify(workload.path, {
-      evaluatorInit: compilerHost,
       wasmInit: compilerHost,
     });
     assertRuntimeExports(workload, seeded);

@@ -7,7 +7,6 @@ import {
 } from "./compiler_module.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
 import { compileWasmArtifact } from "./wasm_codegen.ts";
-import { compileWasmGc } from "./wasm_gc_codegen.ts";
 
 export interface WasmBatchCompilationOptions extends WasmCompilationOptions {
   readonly exportNames?: readonly string[];
@@ -28,44 +27,17 @@ export async function compileModulesToWasm(
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("functional Wasm batch options must be an object");
   }
-  if (
-    options.backend !== undefined &&
-    options.backend !== "linear-memory" &&
-    options.backend !== "wasm-gc"
-  ) {
-    throw new TypeError(
-      `functional WASM backend must be linear-memory or wasm-gc; received ${
-        JSON.stringify(options.backend)
-      }`,
-    );
-  }
-  if (
-    options.backend === "wasm-gc" &&
-    (options.storageCore !== undefined || options.ownedTypeExports !== undefined ||
-      options.simd !== undefined || options.canonicalAbi !== undefined)
-  ) {
-    throw new TypeError(
-      "functional WasmGC compilation does not accept linear-memory storage, canonical ABI, or SIMD options",
-    );
-  }
   if (modules.length === 0) {
     throw new RangeError("functional Wasm batch compilation requires at least one module");
   }
   const exportNames = normalizedExportNames(modules.length, options.exportNames);
   const bundle = await bundleCompiledModules(modules, exportNames);
   const wasmOptions: WasmCompilationOptions = {
-    ...(options.backend === undefined ? {} : { backend: options.backend }),
-    ...(options.storageCore === undefined ? {} : { storageCore: options.storageCore }),
-    ...(options.ownedTypeExports === undefined
-      ? {}
-      : { ownedTypeExports: options.ownedTypeExports }),
     ...(options.simd === undefined ? {} : { simd: options.simd }),
     ...(options.canonicalAbi === undefined ? {} : { canonicalAbi: options.canonicalAbi }),
   };
   const nodes = await bundle.readCoreNodes();
-  const bytes = wasmOptions.backend === "wasm-gc"
-    ? compileWasmGc(bundle, nodes)
-    : compileWasmArtifact(bundle, nodes, false, wasmOptions).bytes;
+  const bytes = compileWasmArtifact(bundle, nodes, false, wasmOptions).bytes;
   return {
     bytes,
     exports: exportNames,

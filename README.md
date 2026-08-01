@@ -180,11 +180,8 @@ unit and pair types. It does not decide what a source construct means.
 Surface is intentionally smaller than most source languages. A frontend should keep its own AST and
 lower into Surface at one boundary rather than use Surface as its parser AST.
 
-Store writes and growth are persistent unless the frontend supplies `{ owned: true }` to
-`surface.storeWrite` or `surface.storeGrow`. That option is a proof obligation: the Store operand
-must have no observable aliases after its operands finish evaluating. Linear-memory WebAssembly then
-writes through the source allocation, growing geometrically when an append exceeds its spare
-capacity; WasmGC reuses the backing array for same-length writes.
+Store writes and growth are persistent. The WebAssembly backend may reuse an allocation only when
+it proves that doing so cannot be observed through another reference.
 
 ### Declare algebraic types
 
@@ -266,9 +263,8 @@ import error.
 
 ### Wasm backends
 
-The default linear-memory backend supports the full private runtime, Canonical ABI adapters, SIMD,
-branch hints, and component boundaries. `{ backend: "wasm-gc" }` is useful when your target supports
-WasmGC, but it deliberately does not support every linear-memory feature.
+The linear-memory backend supports the full private runtime, Canonical ABI adapters, SIMD, branch
+hints, and component boundaries.
 
 For a stable caller-facing boundary, pass a `CanonicalAbiInterface` as `canonicalAbi`. This keeps
 gpufuck's tagged heap private and publishes structural memory32 records, variants, arrays, text,

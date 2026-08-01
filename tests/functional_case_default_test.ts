@@ -8,11 +8,11 @@ import { equal, ok, throws } from "node:assert/strict";
 import {
   buildSurfaceModule,
   GpuCompiler,
-  GpuEvaluator,
   linkModules,
   requestWebGpuDevice,
   surface,
 } from "../functional.ts";
+import { GpuEvaluator } from "../src/functional/evaluator.ts";
 
 let device: GPUDevice | undefined;
 let compiler: GpuCompiler | undefined;

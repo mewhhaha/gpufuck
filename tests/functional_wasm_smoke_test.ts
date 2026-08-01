@@ -24,14 +24,12 @@ import {
   GpuCompiler,
   hasFieldType,
   HostTypes,
-  planModuleStorage,
   requestWebGpuDevice,
   runWasmModule,
   structuralRecordTypeDeclarations,
   surface,
   type SurfaceExpression,
   type TypeSchema,
-  WasmRuntimeFaultCode,
 } from "../functional.ts";
 import { decodeWasmValue } from "../src/functional/wasm_value_codec.ts";
 
@@ -141,7 +139,7 @@ Deno.test("sequence evaluates an unused value before its body", async () => {
   }
 });
 
-Deno.test("unreachable paths retain their standard category in both WebAssembly backends", async () => {
+Deno.test("unreachable paths retain their standard category in WebAssembly", async () => {
   const compilation = await compileEntry(
     surface.if(
       surface.boolean(false),
@@ -155,20 +153,6 @@ Deno.test("unreachable paths retain their standard category in both WebAssembly 
       /F3014:.*unreachable path: pattern invariant/,
     );
 
-    const wasmGc = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
-    const { instance } = await WebAssembly.instantiate(wasmGc);
-    const main = instance.exports.main as unknown as () => unknown;
-    let trapped = false;
-    try {
-      main();
-    } catch (error) {
-      ok(error instanceof WebAssembly.RuntimeError);
-      trapped = true;
-    }
-    equal(trapped, true);
-    const fault = instance.exports.runtimeFault;
-    ok(fault instanceof WebAssembly.Global);
-    equal(fault.value, WasmRuntimeFaultCode.Unreachable);
   } finally {
     compilation.module.destroy();
   }
@@ -212,11 +196,6 @@ Deno.test("a value-carrying join returns its argument in WebAssembly", async () 
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
 
-    const wasmGc = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
-    const { instance } = await WebAssembly.instantiate(wasmGc);
-    const main = instance.exports.main as unknown as () => unknown;
-    const valuePayload = instance.exports.valuePayload as unknown as (value: unknown) => number;
-    equal(valuePayload(main()), 42);
   } finally {
     compilation.module.destroy();
   }
@@ -347,11 +326,6 @@ Deno.test("HasField evidence shares one open projection across record layouts", 
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
 
-    const wasmGc = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
-    const { instance } = await WebAssembly.instantiate(wasmGc);
-    const main = instance.exports.main as unknown as () => unknown;
-    const valuePayload = instance.exports.valuePayload as unknown as (value: unknown) => number;
-    equal(valuePayload(main()), 42);
   } finally {
     compilation.module.destroy();
   }
@@ -453,11 +427,6 @@ Deno.test("ExtendRecord evidence shares one open extension across layouts", asyn
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
 
-    const wasmGc = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
-    const { instance } = await WebAssembly.instantiate(wasmGc);
-    const main = instance.exports.main as unknown as () => unknown;
-    const valuePayload = instance.exports.valuePayload as unknown as (value: unknown) => number;
-    equal(valuePayload(main()), 42);
   } finally {
     compilation.module.destroy();
   }
@@ -765,23 +734,6 @@ Deno.test("emits a well-formed WebAssembly binary that instantiates standalone",
   }
 });
 
-Deno.test("caller-supplied Storage Core retains the verified compilation path", async () => {
-  const compilation = await compileEntry(surface.integer(7));
-  try {
-    const storage = await planModuleStorage(compilation.module);
-    const bytes = await compileModuleToWasm(compilation.module, {
-      storageCore: storage.core,
-    });
-    ok(WebAssembly.validate(bytes), "Storage Core artifact failed WebAssembly.validate");
-    const { instance } = await WebAssembly.instantiate(bytes);
-    const main = instance.exports.main;
-    ok(typeof main === "function");
-    equal(main(), 7);
-  } finally {
-    compilation.module.destroy();
-  }
-});
-
 Deno.test("executes 64-bit float arithmetic that the GPU evaluator delegates to WebAssembly", async () => {
   const compilation = await compileEntry(
     surface.binary(
@@ -814,32 +766,6 @@ Deno.test("an empty Store grows to hold a value in linear-memory WebAssembly", a
     const execution = await runWasmModule(compilation.module);
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
-  } finally {
-    compilation.module.destroy();
-  }
-});
-
-Deno.test("an empty Store grows to hold a value in WasmGC", async () => {
-  const compilation = await compileEntry(
-    surface.storeRead(
-      surface.storeGrow(
-        surface.storeEmpty(),
-        surface.integer(1),
-        surface.integer(42),
-      ),
-      surface.integer(0),
-    ),
-  );
-  try {
-    const bytes = await compileModuleToWasm(compilation.module, { backend: "wasm-gc" });
-    const { instance } = await WebAssembly.instantiate(bytes);
-    const main = instance.exports.main as unknown as () => unknown;
-    const valueKind = instance.exports.valueKind as unknown as (value: unknown) => number;
-    const valuePayload = instance.exports.valuePayload as unknown as (value: unknown) => number;
-    const value = main();
-
-    equal(valueKind(value), 0);
-    equal(valuePayload(value), 42);
   } finally {
     compilation.module.destroy();
   }

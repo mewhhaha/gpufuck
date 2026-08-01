@@ -2,12 +2,14 @@ import { deepStrictEqual, equal, match, ok, rejects, strictEqual } from "node:as
 
 import {
   CompilerPerformanceTrace,
-  type EvaluationOptions,
   GpuCompiler,
-  GpuEvaluator,
   requestWebGpuDevice,
   runWasmModule,
 } from "../functional.ts";
+import {
+  type EvaluationOptions,
+  GpuEvaluator,
+} from "../src/functional/evaluator.ts";
 import {
   GleamFrontendService,
   type GleamSourceModule,
@@ -1393,7 +1395,7 @@ async function evaluateWasm(
 Deno.test("renders linked Gleam source and both functional IR stages side by side", async () => {
   const sources = await readKernelSources();
   const lowered = requireLinked(sources, "kernel/main");
-  const { compiler, evaluator } = gleamRuntime();
+  const { compiler } = gleamRuntime();
   const compilation = await compiler.compileModule(lowered.module);
   ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
   if (!compilation.ok) return;
@@ -1405,7 +1407,7 @@ Deno.test("renders linked Gleam source and both functional IR stages side by sid
       lowered,
       compiledModule: compilation.module,
       coreNodes: await compilation.module.readCoreNodes(),
-      evaluation: await evaluator.evaluate(compilation.module, { heapSlots: 1024 }),
+      evaluation: await runWasmModule(compilation.module),
     });
 
     match(trace, /Gleam source modules<\/th><th>Normalized functional surface/);

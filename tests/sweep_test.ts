@@ -1,6 +1,7 @@
 import { deepStrictEqual, equal, match, ok } from "node:assert/strict";
-import { GpuCompiler, GpuEvaluator, requestWebGpuDevice, runWasmModule } from "../functional.ts";
+import { GpuCompiler, requestWebGpuDevice, runWasmModule } from "../functional.ts";
 import type { WasmHostValue } from "../functional.ts";
+import { GpuEvaluator } from "../src/functional/evaluator.ts";
 import { compileSweepSource, GpuSweepCompiler, parseSweepModule } from "../sweep.ts";
 
 /**

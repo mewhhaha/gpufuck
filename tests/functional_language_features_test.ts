@@ -4,12 +4,12 @@ import {
   BinaryOperator,
   buildSurfaceModule,
   GpuCompiler,
-  GpuEvaluator,
   requestWebGpuDevice,
   surface,
   type SurfaceExpression,
   thunkType,
 } from "../functional.ts";
+import { GpuEvaluator } from "../src/functional/evaluator.ts";
 
 let device: GPUDevice | undefined;
 let compiler: GpuCompiler | undefined;

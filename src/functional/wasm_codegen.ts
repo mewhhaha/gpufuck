@@ -101,11 +101,6 @@ import {
   type NumericPrimitiveKind,
   wideLiteralBits,
 } from "./wasm_numeric.ts";
-import {
-  ownedValueExportFunction,
-  releaseOwnedValueFunction,
-  retainOwnedValueFunction,
-} from "./wasm_owned_runtime.ts";
 import { StoreUpdateMode } from "../semantic/primops.ts";
 import { MAXIMUM_STORE_LENGTH, STORE_TYPE_NAME } from "./store_contract.ts";
 import type { WasmCompilationOptions } from "./wasm_contract.ts";
@@ -141,7 +136,6 @@ const NUMERIC_OBJECT_KIND = WasmValueAbi.objectKinds.numeric;
 const TEXT_OBJECT_KIND = WasmValueAbi.objectKinds.text;
 const STORE_OBJECT_KIND = WasmValueAbi.objectKinds.store;
 const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
-const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
 const THUNK_HEADER_BYTE_LENGTH = 24;
 const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 const CANONICAL_CALL_STATE_BYTE_LENGTH = 16;
@@ -390,30 +384,6 @@ export function compileWasmArtifact(
     constructors: module.constructorCount,
   });
   return emitWasmArtifact(plan, trace);
-}
-
-export function prepareLinearWasmModuleEncoding(
-  module: CompiledModule,
-  nodes: readonly CoreNode[],
-  options: WasmCompilationOptions = {},
-  trace?: CompilerPerformanceTrace,
-): WasmModuleEncoding {
-  trace ??= options.trace;
-  if (options.canonicalAbi !== undefined) {
-    validateCanonicalAbiInterface(options.canonicalAbi);
-  }
-  const plan = createWasmBackendPlan(module, nodes, false, options, trace);
-  const disabledF32x4Workers = new Set<number>();
-  let compiler = new WasmCompiler(plan, false, disabledF32x4Workers);
-  let encoding = compiler.compileEncoding();
-  let conflictingWorkers = compiler.conflictingF32x4WorkerRegion();
-  while (conflictingWorkers.size > 0) {
-    for (const worker of conflictingWorkers) disabledF32x4Workers.add(worker);
-    compiler = new WasmCompiler(plan, false, disabledF32x4Workers);
-    encoding = compiler.compileEncoding();
-    conflictingWorkers = compiler.conflictingF32x4WorkerRegion();
-  }
-  return encoding;
 }
 
 export function compileWasmArtifactWithSignedLiteralUpdate(
@@ -735,7 +705,6 @@ class WasmCompiler {
   readonly #runtimeEmitter: WasmRuntimeEmitter;
   #automaticArenaReset = true;
   readonly #compilationOptions: WasmCompilationOptions;
-  readonly #ownedRuntimeEnabled: boolean;
   readonly #hostEmitter: WasmHostEmitter;
   readonly #trace: CompilerPerformanceTrace | undefined;
   #linearEmission: CachedLinearWasmEmission | undefined;
@@ -774,9 +743,7 @@ class WasmCompiler {
     });
     this.#compilationOptions = plan.options;
     this.#trace = plan.trace;
-    this.#ownedRuntimeEnabled = (plan.options.ownedTypeExports?.length ?? 0) > 0;
     this.#hostEmitter = new WasmHostEmitter({
-      ownedRuntimeEnabled: this.#ownedRuntimeEnabled,
       allocateFunctionIndex: () => this.allocateFunctionIndex(),
       emitDecodeInteger: (instructions) => this.emitDecodeInteger(instructions),
       emitBoxSignedInteger64: (instructions) => this.emitBoxSignedInteger64(instructions),
@@ -1291,43 +1258,7 @@ class WasmCompiler {
       indirectFunctions: indirectFunctions.length,
       functions: baseFunctions.length,
     });
-    const ownedSpan = this.#trace?.start("wasm.emit.owned-runtime");
-    const ownedTypeExports = this.#compilationOptions.ownedTypeExports ?? [];
-    const ownedRuntimeType = ownedTypeExports.length === 0
-      ? undefined
-      : this.functionTypeIndex([WasmValueType.I64], []);
-    const retainOwnedFunctionIndex = ownedRuntimeType === undefined
-      ? undefined
-      : this.#functionImports.length + baseFunctions.length;
-    const releaseOwnedFunctionIndex = retainOwnedFunctionIndex === undefined
-      ? undefined
-      : retainOwnedFunctionIndex + 1;
-    const ownedRuntimeFunctions = ownedRuntimeType === undefined ||
-        retainOwnedFunctionIndex === undefined || releaseOwnedFunctionIndex === undefined
-      ? []
-      : [
-        retainOwnedValueFunction(ownedRuntimeType, this.heapStart()),
-        releaseOwnedValueFunction(
-          ownedRuntimeType,
-          this.#functionImports.length + 2,
-          this.heapStart(),
-        ),
-        ...ownedTypeExports.flatMap((owned) => [
-          ownedValueExportFunction(
-            ownedRuntimeType,
-            retainOwnedFunctionIndex,
-            "retain",
-            owned.name,
-          ),
-          ownedValueExportFunction(
-            ownedRuntimeType,
-            releaseOwnedFunctionIndex,
-            "drop",
-            owned.name,
-          ),
-        ]),
-      ];
-    const functions = [...baseFunctions, ...ownedRuntimeFunctions];
+    const functions = baseFunctions;
     const canonicalReallocateType = this.#compilationOptions.canonicalAbi === undefined
       ? undefined
       : this.functionTypeIndex(
@@ -1350,10 +1281,6 @@ class WasmCompiler {
         this.#functionImports.length + 2,
       ),
     ];
-    ownedSpan?.finish({
-      exports: ownedTypeExports.length,
-      functions: ownedRuntimeFunctions.length,
-    });
     const indirectFunctionIndices = indirectFunctions.map((_, slot) =>
       this.indirectFunctionOffset() + slot
     );
@@ -1374,15 +1301,6 @@ class WasmCompiler {
         name: "cabi_realloc",
         functionIndex: canonicalReallocateIndex,
       }]),
-      ...(releaseOwnedFunctionIndex === undefined
-        ? []
-        : ownedTypeExports.flatMap((owned, index) => [{
-          name: `retain_${owned.name}`,
-          functionIndex: releaseOwnedFunctionIndex + 1 + index * 2,
-        }, {
-          name: `drop_${owned.name}`,
-          functionIndex: releaseOwnedFunctionIndex + 2 + index * 2,
-        }])),
     ];
     const encoding = Object.freeze({
       imports: this.#functionImports,
@@ -5009,7 +4927,7 @@ class WasmCompiler {
     }
     const value = instructions.addLocal(WasmValueType.I64);
     instructions.localSet(value);
-    const fieldCount = eager && !this.#ownedRuntimeEnabled
+    const fieldCount = eager
       ? this.#uniqueReuseAnalysis.uniqueConstructorFieldCount(node.child0)
       : undefined;
     const reusableCases = fieldCount === undefined
@@ -5305,12 +5223,8 @@ class WasmCompiler {
     }
     updates.reverse();
 
-    const owned = updates[0]!.node.payload === StoreUpdateMode.Owned;
     for (const update of updates) {
-      if (
-        update.node.payload !== StoreUpdateMode.Persistent &&
-        update.node.payload !== StoreUpdateMode.Owned
-      ) {
+      if (update.node.payload !== StoreUpdateMode.Persistent) {
         throw new Error(
           `functional WASM Store update at core node ${update.nodeIndex} has unknown mode ${update.node.payload}`,
         );
@@ -5377,44 +5291,11 @@ class WasmCompiler {
     }
 
     const destination = instructions.addLocal(WasmValueType.I32);
-    if (owned && evaluated.every((update) => update.kind === "write")) {
-      instructions.localGet(source);
-      instructions.localSet(destination);
-    } else if (owned) {
-      const sourceCapacity = instructions.addLocal(WasmValueType.I32);
-      instructions.localGet(source);
-      instructions.i32Load(4);
-      instructions.localSet(sourceCapacity);
-      const requiredCapacity = this.storeCapacity(instructions, currentLength);
-      instructions.localGet(requiredCapacity);
-      instructions.localGet(sourceCapacity);
-      instructions.emit(0x4d, 0x04, 0x40);
-      const growth = instructions.addLocal(WasmValueType.I32);
-      instructions.localGet(currentLength);
-      instructions.localGet(sourceLength);
-      instructions.emit(0x6b);
-      instructions.localSet(growth);
-      this.#runtimeEmitter.emitFuelChargeAmount(
-        instructions,
-        growth,
-        nodeIndex,
-      );
-      instructions.localGet(source);
-      instructions.localSet(destination);
-      instructions.emit(0x05);
-      this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
-      const resized = this.allocateStore(instructions, currentLength);
-      this.emitStoreCopy(instructions, resized, source, sourceLength);
-      instructions.localGet(resized);
-      instructions.localSet(destination);
-      instructions.emit(0x0b);
-    } else {
-      this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
-      const copied = this.allocateStore(instructions, currentLength);
-      this.emitStoreCopy(instructions, copied, source, sourceLength);
-      instructions.localGet(copied);
-      instructions.localSet(destination);
-    }
+    this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
+    const copied = this.allocateStore(instructions, currentLength);
+    this.emitStoreCopy(instructions, copied, source, sourceLength);
+    instructions.localGet(copied);
+    instructions.localSet(destination);
     instructions.localGet(destination);
     instructions.localGet(currentLength);
     instructions.i32Store(8);
@@ -5498,11 +5379,6 @@ class WasmCompiler {
     instructions.localGet(pointer);
     instructions.localGet(length);
     instructions.i32Store(8);
-    if (this.#ownedRuntimeEnabled) {
-      instructions.localGet(pointer);
-      instructions.i32Const(1);
-      instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
-    }
     return pointer;
   }
 
@@ -6421,8 +6297,7 @@ class WasmCompiler {
     const node = this.node(nodeIndex);
     if (
       node.tag !== CoreTag.Case ||
-      this.#hasLazyEvaluationBoundary ||
-      this.#ownedRuntimeEnabled
+      this.#hasLazyEvaluationBoundary
     ) return undefined;
     const alternatives: F32x4ProjectionCase["alternatives"][number][] = [];
     for (const alternative of this.caseAlternatives(node, nodeIndex)) {
@@ -8097,11 +7972,6 @@ class WasmCompiler {
       instructions.localGet(pointer);
       instructions.i32Const(valueCount);
       instructions.i32Store(8);
-    }
-    if (this.#ownedRuntimeEnabled) {
-      instructions.localGet(pointer);
-      instructions.i32Const(1);
-      instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
     }
     return pointer;
   }

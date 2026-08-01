@@ -55,8 +55,7 @@ export * from "./src/functional/effect_set.ts";
 export * from "./src/semantic/gpu_dispatch_scheduler.ts";
 export * from "./src/functional/compilation_trace.ts";
 
-// Running it on the GPU, and the host boundary a program can call out to.
-export * from "./src/functional/evaluator.ts";
+// Host capabilities and the portable Store and SIMD libraries.
 export * from "./src/functional/host_contract.ts";
 export * from "./src/functional/store_contract.ts";
 export * from "./src/functional/fixed_vector.ts";
@@ -70,18 +69,4 @@ export * from "./src/functional/component_reload.ts";
 export * from "./src/functional/wasm_contract.ts";
 export * from "./src/functional/wasm_execution.ts";
 export * from "./src/functional/wasm_arena.ts";
-export { GpuWasmEncoder, type GpuWasmEncodingResult } from "./src/functional/gpu_wasm_encoder.ts";
 export { type WasmModuleEncoding } from "./src/functional/wasm_binary.ts";
-export { prepareLinearWasmModuleEncoding } from "./src/functional/wasm_codegen.ts";
-
-// Mutable state behind the backend: the storage plan and the Storage Core it verifies.
-export * from "./src/functional/storage_contract.ts";
-export * from "./src/functional/storage_plan.ts";
-
-// Compile-time work a frontend asks for: bounded execution and bounded resolution search.
-export * from "./src/functional/comptime.ts";
-export * from "./src/functional/comptime_contract.ts";
-export * from "./src/functional/capability_contract.ts";
-export * from "./src/functional/capability_resolver.ts";
-export * from "./src/functional/type_core.ts";
-export * from "./src/functional/type_core_contract.ts";

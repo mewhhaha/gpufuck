@@ -18,7 +18,7 @@ import {
 } from "./abi.ts";
 import { effectNames } from "./effect_set.ts";
 import type { CoreNode, GpuModule } from "./compiler.ts";
-import type { EvaluationResult } from "./evaluator.ts";
+import type { WasmExecution } from "./wasm_execution.ts";
 import { primopDeclaration } from "../semantic/primops.ts";
 import type {
   SurfaceDefinition,
@@ -40,7 +40,7 @@ export interface CompilationTraceInput {
   readonly surface: CompilationTraceSurface;
   readonly compiledModule: GpuModule;
   readonly coreNodes: readonly CoreNode[];
-  readonly evaluation: EvaluationResult;
+  readonly evaluation: WasmExecution;
 }
 
 /** `JSON.stringify` escapes control characters, so the marker has to survive as printable text. */
@@ -67,16 +67,11 @@ export function renderCompilationTrace(input: CompilationTraceInput): string {
   );
   const encoded = formatEncodedModule(input.surface.module);
   const core = formatCoreModule(input.compiledModule, input.surface.module, input.coreNodes);
-  const outcome = input.evaluation.ok
-    ? formatOutcome({
-      entryType: input.compiledModule.entryType,
-      value: input.evaluation.value,
-      stats: input.evaluation.stats,
-    })
-    : formatOutcome({
-      entryType: input.compiledModule.entryType,
-      fault: input.evaluation.fault,
-    });
+  const outcome = formatOutcome({
+    entryType: input.compiledModule.entryType,
+    value: input.evaluation.value,
+    stats: input.evaluation.stats,
+  });
 
   return `# ${input.title}
 
@@ -211,11 +206,11 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
     case "store-read":
       return `${indent}(store-read\n${nested(expression.store)}\n${nested(expression.index)})`;
     case "store-write":
-      return `${indent}(store-write${expression.owned === true ? "-owned" : ""}\n${
+      return `${indent}(store-write\n${
         nested(expression.store)
       }\n${nested(expression.index)}\n${nested(expression.value)})`;
     case "store-grow":
-      return `${indent}(store-grow${expression.owned === true ? "-owned" : ""}\n${
+      return `${indent}(store-grow\n${
         nested(expression.store)
       }\n${nested(expression.length)}\n${nested(expression.initial)})`;
     case "numeric-convert":

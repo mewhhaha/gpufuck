@@ -1,131 +1,13 @@
-import { deepStrictEqual, equal, ok, rejects } from "node:assert/strict";
+import { deepStrictEqual, ok, rejects } from "node:assert/strict";
 
 import {
   BinaryOperator,
   buildSurfaceModule,
   CpuCompiler,
   runWasmExport,
-  runWasmModule,
   storeType,
   surface,
 } from "../functional.ts";
-
-Deno.test("owned Store updates reuse their backing allocation", async () => {
-  // Reading `source` after an owned update deliberately violates the frontend
-  // proof obligation so the result can distinguish reuse from a hidden copy.
-  const expressions = [
-    {
-      name: "persistent-write",
-      expected: 49,
-      body: surface.let(
-        "source",
-        surface.storeNew(surface.integer(1), surface.integer(7)),
-        surface.sequence(
-          "updated",
-          surface.storeWrite(
-            surface.name("source"),
-            surface.integer(0),
-            surface.integer(42),
-          ),
-          surface.binary(
-            BinaryOperator.Add,
-            surface.storeRead(surface.name("source"), surface.integer(0)),
-            surface.storeRead(surface.name("updated"), surface.integer(0)),
-          ),
-        ),
-      ),
-    },
-    {
-      name: "owned-write",
-      expected: 84,
-      body: surface.let(
-        "source",
-        surface.storeNew(surface.integer(1), surface.integer(7)),
-        surface.sequence(
-          "updated",
-          surface.storeWrite(
-            surface.name("source"),
-            surface.integer(0),
-            surface.integer(42),
-            { owned: true },
-          ),
-          surface.binary(
-            BinaryOperator.Add,
-            surface.storeRead(surface.name("source"), surface.integer(0)),
-            surface.storeRead(surface.name("updated"), surface.integer(0)),
-          ),
-        ),
-      ),
-    },
-    {
-      name: "persistent-grow",
-      expected: 5,
-      body: surface.let(
-        "source",
-        surface.storeNew(surface.integer(3), surface.integer(1)),
-        surface.sequence(
-          "updated",
-          surface.storeGrow(
-            surface.name("source"),
-            surface.integer(4),
-            surface.integer(2),
-          ),
-          surface.binary(
-            BinaryOperator.Add,
-            surface.storeLength(surface.name("source")),
-            surface.storeRead(surface.name("updated"), surface.integer(3)),
-          ),
-        ),
-      ),
-    },
-    {
-      name: "owned-grow",
-      expected: 6,
-      body: surface.let(
-        "source",
-        surface.storeNew(surface.integer(3), surface.integer(1)),
-        surface.sequence(
-          "updated",
-          surface.storeGrow(
-            surface.name("source"),
-            surface.integer(4),
-            surface.integer(2),
-            { owned: true },
-          ),
-          surface.binary(
-            BinaryOperator.Add,
-            surface.storeLength(surface.name("source")),
-            surface.storeRead(surface.name("updated"), surface.integer(3)),
-          ),
-        ),
-      ),
-    },
-  ] as const;
-
-  for (const expression of expressions) {
-    const encoded = buildSurfaceModule(
-      [{ name: "main", parameters: [], annotation: { kind: "integer" }, body: expression.body }],
-      [],
-      "main",
-      0,
-    );
-    const compilation = await new CpuCompiler().compileModule(encoded);
-    ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
-    if (!compilation.ok) continue;
-    try {
-      const execution = await runWasmModule(compilation.module);
-      equal(execution.value.kind, "integer", expression.name);
-      equal(
-        execution.value.kind === "integer" ? execution.value.value : undefined,
-        expression.expected,
-        expression.name,
-      );
-    } finally {
-      compilation.module.destroy();
-    }
-  }
-});
-
 Deno.test("invokes named WebAssembly exports through the typed boundary", async () => {
   const signedInteger64 = { kind: "signed-integer-64" as const };
   const module = buildSurfaceModule(
@@ -185,7 +67,6 @@ Deno.test("invokes named WebAssembly exports through the typed boundary", async 
             surface.integer(1),
           ),
           surface.signedInteger64(9n),
-          { owned: true },
         ),
       },
     ],

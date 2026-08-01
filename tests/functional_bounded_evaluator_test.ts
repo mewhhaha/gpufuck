@@ -4,10 +4,10 @@ import {
   buildSurfaceModule,
   CpuCompiler,
   effectSet,
-  evaluateModuleWithBoundedWasm,
   storeType,
   surface,
 } from "../functional.ts";
+import { evaluateModuleWithBoundedWasm } from "../src/functional/evaluator.ts";
 
 Deno.test("bounded evaluation exposes deep Store results", async () => {
   const signedInteger64 = { kind: "signed-integer-64" as const };

@@ -6,11 +6,9 @@ import { WASM_FAULT_OUT_OF_BOUNDS, WASM_FAULT_OUT_OF_MEMORY } from "./wasm_runti
 const TEXT_OBJECT_KIND = WasmValueAbi.objectKinds.text;
 const BYTES_OBJECT_KIND = WasmValueAbi.objectKinds.bytes;
 const OBJECT_HEADER_BYTE_LENGTH = WasmValueAbi.objectHeaderByteLength;
-const OBJECT_REFERENCE_COUNT_BYTE_OFFSET = WasmValueAbi.objectReferenceCountByteOffset;
 const VALUE_BYTE_LENGTH = WasmValueAbi.valueByteLength;
 
 interface WasmHostEmitterContext {
-  readonly ownedRuntimeEnabled: boolean;
   allocateFunctionIndex(): number;
   emitDecodeInteger(instructions: WasmInstructions): void;
   emitBoxSignedInteger64(instructions: WasmInstructions): void;
@@ -666,11 +664,6 @@ export class WasmHostEmitter {
     instructions.localGet(pointer);
     instructions.localGet(length);
     instructions.i32Store(8);
-    if (this.#context.ownedRuntimeEnabled) {
-      instructions.localGet(pointer);
-      instructions.i32Const(1);
-      instructions.i32Store(OBJECT_REFERENCE_COUNT_BYTE_OFFSET);
-    }
     return pointer;
   }
 
