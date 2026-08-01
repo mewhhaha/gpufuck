@@ -464,6 +464,93 @@ Deno.test("strict F32x4 values stay native across let-bound multi-function chain
   }
 });
 
+Deno.test("strict F32x4 workers accept projected record fields", async () => {
+  const vectorPairType = {
+    kind: "named" as const,
+    name: "VectorPair",
+    arguments: [],
+  };
+  const vector = f32x4.make([
+    surface.float32(1),
+    surface.float32(2),
+    surface.float32(3),
+    surface.float32(4),
+  ]);
+  const encoded = buildSurfaceModule(
+    [
+      ...FIXED_VECTOR_DEFINITIONS,
+      {
+        name: "addProjected",
+        parameters: ["left", "pair"],
+        annotation: {
+          kind: "function",
+          parameter: f32x4.type,
+          result: {
+            kind: "function",
+            parameter: vectorPairType,
+            result: f32x4.type,
+          },
+        },
+        body: f32x4.add(
+          surface.name("left"),
+          surface.case(surface.name("pair"), [{
+            constructor: "VectorPair",
+            binders: ["ignored", "right"],
+            body: surface.name("right"),
+          }]),
+        ),
+      },
+      {
+        name: "main",
+        parameters: [],
+        annotation: { kind: "float-32" },
+        body: f32x4.reduceAdd(
+          surface.apply(
+            surface.name("addProjected"),
+            vector,
+            surface.apply(surface.name("VectorPair"), vector, vector),
+          ),
+        ),
+      },
+    ],
+    [
+      ...FIXED_VECTOR_TYPE_DECLARATIONS,
+      {
+        name: "VectorPair",
+        parameters: [],
+        constructors: [{
+          name: "VectorPair",
+          fields: [
+            { name: "left", type: f32x4.type },
+            { name: "right", type: f32x4.type },
+          ],
+        }],
+      },
+    ],
+    "main",
+    0,
+    { evaluationProfile: EvaluationProfile.StrictEager },
+  );
+  const compilation = await functionalWasmCompiler().compileModule(encoded);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) throw new Error("functional F32x4 projection module did not compile");
+  try {
+    const artifact = compileWasmArtifact(
+      compilation.module,
+      await compilation.module.readCoreNodes(),
+      false,
+      { simd: "wasm-simd" },
+    );
+    equal(artifact.nativeF32x4CallSites, 1);
+    const { instance } = await WebAssembly.instantiate(artifact.bytes);
+    const main = instance.exports.main;
+    ok(typeof main === "function");
+    equal(main(), 20);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("strict F32x4 values stay native in let-bound body locals", async () => {
   const encoded = buildSurfaceModule(
     [

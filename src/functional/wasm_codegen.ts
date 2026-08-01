@@ -291,6 +291,14 @@ interface F32x4WorkerApplication {
   readonly bodyEnvironment: Environment;
 }
 
+interface F32x4ProjectionCase {
+  readonly node: CoreNode;
+  readonly alternatives: readonly {
+    readonly alternative: CompiledModule["caseAlternatives"][number];
+    readonly fieldIndex: number;
+  }[];
+}
+
 function compiledSimdVector(
   definition: string,
   kind: CompiledSimdVector["kind"],
@@ -5988,6 +5996,7 @@ class WasmCompiler {
       instructions.emit(0x0b);
       return;
     }
+    if (this.compileF32x4ProjectionCase(instructions, nodeIndex, environment)) return;
     if (node.tag === CoreTag.Apply) {
       const kind = this.compileSimdVectorApplication(instructions, nodeIndex, environment);
       if (kind?.kind === "f32x4") return;
@@ -6010,6 +6019,91 @@ class WasmCompiler {
     if (this.compileF32x4WorkerApplication(instructions, nodeIndex, environment)) return;
     this.compileExpression(instructions, nodeIndex, environment);
     this.emitUnboxF32x4(instructions);
+  }
+
+  compileF32x4ProjectionCase(
+    instructions: WasmInstructions,
+    nodeIndex: number,
+    environment: Environment,
+  ): boolean {
+    const projection = this.f32x4ProjectionCase(nodeIndex);
+    if (projection === undefined) return false;
+
+    const directConstructor = this.constructorApplication(projection.node.child0);
+    if (directConstructor !== undefined) {
+      const arity = this.#module.constructorArities[directConstructor.constructorIndex];
+      if (arity === undefined || directConstructor.arguments.length !== arity) return false;
+      const selected = projection.alternatives.find(({ alternative }) =>
+        alternative.constructor === directConstructor.constructorIndex
+      );
+      if (selected === undefined) return false;
+      let vector: number | undefined;
+      for (const [field, argument] of directConstructor.arguments.entries()) {
+        if (field === selected.fieldIndex) {
+          this.compileF32x4Expression(instructions, argument.node, environment);
+          vector = instructions.addLocal(WasmValueType.V128);
+          instructions.localSet(vector);
+          continue;
+        }
+        this.compileExpressionBinding(instructions, argument, environment);
+      }
+      if (vector === undefined) {
+        throw new Error(
+          `functional F32x4 projection at core node ${nodeIndex} omitted field ${selected.fieldIndex}`,
+        );
+      }
+      instructions.localGet(vector);
+      return true;
+    }
+
+    this.compileExpression(instructions, projection.node.child0, environment);
+    const constructor = instructions.addLocal(WasmValueType.I32);
+    instructions.emit(0xa7);
+    instructions.localSet(constructor);
+    let openArmCount = 0;
+    for (const { alternative, fieldIndex } of projection.alternatives) {
+      instructions.localGet(constructor);
+      instructions.i32Load(4);
+      instructions.i32Const(alternative.constructor);
+      instructions.emit(0x46, 0x04, WasmValueType.V128);
+      instructions.localGet(constructor);
+      instructions.i64Load(OBJECT_HEADER_BYTE_LENGTH + fieldIndex * VALUE_BYTE_LENGTH);
+      this.emitUnboxF32x4(instructions);
+      instructions.emit(0x05);
+      openArmCount += 1;
+    }
+    instructions.emit(0x00);
+    for (let arm = 0; arm < openArmCount; arm += 1) instructions.emit(0x0b);
+    return true;
+  }
+
+  f32x4ProjectionCase(nodeIndex: number): F32x4ProjectionCase | undefined {
+    const node = this.node(nodeIndex);
+    if (
+      node.tag !== CoreTag.Case ||
+      this.#module.evaluationProfile !== EvaluationProfile.StrictEager ||
+      this.#hasLazyEvaluationBoundary ||
+      this.#ownedRuntimeEnabled
+    ) return undefined;
+    const alternatives: F32x4ProjectionCase["alternatives"][number][] = [];
+    for (const alternative of this.caseAlternatives(node, nodeIndex)) {
+      const body = this.node(alternative.body);
+      if (body.tag !== CoreTag.Local || body.payload >= alternative.binderCount) {
+        return undefined;
+      }
+      const arity = this.#module.constructorArities[alternative.constructor];
+      if (arity === undefined || alternative.binderCount !== arity) return undefined;
+      alternatives.push({ alternative, fieldIndex: body.payload });
+    }
+    return alternatives.length === 0 ? undefined : { node, alternatives };
+  }
+
+  isKnownF32x4Operand(
+    nodeIndex: number,
+    environment: Environment,
+  ): boolean {
+    return this.isKnownF32x4Expression(nodeIndex, environment) ||
+      this.f32x4ProjectionCase(nodeIndex) !== undefined;
   }
 
   compileF32x4WorkerApplication(
@@ -6076,7 +6170,7 @@ class WasmCompiler {
     ) return undefined;
 
     const vectorParameters = application.arguments.map((argument) =>
-      this.isKnownF32x4Expression(argument.node, environment)
+      this.isKnownF32x4Operand(argument.node, environment)
     );
     if (!vectorParameters.some(Boolean)) return undefined;
     const parameterBindings: Binding[] = vectorParameters.map((vector, parameter) =>
@@ -6135,18 +6229,18 @@ class WasmCompiler {
     if (canonicalDefinition === F32x4Definition.Splat) return arguments_.length === 1;
     if (simdF32x4BinaryOpcode(definition) !== undefined) {
       return arguments_.length === 2 &&
-        this.isKnownF32x4Expression(arguments_[0]!.node, environment) &&
-        this.isKnownF32x4Expression(arguments_[1]!.node, environment);
+        this.isKnownF32x4Operand(arguments_[0]!.node, environment) &&
+        this.isKnownF32x4Operand(arguments_[1]!.node, environment);
     }
     if (canonicalDefinition === F32x4Definition.Select) {
       return arguments_.length === 3 &&
         this.isKnownMask32x4Expression(arguments_[0]!.node, environment) &&
-        this.isKnownF32x4Expression(arguments_[1]!.node, environment) &&
-        this.isKnownF32x4Expression(arguments_[2]!.node, environment);
+        this.isKnownF32x4Operand(arguments_[1]!.node, environment) &&
+        this.isKnownF32x4Operand(arguments_[2]!.node, environment);
     }
     if (
       f32x4ReplacementLane(definition) !== undefined && arguments_.length === 2 &&
-      this.isKnownF32x4Expression(arguments_[0]!.node, environment)
+      this.isKnownF32x4Operand(arguments_[0]!.node, environment)
     ) return true;
     return this.f32x4WorkerApplication(nodeIndex, environment) !== undefined;
   }
@@ -6160,8 +6254,8 @@ class WasmCompiler {
       application === undefined || application.arguments.length !== 2 ||
       simdF32x4ComparisonOpcode(application.definition) === undefined
     ) return false;
-    return this.isKnownF32x4Expression(application.arguments[0]!.node, environment) &&
-      this.isKnownF32x4Expression(application.arguments[1]!.node, environment);
+    return this.isKnownF32x4Operand(application.arguments[0]!.node, environment) &&
+      this.isKnownF32x4Operand(application.arguments[1]!.node, environment);
   }
 
   compileMask32x4Expression(
