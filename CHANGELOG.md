@@ -5,7 +5,7 @@ All notable changes to gpufuck are documented here. The project is published to 
 
 ## Unreleased
 
-## 0.11.0 - 2026-08-01
+## 0.11.0 - 2026-08-02
 
 ### Changed
 
