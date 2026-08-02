@@ -24,6 +24,7 @@ import {
   NO_INDEX,
   NodeWord,
   PAIR_CONSTRUCTOR_NAME,
+  PAIR_TYPE_NAME,
   requestWebGpuDevice,
   surface,
   type SurfaceExpression,
@@ -1049,7 +1050,11 @@ Deno.test("module linking preserves source effect declarations", async () => {
 Deno.test("surface type schemas bound expansion of structurally shared annotations", () => {
   let sharedType: TypeSchema = { kind: "integer" };
   for (let depth = 0; depth < 13; depth += 1) {
-    sharedType = { kind: "tuple", values: [sharedType, sharedType] };
+    sharedType = {
+      kind: "named",
+      name: PAIR_TYPE_NAME,
+      arguments: [sharedType, sharedType],
+    };
   }
 
   throws(
@@ -1403,8 +1408,9 @@ Deno.test("checks a parser-independent rank-3 function parameter on the GPU", as
         },
       },
       result: {
-        kind: "tuple",
-        values: [{ kind: "integer" }, { kind: "boolean" }],
+        kind: "named",
+        name: PAIR_TYPE_NAME,
+        arguments: [{ kind: "integer" }, { kind: "boolean" }],
       },
     },
     body: surface.lambda(
@@ -1753,6 +1759,27 @@ Deno.test("rejects unknown runtime fault categories before GPU work", async () =
   await rejects(
     () => functionalRuntime().compiler.compileModule({ ...module, nodeWords }),
     /runtime fault node 0 has unknown category 2/,
+  );
+});
+
+Deno.test("rejects unknown let evaluation modes before compiler selection", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: null,
+      body: surface.let("answer", surface.integer(42), surface.name("answer")),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const nodeWords = module.nodeWords.slice();
+  nodeWords[NodeWord.Child2] = 2;
+
+  await rejects(
+    () => new CpuCompiler().compileModule({ ...module, nodeWords }),
+    /functional let node 0 has unknown evaluation mode 2/,
   );
 });
 

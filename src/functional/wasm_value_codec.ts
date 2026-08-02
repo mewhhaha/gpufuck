@@ -1,4 +1,10 @@
-import { PAIR_CONSTRUCTOR_NAME, type Type, type TypeSchema, UNIT_CONSTRUCTOR_NAME } from "./abi.ts";
+import {
+  PAIR_CONSTRUCTOR_NAME,
+  PAIR_TYPE_NAME,
+  type Type,
+  type TypeSchema,
+  UNIT_CONSTRUCTOR_NAME,
+} from "./abi.ts";
 import { type CompiledModule, completeTypeDeclarations } from "./compiler_module.ts";
 import { instantiateSchema } from "./schema_contract.ts";
 import type { WasmHostValue } from "./wasm_contract.ts";
@@ -8,7 +14,6 @@ import {
   RESOURCE_TYPE_PREFIX,
   SLICE_TYPE_NAME,
   TEXT_TYPE_NAME,
-  WHOLE_NUMBER_F64_TYPE_NAME,
 } from "./host_contract.ts";
 import { STORE_TYPE_NAME } from "./store_contract.ts";
 import { WasmValueAbi } from "./wasm_abi.ts";
@@ -136,10 +141,6 @@ export function describeType(type: Type): string {
         frames.push({ kind: "text", text: "unit" });
         break;
       case "named": {
-        if (frame.type.name === WHOLE_NUMBER_F64_TYPE_NAME) {
-          frames.push({ kind: "text", text: "whole number (f64)" });
-          break;
-        }
         if (frame.type.name === TEXT_TYPE_NAME) {
           frames.push({ kind: "text", text: "text" });
           break;
@@ -169,9 +170,6 @@ export function describeType(type: Type): string {
         pushSeparatedTypes(frame.type.arguments, `${name}(`, ")");
         break;
       }
-      case "tuple":
-        pushSeparatedTypes(frame.type.values, "(", ")");
-        break;
       case "function":
         frames.push({ kind: "type", type: frame.type.result });
         frames.push({ kind: "text", text: " -> " });
@@ -407,30 +405,6 @@ export function encodeWasmValue(
       if (currentType.kind === "function") {
         throw new TypeError("functional WASM ABI does not accept host function arguments");
       }
-      if (
-        currentType.kind === "named" &&
-        currentType.name === WHOLE_NUMBER_F64_TYPE_NAME
-      ) {
-        if (currentValue.kind !== "integer") {
-          throw wasmArgumentTypeMismatch(currentType, currentValue);
-        }
-        const payload: unknown = currentValue.value;
-        if (
-          typeof payload !== "number" || !Number.isFinite(payload) || !Number.isInteger(payload)
-        ) {
-          throw new TypeError(
-            `functional WASM whole-number f64 argument payload must be a finite integer; received ${
-              String(payload)
-            }`,
-          );
-        }
-        encodedFields.push(allocateObject(
-          NUMERIC_OBJECT_KIND,
-          WasmValueAbi.numericKinds.float64,
-          [BigInt.asIntN(64, float64Bits(payload))],
-        ));
-        continue;
-      }
       if (currentType.kind === "named" && currentType.name === TEXT_TYPE_NAME) {
         if (currentValue.kind !== "text") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
@@ -524,7 +498,10 @@ export function encodeWasmValue(
         encodedFields.push(allocateObject(RESOURCE_OBJECT_KIND, currentValue.id, []));
         continue;
       }
-      if (currentType.kind === "tuple") {
+      if (
+        currentType.kind === "named" && currentType.name === PAIR_TYPE_NAME &&
+        currentValue.kind === "tuple"
+      ) {
         if (currentValue.kind !== "tuple") {
           throw wasmArgumentTypeMismatch(currentType, currentValue);
         }
@@ -550,12 +527,12 @@ export function encodeWasmValue(
         });
         pending.push({
           kind: "value",
-          expected: currentType.values[1],
+          expected: currentType.arguments[1]!,
           input: values[1] as WasmValue,
         });
         pending.push({
           kind: "value",
-          expected: currentType.values[0],
+          expected: currentType.arguments[0]!,
           input: values[0] as WasmValue,
         });
         continue;
@@ -771,7 +748,7 @@ function decodeWasmValueWithScalarRepresentation(
     | {
       readonly kind: "constructor";
       readonly pointer: number;
-      readonly expected: Extract<Type, { readonly kind: "tuple" | "named" }>;
+      readonly expected: Extract<Type, { readonly kind: "named" }>;
       readonly constructorName: string;
       readonly fieldTypes: readonly Type[];
       nextIndex: number;
@@ -836,7 +813,7 @@ function decodeWasmValueWithScalarRepresentation(
       if (frame.nextIndex === frame.fieldTypes.length) {
         activePointers.delete(frame.pointer);
         frames.pop();
-        if (frame.expected.kind === "tuple") {
+        if (frame.expected.name === PAIR_TYPE_NAME) {
           const first = frame.fields[0];
           const second = frame.fields[1];
           if (first === undefined || second === undefined) {
@@ -916,14 +893,6 @@ function decodeWasmValueWithScalarRepresentation(
     }
     if (expected.kind === "function") {
       throw new TypeError("functional WASM structured results cannot contain function fields");
-    }
-    if (
-      expected.kind === "named" &&
-      expected.name === WHOLE_NUMBER_F64_TYPE_NAME
-    ) {
-      frames.pop();
-      appendDecodedValue(decodeBoxedWholeNumberF64(memory, forced));
-      continue;
     }
     const pointer = Number(BigInt.asUintN(32, forced));
     if (activePointers.has(pointer)) {
@@ -1072,10 +1041,6 @@ export function requireFirstOrderWasmType(
         throw new TypeError(
           `functional WASM ${location} contains a function at ${path}; the public boundary accepts only concrete first-order values`,
         );
-      case "tuple":
-        visit(current.values[0], `${path}.0`);
-        visit(current.values[1], `${path}.1`);
-        return;
       case "named": {
         for (const [index, argument] of current.arguments.entries()) {
           visit(argument, `${path}.arguments[${index}]`);
@@ -1083,7 +1048,6 @@ export function requireFirstOrderWasmType(
         if (
           current.name === TEXT_TYPE_NAME ||
           current.name === BYTES_TYPE_NAME ||
-          current.name === WHOLE_NUMBER_F64_TYPE_NAME ||
           current.name === ARRAY_TYPE_NAME ||
           current.name === SLICE_TYPE_NAME ||
           current.name === STORE_TYPE_NAME ||
@@ -1175,36 +1139,6 @@ function decodeBoxedNumeric(
   };
 }
 
-function decodeBoxedWholeNumberF64(
-  memory: WebAssembly.Memory,
-  rawValue: bigint,
-): WasmValue {
-  const pointer = Number(BigInt.asUintN(32, rawValue));
-  const view = new DataView(memory.buffer);
-  if (pointer > view.byteLength - (OBJECT_HEADER_BYTE_LENGTH + VALUE_BYTE_LENGTH)) {
-    throw new RangeError(
-      `functional WASM whole-number f64 pointer ${pointer} exceeds memory length ${view.byteLength}`,
-    );
-  }
-  const objectKind = view.getUint32(pointer, true);
-  const numericKind = view.getUint32(pointer + 4, true);
-  if (
-    objectKind !== NUMERIC_OBJECT_KIND ||
-    numericKind !== WasmValueAbi.numericKinds.float64
-  ) {
-    throw new Error(
-      `functional WASM whole-number f64 pointer ${pointer} has object kind ${objectKind} and numeric kind ${numericKind}`,
-    );
-  }
-  const value = view.getFloat64(pointer + OBJECT_HEADER_BYTE_LENGTH, true);
-  if (!Number.isFinite(value) || !Number.isInteger(value)) {
-    throw new Error(
-      `functional WASM whole-number f64 pointer ${pointer} contains non-integer ${value}`,
-    );
-  }
-  return { kind: "integer", value };
-}
-
 function wasmArgumentTypeMismatch(type: Type, value: WasmValue): TypeError {
   return new TypeError(
     `functional WASM argument expected ${describeType(type)}; received ${value.kind}`,
@@ -1241,17 +1175,9 @@ function boundedBytes(
 
 export function functionalStructuredFieldTypes(
   module: CompiledModule,
-  type: Extract<Type, { readonly kind: "tuple" | "named" }>,
+  type: Extract<Type, { readonly kind: "named" }>,
   constructorName: string,
 ): readonly Type[] {
-  if (type.kind === "tuple") {
-    if (constructorName !== PAIR_CONSTRUCTOR_NAME) {
-      throw new Error(
-        `functional WASM tuple result used constructor ${JSON.stringify(constructorName)}`,
-      );
-    }
-    return type.values;
-  }
   const declaration = completeTypeDeclarations(module).find((candidate) =>
     candidate.name === type.name
   );
@@ -1308,10 +1234,6 @@ function matchConstructorResult(
       parameters.set(schema.name, type);
       return true;
     }
-    case "tuple":
-      return type.kind === "tuple" &&
-        matchConstructorResult(schema.values[0], type.values[0], parameters) &&
-        matchConstructorResult(schema.values[1], type.values[1], parameters);
     case "named":
       return type.kind === "named" && schema.name === type.name &&
         schema.arguments.length === type.arguments.length &&
@@ -1337,10 +1259,6 @@ function sameType(left: Type, right: Type): boolean {
     case "boolean":
     case "unit":
       return true;
-    case "tuple":
-      return right.kind === "tuple" &&
-        sameType(left.values[0], right.values[0]) &&
-        sameType(left.values[1], right.values[1]);
     case "named":
       return right.kind === "named" && left.name === right.name &&
         left.arguments.length === right.arguments.length &&

@@ -1,12 +1,6 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 
-import {
-  buildSurfaceModule,
-  CpuCompiler,
-  effectSet,
-  storeType,
-  surface,
-} from "../functional.ts";
+import { buildSurfaceModule, CpuCompiler, effectSet, storeType, surface } from "../functional.ts";
 import { evaluateModuleWithBoundedWasm } from "../src/functional/evaluator.ts";
 
 Deno.test("bounded evaluation exposes deep Store results", async () => {

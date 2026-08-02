@@ -123,7 +123,6 @@ function isLiteralPayloadWord(tag: number | undefined, word: number): boolean {
       return word === NodeWord.Payload;
     case ExpressionTag.SignedInteger64:
     case ExpressionTag.Float64:
-    case ExpressionTag.WholeNumberF64:
       return word === NodeWord.Payload || word === NodeWord.Child0;
     default:
       return false;

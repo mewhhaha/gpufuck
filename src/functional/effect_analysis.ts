@@ -97,7 +97,6 @@ export function analyzeModuleEffects(
         switch (node.tag) {
           case CoreTag.SignedInteger64:
           case CoreTag.Float64:
-          case CoreTag.WholeNumberF64:
           case CoreTag.Integer:
           case CoreTag.Float32:
           case CoreTag.Boolean:

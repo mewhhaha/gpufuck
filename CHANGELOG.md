@@ -5,6 +5,21 @@ All notable changes to gpufuck are documented here. The project is published to 
 
 ## Unreleased
 
+## 0.11.0 - 2026-08-01
+
+### Changed
+
+- Functional ABI 10 represents lazy and strict bindings with one `Let` tag and every packed
+  primitive operation with one `Prim` tag.
+- The public compiler has one linear-memory Wasm runtime. The GPU Wasm encoder, Wasm-GC backend,
+  Type Core, capability resolver, compile-time executor, Storage Core, and caller-owned Store modes
+  were removed.
+- The f64-backed whole-number family and structural tuple type were removed. Pairs now use the
+  nominal `$TupleType`; structural equality and indexed constructor results remain for the Gleam,
+  JavaScript, and Lazuli frontends that require them.
+- A lazy let used once in a proven strict position no longer allocates a thunk, and an unaliased
+  fresh Store allocation is reused by its sole write.
+
 ## 0.10.0 - 2026-08-01
 
 ### Added

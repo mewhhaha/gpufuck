@@ -38,14 +38,6 @@ export function instantiateSchema(
       }
       return type;
     }
-    case "tuple":
-      return {
-        kind: "tuple",
-        values: [
-          instantiateSchema(schema.values[0], parameters),
-          instantiateSchema(schema.values[1], parameters),
-        ],
-      };
     case "named":
       return {
         kind: "named",

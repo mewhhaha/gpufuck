@@ -1125,7 +1125,7 @@ The reference evaluator gives runtime and compile-time code the same semantics, 
 representation and phase restrictions. A valid compiled program must agree across:
 
 1. the reference evaluator;
-2. gpufuck's GPU evaluator; and
+2. gpufuck's CPU and GPU semantic compilers; and
 3. emitted WebAssembly.
 
 Before gpufuck lowering, Blot:

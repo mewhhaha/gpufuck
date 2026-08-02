@@ -2447,8 +2447,9 @@ function encodeTypeSchema(
       return { kind: "parameter", name: type.name };
     case "tuple":
       return {
-        kind: "tuple",
-        values: [
+        kind: "named",
+        name: "$TupleType",
+        arguments: [
           encodeTypeSchema(type.values[0], parameters),
           encodeTypeSchema(type.values[1], parameters),
         ],
@@ -2521,7 +2522,7 @@ class SurfaceEncoder {
         );
         const value = this.emitExpression(expression.value, node);
         const body = this.emitExpression(expression.body, node);
-        this.setChildren(node, [value, body]);
+        this.setChildren(node, [value, body, EvaluationMode.LazyCallByNeed]);
         return node;
       }
       case "let-rec": {

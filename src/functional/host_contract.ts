@@ -1,3 +1,4 @@
+import { PAIR_TYPE_NAME } from "./abi.ts";
 import type { WasmExportDeclaration } from "./module_contract.ts";
 import type { TypeSchema } from "./schema_contract.ts";
 import { type EffectSet, effectSetFrom } from "./effect_set.ts";
@@ -8,7 +9,6 @@ export const INIT_TYPE_NAME = "$FunctionalInitType";
 export const INIT_CONSTRUCTOR_NAME = "$FunctionalInit";
 export const TEXT_TYPE_NAME = "$FunctionalText";
 export const BYTES_TYPE_NAME = "$FunctionalBytes";
-export const WHOLE_NUMBER_F64_TYPE_NAME = "$FunctionalWholeNumberF64";
 export const ARRAY_TYPE_NAME = "$FunctionalArray";
 export const SLICE_TYPE_NAME = "$FunctionalSlice";
 export const RESOURCE_TYPE_PREFIX = "$FunctionalResource:";
@@ -25,7 +25,6 @@ interface HostTypeTraversal {
 export const HostTypes: Readonly<{
   readonly text: TypeSchema;
   readonly bytes: TypeSchema;
-  readonly wholeNumberF64: TypeSchema;
   readonly array: (element: TypeSchema) => TypeSchema;
   readonly slice: (element: TypeSchema) => TypeSchema;
   readonly resource: (name: string) => TypeSchema;
@@ -34,11 +33,6 @@ export const HostTypes: Readonly<{
 }> = Object.freeze({
   text: Object.freeze({ kind: "named", name: TEXT_TYPE_NAME, arguments: [] }),
   bytes: Object.freeze({ kind: "named", name: BYTES_TYPE_NAME, arguments: [] }),
-  wholeNumberF64: Object.freeze({
-    kind: "named",
-    name: WHOLE_NUMBER_F64_TYPE_NAME,
-    arguments: [],
-  }),
   array(element: TypeSchema): TypeSchema {
     return Object.freeze({
       kind: "named",
@@ -63,13 +57,12 @@ export const HostTypes: Readonly<{
   },
   erased: Object.freeze({ kind: "named", name: ERASED_TYPE_NAME, arguments: [] }),
   bitBuffer: Object.freeze({
-    kind: "tuple",
-    values: Object.freeze(
-      [
-        Object.freeze({ kind: "named", name: BYTES_TYPE_NAME, arguments: [] }),
-        Object.freeze({ kind: "integer" }),
-      ] as const,
-    ),
+    kind: "named",
+    name: PAIR_TYPE_NAME,
+    arguments: Object.freeze([
+      Object.freeze({ kind: "named", name: BYTES_TYPE_NAME, arguments: [] }),
+      Object.freeze({ kind: "integer" }),
+    ]),
   }),
 });
 
@@ -534,10 +527,10 @@ function requireTupleType(
   type: HostType,
   location: string,
 ): readonly [HostType, HostType] {
-  if (type.kind !== "tuple") {
-    throw new Error(`functional WASM intrinsic ${location} must be a tuple`);
+  if (type.kind !== "named" || type.name !== PAIR_TYPE_NAME || type.arguments.length !== 2) {
+    throw new Error(`functional WASM intrinsic ${location} must be a pair`);
   }
-  return type.values;
+  return [type.arguments[0]!, type.arguments[1]!];
 }
 
 function requireBufferType(type: HostType, location: string): void {
@@ -646,23 +639,6 @@ function requireHostType(
   if (traversal.activeTypes.has(type)) {
     throw new TypeError(`functional host ${location} contains a structural type cycle`);
   }
-  if (type.kind === "tuple") {
-    if (!Array.isArray(type.values) || type.values.length !== 2) {
-      throw new TypeError(
-        `functional host ${location} tuple must contain exactly two values; received ${
-          JSON.stringify(type.values)
-        }`,
-      );
-    }
-    traversal.activeTypes.add(type);
-    try {
-      requireHostType(type.values[0], location, typeParameters, depth + 1, traversal);
-      requireHostType(type.values[1], location, typeParameters, depth + 1, traversal);
-    } finally {
-      traversal.activeTypes.delete(type);
-    }
-    return;
-  }
   if (type.kind === "named") {
     requireName(type.name, `${location} named type`);
     if (!Array.isArray(type.arguments)) {
@@ -752,9 +728,6 @@ function sameHostType(left: HostType, right: HostType): boolean {
       return true;
     case "parameter":
       return right.kind === "parameter" && left.name === right.name;
-    case "tuple":
-      return right.kind === "tuple" && sameHostType(left.values[0], right.values[0]) &&
-        sameHostType(left.values[1], right.values[1]);
     case "named":
       return right.kind === "named" && left.name === right.name &&
         left.arguments.length === right.arguments.length &&

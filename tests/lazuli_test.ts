@@ -135,8 +135,9 @@ Deno.test("infers primitive and let-polymorphic expression types", async () => {
     ok(polymorphic.ok);
     if (!polymorphic.ok) return;
     deepStrictEqual(polymorphic.module.mainType, {
-      kind: "tuple",
-      values: [{ kind: "integer" }, { kind: "boolean" }],
+      kind: "named",
+      name: "$TupleType",
+      arguments: [{ kind: "integer" }, { kind: "boolean" }],
     });
     polymorphic.module.destroy();
   });
@@ -379,7 +380,7 @@ Deno.test("accepts a shared host input value outside its active ancestry", async
       const result = await runtime.evaluator.evaluate(module, {
         input: { kind: "tuple", values: [shared, shared] },
       });
-      ok(result.ok);
+      ok(result.ok, JSON.stringify(result));
       if (result.ok) deepStrictEqual(result.value, { kind: "integer", value: 42 });
     } finally {
       module.destroy();
@@ -496,7 +497,7 @@ Deno.test("reifies and accepts host tuple and unit values", async () => {
           values: [{ kind: "integer", value: 20 }, { kind: "integer", value: 22 }],
         },
       });
-      ok(hostTuple.ok);
+      ok(hostTuple.ok, JSON.stringify(hostTuple));
       deepStrictEqual(hostTuple.value, { kind: "integer", value: 42 });
     } finally {
       module.destroy();

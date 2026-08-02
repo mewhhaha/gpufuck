@@ -159,17 +159,6 @@ function substituteType(
         }
         return replacement;
       }
-      case "tuple":
-        if (!Array.isArray(schema.values) || schema.values.length !== 2) {
-          throw new TypeError(`functional tuple type schema needs two values at ${path}`);
-        }
-        return {
-          kind: "tuple",
-          values: [
-            substituteType(schema.values[0], substitutions, `${path}.0`, depth + 1, traversal),
-            substituteType(schema.values[1], substitutions, `${path}.1`, depth + 1, traversal),
-          ],
-        };
       case "named":
         if (typeof schema.name !== "string" || schema.name.length === 0) {
           throw new TypeError(`functional named type schema needs a name at ${path}`);
@@ -246,19 +235,6 @@ function requireRuntimeType(
   if (type.kind === "parameter" || type.kind === "forall") {
     throw new TypeError(`functional runtime type retains ${type.kind} at ${path}`);
   }
-  if (type.kind === "tuple") {
-    if (!Array.isArray(type.values) || type.values.length !== 2) {
-      throw new TypeError(`functional runtime tuple type needs two values at ${path}`);
-    }
-    traversal.activeTypes.add(type);
-    try {
-      requireRuntimeType(type.values[0], `${path}.0`, depth + 1, traversal);
-      requireRuntimeType(type.values[1], `${path}.1`, depth + 1, traversal);
-    } finally {
-      traversal.activeTypes.delete(type);
-    }
-    return;
-  }
   if (type.kind === "named") {
     if (typeof type.name !== "string" || type.name.length === 0) {
       throw new TypeError(`functional runtime named type needs a name at ${path}`);
@@ -316,8 +292,6 @@ function runtimeTypeKeyValue(type: RuntimeTypeDescriptor): unknown {
     case "boolean":
     case "unit":
       return { kind: type.kind };
-    case "tuple":
-      return { kind: "tuple", values: type.values.map(runtimeTypeKeyValue) };
     case "named":
       return {
         kind: "named",

@@ -26,6 +26,7 @@ import {
   DefinitionWord,
   type Diagnostic,
   type EncodedModule,
+  EvaluationMode,
   ExpressionTag,
   MAXIMUM_EXPRESSION_NODES,
   MAXIMUM_SOURCE_BYTE_LENGTH,
@@ -737,8 +738,6 @@ function schemaShape(schema: TypeSchema): unknown {
       return { kind: schema.kind };
     case "parameter":
       return { kind: schema.kind, name: schema.name };
-    case "tuple":
-      return { kind: schema.kind, values: schema.values.map(schemaShape) };
     case "named":
       return { kind: schema.kind, name: schema.name, arguments: schema.arguments.map(schemaShape) };
     case "function":
@@ -878,6 +877,18 @@ function validateEncodedModule(module: EncodedModule): void {
   for (let nodeIndex = 0; nodeIndex < module.nodeCount; nodeIndex++) {
     const offset = nodeIndex * NODE_WORD_LENGTH;
     const tag = module.nodeWords[offset + NodeWord.Tag];
+    if (tag === ExpressionTag.Let) {
+      const evaluationMode = module.nodeWords[offset + NodeWord.Child2]!;
+      if (
+        evaluationMode !== EvaluationMode.LazyCallByNeed &&
+        evaluationMode !== EvaluationMode.StrictEager
+      ) {
+        throw new Error(
+          `functional let node ${nodeIndex} has unknown evaluation mode ${evaluationMode}`,
+        );
+      }
+      continue;
+    }
     if (tag === ExpressionTag.RuntimeFault) {
       const symbol = module.nodeWords[offset + NodeWord.Payload]!;
       const category = module.nodeWords[offset + NodeWord.Child0]!;
@@ -1062,8 +1073,6 @@ function schemaContainsForall(schema: TypeSchema): boolean {
   switch (schema.kind) {
     case "forall":
       return true;
-    case "tuple":
-      return schemaContainsForall(schema.values[0]) || schemaContainsForall(schema.values[1]);
     case "named":
       return schema.arguments.some(schemaContainsForall);
     case "function":

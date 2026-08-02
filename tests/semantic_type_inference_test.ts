@@ -230,8 +230,9 @@ Deno.test("host type inference instantiates a shared empty Store at independent 
   ok(inference.ok, inference.ok ? undefined : inference.diagnostic.message);
   if (inference.ok) {
     deepStrictEqual(inference.mainType, {
-      kind: "tuple",
-      values: [{ kind: "boolean" }, { kind: "integer" }],
+      kind: "named",
+      name: "$TupleType",
+      arguments: [{ kind: "boolean" }, { kind: "integer" }],
     });
   }
 });
@@ -345,8 +346,9 @@ Deno.test("indexed elimination infers safe results and scopes refinements on hos
       source:
         "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let untag : Tag a -> a = tag => case tag of | TagInt -> 1 | TagBool -> true end; let main = (untag TagInt, untag TagBool);",
       mainType: {
-        kind: "tuple",
-        values: [{ kind: "integer" }, { kind: "boolean" }],
+        kind: "named",
+        name: "$TupleType",
+        arguments: [{ kind: "integer" }, { kind: "boolean" }],
       },
     },
     {
@@ -363,8 +365,9 @@ Deno.test("indexed elimination infers safe results and scopes refinements on hos
       source:
         "data Swap a b = Swapped(first: a, second: b) : Swap b a; let restore : Swap a b -> (b, a) = value => case value of | Swapped(first, second) -> (first, second) end; let main = restore (Swapped true 1);",
       mainType: {
-        kind: "tuple",
-        values: [{ kind: "boolean" }, { kind: "integer" }],
+        kind: "named",
+        name: "$TupleType",
+        arguments: [{ kind: "boolean" }, { kind: "integer" }],
       },
     },
     {
@@ -390,8 +393,9 @@ Deno.test("indexed elimination infers safe results and scopes refinements on hos
       source:
         "data Tag a = TagInt : Tag Int | TagBool : Tag Bool; let classify = tag => case tag of | TagInt -> 1 | TagBool -> 0 end; let main = (classify TagInt, classify TagBool);",
       mainType: {
-        kind: "tuple",
-        values: [{ kind: "integer" }, { kind: "integer" }],
+        kind: "named",
+        name: "$TupleType",
+        arguments: [{ kind: "integer" }, { kind: "integer" }],
       },
     },
     {
@@ -522,8 +526,9 @@ Deno.test("zero-arm elimination from an empty named type matches the host oracle
       arguments: [{ kind: "integer" }],
     },
     result: {
-      kind: "tuple",
-      values: [{ kind: "integer" }, { kind: "boolean" }],
+      kind: "named",
+      name: "$TupleType",
+      arguments: [{ kind: "integer" }, { kind: "boolean" }],
     },
   });
 

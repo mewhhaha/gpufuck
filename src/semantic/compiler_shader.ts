@@ -1,4 +1,4 @@
-import { BinaryOperator, CoreTag, MAXIMUM_CONSTRUCTOR_ARITY, RuntimeFaultCategory } from "./abi.ts";
+import { CoreTag, MAXIMUM_CONSTRUCTOR_ARITY, RuntimeFaultCategory } from "./abi.ts";
 import {
   INDEXED_LOCAL_RESOLUTION_MAGIC,
   INDEXED_LOCAL_RESOLUTION_SCALAR_MAGIC,
@@ -205,29 +205,17 @@ const SURFACE_LET: u32 = 4u;
 const SURFACE_IF: u32 = 5u;
 const SURFACE_LAMBDA: u32 = 6u;
 const SURFACE_APPLY: u32 = 7u;
-const SURFACE_UNARY: u32 = 8u;
-const SURFACE_BINARY: u32 = 9u;
 const SURFACE_CASE: u32 = 10u;
 const SURFACE_CASE_ARM: u32 = 11u;
 const SURFACE_PATTERN_BIND: u32 = 12u;
 const SURFACE_LET_REC: u32 = 16u;
-const SURFACE_SEQUENCE: u32 = 17u;
 const SURFACE_SIGNED_INTEGER_64: u32 = 19u;
 const SURFACE_FLOAT_32: u32 = 20u;
 const SURFACE_FLOAT_64: u32 = 21u;
-const SURFACE_NUMERIC_CONVERT: u32 = 22u;
 const SURFACE_TEXT: u32 = 23u;
 const SURFACE_BYTES: u32 = 24u;
 const SURFACE_RUNTIME_FAULT: u32 = 25u;
 const RUNTIME_FAULT_UNREACHABLE: u32 = ${RuntimeFaultCategory.Unreachable}u;
-const SURFACE_WHOLE_NUMBER_F64: u32 = 26u;
-const SURFACE_BUFFER_APPEND: u32 = 27u;
-const SURFACE_STORE_NEW: u32 = ${CoreTag.StoreNew}u;
-const SURFACE_STORE_LENGTH: u32 = ${CoreTag.StoreLength}u;
-const SURFACE_STORE_READ: u32 = ${CoreTag.StoreRead}u;
-const SURFACE_STORE_WRITE: u32 = ${CoreTag.StoreWrite}u;
-const SURFACE_STORE_GROW: u32 = ${CoreTag.StoreGrow}u;
-const SURFACE_STORE_EMPTY: u32 = ${CoreTag.StoreEmpty}u;
 const SURFACE_PRIM: u32 = ${CoreTag.Prim}u;
 
 const CORE_LOCAL: u32 = 13u;
@@ -360,9 +348,6 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     case SURFACE_SIGNED_INTEGER_64, SURFACE_FLOAT_64: {
       return node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
-    case SURFACE_WHOLE_NUMBER_F64: {
-      return node.child1 < state.type_count && node.child2 == NO_INDEX;
-    }
     case SURFACE_FLOAT_32: {
       return node.child0 == NO_INDEX && node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
@@ -373,10 +358,6 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
       return node.child0 <= RUNTIME_FAULT_UNREACHABLE && node.child1 == NO_INDEX &&
         node.child2 == NO_INDEX;
     }
-    case SURFACE_STORE_EMPTY: {
-      return node.payload < state.type_count && node.child0 == NO_INDEX &&
-        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
-    }
     case SURFACE_BOOLEAN: {
       return node.payload <= 1u && node.child0 == NO_INDEX && node.child1 == NO_INDEX &&
         node.child2 == NO_INDEX;
@@ -385,9 +366,9 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
       return node.payload < state.symbol_count && node.child0 == NO_INDEX &&
         node.child1 == NO_INDEX && node.child2 == NO_INDEX;
     }
-    case SURFACE_LET, SURFACE_SEQUENCE: {
+    case SURFACE_LET: {
       return node.payload < state.symbol_count && required_child_is_valid(node_index, node.child0) &&
-        required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
+        required_child_is_valid(node_index, node.child1) && node.child2 <= 1u;
     }
     case SURFACE_LET_REC: {
       return node.payload < state.symbol_count && required_child_is_valid(node_index, node.child0) &&
@@ -407,47 +388,6 @@ fn node_shape_is_valid(node_index: u32, node: SurfaceNode) -> bool {
     }
     case SURFACE_PRIM: {
       return node.child2 == NO_INDEX || node.child2 < state.type_count;
-    }
-    case SURFACE_UNARY: {
-      let whole_number = node.payload == 6u;
-      return node.payload >= 1u && node.payload <= 6u &&
-        required_child_is_valid(node_index, node.child0) &&
-        select(node.child1 == NO_INDEX, node.child1 < state.type_count, whole_number) &&
-        node.child2 == NO_INDEX;
-    }
-    case SURFACE_NUMERIC_CONVERT: {
-      return node.payload >= 1u && node.payload <= 14u &&
-        required_child_is_valid(node_index, node.child0) &&
-        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
-    }
-    case SURFACE_BINARY: {
-      let whole_number = node.payload >= ${BinaryOperator.EqualWholeNumberF64}u &&
-        node.payload <= ${BinaryOperator.RemainderWholeNumberF64}u;
-      return node.payload >= 1u &&
-        node.payload <= ${BinaryOperator.RemainderFloat64}u &&
-        required_child_is_valid(node_index, node.child0) &&
-        required_child_is_valid(node_index, node.child1) &&
-        select(node.child2 == NO_INDEX, node.child2 < state.type_count, whole_number);
-    }
-    case SURFACE_BUFFER_APPEND: {
-      return node.payload == 0u && required_child_is_valid(node_index, node.child0) &&
-        required_child_is_valid(node_index, node.child1) && node.child2 < state.type_count;
-    }
-    case SURFACE_STORE_NEW, SURFACE_STORE_READ: {
-      return node.payload < state.type_count &&
-        required_child_is_valid(node_index, node.child0) &&
-        required_child_is_valid(node_index, node.child1) && node.child2 == NO_INDEX;
-    }
-    case SURFACE_STORE_LENGTH: {
-      return node.payload < state.type_count &&
-        required_child_is_valid(node_index, node.child0) &&
-        node.child1 == NO_INDEX && node.child2 == NO_INDEX;
-    }
-    case SURFACE_STORE_WRITE, SURFACE_STORE_GROW: {
-      return node.payload < state.type_count &&
-        required_child_is_valid(node_index, node.child0) &&
-        required_child_is_valid(node_index, node.child1) &&
-        required_child_is_valid(node_index, node.child2);
     }
     case SURFACE_CASE: {
       return required_child_is_valid(node_index, node.child0) && node.child2 == NO_INDEX;
@@ -678,14 +618,10 @@ fn write_lowered_node() {
     state.core_payload,
     surface_node.child0,
     surface_node.child1,
-    surface_node.child2,
+    select(surface_node.child2, NO_INDEX, surface_node.tag == SURFACE_LET),
     surface_node.start_byte,
     surface_node.end_byte,
-    select(
-      0u,
-      1u,
-      surface_node.tag == SURFACE_SEQUENCE,
-    ),
+    select(0u, surface_node.child2, surface_node.tag == SURFACE_LET),
   );
   state.primary_cursor += 1u;
   if state.primary_cursor == state.node_count {
@@ -719,10 +655,7 @@ fn lower_node() {
   }
   state.core_tag = surface_node.tag;
   state.core_payload = surface_node.payload;
-  if surface_node.tag == SURFACE_SEQUENCE {
-    state.core_tag = SURFACE_LET;
-  }
-  if surface_node.tag == SURFACE_LET || surface_node.tag == SURFACE_SEQUENCE {
+  if surface_node.tag == SURFACE_LET {
     state.core_payload = 0u;
   }
   if surface_node.tag == SURFACE_NAME {
@@ -752,8 +685,7 @@ fn resolve_local_name() {
   }
 
   let parent = surface_nodes[state.surface_node_base + state.resolution_parent];
-  let introduces_let_binding = (parent.tag == SURFACE_LET ||
-    parent.tag == SURFACE_SEQUENCE) &&
+  let introduces_let_binding = parent.tag == SURFACE_LET &&
     parent.child1 == state.resolution_child;
   let introduces_let_rec_binding = parent.tag == SURFACE_LET_REC &&
     (parent.child0 == state.resolution_child || parent.child1 == state.resolution_child);
@@ -1048,14 +980,10 @@ fn lower_planned_module(
     lowering.algebraic_type,
     surface_node.child0,
     surface_node.child1,
-    surface_node.child2,
+    select(surface_node.child2, NO_INDEX, surface_node.tag == SURFACE_LET),
     surface_node.start_byte,
     surface_node.end_byte,
-    select(
-      0u,
-      1u,
-      surface_node.tag == SURFACE_SEQUENCE,
-    ),
+    select(0u, surface_node.child2, surface_node.tag == SURFACE_LET),
   );
 }
 `;

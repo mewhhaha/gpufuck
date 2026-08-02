@@ -445,8 +445,6 @@ function describeResultSchema(
     ? "unit"
     : tag === InferenceSchemaTag.Parameter
     ? "parameter"
-    : tag === InferenceSchemaTag.Tuple
-    ? "tuple"
     : tag === InferenceSchemaTag.Function
     ? "function"
     : `unknown-${tag}`;
@@ -490,11 +488,6 @@ export function publicTypeMetadata(surface: EncodedSemanticSurface): Pick<
         return Object.freeze({ kind: schema.kind });
       case "parameter":
         return Object.freeze({ kind: "parameter", name: schema.name });
-      case "tuple":
-        return Object.freeze({
-          kind: "tuple",
-          values: Object.freeze([copySchema(schema.values[0]), copySchema(schema.values[1])]),
-        }) as TypeSchema;
       case "named":
         return Object.freeze({
           kind: "named",

@@ -5,7 +5,6 @@ import {
   CoreTag,
   EvaluationMode,
   NO_INDEX,
-  PAIR_CONSTRUCTOR_NAME,
   RuntimeFaultCategory,
   type Type,
   UnaryOperator,
@@ -163,10 +162,6 @@ function sameCanonicalCompiledType(left: Type, right: Type): boolean {
     case "boolean":
     case "unit":
       return true;
-    case "tuple":
-      return right.kind === "tuple" &&
-        sameCanonicalCompiledType(left.values[0], right.values[0]) &&
-        sameCanonicalCompiledType(left.values[1], right.values[1]);
     case "named":
       return right.kind === "named" && left.name === right.name &&
         left.arguments.length === right.arguments.length &&
@@ -237,6 +232,12 @@ interface JoinPoint {
   readonly passesArgument: boolean;
 }
 
+interface DeferredExpression {
+  readonly kind: "deferred-expression";
+  readonly node: number;
+  readonly environment: Environment;
+}
+
 type Binding =
   | ValueSource
   | { readonly kind: "v128-f32x4"; readonly index: number }
@@ -244,7 +245,8 @@ type Binding =
   | VirtualLambda
   | VirtualConstructor
   | StaticRecursiveFunction
-  | UniqueConstructorSource;
+  | UniqueConstructorSource
+  | DeferredExpression;
 
 // A missing source preserves de Bruijn depth for a binding that this closure does not capture.
 type Environment = readonly (Binding | undefined)[];
@@ -1578,25 +1580,6 @@ class WasmCompiler {
     readonly name: string;
     readonly fields: readonly { readonly name: string; readonly type: Type }[];
   }[] {
-    if (compiled.kind === "tuple") {
-      const constructor = this.requiredConstructorIndex(PAIR_CONSTRUCTOR_NAME);
-      if (this.#module.constructorArities[constructor] !== 2) {
-        throw new TypeError(
-          `canonical ABI ${location} Core constructor ${
-            JSON.stringify(PAIR_CONSTRUCTOR_NAME)
-          } has ${
-            this.#module.constructorArities[constructor]
-          } fields; tuple representation requires 2`,
-        );
-      }
-      return [{
-        name: PAIR_CONSTRUCTOR_NAME,
-        fields: [
-          { name: "0", type: compiled.values[0] },
-          { name: "1", type: compiled.values[1] },
-        ],
-      }];
-    }
     if (compiled.kind !== "named") {
       throw new TypeError(
         `canonical ABI ${location} describes a nominal value but compiled type is ${
@@ -3629,10 +3612,6 @@ class WasmCompiler {
         this.compileFloat64Expression(instructions, nodeIndex, environment);
         this.emitBoxFloat64(instructions);
         return;
-      case CoreTag.WholeNumberF64:
-        this.compileWholeNumberF64Expression(instructions, nodeIndex, environment);
-        this.emitBoxFloat64(instructions);
-        return;
       case CoreTag.BufferAppend: {
         const typeName = this.#module.typeNames[node.child2];
         if (typeName !== TEXT_TYPE_NAME && typeName !== BYTES_TYPE_NAME) {
@@ -4905,6 +4884,17 @@ class WasmCompiler {
       ], constructorReuse);
       return;
     }
+    if (
+      node.evaluationMode === EvaluationMode.LazyCallByNeed &&
+      this.#captureAnalysis.localReferenceIsStrictlyDemanded(node.child1, 0)
+    ) {
+      this.compileExpression(instructions, node.child1, [{
+        kind: "deferred-expression",
+        node: node.child0,
+        environment,
+      }, ...environment], constructorReuse);
+      return;
+    }
     const eager = node.evaluationMode === EvaluationMode.StrictEager ||
       this.expressionIsWhnf(node.child0) ||
       this.immediatelyForcesLocal(node.child1, 0);
@@ -5125,12 +5115,6 @@ class WasmCompiler {
       this.emitBoxFloat64(instructions);
       return;
     }
-    if (node.payload === UnaryOperator.NegateWholeNumberF64) {
-      this.compileWholeNumberF64Expression(instructions, node.child0, environment);
-      instructions.emit(0x9a);
-      this.emitBoxFloat64(instructions);
-      return;
-    }
     if (node.payload === UnaryOperator.SquareRootFloat32) {
       this.compileFloat32Expression(instructions, node.child0, environment);
       instructions.emit(0x91);
@@ -5223,6 +5207,15 @@ class WasmCompiler {
     }
     updates.reverse();
 
+    let sourceEnvironment = environment;
+    while (this.node(sourceNodeIndex).tag === CoreTag.Local) {
+      const sourceNode = this.node(sourceNodeIndex);
+      const binding = sourceEnvironment[sourceNode.payload];
+      if (binding?.kind !== "deferred-expression") break;
+      sourceNodeIndex = binding.node;
+      sourceEnvironment = binding.environment;
+    }
+
     for (const update of updates) {
       if (update.node.payload !== StoreUpdateMode.Persistent) {
         throw new Error(
@@ -5231,7 +5224,7 @@ class WasmCompiler {
       }
     }
 
-    const source = this.compileStorePointer(instructions, sourceNodeIndex, environment);
+    const source = this.compileStorePointer(instructions, sourceNodeIndex, sourceEnvironment);
     const sourceLength = instructions.addLocal(WasmValueType.I32);
     instructions.localGet(source);
     instructions.i32Load(8);
@@ -5291,10 +5284,16 @@ class WasmCompiler {
     }
 
     const destination = instructions.addLocal(WasmValueType.I32);
-    this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
-    const copied = this.allocateStore(instructions, currentLength);
-    this.emitStoreCopy(instructions, copied, source, sourceLength);
-    instructions.localGet(copied);
+    const reusesFreshStore = this.node(sourceNodeIndex).tag === CoreTag.StoreNew &&
+      updates.every((update) => update.node.tag === CoreTag.StoreWrite);
+    if (reusesFreshStore) {
+      instructions.localGet(source);
+    } else {
+      this.#runtimeEmitter.emitFuelChargeAmount(instructions, currentLength, nodeIndex);
+      const copied = this.allocateStore(instructions, currentLength);
+      this.emitStoreCopy(instructions, copied, source, sourceLength);
+      instructions.localGet(copied);
+    }
     instructions.localSet(destination);
     instructions.localGet(destination);
     instructions.localGet(currentLength);
@@ -6850,55 +6849,11 @@ class WasmCompiler {
     } else if (group === "float-32") {
       this.compileFloat32Expression(instructions, node.child0, environment);
       this.compileFloat32Expression(instructions, node.child1, environment);
-    } else if (group === "float-64") {
+    } else {
       this.compileFloat64Expression(instructions, node.child0, environment);
       this.compileFloat64Expression(instructions, node.child1, environment);
-    } else {
-      this.compileWholeNumberF64Expression(instructions, node.child0, environment);
-      this.compileWholeNumberF64Expression(instructions, node.child1, environment);
     }
     this.emitNumericBinary(instructions, node.payload, nodeIndex);
-  }
-
-  compileWholeNumberF64Expression(
-    instructions: WasmInstructions,
-    nodeIndex: number,
-    environment: Environment,
-  ): void {
-    this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
-    const node = this.node(nodeIndex);
-    switch (node.tag) {
-      case CoreTag.WholeNumberF64:
-        instructions.f64Const(float64FromBits(wideLiteralBits(node)));
-        return;
-      case CoreTag.Unary:
-        if (node.payload !== UnaryOperator.NegateWholeNumberF64) break;
-        this.compileWholeNumberF64Expression(instructions, node.child0, environment);
-        instructions.emit(0x9a);
-        return;
-      case CoreTag.Binary:
-        if (numericOperatorGroup(node.payload) !== "whole-number-f64") break;
-        this.compileWholeNumberF64Expression(instructions, node.child0, environment);
-        this.compileWholeNumberF64Expression(instructions, node.child1, environment);
-        this.emitNumericBinary(instructions, node.payload, nodeIndex);
-        return;
-      case CoreTag.If: {
-        const selectedBranch = this.constantIfBranch(node, environment);
-        if (selectedBranch !== undefined) {
-          this.compileWholeNumberF64Expression(instructions, selectedBranch, environment);
-          return;
-        }
-        this.compileBooleanExpression(instructions, node.child0, environment);
-        this.emitIf(instructions, node, WasmValueType.F64);
-        this.compileWholeNumberF64Expression(instructions, node.child1, environment);
-        instructions.emit(0x05);
-        this.compileWholeNumberF64Expression(instructions, node.child2, environment);
-        instructions.emit(0x0b);
-        return;
-      }
-    }
-    this.compileExpression(instructions, nodeIndex, environment);
-    this.emitUnboxFloat64(instructions);
   }
 
   compileNumericConversion(
@@ -7052,34 +7007,6 @@ class WasmCompiler {
       instructions.emit(0x0b, 0x0b);
       return;
     }
-    if (
-      operator === BinaryOperator.DivideWholeNumberF64 ||
-      operator === BinaryOperator.RemainderWholeNumberF64
-    ) {
-      const divisor = instructions.addLocal(WasmValueType.F64);
-      instructions.localSet(divisor);
-      const dividend = instructions.addLocal(WasmValueType.F64);
-      instructions.localSet(dividend);
-      instructions.localGet(divisor);
-      instructions.f64Const(0);
-      instructions.emit(0x61, 0x04, WasmValueType.F64);
-      instructions.f64Const(0);
-      instructions.emit(0x05);
-      instructions.localGet(dividend);
-      instructions.localGet(divisor);
-      instructions.emit(0xa3, 0x9d);
-      if (operator === BinaryOperator.RemainderWholeNumberF64) {
-        instructions.localGet(divisor);
-        instructions.emit(0xa2);
-        const multiple = instructions.addLocal(WasmValueType.F64);
-        instructions.localSet(multiple);
-        instructions.localGet(dividend);
-        instructions.localGet(multiple);
-        instructions.emit(0xa1);
-      }
-      instructions.emit(0x0b);
-      return;
-    }
     const opcode = numericBinaryOpcode(operator);
     if (opcode === undefined) {
       throw new Error(
@@ -7159,7 +7086,7 @@ class WasmCompiler {
       if (group === "signed-integer-64") {
         this.emitBoxSignedInteger64(instructions);
       } else if (group === "float-32") this.emitBoxFloat32(instructions);
-      else if (group === "float-64" || group === "whole-number-f64") {
+      else if (group === "float-64") {
         this.emitBoxFloat64(instructions);
       } else {
         throw new Error(
@@ -7762,7 +7689,6 @@ class WasmCompiler {
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Lambda:
       case CoreTag.Constructor:
@@ -8009,6 +7935,9 @@ class WasmCompiler {
         instructions.localGet(source.index);
         this.emitBoxF32x4(instructions, F32X4_CONSTRUCTOR_NAME);
         return;
+      case "deferred-expression":
+        this.compileExpression(instructions, source.node, source.environment);
+        return;
       case "join-point":
         // Unreachable by construction: `joinPointLambda` only contifies a binder whose every
         // reference is a tail call, so nothing can ask for its value.
@@ -8139,7 +8068,7 @@ class WasmCompiler {
     instructions: WasmInstructions,
     type: HostType,
   ): void {
-    if (type.kind === "tuple" || type.kind === "named") return;
+    if (type.kind === "named") return;
     if (type.kind === "unit") {
       instructions.emit(0x1a);
       instructions.i32Const(0);
@@ -8164,7 +8093,7 @@ class WasmCompiler {
     instructions: WasmInstructions,
     type: HostType,
   ): void {
-    if (type.kind === "tuple" || type.kind === "named") return;
+    if (type.kind === "named") return;
     if (type.kind === "integer") {
       this.emitEncodeInteger(instructions);
       return;

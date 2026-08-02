@@ -403,7 +403,8 @@ class JavaScriptAotLowering {
     const completeThrow = (value: SurfaceExpression) =>
       throwContinuationName === null
         ? {
-          kind: "sequence" as const,
+          kind: "let" as const,
+          evaluation: "strict" as const,
           name: this.freshBindingName("uncaughtException"),
           value,
           body: {
@@ -438,7 +439,8 @@ class JavaScriptAotLowering {
     for (let index = hoistedBindings.length - 1; index >= 0; index--) {
       const binding = hoistedBindings[index]!;
       body = {
-        kind: "sequence",
+        kind: "let",
+        evaluation: "strict",
         name: binding.coreName,
         value: this.lowerUndefined(span),
         body,
@@ -580,7 +582,8 @@ class JavaScriptAotLowering {
         statement.value,
         environment,
         (value) => ({
-          kind: "sequence",
+          kind: "let",
+          evaluation: "strict",
           name: this.freshBindingName("discarded"),
           value,
           body: this.lowerStatements(
@@ -681,7 +684,8 @@ class JavaScriptAotLowering {
       for (let index = loweredDeclarations.length - 1; index >= 0; index--) {
         const declaration = loweredDeclarations[index]!;
         body = {
-          kind: "sequence",
+          kind: "let",
+          evaluation: "strict",
           name: declaration.name,
           value: declaration.value,
           body,
@@ -898,7 +902,8 @@ class JavaScriptAotLowering {
       }
       if (statement.catchName === null) {
         return {
-          kind: "sequence" as const,
+          kind: "let" as const,
+          evaluation: "strict" as const,
           name: this.freshBindingName("caughtException"),
           value,
           body: this.lowerScopedBlock(
@@ -937,7 +942,8 @@ class JavaScriptAotLowering {
         return outerEnvironment;
       };
       return {
-        kind: "sequence" as const,
+        kind: "let" as const,
+        evaluation: "strict" as const,
         name: coreName,
         value,
         body: this.lowerScopedBlock(
@@ -1109,7 +1115,8 @@ class JavaScriptAotLowering {
       assignable: true,
     });
     return {
-      kind: "sequence",
+      kind: "let",
+      evaluation: "strict",
       name: coreName,
       value,
       body: this.lowerStatements(
@@ -1344,7 +1351,8 @@ class JavaScriptAotLowering {
         }
         if (expression.operator === "void") {
           return {
-            kind: "sequence",
+            kind: "let",
+            evaluation: "strict",
             name: this.freshBindingName("discarded"),
             value: this.lowerExpression(expression.value, environment),
             body: this.lowerUndefined(expression.span),
@@ -1463,7 +1471,8 @@ class JavaScriptAotLowering {
           };
           for (let index = expression.arguments.length - 1; index >= 0; index--) {
             constructed = {
-              kind: "sequence",
+              kind: "let",
+              evaluation: "strict",
               name: this.freshBindingName("errorArgument"),
               value: this.lowerExpression(expression.arguments[index]!, environment),
               body: constructed,
@@ -1602,7 +1611,8 @@ class JavaScriptAotLowering {
             assignable: false,
           });
           return {
-            kind: "sequence",
+            kind: "let",
+            evaluation: "strict",
             name: leftName,
             value: leftValue,
             body: this.lowerExpressionWithCompletion(
@@ -1623,7 +1633,8 @@ class JavaScriptAotLowering {
                   assignable: false,
                 });
                 return {
-                  kind: "sequence",
+                  kind: "let",
+                  evaluation: "strict",
                   name: rightName,
                   value: rightValue,
                   body: onValue(this.lowerBinary({
@@ -1802,7 +1813,8 @@ class JavaScriptAotLowering {
           assignable: false,
         });
         return {
-          kind: "sequence",
+          kind: "let",
+          evaluation: "strict",
           name: coreName,
           value,
           body: this.lowerExpressionListWithCompletion(
@@ -2302,7 +2314,8 @@ class JavaScriptAotLowering {
       };
       return expression.operator === "&&"
         ? {
-          kind: "sequence",
+          kind: "let",
+          evaluation: "strict",
           name: leftName,
           value: left,
           body: {
@@ -2315,7 +2328,8 @@ class JavaScriptAotLowering {
           span: expression.span,
         }
         : {
-          kind: "sequence",
+          kind: "let",
+          evaluation: "strict",
           name: leftName,
           value: left,
           body: {
@@ -2843,7 +2857,8 @@ class JavaScriptAotLowering {
     };
     for (let index = arguments_.length - 1; index >= 0; index--) {
       result = {
-        kind: "sequence",
+        kind: "let",
+        evaluation: "strict",
         name: argumentNames[index]!,
         value: arguments_[index]!,
         body: result,
@@ -2852,7 +2867,7 @@ class JavaScriptAotLowering {
     }
     return calleeName === undefined
       ? result
-      : { kind: "sequence", name: calleeName, value: callee, body: result, span };
+      : { kind: "let", evaluation: "strict", name: calleeName, value: callee, body: result, span };
   }
 
   private freshBindingName(sourceName: string): string {

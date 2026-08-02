@@ -69,7 +69,6 @@ export function elaborateCaseDefaults(
         };
       }
       case "let":
-      case "sequence":
         return { ...expression, value: expand(expression.value), body: expand(expression.body) };
       case "let-rec":
         return { ...expression, value: expand(expression.value), body: expand(expression.body) };

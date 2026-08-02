@@ -269,7 +269,6 @@ function compactFixedVectorProgramIsProvable(
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Local:
         return { safe: true, usesVector: false };
@@ -364,7 +363,6 @@ function compactScalarProgramIsProvable(
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Local:
         return true;

@@ -82,7 +82,6 @@ export const PRIMOPS: readonly PrimopDeclaration[] = Object.freeze([
     "unary-numeric",
     (operation) =>
       operation !== UnaryOperator.NegateFloat64 &&
-      operation !== UnaryOperator.NegateWholeNumberF64 &&
       operation !== UnaryOperator.SquareRootFloat32,
     () => "none",
   ),
@@ -98,19 +97,15 @@ export const PRIMOPS: readonly PrimopDeclaration[] = Object.freeze([
       operation !== BinaryOperator.DivideFloat32 &&
       !(operation >= BinaryOperator.EqualFloat64 &&
         operation <= BinaryOperator.DivideFloat64) &&
-      operation !== BinaryOperator.RemainderFloat64 &&
-      !(operation >= BinaryOperator.EqualWholeNumberF64 &&
-        operation <= BinaryOperator.RemainderWholeNumberF64),
+      operation !== BinaryOperator.RemainderFloat64,
     (operation) =>
       operation === BinaryOperator.Divide ||
         operation === BinaryOperator.DivideSignedInteger64 ||
         operation === BinaryOperator.DivideFloat32 ||
         operation === BinaryOperator.DivideFloat64 ||
-        operation === BinaryOperator.DivideWholeNumberF64 ||
         operation === BinaryOperator.Remainder ||
         operation === BinaryOperator.RemainderSignedInteger64 ||
-        operation === BinaryOperator.RemainderFloat64 ||
-        operation === BinaryOperator.RemainderWholeNumberF64
+        operation === BinaryOperator.RemainderFloat64
         ? "arithmetic"
         : "none",
   ),

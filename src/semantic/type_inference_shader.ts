@@ -14,7 +14,6 @@ import {
   NODE_WORD_LENGTH,
   RuntimeFaultCategory,
   TYPE_WORD_LENGTH,
-  UnaryOperator,
 } from "./abi.ts";
 import { COMPILATION_STATE_WORD_LENGTH, CompilationStatus } from "./compiler_shader.ts";
 import {
@@ -35,7 +34,6 @@ export const InferenceSchemaTag = {
   Boolean: 2,
   Unit: 3,
   Parameter: 4,
-  Tuple: 5,
   Named: 6,
   Function: 7,
   Forall: 8,
@@ -630,8 +628,6 @@ function prepareIndexedInferenceMetadata(
       resultSymbol === declaredSymbol;
     if (typeIndex + 2 === surface.typeCount) {
       resultHeadIsValid = resultTag === InferenceSchemaTag.Unit;
-    } else if (typeIndex + 1 === surface.typeCount) {
-      resultHeadIsValid = resultTag === InferenceSchemaTag.Tuple;
     }
     if (!resultHeadIsValid) {
       writeFailure(
@@ -823,7 +819,7 @@ export function prepareInferenceShaderMetadata(
 
 /**
  * Persistent, bounded Hindley-Milner and predicative rank-N inference for resolved core
- * nodes and flattened ABI-v8 type metadata. The eight bindings stay within WebGPU's portable
+ * nodes and flattened type metadata. The eight bindings stay within WebGPU's portable
  * per-stage storage-buffer minimum. A dispatch performs at most
  * `maximum_transitions_per_dispatch` state-machine transitions; all durable
  * cursors, Tarjan stacks, expression frames, and arenas live in GPU buffers.
@@ -1161,7 +1157,6 @@ const SCHEMA_INTEGER: u32 = 1u;
 const SCHEMA_BOOLEAN: u32 = 2u;
 const SCHEMA_UNIT: u32 = 3u;
 const SCHEMA_PARAMETER: u32 = 4u;
-const SCHEMA_TUPLE: u32 = 5u;
 const SCHEMA_NAMED: u32 = 6u;
 const SCHEMA_FUNCTION: u32 = 7u;
 const SCHEMA_FORALL: u32 = 8u;
@@ -1194,7 +1189,6 @@ const TYPE_RIGID: u32 = 3u;
 const TYPE_INTEGER: u32 = 4u;
 const TYPE_BOOLEAN: u32 = 5u;
 const TYPE_UNIT: u32 = 6u;
-const TYPE_TUPLE: u32 = 7u;
 const TYPE_NAMED: u32 = 8u;
 const TYPE_FUNCTION: u32 = 9u;
 const TYPE_LIST: u32 = 10u;
@@ -1266,9 +1260,6 @@ const TAG_UNARY: u32 = ${CoreTag.Unary}u;
 const TAG_BINARY: u32 = ${CoreTag.Binary}u;
 const BINARY_STRUCTURAL_EQUAL: u32 = ${BinaryOperator.StructuralEqual}u;
 const BINARY_STRUCTURAL_NOT_EQUAL: u32 = ${BinaryOperator.StructuralNotEqual}u;
-const BINARY_EQUAL_WHOLE_NUMBER_F64: u32 = ${BinaryOperator.EqualWholeNumberF64}u;
-const BINARY_GREATER_EQUAL_WHOLE_NUMBER_F64: u32 = ${BinaryOperator.GreaterEqualWholeNumberF64}u;
-const BINARY_REMAINDER_WHOLE_NUMBER_F64: u32 = ${BinaryOperator.RemainderWholeNumberF64}u;
 const BINARY_REMAINDER_FLOAT_64: u32 = ${BinaryOperator.RemainderFloat64}u;
 const TAG_CASE: u32 = ${CoreTag.Case}u;
 const TAG_CASE_ARM: u32 = ${CoreTag.CaseArm}u;
@@ -1285,7 +1276,6 @@ const TAG_TEXT: u32 = ${CoreTag.Text}u;
 const TAG_BYTES: u32 = ${CoreTag.Bytes}u;
 const TAG_RUNTIME_FAULT: u32 = ${CoreTag.RuntimeFault}u;
 const RUNTIME_FAULT_UNREACHABLE: u32 = ${RuntimeFaultCategory.Unreachable}u;
-const TAG_WHOLE_NUMBER_F64: u32 = ${CoreTag.WholeNumberF64}u;
 const TAG_BUFFER_APPEND: u32 = ${CoreTag.BufferAppend}u;
 const TAG_STORE_NEW: u32 = ${CoreTag.StoreNew}u;
 const TAG_STORE_LENGTH: u32 = ${CoreTag.StoreLength}u;
@@ -1311,7 +1301,6 @@ const PRIM_STORE_GROW: u32 = ${PrimopFamily.StoreGrow}u;
 const OUTPUT_INTEGER: u32 = 1u;
 const OUTPUT_BOOLEAN: u32 = 2u;
 const OUTPUT_UNIT: u32 = 3u;
-const OUTPUT_TUPLE: u32 = 5u;
 const OUTPUT_NAMED: u32 = 6u;
 const OUTPUT_FUNCTION: u32 = 7u;
 const OUTPUT_SIGNED_INTEGER_64: u32 = 9u;
@@ -1346,9 +1335,7 @@ fn numeric_type_index_for_unary(operation: u32) -> u32 {
 }
 
 fn numeric_operator_is_comparison(operation: u32) -> bool {
-  return (operation >= 1u && operation <= 40u && (operation - 1u) % 10u < 6u) ||
-    (operation >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
-      operation <= BINARY_GREATER_EQUAL_WHOLE_NUMBER_F64);
+  return operation >= 1u && operation <= 40u && (operation - 1u) % 10u < 6u;
 }
 
 fn operator_is_structural_equality(operation: u32) -> bool {
@@ -1667,7 +1654,7 @@ fn materialize_type_instance(index: u32) -> bool {
 
   var first = NO_INDEX;
   var second = NO_INDEX;
-  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+  if kind == TYPE_FUNCTION {
     first = type_get(source, 2u);
     second = type_get(source, 3u);
   } else if kind == TYPE_NAMED {
@@ -1690,7 +1677,7 @@ fn materialize_type_instance(index: u32) -> bool {
   if first != NO_INDEX { first_instance = allocate_type_instance(first, mapping, mode, 0u); }
   if second != NO_INDEX { second_instance = allocate_type_instance(second, mapping, mode, 0u); }
   type_set(index, 0u, kind);
-  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+  if kind == TYPE_FUNCTION {
     type_set(index, 1u, type_get(source, 1u));
     type_set(index, 2u, first_instance);
     type_set(index, 3u, second_instance);
@@ -2001,7 +1988,7 @@ fn occurs_visit_transition(frame: u32) {
   let kind = type_get(current, 0u);
   var first = NO_INDEX;
   var second = NO_INDEX;
-  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+  if kind == TYPE_FUNCTION {
     first = type_get(current, 2u); second = type_get(current, 3u);
   } else if kind == TYPE_NAMED {
     first = type_get(current, 2u);
@@ -2122,7 +2109,7 @@ fn unify_transition(frame: u32) {
   var right_first = NO_INDEX;
   var left_second = NO_INDEX;
   var right_second = NO_INDEX;
-  if left_kind == TYPE_TUPLE || left_kind == TYPE_FUNCTION {
+  if left_kind == TYPE_FUNCTION {
     left_first = type_get(left, 2u); right_first = type_get(right, 2u);
     left_second = type_get(left, 3u); right_second = type_get(right, 3u);
   } else if left_kind == TYPE_NAMED {
@@ -2202,7 +2189,7 @@ fn generalize_visit_transition(frame: u32) {
   if type_get(current, 4u) == epoch { pop_work_frame(); return; }
   let kind = type_get(current, 0u);
   var first = NO_INDEX; var second = NO_INDEX;
-  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+  if kind == TYPE_FUNCTION {
     first = type_get(current, 2u); second = type_get(current, 3u);
   } else if kind == TYPE_NAMED { first = type_get(current, 2u); }
   else if kind == TYPE_LIST { first = type_get(current, 1u); second = type_get(current, 2u); }
@@ -2306,7 +2293,7 @@ fn instantiate_visit_transition(frame: u32) {
   }
   var first = NO_INDEX; var second = NO_INDEX; var first_field = 0u; var second_field = 0u;
   var replacement = current;
-  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+  if kind == TYPE_FUNCTION {
     first = type_get(current, 2u); second = type_get(current, 3u);
     first_field = 2u; second_field = 3u;
   } else if kind == TYPE_NAMED {
@@ -2551,7 +2538,7 @@ fn concrete_visit_transition(frame: u32) {
     state.work_result = 0u; pop_work_frame(); return;
   }
   var first = NO_INDEX; var second = NO_INDEX;
-  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+  if kind == TYPE_FUNCTION {
     first = type_get(current, 2u); second = type_get(current, 3u);
   } else if kind == TYPE_NAMED { first = type_get(current, 2u); }
   else if kind == TYPE_LIST { first = type_get(current, 1u); second = type_get(current, 2u); }
@@ -2650,7 +2637,7 @@ fn pattern_match_transition(frame: u32) {
   var right_first = NO_INDEX;
   var left_second = NO_INDEX;
   var right_second = NO_INDEX;
-  if left_kind == TYPE_TUPLE || left_kind == TYPE_FUNCTION {
+  if left_kind == TYPE_FUNCTION {
     left_first = type_get(left, 2u); right_first = type_get(right, 2u);
     left_second = type_get(left, 3u); right_second = type_get(right, 3u);
   } else if left_kind == TYPE_NAMED {
@@ -2725,7 +2712,7 @@ fn fully_zonked_visit_transition(frame: u32) {
   }
   var first = NO_INDEX;
   var second = NO_INDEX;
-  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+  if kind == TYPE_FUNCTION {
     first = type_get(current, 2u); second = type_get(current, 3u);
   } else if kind == TYPE_NAMED {
     first = type_get(current, 2u);
@@ -2784,7 +2771,7 @@ fn rigidify_visit_transition(frame: u32) {
   if type_get(current, 4u) == epoch { pop_work_frame(); return; }
   var first = NO_INDEX;
   var second = NO_INDEX;
-  if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
+  if kind == TYPE_FUNCTION {
     first = type_get(current, 2u); second = type_get(current, 3u);
   } else if kind == TYPE_NAMED {
     first = type_get(current, 2u);
@@ -3099,7 +3086,7 @@ fn schema_visit_transition(frame: u32) {
     if start_mapping_lookup(node.payload, state.work_aux) { frame_set(frame, 3u, 1u); }
     return;
   }
-  if node.tag == SCHEMA_TUPLE || node.tag == SCHEMA_FUNCTION {
+  if node.tag == SCHEMA_FUNCTION {
     let first_child = node.first_child;
     let second_child = select(NO_INDEX, schema_node(first_child).next_sibling, first_child != NO_INDEX);
     if first_child == NO_INDEX || second_child == NO_INDEX {
@@ -3109,8 +3096,7 @@ fn schema_visit_transition(frame: u32) {
       return;
     }
     if !require_type_slots(1u) || !require_frame_slots(1u) { return; }
-    let kind = select(TYPE_FUNCTION, TYPE_TUPLE, node.tag == SCHEMA_TUPLE);
-    let converted = allocate_type(kind, NO_INDEX, NO_INDEX, NO_INDEX);
+    let converted = allocate_type(TYPE_FUNCTION, NO_INDEX, NO_INDEX, NO_INDEX);
     let owner = frame_get(frame, 9u);
     attach_schema_type(parent, field, converted, owner);
     configure_schema_visit(frame, first_child, converted, 2u, frame_get(frame, 8u), owner);
@@ -3539,11 +3525,6 @@ fn expression_transition() {
     if node.tag == TAG_SIGNED_INTEGER_64 { complete_expression(3u); return; }
     if node.tag == TAG_FLOAT_32 { complete_expression(4u); return; }
     if node.tag == TAG_FLOAT_64 { complete_expression(5u); return; }
-    if node.tag == TAG_WHOLE_NUMBER_F64 {
-      if !require_type_slots(1u) { return; }
-      complete_expression(allocate_type(TYPE_NAMED, node.child1, NO_INDEX, NO_INDEX));
-      return;
-    }
     if node.tag == TAG_TEXT || node.tag == TAG_BYTES {
       if !require_type_slots(1u) { return; }
       complete_expression(allocate_type(TYPE_NAMED, node.child0, NO_INDEX, NO_INDEX));
@@ -3715,18 +3696,9 @@ fn expression_transition() {
     if node.tag == TAG_UNARY ||
       (node.tag == TAG_PRIM && expression_family(node) == PRIM_UNARY) {
       let operation = expression_operation(node);
-      let whole_number = operation == ${UnaryOperator.NegateWholeNumberF64}u;
-      if !require_frame_slots(1u) || (whole_number && !require_type_slots(1u)) { return; }
+      if !require_frame_slots(1u) { return; }
       frame_set(frame, 1u, 50u);
-      var operand_type = numeric_type_index_for_unary(operation);
-      if whole_number {
-        operand_type = allocate_type(
-          TYPE_NAMED,
-          expression_auxiliary_type(node),
-          NO_INDEX,
-          NO_INDEX,
-        );
-      }
+      let operand_type = numeric_type_index_for_unary(operation);
       frame_set(frame, 3u, operand_type);
       if push_expression(expression_operand(node, 0u), environment) {
         frame_set(state.frame_top - 1u, 11u, operand_type);
@@ -3737,21 +3709,11 @@ fn expression_transition() {
       (node.tag == TAG_PRIM && expression_family(node) == PRIM_BINARY) {
       let operation = expression_operation(node);
       let structural = operator_is_structural_equality(operation);
-      let whole_number = operation >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
-        operation <= BINARY_REMAINDER_WHOLE_NUMBER_F64;
-      if !require_frame_slots(1u) || ((structural || whole_number) && !require_type_slots(1u)) {
+      if !require_frame_slots(1u) || (structural && !require_type_slots(1u)) {
         return;
       }
       var operand_type = numeric_type_index_for_operator(operation);
       if structural { operand_type = fresh_variable(); }
-      if whole_number {
-        operand_type = allocate_type(
-          TYPE_NAMED,
-          expression_auxiliary_type(node),
-          NO_INDEX,
-          NO_INDEX,
-        );
-      }
       if state.status != STATUS_PENDING { return; }
       frame_set(frame, 3u, operand_type);
       frame_set(frame, 1u, 60u);
@@ -4765,10 +4727,6 @@ fn node_shape_is_valid(node_index: u32) -> bool {
   if node.tag == TAG_SIGNED_INTEGER_64 || node.tag == TAG_FLOAT_64 {
     return node.child1 == NO_INDEX && node.child2 == NO_INDEX && node.evaluation_mode == 0u;
   }
-  if node.tag == TAG_WHOLE_NUMBER_F64 {
-    return node.child1 < state.type_count && node.child2 == NO_INDEX &&
-      node.evaluation_mode == 0u;
-  }
   if node.tag == TAG_TEXT || node.tag == TAG_BYTES {
     return node.child0 < state.type_count && node.child1 == NO_INDEX && node.child2 == NO_INDEX &&
       node.evaluation_mode == 0u;
@@ -4802,15 +4760,12 @@ fn node_shape_is_valid(node_index: u32) -> bool {
   }
   if node.tag == TAG_LET || node.tag == TAG_LET_REC ||
     node.tag == TAG_BINARY || node.tag == TAG_BUFFER_APPEND {
-    let whole_number = node.tag == TAG_BINARY &&
-      node.payload >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
-      node.payload <= BINARY_REMAINDER_WHOLE_NUMBER_F64;
     return required_child_is_valid(node_index, node.child0) &&
       required_child_is_valid(node_index, node.child1) &&
       select(
         node.child2 == NO_INDEX,
         node.child2 < state.type_count,
-        whole_number || node.tag == TAG_BUFFER_APPEND,
+        node.tag == TAG_BUFFER_APPEND,
       ) &&
       (node.evaluation_mode == 0u || node.tag == TAG_LET) &&
       (node.tag != TAG_BUFFER_APPEND || node.payload == 0u) &&
@@ -4857,12 +4812,7 @@ fn node_shape_is_valid(node_index: u32) -> bool {
       node.evaluation_mode != 0u {
       return false;
     }
-    let whole_number = (family == PRIM_UNARY &&
-        operation == ${UnaryOperator.NegateWholeNumberF64}u) ||
-      (family == PRIM_BINARY &&
-        operation >= BINARY_EQUAL_WHOLE_NUMBER_F64 &&
-        operation <= BINARY_REMAINDER_WHOLE_NUMBER_F64);
-    let nominal = whole_number || family == PRIM_BUFFER_APPEND ||
+    let nominal = family == PRIM_BUFFER_APPEND ||
       (family >= PRIM_STORE_EMPTY && family <= PRIM_STORE_GROW);
     if select(node.child2 != NO_INDEX, node.child2 >= state.type_count, nominal) {
       return false;
@@ -4883,12 +4833,10 @@ fn node_shape_is_valid(node_index: u32) -> bool {
     return true;
   }
   if node.tag == TAG_UNARY || node.tag == TAG_NUMERIC_CONVERT {
-    let whole_number = node.tag == TAG_UNARY &&
-      node.payload == ${UnaryOperator.NegateWholeNumberF64}u;
     return required_child_is_valid(node_index, node.child0) &&
-      select(node.child1 == NO_INDEX, node.child1 < state.type_count, whole_number) &&
+      node.child1 == NO_INDEX &&
       node.child2 == NO_INDEX && node.evaluation_mode == 0u &&
-      (node.tag != TAG_UNARY || (node.payload >= 1u && node.payload <= 6u)) &&
+      (node.tag != TAG_UNARY || (node.payload >= 1u && node.payload <= 5u)) &&
       (node.tag != TAG_NUMERIC_CONVERT || (node.payload >= 1u && node.payload <= 14u));
   }
   if node.tag == TAG_CASE {
@@ -5210,7 +5158,7 @@ fn validation_transition() {
         if start_find_type(schema.payload) { state.substage = 1u; }
         return;
       }
-      if schema.tag == SCHEMA_TUPLE || schema.tag == SCHEMA_FUNCTION {
+      if schema.tag == SCHEMA_FUNCTION {
         state.work_aux = 2u;
       } else if schema.tag == SCHEMA_FORALL {
         state.work_aux = 1u;
@@ -5337,8 +5285,6 @@ fn validation_transition() {
         result_schema.payload == declared.symbol;
       if constructor.type_index + 2u == state.type_count {
         result_head_is_valid = result_schema.tag == SCHEMA_UNIT;
-      } else if constructor.type_index + 1u == state.type_count {
-        result_head_is_valid = result_schema.tag == SCHEMA_TUPLE;
       }
       if !result_head_is_valid {
         report_metadata_diagnostic(
@@ -5715,9 +5661,8 @@ fn serialize_main_type() {
       pop_work_frame();
       return;
     }
-    if kind == TYPE_TUPLE || kind == TYPE_FUNCTION {
-      let tag = select(OUTPUT_FUNCTION, OUTPUT_TUPLE, kind == TYPE_TUPLE);
-      write_output(output_index, tag, NO_INDEX, NO_INDEX);
+    if kind == TYPE_FUNCTION {
+      write_output(output_index, OUTPUT_FUNCTION, NO_INDEX, NO_INDEX);
       frame_set(frame, 2u, 2u);
       return;
     }

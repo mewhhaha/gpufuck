@@ -2,7 +2,6 @@ import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 import {
   type CompilerPerformanceAnnotation,
   type CompilerPerformanceTrace,
-  measureCompilerStage,
   measureCompilerStageAsync,
 } from "../compiler_performance_trace.ts";
 import { compiledLiteralUpdate } from "./compiled_module_rebinding.ts";

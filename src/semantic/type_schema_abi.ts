@@ -12,7 +12,7 @@ import {
   type TypeSchema,
 } from "./abi.ts";
 
-/** The schema buffer accompanies version 9 of the surface ABI. */
+/** The schema buffer accompanies the current surface ABI. */
 export const TYPE_SCHEMA_ABI_VERSION = MODULE_ABI_VERSION;
 export const TYPE_SCHEMA_WORD_LENGTH = 6;
 export const TYPE_SCHEMA_BYTE_LENGTH = TYPE_SCHEMA_WORD_LENGTH *
@@ -60,7 +60,6 @@ export const TypeSchemaTag = {
   Boolean: 2,
   Unit: 3,
   Parameter: 4,
-  Tuple: 5,
   Named: 6,
   Function: 7,
   Forall: 8,
@@ -71,7 +70,7 @@ export const TypeSchemaTag = {
 
 export type TypeSchemaTag = (typeof TypeSchemaTag)[keyof typeof TypeSchemaTag];
 
-/** Numeric buffers ready to upload alongside an ABI-v8 surface. */
+/** Numeric buffers ready to upload alongside the current surface ABI. */
 export interface FlattenedTypeSchemas {
   /** One GPU-uploadable buffer: a fixed header followed by the seven logical arrays below. */
   readonly metadataWords: Uint32Array;
@@ -233,10 +232,6 @@ function validateHigherRankDefinitionSchema(schema: TypeSchema, context: string)
           freeParameters.add(current.name);
         }
         return;
-      case "tuple":
-        visit(current.values[0], false, bound);
-        visit(current.values[1], false, bound);
-        return;
       case "named":
         for (const argument of current.arguments) visit(argument, false, bound);
         return;
@@ -286,8 +281,6 @@ function containsForall(schema: TypeSchema): boolean {
   switch (schema.kind) {
     case "forall":
       return true;
-    case "tuple":
-      return containsForall(schema.values[0]) || containsForall(schema.values[1]);
     case "named":
       return schema.arguments.some(containsForall);
     case "function":
@@ -500,22 +493,6 @@ function decodeTypeRecords(
           }
           return Object.freeze({ kind: "parameter", name });
         }
-        case TypeSchemaTag.Tuple: {
-          noSymbol();
-          const values = children(2);
-          const left = values[0];
-          const right = values[1];
-          if (left === undefined || right === undefined) {
-            throw new Error(`tuple schema record ${index} omitted a child.`);
-          }
-          return Object.freeze({
-            kind: "tuple",
-            values: Object.freeze([left, right]) as readonly [
-              TypeSchema,
-              TypeSchema,
-            ],
-          });
-        }
         case TypeSchemaTag.Named:
           return Object.freeze({
             kind: "named",
@@ -671,13 +648,6 @@ class TypeSchemaEncoder {
           TypeSchemaTag.Parameter,
           this.#identifiers.parameterId(type.name, `${context} parameter`),
         );
-      case "tuple":
-        if (!Array.isArray(type.values) || type.values.length !== 2) {
-          throw new Error(`${context} tuple must have exactly two type values.`);
-        }
-        write(TypeSchemaTag.Tuple);
-        attachChildren(type.values);
-        return index;
       case "named":
         requireTypeName(type.name, `${context} named type`);
         if (!Array.isArray(type.arguments)) {
@@ -808,7 +778,7 @@ function validateTypeDeclaration(
   );
   if (firstConstructor !== expectedFirstConstructor) {
     throw new Error(
-      `type ${typeIndex} starts at constructor ${firstConstructor}; ABI-v8 types must start at ${expectedFirstConstructor}.`,
+      `type ${typeIndex} starts at constructor ${firstConstructor}; ABI types must start at ${expectedFirstConstructor}.`,
     );
   }
   if (
@@ -980,14 +950,6 @@ function synthesizedConstructorResult(
     name,
   }));
   if (constructorName === "$Unit") return { kind: "unit" };
-  if (constructorName === "$Tuple") {
-    const first = parameters[0];
-    const second = parameters[1];
-    if (first === undefined || second === undefined || parameters.length !== 2) {
-      throw new Error("the built-in tuple constructor must declare exactly two parameters");
-    }
-    return { kind: "tuple", values: [first, second] };
-  }
   return { kind: "named", name: declaration.name, arguments: parameters };
 }
 

@@ -124,6 +124,23 @@ Deno.test("ordinary lets evaluate only the value selected by control flow", asyn
   }
 });
 
+Deno.test("a single strict use compiles a lazy let without a thunk", async () => {
+  const compilation = await compileEntry(
+    surface.let(
+      "value",
+      surface.binary(BinaryOperator.Multiply, surface.integer(6), surface.integer(7)),
+      surface.binary(BinaryOperator.Add, surface.integer(0), surface.name("value")),
+    ),
+  );
+  try {
+    const execution = await runWasmModule(compilation.module);
+    deepStrictEqual(execution.value, { kind: "integer", value: 42 });
+    equal(execution.stats.thunkEvaluations, 0);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
 Deno.test("sequence evaluates an unused value before its body", async () => {
   const compilation = await compileEntry(
     surface.sequence(
@@ -152,7 +169,6 @@ Deno.test("unreachable paths retain their standard category in WebAssembly", asy
       () => runWasmModule(compilation.module),
       /F3014:.*unreachable path: pattern invariant/,
     );
-
   } finally {
     compilation.module.destroy();
   }
@@ -195,7 +211,6 @@ Deno.test("a value-carrying join returns its argument in WebAssembly", async () 
     const execution = await runWasmModule(compilation.module);
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
-
   } finally {
     compilation.module.destroy();
   }
@@ -325,7 +340,6 @@ Deno.test("HasField evidence shares one open projection across record layouts", 
     const execution = await runWasmModule(compilation.module);
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
-
   } finally {
     compilation.module.destroy();
   }
@@ -426,7 +440,6 @@ Deno.test("ExtendRecord evidence shares one open extension across layouts", asyn
     const execution = await runWasmModule(compilation.module);
     equal(execution.value.kind, "integer");
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
-
   } finally {
     compilation.module.destroy();
   }
@@ -768,5 +781,33 @@ Deno.test("an empty Store grows to hold a value in linear-memory WebAssembly", a
     equal(execution.value.kind === "integer" ? execution.value.value : undefined, 42);
   } finally {
     compilation.module.destroy();
+  }
+});
+
+Deno.test("a sole write reuses its freshly allocated Store", async () => {
+  const fresh = await compileEntry(
+    surface.storeRead(
+      surface.storeNew(surface.integer(1), surface.integer(0)),
+      surface.integer(0),
+    ),
+  );
+  const updated = await compileEntry(
+    surface.let(
+      "store",
+      surface.storeNew(surface.integer(1), surface.integer(0)),
+      surface.storeRead(
+        surface.storeWrite(surface.name("store"), surface.integer(0), surface.integer(42)),
+        surface.integer(0),
+      ),
+    ),
+  );
+  try {
+    const freshExecution = await runWasmModule(fresh.module);
+    const updatedExecution = await runWasmModule(updated.module);
+    deepStrictEqual(updatedExecution.value, { kind: "integer", value: 42 });
+    equal(updatedExecution.stats.allocatedBytes, freshExecution.stats.allocatedBytes);
+  } finally {
+    fresh.module.destroy();
+    updated.module.destroy();
   }
 });

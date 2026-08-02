@@ -6,7 +6,6 @@ export type SurfaceExpression =
   | { readonly kind: "signed-integer-64"; readonly value: bigint; readonly span?: Span }
   | { readonly kind: "float-32"; readonly value: number; readonly span?: Span }
   | { readonly kind: "float-64"; readonly value: number; readonly span?: Span }
-  | { readonly kind: "whole-number-f64"; readonly value: number; readonly span?: Span }
   | { readonly kind: "boolean"; readonly value: boolean; readonly span?: Span }
   | { readonly kind: "text"; readonly value: string; readonly span?: Span }
   | { readonly kind: "bytes"; readonly value: Uint8Array; readonly span?: Span }
@@ -63,13 +62,7 @@ export type SurfaceExpression =
   }
   | {
     readonly kind: "let";
-    readonly name: string;
-    readonly value: SurfaceExpression;
-    readonly body: SurfaceExpression;
-    readonly span?: Span;
-  }
-  | {
-    readonly kind: "sequence";
+    readonly evaluation?: "lazy" | "strict";
     readonly name: string;
     readonly value: SurfaceExpression;
     readonly body: SurfaceExpression;

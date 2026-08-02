@@ -14,9 +14,9 @@ source ──► your parser ──► your lowering ──► gpufuck Surface
                                                 │
                                                 ▼
                                          Functional Core
-                                           │          │
-                                           ▼          ▼
-                                      evaluate     WebAssembly
+                                                │
+                                                ▼
+                                           WebAssembly
 ```
 
 gpufuck does not prescribe syntax, parse files, or silently reinterpret your language. Records,
@@ -135,7 +135,6 @@ when its compiler policy changes.
 | Force GPU semantic compilation                         | `new FunctionalCompilerService({ backend: "gpu" })` |
 | Control a shared GPU device yourself                   | `GpuCompiler.create(device)`                        |
 | Execute with the general runtime and host imports      | `runWasmModule()` or `runWasmExport()`              |
-| Evaluate compatible Core directly on WebGPU            | `GpuEvaluator`                                      |
 | Emit a standalone module                               | `compileModuleToWasm()`                             |
 | Put independent entries in one shared-runtime artifact | `compileModulesToWasm()`                            |
 | Compile independent modules in workers                 | `ParallelFunctionalCompilerService`                 |
@@ -143,7 +142,7 @@ when its compiler policy changes.
 | Generate matching Core Wasm and WIT                    | `compileModuleToComponentBoundary()`                |
 
 Start with `FunctionalCompilerService` and `runWasmModule()`. Choose the lower-level compiler,
-evaluator, batch, or boundary APIs only after your deployment needs them.
+batch, or boundary APIs only after your deployment needs them.
 
 ## Build a frontend
 
@@ -180,8 +179,8 @@ unit and pair types. It does not decide what a source construct means.
 Surface is intentionally smaller than most source languages. A frontend should keep its own AST and
 lower into Surface at one boundary rather than use Surface as its parser AST.
 
-Store writes and growth are persistent. The WebAssembly backend may reuse an allocation only when
-it proves that doing so cannot be observed through another reference.
+Store writes and growth are persistent. The WebAssembly backend may reuse an allocation only when it
+proves that doing so cannot be observed through another reference.
 
 ### Declare algebraic types
 
@@ -249,12 +248,11 @@ Compilation returns either diagnostics or a resolved `CompiledModule`. From that
 - call `runWasmModule()` for the entry point;
 - call `runWasmExport()` for a named source export;
 - call `compileModuleToWasm()` to retain the binary;
-- use `GpuEvaluator` when the supported WebGPU evaluator is useful; or
 - inspect inferred types, effects, exports, and resolved Core metadata.
 
-`runWasmModule()` is the broadest execution path. It supports host capabilities, text, f64, stores,
-runtime faults, and bounded execution. `GpuEvaluator` delegates unsupported operations to bounded
-Wasm, so select it for its execution profile rather than as a requirement.
+`runWasmModule()` is the execution path. It supports host capabilities, text, f64, stores, runtime
+faults, and bounded execution. Semantic compilation may run on the CPU or GPU, but both produce the
+same Core and use the same Wasm backend.
 
 For a program with host capabilities, supply the declared fields through the runner's `init` option.
 Synchronous capabilities use `runWasmModule()`; suspending operations use `runWasmModuleAsync()`.
@@ -295,7 +293,25 @@ discharge its label, including through higher-order code that receives the repla
 dynamic interception: a function that already closed over the global operation stays effectful.
 
 Host capabilities describe the operations supplied by an application at runtime. Keep this boundary
-small and structural; it becomes both the evaluator contract and the Wasm import contract.
+small and structural; it becomes the Wasm import contract.
+
+## The compilation core
+
+The portable core deliberately has one representation for each essential idea:
+
+- one `let` node, with lazy or strict evaluation recorded as metadata;
+- unary functions and applications, with multi-argument source forms curried by the builder;
+- nominal algebraic data and exhaustive `case`;
+- `i32`, `i64`, `f32`, and `f64` scalars, without a second f64-backed integer family;
+- primitive operations encoded through one `Prim` surface node;
+- immutable persistent `Store value` for indexed memory; and
+- effect labels carried by ordinary callable evidence.
+
+Pairs are the ordinary nominal `$TupleType` algebraic type rather than a separate structural type
+primitive. Structural equality remains one low-level operation because erased frontends such as
+Gleam and JavaScript cannot synthesize type-specific equality after lowering. Indexed constructor
+results remain available because Lazuli uses their case-scoped refinements; frontends that do not
+need them should use the ordinary Hindley–Milner profile.
 
 ## SIMD, demand, and branch hints
 
@@ -335,13 +351,11 @@ Expected compile and runtime failures are structured:
 | `F3001`–`F3013`, `F3101`–`F3104` | evaluation faults                    |
 | `F4001`–`F4007`                  | module linking                       |
 | `F4101`–`F4102`                  | host and Wasm boundaries             |
-| `F5001`–`F5002`                  | compile-time evaluation              |
-| `F6001`–`F6006`                  | Storage Core verification            |
 
-Compiler and evaluator options bound semantic steps, result nodes, result bytes, dispatch work,
-heap, and continuation depth. Cancellation uses `AbortSignal`. Invalid API options throw
-`TypeError`; WebGPU setup failures preserve their cause; source-program failures return diagnostics
-or typed runtime faults.
+Compiler and runtime options bound semantic steps, result nodes, result bytes, dispatch work, heap,
+and continuation depth. Cancellation uses `AbortSignal`. Invalid API options throw `TypeError`;
+WebGPU setup failures preserve their cause; source-program failures return diagnostics or typed
+runtime faults.
 
 Never turn a diagnostic into a generic “type error.” Preserve its code and evidence, locate its byte
 span in the owning source, and render the final message in your language's vocabulary.

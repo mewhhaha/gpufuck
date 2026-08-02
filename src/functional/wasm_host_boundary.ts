@@ -116,7 +116,6 @@ export function wasmValueType(type: HostType): number {
       return WasmValueType.F32;
     case "float-64":
       return WasmValueType.F64;
-    case "tuple":
     case "named":
       return WasmValueType.I64;
     case "parameter":
@@ -516,7 +515,7 @@ function decodeHostValue(
       value: decodeWasmBoxedValue(instance, module, type, value, 2_047),
     };
   }
-  return representation.kind === "tuple" || representation.kind === "named"
+  return representation.kind === "named"
     ? decodeWasmValue(
       instance,
       module,
@@ -556,7 +555,7 @@ function encodeHostValue(
     }
     return encodeWasmValue(instance, module, expected, value.value);
   }
-  if (representation.kind === "tuple" || representation.kind === "named") {
+  if (representation.kind === "named") {
     return encodeWasmValue(
       instance,
       module,
@@ -576,7 +575,7 @@ function hostValueFromNative(
   value: number | bigint,
   type: HostType,
 ): WasmHostValue {
-  if (type.kind === "tuple" || type.kind === "named") {
+  if (type.kind === "named") {
     throw new TypeError(
       "functional WASM aggregate host values require an instantiated module",
     );
@@ -604,7 +603,7 @@ function hostValueAsNumber(
   expectedType: HostType,
   field: string,
 ): number | bigint {
-  if (expectedType.kind === "tuple" || expectedType.kind === "named") {
+  if (expectedType.kind === "named") {
     throw new TypeError(
       `functional WASM aggregate host field ${
         JSON.stringify(field)

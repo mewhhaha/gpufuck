@@ -6,10 +6,7 @@ import {
   requestWebGpuDevice,
   runWasmModule,
 } from "../functional.ts";
-import {
-  type EvaluationOptions,
-  GpuEvaluator,
-} from "../src/functional/evaluator.ts";
+import { type EvaluationOptions, GpuEvaluator } from "../src/functional/evaluator.ts";
 import {
   GleamFrontendService,
   type GleamSourceModule,

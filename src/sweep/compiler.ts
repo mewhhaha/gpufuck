@@ -107,11 +107,13 @@ function resolvedSweepCore(module: EncodedModule): CompiledCoreArtifact {
       payload,
       child0: module.nodeWords[surface + NodeWord.Child0] ?? NO_INDEX,
       child1: module.nodeWords[surface + NodeWord.Child1] ?? NO_INDEX,
-      child2: module.nodeWords[surface + NodeWord.Child2] ?? NO_INDEX,
+      child2: surfaceTag === ExpressionTag.Let
+        ? NO_INDEX
+        : module.nodeWords[surface + NodeWord.Child2] ?? NO_INDEX,
       sourceByteOffset: module.nodeWords[surface + NodeWord.StartByte] ?? 0,
       sourceEndByte: module.nodeWords[surface + NodeWord.EndByte] ?? 0,
-      evaluationMode: surfaceTag === ExpressionTag.Sequence
-        ? EvaluationMode.StrictEager
+      evaluationMode: surfaceTag === ExpressionTag.Let
+        ? module.nodeWords[surface + NodeWord.Child2] as EvaluationMode
         : EvaluationMode.LazyCallByNeed,
     });
   }));

@@ -1,6 +1,7 @@
 import {
   BinaryOperator,
   PAIR_CONSTRUCTOR_NAME,
+  PAIR_TYPE_NAME,
   type Span,
   type TypeSchema,
   UNIT_CONSTRUCTOR_NAME,
@@ -13,7 +14,6 @@ import {
   type HostOperationDeclaration,
   TEXT_TYPE_NAME,
   WasmIntrinsic,
-  WHOLE_NUMBER_F64_TYPE_NAME,
 } from "../functional/host_contract.ts";
 import {
   surface,
@@ -1948,10 +1948,7 @@ class GleamLowering {
       kind: "operation",
       name: "byteSlice",
       effects: effectSet(),
-      parameter: {
-        kind: "tuple",
-        values: [text, { kind: "tuple", values: [integer, integer] }],
-      },
+      parameter: nestedTupleSchema([text, integer, integer]),
       result: text,
       wasmIntrinsic: WasmIntrinsic.BufferByteSlice,
     });
@@ -1968,10 +1965,7 @@ class GleamLowering {
           "byteSlice",
           {
             kind: "function" as const,
-            parameter: {
-              kind: "tuple" as const,
-              values: [text, { kind: "tuple" as const, values: [integer, integer] }],
-            },
+            parameter: nestedTupleSchema([text, integer, integer]),
             result: text,
           },
         ],
@@ -2304,7 +2298,6 @@ class GleamTypeResolver {
   readonly #nominals = new Map<string, { readonly name: string; readonly arity: number }>([
     ["List", { name: GLEAM_LIST_TYPE, arity: 1 }],
     ["String", { name: TEXT_TYPE_NAME, arity: 0 }],
-    ["UtfCodepoint", { name: WHOLE_NUMBER_F64_TYPE_NAME, arity: 0 }],
     ["BitArray", { name: GLEAM_BIT_ARRAY_TYPE, arity: 0 }],
     ["Result", { name: GLEAM_RESULT_TYPE, arity: 2 }],
   ]);
@@ -2401,8 +2394,9 @@ class GleamTypeResolver {
         let result = this.lower(type.values.at(-1)!, substitutions, aliasStack);
         for (let index = type.values.length - 2; index >= 0; index--) {
           result = {
-            kind: "tuple",
-            values: [this.lower(type.values[index]!, substitutions, aliasStack), result],
+            kind: "named",
+            name: PAIR_TYPE_NAME,
+            arguments: [this.lower(type.values[index]!, substitutions, aliasStack), result],
           };
         }
         return result;
@@ -2415,6 +2409,10 @@ class GleamTypeResolver {
           this.lower(type.result, substitutions, aliasStack),
         );
       case "named": {
+        if (type.name === "UtfCodepoint") {
+          if (type.arguments.length !== 0) throw this.invalidArity(type, 0);
+          return signedInteger64Type();
+        }
         const alias = this.#aliases.get(type.name);
         if (alias !== undefined) {
           if (type.arguments.length !== alias.parameters.length) {
@@ -2492,15 +2490,6 @@ function qualifyGleamExportType(
   typeNames: ReadonlyMap<string, string>,
 ): TypeSchema | null {
   if (schema === null) return null;
-  if (schema.kind === "tuple") {
-    return {
-      kind: "tuple",
-      values: [
-        qualifyGleamExportType(schema.values[0], typeNames)!,
-        qualifyGleamExportType(schema.values[1], typeNames)!,
-      ],
-    };
-  }
   if (schema.kind === "function") {
     return {
       kind: "function",
@@ -2592,7 +2581,7 @@ function nestedTupleSchema(
   if (values.length === 0) throw new Error("A host operation parameter list cannot be empty.");
   let result = values.at(-1)!;
   for (let index = values.length - 2; index >= 0; index--) {
-    result = { kind: "tuple", values: [values[index]!, result] };
+    result = { kind: "named", name: PAIR_TYPE_NAME, arguments: [values[index]!, result] };
   }
   return result;
 }
@@ -2602,8 +2591,6 @@ function schemaContainsParameter(schema: TypeSchema): boolean {
     case "parameter":
     case "forall":
       return true;
-    case "tuple":
-      return schemaContainsParameter(schema.values[0]) || schemaContainsParameter(schema.values[1]);
     case "named":
       return schema.arguments.some(schemaContainsParameter);
     case "function":

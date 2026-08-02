@@ -491,8 +491,6 @@ function describeSemanticType(type: Type): string {
       return "Boolean";
     case "unit":
       return "Unit";
-    case "tuple":
-      return `(${describeSemanticType(type.values[0])}, ${describeSemanticType(type.values[1])})`;
     case "named":
       return type.arguments.length === 0
         ? type.name
@@ -557,13 +555,6 @@ function instantiateTypeSchema(
       return schema;
     case "parameter":
       return parameters.get(schema.name);
-    case "tuple": {
-      const left = instantiateTypeSchema(schema.values[0], parameters);
-      const right = instantiateTypeSchema(schema.values[1], parameters);
-      return left === undefined || right === undefined
-        ? undefined
-        : { kind: "tuple", values: [left, right] };
-    }
     case "named": {
       const arguments_ = schema.arguments.map((argument) =>
         instantiateTypeSchema(argument, parameters)
@@ -592,10 +583,6 @@ function sameType(left: Type, right: Type): boolean {
     case "boolean":
     case "unit":
       return true;
-    case "tuple":
-      return right.kind === "tuple" &&
-        sameType(left.values[0], right.values[0]) &&
-        sameType(left.values[1], right.values[1]);
     case "named":
       if (
         right.kind !== "named" || left.name !== right.name ||
@@ -631,10 +618,6 @@ function matchConstructorResultSchema(
       parameters.set(schema.name, type);
       return true;
     }
-    case "tuple":
-      return type.kind === "tuple" &&
-        matchConstructorResultSchema(schema.values[0], type.values[0], parameters) &&
-        matchConstructorResultSchema(schema.values[1], type.values[1], parameters);
     case "named":
       if (
         type.kind !== "named" || schema.name !== type.name ||
@@ -662,10 +645,12 @@ function expectedConstructorFieldTypes(
   if (expectedType.kind === "unit") {
     return constructorName === "$Unit" ? [] : undefined;
   }
-  if (expectedType.kind === "tuple") {
-    return constructorName === "$Tuple" ? expectedType.values : undefined;
-  }
   if (expectedType.kind !== "named") return undefined;
+  if (expectedType.name === "$TupleType") {
+    return constructorName === "$Tuple" && expectedType.arguments.length === 2
+      ? expectedType.arguments
+      : undefined;
+  }
 
   const declaration = inputIndex.types.get(expectedType.name);
   if (
@@ -787,8 +772,10 @@ function validateInputValue(
       if (taggedValue.kind !== "unit") return typeMismatch(path, expectedType, value);
       continue;
     }
-    if (expectedType.kind === "tuple") {
-      if (taggedValue.kind !== "tuple") return typeMismatch(path, expectedType, value);
+    if (
+      expectedType.kind === "named" && expectedType.name === "$TupleType" &&
+      taggedValue.kind === "tuple"
+    ) {
       const values = (value as { readonly values?: unknown }).values;
       if (!Array.isArray(values) || values.length !== 2) {
         return badInputAtPath(
@@ -796,10 +783,10 @@ function validateInputValue(
           path,
         );
       }
-      for (let fieldIndex = expectedType.values.length - 1; fieldIndex >= 0; fieldIndex--) {
-        const fieldType = expectedType.values[fieldIndex];
+      for (let fieldIndex = expectedType.arguments.length - 1; fieldIndex >= 0; fieldIndex--) {
+        const fieldType = expectedType.arguments[fieldIndex];
         if (fieldType === undefined) {
-          throw new Error(`tuple type omitted field ${fieldIndex}`);
+          throw new Error(`pair type omitted field ${fieldIndex}`);
         }
         pending.push({
           value: values[fieldIndex],

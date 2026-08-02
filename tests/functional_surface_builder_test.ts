@@ -153,7 +153,7 @@ Deno.test("let, if, and case stamp the span the frontend would have written by h
   equal((branch as { readonly kind: string }).kind, "if");
 });
 
-Deno.test("let and sequence expose demand and sequencing as distinct expressions", () => {
+Deno.test("let bindings carry their evaluation mode", () => {
   equal(
     JSON.stringify(surface.let("x", surface.integer(1), surface.name("x"))),
     JSON.stringify({
@@ -166,7 +166,8 @@ Deno.test("let and sequence expose demand and sequencing as distinct expressions
   equal(
     JSON.stringify(surface.sequence("x", surface.integer(1), surface.name("x"))),
     JSON.stringify({
-      kind: "sequence",
+      kind: "let",
+      evaluation: "strict",
       name: "x",
       value: { kind: "integer", value: 1 },
       body: { kind: "name", name: "x" },

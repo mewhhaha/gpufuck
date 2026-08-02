@@ -58,7 +58,6 @@ export function analyzeSurfaceReachability(
           expressions.push(expression.body);
           break;
         case "let":
-        case "sequence":
         case "let-rec":
           expressions.push(expression.value, expression.body);
           break;
@@ -81,7 +80,6 @@ export function analyzeSurfaceReachability(
         case "signed-integer-64":
         case "float-32":
         case "float-64":
-        case "whole-number-f64":
         case "boolean":
         case "text":
         case "bytes":

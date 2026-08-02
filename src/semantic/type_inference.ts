@@ -24,7 +24,6 @@ import {
   TYPE_WORD_LENGTH,
   type TypeDeclaration,
   type TypeSchema,
-  UnaryOperator,
 } from "./abi.ts";
 import { primopDeclaration, PrimopFamily } from "./primops.ts";
 
@@ -84,11 +83,6 @@ interface Float64Type {
   readonly kind: "float-64";
 }
 
-interface TupleType {
-  readonly kind: "tuple";
-  readonly values: readonly [InferenceType, InferenceType];
-}
-
 interface NamedType {
   readonly kind: "named";
   readonly name: string;
@@ -110,7 +104,6 @@ type InferenceType =
   | SignedInteger64Type
   | Float32Type
   | Float64Type
-  | TupleType
   | NamedType
   | FunctionType;
 
@@ -187,9 +180,7 @@ function numericTypeForBinaryOperator(operator: number): InferenceType {
 }
 
 function binaryOperatorIsComparison(operator: number): boolean {
-  return operator <= 40 && (operator - 1) % 10 < 6 ||
-    operator >= BinaryOperator.EqualWholeNumberF64 &&
-      operator <= BinaryOperator.GreaterEqualWholeNumberF64;
+  return operator <= 40 && (operator - 1) % 10 < 6;
 }
 
 function numericConversionTypes(operator: number): readonly [InferenceType, InferenceType] {
@@ -499,9 +490,6 @@ class InferenceContext {
               case "parameter":
                 resultParameters.add(resultType.name);
                 break;
-              case "tuple":
-                pendingResultTypes.push(resultType.values[1], resultType.values[0]);
-                break;
               case "named":
                 for (let index = resultType.arguments.length - 1; index >= 0; index--) {
                   const argument = resultType.arguments[index];
@@ -529,9 +517,6 @@ class InferenceContext {
                 if (!fieldParameters.has(fieldType.name)) {
                   fieldParameters.set(fieldType.name, fieldType);
                 }
-                break;
-              case "tuple":
-                pendingFieldTypes.push(fieldType.values[1], fieldType.values[0]);
                 break;
               case "named":
                 for (let index = fieldType.arguments.length - 1; index >= 0; index--) {
@@ -599,15 +584,6 @@ class InferenceContext {
     constructorName: string,
   ): InferenceType {
     if (constructorName === "$Unit") return UNIT;
-    if (constructorName === "$Tuple") {
-      if (parameters.length !== 2 || parameters[0] === undefined || parameters[1] === undefined) {
-        throw this.invalidTypeMetadata(
-          "the built-in tuple type must declare exactly two parameters",
-          { startByte: 0, endByte: 0 },
-        );
-      }
-      return { kind: "tuple", values: [parameters[0], parameters[1]] };
-    }
     return { kind: "named", name: typeName, arguments: parameters };
   }
 
@@ -692,12 +668,10 @@ class InferenceContext {
         case ExpressionTag.SignedInteger64:
         case ExpressionTag.Float32:
         case ExpressionTag.Float64:
-        case ExpressionTag.WholeNumberF64:
         case ExpressionTag.Boolean:
         case ExpressionTag.Text:
         case ExpressionTag.Bytes:
         case ExpressionTag.RuntimeFault:
-        case ExpressionTag.StoreEmpty:
           return;
         case ExpressionTag.Name: {
           if (boundSymbols.has(payload)) return;
@@ -705,8 +679,7 @@ class InferenceContext {
           if (dependency !== undefined) dependencies.add(dependency);
           return;
         }
-        case ExpressionTag.Let:
-        case ExpressionTag.Sequence: {
+        case ExpressionTag.Let: {
           visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
           visit(
             this.requiredChild(nodeIndex, NodeWord.Child1),
@@ -750,24 +723,6 @@ class InferenceContext {
           for (const operand of this.primopOperands(nodeIndex)) {
             visit(operand, boundSymbols);
           }
-          return;
-        case ExpressionTag.Binary:
-        case ExpressionTag.BufferAppend:
-        case ExpressionTag.StoreNew:
-        case ExpressionTag.StoreRead:
-          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
-          visit(this.requiredChild(nodeIndex, NodeWord.Child1), boundSymbols);
-          return;
-        case ExpressionTag.StoreWrite:
-        case ExpressionTag.StoreGrow:
-          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
-          visit(this.requiredChild(nodeIndex, NodeWord.Child1), boundSymbols);
-          visit(this.requiredChild(nodeIndex, NodeWord.Child2), boundSymbols);
-          return;
-        case ExpressionTag.Unary:
-        case ExpressionTag.NumericConvert:
-        case ExpressionTag.StoreLength:
-          visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
           return;
         case ExpressionTag.Case: {
           visit(this.requiredChild(nodeIndex, NodeWord.Child0), boundSymbols);
@@ -859,8 +814,6 @@ class InferenceContext {
         return FLOAT_32;
       case ExpressionTag.Float64:
         return FLOAT_64;
-      case ExpressionTag.WholeNumberF64:
-        return this.namedNodeType(nodeIndex, NodeWord.Child1, span);
       case ExpressionTag.Text:
       case ExpressionTag.Bytes: {
         const declaration = this.#surface.typeDeclarations[
@@ -873,8 +826,6 @@ class InferenceContext {
       }
       case ExpressionTag.RuntimeFault:
         return this.inferenceVariable();
-      case ExpressionTag.StoreEmpty:
-        return this.storeType(nodeIndex, this.inferenceVariable(), span);
       case ExpressionTag.Boolean:
         return BOOLEAN;
       case ExpressionTag.Name: {
@@ -887,8 +838,7 @@ class InferenceContext {
         }
         return this.instantiateScheme(scheme);
       }
-      case ExpressionTag.Let:
-      case ExpressionTag.Sequence: {
+      case ExpressionTag.Let: {
         const value = this.inferNode(
           this.requiredChild(nodeIndex, NodeWord.Child0),
           environment,
@@ -1008,168 +958,6 @@ class InferenceContext {
         }
         return callee;
       }
-      case ExpressionTag.Unary: {
-        if (payload === UnaryOperator.NegateWholeNumberF64) {
-          const operandType = this.namedNodeType(nodeIndex, NodeWord.Child1, span);
-          const body = this.inferNode(
-            this.requiredChild(nodeIndex, NodeWord.Child0),
-            environment,
-            operandType,
-          );
-          this.unify(operandType, body, span);
-          return operandType;
-        }
-        const operandType = numericTypeForUnaryOperator(payload);
-        const body = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-          operandType,
-        );
-        this.unify(operandType, body, span);
-        return operandType;
-      }
-      case ExpressionTag.Binary: {
-        if (
-          payload === BinaryOperator.StructuralEqual ||
-          payload === BinaryOperator.StructuralNotEqual
-        ) {
-          const left = this.inferNode(
-            this.requiredChild(nodeIndex, NodeWord.Child0),
-            environment,
-          );
-          const right = this.inferNode(
-            this.requiredChild(nodeIndex, NodeWord.Child1),
-            environment,
-            left,
-          );
-          this.unify(left, right, span);
-          return BOOLEAN;
-        }
-        if (
-          payload >= BinaryOperator.EqualWholeNumberF64 &&
-          payload <= BinaryOperator.RemainderWholeNumberF64
-        ) {
-          const operandType = this.namedNodeType(nodeIndex, NodeWord.Child2, span);
-          const left = this.inferNode(
-            this.requiredChild(nodeIndex, NodeWord.Child0),
-            environment,
-            operandType,
-          );
-          const right = this.inferNode(
-            this.requiredChild(nodeIndex, NodeWord.Child1),
-            environment,
-            operandType,
-          );
-          this.unify(operandType, left, span);
-          this.unify(operandType, right, span);
-          return binaryOperatorIsComparison(payload) ? BOOLEAN : operandType;
-        }
-        const operandType = numericTypeForBinaryOperator(payload);
-        const left = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-          operandType,
-        );
-        const right = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child1),
-          environment,
-          operandType,
-        );
-        this.unify(operandType, left, span);
-        this.unify(operandType, right, span);
-        return binaryOperatorIsComparison(payload) ? BOOLEAN : operandType;
-      }
-      case ExpressionTag.BufferAppend: {
-        const operandType = this.namedNodeType(nodeIndex, NodeWord.Child2, span);
-        const left = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-          operandType,
-        );
-        const right = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child1),
-          environment,
-          operandType,
-        );
-        this.unify(operandType, left, span);
-        this.unify(operandType, right, span);
-        return operandType;
-      }
-      case ExpressionTag.StoreNew: {
-        const length = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-          INTEGER,
-        );
-        this.unify(INTEGER, length, span);
-        const element = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child1),
-          environment,
-        );
-        return this.storeType(nodeIndex, element, span);
-      }
-      case ExpressionTag.StoreLength: {
-        const element = this.inferenceVariable();
-        const storeType = this.storeType(nodeIndex, element, span);
-        const store = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-          storeType,
-        );
-        this.unify(storeType, store, span);
-        return INTEGER;
-      }
-      case ExpressionTag.StoreRead: {
-        const element = this.inferenceVariable();
-        const storeType = this.storeType(nodeIndex, element, span);
-        const store = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-          storeType,
-        );
-        const index = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child1),
-          environment,
-          INTEGER,
-        );
-        this.unify(storeType, store, span);
-        this.unify(INTEGER, index, span);
-        return element;
-      }
-      case ExpressionTag.StoreWrite:
-      case ExpressionTag.StoreGrow: {
-        const element = this.inferenceVariable();
-        const storeType = this.storeType(nodeIndex, element, span);
-        const store = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-          storeType,
-        );
-        const indexOrLength = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child1),
-          environment,
-          INTEGER,
-        );
-        const value = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child2),
-          environment,
-          element,
-        );
-        this.unify(storeType, store, span);
-        this.unify(INTEGER, indexOrLength, span);
-        this.unify(element, value, span);
-        return storeType;
-      }
-      case ExpressionTag.NumericConvert: {
-        const [source, result] = numericConversionTypes(payload);
-        const value = this.inferNode(
-          this.requiredChild(nodeIndex, NodeWord.Child0),
-          environment,
-          source,
-        );
-        this.unify(source, value, span);
-        return result;
-      }
       case ExpressionTag.Prim:
         return this.inferPrim(nodeIndex, payload, environment, span);
       case ExpressionTag.Case:
@@ -1202,11 +990,8 @@ class InferenceContext {
     };
     const auxiliaryType = (): InferenceType =>
       this.namedTypeAt(this.nodeWord(nodeIndex, NodeWord.Child2), span);
-
     if (declaration.family === PrimopFamily.Unary) {
-      const operandType = declaration.operation === UnaryOperator.NegateWholeNumberF64
-        ? auxiliaryType()
-        : numericTypeForUnaryOperator(declaration.operation);
+      const operandType = numericTypeForUnaryOperator(declaration.operation);
       this.unify(operandType, inferOperand(0, operandType), span);
       return operandType;
     }
@@ -1219,10 +1004,7 @@ class InferenceContext {
         this.unify(left, inferOperand(1, left), span);
         return BOOLEAN;
       }
-      const operandType = declaration.operation >= BinaryOperator.EqualWholeNumberF64 &&
-          declaration.operation <= BinaryOperator.RemainderWholeNumberF64
-        ? auxiliaryType()
-        : numericTypeForBinaryOperator(declaration.operation);
+      const operandType = numericTypeForBinaryOperator(declaration.operation);
       this.unify(operandType, inferOperand(0, operandType), span);
       this.unify(operandType, inferOperand(1, operandType), span);
       return binaryOperatorIsComparison(declaration.operation) ? BOOLEAN : operandType;
@@ -1613,9 +1395,7 @@ class InferenceContext {
         this.unify(pruned, this.rigidVariable(fallbackName), { startByte: 0, endByte: 0 });
         continue;
       }
-      if (pruned.kind === "tuple") {
-        pending.push(pruned.values[1], pruned.values[0]);
-      } else if (pruned.kind === "named") {
+      if (pruned.kind === "named") {
         for (let index = pruned.arguments.length - 1; index >= 0; index--) {
           const argument = pruned.arguments[index];
           if (argument !== undefined) pending.push(argument);
@@ -1631,9 +1411,6 @@ class InferenceContext {
       return type.instance !== null && this.isStableConcrete(type.instance);
     }
     if (type.kind === "rigid") return false;
-    if (type.kind === "tuple") {
-      return this.isStableConcrete(type.values[0]) && this.isStableConcrete(type.values[1]);
-    }
     if (type.kind === "named") {
       return type.arguments.every((argument) => this.isStableConcrete(argument));
     }
@@ -1705,14 +1482,6 @@ class InferenceContext {
       case "boolean":
       case "unit":
         return pruned;
-      case "tuple":
-        return {
-          kind: "tuple",
-          values: [
-            this.replaceParameters(pruned.values[0], replacements),
-            this.replaceParameters(pruned.values[1], replacements),
-          ],
-        };
       case "named":
         return {
           kind: "named",
@@ -1782,10 +1551,6 @@ class InferenceContext {
       case "rigid":
         result.add(pruned);
         break;
-      case "tuple":
-        this.freeTypeParameters(pruned.values[0], result);
-        this.freeTypeParameters(pruned.values[1], result);
-        break;
       case "named":
         for (const argument of pruned.arguments) this.freeTypeParameters(argument, result);
         break;
@@ -1806,9 +1571,6 @@ class InferenceContext {
     switch (pruned.kind) {
       case "variable":
         return pruned;
-      case "tuple":
-        return this.firstInferenceVariable(pruned.values[0]) ??
-          this.firstInferenceVariable(pruned.values[1]);
       case "named":
         for (const argument of pruned.arguments) {
           const unresolved = this.firstInferenceVariable(argument);
@@ -1851,10 +1613,6 @@ class InferenceContext {
       case "boolean":
       case "unit":
         return true;
-      case "tuple":
-        return right.kind === "tuple" &&
-          this.matchPatternType(left.values[0], right.values[0]) &&
-          this.matchPatternType(left.values[1], right.values[1]);
       case "named": {
         if (
           right.kind !== "named" || left.name !== right.name ||
@@ -1888,9 +1646,6 @@ class InferenceContext {
     const pruned = this.prune(type);
     if (pruned === source) return true;
     switch (pruned.kind) {
-      case "tuple":
-        return this.rigidOccurs(source, pruned.values[0]) ||
-          this.rigidOccurs(source, pruned.values[1]);
       case "named":
         return pruned.arguments.some((argument) => this.rigidOccurs(source, argument));
       case "function":
@@ -1941,12 +1696,6 @@ class InferenceContext {
       case "boolean":
       case "unit":
         return;
-      case "tuple": {
-        if (right.kind !== "tuple") throw this.typeMismatch(left, right, span);
-        this.unify(left.values[0], right.values[0], span);
-        this.unify(left.values[1], right.values[1], span);
-        return;
-      }
       case "named": {
         if (
           right.kind !== "named" || left.name !== right.name ||
@@ -2005,9 +1754,6 @@ class InferenceContext {
     const pruned = this.prune(type);
     if (pruned === variable) return true;
     switch (pruned.kind) {
-      case "tuple":
-        return this.occurs(variable, pruned.values[0]) ||
-          this.occurs(variable, pruned.values[1]);
       case "named":
         return pruned.arguments.some((argument) => this.occurs(variable, argument));
       case "function":
@@ -2067,14 +1813,6 @@ class InferenceContext {
         parameters.set(schema.name, parameter);
         return parameter;
       }
-      case "tuple":
-        return {
-          kind: "tuple",
-          values: [
-            this.typeFromSchema(schema.values[0], parameters, parameterPolicy, span),
-            this.typeFromSchema(schema.values[1], parameters, parameterPolicy, span),
-          ],
-        };
       case "named": {
         const declaration = this.#typeByName.get(schema.name);
         if (declaration === undefined) {
@@ -2128,14 +1866,6 @@ class InferenceContext {
         return Object.freeze({ kind: schema.kind });
       case "parameter":
         return Object.freeze({ kind: "parameter", name: schema.name });
-      case "tuple":
-        return Object.freeze({
-          kind: "tuple",
-          values: Object.freeze([
-            this.copySchema(schema.values[0]),
-            this.copySchema(schema.values[1]),
-          ]) as readonly [TypeSchema, TypeSchema],
-        });
       case "named":
         return Object.freeze({
           kind: "named",
@@ -2167,14 +1897,6 @@ class InferenceContext {
       case "boolean":
       case "unit":
         return Object.freeze({ kind: pruned.kind });
-      case "tuple":
-        return Object.freeze({
-          kind: "tuple",
-          values: Object.freeze([
-            this.toPublicType(pruned.values[0]),
-            this.toPublicType(pruned.values[1]),
-          ]) as readonly [Type, Type],
-        });
       case "named":
         return Object.freeze({
           kind: "named",
@@ -2199,9 +1921,6 @@ class InferenceContext {
       case "variable":
       case "rigid":
         return true;
-      case "tuple":
-        return this.containsTypeParameter(pruned.values[0]) ||
-          this.containsTypeParameter(pruned.values[1]);
       case "named":
         return pruned.arguments.some((argument) => this.containsTypeParameter(argument));
       case "function":
@@ -2242,8 +1961,6 @@ class InferenceContext {
           names.set(pruned, name);
           return name;
         }
-        case "tuple":
-          return `(${format(pruned.values[0], false)}, ${format(pruned.values[1], false)})`;
         case "named":
           return pruned.arguments.length === 0
             ? pruned.name

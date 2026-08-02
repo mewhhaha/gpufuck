@@ -20,10 +20,8 @@ No dependency installation step is needed. Deno resolves the pinned imports in `
 | Path                         | Responsibility                                                         |
 | ---------------------------- | ---------------------------------------------------------------------- |
 | `functional.ts`              | The complete language-neutral API, and the only entry point for it     |
-| `src/functional/`            | Functional ABI, compiler facade, linking, contracts, evaluator         |
+| `src/functional/`            | Functional ABI, compiler facade, linking, contracts, and Wasm runtime  |
 | `src/functional/wasm_*.ts`   | WebAssembly code generators, binary emitter, runtime, host boundary    |
-| `src/functional/storage_*`   | Storage plan and Storage Core verification behind the backend          |
-| `src/functional/comptime*`   | Bounded compile-time execution over compiled Core                      |
 | `src/semantic/`              | Host lowering plan, GPU shaders, runners, and the inference oracle     |
 | `src/webgpu.ts`              | Device request, required limits, and setup diagnostics                 |
 | `src/lazuli/`                | Repository-only Lazuli parser, compiler, and surface adapter           |
@@ -357,12 +355,10 @@ near timer resolution need more samples, not a percentage-only conclusion.
 
 Expected source failures use typed results and stable diagnostic families. API contract violations,
 device failures, and internal invariant failures throw. Cancellation rejects with the caller's abort
-reason. Constructs portable WGSL cannot express are delegated to bounded WebAssembly by
-`evaluate()`, never approximated in the shader; the delegated path throws a `TypeError` for options
-it cannot honour, such as GPU dispatch, heap, and stack controls.
+reason.
 
 Resource ownership must be visible in control flow: a successful compiled module owns its persistent
-GPU buffers and callers destroy it in `finally`; evaluators own and release only per-run buffers;
+GPU buffers and callers destroy it in `finally`; runtimes own and release only per-run buffers;
 workspace replacement owns both buffers until a successful copy transfers the active state. Do not
 catch a WebGPU error merely to return a generic source diagnostic — enrich and rethrow it, or
 translate it at the boundary with its original `cause` preserved.

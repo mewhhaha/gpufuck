@@ -160,10 +160,8 @@ function createLoweringPlan(
       plannedNode = planName(lookupWords, localDepths[node], payload, symbolCount);
     } else {
       plannedNode = {
-        coreTag: normalizedCoreTag(tag),
-        corePayload: tag === ExpressionTag.Let || tag === ExpressionTag.Sequence
-          ? bindingUses[node] ?? 0
-          : payload,
+        coreTag: tag,
+        corePayload: tag === ExpressionTag.Let ? bindingUses[node] ?? 0 : payload,
         errorCode: SemanticCompilerErrorCode.None,
         errorDetail: NO_INDEX,
       };
@@ -296,11 +294,6 @@ function lookupWord(
   return words[symbol * SYMBOL_LOOKUP_WORD_LENGTH + word] ?? NO_INDEX;
 }
 
-function normalizedCoreTag(tag: number): number {
-  if (tag === ExpressionTag.Sequence) return CoreTag.Let;
-  return tag;
-}
-
 function resolveLocalDepths(
   surface: EncodedSemanticSurface,
   localDepths: Uint32Array,
@@ -351,7 +344,7 @@ function resolveLocalDepths(
     const payload = surface.nodeWords[offset + NodeWord.Payload];
     if (tag === undefined || payload === undefined) return false;
     const payloadIsSymbol = tag === ExpressionTag.Name || tag === ExpressionTag.Let ||
-      tag === ExpressionTag.Sequence || tag === ExpressionTag.LetRec;
+      tag === ExpressionTag.LetRec;
     if (payloadIsSymbol && payload >= symbolCount) return false;
     if (tag === ExpressionTag.Name) {
       const positions = bindingPositions.get(payload);
@@ -392,7 +385,7 @@ function resolveLocalDepths(
       return true;
     };
 
-    if (tag === ExpressionTag.Let || tag === ExpressionTag.Sequence) {
+    if (tag === ExpressionTag.Let) {
       if (!pushScopedNode(child1, [payload]) || !pushNode(child0)) return false;
       continue;
     }
@@ -461,16 +454,7 @@ function resolveLocalDepths(
       continue;
     }
 
-    const childCount = tag === ExpressionTag.If || tag === ExpressionTag.StoreWrite ||
-        tag === ExpressionTag.StoreGrow
-      ? 3
-      : tag === ExpressionTag.Binary || tag === ExpressionTag.BufferAppend ||
-          tag === ExpressionTag.StoreNew || tag === ExpressionTag.StoreRead
-      ? 2
-      : tag === ExpressionTag.Unary || tag === ExpressionTag.NumericConvert ||
-          tag === ExpressionTag.StoreLength
-      ? 1
-      : 0;
+    const childCount = tag === ExpressionTag.If ? 3 : 0;
     const children = [child0, child1, child2];
     for (let childIndex = childCount; childIndex > 0; childIndex--) {
       if (!pushNode(children[childIndex - 1]!)) return false;

@@ -136,14 +136,13 @@ function typeNodeCount(type: Type): number {
     const current = pending.pop();
     if (current === undefined) throw new Error("missing inferred type node");
     count++;
-    if (current.kind === "tuple") pending.push(current.values[0], current.values[1]);
     if (current.kind === "function") pending.push(current.parameter, current.result);
     if (current.kind === "named") pending.push(...current.arguments);
   }
   return count;
 }
 
-Deno.test("GPU inference keeps its ABI-v8 state prefix ahead of the scheduler envelope", () => {
+Deno.test("GPU inference keeps its state prefix ahead of the scheduler envelope", () => {
   equal(INFERENCE_STATE_WORD_LENGTH, 81);
   equal(InferenceSchedulerWord.PreviousSemanticSteps, 81);
   equal(InferenceSchedulerWord.SemanticState, 82);
@@ -547,8 +546,9 @@ Deno.test("packed inference falls back only the exhausted lane", async () => {
     ok(results[1]?.ok);
     if (results[0]?.ok) {
       deepStrictEqual(results[0].module.mainType, {
-        kind: "tuple",
-        values: [{ kind: "integer" }, { kind: "boolean" }],
+        kind: "named",
+        name: "$TupleType",
+        arguments: [{ kind: "integer" }, { kind: "boolean" }],
       });
     }
     if (results[1]?.ok) deepStrictEqual(results[1].module.mainType, { kind: "integer" });

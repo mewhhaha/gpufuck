@@ -1,4 +1,4 @@
-import { CoreTag, NO_INDEX } from "./abi.ts";
+import { CoreTag, EvaluationMode, NO_INDEX } from "./abi.ts";
 import type { CompiledModule, CoreNode } from "./compiler_module.ts";
 
 export class WasmCaptureAnalysis {
@@ -25,7 +25,6 @@ export class WasmCaptureAnalysis {
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Text:
       case CoreTag.Bytes:
@@ -113,7 +112,6 @@ export class WasmCaptureAnalysis {
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Text:
       case CoreTag.Bytes:
@@ -161,6 +159,85 @@ export class WasmCaptureAnalysis {
                 localDepth + alternative.binderCount,
               ),
             0,
+          );
+    }
+  }
+
+  localReferenceIsStrictlyDemanded(nodeIndex: number, localDepth: number): boolean {
+    return this.localReferenceCount(nodeIndex, localDepth) === 1 &&
+      this.#localReferencesAreDemanded(nodeIndex, localDepth, true);
+  }
+
+  #localReferencesAreDemanded(
+    nodeIndex: number,
+    localDepth: number,
+    demanded: boolean,
+  ): boolean {
+    const node = this.#node(nodeIndex);
+    if (node.tag === CoreTag.Local) return node.payload !== localDepth || demanded;
+    switch (node.tag) {
+      case CoreTag.Prim:
+        throw new Error("functional Wasm capture analysis received an unlowered primop");
+      case CoreTag.Integer:
+      case CoreTag.SignedInteger64:
+      case CoreTag.Float32:
+      case CoreTag.Float64:
+      case CoreTag.Boolean:
+      case CoreTag.Text:
+      case CoreTag.Bytes:
+      case CoreTag.RuntimeFault:
+      case CoreTag.StoreEmpty:
+      case CoreTag.Global:
+      case CoreTag.Constructor:
+        return true;
+      case CoreTag.Unary:
+      case CoreTag.NumericConvert:
+      case CoreTag.StoreLength:
+        return this.#localReferencesAreDemanded(node.child0, localDepth, demanded);
+      case CoreTag.Apply:
+        return this.#localReferencesAreDemanded(node.child0, localDepth, demanded) &&
+          this.#localReferencesAreDemanded(
+            node.child1,
+            localDepth,
+            demanded && node.evaluationMode === EvaluationMode.StrictEager,
+          );
+      case CoreTag.Binary:
+      case CoreTag.BufferAppend:
+      case CoreTag.StoreNew:
+      case CoreTag.StoreRead:
+        return this.#localReferencesAreDemanded(node.child0, localDepth, demanded) &&
+          this.#localReferencesAreDemanded(node.child1, localDepth, demanded);
+      case CoreTag.If:
+      case CoreTag.StoreWrite:
+      case CoreTag.StoreGrow:
+        return this.#localReferencesAreDemanded(node.child0, localDepth, demanded) &&
+          this.#localReferencesAreDemanded(node.child1, localDepth, demanded) &&
+          this.#localReferencesAreDemanded(node.child2, localDepth, demanded);
+      case CoreTag.Lambda:
+        return this.#localReferencesAreDemanded(node.child0, localDepth + 1, false);
+      case CoreTag.PatternBind:
+        return this.#localReferencesAreDemanded(node.child0, localDepth + 1, demanded);
+      case CoreTag.Let:
+        return this.#localReferencesAreDemanded(
+          node.child0,
+          localDepth,
+          demanded && node.evaluationMode === EvaluationMode.StrictEager,
+        ) && this.#localReferencesAreDemanded(node.child1, localDepth + 1, demanded);
+      case CoreTag.LetRec:
+        return this.#localReferencesAreDemanded(node.child0, localDepth + 1, false) &&
+          this.#localReferencesAreDemanded(node.child1, localDepth + 1, demanded);
+      case CoreTag.CaseArm:
+        return this.#localReferencesAreDemanded(node.child0, localDepth, demanded) &&
+          (node.child1 === NO_INDEX ||
+            this.#localReferencesAreDemanded(node.child1, localDepth, demanded));
+      case CoreTag.Case:
+        return this.#localReferencesAreDemanded(node.child0, localDepth, demanded) &&
+          this.#caseAlternatives(node).every((alternative) =>
+            this.#localReferencesAreDemanded(
+              alternative.body,
+              localDepth + alternative.binderCount,
+              demanded,
+            )
           );
     }
   }
@@ -218,7 +295,6 @@ export class WasmCaptureAnalysis {
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Text:
       case CoreTag.Bytes:

@@ -37,7 +37,7 @@ function schemaWords(
   return Uint32Array.from(records.flatMap((record) => record));
 }
 
-Deno.test("canonical schema metadata packs every ABI-v8 table into one buffer", () => {
+Deno.test("canonical schema metadata packs every ABI table into one buffer", () => {
   const surface = parsedCanonicalSurface();
   const flattened = flattenTypeSchemas(surface);
 
@@ -122,8 +122,9 @@ Deno.test("canonical schema metadata packs every ABI-v8 table into one buffer", 
   });
   deepStrictEqual(constructorResults.get("$Unit"), { kind: "unit" });
   deepStrictEqual(constructorResults.get("$Tuple"), {
-    kind: "tuple",
-    values: [
+    kind: "named",
+    name: "$TupleType",
+    arguments: [
       { kind: "parameter", name: "first" },
       { kind: "parameter", name: "second" },
     ],
@@ -191,8 +192,9 @@ Deno.test("flattened records preserve source spans and decode parameterized sche
   deepStrictEqual(
     decodeTypeSchema(flattened.schemaWords, fieldRoot, flattened.identifierNames),
     {
-      kind: "tuple",
-      values: [{ kind: "parameter", name: "a" }, { kind: "integer" }],
+      kind: "named",
+      name: "$TupleType",
+      arguments: [{ kind: "parameter", name: "a" }, { kind: "integer" }],
     },
   );
 });
@@ -206,11 +208,12 @@ Deno.test("concrete types round-trip through the shared six-word records", () =>
       arguments: [{ kind: "boolean" }],
     },
     result: {
-      kind: "tuple",
-      values: [{ kind: "integer" }, { kind: "unit" }],
+      kind: "named",
+      name: "$TupleType",
+      arguments: [{ kind: "integer" }, { kind: "unit" }],
     },
   };
-  const serialized = serializeType(type, ["Box"]);
+  const serialized = serializeType(type, ["Box", "$TupleType"]);
 
   equal(serialized.schemaWords.length % TYPE_SCHEMA_WORD_LENGTH, 0);
   for (
@@ -222,7 +225,7 @@ Deno.test("concrete types round-trip through the shared six-word records", () =>
     equal(serialized.schemaWords[offset + TypeSchemaWord.StartByte], 0);
     equal(serialized.schemaWords[offset + TypeSchemaWord.EndByte], 0);
   }
-  deepStrictEqual(decodeType(serialized.schemaWords, serialized.root, ["Box"]), type);
+  deepStrictEqual(decodeType(serialized.schemaWords, serialized.root, ["Box", "$TupleType"]), type);
 });
 
 Deno.test("rank-2 forall schemas decode through canonical records", () => {
@@ -263,7 +266,7 @@ Deno.test("schema decoding rejects cycles, reused records, and malformed links",
     () =>
       decodeTypeSchema(
         schemaWords([
-          [TypeSchemaTag.Tuple, NO_INDEX, 1, NO_INDEX, 0, 0],
+          [TypeSchemaTag.Function, NO_INDEX, 1, NO_INDEX, 0, 0],
           [TypeSchemaTag.Named, 0, 3, 2, 0, 0],
           [TypeSchemaTag.Named, 0, 3, NO_INDEX, 0, 0],
           [
@@ -319,7 +322,7 @@ Deno.test("schema decoding rejects bad symbols, child counts, and nesting depth"
     () =>
       decodeTypeSchema(
         schemaWords([
-          [TypeSchemaTag.Tuple, NO_INDEX, 1, NO_INDEX, 0, 0],
+          [TypeSchemaTag.Function, NO_INDEX, 1, NO_INDEX, 0, 0],
           [
             TypeSchemaTag.Integer,
             NO_INDEX,

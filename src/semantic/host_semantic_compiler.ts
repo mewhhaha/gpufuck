@@ -117,11 +117,13 @@ export function compileSemanticOnHost(
           payload,
           child0: surface.nodeWords[source + NodeWord.Child0] ?? NO_INDEX,
           child1: surface.nodeWords[source + NodeWord.Child1] ?? NO_INDEX,
-          child2: surface.nodeWords[source + NodeWord.Child2] ?? NO_INDEX,
+          child2: surfaceTag === ExpressionTag.Let
+            ? NO_INDEX
+            : surface.nodeWords[source + NodeWord.Child2] ?? NO_INDEX,
           sourceByteOffset: surface.nodeWords[source + NodeWord.StartByte] ?? 0,
           sourceEndByte: surface.nodeWords[source + NodeWord.EndByte] ?? 0,
-          evaluationMode: surfaceTag === ExpressionTag.Sequence
-            ? EvaluationMode.StrictEager
+          evaluationMode: surfaceTag === ExpressionTag.Let
+            ? surface.nodeWords[source + NodeWord.Child2] as EvaluationMode
             : EvaluationMode.LazyCallByNeed,
         });
       })),

@@ -228,7 +228,6 @@ export class WasmFunctionAnalysis {
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Text:
       case CoreTag.Bytes:
@@ -356,7 +355,6 @@ export class WasmFunctionAnalysis {
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Text:
       case CoreTag.Bytes:
@@ -621,7 +619,6 @@ export class WasmFunctionAnalysis {
       case CoreTag.SignedInteger64:
       case CoreTag.Float32:
       case CoreTag.Float64:
-      case CoreTag.WholeNumberF64:
       case CoreTag.Boolean:
       case CoreTag.Text:
       case CoreTag.Bytes:
@@ -1024,7 +1021,6 @@ function coreNodeChildren(node: CoreNode): readonly number[] {
   switch (node.tag) {
     case CoreTag.SignedInteger64:
     case CoreTag.Float64:
-    case CoreTag.WholeNumberF64:
     case CoreTag.Integer:
     case CoreTag.Float32:
     case CoreTag.Boolean:

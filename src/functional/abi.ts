@@ -63,6 +63,7 @@ import type { Span, TypecheckingProfile } from "./schema_contract.ts";
 
 /** Reserved nominal names the surface builder installs; a frontend cannot declare them. */
 export const UNIT_CONSTRUCTOR_NAME = "$Unit";
+export const PAIR_TYPE_NAME = "$TupleType";
 export const PAIR_CONSTRUCTOR_NAME = "$Tuple";
 export const THUNK_TYPE_NAME = "$ThunkType";
 export const THUNK_CONSTRUCTOR_NAME = "$Thunk";
@@ -72,7 +73,6 @@ export const PrimitiveCapability = {
   SignedInteger64: "signed-integer-i64",
   Float32: "float-f32",
   Float64: "float-f64",
-  WholeNumberF64: "whole-number-f64",
   Boolean: "boolean",
   Unit: "unit",
   Pair: "pair",
@@ -94,7 +94,6 @@ export const CORE_V1_PRIMITIVE_CAPABILITIES: readonly PrimitiveCapability[] = Ob
     PrimitiveCapability.SignedInteger64,
     PrimitiveCapability.Float32,
     PrimitiveCapability.Float64,
-    PrimitiveCapability.WholeNumberF64,
     PrimitiveCapability.Boolean,
     PrimitiveCapability.Unit,
     PrimitiveCapability.Pair,

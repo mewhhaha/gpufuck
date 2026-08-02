@@ -2,17 +2,14 @@ import { BinaryOperator, NumericConversion } from "./abi.ts";
 import type { CoreNode } from "./compiler_module.ts";
 
 export function isComparisonOperator(operator: number): boolean {
-  return operator >= 1 && operator <= 40 && (operator - 1) % 10 < 6 ||
-    operator >= BinaryOperator.EqualWholeNumberF64 &&
-      operator <= BinaryOperator.GreaterEqualWholeNumberF64;
+  return operator >= 1 && operator <= 40 && (operator - 1) % 10 < 6;
 }
 
 export type NumericPrimitiveKind =
   | "integer"
   | "signed-integer-64"
   | "float-32"
-  | "float-64"
-  | "whole-number-f64";
+  | "float-64";
 
 export function numericOperatorGroup(operator: number): NumericPrimitiveKind {
   if (operator >= 1 && operator <= 10) return "integer";
@@ -21,13 +18,9 @@ export function numericOperatorGroup(operator: number): NumericPrimitiveKind {
   if (operator <= 40) return "float-64";
   if (operator <= 46) return "integer";
   if (operator <= 52) return "signed-integer-64";
-  if (
-    operator >= BinaryOperator.EqualWholeNumberF64 &&
-    operator <= BinaryOperator.RemainderWholeNumberF64
-  ) return "whole-number-f64";
   if (operator === BinaryOperator.RemainderFloat64) return "float-64";
   throw new RangeError(
-    `functional numeric operator must be within [1, 52], [55, 65], or 66; received ${operator}`,
+    `functional numeric operator must be within [1, 52] or be 66; received ${operator}`,
   );
 }
 
@@ -47,8 +40,6 @@ export function numericBinaryOpcode(operator: number): number | undefined {
       return 0x76;
     case BinaryOperator.RemainderSignedInteger64:
       return 0x81;
-    case BinaryOperator.DivideWholeNumberF64:
-    case BinaryOperator.RemainderWholeNumberF64:
     case BinaryOperator.RemainderFloat64:
       return undefined;
     case BinaryOperator.BitwiseAndSignedInteger64:
@@ -63,9 +54,7 @@ export function numericBinaryOpcode(operator: number): number | undefined {
       return 0x88;
   }
   const group = numericOperatorGroup(operator);
-  const position = group === "whole-number-f64"
-    ? operator - BinaryOperator.EqualWholeNumberF64
-    : (operator - 1) % 10;
+  const position = (operator - 1) % 10;
   const opcodes = group === "integer"
     ? [0x46, 0x47, 0x48, 0x4c, 0x4a, 0x4e, 0x6a, 0x6b, 0x6c, undefined]
     : group === "signed-integer-64"

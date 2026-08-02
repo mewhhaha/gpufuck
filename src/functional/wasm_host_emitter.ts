@@ -1,3 +1,4 @@
+import { PAIR_TYPE_NAME } from "./abi.ts";
 import { BYTES_TYPE_NAME, type HostType, TEXT_TYPE_NAME, WasmIntrinsic } from "./host_contract.ts";
 import { WasmValueAbi } from "./wasm_abi.ts";
 import { WasmFunctionTypeIndex, type WasmInstructions, WasmValueType } from "./wasm_binary.ts";
@@ -78,15 +79,18 @@ export class WasmHostEmitter {
       instructions.emit(0xad);
       return;
     }
-    if (parameter.kind !== "tuple") {
-      throw new Error(`functional WASM intrinsic ${intrinsic} requires a tuple parameter`);
+    if (
+      parameter.kind !== "named" || parameter.name !== PAIR_TYPE_NAME ||
+      parameter.arguments.length !== 2
+    ) {
+      throw new Error(`functional WASM intrinsic ${intrinsic} requires a pair parameter`);
     }
 
     const tuple = this.objectPointer(instructions, argument);
     const first = this.objectField(instructions, tuple, 0);
     if (intrinsic === WasmIntrinsic.BufferByteGet) {
       const indexValue = this.objectField(instructions, tuple, 1);
-      const pointer = this.bufferPointer(instructions, first, parameter.values[0]);
+      const pointer = this.bufferPointer(instructions, first, parameter.arguments[0]!);
       const index = this.decodedInteger(instructions, indexValue);
       this.requireBufferIndex(instructions, pointer, index);
       instructions.localGet(pointer);
@@ -142,7 +146,7 @@ export class WasmHostEmitter {
       instructions.emit(0xad);
       return;
     }
-    const bufferType = parameter.values[0];
+    const bufferType = parameter.arguments[0]!;
     const left = this.bufferPointer(instructions, first, bufferType);
     if (intrinsic === WasmIntrinsic.BufferByteSlice) {
       const bounds = this.objectPointer(instructions, second);
@@ -177,7 +181,7 @@ export class WasmHostEmitter {
       return;
     }
 
-    const right = this.bufferPointer(instructions, second, parameter.values[1]);
+    const right = this.bufferPointer(instructions, second, parameter.arguments[1]!);
     if (intrinsic === WasmIntrinsic.BufferAppend) {
       this.emitBufferAppend(instructions, left, right, bufferType, -1);
       return;

@@ -1,9 +1,8 @@
 /**
- * GPU-backed semantic compilation for functional-language frontends.
+ * Typed semantic compilation and WebAssembly emission for functional-language frontends.
  *
- * Frontends lower their syntax into the portable surface module and compile it through WebGPU to a
- * resolved Functional Core. Core programs are executed by the GPU evaluator or compiled to
- * WebAssembly.
+ * Frontends lower their syntax into the portable surface module. The compiler resolves and checks
+ * that module on the CPU or GPU, then emits WebAssembly from the resulting Functional Core.
  *
  * This is the only entry point. Everything under `src/` that is not re-exported here is internal,
  * and the frontends in `src/lazuli/`, `src/gleam/`, and `examples/` are deliberately

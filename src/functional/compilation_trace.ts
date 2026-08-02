@@ -140,8 +140,6 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
       return `${indent}${expression.value}f32`;
     case "float-64":
       return `${indent}${expression.value}f64`;
-    case "whole-number-f64":
-      return `${indent}${expression.value}whole-f64`;
     case "boolean":
       return `${indent}${expression.value}`;
     case "text":
@@ -156,10 +154,6 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
       return `${indent}(lambda (${expression.parameters.join(" ")})\n${nested(expression.body)})`;
     case "let":
       return `${indent}(let ${expression.name}\n${nested(expression.value)}\n${
-        nested(expression.body)
-      })`;
-    case "sequence":
-      return `${indent}(sequence ${expression.name}\n${nested(expression.value)}\n${
         nested(expression.body)
       })`;
     case "let-rec":
@@ -206,13 +200,13 @@ function formatExpression(expression: SurfaceExpression, depth: number): string 
     case "store-read":
       return `${indent}(store-read\n${nested(expression.store)}\n${nested(expression.index)})`;
     case "store-write":
-      return `${indent}(store-write\n${
-        nested(expression.store)
-      }\n${nested(expression.index)}\n${nested(expression.value)})`;
+      return `${indent}(store-write\n${nested(expression.store)}\n${nested(expression.index)}\n${
+        nested(expression.value)
+      })`;
     case "store-grow":
-      return `${indent}(store-grow\n${
-        nested(expression.store)
-      }\n${nested(expression.length)}\n${nested(expression.initial)})`;
+      return `${indent}(store-grow\n${nested(expression.store)}\n${nested(expression.length)}\n${
+        nested(expression.initial)
+      })`;
     case "numeric-convert":
       return `${indent}(convert${expression.conversion}\n${nested(expression.value)})`;
     case "case": {
@@ -374,13 +368,10 @@ function surfacePayload(module: EncodedModule, tag: number, payload: number): st
       return `value=${payload === 0 ? "false" : "true"}`;
     case ExpressionTag.Name:
     case ExpressionTag.Let:
-    case ExpressionTag.Sequence:
     case ExpressionTag.LetRec:
     case ExpressionTag.CaseArm:
     case ExpressionTag.PatternBind:
       return `symbol=${symbol(module, payload)}`;
-    case ExpressionTag.Binary:
-      return `operator=${binaryOperatorName(payload)}`;
     default:
       return "";
   }
@@ -482,8 +473,6 @@ function formatType(type: TypeSchema | Type): string {
       return "()";
     case "parameter":
       return type.name;
-    case "tuple":
-      return `(${formatType(type.values[0])}, ${formatType(type.values[1])})`;
     case "named": {
       const arguments_ = type.arguments.length === 0
         ? ""

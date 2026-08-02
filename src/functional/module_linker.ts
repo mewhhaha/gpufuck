@@ -1,4 +1,4 @@
-import { type EncodedModule, type SourceRange, type Span, type TypeSchema } from "./abi.ts";
+import type { EncodedModule, SourceRange, Span, TypeSchema } from "./abi.ts";
 import type { HostCapabilityDeclaration, SurfaceModuleOptions } from "./host_contract.ts";
 import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
 import { effectSetFrom } from "./effect_set.ts";
@@ -751,7 +751,6 @@ function collectReferencedDefinitions(
       removeBoundNames(boundNames, expression.parameters);
       return;
     case "let":
-    case "sequence":
       collect(expression.value);
       addBoundNames(boundNames, [expression.name]);
       collect(expression.body);
@@ -836,7 +835,6 @@ function collectReferencedDefinitions(
     case "signed-integer-64":
     case "float-32":
     case "float-64":
-    case "whole-number-f64":
     case "boolean":
     case "text":
     case "bytes":
@@ -876,7 +874,6 @@ function rewriteExpression(
     case "signed-integer-64":
     case "float-32":
     case "float-64":
-    case "whole-number-f64":
     case "boolean":
     case "text":
     case "bytes":
@@ -898,8 +895,7 @@ function rewriteExpression(
       removeBoundNames(boundNames, expression.parameters);
       return { ...expression, body, span };
     }
-    case "let":
-    case "sequence": {
+    case "let": {
       const value = rewrite(expression.value);
       addBoundNames(boundNames, [expression.name]);
       const body = rewrite(expression.body);
@@ -1102,11 +1098,6 @@ function rewriteSchema(
     case "unit":
     case "parameter":
       return schema;
-    case "tuple":
-      return {
-        kind: "tuple",
-        values: [rewriteSchema(schema.values[0], types)!, rewriteSchema(schema.values[1], types)!],
-      };
     case "named":
       return {
         kind: "named",

@@ -44,7 +44,6 @@ export type InputValue =
   | { readonly kind: "signed-integer-64"; readonly value: bigint }
   | { readonly kind: "float-32"; readonly value: number }
   | { readonly kind: "float-64"; readonly value: number }
-  | { readonly kind: "whole-number-f64"; readonly value: number }
   | { readonly kind: "boolean"; readonly value: boolean }
   | { readonly kind: "unit" }
   | {
@@ -280,10 +279,7 @@ async function inspectModuleNumericRequirements(
   let boundedWasm = false;
   for (const node of nodes) {
     if (node.tag === CoreTag.SignedInteger64) signedInteger64 = true;
-    if (
-      node.tag === CoreTag.Float64 ||
-      node.tag === CoreTag.WholeNumberF64
-    ) boundedWasm = true;
+    if (node.tag === CoreTag.Float64) boundedWasm = true;
     if (
       node.tag === CoreTag.Text || node.tag === CoreTag.Bytes ||
       node.tag === CoreTag.RuntimeFault || node.tag === CoreTag.BufferAppend ||
@@ -298,7 +294,6 @@ async function inspectModuleNumericRequirements(
       if (node.payload === UnaryOperator.NegateSignedInteger64) signedInteger64 = true;
       if (
         node.payload === UnaryOperator.NegateFloat64 ||
-        node.payload === UnaryOperator.NegateWholeNumberF64 ||
         node.payload === UnaryOperator.SquareRootFloat32
       ) boundedWasm = true;
     }
@@ -316,10 +311,6 @@ async function inspectModuleNumericRequirements(
         node.payload >= BinaryOperator.EqualFloat64 &&
           node.payload <= BinaryOperator.DivideFloat64 ||
         node.payload === BinaryOperator.RemainderFloat64
-      ) boundedWasm = true;
-      if (
-        node.payload >= BinaryOperator.EqualWholeNumberF64 &&
-        node.payload <= BinaryOperator.RemainderWholeNumberF64
       ) boundedWasm = true;
       if (node.payload === BinaryOperator.DivideFloat32) boundedWasm = true;
     }
@@ -472,8 +463,6 @@ export async function evaluateModuleWithBoundedWasm(
 
 function wasmInputValue(value: InputValue): WasmValue {
   switch (value.kind) {
-    case "whole-number-f64":
-      return { kind: "integer", value: value.value };
     case "tuple":
       return {
         kind: "tuple",

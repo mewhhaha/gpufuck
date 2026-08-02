@@ -73,7 +73,6 @@ function elaborateExpression(
     case "signed-integer-64":
     case "float-32":
     case "float-64":
-    case "whole-number-f64":
     case "boolean":
     case "text":
     case "bytes":
@@ -87,7 +86,6 @@ function elaborateExpression(
         body: elaborate(expression.body, withNames(lexicalNames, expression.parameters)),
       };
     case "let":
-    case "sequence":
       return {
         ...expression,
         value: elaborate(expression.value),
@@ -269,7 +267,6 @@ function rewriteNames(
     case "signed-integer-64":
     case "float-32":
     case "float-64":
-    case "whole-number-f64":
     case "boolean":
     case "text":
     case "bytes":
@@ -289,7 +286,6 @@ function rewriteNames(
         ),
       };
     case "let":
-    case "sequence":
       return {
         ...expression,
         value: rewrite(expression.value),
@@ -411,7 +407,6 @@ function freeNames(
       case "signed-integer-64":
       case "float-32":
       case "float-64":
-      case "whole-number-f64":
       case "boolean":
       case "text":
       case "bytes":

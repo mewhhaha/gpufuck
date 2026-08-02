@@ -1,4 +1,4 @@
-export const MODULE_ABI_VERSION = 9;
+export const MODULE_ABI_VERSION = 10;
 export const NO_INDEX = 0xffffffff;
 export const UNKNOWN_CONSTRUCTOR_FLAG = 0x80000000;
 export const MAXIMUM_SOURCE_BYTE_LENGTH = 1024 * 1024;
@@ -75,28 +75,16 @@ export const ExpressionTag = {
   If: 5,
   Lambda: 6,
   Apply: 7,
-  Unary: 8,
-  Binary: 9,
   Case: 10,
   CaseArm: 11,
   PatternBind: 12,
   LetRec: 16,
-  Sequence: 17,
   SignedInteger64: 19,
   Float32: 20,
   Float64: 21,
-  NumericConvert: 22,
   Text: 23,
   Bytes: 24,
   RuntimeFault: 25,
-  WholeNumberF64: 26,
-  BufferAppend: 27,
-  StoreNew: 28,
-  StoreLength: 29,
-  StoreRead: 30,
-  StoreWrite: 31,
-  StoreGrow: 32,
-  StoreEmpty: 33,
   Prim: 34,
 } as const;
 
@@ -109,8 +97,8 @@ export const CoreTag = {
   If: ExpressionTag.If,
   Lambda: ExpressionTag.Lambda,
   Apply: ExpressionTag.Apply,
-  Unary: ExpressionTag.Unary,
-  Binary: ExpressionTag.Binary,
+  Unary: 8,
+  Binary: 9,
   Case: ExpressionTag.Case,
   CaseArm: ExpressionTag.CaseArm,
   PatternBind: ExpressionTag.PatternBind,
@@ -121,18 +109,17 @@ export const CoreTag = {
   SignedInteger64: ExpressionTag.SignedInteger64,
   Float32: ExpressionTag.Float32,
   Float64: ExpressionTag.Float64,
-  NumericConvert: ExpressionTag.NumericConvert,
+  NumericConvert: 22,
   Text: ExpressionTag.Text,
   Bytes: ExpressionTag.Bytes,
   RuntimeFault: ExpressionTag.RuntimeFault,
-  WholeNumberF64: ExpressionTag.WholeNumberF64,
-  BufferAppend: ExpressionTag.BufferAppend,
-  StoreNew: ExpressionTag.StoreNew,
-  StoreLength: ExpressionTag.StoreLength,
-  StoreRead: ExpressionTag.StoreRead,
-  StoreWrite: ExpressionTag.StoreWrite,
-  StoreGrow: ExpressionTag.StoreGrow,
-  StoreEmpty: ExpressionTag.StoreEmpty,
+  BufferAppend: 27,
+  StoreNew: 28,
+  StoreLength: 29,
+  StoreRead: 30,
+  StoreWrite: 31,
+  StoreGrow: 32,
+  StoreEmpty: 33,
   Prim: ExpressionTag.Prim,
 } as const;
 
@@ -166,7 +153,6 @@ export const UnaryOperator = {
   NegateFloat32: 3,
   NegateFloat64: 4,
   SquareRootFloat32: 5,
-  NegateWholeNumberF64: 6,
 } as const;
 
 export type UnaryOperator = (typeof UnaryOperator)[keyof typeof UnaryOperator];
@@ -226,17 +212,6 @@ export const BinaryOperator = {
   ShiftRightUnsignedSignedInteger64: 52,
   StructuralEqual: 53,
   StructuralNotEqual: 54,
-  EqualWholeNumberF64: 55,
-  NotEqualWholeNumberF64: 56,
-  LessWholeNumberF64: 57,
-  LessEqualWholeNumberF64: 58,
-  GreaterWholeNumberF64: 59,
-  GreaterEqualWholeNumberF64: 60,
-  AddWholeNumberF64: 61,
-  SubtractWholeNumberF64: 62,
-  MultiplyWholeNumberF64: 63,
-  DivideWholeNumberF64: 64,
-  RemainderWholeNumberF64: 65,
   RemainderFloat64: 66,
 } as const;
 
@@ -292,7 +267,6 @@ export type Type =
   | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" }
-  | { readonly kind: "tuple"; readonly values: readonly [Type, Type] }
   | {
     readonly kind: "named";
     readonly name: string;
@@ -308,10 +282,6 @@ export type TypeSchema =
   | { readonly kind: "boolean" }
   | { readonly kind: "unit" }
   | { readonly kind: "parameter"; readonly name: string }
-  | {
-    readonly kind: "tuple";
-    readonly values: readonly [TypeSchema, TypeSchema];
-  }
   | {
     readonly kind: "named";
     readonly name: string;

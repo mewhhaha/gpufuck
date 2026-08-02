@@ -17,6 +17,7 @@ import {
   NodeWord,
   type NumericConversion,
   PAIR_CONSTRUCTOR_NAME,
+  PAIR_TYPE_NAME,
   RuntimeFaultCategory,
   type SourceType,
   type Span,
@@ -24,7 +25,7 @@ import {
   THUNK_TYPE_NAME,
   TypecheckingProfile,
   type TypeSchema,
-  UnaryOperator,
+  type UnaryOperator,
   UNIT_CONSTRUCTOR_NAME,
 } from "./abi.ts";
 import {
@@ -52,7 +53,6 @@ import {
   SLICE_TYPE_NAME,
   type SurfaceModuleOptions,
   TEXT_TYPE_NAME,
-  WHOLE_NUMBER_F64_TYPE_NAME,
 } from "./host_contract.ts";
 import { elaborateCaseDefaults } from "./case_defaults.ts";
 import { type EffectSet, effectSet, effectSetFrom } from "./effect_set.ts";
@@ -217,13 +217,12 @@ export function buildSurfaceModule(
   const declaredNames = new Set(typeDeclarations.map((declaration) => declaration.name));
   for (const declaredName of declaredNames) {
     if (
-      declaredName === "$UnitType" || declaredName === "$TupleType" ||
+      declaredName === "$UnitType" || declaredName === PAIR_TYPE_NAME ||
       declaredName === THUNK_TYPE_NAME ||
       declaredName === INIT_TYPE_NAME || declaredName === TEXT_TYPE_NAME ||
       declaredName === BYTES_TYPE_NAME || declaredName === ERASED_TYPE_NAME ||
       declaredName === ARRAY_TYPE_NAME ||
       declaredName === STORE_TYPE_NAME ||
-      declaredName === WHOLE_NUMBER_F64_TYPE_NAME ||
       declaredName === SLICE_TYPE_NAME ||
       declaredName.startsWith(RESOURCE_TYPE_PREFIX)
     ) {
@@ -408,18 +407,6 @@ function requireSurfaceTypeSchema(
     case "parameter":
       if (typeof schema.name !== "string" || schema.name.length === 0) {
         throw new TypeError(`functional surface ${location} has an unnamed type parameter`);
-      }
-      return;
-    case "tuple":
-      if (!Array.isArray(schema.values) || schema.values.length !== 2) {
-        throw new TypeError(`functional surface ${location} tuple must contain two values`);
-      }
-      traversal.activeTypes.add(schema);
-      try {
-        requireSurfaceTypeSchema(schema.values[0], location, depth + 1, traversal);
-        requireSurfaceTypeSchema(schema.values[1], location, depth + 1, traversal);
-      } finally {
-        traversal.activeTypes.delete(schema);
       }
       return;
     case "named":
@@ -625,8 +612,6 @@ function schemaContainsForall(schema: TypeSchema): boolean {
   switch (schema.kind) {
     case "forall":
       return true;
-    case "tuple":
-      return schemaContainsForall(schema.values[0]) || schemaContainsForall(schema.values[1]);
     case "named":
       return schema.arguments.some(schemaContainsForall);
     case "function":
@@ -676,18 +661,12 @@ function collectBoundaryTypeNames(
       if (
         schema.name === TEXT_TYPE_NAME || schema.name === BYTES_TYPE_NAME ||
         schema.name === ERASED_TYPE_NAME ||
-        schema.name === WHOLE_NUMBER_F64_TYPE_NAME ||
         schema.name === ARRAY_TYPE_NAME || schema.name === SLICE_TYPE_NAME ||
         schema.name.startsWith(RESOURCE_TYPE_PREFIX)
       ) {
         names.add(schema.name);
       }
       for (const argument of schema.arguments) visit(argument);
-      return;
-    }
-    if (schema.kind === "tuple") {
-      visit(schema.values[0]);
-      visit(schema.values[1]);
       return;
     }
     if (schema.kind === "function") {
@@ -714,16 +693,12 @@ function collectBoundaryTypeNames(
       case "bytes":
         names.add(BYTES_TYPE_NAME);
         return;
-      case "whole-number-f64":
-        names.add(WHOLE_NUMBER_F64_TYPE_NAME);
-        return;
       case "lambda":
       case "unary":
       case "numeric-convert":
         visitExpression(expression.kind === "lambda" ? expression.body : expression.value);
         return;
       case "let":
-      case "sequence":
       case "let-rec":
         visitExpression(expression.value);
         visitExpression(expression.body);
@@ -834,7 +809,6 @@ function expressionFeatureMask(expression: SurfaceExpression): number {
         visit(nested.body);
         break;
       case "let":
-      case "sequence":
       case "let-rec":
         visit(nested.body);
         visit(nested.value);
@@ -914,7 +888,6 @@ function expressionFeatureMask(expression: SurfaceExpression): number {
       case "signed-integer-64":
       case "float-32":
       case "float-64":
-      case "whole-number-f64":
       case "boolean":
       case "text":
       case "bytes":
@@ -981,7 +954,7 @@ function primitiveTypeDeclarations(
       span,
     },
     {
-      name: "$TupleType",
+      name: PAIR_TYPE_NAME,
       parameters: ["first", "second"],
       constructors: [{
         name: PAIR_CONSTRUCTOR_NAME,
@@ -1076,30 +1049,6 @@ class SurfaceExpressionEncoder {
         this.words[node * NODE_WORD_LENGTH + NodeWord.Child0] = high;
         return node;
       }
-      case "whole-number-f64": {
-        if (!Number.isFinite(expression.value) || !Number.isInteger(expression.value)) {
-          throw new RangeError(
-            `functional whole-number f64 literal must be a finite integer; received ${expression.value}`,
-          );
-        }
-        const typeIndex = this.typeIndices.get(WHOLE_NUMBER_F64_TYPE_NAME);
-        if (typeIndex === undefined) {
-          throw new Error(
-            `functional surface omitted literal type ${JSON.stringify(WHOLE_NUMBER_F64_TYPE_NAME)}`,
-          );
-        }
-        const [low, high] = float64Bits(expression.value);
-        const node = this.emitNode(
-          ExpressionTag.WholeNumberF64,
-          low,
-          [],
-          parent,
-          expression.span,
-        );
-        this.words[node * NODE_WORD_LENGTH + NodeWord.Child0] = high;
-        this.words[node * NODE_WORD_LENGTH + NodeWord.Child1] = typeIndex;
-        return node;
-      }
       case "boolean":
         return this.emitNode(
           ExpressionTag.Boolean,
@@ -1181,19 +1130,13 @@ class SurfaceExpressionEncoder {
         );
         const value = this.emit(expression.value, node);
         const body = this.emit(expression.body, node);
-        this.setChildren(node, [value, body]);
-        return node;
-      }
-      case "sequence": {
-        const node = this.reserveNode(
-          ExpressionTag.Sequence,
-          this.symbols.intern(expression.name),
-          parent,
-          expression.span,
-        );
-        const value = this.emit(expression.value, node);
-        const body = this.emit(expression.body, node);
-        this.setChildren(node, [value, body]);
+        this.setChildren(node, [
+          value,
+          body,
+          expression.evaluation === "strict"
+            ? EvaluationMode.StrictEager
+            : EvaluationMode.LazyCallByNeed,
+        ]);
         return node;
       }
       case "let-rec": {
@@ -1251,24 +1194,16 @@ class SurfaceExpressionEncoder {
           [expression.value],
           parent,
           expression.span,
-          expression.operator === UnaryOperator.NegateWholeNumberF64
-            ? this.requiredTypeIndex(WHOLE_NUMBER_F64_TYPE_NAME)
-            : NO_INDEX,
+          NO_INDEX,
         );
       }
       case "binary": {
-        const auxiliaryType = (
-            expression.operator >= BinaryOperator.EqualWholeNumberF64 &&
-            expression.operator <= BinaryOperator.RemainderWholeNumberF64
-          )
-          ? this.requiredTypeIndex(WHOLE_NUMBER_F64_TYPE_NAME)
-          : NO_INDEX;
         return this.emitPrim(
           binaryPrimop(expression.operator),
           [expression.left, expression.right],
           parent,
           expression.span,
-          auxiliaryType,
+          NO_INDEX,
         );
       }
       case "text-append":
@@ -1580,12 +1515,6 @@ function sourceType(
     case "unit":
     case "parameter":
       return { ...schema, ...sourceSpan };
-    case "tuple":
-      return {
-        ...schema,
-        values: [sourceType(schema.values[0], span), sourceType(schema.values[1], span)],
-        ...sourceSpan,
-      };
     case "named":
       return {
         ...schema,
@@ -1622,7 +1551,6 @@ type SurfaceBuilderBase = Readonly<{
   signedInteger64(value: bigint): SurfaceExpression;
   float32(value: number): SurfaceExpression;
   float64(value: number): SurfaceExpression;
-  wholeNumberF64(value: number): SurfaceExpression;
   boolean(value: boolean): SurfaceExpression;
   text(value: string): SurfaceExpression;
   bytes(value: Uint8Array): SurfaceExpression;
@@ -1759,9 +1687,6 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
     float64(value: number): SurfaceExpression {
       return { kind: "float-64", value, ...spanned };
     },
-    wholeNumberF64(value: number): SurfaceExpression {
-      return { kind: "whole-number-f64", value, ...spanned };
-    },
     boolean(value: boolean): SurfaceExpression {
       return { kind: "boolean", value, ...spanned };
     },
@@ -1822,7 +1747,8 @@ function createSurface(span: Span | undefined): SurfaceBuilder {
       body: SurfaceExpression,
     ): SurfaceExpression {
       return {
-        kind: "sequence",
+        kind: "let",
+        evaluation: "strict",
         name,
         value,
         body,
