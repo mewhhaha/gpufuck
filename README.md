@@ -138,6 +138,7 @@ when its compiler policy changes.
 | Emit a standalone module                               | `compileModuleToWasm()`                             |
 | Put independent entries in one shared-runtime artifact | `compileModulesToWasm()`                            |
 | Compile independent modules in workers                 | `ParallelFunctionalCompilerService`                 |
+| Compile one import graph in dependency waves           | `FunctionalProjectCompiler`                         |
 | Publish structural host-facing values                  | `WasmCompilationOptions.canonicalAbi`               |
 | Generate matching Core Wasm and WIT                    | `compileModuleToComponentBoundary()`                |
 
@@ -240,6 +241,28 @@ linker qualifies private names, follows reachable imports, checks source contrac
 
 Do not concatenate Surface definition arrays yourself. That loses module ownership, source offsets,
 and typed import checks.
+
+For a project large enough to benefit from parallel semantic work, retain the artifacts and compile
+the graph directly:
+
+```ts
+const projectCompiler = new FunctionalProjectCompiler();
+const result = await projectCompiler.compile(artifacts, {
+  module: "app",
+  exportName: "main",
+});
+if (!result.ok) throw new Error(result.failures[0].diagnostics[0].message);
+
+console.log(result.schedule.waves);
+const wasm = await compileModuleToWasm(result.module);
+result.module.destroy();
+```
+
+The compiler infers reusable export interfaces, compiles modules whose dependencies are ready in the
+same batch, and links their relocated Core back into one optimized program. Its resident cache keys
+each unit by its body and imported interfaces, so an implementation-only dependency edit does not
+recompile unchanged importers. Import and export `effects` are optional contracts; when present,
+they must match the inferred summaries.
 
 ## Compile, run, or publish Wasm
 

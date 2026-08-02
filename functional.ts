@@ -40,11 +40,13 @@ export {
   type ModuleTypeImport,
 } from "./src/functional/module_linker.ts";
 export * from "./src/functional/module_transfer.ts";
+export * from "./src/functional/module_interface.ts";
 
 // Compiling it: admission, dispatch, and the resolved Core that comes back.
 export * from "./src/functional/compiler.ts";
 export * from "./src/compiler_performance_trace.ts";
 export * from "./src/functional/compiler_service.ts";
+export * from "./src/functional/project_compiler.ts";
 export * from "./src/functional/parallel_compiler_service.ts";
 export * from "./src/functional/compilation_admission.ts";
 export * from "./src/functional/compiler_module.ts";

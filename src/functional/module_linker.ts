@@ -1,7 +1,7 @@
 import type { EncodedModule, SourceRange, Span, TypeSchema } from "./abi.ts";
 import type { HostCapabilityDeclaration, SurfaceModuleOptions } from "./host_contract.ts";
 import { INIT_CONSTRUCTOR_NAME } from "./host_contract.ts";
-import { effectSetFrom } from "./effect_set.ts";
+import { type EffectSet, effectSetFrom } from "./effect_set.ts";
 import {
   buildSurfaceModule,
   type SurfaceCaseArm,
@@ -62,12 +62,14 @@ export interface ModuleImport {
   readonly fromModule: string;
   readonly exportName: string;
   readonly type?: TypeSchema;
+  readonly effects?: EffectSet;
 }
 
 export interface ModuleExport {
   readonly name: string;
   readonly definition: string;
   readonly type?: TypeSchema;
+  readonly effects?: EffectSet;
 }
 
 export interface ModuleTypeImport {
@@ -132,6 +134,12 @@ export function createModuleArtifact(
           ? definition
           : { ...definition, effects: [...definition.effects] }
       ),
+      imports: artifact.imports.map((imported) =>
+        imported.effects === undefined ? imported : { ...imported, effects: [...imported.effects] }
+      ),
+      exports: artifact.exports.map((exported) =>
+        exported.effects === undefined ? exported : { ...exported, effects: [...exported.effects] }
+      ),
       options: {
         ...artifact.options,
         ...(artifact.options.hostCapabilities === undefined ? {} : {
@@ -161,6 +169,18 @@ export function createModuleArtifact(
     if (definition.effects === undefined) continue;
     Object.defineProperty(definition, "effects", {
       value: effectSetFrom(definition.effects),
+    });
+  }
+  for (const imported of snapshot.imports) {
+    if (imported.effects === undefined) continue;
+    Object.defineProperty(imported, "effects", {
+      value: effectSetFrom(imported.effects),
+    });
+  }
+  for (const exported of snapshot.exports) {
+    if (exported.effects === undefined) continue;
+    Object.defineProperty(exported, "effects", {
+      value: effectSetFrom(exported.effects),
     });
   }
   for (const capability of snapshot.options.hostCapabilities ?? []) {
@@ -200,6 +220,11 @@ function validateModuleArtifact(artifact: ModuleArtifact): void {
     requireModuleName(imported.name, `module ${JSON.stringify(artifact.name)} import name`);
     requireModuleName(imported.fromModule, `import ${JSON.stringify(imported.name)} source module`);
     requireModuleName(imported.exportName, `import ${JSON.stringify(imported.name)} export name`);
+    requireEffectSet(
+      artifact.name,
+      `import ${JSON.stringify(imported.name)}`,
+      imported.effects,
+    );
     if (importNames.has(imported.name)) {
       throw invalidArtifact(
         artifact.name,
@@ -237,6 +262,11 @@ function validateModuleArtifact(artifact: ModuleArtifact): void {
   const exportNames = new Set<string>();
   for (const exported of artifact.exports) {
     requireModuleName(exported.name, `module ${JSON.stringify(artifact.name)} export name`);
+    requireEffectSet(
+      artifact.name,
+      `export ${JSON.stringify(exported.name)}`,
+      exported.effects,
+    );
     if (!definitionNames.has(exported.definition)) {
       throw invalidArtifact(
         artifact.name,
@@ -482,6 +512,7 @@ export function linkModules(
         name: alias,
         parameters: [],
         annotation,
+        ...(imported.effects === undefined ? {} : { effects: imported.effects }),
         body: { kind: "name", name: target, span: offsetSpan(undefined, sourceBase) },
         span: offsetSpan(undefined, sourceBase),
       });
@@ -651,6 +682,18 @@ export function linkModules(
     module: { ...module, sources: Object.freeze(sources) },
     sources: Object.freeze(sources),
   };
+}
+
+function requireEffectSet(
+  module: string,
+  boundary: string,
+  effects: EffectSet | undefined,
+): void {
+  if (effects === undefined || effects instanceof Set) return;
+  throw invalidArtifact(
+    module,
+    `functional module ${JSON.stringify(module)} ${boundary} effects must be a ReadonlySet`,
+  );
 }
 
 function artifactDefinitionReachability(

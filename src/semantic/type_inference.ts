@@ -35,14 +35,21 @@ export interface TypeInferenceSuccess {
   readonly constructorFieldTypes: readonly (readonly TypeSchema[])[];
 }
 
+export interface HostTypeInferenceSuccess extends TypeInferenceSuccess {
+  /** Indexed by definition order. Free parameters are explicitly quantified. */
+  readonly definitionSchemes: readonly TypeSchema[];
+}
+
 export interface TypeInferenceFailure {
   readonly ok: false;
   readonly diagnostic: SemanticDiagnostic;
 }
 
 export type TypeInferenceResult =
-  | TypeInferenceSuccess
+  | HostTypeInferenceSuccess
   | TypeInferenceFailure;
+
+export type SharedTypeInferenceResult = TypeInferenceSuccess | TypeInferenceFailure;
 
 interface InferenceVariable {
   readonly kind: "variable";
@@ -245,7 +252,7 @@ class InferenceContext {
     this.#trace = trace;
   }
 
-  infer(): TypeInferenceSuccess {
+  infer(): HostTypeInferenceSuccess {
     measureCompilerStage(
       this.#trace,
       "semantic.inference.metadata",
@@ -312,6 +319,16 @@ class InferenceContext {
         return Object.freeze({
           ok: true,
           mainType: this.toPublicType(mainScheme.type),
+          definitionSchemes: Object.freeze(
+            Array.from({ length: this.#surface.definitionCount }, (_, definitionIndex) => {
+              const symbol = this.definitionWord(definitionIndex, DefinitionWord.Symbol);
+              const scheme = this.#definitionSchemes.get(symbol);
+              if (scheme === undefined) {
+                throw new Error(`Definition ${definitionIndex} has no inferred type scheme.`);
+              }
+              return this.toPublicSchema(scheme);
+            }),
+          ),
           typeDeclarations: Object.freeze(this.#publicTypeDeclarations),
           constructorFieldTypes: Object.freeze(
             this.#constructorFieldTypes.map((fields) => Object.freeze(fields)),
@@ -765,11 +782,8 @@ class InferenceContext {
     for (const definitionIndex of component) {
       const annotation = this.#surface.definitionTypes[definitionIndex]?.annotation;
       if (annotation === null || annotation === undefined) continue;
-      const annotationParameters = new Map<string, TypeParameter>();
-      const annotationType = this.typeFromSchema(
+      const annotationType = this.definitionAnnotationType(
         annotation,
-        annotationParameters,
-        "implicit",
         this.definitionSpan(definitionIndex),
       );
       this.unify(
@@ -1855,6 +1869,20 @@ class InferenceContext {
     }
   }
 
+  private definitionAnnotationType(
+    schema: TypeSchema,
+    fallbackSpan: SemanticDiagnostic["span"],
+  ): InferenceType {
+    if (schema.kind !== "forall") {
+      return this.typeFromSchema(schema, new Map(), "implicit", fallbackSpan);
+    }
+    const parameters = new Map<string, TypeParameter>();
+    for (const name of schema.parameters) {
+      parameters.set(name, this.rigidVariable(name));
+    }
+    return this.typeFromSchema(schema.body, parameters, "declared", fallbackSpan);
+  }
+
   private copySchema(schema: TypeSchema): TypeSchema {
     switch (schema.kind) {
       case "integer":
@@ -1912,6 +1940,60 @@ class InferenceContext {
       case "variable":
       case "rigid":
         throw new Error(`Cannot expose non-concrete type ${this.formatType(pruned)}.`);
+    }
+  }
+
+  private toPublicSchema(scheme: TypeScheme): TypeSchema {
+    const parameters = new Map<TypeParameter, string>();
+    for (const [index, parameter] of scheme.parameters.entries()) {
+      const pruned = this.prune(parameter);
+      if (pruned.kind !== "variable" && pruned.kind !== "rigid") continue;
+      parameters.set(pruned, `t${index}`);
+    }
+    const body = this.inferenceTypeSchema(scheme.type, parameters);
+    if (parameters.size === 0) return body;
+    return Object.freeze({
+      kind: "forall",
+      parameters: Object.freeze([...parameters.values()]),
+      body,
+    });
+  }
+
+  private inferenceTypeSchema(
+    type: InferenceType,
+    parameters: ReadonlyMap<TypeParameter, string>,
+  ): TypeSchema {
+    const pruned = this.prune(type);
+    switch (pruned.kind) {
+      case "integer":
+      case "signed-integer-64":
+      case "float-32":
+      case "float-64":
+      case "boolean":
+      case "unit":
+        return Object.freeze({ kind: pruned.kind });
+      case "named":
+        return Object.freeze({
+          kind: "named",
+          name: pruned.name,
+          arguments: Object.freeze(
+            pruned.arguments.map((argument) => this.inferenceTypeSchema(argument, parameters)),
+          ),
+        });
+      case "function":
+        return Object.freeze({
+          kind: "function",
+          parameter: this.inferenceTypeSchema(pruned.parameter, parameters),
+          result: this.inferenceTypeSchema(pruned.result, parameters),
+        });
+      case "variable":
+      case "rigid": {
+        const name = parameters.get(pruned);
+        if (name === undefined) {
+          throw new Error(`Cannot expose unquantified type ${this.formatType(pruned)}.`);
+        }
+        return Object.freeze({ kind: "parameter", name });
+      }
     }
   }
 

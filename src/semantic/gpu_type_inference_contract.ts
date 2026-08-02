@@ -1,6 +1,6 @@
 import type { EncodedSemanticSurface } from "./abi.ts";
 import type { GpuSemanticStateSnapshot } from "./gpu_semantic_contract.ts";
-import type { TypeInferenceResult } from "./type_inference.ts";
+import type { SharedTypeInferenceResult } from "./type_inference.ts";
 
 export interface GpuTypeInferenceBuffers {
   readonly coreNodeBuffer: GPUBuffer;
@@ -65,7 +65,7 @@ export interface GpuTypeInferenceDispatchObservation {
   readonly outputCapacity: number;
 }
 
-export type GpuTypeInferenceRun = TypeInferenceResult & {
+export type GpuTypeInferenceRun = SharedTypeInferenceResult & {
   readonly transitions: number;
   readonly totalSteps: number;
 };
