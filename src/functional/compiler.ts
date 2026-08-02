@@ -236,10 +236,8 @@ export class GpuCompiler {
     module: EncodedModule,
     options: CompilationOptions = {},
   ): Promise<CompileResult> {
-    if (
-      options.signal === undefined && options.maximumSteps === undefined &&
-      options.maximumStepsPerDispatch === undefined
-    ) {
+    validateCompilationOptions(options);
+    if (options.signal === undefined && options.maximumSteps === undefined) {
       return await this.#compileCachedModule(module, options);
     }
     const results = await this.compileBatch([module], options);

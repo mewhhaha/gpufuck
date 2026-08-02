@@ -56,6 +56,8 @@ const STAGE_LABELS: Readonly<Record<Stage, string>> = {
   total: "Total end-to-end, including setup",
 };
 
+const GPU_CORE_STEPS_PER_DISPATCH = 16_384;
+
 const STAGES = Object.keys(STAGE_LABELS) as readonly Stage[];
 
 const element = <T extends HTMLElement>(id: string): T => {
@@ -331,7 +333,9 @@ async function compileAndRun(): Promise<void> {
     let verified: Awaited<ReturnType<BlotCompilerSession["verify"]>>;
     try {
       verified = await activeSession.verify(selected.path, {
-        ...(compilerBackend === "gpu" ? { maximumStepsPerDispatch: 128 } : {}),
+        ...(compilerBackend === "gpu"
+          ? { maximumStepsPerDispatch: GPU_CORE_STEPS_PER_DISPATCH }
+          : {}),
         observeStage: async (stage) => {
           if (stage === "core") {
             setStatus(

@@ -97,6 +97,43 @@ Deno.test("CPU and GPU compilation produce identical resolved Core", async () =>
   }
 });
 
+Deno.test("a GPU dispatch quantum preserves unchanged Core reuse", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "dispatch_cache",
+      parameters: [],
+      annotation: null,
+      body: surface.integer(42),
+    }],
+    [],
+    "dispatch_cache",
+    0,
+  );
+  const compiler = functionalRuntime().compiler;
+  const cold = await compiler.compileModule(module, { maximumStepsPerDispatch: 16_384 });
+  ok(cold.ok, cold.ok ? undefined : cold.diagnostics[0].message);
+  if (!cold.ok) return;
+  cold.module.destroy();
+
+  const trace = new CompilerPerformanceTrace();
+  const warm = await compiler.compileModule(module, {
+    maximumStepsPerDispatch: 16_384,
+    trace,
+  });
+  ok(warm.ok, warm.ok ? undefined : warm.diagnostics[0].message);
+  if (!warm.ok) return;
+  try {
+    const cache = trace.snapshot().find((event) => event.stage === "semantic.service-cache");
+    equal(cache?.annotations.cacheLevel, "module");
+    equal(
+      trace.snapshot().some((event) => event.stage === "semantic.gpu.resolve-infer-readback"),
+      false,
+    );
+  } finally {
+    warm.module.destroy();
+  }
+});
+
 Deno.test("resident GPU compiler restores cached Core after source-only edits", async () => {
   const firstModule = buildSurfaceModule(
     [{
