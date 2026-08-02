@@ -15,6 +15,7 @@ import {
   type CanonicalAbiCoreType,
   type CanonicalAbiExport,
   type CanonicalAbiImport,
+  type CanonicalAbiInterface,
   canonicalAbiLayout,
   canonicalAbiParameterRecord,
   canonicalAbiRecordLayout,
@@ -76,6 +77,7 @@ import {
 import { WasmHostEmitter } from "./wasm_host_emitter.ts";
 import {
   allocateFunction,
+  arenaAllocateFunction,
   canonicalReallocateFunction,
   forceThunkFunction,
   freeFunction,
@@ -152,6 +154,46 @@ function canonicalWasmValueType(type: CanonicalAbiCoreType): number {
   return WasmValueType.F64;
 }
 
+function canonicalAbiUsesBoundaryMemory(interface_: CanonicalAbiInterface): boolean {
+  return interface_.imports.some((field) =>
+    canonicalAbiFunctionUsesBoundaryMemory(field.function, "import")
+  ) || interface_.exports.some((field) =>
+    canonicalAbiFunctionUsesBoundaryMemory(field.function, "export")
+  );
+}
+
+function canonicalAbiFunctionUsesBoundaryMemory(
+  function_: CanonicalAbiExport["function"],
+  direction: "export" | "import",
+): boolean {
+  const signature = canonicalAbiCoreSignature(function_, direction);
+  return signature.indirectParameters || signature.indirectResult ||
+    function_.parameters.some(canonicalAbiTypeUsesMemory) ||
+    canonicalAbiTypeUsesMemory(function_.result);
+}
+
+function canonicalAbiTypeUsesMemory(type: CanonicalAbiType): boolean {
+  switch (type.kind) {
+    case "unit":
+    case "signed-integer-64":
+    case "float-32":
+    case "float-64":
+    case "boolean":
+      return false;
+    case "text":
+    case "array":
+      return true;
+    case "sealed":
+      return canonicalAbiTypeUsesMemory(type.inner);
+    case "record":
+      return type.fields.some((field) => canonicalAbiTypeUsesMemory(field.type));
+    case "variant":
+      return type.cases.some((case_) =>
+        case_.payload !== undefined && canonicalAbiTypeUsesMemory(case_.payload)
+      );
+  }
+}
+
 function sameCanonicalCompiledType(left: Type, right: Type): boolean {
   if (left.kind !== right.kind) return false;
   switch (left.kind) {
@@ -182,6 +224,9 @@ type ValueSource =
   | { readonly kind: "i32-integer-constant"; readonly literal: number }
   | { readonly kind: "i32-boolean"; readonly index: number }
   | { readonly kind: "i32-boolean-constant"; readonly literal: boolean }
+  | { readonly kind: "i64-signed-integer"; readonly index: number }
+  | { readonly kind: "f32"; readonly index: number }
+  | { readonly kind: "f64"; readonly index: number }
   | { readonly kind: "i32-pointer"; readonly index: number }
   | { readonly kind: "capture"; readonly byteOffset: number };
 
@@ -607,7 +652,7 @@ function emitWasmArtifact(
 ): WasmArtifact {
   const emitSpan = trace?.start("wasm.emit");
   try {
-    if (plan.compactScalarEligible && plan.options.canonicalAbi === undefined) {
+    if (plan.compactScalarEligible) {
       const disabledF32x4Workers = new Set<number>();
       let compactCompiler = new WasmCompiler(
         plan,
@@ -719,6 +764,7 @@ class WasmCompiler {
   #nextStaticEnvironmentId = 0;
   #nativeScalarWorkerDepth = 0;
   #requestedAllocator = false;
+  #requestedFree = false;
   #requestedThunkForce = false;
   #structuralEqualitySlot: number | undefined;
 
@@ -997,20 +1043,23 @@ class WasmCompiler {
     if (!this.#compactScalar || scalarResult === undefined || scalarResult.kind === "unit") {
       return undefined;
     }
+    this.validateCanonicalAbiModule();
+    const canonicalAbi = this.#compilationOptions.canonicalAbi;
 
-    const entryRoot = this.#module.definitionRoots[this.#module.entryDefinition];
-    if (entryRoot === undefined) {
-      throw new Error(
-        `functional WASM entry d${this.#module.entryDefinition} exceeds ${this.#module.definitionCount} definitions`,
+    let entryBody: WasmFunctionBody | undefined;
+    if (canonicalAbi === undefined) {
+      const entryRoot = this.#module.definitionRoots[this.#module.entryDefinition];
+      if (entryRoot === undefined) {
+        throw new Error(
+          `functional WASM entry d${this.#module.entryDefinition} exceeds ${this.#module.definitionCount} definitions`,
+        );
+      }
+      const entryInstructions = new WasmInstructions(
+        this.#entry.parameter === undefined ? 0 : 1,
       );
-    }
-    const entryInstructions = new WasmInstructions(
-      this.#entry.parameter === undefined ? 0 : 1,
-    );
-    if (this.#entry.result.kind === "integer") {
-      this.compileIntegerExpression(entryInstructions, entryRoot, []);
-    } else {
-      if (this.#entry.result.kind === "boolean") {
+      if (this.#entry.result.kind === "integer") {
+        this.compileIntegerExpression(entryInstructions, entryRoot, []);
+      } else if (this.#entry.result.kind === "boolean") {
         this.compileBooleanExpression(entryInstructions, entryRoot, []);
       } else if (this.#entry.result.kind === "signed-integer-64") {
         this.compileSignedInteger64Expression(entryInstructions, entryRoot, []);
@@ -1021,24 +1070,23 @@ class WasmCompiler {
       } else {
         this.compileBooleanExpression(entryInstructions, entryRoot, []);
       }
+      entryBody = functionBody(
+        this.functionTypeIndex(
+          this.#entry.parameter === undefined ? [] : [WasmValueType.I64],
+          [wasmValueType(scalarResult)],
+        ),
+        entryInstructions,
+        "compact scalar entry",
+      );
     }
 
-    const entryBody = functionBody(
-      this.functionTypeIndex(
-        this.#entry.parameter === undefined ? [] : [WasmValueType.I64],
-        [wasmValueType(scalarResult)],
-      ),
-      entryInstructions,
-      "compact scalar entry",
-    );
     const callableFunctions: WasmFunctionBody[] = [];
     for (const exported of this.#module.wasmExports) {
       const { parameters, result } = this.wasmExportSignature(exported);
-      const callable = this.compileDirectIntegerWasmExport(
-        exported,
-        parameters,
-        result,
-      );
+      const canonical = canonicalAbi?.exports.find((candidate) => candidate.name === exported.name);
+      const callable = canonical === undefined
+        ? this.compileDirectIntegerWasmExport(exported, parameters, result)
+        : this.compileDirectCanonicalScalarExport(exported, canonical, parameters, result);
       if (callable === undefined) return undefined;
       callableFunctions.push(callable);
     }
@@ -1050,10 +1098,9 @@ class WasmCompiler {
       }
       return body;
     });
-    const entryFunctionIndex = indirectFunctions.length;
     const emittedFunctions = [
       ...indirectFunctions,
-      entryBody,
+      ...(entryBody === undefined ? [] : [entryBody]),
       ...callableFunctions,
     ];
     const requiresRuntime = this.#requestedAllocator ||
@@ -1062,16 +1109,21 @@ class WasmCompiler {
     if (requiresRuntime) return undefined;
 
     const encodeSpan = this.#trace?.start("wasm.encode");
+    const entryFunctionIndex = entryBody === undefined ? undefined : indirectFunctions.length;
+    const firstExportFunctionIndex = indirectFunctions.length + (entryBody === undefined ? 0 : 1);
     const bytes = encodeCompactScalarWasmModule(
       emittedFunctions,
       entryFunctionIndex,
       this.#additionalFunctionTypes,
       {
         runtimeGlobals: this.#runtimeEmitter.compactGlobals,
+        ...(canonicalAbi === undefined
+          ? {}
+          : { canonicalAbiVersion: { major: 1, minor: 0 } as const }),
       },
       this.#module.wasmExports.map((exported, index) => ({
         name: exported.name,
-        functionIndex: entryFunctionIndex + 1 + index,
+        functionIndex: firstExportFunctionIndex + index,
       })),
     );
     encodeSpan?.finish(wasmEncodingAnnotations(
@@ -1110,12 +1162,13 @@ class WasmCompiler {
       const { parameters, result } = this.wasmExportSignature(exported);
       return this.compileDirectIntegerWasmExport(exported, parameters, result);
     });
-    this.#runtimeDefinitionIndices = this.#functionAnalysis.reachableDefinitions([
-      this.#module.entryDefinition,
-      ...this.#module.wasmExports.flatMap((exported, index) =>
-        directCallableFunctions[index] === undefined ? [exported.definitionIndex] : []
-      ),
-    ], {
+    const runtimeRoots = this.#module.wasmExports.flatMap((exported, index) =>
+      directCallableFunctions[index] === undefined ? [exported.definitionIndex] : []
+    );
+    if (this.#compilationOptions.canonicalAbi === undefined) {
+      runtimeRoots.unshift(this.#module.entryDefinition);
+    }
+    this.#runtimeDefinitionIndices = this.#functionAnalysis.reachableDefinitions(runtimeRoots, {
       constantBranches: this.#instrumentedFuel ? "preserve" : "prune",
     });
     reachabilitySpan?.finish({
@@ -1219,21 +1272,52 @@ class WasmCompiler {
       ? WasmValueType.I64
       : wasmValueType(scalarResult);
     const initializeType = this.functionTypeIndex([], [WasmValueType.I32]);
-    const entryInstructions = new WasmInstructions(
-      this.#entry.parameter === undefined ? 0 : 1,
-    );
-    entryInstructions.call(initializeFunctionIndex);
-    entryInstructions.emit(0x1a);
-    this.emitEntryCall(entryInstructions);
-    this.emitPublicResult(entryInstructions, this.#entry.result);
+    const entryInstructions = new WasmInstructions(this.#entry.parameter === undefined ? 0 : 1);
+    if (this.#compilationOptions.canonicalAbi === undefined) {
+      entryInstructions.call(initializeFunctionIndex);
+      entryInstructions.emit(0x1a);
+      this.emitEntryCall(entryInstructions);
+      this.emitPublicResult(entryInstructions, this.#entry.result);
+    } else {
+      entryInstructions.emit(0x00);
+    }
     const freeType = this.functionTypeIndex(
       [WasmValueType.I32, WasmValueType.I32],
       [],
     );
+    const canonicalAbi = this.#compilationOptions.canonicalAbi;
+    const canonicalAbiUsesMemory = canonicalAbi !== undefined &&
+      canonicalAbiUsesBoundaryMemory(canonicalAbi);
+    const arenaAllocation = this.canonicalCallsUseArenaAllocation();
+    const unusedAllocatorInstructions = new WasmInstructions(1);
+    unusedAllocatorInstructions.emit(0x00);
+    const unusedThunkForceInstructions = new WasmInstructions(1);
+    unusedThunkForceInstructions.emit(0x00);
+    const unusedFreeInstructions = new WasmInstructions(2);
+    unusedFreeInstructions.emit(0x01);
+    const allocatorFunction = canonicalAbi === undefined || this.#requestedAllocator ||
+        canonicalAbiUsesMemory
+      ? arenaAllocation ? arenaAllocateFunction() : allocateFunction(this.heapStart())
+      : functionBody(
+        WasmFunctionTypeIndex.Allocator,
+        unusedAllocatorInstructions,
+        "unused allocator slot",
+      );
+    const thunkForceFunction = canonicalAbi === undefined || this.#requestedThunkForce
+      ? forceThunkFunction()
+      : functionBody(
+        WasmFunctionTypeIndex.ThunkForce,
+        unusedThunkForceInstructions,
+        "unused thunk force slot",
+      );
+    const releaseFunction = canonicalAbi === undefined || this.#requestedFree ||
+        canonicalAbiUsesMemory
+      ? freeFunction(freeType, this.heapStart())
+      : functionBody(freeType, unusedFreeInstructions, "unused free slot");
     const baseFunctions = [
-      allocateFunction(this.heapStart()),
-      forceThunkFunction(),
-      freeFunction(freeType, this.heapStart()),
+      allocatorFunction,
+      thunkForceFunction,
+      releaseFunction,
       functionBody(
         forceValueType,
         forceValueInstructions,
@@ -1261,17 +1345,15 @@ class WasmCompiler {
       functions: baseFunctions.length,
     });
     const functions = baseFunctions;
-    const canonicalReallocateType = this.#compilationOptions.canonicalAbi === undefined
-      ? undefined
-      : this.functionTypeIndex(
-        [
-          WasmValueType.I32,
-          WasmValueType.I32,
-          WasmValueType.I32,
-          WasmValueType.I32,
-        ],
-        [WasmValueType.I32],
-      );
+    const canonicalReallocateType = !canonicalAbiUsesMemory ? undefined : this.functionTypeIndex(
+      [
+        WasmValueType.I32,
+        WasmValueType.I32,
+        WasmValueType.I32,
+        WasmValueType.I32,
+      ],
+      [WasmValueType.I32],
+    );
     const canonicalReallocateIndex = canonicalReallocateType === undefined
       ? undefined
       : this.#functionImports.length + functions.length;
@@ -1316,6 +1398,7 @@ class WasmCompiler {
         indirectFunctions.length,
       allocateFunctionIndex: this.#functionImports.length,
       freeFunctionIndex: this.#functionImports.length + 2,
+      exportMemory: canonicalAbi === undefined || canonicalAbiUsesMemory,
       functionExports,
       instrumentedFuel: this.#instrumentedFuel,
       ...(this.#compilationOptions.canonicalAbi === undefined
@@ -1745,6 +1828,87 @@ class WasmCompiler {
     );
   }
 
+  compileDirectCanonicalScalarExport(
+    exported: WasmExport,
+    canonical: CanonicalAbiExport,
+    parameters: readonly Type[],
+    result: Type,
+  ): WasmFunctionBody | undefined {
+    if (exported.effects.size !== 0 || this.#hostFields.length !== 0) return undefined;
+    const signature = canonicalAbiCoreSignature(canonical.function, "export");
+    if (
+      signature.indirectParameters || signature.indirectResult ||
+      parameters.length !== canonical.function.parameters.length ||
+      signature.results.length !== 1
+    ) return undefined;
+
+    const rootNode = this.#module.definitionRoots[exported.definitionIndex];
+    if (rootNode === undefined) {
+      throw new Error(
+        `functional WASM canonical export ${
+          JSON.stringify(exported.name)
+        } definition d${exported.definitionIndex} exceeds ${this.#module.definitionCount} definitions`,
+      );
+    }
+
+    const instructions = new WasmInstructions(signature.parameters.length);
+    let bodyNode = rootNode;
+    let environment: Environment = [];
+    if (parameters.length > 0) {
+      const functionShape = this.#functionAnalysis.function(rootNode);
+      if (
+        functionShape === undefined || functionShape.parameterCount !== parameters.length ||
+        this.uncurriedWorkerHasEnvironmentParameter(functionShape, undefined)
+      ) return undefined;
+      const parameterBindings: Binding[] = canonical.function.parameters.map((parameter, index) => {
+        if (parameter.kind === "signed-integer-64") {
+          return { kind: "i64-signed-integer", index };
+        }
+        if (parameter.kind === "float-32") return { kind: "f32", index };
+        if (parameter.kind === "float-64") return { kind: "f64", index };
+        if (parameter.kind === "boolean") {
+          instructions.localGet(index);
+          instructions.i32Const(1);
+          instructions.emit(0x4b);
+          instructions.trapIf();
+          return { kind: "i32-boolean", index };
+        }
+        throw new Error(
+          `compact canonical export ${JSON.stringify(exported.name)} received ${parameter.kind}`,
+        );
+      });
+      bodyNode = functionShape.bodyNode;
+      environment = this.uncurriedBodyEnvironment(
+        functionShape,
+        parameterBindings,
+        undefined,
+        undefined,
+        "caller",
+      );
+    }
+
+    if (result.kind === "signed-integer-64") {
+      this.compileSignedInteger64Expression(instructions, bodyNode, environment);
+    } else if (result.kind === "float-32") {
+      this.compileFloat32Expression(instructions, bodyNode, environment);
+    } else if (result.kind === "float-64") {
+      this.compileFloat64Expression(instructions, bodyNode, environment);
+    } else if (result.kind === "boolean") {
+      this.compileBooleanExpression(instructions, bodyNode, environment);
+    } else {
+      return undefined;
+    }
+    const callable = functionBody(
+      this.functionTypeIndex(
+        signature.parameters.map(canonicalWasmValueType),
+        signature.results.map(canonicalWasmValueType),
+      ),
+      instructions,
+      `direct canonical scalar export ${exported.name}`,
+    );
+    return callable.usesMemory || callable.usesIndirectCalls ? undefined : callable;
+  }
+
   compileGeneralWasmExport(
     exported: WasmExport,
     parameters: readonly Type[],
@@ -1917,11 +2081,13 @@ class WasmCompiler {
     instructions.i32Const(state);
     instructions.globalGet(WasmRuntimeGlobal.HeapTop);
     instructions.i32Store(CANONICAL_CALL_HEAP_TOP_OFFSET);
-    instructions.i32Const(state);
-    instructions.globalGet(WasmRuntimeGlobal.FreeListHead);
-    instructions.i32Store(CANONICAL_CALL_FREE_LIST_OFFSET);
-    instructions.i32Const(0);
-    instructions.globalSet(WasmRuntimeGlobal.FreeListHead);
+    if (!this.canonicalCallsUseArenaAllocation()) {
+      instructions.i32Const(state);
+      instructions.globalGet(WasmRuntimeGlobal.FreeListHead);
+      instructions.i32Store(CANONICAL_CALL_FREE_LIST_OFFSET);
+      instructions.i32Const(0);
+      instructions.globalSet(WasmRuntimeGlobal.FreeListHead);
+    }
     instructions.i32Const(state);
     instructions.i32Const(callId);
     instructions.i32Store(CANONICAL_CALL_EXPORT_OFFSET);
@@ -1960,9 +2126,11 @@ class WasmCompiler {
     instructions.i32Const(state);
     instructions.i32Load(CANONICAL_CALL_HEAP_TOP_OFFSET);
     instructions.globalSet(WasmRuntimeGlobal.HeapTop);
-    instructions.i32Const(state);
-    instructions.i32Load(CANONICAL_CALL_FREE_LIST_OFFSET);
-    instructions.globalSet(WasmRuntimeGlobal.FreeListHead);
+    if (!this.canonicalCallsUseArenaAllocation()) {
+      instructions.i32Const(state);
+      instructions.i32Load(CANONICAL_CALL_FREE_LIST_OFFSET);
+      instructions.globalSet(WasmRuntimeGlobal.FreeListHead);
+    }
     instructions.i32Const(state);
     instructions.i32Const(0);
     instructions.i32Store(CANONICAL_CALL_RESULT_OFFSET);
@@ -2085,12 +2253,12 @@ class WasmCompiler {
     pointer: number,
     byteLength: number,
   ): void {
-    if (byteLength === 0) return;
+    if (byteLength === 0 || this.canonicalCallsUseArenaAllocation()) return;
     instructions.localGet(pointer);
     instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
     instructions.emit(0x6b);
     instructions.i32Const(byteLength + OBJECT_HEADER_BYTE_LENGTH);
-    instructions.call(this.#functionImports.length + 2);
+    instructions.call(this.freeFunctionIndex());
   }
 
   freeCanonicalDynamic(
@@ -2098,6 +2266,7 @@ class WasmCompiler {
     pointer: number,
     byteLength: number,
   ): void {
+    if (this.canonicalCallsUseArenaAllocation()) return;
     instructions.localGet(byteLength);
     instructions.emit(0x04, 0x40);
     instructions.localGet(pointer);
@@ -2106,7 +2275,7 @@ class WasmCompiler {
     instructions.localGet(byteLength);
     instructions.i32Const(OBJECT_HEADER_BYTE_LENGTH);
     instructions.emit(0x6a);
-    instructions.call(this.#functionImports.length + 2);
+    instructions.call(this.freeFunctionIndex());
     instructions.emit(0x0b);
   }
 
@@ -5890,6 +6059,12 @@ class WasmCompiler {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
+      case CoreTag.Local: {
+        const source = this.localSource(environment, node.payload, nodeIndex);
+        if (source.kind !== "i64-signed-integer") break;
+        instructions.localGet(source.index);
+        return;
+      }
       case CoreTag.SignedInteger64:
         instructions.signedInteger64Literal(nodeIndex, wideLiteralBits(node));
         return;
@@ -5967,6 +6142,12 @@ class WasmCompiler {
       this.compileSimdFloat32Application(instructions, nodeIndex, environment)
     ) return;
     switch (node.tag) {
+      case CoreTag.Local: {
+        const source = this.localSource(environment, node.payload, nodeIndex);
+        if (source.kind !== "f32") break;
+        instructions.localGet(source.index);
+        return;
+      }
       case CoreTag.Float32:
         instructions.f32Const(float32FromBits(node.payload));
         return;
@@ -6783,6 +6964,12 @@ class WasmCompiler {
     this.#runtimeEmitter.emitFuelCharge(instructions, nodeIndex);
     const node = this.node(nodeIndex);
     switch (node.tag) {
+      case CoreTag.Local: {
+        const source = this.localSource(environment, node.payload, nodeIndex);
+        if (source.kind !== "f64") break;
+        instructions.localGet(source.index);
+        return;
+      }
       case CoreTag.Float64:
         instructions.f64Const(float64FromBits(wideLiteralBits(node)));
         return;
@@ -7650,6 +7837,10 @@ class WasmCompiler {
     instructions: WasmInstructions,
     sourceLocal?: number,
   ): void {
+    if (!this.runtimeMayContainThunks()) {
+      if (sourceLocal !== undefined) instructions.localGet(sourceLocal);
+      return;
+    }
     if (!this.#compactScalar && sourceLocal === undefined) {
       instructions.call(this.#functionImports.length + 3);
       return;
@@ -7922,6 +8113,18 @@ class WasmCompiler {
         return;
       case "i32-boolean-constant":
         instructions.i64Const(source.literal ? 10n : 2n);
+        return;
+      case "i64-signed-integer":
+        instructions.localGet(source.index);
+        this.emitBoxSignedInteger64(instructions);
+        return;
+      case "f32":
+        instructions.localGet(source.index);
+        this.emitBoxFloat32(instructions);
+        return;
+      case "f64":
+        instructions.localGet(source.index);
+        this.emitBoxFloat64(instructions);
         return;
       case "i32-pointer":
         instructions.localGet(source.index);
@@ -8997,6 +9200,11 @@ class WasmCompiler {
     return this.#functionImports.length;
   }
 
+  freeFunctionIndex(): number {
+    this.#requestedFree = true;
+    return this.#functionImports.length + 2;
+  }
+
   forceThunkFunctionIndex(): number {
     this.#requestedThunkForce = true;
     return this.#functionImports.length + 1;
@@ -9004,6 +9212,17 @@ class WasmCompiler {
 
   indirectFunctionOffset(): number {
     return this.#functionImports.length + (this.#compactScalar ? 0 : 4);
+  }
+
+  canonicalCallsUseArenaAllocation(): boolean {
+    const canonicalAbi = this.#compilationOptions.canonicalAbi;
+    return canonicalAbi !== undefined && this.#automaticArenaReset &&
+      !canonicalAbiUsesBoundaryMemory(canonicalAbi);
+  }
+
+  runtimeMayContainThunks(): boolean {
+    return this.#hasLazyEvaluationBoundary ||
+      this.#globalThunkSlots.some((slot) => slot !== undefined);
   }
 
   node(index: number): CoreNode {

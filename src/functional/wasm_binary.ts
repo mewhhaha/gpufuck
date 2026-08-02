@@ -61,6 +61,7 @@ export interface WasmModuleEncoding {
   readonly initializeFunctionIndex?: number;
   readonly allocateFunctionIndex?: number;
   readonly freeFunctionIndex?: number;
+  readonly exportMemory?: boolean;
   readonly functionExports?: readonly {
     readonly name: string;
     readonly functionIndex: number;
@@ -452,6 +453,7 @@ function encodeSectionsBeforeCode(
     initializeFunctionIndex,
     allocateFunctionIndex,
     freeFunctionIndex,
+    exportMemory = true,
     functionExports = [],
     instrumentedFuel = false,
     canonicalAbiVersion,
@@ -528,7 +530,7 @@ function encodeSectionsBeforeCode(
           0x00,
           ...encodeUnsigned(exported.functionIndex),
         ]),
-        [...name("memory"), 0x02, 0x00],
+        ...(exportMemory ? [[...name("memory"), 0x02, 0x00]] : []),
         globalExport("runtimeFault", WasmRuntimeGlobal.RuntimeFault),
         globalExport("runtimeFaultNode", WasmRuntimeGlobal.RuntimeFaultNode),
         ...(canonicalAbiVersion === undefined
@@ -634,10 +636,11 @@ function encodeBranchHintSection(
 
 export function encodeCompactScalarWasmModule(
   functions: readonly WasmFunctionBody[],
-  entryFunctionIndex: number,
+  entryFunctionIndex: number | undefined,
   additionalFunctionTypes: readonly WasmFunctionType[],
   options: {
     readonly runtimeGlobals: WasmCompactRuntimeGlobals;
+    readonly canonicalAbiVersion?: { readonly major: 1; readonly minor: 0 };
   },
   functionExports: readonly {
     readonly name: string;
@@ -680,7 +683,15 @@ export function encodeCompactScalarWasmModule(
       );
     }
   }
-  const globals = indexedGlobals.map((global) => global.definition);
+  const canonicalAbiVersion = options.canonicalAbiVersion;
+  const runtimeGlobalCount = indexedGlobals.length;
+  const globals = [
+    ...indexedGlobals.map((global) => global.definition),
+    ...(canonicalAbiVersion === undefined ? [] : [
+      [0x7f, 0x00, 0x41, ...encodeSigned(BigInt(canonicalAbiVersion.major)), 0x0b],
+      [0x7f, 0x00, 0x41, ...encodeSigned(BigInt(canonicalAbiVersion.minor)), 0x0b],
+    ]),
+  ];
   const branchHintSection = encodeBranchHintSection(functions, 0);
   const sections = [
     section(1, vector(usedFunctionTypes)),
@@ -700,7 +711,9 @@ export function encodeCompactScalarWasmModule(
     section(
       7,
       vector([
-        [...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)],
+        ...(entryFunctionIndex === undefined
+          ? []
+          : [[...name("main"), 0x00, ...encodeUnsigned(entryFunctionIndex)]]),
         ...functionExports.map((exported) => [
           ...name(exported.name),
           0x00,
@@ -728,6 +741,18 @@ export function encodeCompactScalarWasmModule(
             ...name("comptimeSteps"),
             0x03,
             ...encodeUnsigned(fuelGlobals.steps),
+          ],
+        ]),
+        ...(canonicalAbiVersion === undefined ? [] : [
+          [
+            ...name("blot:abi-major"),
+            0x03,
+            ...encodeUnsigned(runtimeGlobalCount),
+          ],
+          [
+            ...name("blot:abi-minor"),
+            0x03,
+            ...encodeUnsigned(runtimeGlobalCount + 1),
           ],
         ]),
       ]),

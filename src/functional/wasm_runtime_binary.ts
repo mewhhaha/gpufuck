@@ -160,6 +160,59 @@ export function allocateFunction(heapStart: number): WasmFunctionBody {
   return functionBody(WasmFunctionTypeIndex.Allocator, instructions, "allocator");
 }
 
+export function arenaAllocateFunction(): WasmFunctionBody {
+  const instructions = new WasmInstructions(1);
+  const previousTop = instructions.addLocal(WasmValueType.I32);
+  const nextTop = instructions.addLocal(WasmValueType.I32);
+  const requiredPages = instructions.addLocal(WasmValueType.I32);
+  const currentPages = instructions.addLocal(WasmValueType.I32);
+  emitNormalizeAllocationByteLength(instructions, 0);
+  instructions.globalGet(WasmRuntimeGlobal.HeapTop);
+  instructions.localTee(previousTop);
+  instructions.localGet(0);
+  instructions.emit(0x6a);
+  instructions.localTee(nextTop);
+  instructions.localGet(previousTop);
+  instructions.emit(0x49);
+  instructions.localGet(nextTop);
+  instructions.i32Const(WASM_MAXIMUM_ALLOCATION_BYTE_LENGTH);
+  instructions.emit(0x4b, 0x72, 0x04, 0x40);
+  emitOutOfMemory(instructions);
+  instructions.emit(0x0b);
+  instructions.localGet(nextTop);
+  instructions.globalGet(WasmRuntimeGlobal.HeapCapacityByteLength);
+  instructions.emit(0x4b, 0x04, 0x40);
+  instructions.localGet(nextTop);
+  instructions.i32Const(1);
+  instructions.emit(0x6b);
+  instructions.i32Const(16);
+  instructions.emit(0x76);
+  instructions.i32Const(1);
+  instructions.emit(0x6a);
+  instructions.localTee(requiredPages);
+  instructions.memorySize();
+  instructions.localTee(currentPages);
+  instructions.emit(0x4b, 0x04, 0x40);
+  instructions.localGet(requiredPages);
+  instructions.localGet(currentPages);
+  instructions.emit(0x6b);
+  instructions.memoryGrow();
+  instructions.i32Const(-1);
+  instructions.emit(0x46, 0x04, 0x40);
+  emitOutOfMemory(instructions);
+  instructions.emit(0x0b, 0x0b);
+  instructions.localGet(requiredPages);
+  instructions.i32Const(16);
+  instructions.emit(0x74);
+  instructions.globalSet(WasmRuntimeGlobal.HeapCapacityByteLength);
+  instructions.emit(0x0b);
+  instructions.localGet(nextTop);
+  instructions.globalSet(WasmRuntimeGlobal.HeapTop);
+  emitInitializeAllocation(instructions, previousTop, 0);
+  instructions.localGet(previousTop);
+  return functionBody(WasmFunctionTypeIndex.Allocator, instructions, "arena allocator");
+}
+
 export function freeFunction(typeIndex: number, heapStart: number): WasmFunctionBody {
   const instructions = new WasmInstructions(2);
   const end = instructions.addLocal(WasmValueType.I32);

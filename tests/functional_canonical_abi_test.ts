@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, ok, rejects } from "node:assert/strict";
+import { deepStrictEqual, equal, ok, rejects, throws } from "node:assert/strict";
 
 import {
   BinaryOperator,
@@ -18,6 +18,7 @@ const signedInteger64 = { kind: "signed-integer-64" as const };
 const canonicalSignedInteger64 = { kind: "signed-integer-64" as const };
 const float32 = { kind: "float-32" as const };
 const float64 = { kind: "float-64" as const };
+const boolean = { kind: "boolean" as const };
 const unit = { kind: "unit" as const };
 const canonicalUnit = { kind: "unit" as const };
 
@@ -220,26 +221,270 @@ Deno.test("canonical ABI exports use caller-facing scalar signatures", async () 
     const { instance } = await WebAssembly.instantiate(bytes);
     const add = instance.exports["blot:add"];
     ok(typeof add === "function");
-    equal(add(20n, 22n), 42n);
-    const memory = instance.exports.memory;
-    ok(memory instanceof WebAssembly.Memory);
-    const warmByteLength = memory.buffer.byteLength;
     for (let call = 0; call < 20_000; call += 1) {
       equal(add(20n, 22n), 42n);
     }
-    equal(memory.buffer.byteLength, warmByteLength);
-    ok(typeof instance.exports.cabi_realloc === "function");
+    ok(bytes.byteLength < 256, `compact scalar canonical ABI emitted ${bytes.byteLength} bytes`);
+    deepStrictEqual(Object.keys(instance.exports).sort(), [
+      "blot:abi-major",
+      "blot:abi-minor",
+      "blot:add",
+    ]);
     const major = instance.exports["blot:abi-major"];
     const minor = instance.exports["blot:abi-minor"];
     ok(major instanceof WebAssembly.Global);
     ok(minor instanceof WebAssembly.Global);
     equal(major.value, 1);
     equal(minor.value, 0);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("compact canonical exports preserve every flat scalar parameter", async () => {
+  const scalarIdentity = (
+    name: string,
+    type: typeof float32 | typeof float64 | typeof boolean,
+  ) => ({
+    name,
+    parameters: ["value"],
+    annotation: { kind: "function" as const, parameter: type, result: type },
+    body: surface.name("value"),
+  });
+  const module = buildSurfaceModule(
+    [
+      {
+        name: "main",
+        parameters: [],
+        annotation: signedInteger64,
+        body: surface.signedInteger64(0n),
+      },
+      scalarIdentity("single", float32),
+      scalarIdentity("double", float64),
+      scalarIdentity("boolean", boolean),
+    ],
+    [],
+    "main",
+    0,
+    {
+      wasmExports: [
+        { name: "blot:single", definition: "single" },
+        { name: "blot:double", definition: "double" },
+        { name: "blot:boolean", definition: "boolean" },
+      ],
+    },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, {
+      canonicalAbi: {
+        version: 1,
+        imports: [],
+        exports: [
+          {
+            name: "blot:single",
+            function: { parameters: [float32], result: float32 },
+          },
+          {
+            name: "blot:double",
+            function: { parameters: [float64], result: float64 },
+          },
+          {
+            name: "blot:boolean",
+            function: { parameters: [boolean], result: boolean },
+          },
+        ],
+      },
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const single = instance.exports["blot:single"];
+    const double = instance.exports["blot:double"];
+    const identityBoolean = instance.exports["blot:boolean"];
+    ok(typeof single === "function");
+    ok(typeof double === "function");
+    ok(typeof identityBoolean === "function");
+    equal(single(1.25), 1.25);
+    equal(double(Math.PI), Math.PI);
+    equal(identityBoolean(1), 1);
+    equal(identityBoolean(0), 0);
+    ok(bytes.byteLength < 512, `compact scalar canonical ABI emitted ${bytes.byteLength} bytes`);
+    deepStrictEqual(Object.keys(instance.exports).sort(), [
+      "blot:abi-major",
+      "blot:abi-minor",
+      "blot:boolean",
+      "blot:double",
+      "blot:single",
+    ]);
+    throws(() => identityBoolean(2), WebAssembly.RuntimeError);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("compact canonical exports retain reachable fault evidence", async () => {
+  const module = buildSurfaceModule(
+    [
+      {
+        name: "main",
+        parameters: [],
+        annotation: signedInteger64,
+        body: surface.signedInteger64(0n),
+      },
+      {
+        name: "divide",
+        parameters: ["left", "right"],
+        annotation: {
+          kind: "function",
+          parameter: signedInteger64,
+          result: {
+            kind: "function",
+            parameter: signedInteger64,
+            result: signedInteger64,
+          },
+        },
+        body: surface.binary(
+          BinaryOperator.DivideSignedInteger64,
+          surface.name("left"),
+          surface.name("right"),
+        ),
+      },
+    ],
+    [],
+    "main",
+    0,
+    {
+      wasmExports: [{ name: "blot:divide", definition: "divide" }],
+    },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, {
+      canonicalAbi: {
+        version: 1,
+        imports: [],
+        exports: [{
+          name: "blot:divide",
+          function: {
+            parameters: [canonicalSignedInteger64, canonicalSignedInteger64],
+            result: canonicalSignedInteger64,
+          },
+        }],
+      },
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const divide = instance.exports["blot:divide"];
     const runtimeFault = instance.exports.runtimeFault;
     const runtimeFaultNode = instance.exports.runtimeFaultNode;
+    ok(typeof divide === "function");
     ok(runtimeFault instanceof WebAssembly.Global);
     ok(runtimeFaultNode instanceof WebAssembly.Global);
+    equal(divide(84n, 2n), 42n);
     equal(runtimeFault.value, 0);
+    throws(() => divide(1n, 0n), WebAssembly.RuntimeError);
+    equal(runtimeFault.value, WasmRuntimeFaultCode.DivideByZero);
+    ok(Number(runtimeFaultNode.value) >= 0);
+    deepStrictEqual(Object.keys(instance.exports).sort(), [
+      "blot:abi-major",
+      "blot:abi-minor",
+      "blot:divide",
+      "runtimeFault",
+      "runtimeFaultNode",
+    ]);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("scalar canonical exports use an internal resettable arena", async () => {
+  const module = buildSurfaceModule(
+    [
+      {
+        name: "main",
+        parameters: [],
+        annotation: signedInteger64,
+        body: surface.signedInteger64(0n),
+      },
+      {
+        name: "sum",
+        parameters: ["left", "right"],
+        annotation: {
+          kind: "function",
+          parameter: signedInteger64,
+          result: {
+            kind: "function",
+            parameter: signedInteger64,
+            result: signedInteger64,
+          },
+        },
+        body: surface.case(
+          surface.apply(
+            surface.name("SignedPair"),
+            surface.name("left"),
+            surface.name("right"),
+          ),
+          [{
+            constructor: "SignedPair",
+            binders: ["first", "second"],
+            body: surface.binary(
+              BinaryOperator.AddSignedInteger64,
+              surface.name("first"),
+              surface.name("second"),
+            ),
+          }],
+        ),
+      },
+    ],
+    [{
+      name: "SignedPair",
+      parameters: [],
+      constructors: [{
+        name: "SignedPair",
+        fields: [{ name: "first", type: signedInteger64 }, {
+          name: "second",
+          type: signedInteger64,
+        }],
+      }],
+    }],
+    "main",
+    0,
+    { wasmExports: [{ name: "blot:sum", definition: "sum" }] },
+  );
+  const compilation = await new CpuCompiler().compileModule(module);
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+
+  try {
+    const bytes = await compileModuleToWasm(compilation.module, {
+      canonicalAbi: {
+        version: 1,
+        imports: [],
+        exports: [{
+          name: "blot:sum",
+          function: {
+            parameters: [canonicalSignedInteger64, canonicalSignedInteger64],
+            result: canonicalSignedInteger64,
+          },
+        }],
+      },
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const sum = instance.exports["blot:sum"];
+    ok(typeof sum === "function");
+    for (let call = 0; call < 20_000; call += 1) equal(sum(20n, 22n), 42n);
+    ok(bytes.byteLength < 1_200, `arena-backed scalar ABI emitted ${bytes.byteLength} bytes`);
+    deepStrictEqual(Object.keys(instance.exports).sort(), [
+      "blot:abi-major",
+      "blot:abi-minor",
+      "blot:sum",
+      "runtimeFault",
+      "runtimeFaultNode",
+    ]);
   } finally {
     compilation.module.destroy();
   }
@@ -621,7 +866,7 @@ Deno.test("canonical ABI rejects boolean descriptors for signed i64 exports", as
   }
 });
 
-Deno.test("canonical ABI rejects global thunks that can retain private allocations", async () => {
+Deno.test("compact canonical exports bypass global thunk allocation", async () => {
   const module = buildSurfaceModule(
     [{
       name: "main",
@@ -648,20 +893,26 @@ Deno.test("canonical ABI rejects global thunks that can retain private allocatio
   if (!compilation.ok) return;
 
   try {
-    await rejects(
-      () =>
-        compileModuleToWasm(compilation.module, {
-          canonicalAbi: {
-            version: 1,
-            imports: [],
-            exports: [{
-              name: "blot:computed",
-              function: { parameters: [], result: canonicalSignedInteger64 },
-            }],
-          },
-        }),
-      /global thunk d1 \("computed"\) may retain a heap allocation across calls/,
-    );
+    const bytes = await compileModuleToWasm(compilation.module, {
+      canonicalAbi: {
+        version: 1,
+        imports: [],
+        exports: [{
+          name: "blot:computed",
+          function: { parameters: [], result: canonicalSignedInteger64 },
+        }],
+      },
+    });
+    const { instance } = await WebAssembly.instantiate(bytes);
+    const computed = instance.exports["blot:computed"];
+    ok(typeof computed === "function");
+    equal(computed(), 42n);
+    ok(bytes.byteLength < 256, `compact scalar canonical ABI emitted ${bytes.byteLength} bytes`);
+    deepStrictEqual(Object.keys(instance.exports).sort(), [
+      "blot:abi-major",
+      "blot:abi-minor",
+      "blot:computed",
+    ]);
   } finally {
     compilation.module.destroy();
   }

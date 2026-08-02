@@ -1,4 +1,4 @@
-import { CoreTag, NO_INDEX } from "./abi.ts";
+import { CoreTag, NO_INDEX, type Type } from "./abi.ts";
 import {
   type CompilerPerformanceTrace,
   measureCompilerStage,
@@ -29,6 +29,7 @@ import { lowerCoreForWasm } from "./wasm_core_lowering.ts";
 import { indexWasmCore, type WasmCoreIndex } from "./wasm_core_index.ts";
 import type { LambdaSetAnalysis } from "./wasm_lambda_sets.ts";
 import { analyzeProvenStoreReads } from "./store_bounds_analysis.ts";
+import type { CanonicalAbiExport, CanonicalAbiType } from "./canonical_abi.ts";
 
 export interface WasmBackendPlan {
   readonly module: CompiledModule;
@@ -123,7 +124,7 @@ export function createWasmBackendPlan(
     entry.parameter === undefined &&
     scalarResult !== undefined &&
     scalarResult.kind !== "unit" &&
-    module.wasmExports.every(compactIntegerExportIsProvable) &&
+    compactExportsAreProvable(module, options) &&
     (compactScalarProgramIsProvable(module, loweredNodes) ||
       options.simd === "wasm-simd" &&
         compactFixedVectorProgramIsProvable(module, loweredNodes));
@@ -323,6 +324,23 @@ function compactFixedVectorProgramIsProvable(
     module.wasmExports.every((exported) => visitDefinition(exported.definitionIndex));
 }
 
+function compactExportsAreProvable(
+  module: CompiledModule,
+  options: WasmCompilationOptions,
+): boolean {
+  const canonical = options.canonicalAbi;
+  if (canonical === undefined) return module.wasmExports.every(compactIntegerExportIsProvable);
+  if (canonical.imports.length !== 0 || canonical.exports.length !== module.wasmExports.length) {
+    return false;
+  }
+  return module.wasmExports.every((exported) =>
+    compactCanonicalExportIsProvable(
+      exported,
+      canonical.exports.find((candidate) => candidate.name === exported.name),
+    )
+  );
+}
+
 function compactIntegerExportIsProvable(
   exported: CompiledModule["wasmExports"][number],
 ): boolean {
@@ -333,6 +351,35 @@ function compactIntegerExportIsProvable(
     type = type.result;
   }
   return type.kind === "integer";
+}
+
+function compactCanonicalExportIsProvable(
+  exported: CompiledModule["wasmExports"][number],
+  canonical: CanonicalAbiExport | undefined,
+): boolean {
+  if (canonical === undefined || exported.effects.size !== 0) return false;
+  let compiled = exported.type;
+  for (const parameter of canonical.function.parameters) {
+    if (
+      compiled.kind !== "function" || !sameCompactCanonicalScalar(parameter, compiled.parameter)
+    ) {
+      return false;
+    }
+    compiled = compiled.result;
+  }
+  return compiled.kind !== "function" &&
+    sameCompactCanonicalScalar(canonical.function.result, compiled);
+}
+
+function sameCompactCanonicalScalar(
+  canonical: CanonicalAbiType,
+  compiled: Type,
+): boolean {
+  if (
+    canonical.kind !== "signed-integer-64" && canonical.kind !== "float-32" &&
+    canonical.kind !== "float-64" && canonical.kind !== "boolean"
+  ) return false;
+  return canonical.kind === compiled.kind;
 }
 
 function compactScalarProgramIsProvable(
@@ -369,7 +416,7 @@ function compactScalarProgramIsProvable(
       case CoreTag.Global:
         return visitDefinition(node.payload);
       case CoreTag.Lambda:
-        return allowsLambda && visit(node.child0, false);
+        return allowsLambda && visit(node.child0, true);
       case CoreTag.Apply: {
         const arguments_: number[] = [];
         let calleeIndex = nodeIndex;
