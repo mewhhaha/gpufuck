@@ -13,8 +13,8 @@ import {
   type CanonicalAbiType,
   type CompilationOptions,
   compileModuleToWasm,
-  type CompilerPerformanceTrace,
   CpuCompiler,
+  type CpuCompileResult,
   GpuCompiler,
   type HostCapabilityDeclaration,
   requestWebGpuDevice,
@@ -283,9 +283,13 @@ export interface VerifyTimings {
   readonly canonicalWasmMilliseconds: number;
 }
 
-export interface VerifyOptions {
+export type BlotCompilerBackend = "cpu" | "gpu";
+
+export type VerifyStage = "core" | "wasm";
+
+export interface VerifyOptions extends CompilationOptions {
   readonly wasmInit?: WasmInit;
-  readonly trace?: CompilerPerformanceTrace;
+  readonly observeStage?: (stage: VerifyStage) => void | Promise<void>;
 }
 
 interface SetupTimings {
@@ -294,29 +298,38 @@ interface SetupTimings {
 }
 
 export class BlotCompilerSession {
-  readonly #device: GPUDevice;
-  readonly #compiler: GpuCompiler;
+  readonly #device: GPUDevice | undefined;
+  readonly #compiler: CpuCompiler | GpuCompiler;
+  readonly backend: BlotCompilerBackend;
   #setupTimings: SetupTimings;
   #destroyed = false;
 
   private constructor(
-    device: GPUDevice,
-    compiler: GpuCompiler,
+    backend: BlotCompilerBackend,
+    device: GPUDevice | undefined,
+    compiler: CpuCompiler | GpuCompiler,
     setupTimings: SetupTimings,
   ) {
+    this.backend = backend;
     this.#device = device;
     this.#compiler = compiler;
     this.#setupTimings = setupTimings;
   }
 
-  static async create(): Promise<BlotCompilerSession> {
+  static async create(backend: BlotCompilerBackend = "gpu"): Promise<BlotCompilerSession> {
+    if (backend === "cpu") {
+      return new BlotCompilerSession("cpu", undefined, new CpuCompiler(), {
+        gpuDeviceMilliseconds: 0,
+        gpuCompilerMilliseconds: 0,
+      });
+    }
     const deviceStart = performance.now();
     const device = await requestWebGpuDevice();
     const gpuDeviceMilliseconds = performance.now() - deviceStart;
     try {
       const compilerStart = performance.now();
       const compiler = await GpuCompiler.create(device);
-      return new BlotCompilerSession(device, compiler, {
+      return new BlotCompilerSession("gpu", device, compiler, {
         gpuDeviceMilliseconds,
         gpuCompilerMilliseconds: performance.now() - compilerStart,
       });
@@ -332,9 +345,9 @@ export class BlotCompilerSession {
   }
 
   async compileModule(
-    module: Parameters<GpuCompiler["compileModule"]>[0],
+    module: Parameters<CpuCompiler["compileModule"]>[0],
     options: CompilationOptions = {},
-  ) {
+  ): Promise<CpuCompileResult> {
     if (this.#destroyed) throw new Error("Blot compiler session was destroyed.");
     return await this.#compiler.compileModule(module, options);
   }
@@ -351,7 +364,7 @@ export class BlotCompilerSession {
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
-    this.#device.destroy();
+    this.#device?.destroy();
   }
 }
 
@@ -386,6 +399,7 @@ async function verifyWithSession(
     );
     const builtManifest = publicManifest(internalManifest);
     const manifestBytes = serializeManifest(builtManifest);
+    await options.observeStage?.("wasm");
     const [executed, emitted] = await Promise.all([
       (async () => {
         const start = performance.now();
@@ -452,8 +466,16 @@ async function compile(
 ) {
   const prepared = await prepare(path);
   const setupTimings = session.takeSetupTimings();
+  await options.observeStage?.("core");
   const coreCompileStart = performance.now();
-  const compilation = await session.compileModule(prepared.module, options);
+  const compilation = await session.compileModule(prepared.module, {
+    ...(options.maximumSteps === undefined ? {} : { maximumSteps: options.maximumSteps }),
+    ...(options.maximumStepsPerDispatch === undefined
+      ? {}
+      : { maximumStepsPerDispatch: options.maximumStepsPerDispatch }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.trace === undefined ? {} : { trace: options.trace }),
+  });
   const coreCompileMilliseconds = performance.now() - coreCompileStart;
   if (!compilation.ok) {
     throw loweringBug(compilation.diagnostics, prepared.loaded.module.span);

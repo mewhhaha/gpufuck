@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /// <reference lib="dom.iterable" />
 
-import { BlotCompilerSession } from "./blot/src/backend/compile.ts";
+import { type BlotCompilerBackend, BlotCompilerSession } from "./blot/src/backend/compile.ts";
 import { hostInit } from "./blot/src/backend/host.ts";
 import { BlotError } from "./blot/src/diagnostic.ts";
 import { configureSourceLexerRecords, configureSources, LoadError } from "./blot/src/load.ts";
@@ -50,7 +50,7 @@ const STAGE_LABELS: Readonly<Record<Stage, string>> = {
   surface: "Encode Functional Surface",
   "gpu-device": "Request GPU device",
   "gpu-compiler": "Initialize GPU compiler",
-  core: "Resolve and infer Functional Core on GPU",
+  core: "Resolve and infer Functional Core",
   "wasm-run": "Emit, instantiate, and run executable Wasm",
   "wasm-emit": "Emit canonical ABI Wasm",
   total: "Total end-to-end, including setup",
@@ -75,6 +75,7 @@ const statusLine = element<HTMLParagraphElement>("status");
 const downloadLink = element<HTMLAnchorElement>("download");
 const disableCache = element<HTMLInputElement>("disable-cache");
 const gpuSyntax = element<HTMLInputElement>("gpu-syntax");
+const gpuCore = element<HTMLInputElement>("gpu-core");
 
 const parserWasmUrl = new URL("./parser.wasm", location.href);
 const parserPlanUrl = new URL("./parser.plan", location.href);
@@ -261,10 +262,16 @@ async function compileAndRun(): Promise<void> {
   if (selected === undefined) return;
   const pipelineStart = performance.now();
   const coldRun = disableCache.checked;
+  const compilerBackend: BlotCompilerBackend = gpuCore.checked ? "gpu" : "cpu";
+  if (compilerSession?.backend !== compilerBackend) {
+    compilerSession?.destroy();
+    compilerSession = undefined;
+  }
   const residentRun = !coldRun && compilerSession !== undefined;
   runButton.disabled = true;
   disableCache.disabled = true;
   gpuSyntax.disabled = true;
+  gpuCore.disabled = true;
   downloadLink.hidden = true;
   artifact = undefined;
   const timings = new Map<Stage, number>();
@@ -319,11 +326,27 @@ async function compileAndRun(): Promise<void> {
     }
     const wasmOutput: string[] = [];
     const activeSession = coldRun
-      ? await BlotCompilerSession.create()
-      : compilerSession ??= await BlotCompilerSession.create();
+      ? await BlotCompilerSession.create(compilerBackend)
+      : compilerSession ??= await BlotCompilerSession.create(compilerBackend);
     let verified: Awaited<ReturnType<BlotCompilerSession["verify"]>>;
     try {
       verified = await activeSession.verify(selected.path, {
+        ...(compilerBackend === "gpu" ? { maximumStepsPerDispatch: 128 } : {}),
+        observeStage: async (stage) => {
+          if (stage === "core") {
+            setStatus(
+              `Resolving and inferring Functional Core on ${
+                compilerBackend === "gpu" ? "WebGPU" : "the CPU"
+              }…`,
+              "busy",
+            );
+          } else {
+            setStatus("Emitting and running canonical ABI WebAssembly…", "busy");
+          }
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+        },
         wasmInit: hostInit((line) => wasmOutput.push(line)),
       });
     } finally {
@@ -334,8 +357,10 @@ async function compileAndRun(): Promise<void> {
     timings.set("blot-stage", verified.timings.blotStageMilliseconds);
     timings.set("blot-lower", verified.timings.blotLowerMilliseconds);
     timings.set("surface", verified.timings.surfaceEncodeMilliseconds);
-    timings.set("gpu-device", verified.timings.gpuDeviceMilliseconds);
-    timings.set("gpu-compiler", verified.timings.gpuCompilerMilliseconds);
+    if (compilerBackend === "gpu") {
+      timings.set("gpu-device", verified.timings.gpuDeviceMilliseconds);
+      timings.set("gpu-compiler", verified.timings.gpuCompilerMilliseconds);
+    }
     timings.set("core", verified.timings.coreCompileMilliseconds);
     timings.set("wasm-run", verified.timings.wasmExecuteMilliseconds);
     timings.set("wasm-emit", verified.timings.canonicalWasmMilliseconds);
@@ -370,8 +395,9 @@ async function compileAndRun(): Promise<void> {
     }
     setStatus(
       `${residentRun ? "Resident run" : "Cold run"} compiled with ${
-        syntax?.adapter ?? "Blot CPU syntax and gpufuck WebGPU Core"
-      }; Wasm execution completed.`,
+        syntax?.adapter ?? "Blot CPU syntax"
+      } and gpufuck ${compilerBackend === "gpu" ? "WebGPU" : "CPU"} Core; ` +
+        "Wasm execution completed.",
       "ok",
     );
   } catch (error) {
@@ -382,7 +408,8 @@ async function compileAndRun(): Promise<void> {
   } finally {
     runButton.disabled = false;
     disableCache.disabled = false;
-    gpuSyntax.disabled = false;
+    gpuSyntax.disabled = navigator.gpu === undefined;
+    gpuCore.disabled = navigator.gpu === undefined;
   }
 }
 
@@ -445,10 +472,11 @@ paintHighlight();
 renderStages(new Map());
 clearOutline("Run a Blot module to see its canonical ABI sections, signatures, and exports.");
 if (navigator.gpu === undefined) {
-  runButton.disabled = true;
+  gpuSyntax.disabled = true;
+  gpuCore.disabled = true;
   setStatus(
-    "This browser exposes no WebGPU, which the Core compiler and optional Baba GPU syntax path require.",
-    "error",
+    "Ready. This browser exposes no WebGPU, so the optional GPU paths are unavailable.",
+    "idle",
   );
 } else {
   setStatus("Ready. Press Run, or Ctrl/Cmd+Enter.", "idle");

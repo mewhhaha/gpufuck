@@ -61,22 +61,22 @@ try {
 
   console.log(`Adapter: ${JSON.stringify(adapter)}`);
   await verifyPlaygroundShell(page);
-  if (isSoftwareAdapter(adapter)) {
-    if (Deno.args.includes("--require-hardware")) {
-      throw new Error(
-        `playground measurement requires hardware WebGPU; received ${JSON.stringify(adapter)}`,
-      );
-    }
-    console.log("Browser shell passed; GPU tour skipped because the adapter is software-backed.");
-  } else {
-    const cold = await compileTour(page, "cold page");
-    const resident = await compileTour(page, "resident");
-    const userAgent = await page.evaluate(() => navigator.userAgent);
-
-    console.log(`Browser: ${userAgent}`);
-    printMeasurement("Cold tour", cold);
-    printMeasurement("Resident tour", resident);
+  if (isSoftwareAdapter(adapter) && Deno.args.includes("--require-hardware")) {
+    throw new Error(
+      `playground measurement requires hardware WebGPU; received ${JSON.stringify(adapter)}`,
+    );
   }
+  const cold = await compileExample(page, "tour", "cold page");
+  const resident = await compileExample(page, "tour", "resident");
+  const simd = await compileExample(page, "simd arithmetic", "SIMD arithmetic");
+  const stress = await compileExample(page, "stress project", "stress project");
+  const userAgent = await page.evaluate(() => navigator.userAgent);
+
+  console.log(`Browser: ${userAgent}`);
+  printMeasurement("Cold tour", cold);
+  printMeasurement("Resident tour", resident);
+  printMeasurement("SIMD arithmetic", simd);
+  printMeasurement("Stress project", stress);
 
   if (browserFailures.length > 0) {
     throw new Error(`playground browser reported failures:\n${browserFailures.join("\n")}`);
@@ -88,6 +88,8 @@ try {
 
 interface BrowserMeasurement {
   readonly wallMilliseconds: number;
+  readonly maximumFrameDelayMilliseconds: number;
+  readonly responsiveFrames: number;
   readonly stages: Readonly<Record<string, number>>;
   readonly status: string;
 }
@@ -114,10 +116,36 @@ function isSoftwareAdapter(adapter: BrowserAdapter | undefined): boolean {
   return /(swiftshader|llvmpipe|lavapipe)/i.test(identity);
 }
 
-async function compileTour(
+async function compileExample(
   page: Page,
-  run: "cold page" | "resident",
+  example: string,
+  run: string,
 ): Promise<BrowserMeasurement> {
+  await page.getByRole("button", { name: example, exact: true }).click();
+  await page.evaluate(() => {
+    const browser = globalThis as typeof globalThis & {
+      playgroundResponsivenessProbe?: ResponsivenessProbe;
+    };
+    const probe: ResponsivenessProbe = {
+      frames: 0,
+      lastFrameMilliseconds: 0,
+      maximumFrameDelayMilliseconds: 0,
+      request: 0,
+    };
+    const observeFrame = (now: number) => {
+      probe.frames++;
+      if (probe.lastFrameMilliseconds !== 0) {
+        probe.maximumFrameDelayMilliseconds = Math.max(
+          probe.maximumFrameDelayMilliseconds,
+          now - probe.lastFrameMilliseconds,
+        );
+      }
+      probe.lastFrameMilliseconds = now;
+      probe.request = requestAnimationFrame(observeFrame);
+    };
+    probe.request = requestAnimationFrame(observeFrame);
+    browser.playgroundResponsivenessProbe = probe;
+  });
   const started = performance.now();
   await page.getByRole("button", { name: "Run", exact: true }).click();
   try {
@@ -150,7 +178,33 @@ async function compileTour(
 
   await page.getByRole("heading", { name: "Result", exact: true }).waitFor();
   if (!(await page.locator("#download").isVisible())) {
-    throw new Error(`${run} Blot tour emitted no downloadable Wasm`);
+    throw new Error(`${run} emitted no downloadable Wasm`);
+  }
+
+  const responsiveness = await page.evaluate(() => {
+    const browser = globalThis as typeof globalThis & {
+      playgroundResponsivenessProbe?: ResponsivenessProbe;
+    };
+    const probe = browser.playgroundResponsivenessProbe;
+    if (probe === undefined) throw new Error("playground responsiveness probe was not started");
+    cancelAnimationFrame(probe.request);
+    delete browser.playgroundResponsivenessProbe;
+    return {
+      frames: probe.frames,
+      maximumFrameDelayMilliseconds: probe.maximumFrameDelayMilliseconds,
+    };
+  });
+  if (responsiveness.frames < 2) {
+    throw new Error(
+      `${run} rendered only ${responsiveness.frames} animation frame(s) while compiling`,
+    );
+  }
+  if (responsiveness.maximumFrameDelayMilliseconds >= 1_000) {
+    throw new Error(
+      `${run} blocked animation frames for ${
+        responsiveness.maximumFrameDelayMilliseconds.toFixed(1)
+      } ms while compiling`,
+    );
   }
 
   const stages = await page.locator("#stages").evaluate((stageList) => {
@@ -169,9 +223,18 @@ async function compileTour(
 
   return {
     wallMilliseconds: performance.now() - started,
+    maximumFrameDelayMilliseconds: responsiveness.maximumFrameDelayMilliseconds,
+    responsiveFrames: responsiveness.frames,
     stages,
     status,
   };
+}
+
+interface ResponsivenessProbe {
+  frames: number;
+  lastFrameMilliseconds: number;
+  maximumFrameDelayMilliseconds: number;
+  request: number;
 }
 
 async function servePlaygroundFile(request: Request): Promise<Response> {
@@ -203,7 +266,11 @@ async function servePlaygroundFile(request: Request): Promise<Response> {
 }
 
 function printMeasurement(label: string, measurement: BrowserMeasurement): void {
-  console.log(`${label}: ${measurement.wallMilliseconds.toFixed(1)} ms`);
+  console.log(
+    `${label}: ${measurement.wallMilliseconds.toFixed(1)} ms, ` +
+      `${measurement.responsiveFrames} frames, ` +
+      `${measurement.maximumFrameDelayMilliseconds.toFixed(1)} ms maximum frame delay`,
+  );
   for (const [stage, milliseconds] of Object.entries(measurement.stages)) {
     console.log(`  ${stage}: ${milliseconds.toFixed(1)} ms`);
   }

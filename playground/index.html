@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>gpufuck — compile Blot on the GPU</title>
+    <title>gpufuck — compile Blot to WebAssembly</title>
     <meta
       name="description"
-      content="Parse Blot and compile its Functional Core on WebGPU, then emit and run canonical ABI WebAssembly in the browser."
+      content="Parse Blot, compile its Functional Core, then emit and run canonical ABI WebAssembly in the browser."
     />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
@@ -16,9 +16,9 @@
       <h1>gpufuck</h1>
       <p>
         Blot builds its cursor AST and checks types and ownership in the browser, then hands
-        Functional Core to gpufuck for GPU compilation and canonical ABI WebAssembly. Baba's
-        optional WebGPU syntax path can validate the entry first. Everything below stays in this
-        tab.
+        Functional Core to gpufuck for semantic compilation and canonical ABI WebAssembly. The
+        recommended CPU compiler is the responsive default; the WebGPU compiler and Baba's WebGPU
+        syntax path are explicit experiments. Everything below stays in this tab.
       </p>
     </header>
 
@@ -37,7 +37,7 @@
           <a id="download" href="#" hidden>Download .wasm</a>
           <label
             class="run-control"
-            title="Recreate parser and GPU resources, clear loaded and checked modules, and compile without resident artifacts on every run."
+            title="Recreate parser and compiler resources, clear loaded and checked modules, and compile without resident artifacts on every run."
           >
             <input id="disable-cache" type="checkbox" />
             Disable cache (cold run)
@@ -48,6 +48,13 @@
           >
             <input id="gpu-syntax" type="checkbox" />
             Validate syntax on GPU
+          </label>
+          <label
+            class="run-control"
+            title="Resolve and infer Functional Core on WebGPU. Browser drivers may compile this large shader slowly; the CPU compiler is the recommended default for one module."
+          >
+            <input id="gpu-core" type="checkbox" />
+            Compile Core on GPU
           </label>
         </div>
       </section>
@@ -76,14 +83,15 @@
         records, arrays, operators, and host capabilities. The SIMD examples show native vector
         chains through local bindings and lifted functions. The other examples isolate those features.
         The <em>stress project</em> keeps hundreds of functions reachable across 25 modules so the
-        phase timings show scaling separately from browser and GPU startup costs.
+        phase timings show scaling separately from browser and compiler startup costs.
       </p>
       <p>
         When enabled, Baba&rsquo;s strict GPU frontend performs lexing, delimiter matching, island parsing,
         and flat syntax allocation. Its lexer records feed Blot&rsquo;s cursor-producing parser, so the
         edited entry is not lexed twice. The faster default uses Blot&rsquo;s CPU lexer because Blot still
         needs its own cursor AST. Blot&rsquo;s comptime evaluator, algebraic-subtyping checker, and ownership
-        pass remain on the CPU; gpufuck independently resolves and infers the lowered Core on the GPU.
+        pass remain on the CPU. gpufuck resolves and infers the lowered Core on its CPU compiler by
+        default; the GPU Core control exercises the equivalent WebGPU compiler explicitly.
       </p>
       <p>
         <a href="https://github.com/mewhhaha/gpufuck">Source</a> ·
