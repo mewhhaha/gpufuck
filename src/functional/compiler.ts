@@ -2,6 +2,7 @@ import type { SemanticDiagnostic } from "../semantic/abi.ts";
 import { measureCompilerStage, measureCompilerStageAsync } from "../compiler_performance_trace.ts";
 import {
   CompiledGpuSemanticModule,
+  CompiledHostSemanticModule,
   type GpuSemanticModule,
   type SemanticModule,
 } from "../semantic/compiler_module.ts";
@@ -15,8 +16,16 @@ import {
   GpuSemanticCompiler,
   type SemanticCompilationLimits,
 } from "../semantic/gpu_semantic_compiler.ts";
+import {
+  GpuTypedCoreChecker,
+  prepareTypedCoreCertificate,
+  type TypedCoreCertificatePlan,
+} from "../semantic/gpu_monomorphic_checker.ts";
 import { publicTypeMetadata } from "../semantic/gpu_type_inference_results.ts";
-import { compileSemanticOnHost } from "../semantic/host_semantic_compiler.ts";
+import {
+  compileSemanticOnHost,
+  resolveSemanticSurface,
+} from "../semantic/host_semantic_compiler.ts";
 import {
   CONSTRUCTOR_BYTE_LENGTH,
   CONSTRUCTOR_WORD_LENGTH,
@@ -157,6 +166,7 @@ export class CpuCompiler {
 export class GpuCompiler {
   readonly #device: GPUDevice;
   readonly #semanticCompiler: GpuSemanticCompiler;
+  readonly #typedCoreChecker: GpuTypedCoreChecker;
   readonly #compilationAdmission: CompilationAdmissionQueue;
   readonly #maximumNodeCount: number;
   readonly #maximumDefinitionCount: number;
@@ -168,6 +178,7 @@ export class GpuCompiler {
   private constructor(
     device: GPUDevice,
     semanticCompiler: GpuSemanticCompiler,
+    typedCoreChecker: GpuTypedCoreChecker,
     maximumNodeCount: number,
     maximumDefinitionCount: number,
     maximumTypeCount: number,
@@ -176,6 +187,7 @@ export class GpuCompiler {
   ) {
     this.#device = device;
     this.#semanticCompiler = semanticCompiler;
+    this.#typedCoreChecker = typedCoreChecker;
     this.#compilationAdmission = new CompilationAdmissionQueue(
       maximumConcurrentCompilationWeight,
     );
@@ -220,10 +232,14 @@ export class GpuCompiler {
       );
     }
 
-    const semanticCompiler = await GpuSemanticCompiler.create(device);
+    const [semanticCompiler, typedCoreChecker] = await Promise.all([
+      GpuSemanticCompiler.create(device),
+      GpuTypedCoreChecker.create(device),
+    ]);
     return new GpuCompiler(
       device,
       semanticCompiler,
+      typedCoreChecker,
       maximumNodeCount,
       maximumDefinitionCount,
       maximumTypeCount,
@@ -335,12 +351,39 @@ export class GpuCompiler {
     modules: readonly EncodedModule[],
     options: CompilationOptions = {},
   ): Promise<readonly CompileResult[]> {
+    const results = await this.#compileBatch(modules, options, "gpu");
+    return results.map((result, index) => {
+      if (!result.ok) return result;
+      if (!isGpuModule(result.module)) {
+        throw new Error(`functional GPU batch result ${index} omitted its resident Core buffers`);
+      }
+      return { ok: true, module: result.module };
+    });
+  }
+
+  async compileBatchForLinking(
+    modules: readonly EncodedModule[],
+    options: CompilationOptions = {},
+  ): Promise<readonly CpuCompileResult[]> {
+    return await this.#compileBatch(modules, options, "host");
+  }
+
+  async #compileBatch(
+    modules: readonly EncodedModule[],
+    options: CompilationOptions,
+    output: "gpu" | "host",
+  ): Promise<readonly CpuCompileResult[]> {
     const limits = compilationLimits(options);
     options.signal?.throwIfAborted();
     if (modules.length === 0) return [];
 
-    const results: (CompileResult | undefined)[] = new Array(modules.length);
+    const results: (CpuCompileResult | undefined)[] = new Array(modules.length);
     const accepted: { readonly resultIndex: number; readonly module: EncodedModule }[] = [];
+    const checkingCandidates: {
+      readonly resultIndex: number;
+      readonly module: EncodedModule;
+      readonly plan: TypedCoreCertificatePlan;
+    }[] = [];
     let estimatedTransientByteLength = 0;
     for (const [resultIndex, module] of modules.entries()) {
       measureCompilerStage(
@@ -388,11 +431,96 @@ export class GpuCompiler {
         );
         continue;
       }
+      if (module.definitionTypes.every((definition) => definition.annotation !== null)) {
+        const resolved = resolveSemanticSurface(
+          module,
+          module.sourceByteLength,
+          options.trace,
+        );
+        if (!resolved.ok) {
+          results[resultIndex] = {
+            ok: false,
+            diagnostics: resolved.diagnostics.map(functionalDiagnostic) as [
+              Diagnostic,
+              ...Diagnostic[],
+            ],
+          };
+          continue;
+        }
+        const prepared = measureCompilerStage(
+          options.trace,
+          "semantic.typed-core-certificate",
+          { nodes: module.nodeCount, definitions: module.definitionCount },
+          () => prepareTypedCoreCertificate(module, resolved.nodes),
+        );
+        if (prepared.kind === "ready") {
+          checkingCandidates.push({ resultIndex, module, plan: prepared.plan });
+          continue;
+        }
+      }
       accepted.push({ resultIndex, module });
       estimatedTransientByteLength += COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH +
         COMPILATION_TRANSIENT_BYTES_PER_INPUT *
           (module.sourceByteLength + module.nodeCount + module.definitionCount +
             module.typeCount + module.constructorCount);
+    }
+    if (checkingCandidates.length > 0) {
+      const checks = await measureCompilerStageAsync(
+        options.trace,
+        "semantic.gpu.typed-core-check",
+        {
+          modules: checkingCandidates.length,
+          constraints: checkingCandidates.reduce(
+            (total, candidate) => total + candidate.plan.constraints.length,
+            0,
+          ),
+          terms: checkingCandidates.reduce(
+            (total, candidate) => total + candidate.plan.assignments.length,
+            0,
+          ),
+          witnessTypes: checkingCandidates.reduce(
+            (total, candidate) => total + candidate.plan.witnessTypeCount,
+            0,
+          ),
+        },
+        () =>
+          this.#typedCoreChecker.check(
+            checkingCandidates.map((candidate) => candidate.plan),
+            options.signal,
+          ),
+      );
+      for (const [candidateIndex, candidate] of checkingCandidates.entries()) {
+        if (checks[candidateIndex] !== true) {
+          accepted.push({ resultIndex: candidate.resultIndex, module: candidate.module });
+          estimatedTransientByteLength += COMPILATION_FIXED_TRANSIENT_BYTE_LENGTH +
+            COMPILATION_TRANSIENT_BYTES_PER_INPUT *
+              (candidate.module.sourceByteLength + candidate.module.nodeCount +
+                candidate.module.definitionCount + candidate.module.typeCount +
+                candidate.module.constructorCount);
+          continue;
+        }
+        if (output === "host") {
+          const semanticModule = new CompiledHostSemanticModule(
+            candidate.module,
+            findEntryDefinition(candidate.module),
+            candidate.plan.entryType,
+            publicTypeMetadata(candidate.module).typeDeclarations,
+            candidate.plan.nodes,
+          );
+          results[candidate.resultIndex] = {
+            ok: true,
+            module: await publicModule(semanticModule, candidate.module, options.trace),
+          };
+        } else {
+          results[candidate.resultIndex] = {
+            ok: true,
+            module: await this.restoreCompiledCore(candidate.module, {
+              nodes: candidate.plan.nodes,
+              entryType: candidate.plan.entryType,
+            }),
+          };
+        }
+      }
     }
     if (accepted.length === 0) return completedBatchResults(results);
 
@@ -597,13 +725,17 @@ function encodedDefinitionNames(module: EncodedModule): readonly string[] {
   ));
 }
 
-function completedBatchResults(
-  results: readonly (CompileResult | undefined)[],
-): readonly CompileResult[] {
+function completedBatchResults<Result>(
+  results: readonly (Result | undefined)[],
+): readonly Result[] {
   return results.map((result, index) => {
     if (result === undefined) throw new Error(`functional batch compiler omitted result ${index}`);
     return result;
   });
+}
+
+function isGpuModule(module: CompiledModule): module is GpuModule {
+  return "nodeBuffer" in module && "definitionBuffer" in module && "constructorBuffer" in module;
 }
 
 async function publicModule(

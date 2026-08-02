@@ -108,7 +108,7 @@ export async function linkRelocatableCore(
 
     const ownerPrefix = `${unit.name}::`;
     for (const [localIndex, name] of module.definitionNames.entries()) {
-      if (!name.startsWith(ownerPrefix)) continue;
+      if (name.includes("::") && !name.startsWith(ownerPrefix)) continue;
       const definitionIndex = definitionMap[localIndex];
       const root = module.definitionRoots[localIndex];
       const declaredEffects = module.declaredDefinitionEffects[localIndex];
@@ -273,14 +273,17 @@ function canonicalTypes(units: readonly RelocatableCoreUnit[]): CanonicalTypes {
           } type ${localIndex} does not match ${JSON.stringify(name)}`,
         );
       }
-      const shape = JSON.stringify(declaration);
+      const shape = JSON.stringify(
+        declaration,
+        (key, value) => key === "startByte" || key === "endByte" ? undefined : value,
+      );
       const existing = indices.get(name);
       if (existing !== undefined) {
         if (shapes.get(name) !== shape) {
           throw new TypeError(
             `functional Core linker module ${unitIndex} declares nominal type ${
               JSON.stringify(name)
-            } incompatibly`,
+            } incompatibly: expected ${shapes.get(name)}, received ${shape}`,
           );
         }
         return existing;
@@ -353,19 +356,21 @@ function canonicalDefinitions(
   for (const unit of units) {
     const ownerPrefix = `${unit.name}::`;
     for (const name of unit.module.definitionNames) {
-      if (!name.startsWith(ownerPrefix)) continue;
-      if (indices.has(name)) {
+      if (name.includes("::") && !name.startsWith(ownerPrefix)) continue;
+      const ownedName = name.includes("::") ? name : `${ownerPrefix}${name}`;
+      if (indices.has(ownedName)) {
         throw new TypeError(
-          `functional Core linker has multiple owners for definition ${JSON.stringify(name)}`,
+          `functional Core linker has multiple owners for definition ${JSON.stringify(ownedName)}`,
         );
       }
-      indices.set(name, names.length);
-      names.push(name);
+      indices.set(ownedName, names.length);
+      names.push(ownedName);
     }
   }
   const localIndices = units.map((unit) =>
     unit.module.definitionNames.map((name) => {
-      const index = indices.get(name);
+      const ownedName = name.includes("::") ? name : `${unit.name}::${name}`;
+      const index = indices.get(ownedName);
       if (index === undefined) {
         throw new Error(
           `functional Core linker module ${JSON.stringify(unit.name)} references definition ${

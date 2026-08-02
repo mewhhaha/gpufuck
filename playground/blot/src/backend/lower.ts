@@ -48,7 +48,7 @@ import type {
   ShapeMember,
   Span,
 } from "../syntax/ast.ts";
-import { fail } from "../diagnostic.ts";
+import { BlotError, fail } from "../diagnostic.ts";
 import type { GrantSignature, VariantCase } from "../check/infer.ts";
 import type { SimpleType } from "../check/type.ts";
 import {
@@ -65,6 +65,8 @@ import {
  * type checker.
  */
 export interface Facts {
+  /** Inferred expression types used to annotate residual definitions. */
+  readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   /** What each `open` brought into scope, so an inlined module keeps its own. */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   /** Compile-time declaration values that remain inside residual blocks. */
@@ -146,6 +148,33 @@ export interface Lowered {
   /** Structural declarations needed to publish the stable caller ABI. */
   readonly runtimeTypes: ReadonlyMap<string, RuntimeTypeDeclaration>;
   readonly exports: readonly LoweredExport[];
+  readonly moduleDefinition: string;
+  readonly moduleType: TypeSchema | null;
+  readonly entryType: TypeSchema | null;
+  readonly imports: readonly {
+    readonly name: string;
+    readonly fromModule: string;
+    readonly type: TypeSchema;
+    readonly effects: ReturnType<typeof effectSet>;
+  }[];
+}
+
+export interface LowerModuleImport {
+  readonly name: string;
+  readonly fromModule: string;
+  readonly module: Module;
+  readonly parameter: SimpleType;
+  readonly result: SimpleType;
+  readonly effects: ReturnType<typeof effectSet>;
+}
+
+export interface LowerModuleOptions {
+  readonly parameter?: "capabilities" | "value";
+  readonly moduleParameterType: SimpleType;
+  readonly moduleResultType: SimpleType;
+  readonly moduleEffects: ReturnType<typeof effectSet>;
+  readonly imports?: ReadonlyMap<string, LowerModuleImport>;
+  readonly emitEntry?: boolean;
 }
 
 export type RuntimeTypeDeclaration =
@@ -196,7 +225,7 @@ class Lowering {
   readonly seals = new Map<string, Sealed>();
   readonly definitions: SurfaceDefinition[] = [];
   /** Hoisted prelude closures, by identity: one definition per closure. */
-  readonly hoisted = new Map<Value, string>();
+  readonly hoisted = new Map<Value, { name: string; annotation: TypeSchema | null }>();
   /** One capability per host effect, and one definition per operation. */
   readonly capabilities = new Map<string, HostCapabilityDeclaration>();
   readonly hostDefinitions: HostDefinitionBinding[] = [];
@@ -206,7 +235,18 @@ class Lowering {
   /** Blot effect operations, as Core evidence a handler can replace. */
   readonly effectOperations = new Map<string, string>();
   requiresFixedVectors = false;
+  sourceSpan: Span | null = null;
   private next = 0;
+
+  at(span: Span) {
+    const source = this.sourceSpan ?? span;
+    return surface.at({ startByte: source.start, endByte: source.end });
+  }
+
+  span(span: Span): { startByte: number; endByte: number } {
+    const source = this.sourceSpan ?? span;
+    return { startByte: source.start, endByte: source.end };
+  }
 
   /**
    * Constructor sets declared as compile-time unions.
@@ -219,7 +259,11 @@ class Lowering {
    */
   readonly declared: readonly (readonly VariantCase[])[];
 
-  constructor(readonly facts: Facts, values: ValueEnv) {
+  constructor(
+    readonly facts: Facts,
+    values: ValueEnv,
+    readonly imports: ReadonlyMap<string, LowerModuleImport>,
+  ) {
     this.declared = declaredUnions(values);
   }
 
@@ -241,7 +285,7 @@ class Lowering {
     const existing = this.sums.get(key);
     if (existing !== undefined) return existing;
     const sum: Sum = {
-      name: `Sum${this.sums.size}`,
+      name: `Sum$${typeIdentity(sorted.map((entry) => `${entry.name}:${entry.payload ? 1 : 0}`))}`,
       cases: sorted,
     };
     this.sums.set(key, sum);
@@ -251,9 +295,10 @@ class Lowering {
   seal(sourceName: string): Sealed {
     const existing = this.seals.get(sourceName);
     if (existing !== undefined) return existing;
+    const identity = typeIdentity([sourceName]);
     const sealed = {
-      name: `Sealed${this.seals.size}`,
-      constructor: `Sealed${this.seals.size}`,
+      name: `Sealed$${identity}`,
+      constructor: `Sealed$${identity}`,
       sourceName,
     };
     this.seals.set(sourceName, sealed);
@@ -311,7 +356,7 @@ class Lowering {
     const key = ordered.join("\u0000");
     const existing = this.nominals.get(key);
     if (existing !== undefined) return existing;
-    let label = `Shape${this.nominals.size}`;
+    let label = `Shape$${typeIdentity(ordered)}`;
     if (ordered.length === 0) {
       label = "Empty";
     } else if (ordered.every((name) => /^\d+$/.test(name))) {
@@ -381,6 +426,10 @@ class Lowering {
       })),
     ];
   }
+}
+
+function typeIdentity(parts: readonly string[]): string {
+  return parts.map((part) => `${part.length}_${part}`).join("$");
 }
 
 interface Scope {
@@ -479,17 +528,21 @@ export function lowerModule(
   facts: Facts,
   values: ValueEnv,
   runtimeExports: readonly RuntimeExport[] = [],
+  options: LowerModuleOptions,
 ): Lowered {
-  const lowering = new Lowering(facts, values);
+  const lowering = new Lowering(facts, values, options.imports ?? new Map());
   const scope = childScope(null, values);
 
   // The entry module's parameter is the program's whole authority, and at this
   // boundary that authority *is* the module's imports. It has no runtime
   // representation of its own: each field the program reaches for becomes a
   // declared host operation, so nothing is passed in and nothing is ambient.
-  if (module.parameter !== null && module.parameter.tag === "name") {
+  if (
+    options.parameter !== "value" &&
+    module.parameter !== null && module.parameter.tag === "name"
+  ) {
     scope.granted = module.parameter.name;
-  } else if (module.parameter !== null) {
+  } else if (options.parameter !== "value" && module.parameter !== null) {
     fail(
       "BLOT_UNSUPPORTED_LOWERING",
       "A module parameter must be a single name to be granted as capabilities.",
@@ -497,14 +550,41 @@ export function lowerModule(
     );
   }
 
-  const body = lowerBlock(module.declarations, module.result, scope, lowering);
+  const moduleArgument = lowering.fresh("module");
+  let parameterWrapper = (body: SurfaceExpression): SurfaceExpression => body;
+  if (options.parameter === "value" && module.parameter !== null) {
+    parameterWrapper = bind(
+      module.parameter,
+      surface.name(moduleArgument),
+      scope,
+      lowering,
+    );
+  }
+  const body = parameterWrapper(
+    lowerBlock(module.declarations, module.result, scope, lowering),
+  );
+  const moduleResultType = monomorphicSchema(options.moduleResultType, new Set(), lowering);
+  const moduleType: TypeSchema | null = options.parameter === "value"
+    ? {
+      kind: "function",
+      parameter: exportSchema(
+        options.moduleParameterType,
+        "module parameter",
+        module.span,
+        lowering,
+      ),
+      result: exportSchema(options.moduleResultType, "module result", module.span, lowering),
+    }
+    : moduleResultType === null
+    ? null
+    : { kind: "function", parameter: { kind: "unit" }, result: moduleResultType };
   // Canonical calls reclaim their private arena, so module evaluation cannot be a memoized global
   // thunk. The unit parameter also lets every export share this body without copying it.
-  const moduleArgument = lowering.fresh("module");
   lowering.definitions.push({
     name: MODULE_RESULT,
     parameters: [moduleArgument],
-    annotation: null,
+    annotation: moduleType,
+    effects: options.moduleEffects,
     body,
   });
   const exports = lowerExports(
@@ -512,7 +592,11 @@ export function lowerModule(
     runtimeExports,
     lowering,
   );
-  if (exports.some((exported) => exported.type.kind === "function")) {
+  let entryType: TypeSchema | null = null;
+  if (
+    options.emitEntry !== false && exports.some((exported) => exported.type.kind === "function")
+  ) {
+    entryType = { kind: "unit" };
     const initialized = lowering.fresh("module");
     lowering.definitions.push({
       name: ENTRY,
@@ -524,14 +608,53 @@ export function lowerModule(
         surface.name(UNIT_CONSTRUCTOR_NAME),
       ),
     });
-  } else {
+  } else if (options.emitEntry !== false) {
+    const nominalKeys = new Set(lowering.nominals.keys());
+    const sumKeys = new Set(lowering.sums.keys());
+    try {
+      entryType = exportSchema(options.moduleResultType, "module result", module.span, lowering);
+    } catch (error) {
+      if (
+        !(error instanceof BlotError) ||
+        error.diagnostic.code !== "BLOT_EXPORT_NOT_FIRST_ORDER"
+      ) throw error;
+      for (const key of lowering.nominals.keys()) {
+        if (!nominalKeys.has(key)) lowering.nominals.delete(key);
+      }
+      for (const key of lowering.sums.keys()) {
+        if (!sumKeys.has(key)) lowering.sums.delete(key);
+      }
+    }
     lowering.definitions.push({
       name: ENTRY,
       parameters: [],
-      annotation: null,
+      annotation: entryType,
       body: moduleResultCall(),
     });
   }
+
+  const imports = [...new Map(
+    [...lowering.imports.values()].map((imported) => [imported.name, imported]),
+  ).values()].map((imported) => ({
+    name: imported.name,
+    fromModule: imported.fromModule,
+    effects: imported.effects,
+    type: {
+      kind: "function" as const,
+      parameter: exportSchema(
+        imported.parameter,
+        `${imported.fromModule} module parameter`,
+        module.span,
+        lowering,
+      ),
+      result: exportSchema(
+        imported.result,
+        `${imported.fromModule} module result`,
+        module.span,
+        lowering,
+      ),
+    },
+  }));
 
   return {
     definitions: lowering.requiresFixedVectors
@@ -544,6 +667,10 @@ export function lowerModule(
     capabilities: [...lowering.capabilities.values()],
     hostDefinitions: lowering.hostDefinitions,
     exports,
+    moduleDefinition: MODULE_RESULT,
+    moduleType,
+    entryType,
+    imports,
     shapes: new Map(
       [...lowering.nominals.values()].map((nominal) => [nominal.name, nominal.fields] as const),
     ),
@@ -1437,10 +1564,7 @@ function bind(
   scope: Scope,
   lowering: Lowering,
 ): (body: SurfaceExpression) => SurfaceExpression {
-  const at = surface.at({
-    startByte: pattern.span.start,
-    endByte: pattern.span.end,
-  });
+  const at = lowering.at(pattern.span);
 
   if (pattern.tag === "name") {
     const name = lowering.fresh(pattern.name);
@@ -1610,7 +1734,7 @@ function recursiveBinding(
     lowering,
   );
   const value = wrap(lambda.body);
-  const span = { startByte: lambda.span.start, endByte: lambda.span.end };
+  const span = lowering.span(lambda.span);
   return (body) => ({
     kind: "let-rec-group",
     bindings: [{ name: binding, parameters: [parameter], body: value, span }],
@@ -1624,7 +1748,7 @@ function lower(
   scope: Scope,
   lowering: Lowering,
 ): SurfaceExpression {
-  const at = surface.at({ startByte: expr.span.start, endByte: expr.span.end });
+  const at = lowering.at(expr.span);
 
   switch (expr.tag) {
     case "int":
@@ -1664,7 +1788,13 @@ function lower(
         }
         fail("BLOT_UNBOUND", `\`${expr.name}\` is not in scope.`, expr.span);
       }
-      return lowerValue(value, expr.name, expr.span, lowering);
+      return lowerValue(
+        value,
+        expr.name,
+        expr.span,
+        lowering,
+        lowering.facts.expressionTypes.get(expr),
+      );
     }
 
     case "lambda": {
@@ -1816,7 +1946,13 @@ function lower(
       // run time and immediately taken apart.
       const constant = comptimeShapeMember(expr, scope);
       if (constant !== null) {
-        return lowerValue(constant, expr.name, expr.span, lowering);
+        return lowerValue(
+          constant,
+          expr.name,
+          expr.span,
+          lowering,
+          lowering.facts.expressionTypes.get(expr),
+        );
       }
       const target = lower(expr.target, scope, lowering);
       // The whole field set comes from inference. A projection alone does not
@@ -2371,8 +2507,9 @@ function lowerValue(
   hint: string,
   span: Span,
   lowering: Lowering,
+  inferredType?: SimpleType,
 ): SurfaceExpression {
-  const at = surface.at({ startByte: span.start, endByte: span.end });
+  const at = lowering.at(span);
 
   switch (value.tag) {
     case "int":
@@ -2441,29 +2578,64 @@ function lowerValue(
     }
 
     case "closure": {
+      if (
+        value.body.tag === "block" &&
+        value.imports !== undefined
+      ) {
+        const imported = [...lowering.imports.values()].find((candidate) =>
+          candidate.module.declarations === value.body.declarations &&
+          candidate.module.result === value.body.result
+        );
+        if (imported !== undefined) return at.name(imported.name);
+      }
+      const annotation = inferredType === undefined
+        ? null
+        : monomorphicSchema(inferredType, new Set(), lowering);
       const existing = lowering.hoisted.get(value);
-      if (existing !== undefined) return at.name(existing);
+      if (existing !== undefined) {
+        if (
+          existing.annotation !== null &&
+          JSON.stringify(existing.annotation) !== JSON.stringify(annotation)
+        ) {
+          const definitionIndex = lowering.definitions.findIndex((definition) =>
+            definition.name === existing.name
+          );
+          const definition = lowering.definitions[definitionIndex];
+          if (definition === undefined) {
+            throw new Error(`hoisted definition ${JSON.stringify(existing.name)} is missing`);
+          }
+          lowering.definitions[definitionIndex] = { ...definition, annotation: null };
+          existing.annotation = null;
+        }
+        return at.name(existing.name);
+      }
       const name = lowering.fresh(hint);
-      lowering.hoisted.set(value, name);
+      lowering.hoisted.set(value, { name, annotation });
 
-      const scope = childScope(null, value.env);
-      scope.hoisting = hint;
-      // `rec` names the closure itself, so the definition has to be in scope
-      // inside its own body.
-      if (value.self !== null) scope.names.set(value.self, name);
-      const parameter = lowering.fresh("arg");
-      const body = bindParameter(
-        value.parameter,
-        parameter,
-        scope,
-        lowering,
-      );
-      lowering.definitions.push({
-        name,
-        parameters: [parameter],
-        annotation: null,
-        body: body(value.body),
-      });
+      const previousSourceSpan = lowering.sourceSpan;
+      lowering.sourceSpan = previousSourceSpan ?? span;
+      try {
+        const scope = childScope(null, value.env);
+        scope.hoisting = hint;
+        // `rec` names the closure itself, so the definition has to be in scope
+        // inside its own body.
+        if (value.self !== null) scope.names.set(value.self, name);
+        const parameter = lowering.fresh("arg");
+        const body = bindParameter(
+          value.parameter,
+          parameter,
+          scope,
+          lowering,
+        );
+        lowering.definitions.push({
+          name,
+          parameters: [parameter],
+          annotation,
+          body: body(value.body),
+        });
+      } finally {
+        lowering.sourceSpan = previousSourceSpan;
+      }
       return at.name(name);
     }
     // A type, a union, an effect: real compile-time values with no runtime
@@ -2487,6 +2659,65 @@ function lowerValue(
   return unsupported(`the compile-time value \`${hint}\``, span);
 }
 
+function monomorphicSchema(
+  type: SimpleType,
+  seen: Set<number>,
+  lowering: Lowering,
+): TypeSchema | null {
+  switch (type.tag) {
+    case "unit":
+      return { kind: "unit" };
+    case "range":
+      return type.domain === "int" ? { kind: "signed-integer-64" } : HostTypes.text;
+    case "fun": {
+      const parameter = monomorphicSchema(type.param, new Set(seen), lowering);
+      const result = monomorphicSchema(type.result, new Set(seen), lowering);
+      return parameter === null || result === null ? null : { kind: "function", parameter, result };
+    }
+    case "record": {
+      const fields = new Map<string, TypeSchema>();
+      for (const [name, field] of type.fields) {
+        const schema = monomorphicSchema(field, new Set(seen), lowering);
+        if (schema === null) return null;
+        fields.set(name, schema);
+      }
+      const nominal = lowering.nominal([...fields.keys()]);
+      return {
+        kind: "named",
+        name: nominal.name,
+        arguments: nominal.fields.map((name) => fields.get(name)!),
+      };
+    }
+    case "array": {
+      const element = monomorphicSchema(type.element, new Set(seen), lowering);
+      return element === null ? null : storeType(element);
+    }
+    case "opaque":
+      return type.name === "F32x4" ? f32x4.type : null;
+    case "variant": {
+      const constructors = [...type.cases.keys()];
+      return constructors.length > 0 &&
+          constructors.every((name) => name === "True" || name === "False")
+        ? { kind: "boolean" }
+        : null;
+    }
+    case "var": {
+      if (seen.has(type.id)) return null;
+      seen.add(type.id);
+      const bounds = type.lower.length === 0 ? type.upper : type.lower;
+      const schemas = bounds.map((bound) => monomorphicSchema(bound, new Set(seen), lowering));
+      const first = schemas[0];
+      if (first === undefined || first === null) return null;
+      const key = JSON.stringify(first);
+      return schemas.every((schema) => schema !== null && JSON.stringify(schema) === key)
+        ? first
+        : null;
+    }
+    default:
+      return null;
+  }
+}
+
 /**
  * Binds a lambda's parameter, returning a function that wraps a lowered body.
  * A tuple parameter is one shape argument, so it becomes one binder and a
@@ -2498,10 +2729,7 @@ function bindParameter(
   scope: Scope,
   lowering: Lowering,
 ): (body: Expr) => SurfaceExpression {
-  const at = surface.at({
-    startByte: pattern.span.start,
-    endByte: pattern.span.end,
-  });
+  const at = lowering.at(pattern.span);
   const wrapper = bind(
     pattern,
     at.name(parameter),
@@ -3226,11 +3454,10 @@ function lowerHandle(
 }
 
 /**
- * An imported module, inlined.
+ * An imported module application.
  *
- * A module is a function from its input record to its export record, resolved
- * while compiling. Its body is ordinary blot, so lowering it is lowering a
- * block — the import boundary exists for authority, not for code generation.
+ * Project compilation preserves the call so independent modules can compile
+ * together. Single-module compilation inlines the already-resolved body.
  */
 function lowerImport(
   spine: { callee: Expr; args: Expr[] },
@@ -3250,6 +3477,21 @@ function lowerImport(
     return unsupported(
       `\`@import "${specifier.value}"\` used without calling it — a module is a function, and its exports are what calling it produces`,
       span,
+    );
+  }
+
+  const imported = lowering.imports.get(specifier.value);
+  if (imported !== undefined) {
+    return surface.apply(
+      surface.name(imported.name),
+      lower(spine.args[1], scope, lowering),
+    );
+  }
+  if (specifier.value !== "blot:prelude" && lowering.imports.size > 0) {
+    throw new Error(
+      `Blot lowering has no external binding for import ${
+        JSON.stringify(specifier.value)
+      }; available imports are ${JSON.stringify([...lowering.imports.keys()])}`,
     );
   }
 

@@ -1,4 +1,4 @@
-import { equal, notStrictEqual, ok, strictEqual } from "node:assert/strict";
+import { deepStrictEqual, equal, notStrictEqual, ok, strictEqual } from "node:assert/strict";
 
 import { BlotCompilerSession, validateLowering } from "../playground/blot/src/backend/compile.ts";
 import {
@@ -27,6 +27,31 @@ Deno.test("Blot stress project keeps every module reachable through a runtime ex
     manifest.exports.filter((entry) => entry.phase === "runtime").length,
     project.moduleCount - 1,
   );
+});
+
+Deno.test("Blot stress project compiles and links its independent modules", async () => {
+  const blot = new URL("../playground/blot/", import.meta.url);
+  await initializeBlotParser(
+    new URL("generated/wasm/parser.wasm", blot),
+    new URL("generated/wasm/parser.plan", blot),
+  );
+  const project = createBlotStressProject();
+  configureSources({
+    "/blot/prelude.blot": await Deno.readTextFile(new URL("src/prelude/prelude.blot", blot)),
+    ...project.sources,
+  });
+
+  const session = await BlotCompilerSession.create("cpu");
+  try {
+    const verified = await session.verify(project.entryPath);
+    equal(
+      verified.manifest.exports.filter((entry) => entry.phase === "runtime").length,
+      project.moduleCount - 1,
+    );
+    deepStrictEqual(verified.value, { kind: "unit" });
+  } finally {
+    session.destroy();
+  }
 });
 
 Deno.test("Blot tour shares one module body across runtime exports", async () => {

@@ -80,6 +80,13 @@ route around it without changing what a lane does has failed:
 And the cost is quantified: the same nodes cost **0.29 µs each across 256 independent modules and
 11.34 µs linked into one — 39×.** That is the whole penalty, from a third direction.
 
+The route that changes what a lane does now works. Concrete annotated modules carry a topologically
+ordered type witness into one checking dispatch. Lanes independently validate terms, types, and
+equations; only per-module status records return to the host, with full inference as the fallback.
+On the 8,616-node Blot stress project it measures 105.9 ms against 108.3 ms on CPU, excluding
+adapter and pipeline creation; the former 16384-transition state-machine pathology is absent on that
+path.
+
 Why warp packing does not help, since it looks like it should: both shapes launch the same thread
 count, so the unpacked one hides latency with extra warps exactly as well as the packed one fills
 lanes. The workspace is also lane-major — each lane's arena sits at a widely separated base — so

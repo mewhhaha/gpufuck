@@ -139,6 +139,7 @@ function lookupLiteral(env: TypeEnv, name: string): Expr | undefined {
 }
 
 interface Context {
+  readonly expressionTypes: Map<Expr, SimpleType>;
   /** Field sets and constructor sets, recorded for the backend. */
   readonly shapes: Map<Expr, readonly string[]>;
   /** Compile-time declaration values, keyed by their source expression. */
@@ -259,6 +260,17 @@ function requireComptimeBinding(
 }
 
 export function infer(
+  expr: Expr,
+  context: Context,
+  level: Level,
+  row: SimpleType,
+): SimpleType {
+  const type = inferExpression(expr, context, level, row);
+  context.expressionTypes.set(expr, type);
+  return type;
+}
+
+function inferExpression(
   expr: Expr,
   context: Context,
   level: Level,
@@ -1644,6 +1656,8 @@ function recordComptime(
 export interface Checked {
   readonly type: SimpleType;
   readonly effects: SimpleType;
+  readonly parameterType: SimpleType;
+  readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   /**
    * What each `open` brought into scope.
    *
@@ -1723,8 +1737,10 @@ export function checkModule(
   const grants = new Map<Expr, GrantSignature>();
   const opens = new Map<Expr, ReadonlyMap<string, Value>>();
   const comptimeValues = new Map<Expr, Value>();
+  const expressionTypes = new Map<Expr, SimpleType>();
   const pending: (() => void)[] = [];
   const context: Context = {
+    expressionTypes,
     opens,
     comptimeValues,
     shapes,
@@ -1743,11 +1759,12 @@ export function checkModule(
   const level = 0;
   const row = freshVar(level);
 
+  let parameterType: SimpleType = { tag: "unit" };
   if (module.parameter !== null) {
     // The entry module's parameter is the program's whole authority, and its
     // shape is whatever the program actually reaches for — inference discovers
     // the capability requirement rather than the program declaring it.
-    bindPattern(module.parameter, types, level);
+    parameterType = bindPattern(module.parameter, types, level);
   }
 
   inferDeclarations(module.declarations, context, level, row);
@@ -1758,6 +1775,8 @@ export function checkModule(
   return {
     type: result,
     effects: row,
+    parameterType,
+    expressionTypes,
     opens,
     comptimeValues,
     shapes,

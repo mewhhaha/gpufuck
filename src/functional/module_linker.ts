@@ -508,12 +508,36 @@ export function linkModules(
         ? null
         : rewriteSchema(imported.type, availableTypeNames);
       if (!artifactReachability.definitionNames.has(alias)) continue;
+      const parameters: string[] = [];
+      let residualType = imported.type;
+      while (residualType?.kind === "forall") residualType = residualType.body;
+      while (residualType?.kind === "function") {
+        parameters.push(`$import$argument$${parameters.length}`);
+        residualType = residualType.result;
+      }
+      let body: SurfaceExpression = {
+        kind: "name",
+        name: target,
+        span: offsetSpan(undefined, sourceBase),
+      };
+      if (parameters.length > 0) {
+        body = {
+          kind: "apply",
+          callee: body,
+          arguments: parameters.map((parameter) => ({
+            kind: "name" as const,
+            name: parameter,
+            span: offsetSpan(undefined, sourceBase),
+          })),
+          span: offsetSpan(undefined, sourceBase),
+        };
+      }
       linkedDefinitions.push({
         name: alias,
-        parameters: [],
+        parameters,
         annotation,
         ...(imported.effects === undefined ? {} : { effects: imported.effects }),
-        body: { kind: "name", name: target, span: offsetSpan(undefined, sourceBase) },
+        body,
         span: offsetSpan(undefined, sourceBase),
       });
     }

@@ -44,10 +44,10 @@ function; inference is a global solve. With full annotations there is no unifica
 substitution, no occurs check, no generalization, and no union-find — the four things that make the
 current kernel pointer-chasing and divergent.
 
-Honest caveat: this repository measured annotations as worth only ~9%. That number does **not**
-support this rule, and it does not refute it either — it measured annotations fed to an inference
-engine that solves anyway. A checking-only pipeline is a different algorithm, and its cost is
-unmeasured.
+The earlier annotation experiment was worth only ~9% because it still fed annotations to an
+inference engine that solved anyway. The checking-only kernel now measures the different algorithm:
+on the 8,616-node Blot stress project, cold Core compilation is 108.3 ms on CPU and 105.9 ms on the
+throughput GPU path, excluding adapter and pipeline creation.
 
 **A later measurement supports it, though less dramatically than it first appeared.** Charging every
 inference transition to the frame kind that did it, on the Gleam stdlib, solving came out at
@@ -113,20 +113,20 @@ The ceiling is then the dependency depth of the check, not the node count. For t
 definition graph is 21 waves deep — if a node-level sweep is similarly shallow, a 50,000-node module
 is tens of dependent steps rather than 1.27 million sequential ones.
 
-That is the argument. It is not a measurement, and the honest position is that the constant factors
-could eat it: a lane doing a fixed-size type check still reads its children's types from memory, and
-whether that coalesces is exactly the kind of thing this project has repeatedly been wrong about
-until it measured. The cheapest experiment that would settle it is a checking-only kernel for a
-deliberately trivial annotated language, benchmarked against the existing inference path on the same
-programs.
+That argument now has one positive measurement. `GpuTypedCoreChecker` packs concrete modules and a
+topologically ordered type witness into one dispatch. Independent lanes validate terms, witness
+records, and equations; successful programs perform no atomics, and the host reads back only one
+status record per module. The 8,616-node Blot stress workload is slightly GPU-faster, while the
+1,454-node tour still enters general inference and remains decisively CPU-faster. Typed checking
+removes the large-program pathology without making GPU startup or inference free.
 
 ## Built, and measured: the frontend half buys nothing
 
 Sweep (`sweep.ts`, `src/sweep/`) implements every rule the frontend can implement. Rules 2, 4, 5, 6
 and 7 are enforced — a violation is a diagnostic, tested in `tests/sweep_test.ts`, because a rule
-the compiler does not enforce is a comment. Rules 1 and 3 are expressed in the syntax but cannot be
-honoured by the backend: the engine still solves rather than checks, and Core arrows are still
-unary, so an n-ary signature still folds.
+the compiler does not enforce is a comment. Rule 1 is now honoured for concrete annotated modules;
+unsupported or polymorphic modules still enter full inference. Rule 3 remains unimplemented because
+Core arrows are still unary, so an n-ary signature still folds.
 
 The same computation in Sweep and Lazuli, `deno task bench:sweep`:
 
@@ -153,9 +153,8 @@ or-pattern that explodes 13–16x per arm and hard-fails at four arms, because t
 or-patterns and no nesting. It is faster in the sense that a program which does not compile at all
 in Gleam compiles fine here — not in the sense that anything measured got quicker.
 
-An n-ary lambda node (TASKS item 3) and a checking-only kernel are what would make the rest of the
-design pay. Sweep is the frontend that would demonstrate it, sitting ready, which is the right order
-to have built things in even though the measurement is a flat line.
+The checking-only kernel now makes the annotated subset pay on a large module batch. An n-ary lambda
+node (TASKS item 3) remains the backend change needed for the rest of the design.
 
 ## What it gives up
 

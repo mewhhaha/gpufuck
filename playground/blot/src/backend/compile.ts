@@ -15,8 +15,11 @@ import {
   compileModuleToWasm,
   CpuCompiler,
   type CpuCompileResult,
+  effectSet,
+  FunctionalProjectCompiler,
   GpuCompiler,
   type HostCapabilityDeclaration,
+  type ModuleArtifact,
   requestWebGpuDevice,
   runWasmExport,
   runWasmModule,
@@ -29,12 +32,18 @@ import {
   type WasmValue,
 } from "../../../../functional.ts";
 import { BlotError } from "../diagnostic.ts";
-import { load, type Loaded } from "../load.ts";
+import { importExpressions, load, type Loaded, PRELUDE } from "../load.ts";
 import { checkFile } from "../check/mod.ts";
 import type { Imports } from "../comptime/eval.ts";
 import { bridge } from "../check/bridge.ts";
 import type { SimpleType } from "../check/type.ts";
-import { lowerModule, type RuntimeConstructor, type RuntimeTypeDeclaration } from "./lower.ts";
+import {
+  type Lowered,
+  lowerModule,
+  type LowerModuleImport,
+  type RuntimeConstructor,
+  type RuntimeTypeDeclaration,
+} from "./lower.ts";
 import { type StagedExport, stageModule } from "../stage.ts";
 
 export interface WasmManifest {
@@ -141,7 +150,7 @@ export async function build(path: string): Promise<Built> {
       compiled.exports,
       compiled.lowered.exports,
       compiled.module.wasmExports,
-      compiled.lowered.capabilities,
+      compiled.module.hostCapabilities,
       compiled.lowered.runtimeTypes,
     );
     const builtManifest = publicManifest(internalManifest);
@@ -155,7 +164,7 @@ export async function build(path: string): Promise<Built> {
       wasm,
       manifest: builtManifest,
       manifestBytes,
-      capabilities: compiled.lowered.capabilities.flatMap((capability) => {
+      capabilities: compiled.module.hostCapabilities.flatMap((capability) => {
         if (
           capability.fields.some((field) =>
             field.kind === "operation" && field.wasmIntrinsic === undefined
@@ -300,6 +309,7 @@ interface SetupTimings {
 export class BlotCompilerSession {
   readonly #device: GPUDevice | undefined;
   readonly #compiler: CpuCompiler | GpuCompiler;
+  readonly #projectCompiler: FunctionalProjectCompiler;
   readonly backend: BlotCompilerBackend;
   #setupTimings: SetupTimings;
   #destroyed = false;
@@ -313,6 +323,7 @@ export class BlotCompilerSession {
     this.backend = backend;
     this.#device = device;
     this.#compiler = compiler;
+    this.#projectCompiler = new FunctionalProjectCompiler(compiler);
     this.#setupTimings = setupTimings;
   }
 
@@ -352,6 +363,15 @@ export class BlotCompilerSession {
     return await this.#compiler.compileModule(module, options);
   }
 
+  async compileProject(
+    artifacts: readonly ModuleArtifact[],
+    entry: { readonly module: string; readonly exportName: string },
+    options: CompilationOptions = {},
+  ) {
+    if (this.#destroyed) throw new Error("Blot compiler session was destroyed.");
+    return await this.#projectCompiler.compile(artifacts, entry, options);
+  }
+
   takeSetupTimings(): SetupTimings {
     const timings = this.#setupTimings;
     this.#setupTimings = {
@@ -364,6 +384,7 @@ export class BlotCompilerSession {
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    this.#projectCompiler.clear();
     this.#device?.destroy();
   }
 }
@@ -394,7 +415,7 @@ async function verifyWithSession(
       compiled.exports,
       compiled.lowered.exports,
       compiled.module.wasmExports,
-      compiled.lowered.capabilities,
+      compiled.module.hostCapabilities,
       compiled.lowered.runtimeTypes,
     );
     const builtManifest = publicManifest(internalManifest);
@@ -429,7 +450,7 @@ async function verifyWithSession(
       value: executed.value,
       manifest: builtManifest,
       manifestBytes,
-      capabilities: compiled.lowered.capabilities.flatMap((capability) => {
+      capabilities: compiled.module.hostCapabilities.flatMap((capability) => {
         if (
           capability.fields.some((field) =>
             field.kind === "operation" && field.wasmIntrinsic === undefined
@@ -440,13 +461,13 @@ async function verifyWithSession(
       shapes: compiled.lowered.shapes,
       constructors: compiled.lowered.constructors,
       metrics: {
-        sourceSpanBytes: compiled.encodedModule.sourceByteLength,
-        surfaceNodes: compiled.encodedModule.nodeCount,
-        surfaceArguments: compiled.encodedModule.argumentCount,
-        surfaceCaseAlternatives: compiled.encodedModule.caseAlternativeCount,
-        surfaceDefinitions: compiled.encodedModule.definitionCount,
-        surfaceTypes: compiled.encodedModule.typeCount,
-        surfaceConstructors: compiled.encodedModule.constructorCount,
+        sourceSpanBytes: compiled.sourceByteLength,
+        surfaceNodes: compiled.module.nodeCount,
+        surfaceArguments: compiled.module.arguments.length,
+        surfaceCaseAlternatives: compiled.module.caseAlternatives.length,
+        surfaceDefinitions: compiled.module.definitionCount,
+        surfaceTypes: compiled.module.typeCount,
+        surfaceConstructors: compiled.module.constructorCount,
       },
       timings: {
         ...compiled.timings,
@@ -464,25 +485,48 @@ async function compile(
   session: BlotCompilerSession,
   options: VerifyOptions = {},
 ) {
-  const prepared = await prepare(path);
+  const frontendStart = performance.now();
+  const loadStart = performance.now();
+  const loaded = await load(path);
+  const preparation = {
+    frontendStart,
+    loaded,
+    blotLoadMilliseconds: performance.now() - loadStart,
+  };
+  const projectModules = loadedModules(loaded);
+  const prepared = projectModules.length === 1
+    ? await prepare(path, preparation)
+    : await prepareProject(path, preparation);
   const setupTimings = session.takeSetupTimings();
   await options.observeStage?.("core");
   const coreCompileStart = performance.now();
-  const compilation = await session.compileModule(prepared.module, {
+  const compilationOptions = {
     ...(options.maximumSteps === undefined ? {} : { maximumSteps: options.maximumSteps }),
     ...(options.maximumStepsPerDispatch === undefined
       ? {}
       : { maximumStepsPerDispatch: options.maximumStepsPerDispatch }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.trace === undefined ? {} : { trace: options.trace }),
-  });
+  };
+  const compilation = "artifacts" in prepared
+    ? await session.compileProject(prepared.artifacts, prepared.entry, compilationOptions)
+    : await session.compileModule(prepared.module, compilationOptions);
   const coreCompileMilliseconds = performance.now() - coreCompileStart;
   if (!compilation.ok) {
+    if ("failures" in compilation) {
+      const failure = compilation.failures[0];
+      if (failure === undefined) {
+        throw new Error("Blot project compilation failed without diagnostics");
+      }
+      throw loweringBug(failure.diagnostics, prepared.loaded.module.span);
+    }
     throw loweringBug(compilation.diagnostics, prepared.loaded.module.span);
   }
   return {
     module: compilation.module,
-    encodedModule: prepared.module,
+    sourceByteLength: "sourceByteLength" in prepared
+      ? prepared.sourceByteLength
+      : prepared.module.sourceByteLength,
     lowered: prepared.lowered,
     exports: prepared.exports,
     timings: {
@@ -491,6 +535,286 @@ async function compile(
       coreCompileMilliseconds,
     },
   };
+}
+
+const PROJECT_TYPES_MODULE = "$blot$types";
+const PROJECT_MODULE_EXPORT = "$blot$module";
+const PROJECT_ENTRY_EXPORT = "$blot$entry";
+
+interface PreparedProject {
+  readonly loaded: Loaded;
+  readonly artifacts: readonly ModuleArtifact[];
+  readonly entry: { readonly module: string; readonly exportName: string };
+  readonly lowered: Lowered;
+  readonly exports: readonly StagedExport[];
+  readonly sourceByteLength: number;
+}
+
+interface Preparation {
+  readonly frontendStart: number;
+  readonly loaded: Loaded;
+  readonly blotLoadMilliseconds: number;
+}
+
+async function prepareProject(path: string, preparation?: Preparation) {
+  const frontendStart = preparation?.frontendStart ?? performance.now();
+  const loadStart = performance.now();
+  const loaded = preparation?.loaded ?? await load(path);
+  const blotLoadMilliseconds = preparation?.blotLoadMilliseconds ??
+    performance.now() - loadStart;
+  const modules = loadedModules(loaded);
+
+  const checkStart = performance.now();
+  const checked = new Map<Loaded, Awaited<ReturnType<typeof checkFile>>>();
+  for (const module of modules) checked.set(module, await checkFile(module.path));
+  const blotCheckMilliseconds = performance.now() - checkStart;
+
+  const stageStart = performance.now();
+  const staged = new Map<Loaded, ReturnType<typeof stageModule>>();
+  for (const module of modules) {
+    const moduleCheck = checked.get(module)!;
+    const imports = module.closure.tag === "closure"
+      ? module.closure.imports ?? new Map()
+      : new Map();
+    staged.set(
+      module,
+      stageModule(module.module, moduleCheck.values, imports, moduleCheck.shapes),
+    );
+  }
+  const blotStageMilliseconds = performance.now() - stageStart;
+
+  const lowerStart = performance.now();
+  const lowered = new Map<Loaded, Lowered>();
+  for (const module of modules) {
+    const moduleCheck = checked.get(module)!;
+    const stagedModule = staged.get(module)!;
+    const importBindings = new Map<string, LowerModuleImport>();
+    let importIndex = 0;
+    for (const specifier of importExpressions(stagedModule.module).values()) {
+      const dependency = module.dependencies.get(specifier);
+      if (dependency === undefined || dependency.path === PRELUDE) continue;
+      const dependencyCheck = checked.get(dependency);
+      if (dependencyCheck === undefined) {
+        throw new Error(
+          `checked Blot project omitted dependency ${JSON.stringify(dependency.path)}`,
+        );
+      }
+      importBindings.set(specifier, {
+        name: `$blot$import$${importIndex}`,
+        fromModule: dependency.path,
+        module: dependency.module,
+        parameter: dependencyCheck.moduleParameterType,
+        result: dependencyCheck.moduleType,
+        effects: checkedModuleEffects(dependencyCheck.moduleEffects),
+      });
+      importIndex += 1;
+    }
+    lowered.set(
+      module,
+      lowerModule(
+        stagedModule.module,
+        {
+          ...moduleCheck,
+          shapes: new Map([...moduleCheck.shapes, ...stagedModule.shapes]),
+        },
+        moduleCheck.values,
+        module === loaded ? runtimeExportsFor(stagedModule.exports, moduleCheck) : [],
+        {
+          parameter: module === loaded ? "capabilities" : "value",
+          moduleParameterType: moduleCheck.moduleParameterType,
+          moduleResultType: moduleCheck.moduleType,
+          moduleEffects: checkedModuleEffects(moduleCheck.moduleEffects),
+          imports: importBindings,
+          emitEntry: module === loaded,
+        },
+      ),
+    );
+  }
+  const blotLowerMilliseconds = performance.now() - lowerStart;
+
+  const surfaceStart = performance.now();
+  const typeDeclarations = projectTypeDeclarations([...lowered.values()]);
+  const typeImports = typeDeclarations.map((declaration) => ({
+    name: declaration.name,
+    fromModule: PROJECT_TYPES_MODULE,
+    exportName: declaration.name,
+  }));
+  const constructorImports = typeDeclarations.flatMap((declaration) =>
+    declaration.constructors.map((constructor) => ({
+      name: constructor.name,
+      fromModule: PROJECT_TYPES_MODULE,
+      exportName: constructor.name,
+    }))
+  );
+  const sourceEncoder = new TextEncoder();
+  const artifacts: ModuleArtifact[] = modules.map((module) => {
+    const moduleLowered = lowered.get(module)!;
+    const entryType = moduleLowered.entryType;
+    const moduleType = moduleLowered.moduleType;
+    if (module !== loaded && moduleType === null) {
+      throw new Error(
+        `Blot dependency ${JSON.stringify(module.path)} has no module interface type`,
+      );
+    }
+    return {
+      name: module.path,
+      definitions: moduleLowered.definitions,
+      typeDeclarations: [],
+      imports: moduleLowered.imports.map((imported) => ({
+        name: imported.name,
+        fromModule: imported.fromModule,
+        exportName: PROJECT_MODULE_EXPORT,
+        type: imported.type,
+        effects: imported.effects,
+      })),
+      exports: module === loaded
+        ? [{
+          name: PROJECT_ENTRY_EXPORT,
+          definition: moduleLowered.entry,
+          ...(entryType === null ? {} : { type: entryType }),
+          effects: checkedModuleEffects(checked.get(module)!.moduleEffects),
+        }]
+        : [{
+          name: PROJECT_MODULE_EXPORT,
+          definition: moduleLowered.moduleDefinition,
+          type: moduleType,
+          effects: checkedModuleEffects(checked.get(module)!.moduleEffects),
+        }],
+      typeImports,
+      constructorImports,
+      sourceByteLength: sourceEncoder.encode(module.source).byteLength,
+      options: {
+        hostCapabilities: moduleLowered.capabilities,
+        hostDefinitions: moduleLowered.hostDefinitions,
+        ...(module === loaded
+          ? {
+            wasmExports: moduleLowered.exports.map((exported) => ({
+              name: exported.wasmName,
+              definition: exported.definition,
+            })),
+          }
+          : {}),
+      },
+    };
+  });
+  artifacts.unshift({
+    name: PROJECT_TYPES_MODULE,
+    definitions: [],
+    typeDeclarations,
+    imports: [],
+    exports: [],
+    typeExports: typeDeclarations.map((declaration) => ({
+      name: declaration.name,
+      declaration: declaration.name,
+    })),
+    constructorExports: typeDeclarations.flatMap((declaration) =>
+      declaration.constructors.map((constructor) => ({
+        name: constructor.name,
+        constructor: constructor.name,
+      }))
+    ),
+    sourceByteLength: 0,
+    options: {},
+  });
+  const surfaceEncodeMilliseconds = performance.now() - surfaceStart;
+  const rootLowered = lowered.get(loaded)!;
+  const rootStaged = staged.get(loaded)!;
+  const prepared: PreparedProject = {
+    loaded,
+    artifacts,
+    entry: { module: loaded.path, exportName: PROJECT_ENTRY_EXPORT },
+    lowered: rootLowered,
+    exports: rootStaged.exports,
+    sourceByteLength: modules.reduce(
+      (total, module) => total + sourceEncoder.encode(module.source).byteLength,
+      0,
+    ),
+  };
+  return {
+    ...prepared,
+    timings: {
+      blotFrontendMilliseconds: performance.now() - frontendStart,
+      blotLoadMilliseconds,
+      blotCheckMilliseconds,
+      blotStageMilliseconds,
+      blotLowerMilliseconds,
+      surfaceEncodeMilliseconds,
+    },
+  };
+}
+
+function loadedModules(entry: Loaded): readonly Loaded[] {
+  const ordered: Loaded[] = [];
+  const visited = new Set<string>();
+  const visit = (module: Loaded): void => {
+    if (visited.has(module.path)) return;
+    visited.add(module.path);
+    for (
+      const dependency of [...module.dependencies.values()].sort((left, right) =>
+        left.path.localeCompare(right.path)
+      )
+    ) {
+      if (dependency.path !== PRELUDE) visit(dependency);
+    }
+    ordered.push(module);
+  };
+  visit(entry);
+  return ordered;
+}
+
+function projectTypeDeclarations(loweredModules: readonly Lowered[]) {
+  const declarations = new Map<string, Lowered["types"][number]>();
+  const shapes = new Map<string, string>();
+  for (const lowered of loweredModules) {
+    for (const declaration of lowered.types) {
+      const shape = JSON.stringify(declaration);
+      const previous = shapes.get(declaration.name);
+      if (previous !== undefined && previous !== shape) {
+        throw new TypeError(
+          `Blot modules declare structural type ${JSON.stringify(declaration.name)} incompatibly`,
+        );
+      }
+      shapes.set(declaration.name, shape);
+      declarations.set(declaration.name, declaration);
+    }
+  }
+  return [...declarations.values()];
+}
+
+function runtimeExportsFor(
+  exports: readonly StagedExport[],
+  checked: Awaited<ReturnType<typeof checkFile>>,
+) {
+  return exports.flatMap((exported) => {
+    if (exported.phase !== "runtime") return [];
+    let type = exportType(checked.moduleType, exported.sourceName);
+    if (
+      exported.value !== undefined &&
+      exported.value.tag !== "tag" &&
+      (hasUnconstrainedType(type, new Set()) || exported.value.tag === "shape")
+    ) {
+      const evaluated = bridge(exported.value);
+      if (evaluated !== null) type = evaluated;
+    }
+    return [{ sourceName: exported.sourceName, type, value: exported.value }];
+  });
+}
+
+function checkedModuleEffects(type: SimpleType) {
+  const labels = new Set<string>();
+  const visited = new Set<number>();
+  const pending = [type];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.tag === "effects") {
+      for (const label of current.labels) labels.add(label.replace(/#\d+$/, ""));
+      continue;
+    }
+    if (current.tag !== "var" || visited.has(current.id)) continue;
+    visited.add(current.id);
+    pending.push(...current.lower, ...current.upper);
+  }
+  return effectSet(...[...labels].sort());
 }
 
 interface PreparedModule {
@@ -503,11 +827,12 @@ interface PreparedModule {
 const preparedModules = new WeakMap<Loaded, PreparedModule>();
 const latestPreparedModuleByPath = new Map<string, PreparedModule>();
 
-async function prepare(path: string) {
-  const frontendStart = performance.now();
+async function prepare(path: string, preparation?: Preparation) {
+  const frontendStart = preparation?.frontendStart ?? performance.now();
   const loadStart = performance.now();
-  const loaded = await load(path);
-  const blotLoadMilliseconds = performance.now() - loadStart;
+  const loaded = preparation?.loaded ?? await load(path);
+  const blotLoadMilliseconds = preparation?.blotLoadMilliseconds ??
+    performance.now() - loadStart;
   const cached = preparedModules.get(loaded);
   if (cached !== undefined) {
     return {
@@ -568,6 +893,11 @@ async function prepare(path: string) {
     },
     checked.values,
     runtimeExports,
+    {
+      moduleParameterType: checked.moduleParameterType,
+      moduleResultType: checked.moduleType,
+      moduleEffects: checkedModuleEffects(checked.moduleEffects),
+    },
   );
   const blotLowerMilliseconds = performance.now() - lowerStart;
 

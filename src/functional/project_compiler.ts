@@ -32,6 +32,10 @@ export interface ProjectBatchCompiler {
     modules: readonly EncodedModule[],
     options?: CompilationOptions,
   ): Promise<readonly CpuCompileResult[]>;
+  compileBatchForLinking?(
+    modules: readonly EncodedModule[],
+    options?: CompilationOptions,
+  ): Promise<readonly CpuCompileResult[]>;
 }
 
 export interface CompiledValueInterface {
@@ -98,6 +102,16 @@ export class FunctionalProjectCompiler {
     options.signal?.throwIfAborted();
     const project = indexedProject(artifacts, entry);
     const schedule = dependencySchedule(project, entry.module);
+    const interfacesFromDeclarations = declaredInterfaces(project, schedule);
+    if (interfacesFromDeclarations.size > 0) {
+      return await this.#compileProjectWithDeclaredInterfaces(
+        project,
+        entry,
+        schedule,
+        interfacesFromDeclarations,
+        options,
+      );
+    }
     const interfaces = new Map<string, CompiledModuleInterface>();
     const compiledUnits = new Map<string, CompiledModule>();
 
@@ -110,6 +124,22 @@ export class FunctionalProjectCompiler {
       }[] = [];
       for (const name of wave) {
         const artifact = project.get(name)!;
+        if (artifact.definitions.length === 0 && artifact.exports.length === 0) {
+          interfaces.set(
+            name,
+            Object.freeze({
+              name,
+              values: Object.freeze([]),
+              fingerprint: structuralFingerprint({
+                values: [],
+                typeDeclarations: artifact.typeDeclarations,
+                typeExports: artifact.typeExports ?? [],
+                constructorExports: artifact.constructorExports ?? [],
+              }),
+            }),
+          );
+          continue;
+        }
         validateImportedEffects(artifact, interfaces);
         const encoded = measureCompilerStage(
           options.trace,
@@ -136,7 +166,12 @@ export class FunctionalProjectCompiler {
         options.trace,
         "semantic.project-wave",
         { wave: waveIndex, modules: wave.length, cacheMisses: misses.length },
-        () => this.#compiler.compileBatch(misses.map((unit) => unit.encoded), options),
+        () => {
+          const modules = misses.map((unit) => unit.encoded);
+          return this.#compiler.compileBatchForLinking === undefined
+            ? this.#compiler.compileBatch(modules, options)
+            : this.#compiler.compileBatchForLinking(modules, options);
+        },
       );
       if (compilations.length !== misses.length) {
         throw new Error(
@@ -177,26 +212,286 @@ export class FunctionalProjectCompiler {
       }
     }
 
-    const entryArtifact = project.get(entry.module)!;
-    const exported = entryArtifact.exports.find((candidate) => candidate.name === entry.exportName);
-    const entryInterface = interfaces.get(entry.module)?.values.find((candidate) =>
-      candidate.name === entry.exportName
+    return await linkProject(project, entry, schedule, interfaces, compiledUnits, options);
+  }
+
+  async #compileProjectWithDeclaredInterfaces(
+    project: ReadonlyMap<string, ModuleArtifact>,
+    entry: { readonly module: string; readonly exportName: string },
+    schedule: ProjectCompilationSchedule,
+    interfaces: Map<string, CompiledModuleInterface>,
+    options: CompilationOptions,
+  ): Promise<ProjectCompileResult> {
+    const declaredNames = new Set(interfaces.keys());
+    const compiledUnits = new Map<string, CompiledModule>();
+    const pending = new Set(
+      schedule.waves.flatMap((wave) =>
+        wave.filter((name) => {
+          const artifact = project.get(name)!;
+          return !declaredNames.has(name) &&
+            (artifact.definitions.length > 0 || artifact.exports.length > 0);
+        })
+      ),
     );
-    if (exported === undefined || entryInterface === undefined) {
+    let inferredWave = 0;
+    while (pending.size > 0) {
+      const ready = [...pending].filter((name) =>
+        moduleDependencies(project.get(name)!).every((dependency) => interfaces.has(dependency))
+      );
+      if (ready.length === 0) {
+        throw new Error(
+          `functional project compiler cannot infer declared project dependencies ${
+            JSON.stringify([...pending])
+          }`,
+        );
+      }
+      const prepared: PreparedProjectUnit[] = [];
+      for (const name of ready) {
+        const artifact = project.get(name)!;
+        validateImportedEffects(artifact, interfaces);
+        const encoded = measureCompilerStage(
+          options.trace,
+          "semantic.project-unit",
+          { module: name, wave: inferredWave },
+          () => buildProjectUnit(artifact, project, interfaces),
+        );
+        const inferred = projectUnitSchemes(encoded, artifact, options.trace);
+        if (!inferred.ok) {
+          destroyCompiledUnits(compiledUnits);
+          return {
+            ok: false,
+            failures: [{ module: name, diagnostics: inferred.diagnostics }],
+            schedule,
+          };
+        }
+        prepared.push({
+          name,
+          encoded,
+          fingerprint: projectUnitFingerprint(artifact, encoded, interfaces),
+          schemes: inferred.schemes,
+        });
+      }
+      const failures = await this.#compilePreparedUnits(
+        prepared,
+        project,
+        interfaces,
+        compiledUnits,
+        options,
+        "semantic.project-inferred-wave",
+        { wave: inferredWave },
+      );
+      if (failures.length > 0) {
+        destroyCompiledUnits(compiledUnits);
+        return { ok: false, failures, schedule };
+      }
+      for (const name of ready) pending.delete(name);
+      inferredWave += 1;
+    }
+
+    const declared: PreparedProjectUnit[] = [];
+    for (const [waveIndex, wave] of schedule.waves.entries()) {
+      for (const name of wave) {
+        if (!declaredNames.has(name)) continue;
+        const artifact = project.get(name)!;
+        if (artifact.definitions.length === 0 && artifact.exports.length === 0) continue;
+        validateImportedEffects(artifact, interfaces);
+        const encoded = measureCompilerStage(
+          options.trace,
+          "semantic.project-unit",
+          { module: name, wave: waveIndex },
+          () => buildProjectUnit(artifact, project, interfaces),
+        );
+        const schemes = projectUnitSchemes(encoded, artifact, options.trace);
+        if (!schemes.ok) {
+          destroyCompiledUnits(compiledUnits);
+          return {
+            ok: false,
+            failures: [{ module: name, diagnostics: schemes.diagnostics }],
+            schedule,
+          };
+        }
+        declared.push({
+          name,
+          encoded,
+          fingerprint: projectUnitFingerprint(artifact, encoded, interfaces),
+          schemes: schemes.schemes,
+        });
+      }
+    }
+    const failures = await this.#compilePreparedUnits(
+      declared,
+      project,
+      interfaces,
+      compiledUnits,
+      options,
+      "semantic.project-batch",
+      {},
+    );
+    if (failures.length > 0) {
+      destroyCompiledUnits(compiledUnits);
+      return { ok: false, failures, schedule };
+    }
+    return await linkProject(project, entry, schedule, interfaces, compiledUnits, options);
+  }
+
+  async #compilePreparedUnits(
+    prepared: readonly PreparedProjectUnit[],
+    project: ReadonlyMap<string, ModuleArtifact>,
+    interfaces: Map<string, CompiledModuleInterface>,
+    compiledUnits: Map<string, CompiledModule>,
+    options: CompilationOptions,
+    stage: string,
+    annotations: Readonly<Record<string, number>>,
+  ): Promise<{
+    readonly module: string;
+    readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
+  }[]> {
+    const misses = prepared.filter((unit) => !this.#cache.has(unit.fingerprint));
+    const missedNames = new Set(misses.map((unit) => unit.name));
+    for (const unit of prepared) {
+      if (missedNames.has(unit.name)) continue;
+      const cached = this.#cache.get(unit.fingerprint)!;
+      this.#cache.delete(unit.fingerprint);
+      this.#cache.set(unit.fingerprint, cached);
+      const rebound = await rebindCompiledModuleSource(cached.module, unit.encoded);
+      const artifact = project.get(unit.name)!;
+      const moduleInterface = compiledInterface(artifact, rebound, cached.schemes);
+      validateDeclaredExportEffects(artifact, moduleInterface);
+      interfaces.set(unit.name, moduleInterface);
+      compiledUnits.set(unit.name, rebound);
+    }
+    const compilations = misses.length === 0 ? [] : await measureCompilerStageAsync(
+      options.trace,
+      stage,
+      { ...annotations, modules: prepared.length, cacheMisses: misses.length },
+      () => {
+        const modules = misses.map((unit) => unit.encoded);
+        return this.#compiler.compileBatchForLinking === undefined
+          ? this.#compiler.compileBatch(modules, options)
+          : this.#compiler.compileBatchForLinking(modules, options);
+      },
+    );
+    if (compilations.length !== misses.length) {
       throw new Error(
-        `functional project compiler omitted entry ${
-          JSON.stringify(`${entry.module}.${entry.exportName}`)
-        }`,
+        `functional project compiler received ${compilations.length} results for ${misses.length} modules`,
       );
     }
-    const units: RelocatableCoreUnit[] = schedule.waves.flatMap((wave) =>
-      wave.map((name) => ({
+    const failures: {
+      readonly module: string;
+      readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
+    }[] = [];
+    for (const [missIndex, compilation] of compilations.entries()) {
+      const unit = misses[missIndex]!;
+      if (!compilation.ok) {
+        failures.push({ module: unit.name, diagnostics: compilation.diagnostics });
+        continue;
+      }
+      let snapshot: CompiledModule;
+      try {
+        snapshot = await rebindCompiledModuleSource(compilation.module, unit.encoded);
+      } finally {
+        compilation.module.destroy();
+      }
+      this.#remember(unit.fingerprint, { module: snapshot, schemes: unit.schemes });
+      const rebound = await rebindCompiledModuleSource(snapshot, unit.encoded);
+      const artifact = project.get(unit.name)!;
+      const moduleInterface = compiledInterface(artifact, rebound, unit.schemes);
+      validateDeclaredExportEffects(artifact, moduleInterface);
+      interfaces.set(unit.name, moduleInterface);
+      compiledUnits.set(unit.name, rebound);
+    }
+    if (failures.length > 0) return failures;
+    return failures;
+  }
+
+  clear(): void {
+    for (const cached of this.#cache.values()) cached.module.destroy();
+    this.#cache.clear();
+  }
+
+  #remember(fingerprint: string, unit: CachedProjectUnit): void {
+    const previous = this.#cache.get(fingerprint);
+    if (previous !== undefined && previous !== unit) previous.module.destroy();
+    this.#cache.set(fingerprint, unit);
+    while (this.#cache.size > MAXIMUM_CACHED_PROJECT_UNITS) {
+      const oldest = this.#cache.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = this.#cache.get(oldest);
+      this.#cache.delete(oldest);
+      evicted?.module.destroy();
+    }
+  }
+}
+
+function declaredInterfaces(
+  project: ReadonlyMap<string, ModuleArtifact>,
+  schedule: ProjectCompilationSchedule,
+): Map<string, CompiledModuleInterface> {
+  const interfaces = new Map<string, CompiledModuleInterface>();
+  for (const wave of schedule.waves) {
+    for (const name of wave) {
+      const artifact = project.get(name)!;
+      const values: CompiledValueInterface[] = [];
+      for (const exported of artifact.exports) {
+        if (exported.type === undefined || exported.effects === undefined) {
+          values.length = 0;
+          break;
+        }
+        values.push(Object.freeze({
+          name: exported.name,
+          definition: exported.definition,
+          type: exported.type,
+          effects: exported.effects,
+        }));
+      }
+      if (values.length !== artifact.exports.length) continue;
+      interfaces.set(
         name,
-        module: compiledUnits.get(name)!,
-        sourceByteLength: project.get(name)!.sourceByteLength,
-      }))
+        Object.freeze({
+          name,
+          values: Object.freeze(values),
+          fingerprint: moduleInterfaceFingerprint(artifact, values),
+        }),
+      );
+    }
+  }
+  return interfaces;
+}
+
+async function linkProject(
+  project: ReadonlyMap<string, ModuleArtifact>,
+  entry: { readonly module: string; readonly exportName: string },
+  schedule: ProjectCompilationSchedule,
+  interfaces: ReadonlyMap<string, CompiledModuleInterface>,
+  compiledUnits: ReadonlyMap<string, CompiledModule>,
+  options: CompilationOptions,
+): Promise<ProjectCompileResult> {
+  const entryArtifact = project.get(entry.module)!;
+  const exported = entryArtifact.exports.find((candidate) => candidate.name === entry.exportName);
+  const entryInterface = interfaces.get(entry.module)?.values.find((candidate) =>
+    candidate.name === entry.exportName
+  );
+  if (exported === undefined || entryInterface === undefined) {
+    throw new Error(
+      `functional project compiler omitted entry ${
+        JSON.stringify(`${entry.module}.${entry.exportName}`)
+      }`,
     );
-    const module = await measureCompilerStageAsync(
+  }
+  const units: RelocatableCoreUnit[] = schedule.waves.flatMap((wave) =>
+    wave.flatMap((name) => {
+      const module = compiledUnits.get(name);
+      if (module === undefined) return [];
+      return [{
+        name,
+        module,
+        sourceByteLength: project.get(name)!.sourceByteLength,
+      }];
+    })
+  );
+  let module: CompiledModule;
+  try {
+    module = await measureCompilerStageAsync(
       options.trace,
       "semantic.project-link-core",
       { modules: units.length },
@@ -206,28 +501,22 @@ export class FunctionalProjectCompiler {
           type: concreteInterfaceType(entryInterface.type, entry),
         }),
     );
-    return {
-      ok: true,
-      module,
-      interfaces: Object.freeze(
-        schedule.waves.flatMap((wave) => wave.map((name) => interfaces.get(name)!)),
-      ),
-      schedule,
-    };
+  } finally {
+    for (const unit of units) unit.module.destroy();
   }
+  return {
+    ok: true,
+    module,
+    interfaces: Object.freeze(
+      schedule.waves.flatMap((wave) => wave.map((name) => interfaces.get(name)!)),
+    ),
+    schedule,
+  };
+}
 
-  clear(): void {
-    this.#cache.clear();
-  }
-
-  #remember(fingerprint: string, unit: CachedProjectUnit): void {
-    this.#cache.set(fingerprint, unit);
-    while (this.#cache.size > MAXIMUM_CACHED_PROJECT_UNITS) {
-      const oldest = this.#cache.keys().next().value;
-      if (oldest === undefined) break;
-      this.#cache.delete(oldest);
-    }
-  }
+function destroyCompiledUnits(units: Map<string, CompiledModule>): void {
+  for (const module of units.values()) module.destroy();
+  units.clear();
 }
 
 function projectUnitSchemes(
@@ -240,6 +529,28 @@ function projectUnitSchemes(
     readonly ok: false;
     readonly diagnostics: readonly [Diagnostic, ...Diagnostic[]];
   } {
+  if (artifact.exports.every((exported) => exported.type !== undefined)) {
+    const schemes = new Map<string, TypeSchema>();
+    for (const exported of artifact.exports) {
+      const name = qualified(artifact.name, exported.definition);
+      const type = exported.type;
+      if (type === undefined) {
+        throw new Error(
+          `functional module ${JSON.stringify(artifact.name)} lost an explicit export type`,
+        );
+      }
+      const previous = schemes.get(name);
+      if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(type)) {
+        throw new TypeError(
+          `functional module ${JSON.stringify(artifact.name)} exports definition ${
+            JSON.stringify(exported.definition)
+          } with incompatible explicit types`,
+        );
+      }
+      schemes.set(name, type);
+    }
+    return { ok: true, schemes };
+  }
   const inferred = inferModuleDefinitionSchemes(module, trace);
   if (inferred.ok) {
     return {
@@ -416,21 +727,66 @@ function buildProjectUnit(
   project: ReadonlyMap<string, ModuleArtifact>,
   interfaces: ReadonlyMap<string, CompiledModuleInterface>,
 ): EncodedModule {
+  const declaredTypes = new Map<string, TypeSchema>();
+  for (const exported of artifact.exports) {
+    if (exported.type === undefined) continue;
+    const previous = declaredTypes.get(exported.definition);
+    if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(exported.type)) {
+      throw new TypeError(
+        `functional module ${JSON.stringify(artifact.name)} exports definition ${
+          JSON.stringify(exported.definition)
+        } with incompatible explicit types`,
+      );
+    }
+    declaredTypes.set(exported.definition, exported.type);
+  }
+  const definitions = artifact.definitions.map((definition) => {
+    const declared = declaredTypes.get(definition.name);
+    if (declared === undefined) return definition;
+    if (
+      definition.annotation !== null &&
+      JSON.stringify(definition.annotation) !== JSON.stringify(declared)
+    ) {
+      throw new TypeError(
+        `functional module ${JSON.stringify(artifact.name)} definition ${
+          JSON.stringify(definition.name)
+        } conflicts with its exported type`,
+      );
+    }
+    return definition.annotation === null ? { ...definition, annotation: declared } : definition;
+  });
   const reservedNames = new Set([
-    ...artifact.definitions.map((definition) => definition.name),
+    ...definitions.map((definition) => definition.name),
     ...artifact.exports.map((exported) => exported.name),
   ]);
   const syntheticDefinition = takeAvailableSyntheticName(reservedNames, PROJECT_ENTRY_EXPORT);
   const syntheticExport = takeAvailableSyntheticName(reservedNames, PROJECT_ENTRY_EXPORT);
   let body = surface.integer(0);
-  for (let index = artifact.definitions.length - 1; index >= 0; index--) {
-    const definition = artifact.definitions[index]!;
+  for (let index = definitions.length - 1; index >= 0; index--) {
+    const definition = definitions[index]!;
     const binder = takeAvailableSyntheticName(reservedNames, `$project$keep${index}`);
     body = surface.let(binder, surface.name(definition.name), body);
   }
   const target: ModuleArtifact = {
     ...artifact,
-    definitions: [...artifact.definitions, {
+    imports: artifact.imports.map((imported) => {
+      const target = interfaces.get(imported.fromModule)?.values.find((value) =>
+        value.name === imported.exportName
+      );
+      if (target === undefined) {
+        throw new Error(
+          `functional project compiler omitted imported interface ${
+            JSON.stringify(`${imported.fromModule}.${imported.exportName}`)
+          } for module ${JSON.stringify(artifact.name)}`,
+        );
+      }
+      return {
+        ...imported,
+        type: imported.type ?? target.type,
+        effects: imported.effects ?? target.effects,
+      };
+    }),
+    definitions: [...definitions, {
       name: syntheticDefinition,
       parameters: [],
       annotation: { kind: "integer" },
@@ -551,16 +907,23 @@ function compiledInterface(
       effects,
     });
   });
-  const fingerprint = structuralFingerprint({
-    values: values.map((value) => ({ ...value, effects: effectNames(value.effects) })),
-    typeDeclarations: artifact.typeDeclarations,
-    typeExports: artifact.typeExports ?? [],
-    constructorExports: artifact.constructorExports ?? [],
-  });
+  const fingerprint = moduleInterfaceFingerprint(artifact, values);
   return Object.freeze({
     name: artifact.name,
     values: Object.freeze(values),
     fingerprint,
+  });
+}
+
+function moduleInterfaceFingerprint(
+  artifact: ModuleArtifact,
+  values: readonly CompiledValueInterface[],
+): string {
+  return structuralFingerprint({
+    values: values.map((value) => ({ ...value, effects: effectNames(value.effects) })),
+    typeDeclarations: artifact.typeDeclarations,
+    typeExports: artifact.typeExports ?? [],
+    constructorExports: artifact.constructorExports ?? [],
   });
 }
 

@@ -25,6 +25,10 @@ export interface CheckResult {
   readonly moduleType: SimpleType;
   /** Inferred module row retained for the emitted ABI manifest. */
   readonly moduleEffects: SimpleType;
+  /** Inferred type accepted by the module when it is compiled as an importable unit. */
+  readonly moduleParameterType: SimpleType;
+  /** Inferred type of each expression, retained for typed residual definitions. */
+  readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   readonly ownership: Ownership;
   /** What each `open` brought into scope; see `Checked`. */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
@@ -169,6 +173,8 @@ function checkLoaded(
       effects: row,
       moduleType: checked.type,
       moduleEffects: checked.effects,
+      moduleParameterType: checked.parameterType,
+      expressionTypes: checked.expressionTypes,
       ownership: linear.ownership,
       opens: mergeAll([
         ...dependencyFacts.map((facts) => facts.opens),

@@ -199,8 +199,9 @@ not expect the language to be the win.
 were a parallel sweep rather than a solve. It is now built — Sweep, in `src/sweep/` — and measured:
 against Lazuli on equivalent programs the node counts are _identical_ and the transition counts
 within noise. Every rule needs a backend change to pay, prevents a pathology rather than
-accelerating the common case, or does not touch this pipeline. Item 3 and a checking-only kernel are
-what would make it pay; the frontend is ready and waiting for them.
+accelerating the common case, or does not touch this pipeline. The checking-only kernel has now
+landed for concrete annotated modules and makes the GPU slightly faster on the 8,616-node Blot
+stress project. Item 3 remains the missing backend change; the frontend is ready for it.
 
 ### 4. ~~WebAssembly emission is 38% of cold stdlib compilation~~ — direct globals done
 

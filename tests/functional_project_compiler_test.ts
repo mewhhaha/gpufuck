@@ -96,6 +96,84 @@ Deno.test("project compilation schedules dependency waves and reuses unchanged i
   }
 });
 
+Deno.test("declared project interfaces compile every dependency wave in one batch", async () => {
+  const recording = new RecordingCompiler();
+  const compiler = new FunctionalProjectCompiler(recording);
+  const integer = { kind: "integer" as const };
+  const noEffects = effectSet();
+  const project = integerProject(1).map((artifact): ModuleArtifact => ({
+    ...artifact,
+    imports: artifact.imports.map((imported) => ({
+      ...imported,
+      type: integer,
+      effects: noEffects,
+    })),
+    exports: artifact.exports.map((exported) => ({
+      ...exported,
+      type: integer,
+      effects: noEffects,
+    })),
+  }));
+
+  const result = await compiler.compile(project, {
+    module: "entry",
+    exportName: "main",
+  });
+  ok(result.ok, result.ok ? undefined : result.failures[0]?.diagnostics[0].message);
+  if (!result.ok) return;
+  try {
+    deepStrictEqual(result.schedule.waves, [["leaf"], ["left", "right"], ["entry"]]);
+    deepStrictEqual(recording.batchSizes, [4]);
+    deepStrictEqual((await runWasmModule(result.module)).value, {
+      kind: "integer",
+      value: 41,
+    });
+  } finally {
+    result.module.destroy();
+    compiler.clear();
+  }
+});
+
+Deno.test("declared dependents batch after their inferred dependency", async () => {
+  const recording = new RecordingCompiler();
+  const compiler = new FunctionalProjectCompiler(recording);
+  const integer = { kind: "integer" as const };
+  const noEffects = effectSet();
+  const project = integerProject(1).map((artifact): ModuleArtifact => {
+    if (artifact.name === "leaf") return artifact;
+    return {
+      ...artifact,
+      imports: artifact.imports.map((imported) => ({
+        ...imported,
+        type: integer,
+        effects: noEffects,
+      })),
+      exports: artifact.exports.map((exported) => ({
+        ...exported,
+        type: integer,
+        effects: noEffects,
+      })),
+    };
+  });
+
+  const result = await compiler.compile(project, {
+    module: "entry",
+    exportName: "main",
+  });
+  ok(result.ok, result.ok ? undefined : result.failures[0]?.diagnostics[0].message);
+  if (!result.ok) return;
+  try {
+    deepStrictEqual(recording.batchSizes, [1, 3]);
+    deepStrictEqual((await runWasmModule(result.module)).value, {
+      kind: "integer",
+      value: 41,
+    });
+  } finally {
+    result.module.destroy();
+    compiler.clear();
+  }
+});
+
 Deno.test("project Core linking preserves nominal constructors across modules", async () => {
   const option = {
     name: "Option",

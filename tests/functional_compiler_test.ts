@@ -34,6 +34,11 @@ import {
   WasmIntrinsic,
 } from "../functional.ts";
 import { GpuEvaluator } from "../src/functional/evaluator.ts";
+import {
+  GpuTypedCoreChecker,
+  prepareTypedCoreCertificate,
+} from "../src/semantic/gpu_monomorphic_checker.ts";
+import { resolveSemanticSurface } from "../src/semantic/host_semantic_compiler.ts";
 import { GpuLazuliCompiler, lazuliSurfaceToModule, parseLazuliSource } from "../mod.ts";
 
 interface Runtime {
@@ -94,6 +99,278 @@ Deno.test("CPU and GPU compilation produce identical resolved Core", async () =>
   } finally {
     cpu.module.destroy();
     gpu.module.destroy();
+  }
+});
+
+Deno.test("annotated monomorphic modules use the parallel checking kernel", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.let(
+        "increment",
+        surface.lambda(
+          ["value"],
+          surface.binary(
+            BinaryOperator.Add,
+            surface.name("value"),
+            surface.integer(1),
+          ),
+        ),
+        surface.apply(surface.name("increment"), surface.integer(41)),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const trace = new CompilerPerformanceTrace();
+  const compilation = await functionalRuntime().compiler.compileModule(module, {
+    maximumSteps: 1_000_000,
+    trace,
+  });
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    equal(compilation.module.entryType.kind, "integer");
+    equal(
+      trace.snapshot().some((event) => event.stage === "semantic.gpu.typed-core-check"),
+      true,
+    );
+    equal(
+      trace.snapshot().some((event) => event.stage === "semantic.gpu.admit-and-dispatch"),
+      false,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("typed Core checking rejects a malformed type witness", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.integer(42),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const resolved = resolveSemanticSurface(module, module.sourceByteLength);
+  ok(resolved.ok, resolved.ok ? undefined : resolved.diagnostics[0].message);
+  if (!resolved.ok) return;
+  const prepared = prepareTypedCoreCertificate(module, resolved.nodes);
+  equal(prepared.kind, "ready");
+  if (prepared.kind !== "ready") return;
+  const witnessTypes = prepared.plan.witnessTypes.slice();
+  witnessTypes.fill(NO_INDEX);
+  const checker = await GpuTypedCoreChecker.create(functionalRuntime().device);
+  const accepted = await checker.check([{ ...prepared.plan, witnessTypes }]);
+  deepStrictEqual(accepted, [false]);
+});
+
+Deno.test("typed project units remain host-resident until final linking", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.integer(42),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const [compilation] = await functionalRuntime().compiler.compileBatchForLinking([module]);
+  ok(compilation?.ok, compilation?.ok ? undefined : compilation?.diagnostics[0].message);
+  if (compilation === undefined || !compilation.ok) return;
+  try {
+    equal("nodeBuffer" in compilation.module, false);
+    deepStrictEqual((await compilation.module.readCoreNodes()).map((node) => node.tag), [
+      CoreTag.Integer,
+    ]);
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("typed certificate preparation falls back for an invalid annotation", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "boolean" },
+      body: surface.integer(42),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const trace = new CompilerPerformanceTrace();
+  const compilation = await functionalRuntime().compiler.compileModule(module, {
+    maximumSteps: 1_000_000,
+    trace,
+  });
+  if (compilation.ok) {
+    compilation.module.destroy();
+    throw new Error("parallel checking accepted an invalid annotation");
+  }
+  equal(compilation.diagnostics[0].code, "F2102");
+  equal(
+    trace.snapshot().some((event) => event.stage === "semantic.gpu.typed-core-check"),
+    false,
+  );
+  equal(
+    trace.snapshot().some((event) => event.stage === "semantic.gpu.admit-and-dispatch"),
+    true,
+  );
+});
+
+Deno.test("typed certificate preparation rejects recursive infinite types", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.let(
+        "self",
+        surface.lambda(
+          ["value"],
+          surface.apply(surface.name("value"), surface.name("value")),
+        ),
+        surface.apply(surface.name("self"), surface.name("self")),
+      ),
+    }],
+    [],
+    "main",
+    0,
+  );
+  const trace = new CompilerPerformanceTrace();
+  const compilation = await functionalRuntime().compiler.compileModule(module, { trace });
+  if (compilation.ok) {
+    compilation.module.destroy();
+    throw new Error("parallel checking accepted an infinite type");
+  }
+  equal(compilation.diagnostics[0].code, "F2103");
+  equal(
+    trace.snapshot().some((event) => event.stage === "semantic.gpu.typed-core-check"),
+    false,
+  );
+  equal(
+    trace.snapshot().some((event) => event.stage === "semantic.gpu.admit-and-dispatch"),
+    true,
+  );
+});
+
+Deno.test("parallel checking instantiates generic constructors at each case", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.case(
+        surface.apply(surface.name("Box"), surface.integer(42)),
+        [{ constructor: "Box", binders: ["value"], body: surface.name("value") }],
+      ),
+    }],
+    [{
+      name: "Boxed",
+      parameters: ["value"],
+      constructors: [{
+        name: "Box",
+        fields: [{ name: "value", type: { kind: "parameter", name: "value" } }],
+      }],
+    }],
+    "main",
+    0,
+  );
+  const trace = new CompilerPerformanceTrace();
+  const compilation = await functionalRuntime().compiler.compileModule(module, { trace });
+  ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+  if (!compilation.ok) return;
+  try {
+    equal(compilation.module.entryType.kind, "integer");
+    equal(
+      trace.snapshot().some((event) => event.stage === "semantic.gpu.typed-core-check"),
+      true,
+    );
+    equal(
+      trace.snapshot().some((event) => event.stage === "semantic.gpu.admit-and-dispatch"),
+      false,
+    );
+  } finally {
+    compilation.module.destroy();
+  }
+});
+
+Deno.test("parallel checking defers non-exhaustive cases to diagnostic inference", async () => {
+  const module = buildSurfaceModule(
+    [{
+      name: "main",
+      parameters: [],
+      annotation: { kind: "integer" },
+      body: surface.case(
+        surface.name("First"),
+        [{ constructor: "First", binders: [], body: surface.integer(1) }],
+      ),
+    }],
+    [{
+      name: "Choice",
+      parameters: [],
+      constructors: [
+        { name: "First", fields: [] },
+        { name: "Second", fields: [] },
+      ],
+    }],
+    "main",
+    0,
+  );
+  const trace = new CompilerPerformanceTrace();
+  const compilation = await functionalRuntime().compiler.compileModule(module, { trace });
+  if (compilation.ok) {
+    compilation.module.destroy();
+    throw new Error("parallel checking accepted a non-exhaustive case");
+  }
+  equal(compilation.diagnostics[0].code, "F2010");
+  equal(
+    trace.snapshot().some((event) => event.stage === "semantic.gpu.admit-and-dispatch"),
+    true,
+  );
+});
+
+Deno.test("parallel checking packs annotated modules into one dispatch", async () => {
+  const modules = [40, 41].map((value, index) =>
+    buildSurfaceModule(
+      [{
+        name: `packed_check_${index}`,
+        parameters: [],
+        annotation: { kind: "integer" },
+        body: surface.binary(BinaryOperator.Add, surface.integer(value), surface.integer(1)),
+      }],
+      [],
+      `packed_check_${index}`,
+      0,
+    )
+  );
+  const trace = new CompilerPerformanceTrace();
+  const compilations = await functionalRuntime().compiler.compileBatch(modules, { trace });
+  try {
+    equal(compilations.length, 2);
+    for (const compilation of compilations) {
+      ok(compilation.ok, compilation.ok ? undefined : compilation.diagnostics[0].message);
+    }
+    const checks = trace.snapshot().filter((event) =>
+      event.stage === "semantic.gpu.typed-core-check"
+    );
+    equal(checks.length, 1);
+    equal(checks[0]?.annotations.modules, 2);
+  } finally {
+    for (const compilation of compilations) {
+      if (compilation.ok) compilation.module.destroy();
+    }
   }
 });
 

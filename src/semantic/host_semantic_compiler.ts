@@ -42,11 +42,44 @@ export type HostSemanticCompileResult =
     readonly diagnostics: readonly [SemanticDiagnostic, ...SemanticDiagnostic[]];
   };
 
+export type ResolvedSemanticSurface =
+  | {
+    readonly ok: true;
+    readonly entryDefinition: number;
+    readonly nodes: readonly CoreNode[];
+  }
+  | {
+    readonly ok: false;
+    readonly diagnostics: readonly [SemanticDiagnostic, ...SemanticDiagnostic[]];
+  };
+
 export function compileSemanticOnHost(
   surface: EncodedSemanticSurface,
   sourceByteLength: number,
   trace?: CompilerPerformanceTrace,
 ): HostSemanticCompileResult {
+  const resolved = resolveSemanticSurface(surface, sourceByteLength, trace);
+  if (!resolved.ok) return resolved;
+  const inference = inferTypes(surface, trace);
+  if (!inference.ok) return { ok: false, diagnostics: [inference.diagnostic] };
+
+  return {
+    ok: true,
+    module: new CompiledHostSemanticModule(
+      surface,
+      resolved.entryDefinition,
+      inference.mainType,
+      inference.typeDeclarations,
+      resolved.nodes,
+    ),
+  };
+}
+
+export function resolveSemanticSurface(
+  surface: EncodedSemanticSurface,
+  sourceByteLength: number,
+  trace?: CompilerPerformanceTrace,
+): ResolvedSemanticSurface {
   const validation = measureCompilerStage(
     trace,
     "semantic.validate-declarations",
@@ -94,9 +127,6 @@ export function compileSemanticOnHost(
     return { ok: false, diagnostics: [diagnostic] };
   }
 
-  const inference = inferTypes(surface, trace);
-  if (!inference.ok) return { ok: false, diagnostics: [inference.diagnostic] };
-
   const entryDefinition = findEntryDefinition(surface);
   const nodes = measureCompilerStage(
     trace,
@@ -128,16 +158,7 @@ export function compileSemanticOnHost(
         });
       })),
   );
-  return {
-    ok: true,
-    module: new CompiledHostSemanticModule(
-      surface,
-      entryDefinition,
-      inference.mainType,
-      inference.typeDeclarations,
-      nodes,
-    ),
-  };
+  return { ok: true, entryDefinition, nodes };
 }
 
 function validateTopLevelDeclarations(
